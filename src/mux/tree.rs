@@ -90,6 +90,45 @@ pub struct SessionSpawn {
     env: BTreeMap<String, String>,
 }
 
+/// A pane restart reserved under the tree lock but not yet run —
+/// `respawn-pane`'s phase 1, the same two-phase shape session, window,
+/// and split spawns use (ARC-022).
+pub struct RespawnSpawn {
+    /// The pane being restarted — the replacement keeps this id, so the
+    /// window and layout never change.
+    pub pane_id: PaneId,
+    /// The pane's window, re-validated at insert.
+    pub window_id: WindowId,
+    /// The owning session's identity, re-exported to the new process.
+    pub session_id: SessionId,
+    session_name: String,
+    env: BTreeMap<String, String>,
+    /// The pane's current grid size — the fresh terminal starts here,
+    /// not at a construction default.
+    pub cols: u16,
+    pub rows: u16,
+    /// The command to run: the explicit override, else the pane's stored
+    /// spawn command.
+    pub command: Option<String>,
+    /// The restart's working directory: the explicit override, else the
+    /// pane's last known cwd.
+    pub cwd: Option<std::path::PathBuf>,
+    /// The old pane's user title, carried to the replacement.
+    user_title: Option<String>,
+}
+
+impl RespawnSpawn {
+    /// The factory-facing context — the same fields a fresh spawn passes.
+    pub fn context(&self) -> SpawnContext<'_> {
+        SpawnContext {
+            session: Some((self.session_id, &self.session_name)),
+            window: Some(self.window_id),
+            env: Some(&self.env),
+            cwd: self.cwd.as_deref(),
+        }
+    }
+}
+
 impl SessionSpawn {
     /// The factory-facing context — the same fields the one-shot path passes.
     pub fn context(&self) -> SpawnContext<'_> {
@@ -779,6 +818,16 @@ impl MuxTree {
         })
     }
 
+    /// Whether every pane in the tree has been observed dead — the
+    /// exit-when-empty daemon's "nothing left to serve" test alongside an
+    /// empty tree. A tree holding only dead panes contains frozen screens
+    /// (remain-on-exit); with no client connected either, the daemon
+    /// collects itself instead of lingering on them. `false` for an empty
+    /// tree — the caller tests emptiness separately.
+    pub fn all_panes_dead(&self) -> bool {
+        !self.panes.is_empty() && self.panes.values().all(|pane| pane.dead())
+    }
+
     /// `break-pane -s %N`: move `pane` out of its window into a new
     /// window appended to the same session, which becomes the session's
     /// active window (tmux's behavior). The pane's process, terminal,
@@ -943,6 +992,92 @@ impl MuxTree {
         }
         self.sync_pane_sizes(target_window);
         Ok((target_window, source_window, source_closed, removed_session))
+    }
+
+    /// Phase 1 of `respawn-pane`: resolve the pane, refuse a live one
+    /// without `kill`, and snapshot everything the restart needs. The
+    /// caller DROPS the tree lock, spawns through the factory, and
+    /// re-locks for [`Self::complete_respawn`].
+    pub fn begin_respawn(
+        &mut self,
+        pane: PaneId,
+        kill: bool,
+        command: Option<String>,
+        cwd: Option<&Path>,
+    ) -> Result<RespawnSpawn, MuxError> {
+        let window_id = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        let (session_id, session_name, env) = {
+            let session = self
+                .sessions
+                .values()
+                .find(|s| s.windows.contains(&window_id))
+                .ok_or(MuxError::NoSuchWindow(window_id))?;
+            (session.id, session.name.clone(), session.env.clone())
+        };
+        let (cols, rows, stored_command, stored_cwd, user_title, alive) = {
+            let pane = self
+                .panes
+                .get_mut(&pane)
+                .expect("window_of_pane only returns live windows");
+            let (cols, rows) = pane.terminal().read().size();
+            (
+                cols as u16,
+                rows as u16,
+                pane.spawn_command().map(str::to_string),
+                pane.persistence_cwd(),
+                pane.user_title().map(str::to_string),
+                pane.poll_running(),
+            )
+        };
+        if alive && !kill {
+            return Err(MuxError::PaneAlive(pane));
+        }
+        Ok(RespawnSpawn {
+            pane_id: pane,
+            window_id,
+            session_id,
+            session_name,
+            env,
+            cols,
+            rows,
+            command: command.or(stored_command),
+            cwd: cwd
+                .map(Path::to_owned)
+                .or(stored_cwd)
+                .or_else(|| std::env::current_dir().ok()),
+            user_title,
+        })
+    }
+
+    /// Phase 3 of `respawn-pane`: swap the freshly spawned pane in for
+    /// the old one — same id, so window and layout are untouched. The
+    /// old pane's process is killed off the tree's books; the window may
+    /// have been killed while the spawn ran, in which case the new pane
+    /// is killed and the error reported.
+    pub fn complete_respawn(
+        &mut self,
+        plan: RespawnSpawn,
+        pane: MuxPane,
+    ) -> Result<PaneId, MuxError> {
+        if self.window_of_pane(plan.pane_id) != Some(plan.window_id) {
+            kill_detached(pane);
+            return Err(MuxError::NoSuchWindow(plan.window_id));
+        }
+        let user_title = plan.user_title.clone();
+        let old = self
+            .panes
+            .insert(plan.pane_id, pane)
+            .expect("begin_respawn resolved a live pane, and only complete_respawn removes it");
+        kill_detached(old);
+        if let Some(title) = user_title {
+            if let Some(pane) = self.panes.get_mut(&plan.pane_id) {
+                pane.set_user_title(&title);
+            }
+        }
+        self.sync_pane_sizes(plan.window_id);
+        Ok(plan.pane_id)
     }
 
     /// `move-window -s @N -t <index>`: move `window_id` to `index` in
@@ -2562,6 +2697,60 @@ mod tests {
         let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
             .expect("state rebuilds");
         assert_eq!(restored.session(session_id).unwrap().windows, order);
+    }
+
+    /// `respawn-pane`: a live pane refuses without `kill`; a dead pane
+    /// restarts in place — same id, window, and layout, the user title
+    /// carried to the replacement, a live process again.
+    #[test]
+    fn respawn_restarts_a_dead_pane_in_place() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let pane = tree.window(window_id).unwrap().panes()[0];
+        tree.pane_mut(pane).unwrap().set_user_title("kept");
+
+        // Live process: refused without -k.
+        assert!(matches!(
+            tree.begin_respawn(pane, false, None, None),
+            Err(MuxError::PaneAlive(pane))
+        ));
+
+        // Kill the process the way the reaper observes it: type exit,
+        // poll until the OS agrees, mark the death.
+        tree.pane_mut(pane).unwrap().write(b"exit 0\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut pane_ref = tree.pane_mut(pane).unwrap();
+        while pane_ref.poll_running() && std::time::Instant::now() < deadline {
+            drop(pane_ref);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            pane_ref = tree.pane_mut(pane).unwrap();
+        }
+        assert!(!pane_ref.poll_running(), "the shell must exit on `exit 0`");
+        pane_ref.mark_dead();
+        drop(pane_ref);
+        assert_eq!(tree.pane(pane).unwrap().exit_code(), Some(0));
+        assert!(tree.all_panes_dead());
+
+        // Respawn with the stored command: same pane id, title carried,
+        // layout untouched, a live process again.
+        let factory = tree.factory();
+        let plan = tree.begin_respawn(pane, false, None, None).unwrap();
+        assert_eq!(plan.pane_id, pane);
+        let respawned = factory
+            .create_pane(
+                plan.pane_id,
+                plan.cols,
+                plan.rows,
+                plan.command.as_deref(),
+                &plan.context(),
+            )
+            .expect("respawn spawns");
+        tree.complete_respawn(plan, respawned).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().panes(), vec![pane]);
+        assert_eq!(tree.pane(pane).unwrap().user_title(), Some("kept"));
+        assert!(tree.pane(pane).unwrap().is_running());
+        assert!(!tree.all_panes_dead());
     }
 
     #[test]

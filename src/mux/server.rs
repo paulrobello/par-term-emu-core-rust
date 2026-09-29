@@ -12,12 +12,11 @@ use crate::mux::command::parse_command;
 use crate::mux::command::{parse_line, Line};
 use crate::mux::dispatch::{dispatch_command, Ctx};
 use crate::mux::emit::{emit, emit_block};
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, WindowId};
 use crate::mux::ipc::{
     accept_connection, bind_local_listener, prepare_socket_path, ConnectionAbort, LocalListener,
     LocalStream,
 };
-use crate::mux::pane::MuxError;
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::persist::{write_job, PersistState, SaveOrigin};
 use crate::mux::tree::MuxTree;
@@ -305,8 +304,15 @@ impl MuxServer {
                     // it holds. Both locks are taken and released one at a
                     // time — never nested.
                     if state_path.is_some() {
-                        let idle_empty = self.tree.lock().sessions().is_empty()
-                            && self.clients.lock().is_empty();
+                        // "Empty" counts a tree whose every pane is dead
+                        // too: held panes (remain-on-exit) are for clients
+                        // that might come back — with nobody connected and
+                        // nothing alive anywhere, the daemon collects
+                        // itself instead of lingering on frozen screens.
+                        let no_clients = self.clients.lock().is_empty();
+                        let idle_empty = no_clients
+                            && (self.tree.lock().sessions().is_empty()
+                                || self.tree.lock().all_panes_dead());
                         empty_since = match (idle_empty, empty_since) {
                             (true, Some(since)) => Some(since),
                             (true, None) => Some(std::time::Instant::now()),
@@ -936,107 +942,57 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
     push_to_clients(clients, emit(notification));
 }
 
-/// Close panes whose child exited, with tmux's semantics — a pane dies with
-/// its process. The PTY reader flips `is_running` on EOF; this pass (the
-/// accept loop's idle tick, [`REAP_INTERVAL`]) then removes the pane and
-/// broadcasts what clients need to drop it: `%layout-change` +
-/// `%window-pane-changed` for a surviving window, `%window-close` when the
-/// dead pane was the window's last. The window's closure cascades further in
-/// the tree — a session with no windows is removed with it, and that removal
-/// broadcasts `%sessions-changed`, the same cue a structural kill sends.
-/// A persisting daemon emptied this way exits once the last client is gone
-/// (see [`EXIT_EMPTY_GRACE`]).
+/// Announce panes whose child exited, and HOLD them (remain-on-exit): the
+/// pane, its window, and its frozen screen stay in the tree so
+/// `respawn-pane` can restart the process in place — the recovery path a
+/// client offers on a crashed program. The PTY reader flips `is_running`
+/// on EOF; this pass (the accept loop's idle tick, [`REAP_INTERVAL`])
+/// then observes the death ONCE, records the exit code while the child
+/// handle can still be asked, and broadcasts `%pane-exited` — the cue a
+/// client uses to show "Process exited (code N)" over the frozen screen.
+/// No layout changes: the pane keeps its id, window, and geometry.
 ///
-/// A `kill_pane` on the last pane is refused by the tree, so that case must
-/// resolve to `kill_window` BEFORE the pane is gone from the layout's point
-/// of view. Decision and kill share one lock guard (QA-115) — separate
-/// acquisitions could watch the window change shape between the last-pane
-/// check and the kill — while every broadcast happens after the guard drops
-/// (parking_lot is not reentrant and the broadcast helpers lock the tree
-/// themselves).
+/// Nothing auto-closes anymore. A persisting daemon whose every pane is
+/// dead exits once the last client is gone (see [`EXIT_EMPTY_GRACE`] and
+/// [`MuxTree::all_panes_dead`]) — held panes are for clients that might
+/// come back, and with nobody connected and nothing alive the daemon
+/// collects itself.
 fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
     persist: Option<&Sender<(SaveOrigin, PersistState)>>,
 ) {
-    let dead: Vec<PaneId> = {
+    let mut just_died: Vec<(PaneId, Option<i32>)> = Vec::new();
+    {
         let mut guard = tree.lock();
         // Enumerate first, then poll mutably: poll_running consults the OS
         // child handle when the reader flag still claims alive — on Windows
         // ConPTY that flag never flips after an exit (conhost keeps the pipe
-        // open), so is_running alone would never reap there.
-        let panes: Vec<PaneId> = guard
-            .sessions()
-            .iter()
-            .filter_map(|s| guard.session(*s))
-            .flat_map(|s| s.windows.clone())
-            .filter_map(|w| guard.window(w))
-            .flat_map(|w| w.panes())
-            .collect();
-        panes
-            .into_iter()
-            .filter(|p| guard.pane_mut(*p).is_some_and(|pane| !pane.poll_running()))
-            .collect()
-    };
-    if dead.is_empty() {
-        return;
-    }
-    let mut changed = false;
-    for pane in dead {
-        // (window, killed-whole-window, session-removed-by-cascade, active
-        // pane left behind by a pane kill)
-        let killed: Result<(WindowId, bool, Option<SessionId>, Option<PaneId>), MuxError> = {
-            let mut guard = tree.lock();
-            let Some(window) = guard.window_of_pane(pane) else {
+        // open), so is_running alone would never observe the death there.
+        let panes: Vec<PaneId> = guard.panes.keys().copied().collect();
+        for pane_id in panes {
+            let Some(pane) = guard.pane_mut(pane_id) else {
                 continue;
             };
-            let last_pane = guard.window(window).is_some_and(|w| w.panes().len() <= 1);
-            if last_pane {
-                guard
-                    .kill_window(window)
-                    .map(|removed_session| (window, true, removed_session, None))
-            } else {
-                guard.kill_pane(pane).map(|(window, removed_session)| {
-                    let active = guard.window(window).map(|w| w.active);
-                    (window, false, removed_session, active)
-                })
+            if pane.dead() {
+                continue;
             }
-        };
-        match killed {
-            Ok((window, was_window, removed_session, active)) => {
-                changed = true;
-                if was_window {
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowClose {
-                            window_id: window.to_string(),
-                        },
-                    );
-                    if removed_session.is_some() {
-                        // The window's closure emptied the session — the
-                        // reaper-cascade counterpart of what cmd_kill_window
-                        // broadcasts for the same tree mutation.
-                        broadcast_notification(clients, &TmuxNotification::SessionsChanged);
-                    }
-                } else {
-                    broadcast_layout_change(tree, clients, window);
-                    if let Some(active) = active {
-                        broadcast_notification(
-                            clients,
-                            &TmuxNotification::WindowPaneChanged {
-                                window_id: window.to_string(),
-                                pane_id: active.to_string(),
-                            },
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                log::warn!("par-mux: reaping pane {pane} failed: {err}");
+            if !pane.poll_running() {
+                pane.mark_dead();
+                just_died.push((pane_id, pane.exit_code()));
             }
         }
     }
-    if changed {
+    for &(pane_id, exit_code) in &just_died {
+        broadcast_notification(
+            clients,
+            &TmuxNotification::PaneExited {
+                pane_id: pane_id.to_string(),
+                exit_code,
+            },
+        );
+    }
+    if !just_died.is_empty() {
         if let Some(tx) = persist {
             // Same off-lock capture discipline as the command path
             // (ARC-032): collect handles under the lock, walk grids after.

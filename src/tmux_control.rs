@@ -179,6 +179,22 @@ pub enum TmuxNotification {
     /// Arguments: pane_id, new_title (empty = cleared)
     PaneTitleChanged { pane_id: String, title: String },
 
+    /// A pane's process exited and the pane is held (remain-on-exit):
+    /// the pane, its window, and its frozen screen stay in the tree for
+    /// `respawn-pane`. The exit code is `None` when the child died by
+    /// signal or was reaped before the code was read.
+    /// Arguments: pane_id, exit_code (empty = none)
+    PaneExited {
+        pane_id: String,
+        exit_code: Option<i32>,
+    },
+
+    /// A pane's process was restarted in place by `respawn-pane`: same
+    /// pane id, window, and layout, fresh terminal. The cue clients use
+    /// to clear their exited-state chrome.
+    /// Arguments: pane_id
+    PaneRespawned { pane_id: String },
+
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
     Unknown { line: String },
@@ -222,6 +238,8 @@ impl TmuxNotification {
             Self::AgentReleased { .. } => "agent-released",
             Self::AgentTelemetryChanged { .. } => "agent-telemetry-changed",
             Self::PaneTitleChanged { .. } => "pane-title-changed",
+            Self::PaneExited { .. } => "pane-exited",
+            Self::PaneRespawned { .. } => "pane-respawned",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
         }
@@ -438,6 +456,8 @@ impl TmuxControlParser {
             "agent-released" => Self::parse_agent_released(args),
             "agent-telemetry-changed" => Self::parse_agent_telemetry_changed(args),
             "pane-title-changed" => Self::parse_pane_title_changed(args),
+            "pane-exited" => Self::parse_pane_exited(args),
+            "pane-respawned" => Self::parse_pane_id_only(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
             }),
@@ -619,6 +639,31 @@ impl TmuxControlParser {
         Some(TmuxNotification::PaneTitleChanged {
             pane_id: pane_id.to_string(),
             title: title.to_string(),
+        })
+    }
+
+    fn parse_pane_exited(args: &str) -> Option<TmuxNotification> {
+        // pane_id [exit_code] — a missing code token means the code was
+        // unreadable (signal death, or reaped before the pass saw it).
+        let (pane_id, code) = match args.split_once(' ') {
+            Some((id, rest)) => (id, rest.trim().parse::<i32>().ok()),
+            None => (args, None),
+        };
+        if pane_id.is_empty() {
+            return None;
+        }
+        Some(TmuxNotification::PaneExited {
+            pane_id: pane_id.to_string(),
+            exit_code: code,
+        })
+    }
+
+    fn parse_pane_id_only(args: &str) -> Option<TmuxNotification> {
+        if args.is_empty() {
+            return None;
+        }
+        Some(TmuxNotification::PaneRespawned {
+            pane_id: args.trim().to_string(),
         })
     }
 

@@ -137,6 +137,15 @@ pub fn emit(notification: &TmuxNotification) -> String {
             };
             format!("%pane-title-changed {pane_id}{tail}\n")
         }
+        TmuxNotification::PaneExited { pane_id, exit_code } => {
+            // A missing code token means unreadable (signal death, reaped
+            // before the pass saw it) — the parser reads it back as None.
+            let tail = exit_code.map(|c| format!(" {c}")).unwrap_or_default();
+            format!("%pane-exited {pane_id}{tail}\n")
+        }
+        TmuxNotification::PaneRespawned { pane_id } => {
+            format!("%pane-respawned {pane_id}\n")
+        }
         // Seam S3: `TmuxNotification` carries 29 variants; Phase 1 emits the
         // 9 the spine needs and the rest fall through here, producing nothing
         // rather than panicking. Adding a notification is therefore one new

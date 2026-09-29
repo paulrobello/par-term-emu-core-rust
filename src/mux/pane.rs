@@ -39,6 +39,9 @@ pub enum MuxError {
     PanesInDifferentWindows(PaneId, PaneId),
     /// A pane move named the same pane as source and target.
     SamePane(PaneId),
+    /// The pane's process is still running — `respawn-pane` without
+    /// `-k` refuses to kill it.
+    PaneAlive(PaneId),
     /// The two windows are not in the same session, so their positions
     /// cannot be exchanged.
     WindowsInDifferentSessions(WindowId, WindowId),
@@ -83,6 +86,12 @@ impl std::fmt::Display for MuxError {
             }
             MuxError::SamePane(id) => {
                 write!(f, "pane {id} cannot be moved onto itself")
+            }
+            MuxError::PaneAlive(id) => {
+                write!(
+                    f,
+                    "pane {id} is still running; respawn-pane -k kills it first"
+                )
             }
             MuxError::WindowsInDifferentSessions(a, b) => {
                 write!(f, "windows {a} and {b} are in different sessions")
@@ -132,6 +141,13 @@ pub struct MuxPane {
     /// [`MuxPane::effective_title`] falls back to the terminal's live OSC
     /// title instead.
     user_title: Option<String>,
+    /// The process has been observed dead by a liveness pass. The pane is
+    /// HELD in this state (remain-on-exit): its frozen screen stays for
+    /// `respawn-pane` to restart in place.
+    dead: bool,
+    /// The recorded exit code, valid once `dead` — `None` when the child
+    /// died by signal or was reaped before the code could be read.
+    exit_code: Option<i32>,
     metadata: HashMap<String, String>,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
@@ -323,6 +339,29 @@ impl MuxPane {
     /// pane in the tree forever; see [`PtySession::poll_running`].
     pub fn poll_running(&mut self) -> bool {
         self.session.poll_running()
+    }
+
+    /// Whether a liveness pass has observed this pane's process dead.
+    /// A dead pane is held (remain-on-exit): its frozen screen stays in
+    /// the tree until `respawn-pane` restarts it or `kill-pane` removes
+    /// it.
+    pub fn dead(&self) -> bool {
+        self.dead
+    }
+
+    /// Record the death this pane's process has already been observed to
+    /// reach ([`Self::poll_running`] returned false), capturing the exit
+    /// code while the child handle can still be asked. Best-effort: a
+    /// child that died by signal or was reaped earlier records `None`.
+    pub fn mark_dead(&mut self) {
+        self.dead = true;
+        self.exit_code = self.session.try_wait().ok().flatten();
+    }
+
+    /// The exit code captured at [`Self::mark_dead`] — `None` before the
+    /// death was observed or when the code was unreadable.
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
     }
 
     /// The pane's child process id, if it has been spawned.
@@ -543,6 +582,8 @@ impl ShellPaneFactory {
             session,
             spawn_command,
             user_title: None,
+            dead: false,
+            exit_code: None,
             metadata: HashMap::new(),
             snapshot_cache: Arc::new(Mutex::new(None)),
         }
