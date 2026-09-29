@@ -90,6 +90,17 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests -
 #     consumes APC (ESC _ … ST), so a kitty escape never crosses a ConPTY
 #     pane — the test asserts the daemon-retain/mirror-delete contract
 #     where the medium exists.
+#     A FULL run (no mux:: filter) also executes the integration targets
+#     (mux_daemon/mux_cli/…), whose panes pipe through `tr` etc. from Git's
+#     usr\bin — hosted runners carry that dir on PATH, the VM does NOT, so
+#     prepend it for the session or those tests fail with "'tr' is not
+#     recognized" (measured 2026-09-29, Windows 26200; everything passes
+#     with it). Serve a one-line vmtest.ps1 over the same HTTP port rather
+#     than quoting $env: through prlctl+cmd+powershell.
+#     Also measured 2026-09-29 (Windows 26200): cmd.exe under ConPTY ECHOES
+#     a `\n`-terminated line but never SUBMITS it — a typed Enter must be
+#     `\r` (26100 submitted `\n`; CI intermittents during the image rollout
+#     were mixed runner builds, card 01a0ee2fcfa67d62bb9b9906a353deea).
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
