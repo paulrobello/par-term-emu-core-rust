@@ -69,6 +69,7 @@ include = [
     "TermCursorState",
     "TermModeState",
     "TermKeyEvent",
+    "KeyEncodeOptions",
     "term_event_cb",
 ]
 

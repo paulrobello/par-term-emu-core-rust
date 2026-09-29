@@ -426,8 +426,9 @@ impl SharedCell {
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
 /// the cbindgen-generated include/terminal_core.h); bump both on any layout
-/// or contract change.
-pub const TERM_CORE_ABI_VERSION: u32 = 2;
+/// or contract change. Version 3: `TermKeyOptions` +
+/// `terminal_encode_key_ex` + the `TERM_MOD_ALT_RIGHT` side bit (ENH-028).
+pub const TERM_CORE_ABI_VERSION: u32 = 3;
 
 /// The ABI version this library implements. A binary detects a mismatch
 /// by comparing this call's return against its compiled-in header macro.
@@ -784,12 +785,38 @@ pub unsafe extern "C" fn terminal_encode_key(
     out: *mut u8,
     cap: u32,
 ) -> u32 {
+    terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap)
+}
+
+/// [`terminal_encode_key`] with explicit macOS Option-key modes
+/// (`TermKeyOptions`, ENH-028). Pass NULL `opts` for the defaults (ESC
+/// prefix on both sides — the classic xterm Alt behavior, identical to
+/// `terminal_encode_key`). A zeroed struct means Normal passthrough on
+/// both sides; see `terminal_core_layout.h` for the mode values.
+///
+/// # Safety
+/// `ev` must be valid for reads of one `TermKeyEvent`; `opts`, when not
+/// NULL, must be valid for reads of one `TermKeyOptions`; `out` must be
+/// valid for writes of `cap` bytes, or NULL with `cap` 0 to fetch the
+/// total encoded length.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_encode_key_ex(
+    term: *const Terminal,
+    ev: *const crate::keyboard::TermKeyEvent,
+    opts: *const crate::keyboard::KeyEncodeOptions,
+    out: *mut u8,
+    cap: u32,
+) -> u32 {
     if term.is_null() || ev.is_null() {
         return 0;
     }
     let term_ref = unsafe { &*term };
     let ev_ref = unsafe { &*ev };
-    let bytes = crate::keyboard::encode_key(ev_ref, term_ref);
+    let opts_ref = match unsafe { opts.as_ref() } {
+        Some(o) => o,
+        None => &crate::keyboard::KeyEncodeOptions::default(),
+    };
+    let bytes = crate::keyboard::encode_key_with(ev_ref, term_ref, opts_ref);
     let fill = (bytes.len() as u32).min(cap);
     if fill > 0 && !out.is_null() {
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
@@ -900,6 +927,7 @@ mod tests {
         assert_eq!(size_of::<TermModeState>(), 20);
         assert_eq!(size_of::<crate::keyboard::TermKeyEvent>(), 8);
         assert_eq!(offset_of!(crate::keyboard::TermKeyEvent, codepoint), 4);
+        assert_eq!(size_of::<crate::keyboard::KeyEncodeOptions>(), 2);
     }
 
     // ------------------------------------------------------------------
@@ -1073,6 +1101,64 @@ mod tests {
         unsafe { terminal_free(term) };
     }
 
+    /// ENH-028: `terminal_encode_key_ex` honors `TermKeyOptions` (NULL opts
+    /// = the ESC defaults, a zeroed struct = Normal passthrough, and the
+    /// modifyOtherKeys mode read from the terminal's own negotiated state).
+    #[test]
+    fn ffi_encode_key_ex_options_and_null_default() {
+        use crate::keyboard::{modifiers, option_modes, KeyEncodeOptions, TermKeyEvent};
+
+        let term = unsafe { terminal_create(10, 6, 50) };
+        unsafe { terminal_feed(term, b"\x1b[>4;2m".as_ptr(), 8) };
+        let ev = TermKeyEvent::char_('f', modifiers::ALT);
+
+        let mut buf = [0u8; 32];
+        // modifyOtherKeys 2 outranks the option modes: CSI 27-form.
+        let n = unsafe {
+            terminal_encode_key_ex(
+                term,
+                &ev,
+                &KeyEncodeOptions::default(),
+                buf.as_mut_ptr(),
+                32,
+            )
+        };
+        assert_eq!(&buf[..n as usize], b"\x1b[27;3;102~");
+
+        // Reset modifyOtherKeys; now the option modes decide.
+        unsafe { terminal_feed(term, b"\x1b[>4m".as_ptr(), 6) };
+        let n = unsafe {
+            terminal_encode_key_ex(
+                term,
+                &ev,
+                &KeyEncodeOptions {
+                    left_option: option_modes::META,
+                    right_option: option_modes::NORMAL,
+                },
+                buf.as_mut_ptr(),
+                32,
+            )
+        };
+        assert_eq!(&buf[..n as usize], &[0xE6], "left Alt → Meta mode");
+
+        // NULL opts = ESC defaults, byte-identical to terminal_encode_key.
+        let n =
+            unsafe { terminal_encode_key_ex(term, &ev, std::ptr::null(), buf.as_mut_ptr(), 32) };
+        let m = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
+        assert_eq!(&buf[..n as usize], &[0x1b, b'f']);
+        assert_eq!(n, m);
+
+        // A zeroed struct is Normal on both sides.
+        let zeroed = KeyEncodeOptions {
+            left_option: 0,
+            right_option: 0,
+        };
+        let n = unsafe { terminal_encode_key_ex(term, &ev, &zeroed, buf.as_mut_ptr(), 32) };
+        assert_eq!(&buf[..n as usize], b"f");
+
+        unsafe { terminal_free(term) };
+    }
+
     #[test]
     fn ffi_dirty_ranges_coalesce_and_resize_marks_damage() {
         let term = unsafe { terminal_create(10, 6, 50) };
@@ -1186,14 +1272,14 @@ mod tests {
     /// comparing the two. Bumping one side without the other fails here.
     #[test]
     fn abi_version_matches_header_macro() {
-        assert_eq!(terminal_abi_version(), 2);
+        assert_eq!(terminal_abi_version(), 3);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/include/terminal_core_layout.h"
         ))
         .expect("header readable");
         assert!(
-            header.contains("#define TERM_CORE_ABI_VERSION 2"),
+            header.contains("#define TERM_CORE_ABI_VERSION 3"),
             "header TERM_CORE_ABI_VERSION drifted from terminal_abi_version()"
         );
     }
@@ -1243,6 +1329,19 @@ mod tests {
             ("TERM_MOD_SUPER", modifiers::SUPER as u32),
             ("TERM_MOD_HYPER", modifiers::HYPER as u32),
             ("TERM_MOD_META", modifiers::META as u32),
+            ("TERM_MOD_ALT_RIGHT", modifiers::ALT_RIGHT as u32),
+            (
+                "TERM_OPTION_MODE_NORMAL",
+                crate::keyboard::option_modes::NORMAL as u32,
+            ),
+            (
+                "TERM_OPTION_MODE_META",
+                crate::keyboard::option_modes::META as u32,
+            ),
+            (
+                "TERM_OPTION_MODE_ESC",
+                crate::keyboard::option_modes::ESC as u32,
+            ),
             ("TERM_KEY_UNKNOWN", tk(TermKey::Unknown)),
             ("TERM_KEY_CHAR", tk(TermKey::Char)),
             ("TERM_KEY_TAB", tk(TermKey::Tab)),

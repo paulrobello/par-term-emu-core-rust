@@ -20,8 +20,9 @@
 
 /* Contract version of terminal_core.h (ARC-063). Compare against
  * terminal_abi_version() at runtime to detect a layout mismatch; bump on
- * any layout or contract change to the C surface. */
-#define TERM_CORE_ABI_VERSION 2
+ * any layout or contract change to the C surface. Version 3: TermKeyOptions
+ * + terminal_encode_key_ex + TERM_MOD_ALT_RIGHT (ENH-028). */
+#define TERM_CORE_ABI_VERSION 3
 
 /* Cell attribute bits — SharedCell.attrs (mirrors CellBitflags in cell.rs). */
 #define TERM_CELL_BOLD 1u             /* bit 0 */
@@ -52,6 +53,16 @@
 #define TERM_MOD_SUPER 8u /* bit 3 */
 #define TERM_MOD_HYPER 16u /* bit 4 */
 #define TERM_MOD_META 32u  /* bit 5 */
+/* Side info, not a modifier: the held Alt key is the right one (ENH-028).
+ * Selects TermKeyOptions.right_option over left_option; ignored by every
+ * xterm/kitty modifier parameter field. */
+#define TERM_MOD_ALT_RIGHT 64u /* bit 6 */
+
+/* macOS Option-key modes for TermKeyOptions (ENH-028) — left_option /
+ * right_option fields of terminal_encode_key_ex. */
+#define TERM_OPTION_MODE_NORMAL 0u /* pass the composed character through */
+#define TERM_OPTION_MODE_META 1u   /* 8th bit on ASCII bases, ESC otherwise */
+#define TERM_OPTION_MODE_ESC 2u    /* ESC-prefix the base character */
 
 /* TermKey codes. Functional-key values ARE the kitty protocol functional
  * codes; do not renumber. */
@@ -115,5 +126,6 @@ _Static_assert(sizeof(TermModeState) == 20, "TermModeState must match Rust repr(
 
 _Static_assert(sizeof(TermKeyEvent) == 8, "TermKeyEvent must match Rust repr(C) layout");
 _Static_assert(offsetof(TermKeyEvent, codepoint) == 4, "TermKeyEvent.codepoint offset must match Rust");
+_Static_assert(sizeof(TermKeyOptions) == 2, "TermKeyOptions must match Rust repr(C) layout");
 
 #endif /* PAR_TERM_EMU_CORE_TERMINAL_CORE_LAYOUT_H */

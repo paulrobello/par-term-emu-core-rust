@@ -197,6 +197,22 @@ typedef struct {
 } TermKeyEvent;
 
 /**
+ * Frontend-owned key-encoding options (not terminal state). repr(C) so the
+ * FFI can pass it as `TermKeyOptions`; a zeroed struct means Normal for
+ * both sides.
+ */
+typedef struct {
+  /**
+   * [`option_modes`] value for the left Option key.
+   */
+  uint8_t left_option;
+  /**
+   * [`option_modes`] value for the right Option key.
+   */
+  uint8_t right_option;
+} KeyEncodeOptions;
+
+/**
  * A complete, C-compatible snapshot of the terminal state.
  *
  * All heap-allocated fields (`title`, `cwd`, `cells`) are owned by this struct
@@ -493,6 +509,25 @@ uint32_t terminal_encode_key(const Terminal *term,
                              const TermKeyEvent *ev,
                              uint8_t *out,
                              uint32_t cap);
+
+/**
+ * [`terminal_encode_key`] with explicit macOS Option-key modes
+ * (`TermKeyOptions`, ENH-028). Pass NULL `opts` for the defaults (ESC
+ * prefix on both sides — the classic xterm Alt behavior, identical to
+ * `terminal_encode_key`). A zeroed struct means Normal passthrough on
+ * both sides; see `terminal_core_layout.h` for the mode values.
+ *
+ * # Safety
+ * `ev` must be valid for reads of one `TermKeyEvent`; `opts`, when not
+ * NULL, must be valid for reads of one `TermKeyOptions`; `out` must be
+ * valid for writes of `cap` bytes, or NULL with `cap` 0 to fetch the
+ * total encoded length.
+ */
+uint32_t terminal_encode_key_ex(const Terminal *term,
+                                const TermKeyEvent *ev,
+                                const KeyEncodeOptions *opts,
+                                uint8_t *out,
+                                uint32_t cap);
 
 /**
  * Create a snapshot of the terminal's current state.
