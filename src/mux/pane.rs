@@ -37,6 +37,11 @@ pub enum MuxError {
     /// The two panes are not in the same window, so their positions cannot
     /// be exchanged.
     PanesInDifferentWindows(PaneId, PaneId),
+    /// A pane move named the same pane as source and target.
+    SamePane(PaneId),
+    /// The two windows are not in the same session, so their positions
+    /// cannot be exchanged.
+    WindowsInDifferentSessions(WindowId, WindowId),
     /// The pane has no bordering split of the requested orientation to
     /// adjust.
     PaneNotResizable(PaneId),
@@ -75,6 +80,12 @@ impl std::fmt::Display for MuxError {
             }
             MuxError::PanesInDifferentWindows(a, b) => {
                 write!(f, "panes {a} and {b} are in different windows")
+            }
+            MuxError::SamePane(id) => {
+                write!(f, "pane {id} cannot be moved onto itself")
+            }
+            MuxError::WindowsInDifferentSessions(a, b) => {
+                write!(f, "windows {a} and {b} are in different sessions")
             }
             MuxError::PaneNotResizable(id) => {
                 write!(f, "pane {id} cannot be resized in that direction")

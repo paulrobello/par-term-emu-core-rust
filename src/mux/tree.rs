@@ -754,6 +754,262 @@ impl MuxTree {
         Ok(window_id)
     }
 
+    /// Remove `window_id` from the tree and its session's window list,
+    /// closing the session when it was the last window — the same
+    /// cascade [`Self::kill_pane`] runs for a window emptied of panes.
+    /// Returns the removed session, when the cascade reached it. The
+    /// caller guarantees the window exists and every pane it held has
+    /// already been re-homed or killed.
+    fn drop_empty_window(&mut self, window_id: WindowId) -> Option<SessionId> {
+        self.windows.remove(&window_id);
+        let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
+            if let Some(pos) = session.windows.iter().position(|w| *w == window_id) {
+                session.windows.remove(pos);
+                if session.active >= session.windows.len() && !session.windows.is_empty() {
+                    session.active = session.windows.len() - 1;
+                }
+                if session.windows.is_empty() {
+                    return Some(*id);
+                }
+            }
+            None
+        });
+        empty_session.inspect(|&session_id| {
+            self.sessions.remove(&session_id);
+        })
+    }
+
+    /// `break-pane -s %N`: move `pane` out of its window into a new
+    /// window appended to the same session, which becomes the session's
+    /// active window (tmux's behavior). The pane's process, terminal,
+    /// and title all move with it — the move is pure layout surgery, so
+    /// nothing is re-spawned. The new window inherits the source
+    /// window's grid size, and the pane's terminal is re-fitted to that
+    /// full extent. The source window closes when the pane was its last
+    /// one; the session cannot die that way — the new window is
+    /// inserted before the source is dropped, so the cascade in
+    /// [`Self::drop_empty_window`] never finds an empty session. The Ok
+    /// payload is `(new window, source window, whether the source
+    /// window closed)`.
+    pub fn break_pane(
+        &mut self,
+        pane: PaneId,
+        name: &str,
+    ) -> Result<(WindowId, WindowId, bool), MuxError> {
+        let source_window = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        let session_id = self
+            .sessions
+            .values()
+            .find(|s| s.windows.contains(&source_window))
+            .map(|s| s.id)
+            .ok_or(MuxError::NoSuchWindow(source_window))?;
+        let (cols, rows) = {
+            let window = self
+                .windows
+                .get(&source_window)
+                .expect("window_of_pane only returns live windows");
+            (window.cols, window.rows)
+        };
+        let only_pane = {
+            let window = self
+                .windows
+                .get_mut(&source_window)
+                .expect("window_of_pane only returns live windows");
+            // A layout mutation ends the zoom the same way every other
+            // one does.
+            window.zoomed = None;
+            window.layout == LayoutTree::leaf(pane)
+        };
+
+        // The new window exists before the pane leaves the source, so an
+        // only-pane break never leaves the session windowless.
+        let window_id = self.ids.next_window();
+        self.windows.insert(
+            window_id,
+            MuxWindow {
+                id: window_id,
+                name: name.to_string(),
+                layout: LayoutTree::leaf(pane),
+                active: pane,
+                cols,
+                rows,
+                zoomed: None,
+            },
+        );
+        {
+            let session = self
+                .sessions
+                .get_mut(&session_id)
+                .expect("checked directly above");
+            session.windows.push(window_id);
+            session.active = session.windows.len() - 1;
+        }
+
+        let source_closed = if only_pane {
+            self.drop_empty_window(source_window);
+            true
+        } else {
+            let window = self
+                .windows
+                .get_mut(&source_window)
+                .expect("only_pane was false, so the window still lives");
+            window.layout.remove_pane(pane).expect("not the only pane");
+            if window.active == pane {
+                window.active = window.layout.pane_ids()[0];
+            }
+            self.sync_pane_sizes(source_window);
+            false
+        };
+        self.sync_pane_sizes(window_id);
+        Ok((window_id, source_window, source_closed))
+    }
+
+    /// `join-pane -s %N -t %M`: move `source` next to `target` — into
+    /// `target`'s window when the panes live in different ones, the
+    /// `split-window` arrangement rule (`-h` beside, `-v`/default
+    /// below) and `-p` share applied to the moved pane. The moved pane
+    /// becomes the destination window's active pane, like a split's new
+    /// pane does. The source window closes when the pane was its last
+    /// one — and that cascade CAN reach the session (the destination
+    /// belongs to whichever window `target` lives in, so nothing
+    /// backstops the source's session). The Ok payload is
+    /// `(destination window, source window, whether the source window
+    /// closed, the session removed by the cascade)`.
+    pub fn join_pane(
+        &mut self,
+        source: PaneId,
+        target: PaneId,
+        direction: SplitDirection,
+        new_share: f32,
+    ) -> Result<(WindowId, WindowId, bool, Option<SessionId>), MuxError> {
+        if source == target {
+            return Err(MuxError::SamePane(source));
+        }
+        let source_window = self
+            .window_of_pane(source)
+            .ok_or(MuxError::NoSuchPane(source))?;
+        let target_window = self
+            .window_of_pane(target)
+            .ok_or(MuxError::NoSuchPane(target))?;
+        let only_pane = {
+            let window = self
+                .windows
+                .get_mut(&source_window)
+                .expect("window_of_pane only returns live windows");
+            window.zoomed = None;
+            window.layout == LayoutTree::leaf(source)
+        };
+
+        let mut removed_session = None;
+        let source_closed = if only_pane {
+            if source_window == target_window {
+                // The target lives in the same single-pane window, so it
+                // is the source itself — rejected above. Unreachable.
+                return Err(MuxError::SamePane(source));
+            }
+            removed_session = self.drop_empty_window(source_window);
+            true
+        } else {
+            let window = self
+                .windows
+                .get_mut(&source_window)
+                .expect("only_pane was false, so the window still lives");
+            window
+                .layout
+                .remove_pane(source)
+                .expect("not the only pane");
+            if window.active == source {
+                window.active = window.layout.pane_ids()[0];
+            }
+            false
+        };
+
+        {
+            let window = self
+                .windows
+                .get_mut(&target_window)
+                .expect("window_of_pane only returns live windows");
+            window
+                .layout
+                .split_pane(target, source, direction, new_share)
+                .expect("target pane exists in its own window");
+            window.zoomed = None;
+            window.active = source;
+        }
+        if !source_closed {
+            self.sync_pane_sizes(source_window);
+        }
+        self.sync_pane_sizes(target_window);
+        Ok((target_window, source_window, source_closed, removed_session))
+    }
+
+    /// `move-window -s @N -t <index>`: move `window_id` to `index` in
+    /// its session's window list, clamping out-of-range positions to
+    /// the ends. The active window is tracked by identity, not
+    /// position — the window that was active stays active after the
+    /// list moves.
+    pub fn move_window(&mut self, window_id: WindowId, index: usize) -> Result<(), MuxError> {
+        let session = self
+            .sessions
+            .values_mut()
+            .find(|s| s.windows.contains(&window_id))
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        let active_window = session.windows.get(session.active).copied();
+        let pos = session
+            .windows
+            .iter()
+            .position(|w| *w == window_id)
+            .expect("found by contains");
+        session.windows.remove(pos);
+        let insert_at = index.min(session.windows.len());
+        session.windows.insert(insert_at, window_id);
+        if let Some(active) = active_window {
+            session.active = session
+                .windows
+                .iter()
+                .position(|w| *w == active)
+                .expect("the active window is in the list");
+        }
+        Ok(())
+    }
+
+    /// `swap-window -s @A -t @B`: exchange the two windows' positions in
+    /// their session's window list. Same session only — a swap across
+    /// sessions changes window ownership, a different operation than a
+    /// reorder. The active window is tracked by identity, not position.
+    pub fn swap_windows(&mut self, a: WindowId, b: WindowId) -> Result<(), MuxError> {
+        if a == b {
+            return Ok(());
+        }
+        let session = self
+            .sessions
+            .values_mut()
+            .find(|s| s.windows.contains(&a) && s.windows.contains(&b))
+            .ok_or(MuxError::WindowsInDifferentSessions(a, b))?;
+        let active_window = session.windows.get(session.active).copied();
+        let pos_a = session
+            .windows
+            .iter()
+            .position(|w| *w == a)
+            .expect("found by contains");
+        let pos_b = session
+            .windows
+            .iter()
+            .position(|w| *w == b)
+            .expect("found by contains");
+        session.windows.swap(pos_a, pos_b);
+        if let Some(active) = active_window {
+            session.active = session
+                .windows
+                .iter()
+                .position(|w| *w == active)
+                .expect("the active window is in the list");
+        }
+        Ok(())
+    }
+
     /// Grow or shrink `pane` by `cells` toward `direction` (tmux's
     /// `-L`/`-R`/`-U`/`-D`), adjusting the ratio of the split it borders —
     /// from either side of it.
@@ -2054,6 +2310,258 @@ mod tests {
         let mut tree = tree();
         let result = tree.zoom_pane(PaneId(9999));
         assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
+    }
+
+    /// `break-pane` + `join-pane` round trip: breaking a pane out of a
+    /// two-pane window gives it a new full-grid window (the session's
+    /// active one) while the survivor re-fits; joining it back beside
+    /// the survivor restores the two-pane layout and closes the
+    /// one-pane window it leaves behind.
+    #[test]
+    fn break_then_join_restores_two_panes() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let first_window = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(first_window).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (40, 24));
+
+        let (new_window, source, source_closed) = tree.break_pane(first, "broken").unwrap();
+        assert_eq!(source, first_window);
+        assert!(!source_closed, "the source window keeps its other pane");
+        assert_eq!(
+            tree.session(session_id).unwrap().windows,
+            vec![first_window, new_window],
+            "the new window is appended to the session"
+        );
+        assert_eq!(tree.session(session_id).unwrap().active, 1);
+        assert_eq!(tree.window(new_window).unwrap().name, "broken");
+        assert_eq!(tree.window(new_window).unwrap().panes(), vec![first]);
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (80, 24),
+            "the broken pane takes the new window's full grid"
+        );
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (80, 24),
+            "the survivor grows into the freed extent"
+        );
+
+        let (dest, src, closed, removed) = tree
+            .join_pane(first, second, SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(dest, first_window);
+        assert_eq!(src, new_window);
+        assert!(
+            closed,
+            "the break's one-pane window closed when its pane left"
+        );
+        assert_eq!(removed, None, "the session kept the destination window");
+        // The split machinery puts the target first and the moved pane
+        // second, exactly like a fresh split of the survivor.
+        assert_eq!(
+            tree.window(first_window).unwrap().panes(),
+            vec![second, first]
+        );
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (40, 24),
+            "the rejoined pane returns to its half"
+        );
+        assert_eq!(
+            tree.session(session_id).unwrap().windows,
+            vec![first_window],
+            "the closed window left the session list"
+        );
+    }
+
+    /// Breaking a window's only pane moves the window instead of killing
+    /// the session — the new window exists before the source drops.
+    #[test]
+    fn breaking_the_only_pane_closes_the_source_not_the_session() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let first_window = tree.session(session_id).unwrap().windows[0];
+        let only = tree.window(first_window).unwrap().panes()[0];
+
+        let (new_window, source, source_closed) = tree.break_pane(only, "solo").unwrap();
+        assert!(source_closed, "the emptied source window closed");
+        assert_eq!(source, first_window);
+        assert!(tree.window(first_window).is_none());
+        assert!(tree.session(session_id).is_some(), "the session survives");
+        assert_eq!(
+            tree.session(session_id).unwrap().windows,
+            vec![new_window],
+            "the pane's new window replaced the source in the list"
+        );
+        assert_eq!(tree.window(new_window).unwrap().panes(), vec![only]);
+    }
+
+    /// Joining the last pane out of a session's only window closes that
+    /// session — the destination belongs to the target's window, so
+    /// nothing backstops the source's session (the mirror image of
+    /// break-pane's guarantee).
+    #[test]
+    fn joining_the_last_pane_out_of_the_only_window_closes_its_session() {
+        let mut tree = tree();
+        let donor = tree.new_session("donor", 80, 24).unwrap();
+        let donor_window = tree.session(donor).unwrap().windows[0];
+        let mover = tree.window(donor_window).unwrap().panes()[0];
+        let keeper = tree.new_session("keeper", 80, 24).unwrap();
+        let keeper_window = tree.session(keeper).unwrap().windows[0];
+        let anchor = tree.window(keeper_window).unwrap().panes()[0];
+
+        let (dest, src, closed, removed) = tree
+            .join_pane(mover, anchor, SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        assert_eq!(dest, keeper_window);
+        assert_eq!(src, donor_window);
+        assert!(closed);
+        assert_eq!(removed, Some(donor), "the donor session closed");
+        assert!(tree.session(donor).is_none());
+        assert!(tree.window(donor_window).is_none());
+        // The moved pane landed next to the anchor, below it.
+        assert_eq!(
+            tree.window(keeper_window).unwrap().panes(),
+            vec![anchor, mover]
+        );
+    }
+
+    /// `join-pane` rejects a pane onto itself and unknown panes, and a
+    /// same-window join is a within-window move, not an error.
+    #[test]
+    fn join_pane_rejects_self_and_unknown_but_allows_same_window() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        assert!(matches!(
+            tree.join_pane(first, first, SplitDirection::Vertical, 0.5),
+            Err(MuxError::SamePane(first))
+        ));
+        assert!(matches!(
+            tree.join_pane(PaneId(9999), first, SplitDirection::Vertical, 0.5),
+            Err(MuxError::NoSuchPane(_))
+        ));
+
+        // Same window: first moves below second (target first, moved
+        // pane second), and the window keeps both panes.
+        let (dest, src, closed, removed) = tree
+            .join_pane(first, second, SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        assert_eq!((dest, src), (window_id, window_id));
+        assert!(!closed);
+        assert_eq!(removed, None);
+        assert_eq!(tree.window(window_id).unwrap().panes(), vec![second, first]);
+    }
+
+    /// Break and join are layout mutations — a zoomed window unzooms.
+    #[test]
+    fn break_and_join_end_a_zoom() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let first_window = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(first_window).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let other_window = tree.new_window(session_id, "other", 80, 24).unwrap();
+        let other = tree.window(other_window).unwrap().panes()[0];
+
+        tree.zoom_pane(second).unwrap();
+        let (new_window, _, _) = tree.break_pane(second, "zoomed").unwrap();
+        assert_eq!(tree.window(new_window).unwrap().zoomed, None);
+
+        tree.zoom_pane(other).unwrap();
+        tree.join_pane(other, first, SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(tree.window(first_window).unwrap().zoomed, None);
+    }
+
+    /// `move-window` reorders the session's window list, clamps
+    /// out-of-range positions, and keeps the active window active by
+    /// identity rather than index.
+    #[test]
+    fn move_window_reorders_and_keeps_the_active_window() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let w0 = tree.session(session_id).unwrap().windows[0];
+        let w1 = tree.new_window(session_id, "one", 80, 24).unwrap();
+        let w2 = tree.new_window(session_id, "two", 80, 24).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().windows, vec![w0, w1, w2]);
+        assert_eq!(tree.session(session_id).unwrap().active, 0);
+
+        tree.move_window(w2, 0).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().windows, vec![w2, w0, w1]);
+        assert_eq!(
+            tree.session(session_id).unwrap().windows[tree.session(session_id).unwrap().active],
+            w0,
+            "the active window stayed active through the move"
+        );
+
+        // Out-of-range clamps to the end.
+        tree.move_window(w0, 99).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().windows, vec![w2, w1, w0]);
+        assert_eq!(
+            tree.session(session_id).unwrap().windows[tree.session(session_id).unwrap().active],
+            w0
+        );
+
+        assert!(matches!(
+            tree.move_window(WindowId(9999), 0),
+            Err(MuxError::NoSuchWindow(_))
+        ));
+    }
+
+    /// `swap-window` exchanges two windows' positions in their shared
+    /// session and refuses windows in different sessions.
+    #[test]
+    fn swap_windows_exchanges_positions_within_a_session() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let w0 = tree.session(session_id).unwrap().windows[0];
+        let w1 = tree.new_window(session_id, "one", 80, 24).unwrap();
+        let w2 = tree.new_window(session_id, "two", 80, 24).unwrap();
+
+        tree.swap_windows(w0, w2).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().windows, vec![w2, w1, w0]);
+        // A self-swap is a no-op, not an error.
+        tree.swap_windows(w1, w1).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().windows, vec![w2, w1, w0]);
+
+        let other_session = tree.new_session("other", 80, 24).unwrap();
+        let other_window = tree.session(other_session).unwrap().windows[0];
+        assert!(matches!(
+            tree.swap_windows(w0, other_window),
+            Err(MuxError::WindowsInDifferentSessions(_, _))
+        ));
+    }
+
+    /// Window order is session state — a persist round trip keeps the
+    /// reordered list (the restore path par-mux's restart runs).
+    #[test]
+    fn window_order_survives_a_persist_round_trip() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let w0 = tree.session(session_id).unwrap().windows[0];
+        let w1 = tree.new_window(session_id, "one", 80, 24).unwrap();
+        let w2 = tree.new_window(session_id, "two", 80, 24).unwrap();
+        tree.move_window(w2, 0).unwrap();
+        tree.swap_windows(w1, w0).unwrap();
+        let order = tree.session(session_id).unwrap().windows.clone();
+        assert_eq!(order, vec![w2, w1, w0]);
+
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+            .expect("state rebuilds");
+        assert_eq!(restored.session(session_id).unwrap().windows, order);
     }
 
     #[test]

@@ -72,8 +72,9 @@ pub(super) struct Outcome {
     pub(super) notifications: Vec<TmuxNotification>,
     /// Notifications sent only to the issuing client (`%session-changed`).
     pub(super) issuer_only: Vec<TmuxNotification>,
-    /// The window a `%layout-change` is broadcast for.
-    pub(super) layout_changed: Option<WindowId>,
+    /// The windows a `%layout-change` is broadcast for, in order —
+    /// usually one; a pane move touches both its windows.
+    pub(super) layout_changed: Vec<WindowId>,
     /// Whether the handler's tree operation landed — gates persistence
     /// alongside [`MuxCommand::mutates`], so a mutating command that failed
     /// (`kill-pane` of an unknown pane) does not save.
@@ -87,7 +88,7 @@ impl Outcome {
             reply: emit_block(ctx.command_number, body, true),
             notifications: Vec::new(),
             issuer_only: Vec::new(),
-            layout_changed: None,
+            layout_changed: Vec::new(),
             succeeded: true,
         }
     }
@@ -98,7 +99,7 @@ impl Outcome {
             reply: emit_block(ctx.command_number, message, false),
             notifications: Vec::new(),
             issuer_only: Vec::new(),
-            layout_changed: None,
+            layout_changed: Vec::new(),
             succeeded: false,
         }
     }
@@ -115,9 +116,9 @@ impl Outcome {
         self
     }
 
-    /// Queue the `%layout-change` window.
+    /// Queue a `%layout-change` window.
     fn with_layout(mut self, window_id: WindowId) -> Self {
-        self.layout_changed = Some(window_id);
+        self.layout_changed.push(window_id);
         self
     }
 }
@@ -171,6 +172,15 @@ pub(super) fn dispatch_command(
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
+        MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
+        MuxCommand::JoinPane {
+            source,
+            target,
+            direction,
+            percent,
+        } => cmd_join_pane(ctx, source, target, direction, percent),
+        MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
+        MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
         MuxCommand::NewWindow {
             session,
             name,
@@ -202,8 +212,8 @@ pub(super) fn dispatch_command(
         MuxCommand::Version => cmd_version(ctx),
     };
 
-    if let Some(window_id) = outcome.layout_changed {
-        broadcast_layout_change(ctx.tree, ctx.clients, window_id);
+    for window_id in &outcome.layout_changed {
+        broadcast_layout_change(ctx.tree, ctx.clients, *window_id);
     }
     for notification in &outcome.notifications {
         broadcast_notification(ctx.clients, notification);
@@ -723,6 +733,112 @@ fn cmd_swap_panes(ctx: &Ctx<'_>, target: Target<PaneId>, source: Target<PaneId>)
     };
     match ctx.tree.lock().swap_panes(target, source) {
         Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_break_pane(ctx: &Ctx<'_>, source: Target<PaneId>, name: Option<String>) -> Outcome {
+    let source = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_pane_target(source) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    let name = name.unwrap_or_else(|| "0".to_string());
+    match ctx.tree.lock().break_pane(source, &name) {
+        Ok((window_id, source_window, source_closed)) => {
+            // The new window is announced like new-window's; the source's
+            // frame only exists while the source does.
+            let mut outcome =
+                Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
+                    window_id: window_id.to_string(),
+                });
+            if source_closed {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
+                    window_id: source_window.to_string(),
+                });
+            } else {
+                outcome = outcome.with_layout(source_window);
+            }
+            outcome
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_join_pane(
+    ctx: &Ctx<'_>,
+    source: Target<PaneId>,
+    target: Target<PaneId>,
+    direction: SplitDirection,
+    percent: u32,
+) -> Outcome {
+    let (source, target) = {
+        let guard = ctx.tree.lock();
+        match (
+            guard.resolve_pane_target(source),
+            guard.resolve_pane_target(target),
+        ) {
+            (Ok(source), Ok(target)) => (source, target),
+            (Err(err), _) | (_, Err(err)) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx
+        .tree
+        .lock()
+        .join_pane(source, target, direction, percent as f32 / 100.0)
+    {
+        Ok((target_window, source_window, source_closed, removed_session)) => {
+            // Both windows' layouts changed — the destination grew a pane
+            // and the source lost one (or closed outright).
+            let mut outcome = Outcome::ok(ctx, "").with_layout(target_window);
+            if source_closed {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
+                    window_id: source_window.to_string(),
+                });
+            } else {
+                outcome = outcome.with_layout(source_window);
+            }
+            if removed_session.is_some() {
+                // The same argument-less cue kill-pane's cascade sends.
+                outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+            }
+            outcome
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_move_window(ctx: &Ctx<'_>, source: Target<WindowId>, index: usize) -> Outcome {
+    let source = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_window_target(source) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().move_window(source, index) {
+        // No layout changed — the reorder cue is the argument-less
+        // sessions-changed; clients re-query list-windows.
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::SessionsChanged),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_swap_windows(ctx: &Ctx<'_>, source: Target<WindowId>, target: Target<WindowId>) -> Outcome {
+    let (source, target) = {
+        let guard = ctx.tree.lock();
+        match (
+            guard.resolve_window_target(source),
+            guard.resolve_window_target(target),
+        ) {
+            (Ok(source), Ok(target)) => (source, target),
+            (Err(err), _) | (_, Err(err)) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().swap_windows(source, target) {
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::SessionsChanged),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }

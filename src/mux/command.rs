@@ -173,6 +173,45 @@ pub enum MuxCommand {
         /// Pane swapped into the target's position (`-s`).
         source: Target<PaneId>,
     },
+    /// Move a pane out of its window into a new window of the same
+    /// session (`break-pane`).
+    BreakPane {
+        /// The pane promoted to its own window (`-s`).
+        source: Target<PaneId>,
+        /// The new window's name (`-n`); the pane's process, terminal,
+        /// and title all move with it — nothing is re-spawned.
+        name: Option<String>,
+    },
+    /// Move a pane next to another pane (`join-pane`), possibly in a
+    /// different window.
+    JoinPane {
+        /// The pane that moves (`-s`).
+        source: Target<PaneId>,
+        /// The pane it lands next to (`-t`).
+        target: Target<PaneId>,
+        /// `-h` beside the target, `-v`/default below it — the same
+        /// arrangement rule `split-window` uses.
+        direction: SplitDirection,
+        /// The share of the target's extent the moved pane takes
+        /// (`-p`), 1-99, default 50.
+        percent: u32,
+    },
+    /// Move a window to a position in its session's window list
+    /// (`move-window`).
+    MoveWindow {
+        /// The window that moves (`-s`).
+        source: Target<WindowId>,
+        /// The list position it lands at (`-t`); out-of-range positions
+        /// clamp to the ends.
+        index: usize,
+    },
+    /// Exchange two windows' positions in their session (`swap-window`).
+    SwapWindows {
+        /// First window (`-s`).
+        source: Target<WindowId>,
+        /// Second window (`-t`).
+        target: Target<WindowId>,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -267,6 +306,10 @@ impl MuxCommand {
             | MuxCommand::SelectPane { .. }
             | MuxCommand::ResizePane { .. }
             | MuxCommand::SwapPanes { .. }
+            | MuxCommand::BreakPane { .. }
+            | MuxCommand::JoinPane { .. }
+            | MuxCommand::MoveWindow { .. }
+            | MuxCommand::SwapWindows { .. }
             | MuxCommand::SetBuffer { .. }
             | MuxCommand::SetEnvironment { .. }
             | MuxCommand::RenameSession { .. }
@@ -720,6 +763,10 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("pane-info", parse_pane_info),
     ("resize-pane", parse_resize_pane),
     ("swap-pane", parse_swap_pane),
+    ("break-pane", parse_break_pane),
+    ("join-pane", parse_join_pane),
+    ("move-window", parse_move_window),
+    ("swap-window", parse_swap_windows),
     ("capture-pane", parse_capture_pane),
     ("set-buffer", parse_set_buffer),
     ("set-client-colors", parse_set_client_colors),
@@ -1071,6 +1118,61 @@ fn parse_swap_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::SwapPanes {
         target: a.pane("-t")?,
         source: a.pane("-s")?,
+    })
+}
+
+fn parse_break_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::BreakPane {
+        source: a.pane("-s")?,
+        name: a.quoted_flag("-n")?,
+    })
+}
+
+fn parse_join_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let source = a.pane("-s")?;
+    let target = a.pane("-t")?;
+    // The same arrangement rule split-window uses: `-h` beside the
+    // target, `-v`/default below it.
+    let direction = if a.has_flag("-h") {
+        SplitDirection::Vertical
+    } else {
+        SplitDirection::Horizontal
+    };
+    let percent = match a.flag("-p") {
+        Some(raw) => {
+            let percent: u32 = raw
+                .parse()
+                .map_err(|_| format!("invalid percentage: {raw}"))?;
+            if !(1..=99).contains(&percent) {
+                return Err(format!("percentage must be 1-99: {raw}"));
+            }
+            percent
+        }
+        None => 50,
+    };
+    Ok(MuxCommand::JoinPane {
+        source,
+        target,
+        direction,
+        percent,
+    })
+}
+
+fn parse_move_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let source = a.window("-s")?;
+    let index = match a.flag("-t") {
+        Some(raw) => raw
+            .parse()
+            .map_err(|_| format!("move-window: -t expects a position, got: {raw}"))?,
+        None => return Err("move-window requires -t".to_string()),
+    };
+    Ok(MuxCommand::MoveWindow { source, index })
+}
+
+fn parse_swap_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SwapWindows {
+        source: a.window("-s")?,
+        target: a.window("-t")?,
     })
 }
 
@@ -2052,6 +2154,66 @@ mod tests {
         assert!(
             parse_command("resize-pane -t %0 -Z -R").is_err(),
             "the zoom form cannot combine with the relative form"
+        );
+    }
+
+    #[test]
+    fn parses_break_join_and_window_reorder() {
+        assert_eq!(
+            parse_command("break-pane -s %1").unwrap(),
+            MuxCommand::BreakPane {
+                source: Target::Id(PaneId(1)),
+                name: None
+            }
+        );
+        assert_eq!(
+            parse_command("break-pane -s %1 -n 'my window'").unwrap(),
+            MuxCommand::BreakPane {
+                source: Target::Id(PaneId(1)),
+                name: Some("my window".to_string())
+            }
+        );
+        // join-pane defaults to below (Horizontal) at 50, split-window's
+        // arrangement rule; -h/-p override.
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0").unwrap(),
+            MuxCommand::JoinPane {
+                source: Target::Id(PaneId(1)),
+                target: Target::Id(PaneId(0)),
+                direction: SplitDirection::Horizontal,
+                percent: 50
+            }
+        );
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0 -h -p 30").unwrap(),
+            MuxCommand::JoinPane {
+                source: Target::Id(PaneId(1)),
+                target: Target::Id(PaneId(0)),
+                direction: SplitDirection::Vertical,
+                percent: 30
+            }
+        );
+        assert!(
+            parse_command("join-pane -s %1 -t %0 -p 0").is_err(),
+            "the share percentage stays in 1-99"
+        );
+        assert_eq!(
+            parse_command("move-window -s @2 -t 0").unwrap(),
+            MuxCommand::MoveWindow {
+                source: Target::Id(WindowId(2)),
+                index: 0
+            }
+        );
+        assert!(
+            parse_command("move-window -s @2 -t first").is_err(),
+            "move-window's -t is a position, not a target"
+        );
+        assert_eq!(
+            parse_command("swap-window -s @0 -t @2").unwrap(),
+            MuxCommand::SwapWindows {
+                source: Target::Id(WindowId(0)),
+                target: Target::Id(WindowId(2))
+            }
         );
     }
 
