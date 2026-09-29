@@ -148,7 +148,7 @@ Eviction is by **queue depth only** — intended, and deliberately unlike tmux, 
 
 ## Command Reference
 
-The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `split-window -c DIR` / `new-window -c DIR` start directories, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value), and the `-t`/`-s` targets, so a name, directory, title, value, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `split-window -c DIR` / `new-window -c DIR` start directories, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value, the `rename-session` name), and the `-t`/`-s` targets, so a name, directory, title, value, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
 
 A target placeholder in the table below (`<pane>`, `<window>`, `<session>`) is either the typed id (`%N`, `@N`, `$N`) or a **name**, resolved daemon-side against the tree:
 
@@ -165,6 +165,8 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `select-window` | `-t <window>` | empty | `%window-pane-changed` |
 | `kill-window` | `-t <window>` | empty | `%window-close` |
 | `rename-window` | `-t <window> <name>` | empty | `%window-renamed` |
+| `rename-session` | `-t <session> <name>` | empty | `%session-renamed` |
+| `kill-session` | `-t <session>` | empty | `%window-close` per killed window, then `%sessions-changed` |
 | `split-window` | `-t <pane> [-h\|-v] [-p 1-99] [-c dir]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
 | `select-pane` | `-t <pane> [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
 | `pane-title` | `-t <pane>` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
