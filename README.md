@@ -158,7 +158,7 @@ is documented there (older README release notes were merged into the changelog).
 
 ### Screenshots and Export
 
-- **Multiple Formats** - PNG, JPEG, BMP, SVG (vector), HTML
+- **Multiple Formats** - PNG, JPEG, BMP, SVG (vector); HTML via `export_html()`
 - **Embedded Font** - JetBrains Mono bundled - no installation required
 - **Programming Ligatures** - =>, !=, >=, and other code ligatures
 - **True Font Rendering** - High-quality antialiasing for raster formats
@@ -427,7 +427,7 @@ term.process_str("\x1b[1;31mHello, World!\x1b[0m\n")
 # Save screenshot
 term.screenshot_to_file("output.png")
 term.screenshot_to_file("output.svg", format="svg")  # Vector graphics!
-term.screenshot_to_file("output.html", format="html")  # Styled HTML
+open("output.html", "w").write(term.export_html(include_styles=True))  # Styled HTML
 
 # Custom configuration
 term.screenshot_to_file(
