@@ -1,365 +1,269 @@
 # FFI Guide
 
-This guide explains how to embed the terminal emulator in C, C++, Swift, Kotlin/JNI, or other languages that support C FFI using the provided `#[repr(C)]` types and `extern "C"` functions.
+How to embed the terminal emulator from C, C++, Swift, or any language with a C FFI. The surface lives in a hand-written header, [`include/terminal_core.h`](../include/terminal_core.h), which mirrors `src/ffi.rs`: the Rust types are `#[repr(C)]`, and `_Static_assert`s in the header pin the shared layout so header and library cannot drift apart silently.
+
+- **Embedding functions** — `terminal_abi_version`, `terminal_create`/`terminal_free`, `terminal_feed`, `terminal_resize`, `terminal_dirty_ranges`/`terminal_mark_clean`, `terminal_read_row`/`terminal_read_scrollback_row`/`terminal_scrollback_count`, `terminal_get_cursor`/`terminal_get_modes`, `terminal_encode_key`
+- **Snapshot functions** — `terminal_get_state`/`terminal_free_state`
+- **Observer functions** — `terminal_add_observer`/`terminal_remove_observer`
+- **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `TerminalObserverVtable`
 
 ## Table of Contents
 - [Overview](#overview)
-- [Building for C/C++](#building-for-cc)
-- [FFI Types](#ffi-types)
-  - [SharedCell](#sharedcell)
-  - [SharedState](#sharedstate)
-  - [TerminalObserverVtable](#terminalobservervtable)
-- [Memory Management Contract](#memory-management-contract)
-- [API Reference](#api-reference)
-  - [Snapshot Functions](#snapshot-functions)
-  - [Observer Functions](#observer-functions)
-- [Examples](#examples)
-  - [C Code: Terminal Snapshot](#c-code-terminal-snapshot)
-  - [C Code: Observer Pattern](#c-code-observer-pattern)
+- [Building](#building)
+- [Lifecycle](#lifecycle)
+- [Render Loop](#render-loop)
+- [Scrollback](#scrollback)
+- [Cursor and Modes](#cursor-and-modes)
+- [Key Encoding](#key-encoding)
+- [Snapshot: SharedState](#snapshot-sharedstate)
+- [Observers](#observers)
+- [Swift: `import TerminalCore`](#swift-import-terminalcore)
+- [ABI Version](#abi-version)
 - [Related Documentation](#related-documentation)
 
 ## Overview
 
-The library provides a C-compatible API for accessing terminal state via `#[repr(C)]` types and `extern "C"` functions. This enables embedding in applications written in languages other than Rust or Python.
-
-### Key Components
-
-- **`SharedCell`** - A single terminal cell containing character data, colors, and attributes
-- **`SharedState`** - A complete terminal snapshot with grid, cursor, and metadata
-- **`TerminalObserverVtable`** - Function-pointer table for receiving terminal events
-
-All types use `#[repr(C)]` layout for stable ABI across language boundaries.
-
-### Architecture
-
 ```mermaid
 graph LR
-    subgraph "FFI Layer"
-        A[SharedState]
-        B[SharedCell]
-        C[TerminalObserverVtable]
+    subgraph "Host Application"
+        U[PTY / child process output]
+        K[Keyboard input]
+        R[Renderer]
     end
-
+    subgraph "terminal_core.h"
+        F[terminal_feed]
+        D[terminal_dirty_ranges]
+        RD[terminal_read_row]
+        M[terminal_mark_clean]
+        E[terminal_encode_key]
+    end
     subgraph "Rust Core"
-        D[Terminal]
-        E[Grid]
-        F[Cursor]
+        T[Terminal]
+        G[Grid]
     end
 
-    subgraph "Consumer"
-        G[C/C++ App]
-        H[Swift App]
-        I[Kotlin/JNI App]
-    end
+    U --> F --> T
+    T --> G
+    T --> D --> R
+    R --> RD
+    R --> M --> T
+    K --> E --> U
 
-    D --> A
-    E --> B
-    F --> A
-    C --> D
-    A --> G
-    A --> H
-    A --> I
-
-    style A fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style B fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style C fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style D fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style E fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style F fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style G fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style H fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style I fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef host fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef api fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef core fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    class U,K,R host
+    class F,D,RD,M,E api
+    class T,G core
 ```
 
-## Building for C/C++
+The intended embedding shape is a **damage-driven render loop** (below): the host feeds PTY bytes in, asks which rows changed, reads only those rows into its own buffers, and encodes keyboard input back out. The `SharedState` snapshot and the observer vtable cover the cases a renderer does not handle per-frame (full-state queries, shell-integration events).
 
-Use the `rust-only` feature flag to exclude Python bindings:
+**Cross-cutting contracts** (from the header):
+
+- **Single-threaded handles.** No concurrent calls on one `Terminal`; synchronize externally if you share it.
+- **No panic catching.** No entry point catches a Rust panic — a panic inside any call aborts the host process (Rust 1.81+ abort-on-FFI-unwind semantics). Allocation failure is likewise fatal: this surface has no error channel, so out-of-memory aborts by design.
+- **Reads target the active grid.** While the alternate screen is active, `terminal_scrollback_count` returns 0 — the alternate screen has no scrollback.
+
+## Building
+
+The crate's everyday `crate-type` is `cdylib, rlib` (Python extension + Rust library), so a plain `cargo build` produces **no** static library. To get a C-linkable `.a`, override the crate type for one invocation:
 
 ```bash
-# Build static library (.a) + dynamic library (.so/.dylib/.dll)
-cargo build --release --no-default-features --features rust-only
+# Static library (.a) for the host target — what a C/C++ app links against
+cargo rustc --lib --crate-type staticlib --release \
+    --no-default-features --features rust-only
 
 # Output: target/release/libpar_term_emu_core_rust.a
-#         target/release/libpar_term_emu_core_rust.so (Linux)
-#         target/release/libpar_term_emu_core_rust.dylib (macOS)
-#         target/release/par_term_emu_core_rust.dll (Windows)
 ```
 
-Link against the appropriate library in your C/C++ project and include the generated C header (or manually declare the FFI types).
+- The `rust-only` feature drops the Python bindings (the default `python` feature links the host's libpython, which cannot link into a binary that embeds no interpreter).
+- A dynamic library is available through the default `cdylib` crate type (`make dev` / `cargo build --release`), but embedding is normally done against the static library so the linker can drop unused code.
 
-## FFI Types
+### iOS / Apple platforms
 
-### SharedCell
+```bash
+make xcframework
+```
 
-A single terminal cell in a C-compatible layout.
+`scripts/build-xcframework.sh` builds staticlibs for `aarch64-apple-ios` and `aarch64-apple-ios-sim`, smoke-compiles the header for both targets (running its `_Static_assert`s), packages `TerminalCore.xcframework` with `include/` as the headers, and writes a `Modules/module.modulemap` into every slice so Swift consumers can `import TerminalCore` (see [Swift](#swift-import-terminalcore)). Requires Xcode and the two Rust targets (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`).
+
+## Lifecycle
 
 ```c
-typedef struct SharedCell {
-    uint8_t text[4];      // UTF-8 encoded character bytes (up to 4 bytes)
-    uint8_t text_len;     // Number of valid bytes in text
-    uint8_t fg_r;         // Foreground color - red component
-    uint8_t fg_g;         // Foreground color - green component
-    uint8_t fg_b;         // Foreground color - blue component
-    uint8_t bg_r;         // Background color - red component
-    uint8_t bg_g;         // Background color - green component
-    uint8_t bg_b;         // Background color - blue component
-    uint16_t attrs;       // Bitfield of cell attributes
-    uint8_t width;        // Display width of the character (1 or 2)
-} SharedCell;
+#include "terminal_core.h"
+
+Terminal *make_terminal(void) {
+    return terminal_create(80, 24, 10000); /* cols, rows, scrollback */
+}
 ```
 
-**Field Details:**
+- `terminal_create(cols, rows, scrollback)` returns `NULL` when `cols` or `rows` is 0.
+- `terminal_free(term)` releases the handle; `NULL` is a no-op.
+- `terminal_resize(term, cols, rows)` reflows the grid; a zero dimension is a no-op.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `text` | `uint8_t[4]` | UTF-8 bytes of the base character (up to 4 bytes for any Unicode scalar) |
-| `text_len` | `uint8_t` | Number of valid bytes in `text` array |
-| `fg_r`, `fg_g`, `fg_b` | `uint8_t` | RGB foreground color components (0-255) |
-| `bg_r`, `bg_g`, `bg_b` | `uint8_t` | RGB background color components (0-255) |
-| `attrs` | `uint16_t` | Bitfield of VT text attributes (see Cell Attributes) |
-| `width` | `uint8_t` | Display width: 1 for normal characters, 2 for wide characters (CJK, emoji) |
+On first use, compare `terminal_abi_version()` against `TERM_CORE_ABI_VERSION` (see [ABI Version](#abi-version)).
 
-**Cell Attributes (`attrs` bitfield):**
+## Render Loop
 
-| Bit | Mask | Constant | Description |
-|-----|------|----------|-------------|
-| 0 | `0x0001` | `BOLD` | Bold text |
-| 1 | `0x0002` | `DIM` | Dim/faint text |
-| 2 | `0x0004` | `ITALIC` | Italic text |
-| 3 | `0x0008` | `UNDERLINE` | Underlined text |
-| 4 | `0x0010` | `BLINK` | Blinking text |
-| 5 | `0x0020` | `REVERSE` | Reverse video (swap fg/bg) |
-| 6 | `0x0040` | `HIDDEN` | Hidden/concealed text |
-| 7 | `0x0080` | `STRIKETHROUGH` | Strikethrough text |
-| 8 | `0x0100` | `OVERLINE` | Overlined text |
-| 9 | `0x0200` | `GUARDED` | Protected cell (not erased by clear) |
-| 10 | `0x0400` | `WIDE_CHAR` | Wide character (2 columns) |
-| 11 | `0x0800` | `WIDE_CHAR_SPACER` | Spacer cell following a wide character |
+The per-frame cycle is `terminal_feed` → `terminal_dirty_ranges` → `terminal_read_row` (per dirty range) → `terminal_mark_clean`:
 
-### SharedState
-
-A complete, C-compatible snapshot of the terminal state.
+1. **Feed** raw application/PTY output bytes (`terminal_feed`). VT parsing happens inline.
+2. **Size the damage** — `terminal_dirty_ranges(term, NULL, 0)` returns the total number of coalesced dirty-row ranges without writing anything.
+3. **Fetch the ranges** into a buffer of that size. Every call returns the *total* range count; if the terminal dirtied more rows between the two calls, the return exceeds your capacity and you retry larger.
+4. **Read only the dirty rows** with `terminal_read_row` into a caller-owned buffer — no allocation, no full-grid copy.
+5. **`terminal_mark_clean`** clears the damage set once the frame is drawn.
 
 ```c
-typedef struct SharedState {
-    uint32_t cols;              // Number of columns in the grid
-    uint32_t rows;              // Number of rows in the grid
-    uint32_t cursor_col;        // Current cursor column (0-indexed)
-    uint32_t cursor_row;        // Current cursor row (0-indexed)
-    bool cursor_visible;        // Whether the cursor is visible
-    bool alt_screen_active;     // Whether alternate screen buffer is active
-    uint8_t mouse_mode;         // Mouse tracking mode
-    char* title;                // Terminal title (NUL-terminated UTF-8, owned)
-    uint32_t title_len;         // Length of title in bytes (excluding NUL)
-    char* cwd;                  // Current working directory (NUL-terminated, owned), or NULL
-    uint32_t cwd_len;           // Length of cwd in bytes, 0 if NULL
-    SharedCell* cells;          // Array of cell_count cells (owned)
-    uint32_t cell_count;        // Total cells (cols * rows)
-    uint32_t scrollback_lines;  // Lines in scrollback buffer
-    uint32_t total_lines;       // Total lines (visible + scrollback)
-} SharedState;
-```
-
-**Field Details:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `cols` | `uint32_t` | Number of columns in the terminal grid |
-| `rows` | `uint32_t` | Number of rows in the terminal grid |
-| `cursor_col` | `uint32_t` | Current cursor column (0-indexed, leftmost is 0) |
-| `cursor_row` | `uint32_t` | Current cursor row (0-indexed, topmost is 0) |
-| `cursor_visible` | `bool` | Whether the cursor is currently visible |
-| `alt_screen_active` | `bool` | Whether the alternate screen buffer is active |
-| `mouse_mode` | `uint8_t` | Mouse tracking mode (see Mouse Mode Mapping) |
-| `title` | `char*` | Terminal title as NUL-terminated UTF-8 string (owned) |
-| `title_len` | `uint32_t` | Length of title string in bytes (not counting NUL) |
-| `cwd` | `char*` | Current working directory (NUL-terminated, owned), or NULL |
-| `cwd_len` | `uint32_t` | Length of cwd string in bytes, 0 if cwd is NULL |
-| `cells` | `SharedCell*` | Pointer to array of `cell_count` cells (owned) |
-| `cell_count` | `uint32_t` | Total number of cells (cols * rows) |
-| `scrollback_lines` | `uint32_t` | Number of lines currently in the scrollback buffer |
-| `total_lines` | `uint32_t` | Total lines (visible grid + scrollback) |
-
-**Mouse Mode Mapping:**
-
-| Value | Mode | Description |
-|-------|------|-------------|
-| 0 | Off | Mouse tracking disabled |
-| 1 | X10 | X10 compatibility mode (button press only) |
-| 2 | Normal | Normal mouse tracking (press/release) |
-| 3 | ButtonEvent | Button event tracking |
-| 4 | AnyEvent | Any event tracking (including motion) |
-
-### TerminalObserverVtable
-
-A C-compatible vtable for terminal event observation.
-
-```c
-typedef struct TerminalObserverVtable {
-    void (*on_zone_event)(void* user_data, const char* event_text);
-    void (*on_command_event)(void* user_data, const char* event_text);
-    void (*on_environment_event)(void* user_data, const char* event_text);
-    void (*on_screen_event)(void* user_data, const char* event_text);
-    void (*on_event)(void* user_data, const char* event_text);
-    void* user_data;
-} TerminalObserverVtable;
-```
-
-**Callback Types:**
-
-| Callback | Description |
-|----------|-------------|
-| `on_zone_event` | Called for zone lifecycle events (scroll regions, margins) |
-| `on_command_event` | Called for command/shell integration events |
-| `on_environment_event` | Called for environment change events (cwd, title) |
-| `on_screen_event` | Called for screen content events (resize, clear) |
-| `on_event` | Catch-all callback for ALL terminal events |
-
-**Event Format:** Observer callbacks receive events as Rust Debug-formatted strings produced by `format!("{:?}", event)`. The output is the `Debug` representation of `TerminalEvent` (not valid JSON), intended primarily for diagnostics; parse it accordingly or match on prefixes to filter event kinds.
-
-## Memory Management Contract
-
-### Ownership Rules
-
-```mermaid
-graph TD
-    A[terminal_get_state] -->|returns owned| B[SharedState]
-    B -->|owns| C[title string]
-    B -->|owns| D[cwd string]
-    B -->|owns| E[cells array]
-    F[terminal_free_state] -->|frees| B
-    F -->|frees| C
-    F -->|frees| D
-    F -->|frees| E
-
-    style A fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style B fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style C fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style D fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style E fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style F fill:#b71c1c,stroke:#f44336,stroke-width:2px,color:#ffffff
-```
-
-1. **`SharedState` ownership**: When you call `terminal_get_state()`, you receive a heap-allocated `SharedState` that you **own**. You must free it by calling `terminal_free_state()`.
-
-2. **Raw pointer lifetimes**: The `title`, `cwd`, and `cells` pointers inside `SharedState` are valid **only** while the `SharedState` exists. After calling `terminal_free_state()`, these pointers become invalid.
-
-3. **String encoding**: All strings (`title`, `cwd`) are NUL-terminated UTF-8 (`*mut c_char`). Do not free them directly; they are freed automatically when `SharedState` is dropped.
-
-4. **Cell array**: The `cells` pointer is an array of `cell_count` elements. Do not free it directly; it is freed automatically when `SharedState` is dropped.
-
-5. **Observer vtables**: The `user_data` pointer in `TerminalObserverVtable` must remain valid for the lifetime of the observer registration. The library does not take ownership of `user_data`; you are responsible for its lifetime.
-
-### Safety Requirements
-
-> **⚠️ Warning:** Thread Safety Requirements
-
-- **Thread safety**: Do not access a `Terminal` from multiple threads simultaneously without external synchronization. The FFI does not perform internal locking.
-
-- **Snapshot consistency**: Only one `SharedState` should exist per `Terminal` at a time. Creating multiple snapshots concurrently may result in data races.
-
-- **Pointer validity**: All function pointers in `TerminalObserverVtable` must be valid for the duration of the observer registration.
-
-## API Reference
-
-### Snapshot Functions
-
-#### `terminal_get_state`
-
-```c
-SharedState* terminal_get_state(const Terminal* term);
-```
-
-Creates a snapshot of the terminal's current state.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `term` | `const Terminal*` | Pointer to a `Terminal` instance (must be non-null) |
-
-**Returns:**
-- Pointer to a heap-allocated `SharedState`, or `NULL` if `term` is null
-
-**Ownership:** Caller must free the returned pointer with `terminal_free_state()`.
-
-#### `terminal_free_state`
-
-```c
-void terminal_free_state(SharedState* state);
-```
-
-Frees a `SharedState` previously returned by `terminal_get_state()`.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `state` | `SharedState*` | Pointer to free (may be null; no-op if null) |
-
-**Ownership:** `state` must not be used after this call. All internal pointers (`title`, `cwd`, `cells`) become invalid.
-
-### Observer Functions
-
-#### `terminal_add_observer`
-
-```c
-uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
-```
-
-Registers an observer to receive terminal events.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `term` | `Terminal*` | Pointer to a `Terminal` instance (must be non-null, mutable) |
-| `vtable` | `TerminalObserverVtable` | Function-pointer table with event callbacks |
-
-**Returns:**
-- Observer ID (use with `terminal_remove_observer`), or 0 on failure
-
-**Safety:** The `vtable` (including `user_data`) must remain valid until the observer is removed.
-
-#### `terminal_remove_observer`
-
-```c
-bool terminal_remove_observer(Terminal* term, uint64_t id);
-```
-
-Removes a previously registered observer.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `term` | `Terminal*` | Pointer to a `Terminal` instance (must be non-null, mutable) |
-| `id` | `uint64_t` | Observer ID returned by `terminal_add_observer` |
-
-**Returns:**
-- `true` if the observer was found and removed, `false` otherwise
-
-## Examples
-
-### C Code: Terminal Snapshot
-
-```c
+#include "terminal_core.h"
 #include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include <stdlib.h>
 
-// Forward declarations (manually extracted from Rust FFI)
-typedef struct Terminal Terminal;
-typedef struct SharedState SharedState;
-typedef struct SharedCell SharedCell;
+/* One frame: feed bytes, then print the rows that changed. Returns 0 on
+ * success, -1 on allocation failure. */
+int render_frame(Terminal *term, const uint8_t *bytes, uint32_t len) {
+    terminal_feed(term, bytes, len);
 
-extern SharedState* terminal_get_state(const Terminal* term);
-extern void terminal_free_state(SharedState* state);
+    /* Size the damage: NULL out + cap 0 returns the total range count. */
+    uint32_t total = terminal_dirty_ranges(term, NULL, 0);
+    if (total == 0) {
+        return 0; /* nothing changed */
+    }
 
-void print_terminal_state(const Terminal* term) {
-    SharedState* state = terminal_get_state(term);
+    TermRowRange *ranges = malloc(sizeof(TermRowRange) * total);
+    if (!ranges) {
+        return -1;
+    }
+    uint32_t written = terminal_dirty_ranges(term, ranges, total);
+    while (written > total) { /* damage grew between the two calls */
+        total = written;
+        TermRowRange *grown = realloc(ranges, sizeof(TermRowRange) * total);
+        if (!grown) {
+            free(ranges);
+            return -1;
+        }
+        ranges = grown;
+        written = terminal_dirty_ranges(term, ranges, total);
+    }
+
+    for (uint32_t i = 0; i < written; i++) {
+        uint32_t row = ranges[i].start;
+        while (row <= ranges[i].end) {
+            /* Size the row: NULL out + cap 0 returns the cells available
+             * from col_start. Reading a full row: col_start = 0. */
+            uint32_t cells = terminal_read_row(term, row, 0, NULL, 0);
+            SharedCell *buf = malloc(sizeof(SharedCell) * (cells ? cells : 1));
+            if (!buf) {
+                free(ranges);
+                return -1;
+            }
+            uint32_t n = terminal_read_row(term, row, 0, buf, cells);
+            for (uint32_t c = 0; c < n; c++) {
+                printf("%.*s", (int)buf[c].text_len, (const char *)buf[c].text);
+            }
+            printf("\n");
+            free(buf);
+            row++;
+        }
+    }
+
+    free(ranges);
+    terminal_mark_clean(term);
+    return 0;
+}
+```
+
+`terminal_read_row(term, row, col_start, out, cap)` writes up to `cap` cells starting at `col_start` and returns the number written; with `out == NULL` and `cap == 0` it returns the number of cells available from `col_start` (the sizing answer). Rows are 0-indexed.
+
+Each `SharedCell` carries up to 4 UTF-8 bytes of the base character (`text`/`text_len`), RGB foreground and background, a `TERM_CELL_*` attribute bitfield, and the display `width` (1 or 2 — a wide CJK/emoji cell is followed by a `TERM_CELL_WIDE_CHAR_SPACER` cell).
+
+## Scrollback
+
+```c
+#include "terminal_core.h"
+#include <stdio.h>
+
+/* Print the oldest scrollback line. Lines run from oldest (0) to newest
+ * (count - 1); the visible grid is NOT part of this numbering. */
+void print_first_scrollback_line(Terminal *term) {
+    uint32_t count = terminal_scrollback_count(term);
+    if (count == 0) {
+        return; /* empty, or the alternate screen is active */
+    }
+    uint32_t cells = terminal_read_scrollback_row(term, 0, 0, NULL, 0);
+    SharedCell buf[512];
+    uint32_t n = terminal_read_scrollback_row(
+        term, 0, 0, buf,
+        cells < 512 ? cells : 512);
+    for (uint32_t c = 0; c < n; c++) {
+        printf("%.*s", (int)buf[c].text_len, (const char *)buf[c].text);
+    }
+    printf("\n");
+}
+```
+
+`terminal_read_scrollback_row` has the same cap/return protocol as `terminal_read_row`. While the alternate screen is active, `terminal_scrollback_count` returns 0.
+
+## Cursor and Modes
+
+Per-frame renderer state, written into caller-owned structs (no allocation):
+
+```c
+#include "terminal_core.h"
+
+void print_frame_state(Terminal *term) {
+    TermCursorState cursor; /* .col, .row (0-indexed), .visible, .style */
+    terminal_get_cursor(term, &cursor);
+
+    TermModeState modes; /* alt_screen, bracketed_paste, application_cursor,
+                            origin_mode, insert_mode, auto_wrap, mouse_mode,
+                            kitty_flags, cols, rows */
+    terminal_get_modes(term, &modes);
+}
+```
+
+`cursor.style`: 0 blinking block, 1 steady block, 2 blinking underline, 3 steady underline, 4 blinking bar, 5 steady bar. `modes.mouse_mode` uses the `TERM_MOUSE_MODE_*` constants; `modes.kitty_flags` are the kitty keyboard progressive-enhancement flags the application negotiated (relevant to [key encoding](#key-encoding)).
+
+## Key Encoding
+
+`terminal_encode_key(term, &ev, out, cap)` encodes a key event against the terminal's **negotiated input state** (application cursor keys, kitty keyboard flags) — the exact bytes a frontend writes to the PTY. It uses the same cap/return-total protocol as the buffer reads: it writes up to `cap` bytes and returns the *total* encoded length; if the return exceeds `cap`, retry with a larger buffer. A return of 0 means the event encodes to nothing.
+
+```c
+#include "terminal_core.h"
+
+/* Send "Ctrl+Left arrow" to the application, honoring whatever key
+ * protocol it negotiated. Returns bytes written, or the needed size. */
+uint32_t send_ctrl_left(Terminal *term) {
+    TermKeyEvent ev = {
+        .key = TERM_KEY_LEFT,
+        .modifiers = TERM_MOD_CTRL,
+        .codepoint = 0, /* only meaningful for TERM_KEY_CHAR */
+    };
+    uint8_t buf[32];
+    uint32_t total = terminal_encode_key(term, &ev, buf, sizeof(buf));
+    /* total <= sizeof(buf): write buf[0..total] to the PTY.
+     * total > sizeof(buf): retry with a buffer of `total` bytes. */
+    return total;
+}
+```
+
+- `TermKeyEvent.key` is a `TERM_KEY_*` constant. Functional-key values **are** the kitty protocol functional codes (e.g. `TERM_KEY_LEFT` is 57428) — do not renumber or remap them.
+- For `TERM_KEY_CHAR`, set `codepoint` to the Unicode scalar: the typed form for plain text, the base form for Ctrl/Alt combinations.
+- Any `uint16_t` key value is accepted; values that are not a `TERM_KEY_*` constant encode to zero bytes.
+- `modifiers` is a bitfield of `TERM_MOD_SHIFT`, `TERM_MOD_ALT`, `TERM_MOD_CTRL`, `TERM_MOD_SUPER`, `TERM_MOD_HYPER`, `TERM_MOD_META` (kitty protocol order).
+
+## Snapshot: SharedState
+
+For a full-state query (saving state, drawing a complete frame, debugging), `terminal_get_state` returns a heap-allocated `SharedState` owned by the caller:
+
+```c
+#include "terminal_core.h"
+#include <stdio.h>
+
+void print_terminal_state(const Terminal *term) {
+    SharedState *state = terminal_get_state(term);
     if (!state) {
-        fprintf(stderr, "Failed to get terminal state\n");
+        fprintf(stderr, "terminal_get_state failed\n");
         return;
     }
 
@@ -369,107 +273,140 @@ void print_terminal_state(const Terminal* term) {
     printf("Title: %s\n", state->title);
     printf("CWD: %s\n", state->cwd ? state->cwd : "(none)");
     printf("Alt screen: %d\n", state->alt_screen_active);
-    printf("Mouse mode: %u\n", state->mouse_mode);
     printf("Scrollback: %u lines\n", state->scrollback_lines);
     printf("Total lines: %u\n", state->total_lines);
 
-    // Access first cell (top-left corner)
     if (state->cell_count > 0) {
-        SharedCell* cell = &state->cells[0];
-        printf("First cell: char='%.*s' fg=(%d,%d,%d) bg=(%d,%d,%d) attrs=0x%04x width=%d\n",
-               (int)cell->text_len, (char*)cell->text,
-               cell->fg_r, cell->fg_g, cell->fg_b,
-               cell->bg_r, cell->bg_g, cell->bg_b,
+        SharedCell *cell = &state->cells[0];
+        printf("First cell: '%.*s' attrs=0x%04x width=%u\n",
+               (int)cell->text_len, (const char *)cell->text,
                cell->attrs, cell->width);
+        if (cell->attrs & TERM_CELL_BOLD) printf("  - Bold\n");
+        if (cell->attrs & TERM_CELL_ITALIC) printf("  - Italic\n");
     }
 
-    // Check specific attributes
-    if (state->cell_count > 0) {
-        SharedCell* cell = &state->cells[0];
-        if (cell->attrs & 0x0001) printf("  - Bold\n");
-        if (cell->attrs & 0x0004) printf("  - Italic\n");
-        if (cell->attrs & 0x0008) printf("  - Underline\n");
-    }
-
-    terminal_free_state(state);
+    terminal_free_state(state); /* also invalidates title, cwd, cells */
 }
 ```
 
-### C Code: Observer Pattern
+### Ownership rules
+
+```mermaid
+graph TD
+    A[terminal_get_state] -->|returns owned| B[SharedState]
+    B -->|owns| C[title string]
+    B -->|owns| D[cwd string or NULL]
+    B -->|owns| E[cells array]
+    F[terminal_free_state] -->|frees| B
+
+    classDef api fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef owned fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef free fill:#b71c1c,stroke:#f4436,stroke-width:2px,color:#ffffff
+    class A api
+    class B,C,D,E owned
+    class F free
+```
+
+1. You own the `SharedState*` from `terminal_get_state()`; release it with `terminal_free_state()` (NULL is a no-op).
+2. The `title`, `cwd`, and `cells` pointers are valid **only** until that call — they are freed with the struct; never free them directly.
+3. Strings are NUL-terminated UTF-8 with `*_len == strlen(...)`. Interior NULs in the source title are replaced with U+FFFD, never truncated.
+4. `cells` holds `cell_count` (= `cols * rows`) entries in row-major order.
+
+You may hold any number of snapshots; they are independent copies, not live views. For per-frame rendering prefer the [render loop](#render-loop) — a snapshot copies the whole grid every call.
+
+## Observers
+
+Register a vtable to receive terminal events inline as `terminal_feed` parses:
 
 ```c
+#include "terminal_core.h"
 #include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
 
-// Forward declarations
-typedef struct Terminal Terminal;
-
-typedef struct TerminalObserverVtable {
-    void (*on_zone_event)(void* user_data, const char* event_text);
-    void (*on_command_event)(void* user_data, const char* event_text);
-    void (*on_environment_event)(void* user_data, const char* event_text);
-    void (*on_screen_event)(void* user_data, const char* event_text);
-    void (*on_event)(void* user_data, const char* event_text);
-    void* user_data;
-} TerminalObserverVtable;
-
-extern uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
-extern bool terminal_remove_observer(Terminal* term, uint64_t id);
-
-// Callback implementation
-void on_event_callback(void* user_data, const char* event_json) {
-    const char* prefix = (const char*)user_data;
-    printf("%s: %s\n", prefix, event_json);
+static void on_screen_event(void *user_data, const char *event_text) {
+    printf("[%s] %s\n", (const char *)user_data, event_text);
 }
 
-// Register observer with all callbacks
-uint64_t register_full_observer(Terminal* term) {
+void observer_example(void) {
+    Terminal *term = terminal_create(80, 24, 1000);
+    if (!term) return;
+
     TerminalObserverVtable vtable = {
-        .on_zone_event = on_event_callback,
-        .on_command_event = on_event_callback,
-        .on_environment_event = on_event_callback,
-        .on_screen_event = on_event_callback,
-        .on_event = on_event_callback,
-        .user_data = (void*)"TerminalEvent"
+        .on_screen_event = on_screen_event,
+        .user_data = (void *)"screen",
     };
-    return terminal_add_observer(term, vtable);
-}
+    uint64_t id = terminal_add_observer(term, vtable);
 
-// Register observer with only specific callbacks
-uint64_t register_minimal_observer(Terminal* term) {
-    TerminalObserverVtable vtable = {
-        .on_zone_event = NULL,
-        .on_command_event = NULL,
-        .on_environment_event = on_event_callback,
-        .on_screen_event = NULL,
-        .on_event = NULL,
-        .user_data = (void*)"EnvChange"
-    };
-    return terminal_add_observer(term, vtable);
-}
+    static const uint8_t clear[] = "\033[2J";
+    terminal_feed(term, clear, sizeof(clear) - 1); /* fires ScreenCleared */
 
-// Example lifecycle
-void observer_example(Terminal* term) {
-    uint64_t observer_id = register_full_observer(term);
-    if (observer_id == 0) {
-        fprintf(stderr, "Failed to register observer\n");
-        return;
-    }
-    printf("Registered observer with ID: %llu\n", (unsigned long long)observer_id);
-
-    // ... terminal operations ...
-
-    // Cleanup
-    bool removed = terminal_remove_observer(term, observer_id);
-    printf("Observer removed: %s\n", removed ? "yes" : "no");
+    terminal_remove_observer(term, id);
+    terminal_free(term);
 }
 ```
+
+### Event routing
+
+| Callback | Fires for |
+|----------|-----------|
+| `on_zone_event` | OSC 133 / FinalTerm shell-integration **zones**: `ZoneOpened`, `ZoneClosed`, `ZoneScrolledOut` (prompt/command/output blocks) |
+| `on_command_event` | `ShellIntegrationEvent` (OSC 133 `prompt_start`, `command_start`, `command_executed`, `command_finished`) |
+| `on_environment_event` | `CwdChanged`, `EnvironmentChanged`, `RemoteHostTransition`, `SubShellDetected` |
+| `on_screen_event` | everything else — `TitleChanged`, `BellRang`, `SizeChanged`, `ModeChanged`, `ScreenCleared`, `DirtyRegion`, graphics/hyperlink/transfer events, … |
+| `on_event` | catch-all: every event, in addition to its category callback |
+
+All callbacks are optional (NULL slots are skipped).
+
+### Payload and re-entry contracts
+
+- The `event_text` parameter is the Rust `Debug` formatting of the event (`format!("{:?}", event)`), **not JSON**. It is diagnostic text with **no stable format** — it changes whenever the Rust event enum changes. Parse it only for logging; gate no behavior on its shape.
+- The pointer is valid only for the duration of the callback; do not free it, do not store it.
+- **No re-entry.** Callbacks fire inline while the terminal is mutably borrowed for the dispatch — a callback must not call any `terminal_*` function on the same handle; re-entry is undefined behavior. Copy what you need out and act after `terminal_feed` returns.
+- The vtable (including its `user_data`) must stay valid for the lifetime of the registration; the library never takes ownership of it. `terminal_add_observer` returns an id for `terminal_remove_observer` (returns `true` if the observer was found).
+
+## Swift: `import TerminalCore`
+
+`make xcframework` writes a `module.modulemap` into every slice of `TerminalCore.xcframework`, so after dragging the xcframework into an Xcode project:
+
+```swift
+import TerminalCore
+
+let term = terminal_create(80, 24, 10_000)
+defer { terminal_free(term) }
+
+terminal_feed(term, bytes, UInt32(bytes.count))
+var cursor = TermCursorState(col: 0, row: 0, visible: false, style: 0)
+terminal_get_cursor(term, &cursor)
+```
+
+The Swift names are the C names unchanged; struct initializers are memberwise. Without the module map (e.g. consuming just the `.a` + header), a bridging header with `#include "terminal_core.h"` works too.
+
+## ABI Version
+
+`TERM_CORE_ABI_VERSION` (in the header) and `terminal_abi_version()` (in the library) are the contract version of this surface — struct layouts, function signatures, and the behavioral contracts above. They are bumped together on any layout or contract change to the C surface. Guard at startup:
+
+```c
+#include "terminal_core.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+Terminal *init_terminal_core(void) {
+    if (terminal_abi_version() != TERM_CORE_ABI_VERSION) {
+        fprintf(stderr,
+                "terminal_core ABI mismatch: app %u, library %u\n",
+                TERM_CORE_ABI_VERSION, terminal_abi_version());
+        return NULL;
+    }
+    return terminal_create(80, 24, 10000);
+}
+```
+
+The `_Static_assert`s in the header pin the struct layouts at compile time; the version check catches a library built against a different header at runtime.
 
 ## Related Documentation
 
-- [API Reference](API_REFERENCE.md) - Complete Python API documentation
+- [API Reference](API_REFERENCE.md) - Python API documentation
 - [Architecture](ARCHITECTURE.md) - Internal system design and data flow
 - [Security Guide](SECURITY.md) - PTY security considerations for FFI consumers
-- [Cell Implementation](../src/cell.rs) - Source code for `CellBitflags` and cell attributes
-- [FFI Implementation](../src/ffi.rs) - Source code for FFI types and functions
+- [`terminal_core.h`](../include/terminal_core.h) - The authoritative C header
+- [FFI Implementation](../src/ffi.rs) - Source for the FFI types and functions
+- [Cell Implementation](../src/cell.rs) - Source for `CellBitflags` and cell attributes
