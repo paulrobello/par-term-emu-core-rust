@@ -518,6 +518,81 @@ fn a_split_pane_pushes_its_output_to_clients() {
     );
 }
 
+/// Await the next `%layout-change` whose raw flags are `want_flags` and
+/// whose layout tree carries (or lacks) a brace — the brace filter picks
+/// the split's two-pane frame out of the earlier single-pane one, and
+/// matches the zoom frame too (its `window_layout` stays the true tree).
+/// Returns `(window_layout, window_visible_layout)`.
+fn next_layout_change(
+    client: &mut par_term_emu_core_rust::mux::MuxClient,
+    want_flags: &str,
+    want_braced: bool,
+) -> (String, String) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::LayoutChange {
+            window_layout,
+            window_visible_layout,
+            window_raw_flags,
+            ..
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            if window_raw_flags == want_flags && window_layout.contains('{') == want_braced {
+                return (window_layout, window_visible_layout);
+            }
+        }
+    }
+    panic!("no %layout-change with flags {want_flags:?} (braced={want_braced}) arrived within 15s");
+}
+
+/// `resize-pane -Z` over the wire: the zoom's `%layout-change` keeps the
+/// true tree in `window_layout` — that is what makes unzoom restore
+/// exact — and marks the zoom in the other two fields instead: the
+/// visible layout is the zoomed pane alone at the window's full extent,
+/// and the raw flags carry tmux's `Z`. Unzooming pushes the tree back
+/// into both layout fields with empty flags.
+#[test]
+fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
+    let fixture = MuxFixture::new("zoomwire");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s zoomwire").expect("new-session");
+    client.send("split-window -h -t %0").expect("split");
+    let (tree, visible) = next_layout_change(&mut client, "", true);
+    assert_eq!(visible, tree, "unzoomed frames show the tree as-is");
+    let extent = tree.split(',').nth(1).expect("window extent field");
+
+    client.send("resize-pane -t %0 -Z").expect("zoom");
+    let (zoom_tree, zoom_visible) = next_layout_change(&mut client, "Z", true);
+    assert_eq!(zoom_tree, tree, "the zoom never edits the layout tree");
+    assert!(
+        !zoom_visible.contains('{'),
+        "the visible layout is the zoomed pane alone: {zoom_visible}"
+    );
+    assert_eq!(
+        zoom_visible.split(',').nth(1),
+        Some(extent),
+        "the zoomed pane renders at the window's full extent: {zoom_visible}"
+    );
+    assert!(
+        zoom_visible.ends_with(",0"),
+        "the visible pane is the zoom target %0: {zoom_visible}"
+    );
+
+    client.send("resize-pane -t %0 -Z").expect("unzoom");
+    let (tree_again, visible_again) = next_layout_change(&mut client, "", true);
+    assert_eq!(tree_again, tree, "unzoom restores the exact prior layout");
+    assert_eq!(
+        visible_again, tree,
+        "unzoom restores the visible layout too"
+    );
+}
+
 /// The `version` command: a daemon answers with its build stamp — one line,
 /// exactly `mux::build_stamp()`, with no session state involved — so a
 /// client can compare the daemon's core build against its own and surface a
