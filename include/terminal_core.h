@@ -210,7 +210,7 @@ typedef struct {
    * [`option_modes`] value for the right Option key.
    */
   uint8_t right_option;
-} KeyEncodeOptions;
+} TermKeyOptions;
 
 /**
  * A complete, C-compatible snapshot of the terminal state.
@@ -525,7 +525,7 @@ uint32_t terminal_encode_key(const Terminal *term,
  */
 uint32_t terminal_encode_key_ex(const Terminal *term,
                                 const TermKeyEvent *ev,
-                                const KeyEncodeOptions *opts,
+                                const TermKeyOptions *opts,
                                 uint8_t *out,
                                 uint32_t cap);
 

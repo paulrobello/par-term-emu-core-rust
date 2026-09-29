@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The shared key encoder now covers modifyOtherKeys and the macOS option-key modes** (ENH-028; `src/keyboard.rs`, `src/ffi.rs`, `src/python_bindings/terminal/input_api.rs`). `keyboard::encode_key` grows into the single encoder par-term, ParDeck and Python all call, replacing the modes that previously lived only in par-term's `key_encoding.rs`: text keys with Ctrl or Alt held encode as `CSI 27;mods;codepoint~` under modifyOtherKeys mode 1/2 (one rule set, matching par-term exactly — Shift-only exempt, ASCII bases only), and `encode_key_with(ev, term, &KeyEncodeOptions{left_option, right_option})` selects Normal/Meta/Esc option-key handling per side, picked by the new `modifiers::ALT_RIGHT` side bit (bit 6, above the kitty-order bits; ignored by every parameter field). Also par-term parity: Shift+Enter sends LF, and the legacy modifier parameter counts Shift/Alt/Ctrl only, so Super held alone no longer fabricates `CSI 1;N` parameters. Defaults (ESC both sides) keep `encode_key`/`terminal_encode_key` byte-identical to the previous wire behavior. New surface: FFI `terminal_encode_key_ex` + `KeyEncodeOptions` (TERM_OPTION_MODE_* constants, ABI 3); Python `Terminal.encode_key(key, modifiers, codepoint=0, left_option=0, right_option=0)`. Data-driven conformance tests derive from par-term-input's suite (~360 rows plus a 1350-case no-truncation sweep), red-proofed against the old encoder first; two deliberate divergences are noted in the test module (Home/End keep SS3 under DECCKM, Alt+Space runs the option transform). Kitty protocol levels 2-4 remain out of scope (level 1 unchanged, pinned by tests).
+
 ## [0.56.0] - 2026-09-29
 
 ### Removed (breaking for Rust embedders)

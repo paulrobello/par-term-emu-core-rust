@@ -246,6 +246,18 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 
 **Note:** Mode resets to 0 on terminal reset and when exiting alternate screen.
 
+#### Key Encoding
+- `encode_key(key: int, modifiers: int, codepoint: int = 0, left_option: int = 0, right_option: int = 0) -> bytes`: Encode a key event into the bytes a terminal application expects, honoring the terminal's negotiated input state (application cursor keys, kitty flags, modifyOtherKeys mode). `key` is a `TERM_KEY_*`-style value (1 = character key; functional codes 9 Tab, 13 Enter, 27 Escape, 127 Backspace, 57428..57437 arrows/Home/End, 57376..57387 F1..F12). `modifiers` bits: shift=1, alt=2, ctrl=4, super=8, hyper=16, meta=32, alt_right=64 (side info selecting `right_option`). `codepoint` is the typed form for plain text, the base form when ctrl/alt drive the encoding. Option-key modes: 0 normal (passthrough), 1 meta (8th bit on ASCII bases), 2 esc (ESC prefix). Empty bytes mean the key has no encoding.
+
+```python
+term = Terminal(80, 24)
+term.encode_key(1, 4, ord("c"))  # b'\x03'  (Ctrl+C)
+term.encode_key(57430, 0, 0)  # b'\x1b[A' (Up arrow)
+term.encode_key(1, 2, ord("f"), left_option=2)  # b'\x1bf'
+```
+
+**Note:** Byte-identical to the C FFI's `terminal_encode_key_ex` and par-term's encoder (ENH-028), so a Python frontend sends the same bytes as the desktop app.
+
 #### Clipboard Operations (OSC 52)
 - `clipboard() -> str | None`: Get clipboard content
 - `set_clipboard(content: str | None)`: Set clipboard content programmatically

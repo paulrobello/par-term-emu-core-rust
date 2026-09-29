@@ -73,5 +73,10 @@ include = [
     "term_event_cb",
 ]
 
+[export.rename]
+# The FFI mirror carries the Term* family name (ENH-028 plan); the Rust
+# side keeps the encoding-scoped KeyEncodeOptions name.
+KeyEncodeOptions = "TermKeyOptions"
+
 [parse]
 parse_deps = false

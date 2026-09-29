@@ -5,7 +5,7 @@ How to embed the terminal emulator from C, C++, Swift, or any language with a C 
 - **Embedding functions** — `terminal_abi_version`, `terminal_create`/`terminal_free`, `terminal_feed`, `terminal_resize`, `terminal_dirty_ranges`/`terminal_mark_clean`, `terminal_damage_generation`/`terminal_dirty_ranges_since`, `terminal_read_row`/`terminal_read_scrollback_row`/`terminal_scrollback_count`, `terminal_get_cursor`/`terminal_get_modes`, `terminal_encode_key`/`terminal_encode_key_ex`
 - **Snapshot functions** — `terminal_get_state`/`terminal_free_state`
 - **Observer functions** — `terminal_add_observer`/`terminal_remove_observer`
-- **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `KeyEncodeOptions`, `TerminalObserverVtable`
+- **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `TermKeyOptions`, `TerminalObserverVtable`
 
 ## Table of Contents
 - [Overview](#overview)
@@ -261,11 +261,11 @@ uint32_t send_ctrl_left(Terminal *term) {
 
 ### Option-key modes: `terminal_encode_key_ex`
 
-`terminal_encode_key` uses the default macOS Option-key handling (ESC prefix — the classic xterm Alt). `terminal_encode_key_ex(term, &ev, &opts, out, cap)` takes an explicit `KeyEncodeOptions` for per-side Option-key modes; `opts` may be NULL for those same defaults, and a zeroed struct means `TERM_OPTION_MODE_NORMAL` on both sides.
+`terminal_encode_key` uses the default macOS Option-key handling (ESC prefix — the classic xterm Alt). `terminal_encode_key_ex(term, &ev, &opts, out, cap)` takes an explicit `TermKeyOptions` for per-side Option-key modes; `opts` may be NULL for those same defaults, and a zeroed struct means `TERM_OPTION_MODE_NORMAL` on both sides.
 
 ```c
 /* Right Option = Meta (8th bit), left Option = Esc prefix. */
-KeyEncodeOptions opts = {
+TermKeyOptions opts = {
     .left_option = TERM_OPTION_MODE_ESC,
     .right_option = TERM_OPTION_MODE_META,
 };

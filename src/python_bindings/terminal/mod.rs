@@ -12,6 +12,7 @@ mod clipboard_api;
 mod color_api;
 mod file_transfer_api;
 mod image_api;
+mod input_api;
 mod metrics_api;
 mod mouse_api;
 mod notification_api;
