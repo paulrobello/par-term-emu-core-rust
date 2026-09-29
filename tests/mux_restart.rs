@@ -298,15 +298,12 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
         &format!("send-keys -t {right} 'exit 1' Enter"),
     );
 
-    // The race's losing branch starts only once the reaper has PERSISTED
-    // the deaths — wait for the tree to have no panes left.
-    wait_until(
-        &mut writer,
-        &mut reader,
-        "list-panes",
-        |text| pane_ids(text).is_empty(),
-        "an emptied tree after both panes exited",
-    );
+    // The race's losing branch: SIGTERM racing the reaper's death persist.
+    // Dead panes are HELD now (remain-on-exit) — the tree never empties
+    // on its own, so every interleaving of this race restores both panes.
+    // Give the reaper its pass (REAP_INTERVAL is 250ms) so the exercised
+    // interleaving is the one where the deaths ARE persisted first.
+    std::thread::sleep(std::time::Duration::from_millis(600));
     drop((writer, reader));
 
     // The raced stop: SIGTERM after the burst. Its final save is empty and

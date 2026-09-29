@@ -362,59 +362,90 @@ fn sigterm_saves_state_on_the_way_out() {
     }
 }
 
-/// A pane whose child exits is reaped daemon-side (tmux semantics: a pane
-/// dies with its process) and clients are told — `%layout-change` for a
-/// surviving window, `%window-close` when the dead pane was the last one.
-/// Before the reaper, the pane sat dead in the tree forever and clients
-/// stared at a frozen pane (`exit` in par-term stuck exactly there).
+/// A pane whose child exits is HELD (remain-on-exit), not removed: the
+/// reaper announces `%pane-exited` with the exit code, the pane keeps its
+/// id, window, and frozen screen, and `respawn-pane` restarts the
+/// process in place — refusing a live pane without `-k`, restarting it
+/// with `-k`, and restarting a dead pane with no flag at all.
 #[test]
-fn a_pane_whose_child_exits_is_reaped_and_broadcast() {
+fn a_dead_pane_is_held_announced_and_respawnable() {
     let fixture = MuxFixture::new("reap");
     let path = fixture.socket();
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let stream = connect_local_stream(path).expect("connect");
-    let mut writer = stream.try_clone().expect("clone");
-    let mut reader = BufReader::new(stream);
-    command(&mut writer, &mut reader, "new-session -s reap");
-    command(&mut writer, &mut reader, "split-window -h -t %0");
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s reap").expect("new-session");
 
-    // Exit the FIRST pane's shell; the reaper must close it within a bound.
-    command(&mut writer, &mut reader, "send-keys -t %0 'exit' Enter");
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut reaped = false;
-    while Instant::now() < deadline && !reaped {
-        let listed = command(&mut writer, &mut reader, "list-panes").join(" ");
-        reaped = pane_ids(&listed).len() == 1;
-        if !reaped {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
+    // A live pane refuses the restart without -k.
+    let refused = client.send("respawn-pane -t %0").expect("refuse").join("");
     assert!(
-        reaped,
-        "the dead pane must leave the tree within 10s of its child exiting"
+        refused.contains("still running"),
+        "a live pane must refuse respawn-pane without -k: {refused}"
+    );
+    // With -k it restarts in place — the respawned cue arrives.
+    client.send("respawn-pane -t %0 -k").expect("restart");
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned { pane_id }
+                if pane_id == "%0"
+        )
+    });
+    // Flush the restarted shell's own output before the death wait.
+    while client
+        .notifications()
+        .recv_timeout(Duration::from_millis(200))
+        .is_ok()
+    {}
+
+    // Exit the shell with a code: the pane is HELD and announced.
+    client.send("send-keys -t %0 'exit 7' Enter").expect("exit");
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+                pane_id,
+                exit_code: Some(7),
+            } if pane_id == "%0"
+        )
+    });
+    let listed = client.send("list-panes").expect("list").join("\n");
+    assert!(
+        listed.contains("%0"),
+        "the dead pane stays in the tree for respawn: {listed}"
     );
 
-    // The LAST pane exiting closes the window instead.
-    command(&mut writer, &mut reader, "send-keys -t %1 'exit' Enter");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut closed = false;
-    while Instant::now() < deadline && !closed {
-        let windows = command(&mut writer, &mut reader, "list-windows").join(" ");
-        // The reply block itself always carries %begin/%end lines — the
-        // window set is empty when no @N id appears in it.
-        closed = !windows.contains('@');
-        if !closed {
-            std::thread::sleep(Duration::from_millis(100));
+    // A dead pane restarts with no flag; the new shell answers.
+    client.send("respawn-pane -t %0").expect("respawn");
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned { pane_id }
+                if pane_id == "%0"
+        )
+    });
+    // Case-folded marker: the typed command's echo carries the uppercase
+    // form only, so only real output satisfies the wait.
+    client
+        .send("send-keys -t %0 'echo RESPAWNED-OUT | tr A-Z a-z' Enter")
+        .expect("send-keys");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw = false;
+    while Instant::now() < deadline && !saw {
+        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
+            pane_id,
+            data,
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            saw = pane_id == "%0" && String::from_utf8_lossy(&data).contains("respawned-out");
         }
     }
-    let final_panes = command(&mut writer, &mut reader, "list-panes").join(" ");
-    let final_windows = command(&mut writer, &mut reader, "list-windows").join(" ");
     assert!(
-        closed,
-        "the window must close when its last pane's child exits — panes:          {final_panes:?}, windows: {final_windows:?}"
+        saw,
+        "the restarted pane's process must produce output again"
     );
 }
 
