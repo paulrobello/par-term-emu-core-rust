@@ -2734,14 +2734,42 @@ mod tests {
 
         // Kill the process the way the reaper observes it: type exit,
         // poll until the OS agrees, mark the death.
-        tree.pane_mut(pane).unwrap().write(b"exit 0\n").unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        //
+        // Enter is `\r`, not `\n`: on newer conhost builds (measured on
+        // the Windows-26200 VM: both writes echoed, `exit 0exit 0` on one
+        // line, never executed) a `\n`-terminated line is echoed by
+        // cmd.exe but never submitted. windows CI runners were straddling
+        // the 26100→26200 image rollout, which made this intermittent
+        // (run 36601091589). Every other typed-line path in the suite
+        // (mux_factory's `type_line`, the daemon's send-keys Enter)
+        // already sends `\r`.
+        tree.pane_mut(pane).unwrap().write(b"exit 0\r").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while tree.pane_mut(pane).unwrap().poll_running() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let pane_ref = tree.pane_mut(pane).unwrap();
-        assert!(!pane_ref.poll_running(), "the shell must exit on `exit 0`");
-        pane_ref.mark_dead();
+        let still_running = tree.pane_mut(pane).unwrap().poll_running();
+        let exit = tree.pane(pane).unwrap().exit_code();
+        let screen_tail: String = tree
+            .pane(pane)
+            .unwrap()
+            .terminal()
+            .read()
+            .content()
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        assert!(
+            !still_running,
+            "the shell must exit on `exit 0`; exit_code={exit:?}, screen tail \
+             (an echoed command proves delivery, an absent one a dropped \
+             write): {screen_tail:?}"
+        );
+        tree.pane_mut(pane).unwrap().mark_dead();
         assert_eq!(tree.pane(pane).unwrap().exit_code(), Some(0));
         assert!(tree.all_panes_dead());
 
