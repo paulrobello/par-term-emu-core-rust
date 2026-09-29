@@ -274,7 +274,7 @@ macro_seq.save_yaml("demo.yaml")?;
 
 **Terminal Integration:**
 ```rust
-use par_term_emu_core_rust::terminal::Terminal;
+use par_term_emu_core_rust::terminal::{MacroEngine, Terminal};
 
 let mut terminal = Terminal::new(80, 24);
 
@@ -291,7 +291,7 @@ if let Some(session) = terminal.stop_recording() {
 
     // `session.title` is a `String` (never None). Convert to a playable macro
     // with the `recording_to_macro` helper, or build one manually:
-    let macro_data = terminal.recording_to_macro(&session, session.title.clone());
+    let macro_data = MacroEngine::recording_to_macro(&mut terminal, &session, session.title.clone());
     macro_data.save_yaml("recording.yaml")?;
 }
 ```
@@ -693,43 +693,45 @@ term.remove_macro("demo")
 stored_macro = term.get_macro("demo")
 ```
 
-**Rust API:**
+**Rust API** (`MacroEngine` is a stateless service over a borrowed `Terminal`; the `Terminal` forwarders were removed in 0.56.0):
 ```rust
+use par_term_emu_core_rust::terminal::MacroEngine;
+
 // Load a macro into the library
-terminal.load_macro("demo".to_string(), macro_data);
+MacroEngine::load_macro(&mut terminal, "demo".to_string(), macro_data);
 
 // List available macros
-let macros = terminal.list_macros();
+let macros = MacroEngine::list_macros(&terminal);
 
 // Play a macro by name
-terminal.play_macro("demo")?;
+MacroEngine::play_macro(&mut terminal, "demo")?;
 
 // Check playback state
-if terminal.is_macro_playing() {
-    let progress = terminal.get_macro_progress();
-    let name = terminal.get_current_macro_name();
+if MacroEngine::is_macro_playing(&terminal) {
+    let progress = MacroEngine::get_macro_progress(&terminal);
+    let name = MacroEngine::get_current_macro_name(&terminal);
 
     // Pause/resume control
-    terminal.pause_macro();
-    if terminal.is_macro_paused() {
+    MacroEngine::pause_macro(&mut terminal);
+    if MacroEngine::is_macro_paused(&terminal) {
         println!("Macro is paused");
     }
-    terminal.resume_macro();
+    MacroEngine::resume_macro(&mut terminal);
 
     // Change speed
-    terminal.set_macro_speed(2.0);
+    MacroEngine::set_macro_speed(&mut terminal, 2.0);
 }
 
 // Stop playback
-terminal.stop_macro();
+MacroEngine::stop_macro(&mut terminal);
 
 // Tick macro playback and get events
-if let Some(bytes) = terminal.tick_macro() {
+if let Some(bytes) = MacroEngine::tick_macro(&mut terminal) {
     // bytes contains the key press data to send
 }
 
 // Get screenshot triggers that fired
-let triggers = terminal.get_macro_screenshot_triggers();
+let triggers = MacroEngine::get_macro_screenshot_triggers(&mut terminal);
 for label in triggers {
     println!("Screenshot trigger: {}", label);
 }
@@ -810,7 +812,11 @@ while !playback.is_finished() {
         match event {
             MacroEvent::Screenshot { label, .. } => {
                 // Verify UI state at checkpoint
-                let actual = terminal.screenshot()?;
+                let actual = par_term_emu_core_rust::screenshot::render_terminal(
+                    &terminal,
+                    ScreenshotConfig::default(),
+                    0,
+                )?;
                 let expected = load_expected(&label)?;
                 assert_images_match(actual, expected);
             }
