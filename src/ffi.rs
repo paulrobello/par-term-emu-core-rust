@@ -840,8 +840,10 @@ mod tests {
         assert!(!term.is_null());
 
         // Frame chunks: text, colors, cursor moves, wide chars, full erase,
-        // and enough lines to push rows into scrollback.
-        let frames: [&[u8]; 7] = [
+        // and enough lines to push rows into scrollback. The QA-150 frames
+        // (ICH, DCH, the rectangle ops, RIS) pin the damage contract for
+        // every mutator that used to skip marking.
+        let frames: [&[u8]; 13] = [
             b"hello world",
             b"\x1b[31mred\x1b[0m plain \x1b[1;32mbold-green\x1b[0m",
             b"\x1b[3;2HX at 3;2",
@@ -849,6 +851,12 @@ mod tests {
             b"\x1b[2J\x1b[Hcleared",
             b"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight", // forces scroll
             b"\x1b[104;200H tail write",
+            b"\x1b[3@",            // ICH
+            b"\x1b[2P",            // DCH
+            b"\x1b[65;1;1;3;5$x",  // DECFRA
+            b"\x1b[1;1;3;5;4;1$v", // DECCRA
+            b"\x1b[1;1;3;5$z",     // DECERA
+            b"\x1b[1;1;2;5;7$r",   // DECCARA
         ];
 
         let mut prev_screen: Vec<Vec<SharedCell>> =
@@ -908,6 +916,24 @@ mod tests {
                 .map(SharedCell::from_cell)
                 .collect();
             assert_eq!(buf, core, "scrollback line {line} FFI != core");
+        }
+
+        // 3b. RIS clears screen and scrollback, so it runs after the
+        // scrollback readback: every row must land in a dirty range
+        // (ARC-058's damage contract, pinned here at the FFI boundary).
+        {
+            unsafe { terminal_feed(term, b"\x1bc".as_ptr(), 2) };
+            let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+            unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+            for row in 0..RT_ROWS {
+                let inside = ranges
+                    .iter()
+                    .any(|r| row >= r.start as usize && row <= r.end as usize);
+                assert!(inside, "RIS: row {row} not in any dirty range {ranges:?}");
+            }
+            let sb = unsafe { terminal_scrollback_count(term) };
+            assert_eq!(sb, 0, "RIS clears scrollback");
         }
 
         // 4. Cursor + modes match the core's accessors.

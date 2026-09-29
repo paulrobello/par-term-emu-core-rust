@@ -266,6 +266,15 @@ impl Terminal {
         self.margins.scroll_region_bottom = snap.scroll_region_bottom;
         self.tab_stops = snap.tab_stops;
         self.pending_wrap = snap.pending_wrap;
+
+        // The whole screen just changed under any damage-driven renderer
+        // (QA-150). The bitset may need resizing when the snapshot's row
+        // count differs from the terminal's current one — restore swaps
+        // grid contents directly, without the resize path that normally
+        // keeps `dirty_rows` sized.
+        let rows = self.active_grid().rows();
+        self.dirty_rows.resize(rows.div_ceil(64), 0);
+        self.mark_rows_dirty(0, rows.saturating_sub(1));
     }
 
     /// Restore a snapshot under a process that did not produce it (a pane
@@ -292,6 +301,13 @@ impl Terminal {
         self.keyboard_state.modify_other_keys_mode = 0;
         self.cursor.visible = true;
         self.pending_wrap = false;
+
+        // Same damage contract as the plain restore (QA-150), re-asserted
+        // after the screen switch: the primary screen is what a renderer
+        // now sees.
+        let rows = self.active_grid().rows();
+        self.dirty_rows.resize(rows.div_ceil(64), 0);
+        self.mark_rows_dirty(0, rows.saturating_sub(1));
     }
 }
 

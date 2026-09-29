@@ -2583,6 +2583,114 @@ fn test_dirty_region_tracking() {
     assert_eq!(term.get_dirty_rows(), vec![10]);
 }
 
+/// QA-150: every mutator honors the damage contract — mark_clean, apply
+/// one sequence to a prefilled screen, assert the exact dirty row set.
+#[test]
+fn test_ich_dch_mark_cursor_row_dirty() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"prefill\r\nprefill\r\nprefill\r\nprefill\r\nprefill\r\nprefill");
+    term.process(b"\x1b[6;10H"); // park the cursor on row 5 (0-indexed)
+    term.mark_clean();
+
+    term.process(b"\x1b[3@"); // ICH
+    assert_eq!(term.get_dirty_rows(), vec![5], "ICH marks the cursor row");
+
+    term.mark_clean();
+    term.process(b"\x1b[2P"); // DCH
+    assert_eq!(term.get_dirty_rows(), vec![5], "DCH marks the cursor row");
+}
+
+#[test]
+fn test_rectangle_ops_mark_their_rows_dirty() {
+    let mut term = Terminal::new(80, 24);
+    for _ in 0..6 {
+        term.process(b"prefill row content padding padding\r\n");
+    }
+    term.mark_clean();
+
+    // DECFRA: fill 'A' rows 1-3, cols 1-5 (1-indexed).
+    term.process(b"\x1b[65;1;1;3;5$x");
+    assert_eq!(
+        term.get_dirty_rows(),
+        vec![0, 1, 2],
+        "DECFRA marks top..=bottom"
+    );
+
+    term.mark_clean();
+    // DECERA: erase rows 1-3, cols 1-5.
+    term.process(b"\x1b[1;1;3;5$z");
+    assert_eq!(
+        term.get_dirty_rows(),
+        vec![0, 1, 2],
+        "DECERA marks top..=bottom"
+    );
+
+    term.mark_clean();
+    // DECCRA: copy rows 1-3 cols 1-5 to destination row 10 — the
+    // destination rows change, the unchanged source rows must NOT be
+    // marked (marking the source is the classic false-dirty bug).
+    term.process(b"\x1b[1;1;3;5;1;10;1$v");
+    assert_eq!(
+        term.get_dirty_rows(),
+        vec![9, 10, 11],
+        "DECCRA marks the destination rows only"
+    );
+
+    term.mark_clean();
+    // DECCARA: change attributes rows 1-2, cols 1-5.
+    term.process(b"\x1b[1;1;2;5;1$r");
+    assert_eq!(
+        term.get_dirty_rows(),
+        vec![0, 1],
+        "DECCARA marks top..=bottom"
+    );
+
+    term.mark_clean();
+    // DECRARA: reverse attributes rows 1-2, cols 1-5.
+    term.process(b"\x1b[1;1;2;5;7$t");
+    assert_eq!(
+        term.get_dirty_rows(),
+        vec![0, 1],
+        "DECRARA marks top..=bottom"
+    );
+}
+
+#[test]
+fn test_ris_marks_every_row_dirty() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"content");
+    term.mark_clean();
+    term.process(b"\x1bc");
+    assert_eq!(
+        term.get_dirty_rows(),
+        (0..24).collect::<Vec<_>>(),
+        "RIS marks every screen row"
+    );
+}
+
+#[test]
+fn test_snapshot_restore_marks_every_row_dirty() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"before");
+    let snap = term.capture_snapshot();
+    term.mark_clean();
+
+    term.restore_from_snapshot(snap.clone());
+    assert_eq!(
+        term.get_dirty_rows(),
+        (0..24).collect::<Vec<_>>(),
+        "restore_from_snapshot marks every row"
+    );
+
+    term.mark_clean();
+    term.restore_for_new_process(snap);
+    assert_eq!(
+        term.get_dirty_rows(),
+        (0..24).collect::<Vec<_>>(),
+        "restore_for_new_process marks every row"
+    );
+}
+
 #[test]
 fn test_bell_events() {
     let mut term = Terminal::new(80, 24);

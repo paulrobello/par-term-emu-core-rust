@@ -55,6 +55,7 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 self.active_grid_mut()
                     .insert_characters(cursor_col, cursor_row, n);
+                self.mark_row_dirty(cursor_row);
             }
             'P' => {
                 // Delete characters (DCH)
@@ -68,6 +69,7 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 self.active_grid_mut()
                     .delete_characters(cursor_col, cursor_row, n);
+                self.mark_row_dirty(cursor_row);
             }
             _ => {}
         }
