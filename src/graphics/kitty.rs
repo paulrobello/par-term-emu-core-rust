@@ -18,6 +18,17 @@ use crate::graphics::{
     MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS,
 };
 
+/// cap: Decoded bytes one kitty transmission may accumulate across chunks
+/// (SEC-116). The wire side carries base64 (+~33%); its cap lives in
+/// `apc_filter.rs` as `MAX_KITTY_APC_BYTES`.
+pub const MAX_KITTY_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+
+/// cap: Upper bound on one kitty zlib stream's decompressed output
+/// (SEC-116) — `MAX_IMAGE_PIXELS * 4` (256 MiB), the same worst-case RGBA
+/// allocation the decoder enforces, applied while inflating so a bomb
+/// fails streaming instead of after allocating.
+pub const MAX_KITTY_DECOMPRESSED_BYTES: usize = MAX_IMAGE_PIXELS * 4;
+
 /// Kitty graphics transmission action
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyAction {
@@ -216,6 +227,10 @@ pub struct KittyParser {
     pub more_chunks: bool,
     /// Accumulated data chunks
     data_chunks: Vec<Vec<u8>>,
+    /// Decoded bytes accumulated so far (SEC-116) — tracks the total
+    /// against [`MAX_KITTY_PAYLOAD_BYTES`]. Lives beside the chunks so
+    /// every `reset()` path (which rebuilds the parser) zeroes it too.
+    data_bytes: usize,
     /// Delete target
     pub delete_target: Option<KittyDeleteTarget>,
     /// Virtual placement (U=1)
@@ -502,6 +517,16 @@ impl KittyParser {
                         )
                     })
                     .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
+            if self.data_bytes + decoded.len() > MAX_KITTY_PAYLOAD_BYTES {
+                // Over the cap: drop the accumulated transmission entirely
+                // so a later one starts from zero, not from the overflow.
+                self.reset();
+                return Err(GraphicsError::KittyError(format!(
+                    "payload exceeds {} bytes",
+                    MAX_KITTY_PAYLOAD_BYTES
+                )));
+            }
+            self.data_bytes += decoded.len();
             self.data_chunks.push(decoded);
         }
 
@@ -532,32 +557,63 @@ impl KittyParser {
         }
     }
 
-    /// Get accumulated data, decompressing if necessary
-    pub fn get_data(&self) -> Vec<u8> {
+    /// Get accumulated data, decompressing if necessary.
+    ///
+    /// Decompression failures propagate (SEC-116): the old raw-bytes
+    /// fallback fed compressed bytes to the pixel decoder on a limit
+    /// error — garbage at best, an attack surface at worst.
+    pub fn get_data(&self) -> Result<Vec<u8>, GraphicsError> {
         let raw = self.data_chunks.concat();
         if self.compression == KittyCompression::Zlib {
-            match Self::decompress_zlib(&raw) {
-                Ok(decompressed) => decompressed,
-                Err(_) => raw, // Fall back to raw data on decompression failure
-            }
+            Self::decompress_zlib(&raw, self.decompression_limit())
         } else {
-            raw
+            Ok(raw)
         }
     }
 
-    /// Decompress zlib-compressed data
-    fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+    /// The zlib output bound for this transmission: with the pixel
+    /// geometry known (`f=24`/`f=32` carrying `s=` and `v=`), exactly
+    /// width × height × bytes-per-pixel; otherwise the global RGBA worst
+    /// case. Either way clamped by [`MAX_KITTY_DECOMPRESSED_BYTES`], so a
+    /// lying `s=`/`v=` pair cannot raise the ceiling.
+    fn decompression_limit(&self) -> usize {
+        let bytes_per_pixel = match self.format {
+            KittyFormat::Rgb => 3,
+            KittyFormat::Rgba => 4,
+            KittyFormat::Png => return MAX_KITTY_DECOMPRESSED_BYTES,
+        };
+        match (self.width, self.height) {
+            (Some(width), Some(height)) => (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(bytes_per_pixel)
+                .min(MAX_KITTY_DECOMPRESSED_BYTES),
+            _ => MAX_KITTY_DECOMPRESSED_BYTES,
+        }
+    }
+
+    /// Decompress zlib-compressed data, bounding the output at `limit`
+    /// while inflating (SEC-116): `take(limit + 1)` stops the decoder
+    /// after one byte past the bound, so an over-limit stream is detected
+    /// without ever allocating its full size.
+    fn decompress_zlib(data: &[u8], limit: usize) -> Result<Vec<u8>, GraphicsError> {
         // Empty input is not a valid zlib stream, but this API treats it as
         // empty output; flate2 versions differ here and callers rely on
         // zero-length payloads not being an error.
         if data.is_empty() {
             return Ok(Vec::new());
         }
-        let mut decoder = ZlibDecoder::new(data);
         let mut decompressed = Vec::new();
-        decoder
+        ZlibDecoder::new(data)
+            .take(limit as u64 + 1)
             .read_to_end(&mut decompressed)
             .map_err(|e| GraphicsError::KittyError(format!("Zlib decompression failed: {}", e)))?;
+        if decompressed.len() > limit {
+            return Err(GraphicsError::KittyError(format!(
+                "Decompressed size {} exceeds limit {}",
+                decompressed.len(),
+                limit
+            )));
+        }
         Ok(decompressed)
     }
 
@@ -763,7 +819,7 @@ impl KittyParser {
         position: (usize, usize),
         store: &mut GraphicsStore,
     ) -> Result<KittyGraphicResult, GraphicsError> {
-        let raw_data = self.get_data();
+        let raw_data = self.get_data()?;
         if raw_data.is_empty() {
             return Err(GraphicsError::KittyError("No image data".to_string()));
         }
@@ -848,7 +904,7 @@ impl KittyParser {
         store: &mut GraphicsStore,
     ) -> Result<KittyGraphicResult, GraphicsError> {
         // Add animation frame
-        let raw_data = self.get_data();
+        let raw_data = self.get_data()?;
         if raw_data.is_empty() {
             return Err(GraphicsError::KittyError("No frame data".to_string()));
         }
@@ -1414,6 +1470,7 @@ mod tests {
 
         // Test file loading
         let data = parser.get_data();
+        let data = data.unwrap();
         assert!(!data.is_empty());
         assert_eq!(data, file_path.as_bytes());
 
@@ -1526,7 +1583,7 @@ mod tests {
         assert_eq!(parser.compression, KittyCompression::Zlib);
 
         // get_data() should return decompressed data
-        let data = parser.get_data();
+        let data = parser.get_data().unwrap();
         assert_eq!(data, pixel_data);
     }
 
@@ -1671,7 +1728,7 @@ mod tests {
         assert!(!more);
 
         // Data should be decompressed correctly
-        let data = parser.get_data();
+        let data = parser.get_data().unwrap();
         assert_eq!(data, pixel_data);
     }
 
@@ -1679,8 +1736,76 @@ mod tests {
     fn test_kitty_decompress_zlib_invalid_data() {
         // Test decompression with invalid zlib data falls back gracefully
         let invalid_data = vec![0x00, 0x01, 0x02, 0x03];
-        let result = KittyParser::decompress_zlib(&invalid_data);
+        let result = KittyParser::decompress_zlib(&invalid_data, MAX_KITTY_DECOMPRESSED_BYTES);
         assert!(result.is_err());
+    }
+
+    /// SEC-116: the streaming output bound rejects during inflation.
+    #[test]
+    fn test_decompress_zlib_limit_rejects_oversized_output() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+        enc.write_all(&[0u8; 1024]).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        let result = KittyParser::decompress_zlib(&compressed, 16);
+        assert!(
+            result.is_err(),
+            "1 KiB inflating past a 16-byte limit errors"
+        );
+        let ok = KittyParser::decompress_zlib(&compressed, 1024).unwrap();
+        assert_eq!(ok.len(), 1024, "a fitting limit still succeeds");
+    }
+
+    /// SEC-116: a small wire payload that inflates past the transmission's
+    /// geometry-derived limit errors quickly, never allocating the bomb's
+    /// full size (`f=32,s=1,v=1` bounds decompression at 4 bytes).
+    #[test]
+    fn test_kitty_zlib_bomb_errors_quickly() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::new(9));
+        enc.write_all(&vec![0u8; 4 * 1024 * 1024]).unwrap();
+        let compressed = enc.finish().unwrap();
+        assert!(
+            compressed.len() < 64 * 1024,
+            "the bomb stays small on the wire"
+        );
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+        let mut parser = KittyParser::new();
+        parser
+            .parse_chunk(&format!("a=T,f=32,s=1,v=1,o=z;{}", b64))
+            .unwrap();
+        assert!(
+            parser.get_data().is_err(),
+            "the bomb is rejected at the streaming bound"
+        );
+    }
+
+    /// SEC-116: decoded chunks past [`MAX_KITTY_PAYLOAD_BYTES`] error and
+    /// reset the parser, so the next transmission starts from zero.
+    #[test]
+    fn test_chunk_accumulation_cap_resets_parser() {
+        let chunk = vec![b'A'; 16 * 1024 * 1024]; // 16 MiB decoded
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &chunk);
+        let mut parser = KittyParser::new();
+        // Four chunks land exactly at the 64 MiB cap (allowed), the fifth
+        // crosses it.
+        for i in 0..4 {
+            parser
+                .parse_chunk(&format!("a=T,m=1;{}", b64))
+                .unwrap_or_else(|e| panic!("chunk {i} within cap: {e}"));
+        }
+        let err = parser
+            .parse_chunk(&format!("a=T,m=0;{}", b64))
+            .expect_err("the fifth 16 MiB chunk crosses the cap");
+        assert!(err.to_string().contains("payload exceeds"));
+        assert!(parser.data_chunks.is_empty(), "parser reset on overflow");
+        assert_eq!(parser.data_bytes, 0, "byte counter reset with it");
+        // A fresh small transmission parses cleanly afterward.
+        parser.parse_chunk("a=T;QUFB").unwrap();
+        assert_eq!(parser.get_data().unwrap(), b"AAA");
     }
 
     #[test]
@@ -2066,7 +2191,7 @@ mod tests {
         let mut parser = KittyParser::new();
         let result = parser.parse_chunk("a=T;QUFB");
         assert!(result.is_ok());
-        let data = parser.get_data();
+        let data = parser.get_data().unwrap();
         assert_eq!(data, b"AAA");
     }
 
@@ -2077,7 +2202,7 @@ mod tests {
         let mut parser = KittyParser::new();
         let result = parser.parse_chunk("a=T;QQ==");
         assert!(result.is_ok());
-        assert_eq!(parser.get_data(), b"A");
+        assert_eq!(parser.get_data().unwrap(), b"A");
     }
 
     // --- reset() ---
@@ -2096,23 +2221,22 @@ mod tests {
         assert!(!parser.more_chunks);
         assert_eq!(parser.compression, KittyCompression::None);
         // After reset, accumulated data chunks are gone.
-        assert!(parser.get_data().is_empty());
+        assert!(parser.get_data().unwrap().is_empty());
     }
 
-    // --- get_data decompression fallback ---
+    // --- get_data decompression failure (SEC-116) ---
 
     #[test]
-    fn test_get_data_zlib_failure_falls_back_to_raw() {
-        // If o=z is set but the data is not actually zlib, get_data() must
-        // return the raw bytes (not propagate an error / panic).
+    fn test_get_data_zlib_failure_propagates() {
+        // If o=z is set but the data is not actually zlib, get_data()
+        // propagates the error (SEC-116): the old raw-bytes fallback fed
+        // compressed bytes to the pixel decoder.
         let mut parser = KittyParser::new();
         // Mark compressed with valid zlib marker but corrupt the body.
         let bad = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"not zlib");
         let _ = parser.parse_chunk(&format!("a=T,o=z;{}", bad));
         assert!(parser.is_compressed());
-        // decompress fails -> should return raw concatenated data
-        let data = parser.get_data();
-        assert_eq!(data, b"not zlib");
+        assert!(parser.get_data().is_err());
     }
 
     #[test]
@@ -2120,7 +2244,7 @@ mod tests {
         let mut parser = KittyParser::new();
         let _ = parser.parse_chunk("a=T,m=1;QUFB"); // "AAA"
         let _ = parser.parse_chunk("m=0;QkJD"); // "BBC"
-        assert_eq!(parser.get_data(), b"AAABBC");
+        assert_eq!(parser.get_data().unwrap(), b"AAABBC");
     }
 
     // --- parse_delete_target variants ---
@@ -3430,7 +3554,7 @@ mod tests {
     #[test]
     fn test_decompress_zlib_empty_input_succeeds_with_empty_output() {
         // ZlibDecoder treats empty input as a valid empty stream.
-        let result = KittyParser::decompress_zlib(&[]);
+        let result = KittyParser::decompress_zlib(&[], MAX_KITTY_DECOMPRESSED_BYTES);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -3440,7 +3564,7 @@ mod tests {
         // A valid zlib stream that decompresses to zero bytes.
         // RFC 1950 wrapper around deflate of empty stored block.
         let empty_zlib: [u8; 8] = [0x78, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];
-        let result = KittyParser::decompress_zlib(&empty_zlib);
+        let result = KittyParser::decompress_zlib(&empty_zlib, MAX_KITTY_DECOMPRESSED_BYTES);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }

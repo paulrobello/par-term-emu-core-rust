@@ -894,7 +894,12 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
   path-traversal writes).
 - OSC data is capped (`DEFAULT_MAX_OSC_DATA_LENGTH`, configurable via
   `Terminal::set_max_osc_data_length` — QA-012).
-- zlib decompression is capped (`MAX_DECOMPRESSED_SIZE`).
+- zlib decompression is capped on both paths: streaming frames by
+  `MAX_DECOMPRESSED_SIZE` (wire frames only), and the Kitty graphics
+  APC path by `MAX_KITTY_PAYLOAD_BYTES` / `MAX_KITTY_DECOMPRESSED_BYTES`
+  / `MAX_KITTY_APC_BYTES` (SEC-116) — a small compressed payload that
+  inflates past its geometry-derived limit errors during inflation,
+  and the APC accumulator itself is bounded.
 - The current values of every size cap live in the
   [Resource Limits Reference](#resource-limits-reference) table, generated
   from the code — prose numbers here would drift.
@@ -1103,7 +1108,9 @@ sections; the numbers live here.
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1115` | Bytes read from one kitty file medium named by an escape payload. |
+| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
+| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
+| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1171` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:81` | Bytes accepted for one hook or agent report value sent from a pane. |
@@ -1123,6 +1130,7 @@ sections; the numbers live here.
 | `MAX_COLS` | 1,000 | `src/streaming/server.rs:160` | Columns a streaming client may request for its terminal. |
 | `MAX_ROWS` | 500 | `src/streaming/server.rs:163` | Rows a streaming client may request for its terminal. |
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:34` | Client input bytes queued per session pending write to the PTY. |
+| `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:87` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:91` | Completed transfers retained from client file-transfer requests. |
