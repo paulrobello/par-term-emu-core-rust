@@ -40,6 +40,12 @@ pub struct MuxWindow {
     pub cols: u16,
     /// The window's height in rows.
     pub rows: u16,
+    /// `resize-pane -Z`: the pane currently zoomed to the full window
+    /// grid, hiding the others. The layout tree is never touched while
+    /// zoomed, so unzooming restores the exact prior geometry — zoom lives
+    /// only in pane sizes. Not persisted: a restored window starts
+    /// unzoomed (tmux's behavior).
+    pub zoomed: Option<PaneId>,
 }
 
 impl MuxWindow {
@@ -366,6 +372,7 @@ impl MuxTree {
                 active: pane_id,
                 cols,
                 rows,
+                zoomed: None,
             },
         );
         self.sessions.insert(
@@ -489,6 +496,7 @@ impl MuxTree {
                 active: pane_id,
                 cols,
                 rows,
+                zoomed: None,
             },
         );
         self.sessions
@@ -618,6 +626,9 @@ impl MuxTree {
         self.panes.insert(pane_id, pane);
         if let Some(window) = self.windows.get_mut(&window_id) {
             window.active = pane_id;
+            // The new pane must be visible to be useful — a zoom hiding
+            // it would defeat the split.
+            window.zoomed = None;
         }
         self.sync_pane_sizes(window_id);
         Ok((pane_id, window_id))
@@ -668,10 +679,23 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
-        self.windows
-            .get_mut(&window_id)
-            .expect("window_of_pane only returns live windows")
-            .active = pane;
+        let mut unzoomed = false;
+        {
+            let window = self
+                .windows
+                .get_mut(&window_id)
+                .expect("window_of_pane only returns live windows");
+            window.active = pane;
+            // Selecting another pane reveals the layout — tmux unzooms on
+            // the switch; selecting the zoomed pane itself keeps the zoom.
+            if window.zoomed.is_some_and(|z| z != pane) {
+                window.zoomed = None;
+                unzoomed = true;
+            }
+        }
+        if unzoomed {
+            self.sync_pane_sizes(window_id);
+        }
         Ok(window_id)
     }
 
@@ -697,6 +721,34 @@ impl MuxTree {
                 .layout
                 .swap_pane(target, source)
                 .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
+            // The traded geometry no longer matches what the zoom shows —
+            // a zoom survives only until the layout moves.
+            window.zoomed = None;
+        }
+        self.sync_pane_sizes(window_id);
+        Ok(window_id)
+    }
+
+    /// Toggle `pane`'s zoom (`resize-pane -Z`): zooming resizes its
+    /// terminal and PTY to the full window grid; unzooming re-fits every
+    /// pane to the layout, which the zoom never edited — the exact prior
+    /// geometry. Zooming a different pane moves the zoom to it. The Ok
+    /// payload is the pane's window — the dispatcher's `%layout-change`
+    /// target.
+    pub fn zoom_pane(&mut self, pane: PaneId) -> Result<WindowId, MuxError> {
+        let window_id = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        {
+            let window = self
+                .windows
+                .get_mut(&window_id)
+                .expect("window_of_pane only returns live windows");
+            window.zoomed = if window.zoomed == Some(pane) {
+                None
+            } else {
+                Some(pane)
+            };
         }
         self.sync_pane_sizes(window_id);
         Ok(window_id)
@@ -913,6 +965,8 @@ impl MuxTree {
         let Some(window) = self.windows.get(&window_id) else {
             return;
         };
+        let zoomed = window.zoomed;
+        let (window_cols, window_rows) = (window.cols as usize, window.rows as usize);
         let geometry = window
             .layout
             .geometry(0, 0, window.cols as usize, window.rows as usize);
@@ -920,15 +974,19 @@ impl MuxTree {
             if let Some(pane) = self.panes.get_mut(&pane_geometry.pane) {
                 // A reported cell pixel size rides every re-fit, so grid
                 // changes keep XTWINOPS/TIOCGWINSZ/image-span math correct
-                // instead of reverting to the construction default.
+                // instead of reverting to the construction default. A
+                // zoomed pane takes the full window grid instead of its
+                // layout cell.
+                let (width, height) = if zoomed == Some(pane_geometry.pane) {
+                    (window_cols, window_rows)
+                } else {
+                    (pane_geometry.width, pane_geometry.height)
+                };
                 let resized = match self.client_cell_pixels {
-                    Some((cell_w, cell_h)) => pane.resize_with_cell_pixels(
-                        pane_geometry.width as u16,
-                        pane_geometry.height as u16,
-                        cell_w,
-                        cell_h,
-                    ),
-                    None => pane.resize(pane_geometry.width as u16, pane_geometry.height as u16),
+                    Some((cell_w, cell_h)) => {
+                        pane.resize_with_cell_pixels(width as u16, height as u16, cell_w, cell_h)
+                    }
+                    None => pane.resize(width as u16, height as u16),
                 };
                 let _ = resized;
             }
@@ -1005,7 +1063,11 @@ impl MuxTree {
         }
 
         // The killed pane left its window's layout; a surviving pane takes
-        // the freed extent and its terminal must grow into it.
+        // the freed extent and its terminal must grow into it. The layout
+        // changed, so any zoom is over — including the killed pane's own.
+        if let Some(window) = self.windows.get_mut(&affected_window) {
+            window.zoomed = None;
+        }
         self.sync_pane_sizes(affected_window);
 
         Ok((affected_window, removed_session))
@@ -1838,6 +1900,160 @@ mod tests {
 
         let result = tree.resize_pane_absolute(first, Some(40), None);
         assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
+    }
+
+    /// `resize-pane -Z`: two panes 40x24 each; zooming takes the full
+    /// window grid while the hidden pane keeps its size, and unzooming
+    /// restores the exact prior extent — the zoom never edits the layout.
+    #[test]
+    fn zoom_toggles_full_grid_and_restores_exactly() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (40, 24));
+
+        tree.zoom_pane(first).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, Some(first));
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (80, 24),
+            "the zoomed pane takes the full window grid"
+        );
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (40, 24),
+            "the hidden pane keeps its size"
+        );
+
+        tree.zoom_pane(first).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (40, 24),
+            "unzoom restores the exact prior extent"
+        );
+    }
+
+    /// Zooming a different pane moves the zoom to it (tmux semantics).
+    #[test]
+    fn zoom_moves_to_another_pane() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.zoom_pane(first).unwrap();
+        tree.zoom_pane(second).unwrap();
+
+        assert_eq!(tree.window(window_id).unwrap().zoomed, Some(second));
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (80, 24)
+        );
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (40, 24),
+            "the previous zoom target returns to its layout cell"
+        );
+    }
+
+    /// A window resize while zoomed re-fits the zoomed pane to the NEW
+    /// full grid.
+    #[test]
+    fn window_resize_while_zoomed_follows_the_new_grid() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        tree.split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.zoom_pane(first).unwrap();
+        tree.resize_window(window_id, 100, 30).unwrap();
+
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (100, 30),
+            "the zoom tracks the window's new extent"
+        );
+    }
+
+    /// Every layout mutation ends the zoom: split, kill, swap, and
+    /// select-pane to another pane unzoom first; selecting the zoomed
+    /// pane itself keeps it (tmux's rule).
+    #[test]
+    fn layout_mutations_unzoom_the_window() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        // split-window: the new pane must be visible.
+        tree.zoom_pane(first).unwrap();
+        let third = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+        let geo = tree
+            .window(window_id)
+            .unwrap()
+            .layout
+            .geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (width_of(first), 24),
+            "the split target returns to its layout cell"
+        );
+
+        // kill-pane of a non-zoomed pane still changes the layout.
+        tree.zoom_pane(first).unwrap();
+        tree.kill_pane(third).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+
+        // kill-pane of the zoomed pane itself.
+        tree.zoom_pane(second).unwrap();
+        tree.kill_pane(second).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+
+        // swap-pane: the traded geometry no longer matches the zoom.
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        tree.zoom_pane(first).unwrap();
+        tree.swap_panes(first, second).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+
+        // select-pane to another pane reveals the layout; to the zoomed
+        // pane itself keeps the zoom.
+        tree.zoom_pane(first).unwrap();
+        tree.select_pane(second).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (40, 24),
+            "unzoom on select restores the pane's layout cell"
+        );
+        tree.zoom_pane(first).unwrap();
+        tree.select_pane(first).unwrap();
+        assert_eq!(tree.window(window_id).unwrap().zoomed, Some(first));
+    }
+
+    #[test]
+    fn zoom_rejects_an_unknown_pane() {
+        let mut tree = tree();
+        let result = tree.zoom_pane(PaneId(9999));
+        assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
     }
 
     #[test]

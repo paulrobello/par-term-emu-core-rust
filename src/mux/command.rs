@@ -24,6 +24,10 @@ pub enum ResizeAdjustment {
         /// `-y`: the pane's height in rows.
         rows: Option<u16>,
     },
+    /// `-Z`: toggle the pane's zoom — the full window grid while zoomed,
+    /// the exact prior layout back on unzoom (tmux's `resize-pane -Z`).
+    /// Not combinable with the other adjustment forms.
+    Zoom,
 }
 
 /// A command received from a control-mode client.
@@ -1018,6 +1022,19 @@ fn parse_pane_info(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_resize_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     let pane = a.pane("-t")?;
+    // The zoom form: -Z toggles, standalone.
+    if a.has_flag("-Z") {
+        if a.has_flag("-x")
+            || a.has_flag("-y")
+            || ["-L", "-R", "-U", "-D"].iter().any(|f| a.has_flag(f))
+        {
+            return Err("resize-pane: -Z cannot combine with -L -R -U -D or -x/-y".to_string());
+        }
+        return Ok(MuxCommand::ResizePane {
+            pane,
+            adjustment: ResizeAdjustment::Zoom,
+        });
+    }
     // The absolute form: -x COLS and/or -y ROWS, at least one.
     let cols = a.size("-x")?;
     let rows = a.size("-y")?;
@@ -2016,6 +2033,25 @@ mod tests {
         assert!(
             parse_command("resize-pane -t %0 -x 120 -R").is_err(),
             "absolute and relative forms cannot combine"
+        );
+    }
+
+    #[test]
+    fn parses_resize_pane_zoom_toggle() {
+        assert_eq!(
+            parse_command("resize-pane -t %0 -Z").unwrap(),
+            MuxCommand::ResizePane {
+                pane: Target::Id(PaneId(0)),
+                adjustment: ResizeAdjustment::Zoom
+            }
+        );
+        assert!(
+            parse_command("resize-pane -t %0 -Z -x 80").is_err(),
+            "the zoom form cannot combine with the absolute form"
+        );
+        assert!(
+            parse_command("resize-pane -t %0 -Z -R").is_err(),
+            "the zoom form cannot combine with the relative form"
         );
     }
 

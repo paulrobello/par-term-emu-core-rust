@@ -1092,10 +1092,12 @@ fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
 /// Push a `%layout-change` for `window_id` to every connected client.
 ///
 /// tmux subscribers re-render their local pane grid from the wire layout
-/// string; the visible-layout copy and raw flags mirror tmux's frame shape
-/// (same string, empty flags) rather than carrying state Phase 2 does not
-/// track. Rendered after the tree lock is released, so a slow client
-/// channel never holds up a mutation.
+/// string; the visible-layout copy and raw flags mirror tmux's frame shape.
+/// While a pane is zoomed (`resize-pane -Z`) the layout string stays the
+/// true (untouched) tree — that is what makes unzoom restore exact — and
+/// the zoom shows in the other two fields instead: the visible layout is
+/// the zoomed pane alone at full extent, and the raw flags carry `Z`
+/// (tmux's zoom flag).
 pub(crate) fn broadcast_layout_change(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -1109,11 +1111,19 @@ pub(crate) fn broadcast_layout_change(
         let layout = window
             .layout
             .render(0, 0, window.cols as usize, window.rows as usize);
+        let (visible_layout, raw_flags) = match window.zoomed {
+            Some(pane) => (
+                // The single-pane form render_node produces for a leaf.
+                format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
+                "Z".to_string(),
+            ),
+            None => (layout.clone(), String::new()),
+        };
         emit(&TmuxNotification::LayoutChange {
             window_id: window_id.to_string(),
-            window_layout: layout.clone(),
-            window_visible_layout: layout,
-            window_raw_flags: String::new(),
+            window_layout: layout,
+            window_visible_layout: visible_layout,
+            window_raw_flags: raw_flags,
         })
     };
     push_to_clients(clients, line);

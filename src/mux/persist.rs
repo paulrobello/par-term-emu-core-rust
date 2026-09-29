@@ -537,6 +537,9 @@ impl MuxTree {
                         active: PaneId(window.active_pane),
                         cols: window.cols,
                         rows: window.rows,
+                        // Zoom is session state, not layout — restored
+                        // windows start unzoomed (tmux's behavior).
+                        zoomed: None,
                     },
                 );
             }

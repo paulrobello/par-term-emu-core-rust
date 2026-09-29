@@ -701,6 +701,7 @@ fn cmd_resize_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, adjustment: ResizeAdjust
             ResizeAdjustment::Absolute { cols, rows } => {
                 guard.resize_pane_absolute(pane, cols, rows)
             }
+            ResizeAdjustment::Zoom => guard.zoom_pane(pane),
         }
     };
     match outcome {
