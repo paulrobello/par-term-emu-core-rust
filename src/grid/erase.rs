@@ -18,6 +18,7 @@ impl Grid {
             cell.bg = bg;
         }
         self.zones.clear();
+        self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 
     /// Clear the entire grid with default background

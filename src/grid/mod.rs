@@ -40,6 +40,10 @@ pub struct Grid {
     pub(in crate::grid) evicted_zones: Vec<Zone>,
     /// Total number of lines that have ever been scrolled into scrollback.
     pub(in crate::grid) total_lines_scrolled: usize,
+    /// Dirty-row bitset over `rows` (ENH-025). Mutators mark the rows they
+    /// change so the damage contract cannot be forgotten at a call site;
+    /// `get_mut`/`row_mut` mark conservatively because they hand out `&mut`.
+    pub(in crate::grid) damage: Vec<u64>,
 }
 
 impl Grid {
@@ -59,7 +63,41 @@ impl Grid {
             zones: Vec::new(),
             evicted_zones: Vec::new(),
             total_lines_scrolled: 0,
+            damage: vec![0u64; rows.div_ceil(64)],
         }
+    }
+
+    /// Mark a row as damaged (needs redrawing)
+    pub fn mark_row_damage(&mut self, row: usize) {
+        let word = row / 64;
+        if word < self.damage.len() {
+            self.damage[word] |= 1u64 << (row % 64);
+        }
+    }
+
+    /// Mark an inclusive row range as damaged
+    pub fn mark_rows_damage(&mut self, top: usize, bottom: usize) {
+        let last_row = self.rows.saturating_sub(1);
+        for row in top..=bottom.min(last_row) {
+            self.mark_row_damage(row);
+        }
+    }
+
+    /// Clear all damage (the consumer has repainted)
+    pub fn clear_damage(&mut self) {
+        self.damage.fill(0);
+    }
+
+    /// Iterate damaged row numbers in ascending order
+    pub fn damage_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.damage
+            .iter()
+            .enumerate()
+            .flat_map(|(word_idx, &word)| {
+                let base = word_idx * 64;
+                (0..64usize)
+                    .filter_map(move |bit| (word & (1u64 << bit) != 0).then_some(base + bit))
+            })
     }
 
     /// Get the number of columns
@@ -81,9 +119,11 @@ impl Grid {
         }
     }
 
-    /// Get a mutable reference to a cell at (col, row)
+    /// Get a mutable reference to a cell at (col, row). Marks the row
+    /// damaged conservatively — the caller may write through the reference.
     pub fn get_mut(&mut self, col: usize, row: usize) -> Option<&mut Cell> {
         if col < self.cols && row < self.rows {
+            self.mark_row_damage(row);
             Some(&mut self.cells[row * self.cols + col])
         } else {
             None
@@ -92,8 +132,9 @@ impl Grid {
 
     /// Set a cell at (col, row)
     pub fn set(&mut self, col: usize, row: usize, cell: Cell) {
-        if let Some(c) = self.get_mut(col, row) {
-            *c = cell;
+        if col < self.cols && row < self.rows {
+            self.mark_row_damage(row);
+            self.cells[row * self.cols + col] = cell;
         }
     }
 
@@ -108,9 +149,11 @@ impl Grid {
         }
     }
 
-    /// Get a mutable row
+    /// Get a mutable row. Marks the row damaged conservatively — the
+    /// caller may write through the slice.
     pub fn row_mut(&mut self, row: usize) -> Option<&mut [Cell]> {
         if row < self.rows {
+            self.mark_row_damage(row);
             let start = row * self.cols;
             let end = start + self.cols;
             Some(&mut self.cells[start..end])
@@ -157,10 +200,12 @@ impl Grid {
         self.wrapped.get(row).copied().unwrap_or(false)
     }
 
-    /// Set wrapped state for a line
+    /// Set wrapped state for a line. The wrap flag changes how the row
+    /// renders (joined lines), so the row is damaged too.
     pub fn set_line_wrapped(&mut self, row: usize, wrapped: bool) {
         if let Some(w) = self.wrapped.get_mut(row) {
             *w = wrapped;
+            self.mark_row_damage(row);
         }
     }
 
@@ -234,6 +279,8 @@ impl Grid {
         self.zones = snap.zones.clone();
         self.evicted_zones.clear();
         self.total_lines_scrolled = snap.total_lines_scrolled;
+        self.damage = vec![0u64; self.rows.div_ceil(64)];
+        self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 }
 

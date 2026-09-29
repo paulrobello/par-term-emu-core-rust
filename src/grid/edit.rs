@@ -30,6 +30,7 @@ impl Grid {
         for i in row..(row + n).min(self.rows) {
             self.clear_row(i);
         }
+        self.mark_rows_damage(row, effective_bottom);
     }
 
     /// Delete n lines at row
@@ -60,6 +61,7 @@ impl Grid {
         for i in clear_start..=effective_bottom {
             self.clear_row(i);
         }
+        self.mark_rows_damage(row, effective_bottom);
     }
 
     /// Insert n blank characters at position
