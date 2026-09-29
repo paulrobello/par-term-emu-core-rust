@@ -1197,10 +1197,6 @@ pub struct Terminal {
     pub(crate) margin_bell_volume: u8,
     /// tmux control-protocol state (ARC-001 sub-struct)
     pub(crate) tmux: TmuxState,
-    /// Dirty rows tracking (0-indexed row numbers that have changed), one bit
-    /// per visible row — the print path sets a bit per character, so this is
-    /// a plain mask OR rather than a hash insert
-    pub(crate) dirty_rows: Vec<u64>,
     /// Event buffer + observer registry + dispatch index + ID counters (ARC-001 sub-struct)
     pub(crate) events: EventBrokerState,
     /// Current selection state
@@ -1332,7 +1328,6 @@ impl Terminal {
             warning_bell_volume: 4,
             margin_bell_volume: 4,
             tmux: TmuxState::default(),
-            dirty_rows: vec![0u64; rows.div_ceil(64)],
             events: EventBrokerState::default(),
             selection: None,
             bookmarks_state: BookmarksState::default(),
@@ -1546,18 +1541,9 @@ impl Terminal {
         self.grid.resize(cols, rows);
         // The alt screen never reflows (see Grid::resize_without_reflow).
         self.alt_grid.resize_without_reflow(cols, rows);
-        // Keep the dirty-row mask sized to the visible rows, then mark every
-        // row dirty: a resize reflows/redraws the whole screen, and a
+        // Both grids' damage bitsets were resized and fully marked by their
+        // resize calls: a resize reflows/redraws the whole screen, and a
         // damage-driven renderer (FFI readback) must repaint all of it.
-        self.dirty_rows.resize(rows.div_ceil(64), 0);
-        for word in self.dirty_rows.iter_mut() {
-            *word = u64::MAX;
-        }
-        let last_word_bits = rows % 64;
-        if last_word_bits != 0 {
-            let last = self.dirty_rows.len() - 1;
-            self.dirty_rows[last] = (1u64 << last_word_bits) - 1;
-        }
 
         // Update pixel dimensions proportionally (10x20 per cell if not explicitly set)
         // This ensures CSI 14 t queries return valid pixel dimensions after resize
@@ -3307,12 +3293,11 @@ impl Terminal {
         self.pending_wrap = false;
     }
 
-    /// Mark a row as dirty (needs redrawing)
+    /// Mark a row as dirty (needs redrawing). Damage normally comes from the
+    /// Grid mutators themselves (ENH-025); this forwarder stays for the
+    /// non-grid visual changes (cursor shape, selection) and the Python API.
     pub fn mark_row_dirty(&mut self, row: usize) {
-        let word = row / 64;
-        if word < self.dirty_rows.len() {
-            self.dirty_rows[word] |= 1u64 << (row % 64);
-        }
+        self.active_grid_mut().mark_row_damage(row);
     }
 
     /// Queue a row for trigger scanning (ARC-064).
@@ -3367,27 +3352,17 @@ impl Terminal {
     /// Mark an inclusive range of rows dirty — scrolling changes every row
     /// in the scrolled region, not just the ones that received cells.
     pub(crate) fn mark_rows_dirty(&mut self, top: usize, bottom: usize) {
-        let last_row = self.active_grid().rows().saturating_sub(1);
-        for row in top..=bottom.min(last_row) {
-            self.mark_row_dirty(row);
-        }
+        self.active_grid_mut().mark_rows_damage(top, bottom);
     }
 
     /// Mark the entire screen as clean
     pub fn mark_clean(&mut self) {
-        self.dirty_rows.fill(0);
+        self.active_grid_mut().clear_damage();
     }
 
     /// Iterate the dirty row numbers in ascending order
     fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        self.dirty_rows
-            .iter()
-            .enumerate()
-            .flat_map(|(word_idx, &word)| {
-                let base = word_idx * 64;
-                (0..64usize)
-                    .filter_map(move |bit| (word & (1u64 << bit) != 0).then_some(base + bit))
-            })
+        self.active_grid().damage_indices()
     }
 
     /// Get all dirty rows (ascending)

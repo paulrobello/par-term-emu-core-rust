@@ -66,6 +66,7 @@ impl Grid {
         // refill matches what clear_row wrote on these rows before.
         self.cells.resize(self.rows * self.cols, Cell::default());
         self.wrapped.resize(wrapped_len, false);
+        self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 
     /// Absorb rows drained out of the main grid into the scrollback buffer.
@@ -143,6 +144,7 @@ impl Grid {
                 self.wrapped[i] = false;
             }
         }
+        self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 
     /// Scroll up within a region. Returns `false` if parameters are invalid.
@@ -159,6 +161,7 @@ impl Grid {
         let n = n.min(bottom - top + 1);
         let effective_bottom = bottom.min(self.rows - 1);
         let region_size = effective_bottom - top + 1;
+        self.mark_rows_damage(top, effective_bottom);
 
         if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
             self.scroll_up(n);
@@ -204,6 +207,7 @@ impl Grid {
 
         let n = n.min(bottom - top + 1);
         let effective_bottom = bottom.min(self.rows - 1);
+        self.mark_rows_damage(top, effective_bottom);
 
         if n > effective_bottom - top {
             for i in top..=effective_bottom {
@@ -254,6 +258,14 @@ impl Grid {
         self.wrapped = vec![false; rows];
         self.cols = cols;
         self.rows = rows;
+        self.reset_damage_for_resize();
+    }
+
+    /// Resize the damage bitset to the new row count and mark every row:
+    /// a resize moves content even when the cell data survives unchanged.
+    fn reset_damage_for_resize(&mut self) {
+        self.damage = vec![0u64; self.rows.div_ceil(64)];
+        self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
@@ -273,6 +285,7 @@ impl Grid {
             self.cells.resize(cols * rows, Cell::default());
             self.wrapped.resize(rows, false);
             self.rows = rows;
+            self.reset_damage_for_resize();
 
             // Scrollback remains identical (no push/pull)
             // Zones remain valid as they track absolute indices
@@ -288,6 +301,7 @@ impl Grid {
         }
 
         self.reflow_main_grid(old_cols, old_rows, cols, rows);
+        self.reset_damage_for_resize();
     }
 
     fn reflow_scrollback(&mut self, old_cols: usize, new_cols: usize) {
