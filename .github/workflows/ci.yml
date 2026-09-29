@@ -48,7 +48,10 @@ jobs:
   test:
     name: Test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # windows-latest legs exceed 15m: uv sync + maturin build + 3 cargo-test
+    # feature-set compiles run 15-25m cold; the 15m ceiling killed them
+    # mid-compile (runs 36314822395, 36315904423, 36597353943).
+    timeout-minutes: 30
     needs: [version-check]
     strategy:
       matrix:
