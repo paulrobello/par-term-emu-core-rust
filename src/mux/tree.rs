@@ -2444,7 +2444,7 @@ mod tests {
 
         assert!(matches!(
             tree.join_pane(first, first, SplitDirection::Vertical, 0.5),
-            Err(MuxError::SamePane(first))
+            Err(MuxError::SamePane(_first))
         ));
         assert!(matches!(
             tree.join_pane(PaneId(9999), first, SplitDirection::Vertical, 0.5),
