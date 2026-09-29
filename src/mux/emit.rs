@@ -60,6 +60,11 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::SessionChanged { session_id, name } => {
             format!("%session-changed {session_id} {name}\n")
         }
+        // The name is the rest of the line (no quoting): the parser reads
+        // it back with splitn, so a name with spaces round-trips.
+        TmuxNotification::SessionRenamed { session_id, name } => {
+            format!("%session-renamed {session_id} {name}\n")
+        }
         // The session set changed (one created or destroyed) — tmux's own
         // argument-less shape: clients re-query `list-sessions` rather than
         // parsing ids off the line.
@@ -394,11 +399,14 @@ mod tests {
     #[test]
     fn unemitted_variants_produce_nothing_rather_than_panicking() {
         // Seam S3: the catch-all arm. Adding a notification later is one new
-        // arm here, never a change at call sites; until then it emits nothing.
+        // arm here, never a change at call sites; until then it emits
+        // nothing. SessionRenamed left this set when rename-session
+        // (card 01a0ea74ec2e) made it a wire notification.
         assert_eq!(
-            emit(&TmuxNotification::SessionRenamed {
+            emit(&TmuxNotification::ClientSessionChanged {
+                client: "c1".to_string(),
                 session_id: "$0".to_string(),
-                name: "renamed".to_string()
+                name: "x".to_string(),
             }),
             ""
         );
@@ -409,6 +417,22 @@ mod tests {
         let original = TmuxNotification::SessionsChanged;
         let line = emit(&original);
         assert_eq!(line, "%sessions-changed\n", "the wire shape: no arguments");
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn session_renamed_round_trips_with_spaces() {
+        // A session name legitimately contains spaces; the parser takes the
+        // rest of the line (splitn), so the emitter must not quote or
+        // truncate it.
+        let original = TmuxNotification::SessionRenamed {
+            session_id: "$1".to_string(),
+            name: "my renamed session".to_string(),
+        };
+        let line = emit(&original);
+        assert_eq!(line, "%session-renamed $1 my renamed session\n");
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");

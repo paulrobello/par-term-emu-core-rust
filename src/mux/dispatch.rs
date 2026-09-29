@@ -178,6 +178,8 @@ pub(super) fn dispatch_command(
         } => cmd_new_window(ctx, session, name, start_dir.as_deref()),
         MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
         MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
+        MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
+        MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
         MuxCommand::ListWindows => cmd_list_windows(ctx),
         MuxCommand::ListSessions => cmd_list_sessions(ctx),
@@ -884,6 +886,47 @@ fn cmd_kill_server(ctx: &Ctx<'_>) -> Outcome {
             Outcome::ok(ctx, "")
         }
         None => Outcome::err(ctx, "kill-server: no running server to stop"),
+    }
+}
+
+fn cmd_rename_session(ctx: &Ctx<'_>, session: Target<SessionId>, name: String) -> Outcome {
+    let session = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_session_target(session) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().rename_session(session, &name) {
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::SessionRenamed {
+            session_id: session.to_string(),
+            name,
+        }),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Outcome {
+    let session = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_session_target(session) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().kill_session(session) {
+        Ok(killed_windows) => {
+            // The same line order kill-window's cascade produces: one
+            // %window-close per killed window, then the session-set cue.
+            let mut outcome = Outcome::ok(ctx, "");
+            for window in &killed_windows {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
+                    window_id: window.to_string(),
+                });
+            }
+            outcome.notifying(TmuxNotification::SessionsChanged)
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
 

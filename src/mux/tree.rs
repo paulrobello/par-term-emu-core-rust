@@ -1072,6 +1072,42 @@ impl MuxTree {
 
         Ok(removed)
     }
+
+    /// Rename a session. The tree's name is what future pane spawns export
+    /// as `PAR_MUX_SESSION`; panes already running keep the name they were
+    /// spawned with (the fixed-at-spawn contract, MUX.md).
+    pub fn rename_session(&mut self, session_id: SessionId, name: &str) -> Result<(), MuxError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or(MuxError::NoSuchSession(session_id))?;
+        session.name = name.to_string();
+        Ok(())
+    }
+
+    /// Kill a session and every window and pane in it. The Ok value lists
+    /// the windows killed, so the caller can emit a `%window-close` per
+    /// window before the `%sessions-changed` cue — the same line order
+    /// `kill-window`'s cascade produces.
+    pub fn kill_session(&mut self, session_id: SessionId) -> Result<Vec<WindowId>, MuxError> {
+        let session = self
+            .sessions
+            .remove(&session_id)
+            .ok_or(MuxError::NoSuchSession(session_id))?;
+        let mut killed = Vec::new();
+        for window_id in session.windows {
+            let Some(window) = self.windows.remove(&window_id) else {
+                continue;
+            };
+            for pane_id in window.panes() {
+                if let Some(pane) = self.panes.remove(&pane_id) {
+                    kill_detached(pane);
+                }
+            }
+            killed.push(window_id);
+        }
+        Ok(killed)
+    }
 }
 
 /// The outcome of matching a name against the tree: the resolvers above
@@ -2105,5 +2141,45 @@ mod tests {
             }
             other => panic!("ambiguity must error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rename_session_updates_the_name_for_resolution_and_future_spawns() {
+        let mut tree = named_tree(None, None);
+        tree.rename_session(SessionId(1), "renamed").unwrap();
+        assert_eq!(tree.session(SessionId(1)).unwrap().name, "renamed");
+        assert_eq!(
+            tree.resolve_session_target(Target::Name("renamed".to_string()))
+                .unwrap(),
+            SessionId(1)
+        );
+        assert!(matches!(
+            tree.resolve_session_target(Target::Name("beta".to_string())),
+            Err(MuxError::NoSuchSessionNamed(n)) if n == "beta"
+        ));
+        assert!(matches!(
+            tree.rename_session(SessionId(9), "x"),
+            Err(MuxError::NoSuchSession(_))
+        ));
+    }
+
+    #[test]
+    fn kill_session_removes_every_window_pane_and_the_session() {
+        let mut tree = named_tree(None, None);
+        // A second window in session 1, so the kill spans multiple windows.
+        tree.new_window(SessionId(1), "logs", 80, 24).unwrap();
+        let killed = tree.kill_session(SessionId(1)).unwrap();
+        assert_eq!(killed.len(), 2, "both windows of the session die");
+        for window in &killed {
+            assert!(tree.window(*window).is_none());
+        }
+        assert!(tree.session(SessionId(1)).is_none());
+        // The other session is untouched.
+        assert!(tree.session(SessionId(0)).is_some());
+        assert_eq!(tree.sessions().len(), 1);
+        assert!(matches!(
+            tree.kill_session(SessionId(1)),
+            Err(MuxError::NoSuchSession(_))
+        ));
     }
 }

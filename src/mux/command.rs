@@ -220,6 +220,21 @@ pub enum MuxCommand {
         /// `Some` sets the value; `None` (`-u`) removes the variable.
         value: Option<String>,
     },
+    /// Rename a session (`rename-session -t $N <name>`). The tree's name is
+    /// what future pane spawns export as `PAR_MUX_SESSION`; panes already
+    /// running keep the spawn-time name (fixed-at-spawn contract, MUX.md).
+    RenameSession {
+        /// Target session.
+        session: Target<SessionId>,
+        /// New name.
+        name: String,
+    },
+    /// Kill a session and every window and pane in it
+    /// (`kill-session -t $N`).
+    KillSession {
+        /// Target session.
+        session: Target<SessionId>,
+    },
     /// Report the daemon's build stamp — the `version` wire form of
     /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
     /// client can compare the daemon's core build against its own linked
@@ -249,7 +264,9 @@ impl MuxCommand {
             | MuxCommand::ResizePane { .. }
             | MuxCommand::SwapPanes { .. }
             | MuxCommand::SetBuffer { .. }
-            | MuxCommand::SetEnvironment { .. } => true,
+            | MuxCommand::SetEnvironment { .. }
+            | MuxCommand::RenameSession { .. }
+            | MuxCommand::KillSession { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             MuxCommand::ListPanes
             | MuxCommand::ListAgents
@@ -691,6 +708,8 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("list-windows", parse_list_windows),
     ("list-sessions", parse_list_sessions),
     ("kill-server", parse_kill_server),
+    ("rename-session", parse_rename_session),
+    ("kill-session", parse_kill_session),
     ("split-window", parse_split_window),
     ("select-pane", parse_select_pane),
     ("pane-title", parse_pane_title),
@@ -899,6 +918,42 @@ fn parse_list_sessions(_a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_kill_server(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillServer)
+}
+
+/// `rename-session -t $N <name>`. The name goes through [`shell_split`],
+/// so a quoted name may contain spaces; exactly one name word is accepted
+/// (the same grammar `set-environment` uses for its value).
+fn parse_rename_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a
+        .session("-t")?
+        .ok_or_else(|| format!("{} requires -t", a.name))?;
+    let words = shell_split(a.line);
+    let mut positional = Vec::new();
+    let mut iter = words.iter().skip(1);
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "-t" => {
+                iter.next();
+            }
+            _ => positional.push(word.clone()),
+        }
+    }
+    match positional.len() {
+        0 => Err("rename-session requires a new name".to_string()),
+        1 => Ok(MuxCommand::RenameSession {
+            session,
+            name: positional.remove(0),
+        }),
+        _ => Err("rename-session takes exactly one name".to_string()),
+    }
+}
+
+/// `kill-session -t $N`.
+fn parse_kill_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a
+        .session("-t")?
+        .ok_or_else(|| format!("{} requires -t", a.name))?;
+    Ok(MuxCommand::KillSession { session })
 }
 
 fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -1622,6 +1677,66 @@ mod tests {
         assert!(
             parse_command("rename-window -t @1").is_err(),
             "rename-window needs a new name"
+        );
+    }
+
+    #[test]
+    fn parses_rename_session_with_shell_quoting() {
+        assert_eq!(
+            parse_command("rename-session -t $1 'My Session'").unwrap(),
+            MuxCommand::RenameSession {
+                session: Target::Id(SessionId(1)),
+                name: "My Session".into()
+            }
+        );
+        assert_eq!(
+            parse_command(r#"rename-session -t $1 "double""#).unwrap(),
+            MuxCommand::RenameSession {
+                session: Target::Id(SessionId(1)),
+                name: "double".into()
+            }
+        );
+        // A name target resolves by session name, like every other
+        // session-targeted command.
+        assert_eq!(
+            parse_command("rename-session -t alpha work").unwrap(),
+            MuxCommand::RenameSession {
+                session: Target::Name("alpha".into()),
+                name: "work".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rename_session_rejects_missing_target_name_and_extra_words() {
+        assert!(parse_command("rename-session").is_err(), "-t is required");
+        assert!(
+            parse_command("rename-session -t $1").is_err(),
+            "a new name is required"
+        );
+        assert!(
+            parse_command("rename-session -t $1 one two").is_err(),
+            "one name word only — quote a name with spaces"
+        );
+    }
+
+    #[test]
+    fn parses_kill_session_requiring_a_target() {
+        assert_eq!(
+            parse_command("kill-session -t $1").unwrap(),
+            MuxCommand::KillSession {
+                session: Target::Id(SessionId(1))
+            }
+        );
+        assert_eq!(
+            parse_command("kill-session -t alpha").unwrap(),
+            MuxCommand::KillSession {
+                session: Target::Name("alpha".into())
+            }
+        );
+        assert!(
+            parse_command("kill-session").is_err(),
+            "-t is required: no newest-session default (same rule as set-environment)"
         );
     }
 

@@ -2106,6 +2106,91 @@ mod tests {
         assert!(tree.lock().session(session_id).is_none());
     }
 
+    /// rename-session and kill-session (card 01a0ea74ec2e): the rename
+    /// broadcasts %session-renamed with the new name; the kill closes every
+    /// window in the session before the %sessions-changed cue.
+    #[test]
+    fn rename_and_kill_session_broadcast_their_notifications() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        dispatch(
+            &format!("new-window -t {session_id} -n logs"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        let windows = tree.lock().session(session_id).unwrap().windows.clone();
+
+        // An observer client registered before the mutations: everything it
+        // sees is a broadcast.
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
+
+        dispatch(
+            &format!("rename-session -t {session_id} 'Renamed Main'"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%session-renamed")
+                && l.contains(&session_id.to_string())
+                && l.contains("Renamed Main")),
+            "rename-session must broadcast %session-renamed with the new name: {lines:?}"
+        );
+        assert_eq!(
+            tree.lock().session(session_id).unwrap().name,
+            "Renamed Main",
+            "the tree keeps the new name for future spawns"
+        );
+
+        dispatch(
+            &format!("kill-session -t {session_id}"),
+            4,
+            &tree,
+            &clients,
+            None,
+        );
+        let lines = drain_broadcasts(&rx);
+        for window in &windows {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.starts_with("%window-close") && l.contains(&window.to_string())),
+                "kill-session must broadcast %window-close for {window}: {lines:?}"
+            );
+        }
+        let close = lines
+            .iter()
+            .position(|l| l.starts_with("%window-close"))
+            .expect("the killed windows close first");
+        let changed = lines
+            .iter()
+            .position(|l| l.starts_with("%sessions-changed"))
+            .expect("kill-session must broadcast %sessions-changed");
+        assert!(
+            close < changed,
+            "%window-close lines precede %sessions-changed: {lines:?}"
+        );
+        assert!(
+            tree.lock().session(session_id).is_none(),
+            "the session is gone from the tree"
+        );
+        assert!(
+            tree.lock().sessions().is_empty(),
+            "kill-session leaves no orphaned windows or sessions behind"
+        );
+    }
+
     #[test]
     fn new_session_broadcasts_window_add_and_notifies_the_issuer() {
         let (tree, clients) = harness();
