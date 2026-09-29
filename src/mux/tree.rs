@@ -175,6 +175,9 @@ pub struct SplitSpawn {
     target: PaneId,
     direction: SplitDirection,
     new_share: f32,
+    /// `-b`: the new pane takes `first` (left/top) of the new split
+    /// instead of `second` (right/bottom).
+    before: bool,
     pub cols: u16,
     pub rows: u16,
     session: Option<(SessionId, String)>,
@@ -580,7 +583,7 @@ impl MuxTree {
         command: Option<&str>,
         cwd: Option<&Path>,
     ) -> Result<(PaneId, WindowId), MuxError> {
-        let plan = self.begin_split(target, direction, new_share, cwd)?;
+        let plan = self.begin_split(target, direction, new_share, cwd, false)?;
         let pane = self.spawn_from(
             &plan.pane_id,
             plan.cols,
@@ -599,6 +602,7 @@ impl MuxTree {
         direction: SplitDirection,
         new_share: f32,
         cwd: Option<&Path>,
+        before: bool,
     ) -> Result<SplitSpawn, MuxError> {
         let window_id = self
             .window_of_pane(target)
@@ -617,6 +621,7 @@ impl MuxTree {
             target,
             direction,
             new_share,
+            before,
             cols,
             rows,
             session: session.map(|s| (s.id, s.name.clone())),
@@ -640,6 +645,7 @@ impl MuxTree {
             target,
             direction,
             new_share,
+            before,
             cols: _,
             rows: _,
             session: _,
@@ -648,12 +654,22 @@ impl MuxTree {
         } = plan;
         // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
         // (the target), while the command speaks in the NEW pane's share.
+        // `-b` instead puts the NEW pane in `first`: split at the new
+        // pane's share and swap the two leaves, which lands the new pane
+        // left/above with exactly its `-p` share.
         let split = self.windows.get_mut(&window_id).and_then(|window| {
             if window.panes().contains(&target) {
-                window
-                    .layout
-                    .split_pane(target, pane_id, direction, 1.0 - new_share)
-                    .ok()
+                let placed = if before {
+                    window
+                        .layout
+                        .split_pane(target, pane_id, direction, new_share)
+                        .and_then(|_| window.layout.swap_pane(target, pane_id))
+                } else {
+                    window
+                        .layout
+                        .split_pane(target, pane_id, direction, 1.0 - new_share)
+                };
+                placed.ok()
             } else {
                 None
             }
@@ -2720,15 +2736,12 @@ mod tests {
         // poll until the OS agrees, mark the death.
         tree.pane_mut(pane).unwrap().write(b"exit 0\n").unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut pane_ref = tree.pane_mut(pane).unwrap();
-        while pane_ref.poll_running() && std::time::Instant::now() < deadline {
-            drop(pane_ref);
+        while tree.pane_mut(pane).unwrap().poll_running() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            pane_ref = tree.pane_mut(pane).unwrap();
         }
+        let pane_ref = tree.pane_mut(pane).unwrap();
         assert!(!pane_ref.poll_running(), "the shell must exit on `exit 0`");
         pane_ref.mark_dead();
-        drop(pane_ref);
         assert_eq!(tree.pane(pane).unwrap().exit_code(), Some(0));
         assert!(tree.all_panes_dead());
 

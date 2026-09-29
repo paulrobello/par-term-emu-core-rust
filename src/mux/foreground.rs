@@ -135,6 +135,46 @@ impl ProcessTable {
         }
     }
 
+    /// The pane's foreground command name: the basename of the deepest
+    /// known descendant's argv[0] (root included, so an idle shell reports
+    /// itself while a shell running a job reports the job). `None` when
+    /// the root is absent from the table or the chosen argv is unreadable
+    /// — callers treat that as "name unknown", never as "idle".
+    pub(crate) fn foreground_command(&self, root: u32) -> Option<String> {
+        let root = root as i32;
+        if !self.metas.iter().any(|meta| meta.pid == root) {
+            return None;
+        }
+        let mut children: std::collections::HashMap<i32, Vec<i32>> =
+            std::collections::HashMap::new();
+        for meta in &self.metas {
+            children.entry(meta.ppid).or_default().push(meta.pid);
+        }
+        let mut best: Option<(u32, i32)> = None;
+        let mut stack = vec![(root, 0u32)];
+        let mut visited = std::collections::HashSet::new();
+        while let Some((pid, depth)) = stack.pop() {
+            if !visited.insert(pid) {
+                continue;
+            }
+            if best.is_none_or(|(deepest, _)| depth > deepest) {
+                best = Some((depth, pid));
+            }
+            if let Some(kids) = children.get(&pid) {
+                stack.extend(kids.iter().map(|&kid| (kid, depth + 1)));
+            }
+        }
+        let argv = self.argv_of(best?.1)?;
+        let argv0 = argv.first()?;
+        Some(
+            argv0
+                .rsplit('/')
+                .next()
+                .unwrap_or(argv0.as_str())
+                .to_string(),
+        )
+    }
+
     fn argv_of(&self, pid: i32) -> Option<Vec<String>> {
         match &self.fixed_argv {
             Some(map) => map.get(&pid).cloned().flatten(),
@@ -516,6 +556,24 @@ mod tests {
         assert_eq!(table.agent_alive(9999, "pi"), Liveness::Unknown);
         let empty = ProcessTable::with_fixed_argv(&[]);
         assert_eq!(empty.agent_alive(100, "pi"), Liveness::Unknown);
+    }
+
+    #[test]
+    fn foreground_command_names_the_deepest_descendant() {
+        let table = ProcessTable::with_fixed_argv(&[
+            (100, 1, argv(&["/bin/zsh", "-l"])),
+            (2100, 100, argv(&["/bin/sleep", "15"])),
+        ]);
+        assert_eq!(table.foreground_command(100).as_deref(), Some("sleep"));
+        // Idle: the shell is its own deepest descendant.
+        let idle = ProcessTable::with_fixed_argv(&[(200, 1, argv(&["-zsh"]))]);
+        assert_eq!(idle.foreground_command(200).as_deref(), Some("-zsh"));
+        // Unreadable argv at the deepest node: name unknown, not a guess.
+        let blind = ProcessTable::with_fixed_argv(&[(300, 1, None)]);
+        assert_eq!(blind.foreground_command(300), None);
+        // A root missing from the table: same unknown.
+        let empty = ProcessTable::with_fixed_argv(&[]);
+        assert_eq!(empty.foreground_command(100), None);
     }
 
     #[cfg(target_os = "macos")]

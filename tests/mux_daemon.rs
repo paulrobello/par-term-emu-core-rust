@@ -1174,3 +1174,116 @@ fn oversized_control_line_gets_error_and_close() {
     let _ = handle;
     drop(fixture);
 }
+
+/// `split-window -b` (card 01a0ea74): the new pane is placed BEFORE the
+/// target — left of it under `-h`, above it in the default direction.
+/// `list-panes` walks the layout's leaf order, so its line order is the
+/// on-screen left-to-right / top-to-bottom order.
+#[test]
+fn split_window_b_places_the_new_pane_before_its_target() {
+    let fixture = MuxFixture::new("splitb");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s splitb").expect("new-session");
+
+    // Side by side, new pane LEFT of the target.
+    let first = client
+        .send("split-window -b -h -t %0")
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+    assert_eq!(first, "%1", "the reply is the new pane id");
+    let listed = client.send("list-panes").expect("list").join("\n");
+    let order: Vec<&str> = listed.lines().map(str::trim).collect();
+    assert_eq!(
+        order,
+        vec!["%1", "%0"],
+        "-b -h puts the new pane left: {listed}"
+    );
+
+    // Default direction, new pane ABOVE its target.
+    let second = client
+        .send("split-window -b -t %1")
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+    assert_eq!(second, "%2");
+    let listed = client.send("list-panes").expect("list").join("\n");
+    let order: Vec<&str> = listed.lines().map(str::trim).collect();
+    assert_eq!(
+        order,
+        vec!["%2", "%1", "%0"],
+        "-b stacks the second new pane above: {listed}"
+    );
+}
+
+/// The `cmd=` token of a `pane-info` reply (card 01a0ea74): the pane's
+/// foreground command — the deepest descendant of its child process, so a
+/// pane running a job under the shell reports the job while an idle pane
+/// reports the shell itself.
+///
+/// Unix-only: the process table snapshot is `None` on Windows, so the
+/// token is legitimately absent there and the poll below could only fail.
+#[cfg(unix)]
+#[test]
+fn pane_info_reports_the_panes_foreground_command() {
+    use base64::Engine as _;
+
+    fn cmd_token(reply: &str) -> Option<String> {
+        let token = reply.split_whitespace().find(|t| t.starts_with("cmd="))?;
+        let encoded = token.strip_prefix("cmd=")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+    }
+
+    let fixture = MuxFixture::new("fgcmd");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s fgcmd").expect("new-session");
+
+    // Idle: the token names the pane's own shell. The shell may take a
+    // moment to appear in the process table, so poll for a non-empty name.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let idle_name = loop {
+        let reply = client.send("pane-info -t %0").expect("info").join("");
+        if let Some(name) = cmd_token(&reply).filter(|n| !n.is_empty()) {
+            break name;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "an idle pane must name its shell: last reply {reply}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_ne!(
+        idle_name, "sleep",
+        "the idle pane is not running the job yet"
+    );
+
+    // A child process takes the foreground: sleep runs under the shell.
+    client
+        .send("send-keys -t %0 'sleep 15' Enter")
+        .expect("send");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let reply = client.send("pane-info -t %0").expect("info").join("");
+        if cmd_token(&reply).as_deref() == Some("sleep") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cmd= must report the running job: last reply {reply}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

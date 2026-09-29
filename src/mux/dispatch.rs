@@ -15,6 +15,7 @@
 
 use crate::mux::command::{MuxCommand, ResizeAdjustment};
 use crate::mux::emit::{emit, emit_block};
+use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::MuxError;
@@ -165,8 +166,9 @@ pub(super) fn dispatch_command(
             pane,
             direction,
             percent,
+            before,
             start_dir,
-        } => cmd_split_window(ctx, pane, direction, percent, start_dir.as_deref()),
+        } => cmd_split_window(ctx, pane, direction, percent, before, start_dir.as_deref()),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
@@ -575,6 +577,7 @@ fn cmd_split_window(
     pane: Target<PaneId>,
     direction: SplitDirection,
     percent: u32,
+    before: bool,
     start_dir: Option<&str>,
 ) -> Outcome {
     let (cwd, note) = resolve_start_dir(start_dir);
@@ -587,7 +590,13 @@ fn cmd_split_window(
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        match guard.begin_split(pane, direction, percent as f32 / 100.0, cwd.as_deref()) {
+        match guard.begin_split(
+            pane,
+            direction,
+            percent as f32 / 100.0,
+            cwd.as_deref(),
+            before,
+        ) {
             Ok(plan) => (plan, guard.factory()),
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
@@ -689,18 +698,34 @@ fn cmd_pane_title(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
 }
 
 fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
-    // Wire contract: one line, `%N @W COLSxROWS` — the pane's window and
-    // its terminal's current grid size.
-    let guard = ctx.tree.lock();
-    let pane = match guard.resolve_pane_target(pane) {
-        Ok(id) => id,
-        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    // Wire contract: one line, `%N @W COLSxROWS cmd=<base64>` — the pane's
+    // window, its terminal's current grid size, and, when knowable, the
+    // pane's foreground command name (deepest descendant of its child
+    // process) for close-confirmation prompts. The cmd token is last and
+    // may be absent (Windows table, unreadable argv), so older clients
+    // keep parsing the fixed prefix.
+    let (pane, window, cols, rows, child_pid) = {
+        let guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let (Some(target), Some(window)) = (guard.pane(pane), guard.window_of_pane(pane)) else {
+            return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
+        };
+        let (cols, rows) = target.terminal().read().size();
+        (pane, window, cols, rows, target.child_pid())
     };
-    let (Some(target), Some(window)) = (guard.pane(pane), guard.window_of_pane(pane)) else {
-        return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
-    };
-    let (cols, rows) = target.terminal().read().size();
-    Outcome::ok(ctx, &format!("{pane} {window} {cols}x{rows}"))
+    // The process table snapshot reads the whole OS process list; taking
+    // it outside the tree lock keeps a slow read from stalling clients.
+    let mut line = format!("{pane} {window} {cols}x{rows}");
+    if let Some(name) = child_pid
+        .and_then(|pid| ProcessTable::snapshot().and_then(|table| table.foreground_command(pid)))
+    {
+        line.push_str(" cmd=");
+        line.push_str(&base64::engine::general_purpose::STANDARD.encode(name));
+    }
+    Outcome::ok(ctx, &line)
 }
 
 fn cmd_resize_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, adjustment: ResizeAdjustment) -> Outcome {

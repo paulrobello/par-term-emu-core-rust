@@ -1708,7 +1708,14 @@ mod tests {
                 .collect()
         };
         let reply = dispatch("pane-info -t %0", 3, &tree, &clients, None);
-        assert_eq!(body(&reply), vec!["%0 @0 100x30"], "{reply}");
+        // The harness pane runs a real shell, so the reply may carry the
+        // optional `cmd=` token; the fixed prefix must stay parseable by
+        // older clients either way.
+        let line = body(&reply).join("");
+        assert!(
+            line == "%0 @0 100x30" || line.starts_with("%0 @0 100x30 cmd="),
+            "pane-info keeps its fixed prefix: {reply}"
+        );
 
         let split = dispatch("split-window -h -t %0", 4, &tree, &clients, None);
         assert!(!split.contains("%error"), "{split}");

@@ -131,6 +131,9 @@ pub enum MuxCommand {
         /// `-p`: percent of the split area given to the NEW pane, 50 when
         /// absent (tmux semantics — the target keeps the remainder).
         percent: u32,
+        /// `-b`: place the new pane BEFORE the target — left of it under
+        /// `-h`, above it in the default direction (tmux semantics).
+        before: bool,
         /// `-c`: the new pane's start directory, with the same
         /// degrade-to-home rule as `new-window -c`.
         start_dir: Option<String>,
@@ -1050,6 +1053,7 @@ fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
         pane,
         direction,
         percent,
+        before: a.has_flag("-b"),
         start_dir: a.quoted_flag("-c")?,
     })
 }
@@ -1984,6 +1988,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
+                before: false,
                 start_dir: None,
             }
         );
@@ -1993,6 +1998,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
+                before: false,
                 start_dir: None,
             }
         );
@@ -2003,6 +2009,18 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Vertical,
                 percent: 25,
+                before: false,
+                start_dir: None,
+            }
+        );
+        // -b: the new pane goes BEFORE the target (left/above).
+        assert_eq!(
+            parse_command("split-window -t %0 -h -b -p 30").unwrap(),
+            MuxCommand::SplitWindow {
+                pane: Target::Id(PaneId(0)),
+                direction: SplitDirection::Vertical,
+                percent: 30,
+                before: true,
                 start_dir: None,
             }
         );
@@ -2024,6 +2042,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
+                before: false,
                 start_dir: Some("/tmp".into())
             }
         );
@@ -2424,6 +2443,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
+                before: false,
                 start_dir: None,
             },
             MuxCommand::SelectPane {
