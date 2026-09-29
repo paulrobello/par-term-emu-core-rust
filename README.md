@@ -299,7 +299,7 @@ make xcframework
 # → target/xcframework/TerminalCore.xcframework
 ```
 
-`TerminalCore.xcframework` (device + simulator slices) is also attached to every GitHub release. Each slice carries a `Modules/module.modulemap`, so after adding the xcframework to an Xcode project a Swift file just does `import TerminalCore` (the C header is re-exported; no bridging header needed).
+`TerminalCore.xcframework` (device + simulator slices) is attached to GitHub releases starting with 0.56.0 — until then, build it locally with `make xcframework`. Each slice carries a `Modules/module.modulemap`, so after adding the xcframework to an Xcode project a Swift file just does `import TerminalCore` (the C header is re-exported; no bridging header needed).
 
 The C surface is a full embedding API, not just snapshots:
 
