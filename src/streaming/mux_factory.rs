@@ -202,7 +202,28 @@ fn pane_size_in_layout(layout: &str, pane: u32) -> Option<(usize, usize)> {
 }
 
 /// One `send-keys -H` command line carrying `chunk` for `pane`.
+///
+/// Encodes into one pre-sized buffer — this runs per input byte on the
+/// paste path, and a per-byte `format!` allocated one String each
+/// (ENH-031). Output must stay byte-identical to the daemon's
+/// `send-keys -H` grammar.
 fn send_keys_line(pane: u32, chunk: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut line = String::with_capacity(24 + 3 * chunk.len());
+    use std::fmt::Write as _;
+    let _ = write!(line, "send-keys -t %{pane} -H");
+    for &b in chunk {
+        line.push(' ');
+        line.push(HEX[(b >> 4) as usize] as char);
+        line.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    line
+}
+
+/// The pre-ENH-031 per-byte `format!` encoder, kept as the equivalence
+/// reference for `send_keys_line`.
+#[cfg(test)]
+fn send_keys_line_reference(pane: u32, chunk: &[u8]) -> String {
     let mut line = format!("send-keys -t %{pane} -H");
     for byte in chunk {
         line.push_str(&format!(" {byte:02x}"));
@@ -490,6 +511,59 @@ fn forward(link: &MirrorLink, data: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_keys_line_matches_reference() {
+        // Every byte value on its own...
+        for b in 0..=u8::MAX {
+            assert_eq!(
+                send_keys_line(7, &[b]),
+                send_keys_line_reference(7, &[b]),
+                "byte {b}"
+            );
+        }
+        // ...and mixed chunks, including INPUT_CHUNK-sized ones (the
+        // paste path splits there) and the empty chunk.
+        let mixed: Vec<u8> = (0..=u8::MAX).cycle().take(3 * 1024).collect();
+        for chunk in [&mixed[..0], &mixed[..1], &mixed, &mixed[..INPUT_CHUNK]] {
+            assert_eq!(
+                send_keys_line(42, chunk),
+                send_keys_line_reference(42, chunk),
+                "chunk len {}",
+                chunk.len()
+            );
+        }
+        assert_eq!(
+            send_keys_line(0, &[0xde, 0xad, 0xbe, 0xef]),
+            "send-keys -t %0 -H de ad be ef"
+        );
+    }
+
+    /// ENH-031 measurement: 256 KiB encode, new vs the per-byte
+    /// `format!` reference. `#[ignore]`d — a timing loop, not a gate.
+    #[test]
+    #[ignore = "timing measurement, run explicitly"]
+    fn send_keys_line_256kib_timing() {
+        let chunk: Vec<u8> = (0..=u8::MAX).cycle().take(256 * 1024).collect();
+        let rounds = 20;
+
+        let start = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(send_keys_line(3, &chunk));
+        }
+        let new_elapsed = start.elapsed();
+
+        let start = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(send_keys_line_reference(3, &chunk));
+        }
+        let reference_elapsed = start.elapsed();
+
+        println!(
+            "256 KiB encode x{rounds}: nibble-table {new_elapsed:?}, reference {reference_elapsed:?}, speedup {:.1}x",
+            reference_elapsed.as_secs_f64() / new_elapsed.as_secs_f64()
+        );
+    }
 
     #[test]
     fn pane_info_parses() {
