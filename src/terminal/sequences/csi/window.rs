@@ -77,7 +77,7 @@ impl Terminal {
                     );
                     // The destination rows change; the untouched source
                     // rows must not be marked (false dirty).
-                    self.mark_rows_dirty(dst_top, dst_top + (src_bottom - src_top));
+                    self.mark_rows_dirty(dst_top, dst_top + src_bottom.saturating_sub(src_top));
                 }
                 'z' => {
                     // DECERA - Erase Rectangular Area: CSI Pt ; Pl ; Pb ; Pr $ z
