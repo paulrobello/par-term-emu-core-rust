@@ -1075,4 +1075,30 @@ mod tests {
         assert_eq!(title.to_bytes(), b"hello");
         drop(state); // Drop frees title/cwd/cells
     }
+
+    /// QA-151: an arbitrary uint16_t in `TermKeyEvent.key` — a value C or
+    /// Swift is free to write — encodes to nothing instead of being
+    /// undefined behavior. key=2 is not a discriminant, 57388 sits between
+    /// the F-keys and Insert, 0xFFFF is the extreme.
+    #[test]
+    fn encode_key_rejects_invalid_discriminants_without_ub() {
+        let term = unsafe { terminal_create(20, 5, 100) };
+        assert!(!term.is_null());
+        let mut out = [0u8; 16];
+        for raw in [2u16, 57388, 0xFFFF] {
+            let ev = crate::keyboard::TermKeyEvent {
+                key: raw,
+                modifiers: 0,
+                _pad: 0,
+                codepoint: 0,
+            };
+            let n = unsafe { terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
+            assert_eq!(n, 0, "raw key {raw} has no encoding");
+        }
+        // A real key still encodes through the same path.
+        let ev = crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Up, 0);
+        let n = unsafe { terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
+        assert_eq!(&out[..n as usize], b"\x1b[A");
+        unsafe { terminal_free(term) };
+    }
 }

@@ -67,6 +67,26 @@ pub enum TermKey {
     F12 = 57387,
 }
 
+/// Map a raw wire/header value to a variant; anything that is not a
+/// defined discriminant becomes `Unknown` (QA-151). The macro lists the
+/// variants once so the match arms stay in lockstep with the enum.
+macro_rules! term_key_from_raw {
+    ($($variant:ident),* $(,)?) => {
+        impl TermKey {
+            pub fn from_raw(v: u16) -> TermKey {
+                match v {
+                    $(x if x == TermKey::$variant as u16 => TermKey::$variant,)*
+                    _ => TermKey::Unknown,
+                }
+            }
+        }
+    };
+}
+term_key_from_raw!(
+    Unknown, Char, Escape, Tab, Enter, Backspace, Insert, Delete, Left, Right, Up, Down, PageUp,
+    PageDown, Home, End, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+);
+
 /// A key event in a C-compatible layout.
 ///
 /// For `TermKey::Char`, `codepoint` is the character as it should be typed:
@@ -75,10 +95,14 @@ pub enum TermKey {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TermKeyEvent {
-    pub key: TermKey,
+    /// The key as a raw `TERM_KEY_*` value: C and Swift fill this struct
+    /// with a bare `uint16_t`, and a Rust enum reference is only sound for
+    /// a valid discriminant (QA-151) — every read goes through
+    /// [`TermKeyEvent::key`], which maps unknown values to `Unknown`.
+    pub key: u16,
     /// Bitfield of [`modifiers`] constants.
     pub modifiers: u8,
-    /// UTF-8 encoded length hint unused; kept for C padding predictability.
+    /// Reserved; must be zero.
     pub _pad: u8,
     /// Unicode scalar for `TermKey::Char`, 0 otherwise.
     pub codepoint: u32,
@@ -88,7 +112,7 @@ impl TermKeyEvent {
     /// Build a `Char` event from a character and modifier bits.
     pub fn char_(c: char, mods: u8) -> Self {
         Self {
-            key: TermKey::Char,
+            key: TermKey::Char as u16,
             modifiers: mods,
             _pad: 0,
             codepoint: c as u32,
@@ -98,11 +122,18 @@ impl TermKeyEvent {
     /// Build a functional-key event.
     pub fn functional(key: TermKey, mods: u8) -> Self {
         Self {
-            key,
+            key: key as u16,
             modifiers: mods,
             _pad: 0,
             codepoint: 0,
         }
+    }
+
+    /// The validated key. The FFI fills `key` with a raw `uint16_t` from
+    /// C/Swift; converting through here is what keeps an invalid
+    /// discriminant from ever materializing as an enum value (QA-151).
+    pub fn key(&self) -> TermKey {
+        TermKey::from_raw(self.key)
     }
 
     fn ctrl(&self) -> bool {
@@ -161,7 +192,7 @@ fn encode_legacy(ev: &TermKeyEvent, app_cursor: bool, out: &mut Vec<u8>) {
         }
     };
 
-    match ev.key {
+    match ev.key() {
         TermKey::Char => {
             let c = char::from_u32(ev.codepoint).unwrap_or('\0');
             if ev.text_like() {
@@ -202,7 +233,7 @@ fn encode_legacy(ev: &TermKeyEvent, app_cursor: bool, out: &mut Vec<u8>) {
         }
         TermKey::Backspace => out.push(0x7f),
         TermKey::Insert | TermKey::Delete | TermKey::PageUp | TermKey::PageDown => {
-            let n = match ev.key {
+            let n = match ev.key() {
                 TermKey::Insert => 2,
                 TermKey::Delete => 3,
                 TermKey::PageUp => 5,
@@ -216,7 +247,7 @@ fn encode_legacy(ev: &TermKeyEvent, app_cursor: bool, out: &mut Vec<u8>) {
             }
         }
         TermKey::F1 | TermKey::F2 | TermKey::F3 | TermKey::F4 => {
-            let final_byte = match ev.key {
+            let final_byte = match ev.key() {
                 TermKey::F1 => b'P',
                 TermKey::F2 => b'Q',
                 TermKey::F3 => b'R',
@@ -265,12 +296,12 @@ fn encode_legacy(ev: &TermKeyEvent, app_cursor: bool, out: &mut Vec<u8>) {
 fn encode_kitty(ev: &TermKeyEvent, out: &mut Vec<u8>) {
     // Text keys without Ctrl/Alt/Super-class modifiers stay plain text so
     // typing (and IME) is unaffected — that includes Shift.
-    if matches!(ev.key, TermKey::Char) && ev.modifiers & !(modifiers::SHIFT) == 0 {
+    if matches!(ev.key(), TermKey::Char) && ev.modifiers & !(modifiers::SHIFT) == 0 {
         encode_legacy(ev, false, out);
         return;
     }
 
-    let codepoint: u16 = match ev.key {
+    let codepoint: u16 = match ev.key() {
         TermKey::Char => char::from_u32(ev.codepoint).map(|c| c as u16).unwrap_or(0),
         // TermKey discriminants ARE the kitty functional codes.
         functional => functional as u16,
@@ -279,7 +310,7 @@ fn encode_kitty(ev: &TermKeyEvent, out: &mut Vec<u8>) {
     // Arrows/Home/End keep their unambiguous legacy CSI <final> form under
     // level 1 when unmodified; everything else goes CSI u.
     if ev.modifiers == 0 {
-        if let Some(final_byte) = cursor_group_final(ev.key) {
+        if let Some(final_byte) = cursor_group_final(ev.key()) {
             out.push(0x1b);
             out.push(b'[');
             out.push(final_byte);
@@ -470,5 +501,47 @@ mod tests {
             ),
             b"\x1b[57433;2u"
         );
+    }
+
+    /// QA-151: from_raw covers every discriminant (the macro list cannot
+    /// have drifted from the enum) and maps everything else to Unknown.
+    #[test]
+    fn from_raw_round_trips_every_variant() {
+        let all = [
+            TermKey::Unknown,
+            TermKey::Char,
+            TermKey::Escape,
+            TermKey::Tab,
+            TermKey::Enter,
+            TermKey::Backspace,
+            TermKey::Insert,
+            TermKey::Delete,
+            TermKey::Left,
+            TermKey::Right,
+            TermKey::Up,
+            TermKey::Down,
+            TermKey::PageUp,
+            TermKey::PageDown,
+            TermKey::Home,
+            TermKey::End,
+            TermKey::F1,
+            TermKey::F2,
+            TermKey::F3,
+            TermKey::F4,
+            TermKey::F5,
+            TermKey::F6,
+            TermKey::F7,
+            TermKey::F8,
+            TermKey::F9,
+            TermKey::F10,
+            TermKey::F11,
+            TermKey::F12,
+        ];
+        for variant in all {
+            assert_eq!(TermKey::from_raw(variant as u16), variant);
+        }
+        for raw in [2u16, 57388, 0xFFFF] {
+            assert_eq!(TermKey::from_raw(raw), TermKey::Unknown, "raw {raw}");
+        }
     }
 }

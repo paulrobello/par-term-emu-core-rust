@@ -191,6 +191,8 @@ _Static_assert(sizeof(TermModeState) == 20, "TermModeState must match Rust repr(
 #define TERM_KEY_F12        57387
 
 typedef struct TermKeyEvent {
+    /* Any uint16_t is accepted: values that are not a TERM_KEY_* constant
+     * encode to zero bytes (validated via TermKey::from_raw, QA-151). */
     uint16_t key;       /* TERM_KEY_* */
     uint8_t modifiers;  /* TERM_MOD_* bitfield */
     uint8_t _pad;
