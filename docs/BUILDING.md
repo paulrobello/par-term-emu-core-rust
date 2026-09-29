@@ -36,6 +36,16 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ## Prerequisites
 
+### cbindgen (C header generation)
+
+`include/terminal_core.h` is generated from `src/ffi.rs` by [cbindgen](https://github.com/mozilla/cbindgen). `make checkall` regenerates it to a temp file and fails on drift, so every contributor needs the tool:
+
+```bash
+cargo install cbindgen --locked
+```
+
+After changing any `#[repr(C)]` type or `extern "C"` function, regenerate and commit the header: `make ffi-header`. The `TERM_*` constants and `_Static_assert` layout pins are NOT generated — they live in `include/terminal_core_layout.h` and are pinned to the Rust values by the `layout_header_defines_match_rust` test.
+
 ### Rust
 
 You need Rust 1.98 or later (as specified in `Cargo.toml` with `rust-version = "1.98"`). Install Rust from [rustup.rs](https://rustup.rs):

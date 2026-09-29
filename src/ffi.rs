@@ -232,6 +232,16 @@ impl Drop for SharedState {
 // TerminalObserverVtable — C function-pointer table for observers
 // ---------------------------------------------------------------------------
 
+/// The callback shape shared by every [`TerminalObserverVtable`] slot:
+/// receives the vtable's `user_data` and a NUL-terminated, Debug-formatted
+/// event description valid only for the duration of the call. A named alias
+/// (not an inline type) so cbindgen emits the `term_event_cb` typedef the
+/// C header promises (ENH-027).
+// snake_case on purpose: the name is the C typedef the header exports.
+#[allow(nonstandard_style)]
+pub type term_event_cb =
+    Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>;
+
 /// A C-compatible vtable for terminal event observation.
 ///
 /// Each function pointer receives the `user_data` pointer and a
@@ -250,20 +260,15 @@ impl Drop for SharedState {
 #[repr(C)]
 pub struct TerminalObserverVtable {
     /// Called for zone lifecycle events
-    pub on_zone_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
+    pub on_zone_event: term_event_cb,
     /// Called for command/shell integration events
-    pub on_command_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
+    pub on_command_event: term_event_cb,
     /// Called for environment change events
-    pub on_environment_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
+    pub on_environment_event: term_event_cb,
     /// Called for screen content events
-    pub on_screen_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
+    pub on_screen_event: term_event_cb,
     /// Called for ALL events (catch-all)
-    pub on_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
+    pub on_event: term_event_cb,
     /// Opaque pointer passed to every callback
     pub user_data: *mut std::ffi::c_void,
 }
@@ -290,11 +295,7 @@ impl FfiObserver {
 
     /// Format a terminal event as a Debug-formatted (`{:?}`) string and call
     /// an FFI callback with it.
-    fn call_callback(
-        &self,
-        cb: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char)>,
-        event: &TerminalEvent,
-    ) {
+    fn call_callback(&self, cb: term_event_cb, event: &TerminalEvent) {
         if let Some(f) = cb {
             let desc = format!("{:?}", event);
             if let Ok(cstr) = CString::new(desc) {
@@ -423,8 +424,9 @@ impl SharedCell {
 }
 
 /// ABI version of the C surface (ARC-063). Must equal
-/// `TERM_CORE_ABI_VERSION` in include/terminal_core.h; bump both on any
-/// layout or contract change.
+/// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
+/// the cbindgen-generated include/terminal_core.h); bump both on any layout
+/// or contract change.
 pub const TERM_CORE_ABI_VERSION: u32 = 2;
 
 /// The ABI version this library implements. A binary detects a mismatch
@@ -1187,13 +1189,128 @@ mod tests {
         assert_eq!(terminal_abi_version(), 2);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/include/terminal_core.h"
+            "/include/terminal_core_layout.h"
         ))
         .expect("header readable");
         assert!(
             header.contains("#define TERM_CORE_ABI_VERSION 2"),
             "header TERM_CORE_ABI_VERSION drifted from terminal_abi_version()"
         );
+    }
+
+    /// ENH-027: every `#define` in terminal_core_layout.h — the hand-written
+    /// companion to the cbindgen-generated terminal_core.h — must equal its
+    /// Rust source of truth. cbindgen cannot emit these constants, so this
+    /// test is what keeps the C side from renumbering silently: change the
+    /// Rust value and this fails until the companion is updated (and vice
+    /// versa). It also fails on a define that no longer has a Rust
+    /// counterpart, so stale macros cannot accumulate.
+    #[test]
+    fn layout_header_defines_match_rust() {
+        use crate::cell::CellBitflags;
+        use crate::keyboard::modifiers;
+        use crate::keyboard::TermKey;
+        use crate::mouse::MouseMode;
+
+        let cb = |f: CellBitflags| f.bits() as u32;
+        let mm = |m: MouseMode| m as u32;
+        let tk = |k: TermKey| k as u16 as u32;
+        let expected: Vec<(&str, u32)> = vec![
+            ("TERM_CORE_ABI_VERSION", TERM_CORE_ABI_VERSION),
+            ("TERM_CELL_BOLD", cb(CellBitflags::BOLD)),
+            ("TERM_CELL_DIM", cb(CellBitflags::DIM)),
+            ("TERM_CELL_ITALIC", cb(CellBitflags::ITALIC)),
+            ("TERM_CELL_UNDERLINE", cb(CellBitflags::UNDERLINE)),
+            ("TERM_CELL_BLINK", cb(CellBitflags::BLINK)),
+            ("TERM_CELL_REVERSE", cb(CellBitflags::REVERSE)),
+            ("TERM_CELL_HIDDEN", cb(CellBitflags::HIDDEN)),
+            ("TERM_CELL_STRIKETHROUGH", cb(CellBitflags::STRIKETHROUGH)),
+            ("TERM_CELL_OVERLINE", cb(CellBitflags::OVERLINE)),
+            ("TERM_CELL_GUARDED", cb(CellBitflags::GUARDED)),
+            ("TERM_CELL_WIDE_CHAR", cb(CellBitflags::WIDE_CHAR)),
+            (
+                "TERM_CELL_WIDE_CHAR_SPACER",
+                cb(CellBitflags::WIDE_CHAR_SPACER),
+            ),
+            ("TERM_MOUSE_MODE_OFF", mm(MouseMode::Off)),
+            ("TERM_MOUSE_MODE_X10", mm(MouseMode::X10)),
+            ("TERM_MOUSE_MODE_NORMAL", mm(MouseMode::Normal)),
+            ("TERM_MOUSE_MODE_BUTTON", mm(MouseMode::ButtonEvent)),
+            ("TERM_MOUSE_MODE_ANY", mm(MouseMode::AnyEvent)),
+            ("TERM_MOD_SHIFT", modifiers::SHIFT as u32),
+            ("TERM_MOD_ALT", modifiers::ALT as u32),
+            ("TERM_MOD_CTRL", modifiers::CTRL as u32),
+            ("TERM_MOD_SUPER", modifiers::SUPER as u32),
+            ("TERM_MOD_HYPER", modifiers::HYPER as u32),
+            ("TERM_MOD_META", modifiers::META as u32),
+            ("TERM_KEY_UNKNOWN", tk(TermKey::Unknown)),
+            ("TERM_KEY_CHAR", tk(TermKey::Char)),
+            ("TERM_KEY_TAB", tk(TermKey::Tab)),
+            ("TERM_KEY_ENTER", tk(TermKey::Enter)),
+            ("TERM_KEY_ESCAPE", tk(TermKey::Escape)),
+            ("TERM_KEY_BACKSPACE", tk(TermKey::Backspace)),
+            ("TERM_KEY_INSERT", tk(TermKey::Insert)),
+            ("TERM_KEY_DELETE", tk(TermKey::Delete)),
+            ("TERM_KEY_LEFT", tk(TermKey::Left)),
+            ("TERM_KEY_RIGHT", tk(TermKey::Right)),
+            ("TERM_KEY_UP", tk(TermKey::Up)),
+            ("TERM_KEY_DOWN", tk(TermKey::Down)),
+            ("TERM_KEY_PAGE_UP", tk(TermKey::PageUp)),
+            ("TERM_KEY_PAGE_DOWN", tk(TermKey::PageDown)),
+            ("TERM_KEY_HOME", tk(TermKey::Home)),
+            ("TERM_KEY_END", tk(TermKey::End)),
+            ("TERM_KEY_F1", tk(TermKey::F1)),
+            ("TERM_KEY_F2", tk(TermKey::F2)),
+            ("TERM_KEY_F3", tk(TermKey::F3)),
+            ("TERM_KEY_F4", tk(TermKey::F4)),
+            ("TERM_KEY_F5", tk(TermKey::F5)),
+            ("TERM_KEY_F6", tk(TermKey::F6)),
+            ("TERM_KEY_F7", tk(TermKey::F7)),
+            ("TERM_KEY_F8", tk(TermKey::F8)),
+            ("TERM_KEY_F9", tk(TermKey::F9)),
+            ("TERM_KEY_F10", tk(TermKey::F10)),
+            ("TERM_KEY_F11", tk(TermKey::F11)),
+            ("TERM_KEY_F12", tk(TermKey::F12)),
+        ];
+
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/include/terminal_core_layout.h"
+        ))
+        .expect("terminal_core_layout.h readable");
+
+        // #define NAME VALUE — values are `0`, `1u`, `1024u`, …
+        let mut actual: Vec<(String, u32)> = Vec::new();
+        for line in text.lines() {
+            if let Some(rest) = line.trim().strip_prefix("#define ") {
+                let mut parts = rest.split_whitespace();
+                if let (Some(name), Some(raw)) = (parts.next(), parts.next()) {
+                    if let Ok(v) = raw.trim_end_matches('u').parse::<u32>() {
+                        actual.push((name.to_string(), v));
+                    }
+                }
+            }
+        }
+        assert!(
+            !actual.is_empty(),
+            "no #defines parsed — terminal_core_layout.h shape changed?"
+        );
+
+        for (name, want) in &expected {
+            match actual.iter().find(|(n, _)| n == name) {
+                Some((_, got)) => assert_eq!(
+                    got, want,
+                    "{name} in terminal_core_layout.h drifted from Rust"
+                ),
+                None => panic!("{name} missing from terminal_core_layout.h"),
+            }
+        }
+        for (name, _) in &actual {
+            assert!(
+                expected.iter().any(|(n, _)| n == name),
+                "terminal_core_layout.h defines {name} with no Rust counterpart — stale macro?"
+            );
+        }
     }
 
     /// ENH-025: the FFI generation consumer and the built-in default

@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -49,6 +49,9 @@ help:
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
 	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
 	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
+	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
+	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
+	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
@@ -325,7 +328,42 @@ caps-table:
 caps-table-check:
 	python3 scripts/gen_caps_table.py --check
 
-checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web caps-table-check
+# ENH-027: generate include/terminal_core.h from src/ffi.rs. Run after any
+# #[repr(C)] type or extern "C" fn change; commit the regenerated header.
+# Requires cbindgen: cargo install cbindgen --locked
+ffi-header:
+	@command -v cbindgen >/dev/null 2>&1 || { \
+		echo "ERROR: cbindgen not found — cargo install cbindgen --locked"; \
+		exit 1; \
+	}
+	cbindgen --config cbindgen.toml --crate par-term-emu-core-rust --output include/terminal_core.h
+
+# Fail when the committed header is not what cbindgen would generate.
+# cbindgen's skip-warnings (crate consts it refuses to export) are noise —
+# captured and printed only when generation actually fails.
+ffi-header-check:
+	@command -v cbindgen >/dev/null 2>&1 || { \
+		echo "ERROR: cbindgen not found — cargo install cbindgen --locked"; \
+		exit 1; \
+	}
+	@tmp=$$(mktemp); err=$$(mktemp); \
+	cbindgen --config cbindgen.toml --crate par-term-emu-core-rust --output $$tmp 2>$$err; \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then cat $$err; rm -f $$tmp $$err; exit $$status; fi; \
+	diff -u include/terminal_core.h $$tmp; \
+	status=$$?; \
+	rm -f $$tmp $$err; \
+	if [ $$status -ne 0 ]; then \
+		echo "ERROR: include/terminal_core.h is stale — run: make ffi-header"; \
+	fi; \
+	exit $$status
+
+# Fail when an exported extern "C" fn is missing from the header or
+# docs/FFI_GUIDE.md.
+ffi-surface-check:
+	python3 scripts/check_ffi_surface.py
+
+checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint lint-python stub-check test-python test-web caps-table-check
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.

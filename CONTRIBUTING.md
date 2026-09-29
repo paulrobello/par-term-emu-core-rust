@@ -37,7 +37,7 @@ The only time you invoke `cargo` directly is for Rust tests, which require the `
 Run the full quality gate before every commit.
 
 ```bash
-make checkall     # All checks: clippy, fmt, ruff, pyright, Rust + Python tests
+make checkall     # All checks: clippy, fmt, ruff, pyright, Rust + Python tests, FFI header/surface drift
 ```
 
 Targeted checks during development:
