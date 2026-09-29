@@ -24,7 +24,6 @@ impl Terminal {
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
                     self.active_grid_mut()
                         .insert_lines(n, cursor_row, scroll_bottom);
-                    self.mark_rows_dirty(cursor_row, scroll_bottom);
                     self.shift_pending_trigger_rows(true, n, cursor_row, scroll_bottom);
                 }
             }
@@ -41,7 +40,6 @@ impl Terminal {
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
                     self.active_grid_mut()
                         .delete_lines(n, cursor_row, scroll_bottom);
-                    self.mark_rows_dirty(cursor_row, scroll_bottom);
                     self.shift_pending_trigger_rows(false, n, cursor_row, scroll_bottom);
                 }
             }
@@ -57,7 +55,6 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 self.active_grid_mut()
                     .insert_characters(cursor_col, cursor_row, n);
-                self.mark_row_dirty(cursor_row);
             }
             'P' => {
                 // Delete characters (DCH)
@@ -71,7 +68,6 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 self.active_grid_mut()
                     .delete_characters(cursor_col, cursor_row, n);
-                self.mark_row_dirty(cursor_row);
             }
             _ => {}
         }

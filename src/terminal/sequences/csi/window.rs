@@ -44,7 +44,6 @@ impl Terminal {
 
                     self.active_grid_mut()
                         .fill_rectangle(fill_cell, top, left, bottom, right);
-                    self.mark_rows_dirty(top, bottom);
                 }
                 'v' => {
                     // DECCRA - Copy Rectangular Area: CSI Pt ; Pl ; Pb ; Pr ; Pp ; Dt ; Dl ; Dp $ v
@@ -77,7 +76,6 @@ impl Terminal {
                     );
                     // The destination rows change; the untouched source
                     // rows must not be marked (false dirty).
-                    self.mark_rows_dirty(dst_top, dst_top + src_bottom.saturating_sub(src_top));
                 }
                 'z' => {
                     // DECERA - Erase Rectangular Area: CSI Pt ; Pl ; Pb ; Pr $ z
@@ -102,7 +100,6 @@ impl Terminal {
 
                     self.active_grid_mut()
                         .erase_rectangle_unconditional(top, left, bottom, right);
-                    self.mark_rows_dirty(top, bottom);
                 }
                 '{' => {
                     // DECSERA - Selective Erase Rectangular Area: CSI Pt ; Pl ; Pb ; Pr $ {
@@ -199,7 +196,6 @@ impl Terminal {
                     }
                     // Every segment falls inside top..=bottom (stream
                     // extent included), so one range covers them all.
-                    self.mark_rows_dirty(top, bottom);
                 }
                 _ => {}
             }

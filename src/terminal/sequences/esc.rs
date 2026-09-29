@@ -47,7 +47,6 @@ impl Terminal {
                         .scroll_region_down(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_down(1, scroll_top, scroll_bottom);
-                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                     self.shift_pending_trigger_rows(true, 1, scroll_top, scroll_bottom);
                 }
             }
@@ -72,7 +71,6 @@ impl Terminal {
                         .scroll_region_up(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                     self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 }
             }
@@ -101,7 +99,6 @@ impl Terminal {
                         .scroll_region_up(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                     self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 }
             }
