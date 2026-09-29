@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
 
       - name: Check version consistency
         run: |
@@ -68,10 +70,12 @@ jobs:
 
     - name: Set up MSVC
       if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      with:
+        toolchain: stable
 
     - name: Install uv
       run: pip install uv
@@ -131,10 +135,12 @@ jobs:
 
     - name: Set up MSVC
       if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      with:
+        toolchain: stable
 
     - name: Build sim (D1 isolation)
       # Default shell (PowerShell on Windows): cargo links with MSVC's
@@ -178,8 +184,9 @@ jobs:
         python-version: "3.14"
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       with:
+        toolchain: stable
         components: rustfmt, clippy
 
     - name: Install uv
@@ -222,7 +229,7 @@ jobs:
 
     - name: Set up MSVC
       if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
     - name: Install maturin
       run: pip install maturin
@@ -250,7 +257,7 @@ jobs:
     - uses: actions/checkout@v7
 
     - name: Set up bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
     - name: Install frontend dependencies
       working-directory: web-terminal-frontend
@@ -291,7 +298,9 @@ jobs:
         python-version: "3.14"
 
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      with:
+        toolchain: stable
 
     - name: Install cargo-hack
       run: cargo install cargo-hack --locked
