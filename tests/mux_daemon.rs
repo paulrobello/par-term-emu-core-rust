@@ -519,14 +519,16 @@ fn a_split_pane_pushes_its_output_to_clients() {
 }
 
 /// Await the next `%layout-change` whose raw flags are `want_flags` and
-/// whose layout tree carries (or lacks) a brace — the brace filter picks
-/// the split's two-pane frame out of the earlier single-pane one, and
-/// matches the zoom frame too (its `window_layout` stays the true tree).
+/// whose layout tree is (`true`) or is not (`false`) a split — a split
+/// renders with a `{…}` group (side-by-side) or a `[…]` group
+/// (stacked). The filter picks a window shape out of the stream: the
+/// split's two-pane frame over new-session's single-pane one, the zoom
+/// frame (whose `window_layout` stays the true tree), and so on.
 /// Returns `(window_layout, window_visible_layout)`.
 fn next_layout_change(
     client: &mut par_term_emu_core_rust::mux::MuxClient,
     want_flags: &str,
-    want_braced: bool,
+    want_split: bool,
 ) -> (String, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
@@ -539,12 +541,13 @@ fn next_layout_change(
             .notifications()
             .recv_timeout(Duration::from_millis(250))
         {
-            if window_raw_flags == want_flags && window_layout.contains('{') == want_braced {
+            let split = window_layout.contains('{') || window_layout.contains('[');
+            if window_raw_flags == want_flags && split == want_split {
                 return (window_layout, window_visible_layout);
             }
         }
     }
-    panic!("no %layout-change with flags {want_flags:?} (braced={want_braced}) arrived within 15s");
+    panic!("no %layout-change with flags {want_flags:?} (split={want_split}) arrived within 15s");
 }
 
 /// `resize-pane -Z` over the wire: the zoom's `%layout-change` keeps the
@@ -590,6 +593,140 @@ fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
     assert_eq!(
         visible_again, tree,
         "unzoom restores the visible layout too"
+    );
+}
+
+/// Await the next notification matching `pred`, skipping unrelated ones —
+/// the interleaved `%output`/`%layout-change` frames a busy daemon pushes
+/// must not satisfy a lifecycle wait.
+fn next_notification(
+    client: &mut par_term_emu_core_rust::mux::MuxClient,
+    mut pred: impl FnMut(&par_term_emu_core_rust::tmux_control::TmuxNotification) -> bool,
+) -> par_term_emu_core_rust::tmux_control::TmuxNotification {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        if let Ok(note) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            if pred(&note) {
+                return note;
+            }
+        }
+    }
+    panic!("no matching notification arrived within 15s");
+}
+
+/// `break-pane`, `join-pane`, and window reorder over the wire:
+/// break-pane replies the new window's id and announces it with
+/// `%window-add` plus a `%layout-change` for the source; join-pane moves
+/// the pane back and closes the emptied window (`%window-close`), with
+/// layout changes for both windows; `swap-window` reorders, and
+/// `list-windows` reflects the new order.
+#[test]
+fn panes_break_join_and_windows_reorder_over_the_wire() {
+    let fixture = MuxFixture::new("bjr");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s bjr").expect("new-session");
+    let moved = client
+        .send("split-window -h -t %0")
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+    let window_two = client
+        .send("new-window -n two")
+        .expect("new-window")
+        .join("")
+        .trim()
+        .to_string();
+    assert!(moved.starts_with('%'), "split replies the pane id: {moved}");
+    assert!(
+        window_two.starts_with('@'),
+        "new-window replies the window id: {window_two}"
+    );
+    // Flush the setup's own notifications so every wait below matches
+    // only the operation it follows.
+    while client
+        .notifications()
+        .recv_timeout(Duration::from_millis(200))
+        .is_ok()
+    {}
+
+    // break-pane: the pane leaves @0 (its layout drops to one pane) and
+    // its new window is announced.
+    let broken = client
+        .send(&format!("break-pane -s {moved} -n promoted"))
+        .expect("break")
+        .join("")
+        .trim()
+        .to_string();
+    assert!(
+        broken.starts_with('@'),
+        "break replies the window id: {broken}"
+    );
+    let (layout, _) = next_layout_change(&mut client, "", false);
+    assert!(
+        !(layout.contains('{') || layout.contains('[')),
+        "the source window's layout dropped to one pane: {layout}"
+    );
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowAdd { window_id }
+                if window_id == &broken
+        )
+    });
+
+    // join-pane: the pane lands back beside %0 (two panes again) and the
+    // emptied break window closes.
+    let join_reply = client
+        .send(&format!("join-pane -s {moved} -t %0"))
+        .expect("join")
+        .join("");
+    assert!(
+        !join_reply.contains("error:"),
+        "join-pane must succeed: {join_reply}"
+    );
+    let (layout, _) = next_layout_change(&mut client, "", true);
+    assert!(
+        layout.contains('{') || layout.contains('['),
+        "the destination window holds both panes again: {layout}"
+    );
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowClose { window_id }
+                if window_id == &broken
+        )
+    });
+
+    // swap-window: the reorder cue lands and list-windows reflects it.
+    client
+        .send(&format!("swap-window -s @0 -t {window_two}"))
+        .expect("swap");
+    next_notification(&mut client, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::SessionsChanged
+        )
+    });
+    let listing = client.send("list-windows").expect("list").join("\n");
+    let two_at = listing
+        .lines()
+        .position(|l| l.starts_with(&window_two))
+        .expect("window two is listed");
+    let zero_at = listing
+        .lines()
+        .position(|l| l.starts_with("@0"))
+        .expect("window zero is listed");
+    assert!(
+        two_at < zero_at,
+        "the swap moved window two first: {listing}"
     );
 }
 
