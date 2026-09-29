@@ -40,10 +40,15 @@ pub struct Grid {
     pub(in crate::grid) evicted_zones: Vec<Zone>,
     /// Total number of lines that have ever been scrolled into scrollback.
     pub(in crate::grid) total_lines_scrolled: usize,
-    /// Dirty-row bitset over `rows` (ENH-025). Mutators mark the rows they
-    /// change so the damage contract cannot be forgotten at a call site;
-    /// `get_mut`/`row_mut` mark conservatively because they hand out `&mut`.
-    pub(in crate::grid) damage: Vec<u64>,
+    /// Per-row damage generations over `rows` (ENH-025). Mutators stamp the
+    /// rows they change with the grid's monotonic counter so the damage
+    /// contract cannot be forgotten at a call site; `get_mut`/`row_mut`
+    /// mark conservatively because they hand out `&mut`.
+    pub(in crate::grid) row_gen: Vec<u64>,
+    /// Monotonic damage generation counter — every mark stamps a fresh
+    /// value from it, so consumers diff against a remembered generation
+    /// instead of clearing shared state.
+    pub(in crate::grid) gen: u64,
 }
 
 impl Grid {
@@ -63,15 +68,18 @@ impl Grid {
             zones: Vec::new(),
             evicted_zones: Vec::new(),
             total_lines_scrolled: 0,
-            damage: vec![0u64; rows.div_ceil(64)],
+            row_gen: vec![0u64; rows],
+            gen: 0,
         }
     }
 
-    /// Mark a row as damaged (needs redrawing)
+    /// Mark a row as damaged (needs redraw). Stamps the row with a fresh
+    /// generation so every consumer decides dirtiness against its own
+    /// remembered generation (ENH-025).
     pub fn mark_row_damage(&mut self, row: usize) {
-        let word = row / 64;
-        if word < self.damage.len() {
-            self.damage[word] |= 1u64 << (row % 64);
+        self.gen += 1;
+        if row < self.row_gen.len() {
+            self.row_gen[row] = self.gen;
         }
     }
 
@@ -83,21 +91,24 @@ impl Grid {
         }
     }
 
-    /// Clear all damage (the consumer has repainted)
-    pub fn clear_damage(&mut self) {
-        self.damage.fill(0);
+    /// Current damage generation of this grid
+    pub fn generation(&self) -> u64 {
+        self.gen
     }
 
-    /// Iterate damaged row numbers in ascending order
-    pub fn damage_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        self.damage
+    /// Raise this grid's generation floor to `gen`. Screen switches and
+    /// wholesale invalidations use this to keep both grids' stamps
+    /// comparable against generations consumers captured earlier.
+    pub fn raise_generation(&mut self, gen: u64) {
+        self.gen = self.gen.max(gen);
+    }
+
+    /// Iterate row numbers damaged since generation `since`, ascending
+    pub fn damage_indices(&self, since: u64) -> impl Iterator<Item = usize> + '_ {
+        self.row_gen
             .iter()
             .enumerate()
-            .flat_map(|(word_idx, &word)| {
-                let base = word_idx * 64;
-                (0..64usize)
-                    .filter_map(move |bit| (word & (1u64 << bit) != 0).then_some(base + bit))
-            })
+            .filter_map(move |(row, &gen)| (gen > since).then_some(row))
     }
 
     /// Get the number of columns
@@ -279,7 +290,7 @@ impl Grid {
         self.zones = snap.zones.clone();
         self.evicted_zones.clear();
         self.total_lines_scrolled = snap.total_lines_scrolled;
-        self.damage = vec![0u64; self.rows.div_ceil(64)];
+        self.row_gen = vec![0u64; self.rows];
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 }

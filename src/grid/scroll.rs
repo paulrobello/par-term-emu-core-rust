@@ -261,10 +261,11 @@ impl Grid {
         self.reset_damage_for_resize();
     }
 
-    /// Resize the damage bitset to the new row count and mark every row:
-    /// a resize moves content even when the cell data survives unchanged.
+    /// Reset per-row damage generations to the new row count and mark every
+    /// row: a resize moves content even when the cell data survives
+    /// unchanged.
     fn reset_damage_for_resize(&mut self) {
-        self.damage = vec![0u64; self.rows.div_ceil(64)];
+        self.row_gen = vec![0u64; self.rows];
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 

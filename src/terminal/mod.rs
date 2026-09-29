@@ -1107,6 +1107,10 @@ pub struct Terminal {
     pub(crate) grid: Grid,
     /// Alternate screen grid
     pub(crate) alt_grid: Grid,
+    /// Last damage generation observed by the built-in default consumer
+    /// (`get_dirty_rows`/`mark_clean`). External consumers keep their own
+    /// remembered generations and are unaffected by `mark_clean`.
+    pub(crate) default_consumer_gen: u64,
     /// Whether we're using the alternate screen
     pub(crate) alt_screen_active: bool,
     /// Cursor position and state
@@ -1285,6 +1289,7 @@ impl Terminal {
         Self {
             grid: Grid::new(cols, rows, scrollback),
             alt_grid: Grid::new(cols, rows, 0), // Alt screen has no scrollback
+            default_consumer_gen: 0,
             alt_screen_active: false,
             cursor: Cursor::new(),
             alt_cursor: Cursor::new(),
@@ -1535,6 +1540,10 @@ impl Terminal {
         // indices cannot follow that, so scan before it happens (ARC-064).
         self.flush_pending_trigger_rows();
 
+        // Both grids re-mark every row below; sync first so those stamps
+        // outrun any generation a consumer captured earlier (ENH-025).
+        self.sync_damage_generations();
+
         let old_cols = self.grid.cols().max(1);
         let old_rows = self.grid.rows().max(1);
 
@@ -1761,6 +1770,7 @@ impl Terminal {
                 self.alt_grid.clear();
             }
             // The whole visible screen just changed — every row is dirty.
+            self.sync_damage_generations();
             let rows = self.grid.rows();
             self.mark_rows_dirty(0, rows.saturating_sub(1));
             // Notify about alt screen entry
@@ -1793,6 +1803,7 @@ impl Terminal {
             // Save alternate cursor for when we switch back
             self.alt_cursor = alt_cursor;
             // The whole visible screen just changed — every row is dirty.
+            self.sync_damage_generations();
             let rows = self.grid.rows();
             self.mark_rows_dirty(0, rows.saturating_sub(1));
             // Reset keyboard protocol flags when exiting alternate screen
@@ -3239,10 +3250,17 @@ impl Terminal {
         fresh.pixel_height = self.pixel_height;
         std::mem::swap(&mut fresh.profiling, &mut self.profiling);
 
+        // RIS swaps in a fresh Terminal whose grid counters start at zero;
+        // carry the old maximum so consumers holding pre-reset generations
+        // still see the reset screen as fully dirty (ENH-025).
+        let max_gen = self.grid.generation().max(self.alt_grid.generation());
+
         *self = fresh;
         self.tab_stops = tab_stops;
 
         // The whole screen changed under whoever is watching it.
+        self.grid.raise_generation(max_gen);
+        self.alt_grid.raise_generation(max_gen);
         self.mark_rows_dirty(0, rows.saturating_sub(1));
     }
 
@@ -3355,14 +3373,41 @@ impl Terminal {
         self.active_grid_mut().mark_rows_damage(top, bottom);
     }
 
+    /// Carry the maximum damage generation across both grids. Generations
+    /// are per grid, but consumers remember one number; syncing at every
+    /// wholesale invalidation (screen switch, resize, reset) keeps both
+    /// grids' stamps comparable (ENH-025).
+    fn sync_damage_generations(&mut self) {
+        let gen = self.grid.generation().max(self.alt_grid.generation());
+        self.grid.raise_generation(gen);
+        self.alt_grid.raise_generation(gen);
+    }
+
     /// Mark the entire screen as clean
+    ///
+    /// Records the current damage generation for the built-in default
+    /// consumer; consumers holding their own generations from
+    /// `damage_generation()` are unaffected (ENH-025).
     pub fn mark_clean(&mut self) {
-        self.active_grid_mut().clear_damage();
+        self.default_consumer_gen = self.damage_generation();
+    }
+
+    /// Current damage generation. Consumers remember this value and pass it
+    /// to `dirty_rows_since` to observe only what changed since.
+    pub fn damage_generation(&self) -> u64 {
+        self.grid.generation().max(self.alt_grid.generation())
+    }
+
+    /// Rows damaged since the given generation (ascending). The generation
+    /// comes from an earlier `damage_generation()` call; a screen switch
+    /// dirties every row of the newly visible grid.
+    pub fn dirty_rows_since(&self, gen: u64) -> impl Iterator<Item = usize> + '_ {
+        self.active_grid().damage_indices(gen)
     }
 
     /// Iterate the dirty row numbers in ascending order
     fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        self.active_grid().damage_indices()
+        self.dirty_rows_since(self.default_consumer_gen)
     }
 
     /// Get all dirty rows (ascending)
