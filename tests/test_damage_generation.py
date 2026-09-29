@@ -6,7 +6,6 @@ that get_dirty_rows() serves.
 """
 
 import pytest
-
 from par_term_emu_core_rust import Terminal
 
 
