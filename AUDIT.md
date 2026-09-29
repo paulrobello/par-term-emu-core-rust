@@ -1,41 +1,59 @@
 # Project Audit Report
 
-> **Project**: par-term-emu-core-rust (v0.53.0, HEAD d53ed92)
-> **Date**: 2026-09-26
-> **Cycle tag**: `audit-2026-09-26-r2` (second audit run on this date; board cards carry both `audit-2026-09-26` and `audit-2026-09-26-r2` — select by `audit-2026-09-26-r2` to exclude the earlier run's cards)
-> **Stack**: Rust (PyO3 0.29 bindings), Python 3.12+, TypeScript/Next.js web frontend, WebSocket streaming server, par-mux daemon
-> **Audited by**: Claude Code Audit System — /opus-audit run (Opus 5 subagents, parsight graph at repo-db09184b0394f6287256c56299eaeb0f, index current at d53ed92)
-> **Previous run**: an earlier /opus-audit on 2026-09-26 at HEAD 17060c6 (v0.52.0). Most of its findings were fixed in the 44 commits since; items still present are marked **recurring: prior <ID>**.
+> **Project**: par-term-emu-core-rust (v0.55.0 released; HEAD 6828c63 carries 13 unreleased commits after the bump 73a118f)
+> **Date**: 2026-09-28
+> **Cycle tag**: `audit-2026-09-28`
+> **Stack**: Rust (PyO3 0.29 bindings, C FFI + iOS `TerminalCore.xcframework`), Python 3.12+, TypeScript/Next.js web frontend, WebSocket streaming server, par-mux daemon
+> **Audited by**: Claude Code Audit System — /opus-audit run (Opus 5 subagents; parsight graph `par-term-emu-core-rust`, index current at 6828c63)
+> **Previous run**: 2026-09-26 run 2 (`audit-2026-09-26-r2`, HEAD d53ed92). Its board cards are all closed. Items still present in the code are marked **recurring: prior &lt;ID&gt;** using the prior AUDIT.md's own IDs.
 
 ---
 
 ## Executive Summary
 
-The codebase is in good health. There are no Critical findings, and the previous run's security fixes (kitty file-media gate, mux line and hook caps, per-UID sockets) hold up under review. The most important new finding is **SEC-108**: the pre-0.52 socket probe added for upgrades lets `connect_or_spawn` attach to whatever listens at `/tmp/par-mux-<name>.sock`, and the client never checks the server's identity. That reopens the socket-squatting hole the per-UID move closed. It is a small fix (a client-side peer-UID check). Several findings are regressions or half-finished work from the remediation itself:
-- The two-phase spawn can drop a new pane's first output (ARC-041).
-- The streaming input queue is unbounded (QA-131).
-- The `screenshot` feature gate leaves `swash` unconditional (ARC-043).
-- Wheel feature sets diverge across build paths (ARC-042).
+The prior cycle's fixes hold. The SEC-108 client euid check, the Windows named-pipe identity check, the kitty file-media gate on `PtyTerminal` and the streamer, and the bounded input queue were all re-verified. There are no Critical findings.
 
-The top issues take roughly 3–5 focused days. The biggest documentation gap is `docs/API_REFERENCE.md`: about 50 Python methods are listed with the wrong parameters (DOC-039). Strength: every production `expect` states its invariant, there are zero TODO/FIXME markers, and SECURITY.md/MUX.md track the recent security releases accurately.
+The most important new finding is **SEC-115**, reproduced end-to-end. The par-mux host-telemetry probe runs `git` every 30 s in a directory that pane output controls through OSC 7, so a repo whose `.git/config` sets `core.fsmonitor` executes arbitrary commands as the user.
+
+Three more High problems come from the new surfaces:
+1. **ARC-058**: one `ESC c` (or `CSI ! p`) from any program rebuilds the whole `Terminal`. This silently resets host security policy and detaches every observer and trigger.
+2. **QA-150**: the dirty-row damage contract that the iOS FFI renderer depends on still misses ICH/DCH, the rectangle operations, RIS and snapshot restore.
+3. **ARC-060**: the `list-agents` roster grammar breaks par-term's shipped parser, which drops any row carrying a blocked reason or telemetry.
+
+The C FFI also has two memory-safety defects, an enum UB (QA-151) and a length/buffer mismatch reachable from OSC 7 (SEC-117). The documented `cargo install` path for the streamer fails (DOC-067). The High tier is roughly 4–6 focused days.
+
+Strengths: validation of the new telemetry endpoint is careful, the FFI layout is pinned on both sides, the Python API reference is machine-checked (497/497 signatures), and the resource-caps table is gated.
 
 ### Issue Count by Severity
 
 | Severity | Architecture | Security | Code Quality | Documentation | Total |
 |----------|:-----------:|:--------:|:------------:|:-------------:|:-----:|
 | 🔴 Critical | 0 | 0 | 0 | 0 | **0** |
-| 🟠 High     | 1 | 1 | 2 | 2 | **6** |
-| 🟡 Medium   | 11 | 2 | 9 | 15 | **37** |
-| 🔵 Low      | 7 | 4 | 9 | 8 | **28** |
-| **Total**   | **19** | **7** | **20** | **25** | **71** |
+| 🟠 High     | 2 | 3 | 2 | 5 | **12** |
+| 🟡 Medium   | 16 | 1 | 15 | 21 | **53** |
+| 🔵 Low      | 9 | 5 | 14 | 8 | **36** |
+| **Total**   | **27** | **9** | **31** | **34** | **101** |
 
-Merged during dedup:
-- ARC-C and QA-F became ARC-041.
-- QA-B and SEC-D became QA-131.
-- ARC-P and QA-G became QA-133.
-- ARC-Q and DOC-Z became ARC-054.
-- SEC-G and the PtyTerminal half of DOC-B became SEC-112.
-- DOC-H's CI half became ARC-057.
+**Merged duplicates.** Six findings were reported by more than one domain. Each keeps one ID, and the absorbed IDs are retired so the numbering gaps are intentional:
+
+| Kept | Absorbs | Topic |
+|------|---------|-------|
+| QA-150 | ARC-059 | Incomplete dirty-row damage contract |
+| QA-151 | ARC-061, SEC-122 | `TermKeyEvent.key` enum UB across the FFI |
+| SEC-117 | QA-152 | FFI `title_len`/`cwd_len` vs NUL-truncated C string |
+| SEC-115 | ARC-065, QA-155 (git-flag half) | Host probe runs git in an OSC 7-chosen cwd |
+| QA-153 | ARC-066 | PTY input drain busy-polls; drain does not own all writes |
+| QA-165 | ARC-067 (size half) | Large/god files keep growing |
+
+`QA-155` keeps the `run_git` pipe-deadlock and shutdown-join half; `SEC-124` keeps the wedged-filesystem half. The architecture agent's catch_unwind note became its own finding, ARC-087; ARC-085 is only the `dirty_ranges` allocation.
+
+**Prior-ID note.** In the previous AUDIT.md, `SEC-112` is the kitty file-media gate and `SEC-114` is the `paste` advisory. Some commit messages use `SEC-112` for the Windows named-pipe check and `SEC-114` for file media. This report cites the prior AUDIT.md's numbering.
+
+---
+
+## User-Directed Focus
+
+No focus areas were supplied. The agents weighted the code changed since d53ed92: the C FFI embedding surface, the mux telemetry endpoint and host probe, the streaming input-path rework, and the dirty-row contract.
 
 ---
 
@@ -47,75 +65,163 @@ None.
 
 ## 🟠 High Priority Issues
 
-### [SEC-108] Legacy `/tmp` socket probe lets another local user impersonate the par-mux daemon; client never verifies server identity
-- **Area**: Security (CWE-287 / CWE-668)
-- **Location**:
-  - `src/mux/client.rs:49-58` (`connect_or_spawn`)
-  - `src/mux/ipc.rs:419-421` (`legacy_socket_path` = `temp_dir()/par-mux-<name>.sock`)
-  - `src/mux/ipc.rs:293-303` (`connect_local_stream`, no peer check)
-  - The peer check exists only on the accept side (`src/mux/ipc.rs:93-125`)
-- **Description**: Commit 490da28 added a probe. When the per-UID default socket is not answering, `connect_or_spawn` attaches to whatever answers at the shared-temp legacy path.
-  - `guard_fallback_socket_dir` only protects the per-UID directory, so that path gets no owner or mode check.
-  - The client never checks the server's euid.
-  - Pre-0.52 builds defaulted to `$XDG_RUNTIME_DIR` when set (verified: `git show 17060c6~30:src/mux/ipc.rs:335-345`). On XDG systems the probe therefore reaches a path no legitimate old daemon ever served.
-- **Impact**: On multi-user Linux, another user binds `/tmp/par-mux-default.sock`. When the victim's daemon is down, par-term (`MuxClient::connect_or_spawn`) attaches to the attacker's server. Every `send-keys` goes to the attacker (keystrokes, pasted secrets), and the attacker can return forged `%output`. macOS is not affected (per-user `$TMPDIR`). The Windows global pipe namespace has the same shape (Low, unreproduced).
+### [SEC-115] Host-telemetry probe runs `git` in an OSC 7-controlled cwd, executing repo-configured hooks (merges ARC-065, QA-155 git-flags half)
+- **Area**: Security
+- **Location**: `src/mux/host_probe.rs:133-172` (`run_git`: `git -C <cwd>` with no config hardening), `:96-126` (`symbolic-ref`, `diff-index --quiet HEAD --`, `ls-files --others`), `:229-249` (`host_probe_sweep`); `src/mux/pane.rs:163-168` (`PaneSnapshotParts::cwd` prefers `terminal.current_directory()`, the OSC 7 value, over `process_cwd(child_pid)`); `src/terminal/sequences/osc/shell.rs:11-32` (OSC 7 hostname parsed, then dropped).
+- **Description**:
+  - The 30 s sweep probes every rostered pane's cwd, and that cwd comes from program output.
+  - `git diff-index` and `git ls-files` execute the repo's `core.fsmonitor` hook, and a worktree `diff-index` runs clean filters. Git's dubious-ownership guard does not help for a repo the victim owns whose `.git/config` an attacker wrote (an extracted tarball, `npm pack`, or an embedded `core.worktree`).
+  - An SSH pane's remote cwd is probed as a local path.
+- **Impact**:
+  - Reproduced end-to-end against a throwaway daemon on a `mktemp` socket: a pane emitted OSC 7 for a repo whose `core.fsmonitor` wrote a marker file, the pane was rostered via `pane.report_agent`, and the next sweep executed the hook.
+  - The result is arbitrary command execution in a long-lived daemon, driven by untrusted output.
+- **Remedy**: Apply three layers together.
+  1. Probe `process_cwd(child_pid)` only, never the OSC 7 value, and skip the pane when that is unavailable.
+  2. Run every git invocation with `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit`, `--no-optional-locks`, and `GIT_OPTIONAL_LOCKS=0`/`GIT_TERMINAL_PROMPT=0`.
+  3. Use `git diff-index --cached --quiet HEAD --`, where the clean filter does not run.
+
+### [SEC-116] Kitty zlib (`o=z`) decompression bomb; APC and chunk buffers unbounded (recurring: prior SEC-109)
+- **Area**: Security
+- **Location**: `src/graphics/kitty.rs:549-561` (`decompress_zlib`: `read_to_end`, no limit), `:505` (`data_chunks.push`, no total cap), `:537` (`concat()`); `src/terminal/apc_filter.rs:123-146` (`apc_buffer.push`, no cap); reached from `Terminal::process` (`src/terminal/mod.rs:2799`); `docs/SECURITY.md:897` wrongly claims the kitty path is capped by `MAX_DECOMPRESSED_SIZE` (that cap applies only to the streaming wire).
+- **Description**: A small APC carrying a large zlib payload inflates without bound before `decode_pixels` rejects the dimensions. The APC accumulator and `data_chunks` also grow without limit. ENH-020 added the fuzz target and `-rss_limit_mb`, but the runtime cap was never added.
+- **Impact**: `cat` of a crafted file, a hostile SSH host, or a tailed log can OOM the embedding process. Under par-mux or the streamer, one pane takes down every session.
 - **Remedy**:
-  - Add a client-side `peer_creds().euid() == current_uid()` check in `connect_local_stream`. It fails closed with `PermissionDenied` and covers every path, including explicit `--socket`.
-  - Skip the legacy probe when `XDG_RUNTIME_DIR` is set.
-  - `lstat` the legacy path and require `is_socket() && uid == current_uid()`.
-  - Windows: compare the server PID's token SID via `GetNamedPipeServerProcessId`.
-  - Add a regression test.
+  - Stream-decompress through `take(limit + 1)`. The limit is `s*v*{3,4}` when known, else `MAX_IMAGE_PIXELS * 4`.
+  - Cap accumulated `data_chunks` bytes and `apc_buffer` length at 64 MiB, resetting on overflow.
+  - Add `/// cap:` doc comments and correct SECURITY.md.
 
-### [ARC-039] `Terminal` is still a god object — phase 1 moved only screenshot and benchmarks (recurring: prior ARC-021)
+### [SEC-117] FFI `SharedState.title_len`/`cwd_len` disagree with the NUL-truncated C string (merges QA-152)
+- **Area**: Security
+- **Location**: `src/ffi.rs:124-139` (`title_len = title_str.len()`, then `CString::new(title_str).unwrap_or_default()`; same pattern for `cwd`); `include/terminal_core.h:78-82` documents "`*_len` bytes"; reachability: `src/terminal/sequences/osc/shell.rs:288-310` (`parse_osc7_url` percent-decodes `%00` to U+0000), stored unchecked in `src/terminal/shell_integration.rs:160-185`.
+- **Description**: An interior NUL makes `CString::new` fail. The fallback is an empty 1-byte string, while the length field still reports N.
+- **Impact**: Reproduced via ctypes: `cwd_len` was 4003 while `strlen(cwd)` was 0. An iOS or C consumer that honors the length, such as `Data(bytes:count:)`, performs a heap over-read driven by remote shell output.
+- **Remedy**:
+  - Replace interior NUL with U+FFFD, or strip it, before `CString::new`.
+  - Compute the lengths from `cstring.as_bytes().len()`.
+  - Reject decoded OSC 7 and iTerm2 CurrentDir paths that contain NUL or C0 controls.
+  - Add an FFI test asserting `strlen(cwd) == cwd_len`.
+
+### [ARC-058] RIS (`ESC c`) and DECSTR (`CSI ! p`) rebuild the whole `Terminal`, wiping host policy, observers, triggers and damage
 - **Area**: Architecture
-- **Location**:
-  - `src/terminal/mod.rs`: 3,642 lines, 172 `pub fn`, 204 of the 400 `Terminal::` methods; struct at `:1088`.
-  - 43 `impl Terminal` blocks across `src/terminal/**` (`colors.rs` 46, `clipboard.rs` 21, `metrics.rs` 21, `macros.rs` 16, `trigger.rs`, `recording.rs`, `notification.rs`, …).
-  - Deprecated forwarders at `mod.rs:2698,2713` and `metrics.rs:290-320` with no removal version.
-- **Description**: `TerminalBenchmarks` and `screenshot::render_terminal`/`save_terminal` were extracted in 0.53.0. Macros, triggers, recording, search, compliance, clipboard history and HTML export are still inherent methods. `Terminal` is the #3 bridge symbol (in-degree 98) and has the highest file fan-in (113).
-- **Impact**: Every feature change still touches the core type and the four-way sync surface (Rust impl, binding macros, `.pyi`, API_REFERENCE).
-- **Remedy**: Continue one service per PR. This cycle's bounded slice: extract `MacroEngine` (the 16 methods in `src/terminal/macros.rs`) and `TriggerEngine` (the `Terminal` methods in `src/terminal/trigger.rs:137-402`) over `&mut Terminal`, with `#[doc(hidden)] #[deprecated]` forwarders and the Python API unchanged. Pin the removal version of the 0.53.0 forwarders (`since = "0.53.0"`, removal at 0.55.0) in code and CHANGELOG.
+- **Location**: `src/terminal/mod.rs:3138-3150` (`reset()` does `*self = Self::with_scrollback(..)`, keeping only tab stops); callers `src/terminal/sequences/esc.rs:105-107` (RIS), `src/terminal/sequences/csi/report.rs:93-95` (DECSTR), `src/python_bindings/terminal/mod.rs:182` (`PyTerminal.reset`).
+- **Description**:
+  - Probed against the 0.55.0 build. After `ESC c`, every embedder setting reverts to its default:
+    - `get_allow_file_media` goes from `off` to `temp_only`.
+    - `disable_insecure_sequences` goes from True to False, and `accept_osc7` from False to True.
+    - `max_osc_data_length` goes from 4096 to 1 MiB, and the sixel limits revert as well.
+    - `answerback_string` is dropped, `observer_count()` goes from 1 to 0, `list_triggers()` goes from 1 to 0, and `get_dirty_rows()` returns `[]`.
+  - DECSTR is a soft reset, which VT510 defines as leaving the screen and scrollback intact. Here it goes through the same path and erases the screen and all scrollback. That was verified: the scrollback went from 2 lines to 0.
+- **Impact**:
+  - `reset`/`tput reset` trigger this during ordinary use.
+  - A remote program can turn off a hardened embedder's policy (streamer `kitty_file_media`, `disable_insecure_sequences`) with one escape.
+  - par-term's observers detach silently, and damage-driven renderers keep stale pixels.
+  - Every setter added in future is reset by default.
+- **Remedy**:
+  - In `reset()`, save and restore all state an embedder sets through the API. That is the security flags, limits, answerback, file-media mode, theme/palette config, unicode config, observers, triggers, macros, notification config and event subscription. Then mark every row dirty.
+  - Give DECSTR its own `soft_reset()`: modes, SGR, charsets, margins, cursor, saved cursor. No grid wipe.
+  - Add a regression test that sets every setter, sends `ESC c`, and asserts each one survives.
+  - The Host/Services/VT struct split belongs to ARC-067.
 
-### [QA-131] Streaming PTY input queue is unbounded; failed sends are silently dropped (merges SEC-D)
-- **Area**: Code Quality + Security (CWE-770)
-- **Location**:
-  - `src/streaming/session.rs:89` (`UnboundedSender<Vec<u8>>`), `:342` (`mpsc::unbounded_channel`), `:332` and `:365` (`let _ = tx.send(bytes)`).
-  - The drain loop silently skips when `pty_writer` is `None` (`:350-351`).
-  - The rate limit defaults to 0 (`src/streaming/config.rs:422`, `src/bin/streaming_server/cli.rs:281-282`).
-- **Description**: This regression came with the QA-110 fix. When the child stops reading stdin, the single drain task blocks in `write_all` and every later Input/Paste message is queued in memory without limit. A send that fails because the drain task exited drops keystrokes with no metric or log.
-- **Impact**: Any authenticated, non-read-only client can grow streamer memory without limit, affecting every session in the process. Dropped input is invisible to operators.
-- **Remedy**: Use a bounded channel with a byte budget (~4 MiB). On overflow, `try_send`, drop, count in `metrics.dropped_messages`/`errors`, and log (or disconnect the client). Count send failures, and log the `pty_writer == None` drop. Test with a writer that never drains.
+### [ARC-060] `list-agents` roster grammar is ambiguous and breaks par-term's shipped parser
+- **Area**: Architecture
+- **Location**: `src/mux/dispatch.rs:311-370` (`cmd_list_agents`: `%N <agent> <state> <source> [reason…] [telemetry=…] [host_telemetry=…]`); `src/mux/hooks.rs:225-236` (free-text reason, whitespace-collapsed only); `CHANGELOG.md:15` ("Backward compatible by construction"); downstream `~/Repos/par-term/par-term-mux/src/agents.rs:76-92` (`parse_list_line` takes the last token as the source).
+- **Description**:
+  - par-term pins core `0.55`. Its parser fails `AgentSource::parse` and drops any row with a trailing reason (column added in 02920a6, v0.50.0) or a telemetry token (0.55.0).
+  - Agent, state and source are positionally parseable, because state is validated to `working|blocked|idle|unknown`. The free-text reason followed by `key=value` tokens is still ambiguous: a reason may contain `telemetry=` or end in `hook`.
+- **Impact**:
+  - par-term's agent roster loses every blocked row that carries a reason. That is exactly the scannability case the column exists for.
+  - It also loses every row once telemetry is reported.
+  - The CHANGELOG compatibility claim is false.
+- **Remedy (core)**:
+  - Make the reason unambiguous: encode it as a single `reason=<base64>` token, or reject reasons whose last token matches `hook|scrape|*=*`. Keep the leading `agent state source` order.
+  - Add a conformance test that parses rows the way par-term does.
+  - Correct `CHANGELOG.md:15`.
+- **Remedy (upstream)**: par-term's parser must read positions 1–3 and ignore the tail. Filed on the par-term board, linked to this card.
 
-### [QA-132] Python screenshot/emoji tests unconditionally skipped since 2025-11; a streaming test turns failure into skip
-- **Area**: Code Quality (test coverage)
-- **Location**:
-  - `tests/test_screenshot.py:258`, `:275`: `@pytest.mark.skip(reason="PTY screenshot tests hang in CI")`
-  - `tests/test_screenshot.py:340`: emoji color rendering
-  - `tests/test_streaming.py:356`: `pytest.skip` on a 2 s timeout
-- **Description**: QA-111 re-enabled the `test_pty*` family locally but missed these. They are skipped everywhere, including in `make test-pty`.
-- **Impact**: `PtySession::screenshot` (the path QA-130 changes) and color-emoji rendering have no Python coverage. A streaming regression reports as "skipped".
-- **Remedy**: Replace the skips with `skipif(os.environ.get("CI"))` or move the tests into the `make test-pty` family. Make the streaming timeout fail (or `xfail(strict=False)` with a reason).
+### [QA-150] Dirty-row damage contract still misses ICH/DCH, rectangle ops, RIS and snapshot restore (merges ARC-059)
+- **Area**: Code Quality
+- **Location**: `src/terminal/sequences/csi/edit.rs:46-71` (ICH `@`, DCH `P`: no marking); `src/terminal/sequences/csi/window.rs:17-190` (DECFRA `$x`, DECCRA `$v`, DECERA `$z`, DECCARA/DECRARA `$r`/`$t`); `src/terminal/mod.rs:3139-3149` (RIS zeroes `dirty_rows`); `src/terminal/replay_snapshot.rs:231,277` (`restore_from_snapshot`, `restore_for_new_process`); marking helpers `src/terminal/mod.rs:3153-3172`.
+- **Description**:
+  - Probed from a clean state: ICH, DCH, DECFRA, DECCRA and DECERA each changed content and reported `dirty=[]`.
+  - The aa6edf1 message claims DECERA is covered, but that diff never touches `window.rs`.
+  - Marking happens per handler, so every new handler must remember to call it.
+- **Impact**: The iOS `TerminalCore.xcframework` renderer (`terminal_dirty_ranges`) leaves stale cells after insert/delete-char, which readline, vim and tmux emit constantly, and after `ESC c`.
+- **Remedy**:
+  - Mark in each handler. ICH/DCH mark the cursor row. Each rectangle op marks `top..=bottom` clamped to the screen. Reset and both restore paths mark every row.
+  - Add frames `\x1b[3@`, `\x1b[2P`, `\x1b[65;1;1;3;5$x`, `\x1b[1;1;3;5;4;1$v`, `\x1b[1;1;3;5$z`, `\x1b[1;1;2;5;7$r` and `\x1bc` to `ffi_round_trip_matches_core_state`.
+  - Structural hardening, where marking lives inside the grid mutators plus a proptest invariant, is ENH-025.
 
-### [DOC-039] `docs/API_REFERENCE.md` gives wrong parameter lists for ~50 Python methods
+### [QA-151] `TermKeyEvent.key` is a Rust enum inside a `#[repr(C)]` struct that C/Swift fill with arbitrary `uint16_t` (merges ARC-061, SEC-122)
+- **Area**: Code Quality
+- **Location**: `src/keyboard.rs:36-68` (`#[repr(u16)] enum TermKey`), `:76-85` (`pub key: TermKey`, and the misleading `_pad` doc); `src/ffi.rs:672-693` (`terminal_encode_key` does `&*ev`); `include/terminal_core.h:191-197` (`uint16_t key`); `scripts/build-xcframework.sh:135` (the Swift probe passes `UInt16(...)`).
+- **Description**: Creating a reference to a `TermKeyEvent` whose `key` is not a valid discriminant is immediate undefined behavior, whether or not the field is ever matched.
+- **Impact**: Memory-unsafe behavior reachable from the shipped xcframework. A key code added on the Swift side first, or a typo, can miscompile the `match` in `encode_legacy`/`encode_kitty`.
+- **Remedy**:
+  - Give the FFI struct a `key: u16` field and add `TermKey::from_raw(u16) -> TermKey` that maps unknown values to `Unknown`.
+  - Convert once in `terminal_encode_key`.
+  - Add tests for `key = 2`, `57388` and `0xFFFF` asserting empty output.
+  - Fix the `_pad` doc.
+  - The C header is unchanged, so there is no ABI break.
+
+### [DOC-065] FFI_GUIDE.md documents none of the embedding surface shipped for iOS
 - **Area**: Documentation
-- **Location**: `docs/API_REFERENCE.md`, among others lines 258, 375, 471, 482-483, 490-491, 501, 560, 679-680, 688, 696, 698, 803, 811, 819-822, 833, 855, 864, 874, 939-944, 975, 1137, 1141, 1172, 1203, 1214, 1220, 1442
-- **Description**: Checked against `_native.pyi` and the `#[pyo3(signature=...)]` definitions:
-  - **Arguments documented that the methods don't take**: `detect_urls(text)`, `detect_file_paths(text)` and `detect_semantic_items(text)` take no arguments.
-  - **Required arguments omitted**: `run_benchmark_suite(suite_name)`, `test_compliance(level)`, `generate_color_palette(r,g,b,mode)`, `get_mouse_events(count)`, `get_mouse_positions(count)`, `next_regex_match(from_row, from_col)`, `prev_regex_match(from_row, from_col)`.
-  - **Wrong shapes**: `color_distance` takes six ints. `get_images_at` is `(col,row)`. `get_paragraph_at` is `(row)`. `add_damage_region` is `(left,top,right,bottom)`. `add_rendering_hint` takes 7 arguments. `record_frame_timing` is `(processing_us, cells_updated, bytes_processed)`. `record_clipboard_sync` takes 4. `benchmark_*` take `iterations`. `remove_bookmark` takes an `id`.
-  - **Wrong keyword names**: `paste(content)`, `record_marker(label)`, `write_str(s)`, `has_updates_since(last_generation)`, `fill_rectangle(..., ch)`, `set_remote_session_id(session_id)`, `record_cwd_change(new_cwd, …)`, `set_max_clipboard_event_bytes(max_bytes)`, `Macro.from_yaml(yaml)`, `load_macro(name, macro_obj)`, `adjust_contrast_rgb(..., minimum_contrast)`, and `contrast_ratio`/`mix_colors(rgb1, rgb2)`.
-  - **Missing argument**: `set_sixel_limits` lacks `max_repeat`.
+- **Location**: `docs/FFI_GUIDE.md` (whole file; :5-19, :74-88, :208-216, :257-259, :342-467).
+- **Description**: The guide omits most of what embedders need and gets several facts wrong.
+  - **Missing API**: the 12 functions from 9c2cf0b (`terminal_create`, `terminal_free`, `terminal_feed`, `terminal_resize`, `terminal_dirty_ranges`, `terminal_mark_clean`, `terminal_read_row`, `terminal_read_scrollback_row`, `terminal_scrollback_count`, `terminal_get_cursor`, `terminal_get_modes`, `terminal_encode_key`), the four structs, the `TERM_*` macros, `include/terminal_core.h`, and `make xcframework`.
+  - **Examples**: they never obtain a terminal, and they hand-declare types that conflict with the header.
+  - **Wrong artifact**: :78-86 claims a `.a` from `cargo build`, but the crate types are `cdylib`/`rlib`.
+  - **Wrong provenance**: :88 calls the header "generated", but it is hand-written.
+  - **Wrong callback descriptions** (:212-215): `on_zone_event` fires for OSC 133 zones, and title changes arrive on `on_screen_event`.
+  - **Invented constraint**: :259 says one `SharedState` per terminal. Each snapshot is actually an owned copy.
+- **Impact**: A C or Swift embedder cannot create or feed a terminal by following the guide.
+- **Remedy**: Rewrite the guide around the header. Cover lifecycle, the render loop, key encoding, snapshots and observers, the xcframework, and the cap/return-total sizing protocol. Then fix the listed lines.
 
-  The prior "clean both directions" check compared names only.
-- **Impact**: Copying any of these signatures raises `TypeError`. With no stub docstrings (DOC-052), this is the only reference users have.
-- **Remedy**: Correct every line from the pyo3 signatures. Add a checker to `make stub-check` that compares the parameter names in each `- `name(args)`` line against `_native.pyi`.
-
-### [DOC-040] "PtyTerminal inherits all Terminal methods" is false
+### [DOC-066] 13 post-release commits have no CHANGELOG entry; README presents unreleased work as released
 - **Area**: Documentation
-- **Location**: `docs/API_REFERENCE.md:1152`, `docs/SECURITY.md:572`, `README.md:22,120`
-- **Description**: At runtime, `PtyTerminal.__mro__ == (PtyTerminal, object)`: 206 methods against Terminal's 388, with 224 missing (observers, `detect_urls`, bookmarks, benchmarks, `set_allow_file_media`/`get_allow_file_media`, …). SECURITY.md tells PTY users to call `Terminal.set_allow_file_media`, which a `PtyTerminal` does not have (see SEC-112).
-- **Impact**: Users code against a surface that does not exist. Security-conscious PTY users cannot disable file media.
-- **Remedy**: Replace the sentence with an accurate statement (ideally a generated availability table). After SEC-112 lands, document the new `PtyTerminal.set_allow_file_media`.
+- **Location**: `CHANGELOG.md:8` (no `[Unreleased]` section); `README.md:292-309`, especially :302; `docs/MUX.md:92,114,242`.
+- **Description**:
+  - After the 0.55.0 bump (73a118f), main gained the FFI surface and xcframework (c638c00, 9c2cf0b, 99ebac8, 610a030).
+  - It also gained two behavior changes: the `PAR_MUX_SOCKET` CLI fallback (1367050) and input on a writer-less session now closing the WebSocket (beffc93).
+  - Other changes: the dirty-row fixes (aa6edf1, 32b922f) and the input-drain fixes (932283a, 444be93, e818a37, 6828c63).
+  - None of these has a CHANGELOG entry.
+  - README:302 says the xcframework is "attached to every GitHub release". The v0.55.0 release has no xcframework asset (checked with `gh release view`).
+- **Impact**: Readers look for a release asset that doesn't exist, and the next version bump has to reconstruct 13 commits of notes, two of them behavior-affecting.
+- **Remedy**:
+  - Add `## [Unreleased]` with Added, Changed (flag the behavior-affecting items) and Fixed.
+  - Change README:302 to "attached to GitHub releases starting with 0.56.0".
+
+### [DOC-067] `cargo install … --features streaming-bin` fails at link (recurring: prior DOC-046, now verified)
+- **Area**: Documentation
+- **Location**: `README.md:281`; `QUICKSTART.md:160`.
+- **Description**:
+  - Without `--no-default-features`, the default `python` feature enables `pyo3/extension-module`.
+  - The link then fails with `ld: symbol(s) not found … _Py_IsInitialized` (exit 101, reproduced on macOS arm64).
+  - No `par-mux` install line exists.
+- **Impact**: The crates.io install path for the streamer fails for every user.
+- **Remedy**:
+  - Replace the install line with `cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer`.
+  - Add the equivalent `--features mux --bin par-mux` line.
+
+### [DOC-068] `TmuxNotification.notification_type` documented with underscores; runtime is hyphenated; four types missing
+- **Area**: Documentation
+- **Location**: `docs/API_REFERENCE.md:1824-1825`.
+- **Description**:
+  - The doc gives `"layout_change"`, `"pane_mode"` and `"agent_state_changed"`.
+  - At runtime the values are `layout-change`, `pane-mode-changed`, `agent-state-changed` and `agent-telemetry-changed` (verified with `drain_tmux_notifications()`).
+  - `agent-released`, `agent-telemetry-changed`, `sessions-changed` and `pane-title-changed` are not listed.
+- **Impact**: Python clients that compare against the documented strings silently never match.
+- **Remedy**: List the hyphenated values, taken from `TmuxNotification::notification_type` (`src/tmux_control.rs:193`), and document the name/value/source mapping for the three agent types.
+
+### [DOC-069] README Quick Start screenshot example raises `ValueError`
+- **Area**: Documentation
+- **Location**: `README.md:425`, `README.md:161`.
+- **Description**:
+  - `term.screenshot_to_file("output.html", format="html")` raises `ValueError: Invalid format: html` (verified on 0.55.0).
+  - README:161 lists HTML as a screenshot format.
+- **Impact**: The Quick Start fails on its third line.
+- **Remedy**:
+  - Change :425 to `open("output.html", "w").write(term.export_html(include_styles=True))`.
+  - Change :161 to "PNG, JPEG, BMP, SVG; HTML via `export_html()`".
 
 ---
 
@@ -123,293 +229,443 @@ None.
 
 ### Architecture
 
-#### [ARC-040] CI never runs automatically, while the bench gate rotates its baseline tag on unchecked main (recurring: prior ARC-023)
-- **Location**: `.github/workflows/ci.yml:3-4` (`workflow_dispatch` only); `.github/workflows/bench.yml:3-7` (weekly `schedule`), `:31` (`BENCH_ROTATE_TAG` = 1 on main); `fuzz.yml` (nightly).
-- **Description**: The performance and fuzz gates now run on a schedule, but fmt, clippy, tests, the `sim` tree guard and the Windows mux suite still never run on push or PR. The scheduled bench can move `bench-baseline` onto a HEAD that no correctness gate has checked. No recorded decision makes dispatch-only intentional (project memory records it only as a fact).
-- **Remedy**: Add a cheap Linux job on `push: [main]` + `pull_request` (fmt `--check`, clippy `-D warnings`, `cargo test --lib`, the `sim` guard). Keep the full matrix dispatch-only. Rotate the bench tag only when that SHA's CI run is green.
+#### [ARC-062] FFI readback discards palette, theme and grapheme clusters; color resolution exists in three divergent copies
+- **Location**: `src/ffi.rs:368-385` (`SharedCell::from_cell` uses the fixed `Color::to_rgb` table), `:26-28` (`text: [u8; 4]`); the other resolvers are `src/python_bindings/common.rs:2276-2294` (palette-aware) and `src/screenshot/renderer.rs:196-230` (theme-aware, bold-bright).
+- **Description**: Probed via ctypes:
+  - After `OSC 4;1;rgb:00/00/ff`, red reads back as `(128,0,0)`.
+  - `x`+U+0301 reads back as `x`, 👨‍👩‍👧 as 👨, and 👍🏽 as 👍.
+  - Default and explicit white/black are indistinguishable.
+- **Impact**: ParDeck renders different colors and glyphs than par-term and the Python surface do for the same stream.
+- **Remedy**:
+  - Add one `Terminal::resolve_cell_colors(&Cell)` and use it from all three surfaces.
+  - Add `is_default_fg`/`is_default_bg` bits, a grapheme length, and a long-cluster side channel.
+  - Ship it as one ABI revision together with ARC-063.
 
-#### [ARC-041] Two-phase spawn loses a new pane's early output; the spawn/wire block is copied three times (merges QA-F)
-- **Location**:
-  - `src/mux/dispatch.rs:229-273` (`cmd_new_session`), `:515-555` (`cmd_split_window`), `:694-735` (`cmd_new_window`)
-  - `src/pty_session.rs:190` (`output_callback` starts `None`), `:707` (`spawn_internal` starts the reader thread)
-  - `src/mux/pane.rs:335-342` (`on_output`)
-  - `src/mux/server.rs:968-985` (`wire_all_pane_outputs`)
-  - `src/mux/tree.rs:300-432` (test-only one-shot wrappers)
-- **Description**: `create_pane` → `spawn*` → `start_reader_thread` runs before `complete_*` re-acquires the (contended) tree lock and installs `pane_output_sink`. Bytes read in that gap, usually the first prompt, are processed into the daemon grid but never emitted as `%output`. The gap is now bounded by lock contention (other clients, the reaper, the persist capture), not microseconds. The three handlers repeat reserve → drop → spawn → relock → complete → wire → cwd-note with 4-5 levels of nested `match`. `dispatch_command` is the #2 churn×complexity hotspot.
-- **Remedy**: Carry the output sink in the spawn context so `create_pane` installs it before the reader starts (the pane id is already reserved in the plan). Extract one `spawn_two_phase` helper. Add a test with a factory that emits output immediately and a delayed `complete_*`. Run the Windows mux suite.
+#### [ARC-063] C ABI has no version, no generated header, a Debug-string event payload, and an aliasing-permitting observer contract
+- **Location**: `include/terminal_core.h` (hand-written, no version constant); `src/ffi.rs:272-284` (payload is `format!("{:?}", event)`); `src/ffi.rs:439-447` (`terminal_feed` holds `&mut Terminal` while observers dispatch inline).
+- **Description**:
+  - An observer callback that calls any `terminal_*` function on the same handle during `terminal_feed` aliases `&`/`&mut`, which is UB.
+  - The event payload is Rust `Debug` output, so it changes silently whenever the enum changes.
+  - Nothing lets a binary detect a layout mismatch after QA-151 and ARC-062 land.
+- **Remedy**:
+  - Add `TERM_CORE_ABI_VERSION` and `terminal_abi_version()`.
+  - Document "no re-entry from callbacks", or defer FFI observer dispatch until after `feed` returns.
+  - Replace the Debug strings with a `repr(C)` event struct.
+  - Header generation and its drift gate are ENH-027.
 
-#### [ARC-042] Wheel feature set diverges across build paths after ENH-017
-- **Location**: `.github/workflows/deployment.yml:238,293,299,344` (`--features streaming`); `publish-testpypi.yml:61` (none); the sdist job (`deployment.yml:382`) and `pyproject.toml:74-77` (`[tool.maturin] features = ["pyo3/extension-module"]`); `Makefile:125,139,163` (`make dev` without streaming).
-- **Description**: PyPI wheels include streaming. TestPyPI wheels, sdist installs and `make dev` do not, and `HAS_STREAMING` now reports each case truthfully.
-- **Impact**: The TestPyPI rehearsal doesn't test what ships. Source installs lose a documented feature. `make stubs` after `make dev` drops the streaming classes.
-- **Remedy**: Make `pyproject.toml [tool.maturin] features = ["pyo3/extension-module", "streaming"]` the single source of truth. Remove `--features` from workflow args. Point `make dev` at the pyproject setting and add a `make dev-fast` for quick builds without streaming.
+#### [ARC-064] Triggers ride render damage, so every damage fix multiplies trigger side effects
+- **Location**: `src/terminal/mod.rs:3153-3163` (`mark_row_dirty` also inserts into `pending_trigger_rows`); `src/terminal/trigger.rs:176-220` (rescans every pending row, with no dedup); actions at `trigger.rs:262-330`.
+- **Description**:
+  - aa6edf1 and 32b922f extended region marking to scrolls, IL/DL and alt-screen, and each of those now re-fires triggers.
+  - Probe: two `ERROR` lines match again on alt-screen exit, and a line that scrolls while visible re-matches on every scroll.
+- **Impact**: Duplicate notifications, bookmarks, and SendText/RunCommand results. QA-150 makes this worse.
+- **Remedy**:
+  - Feed triggers from a "rows that received new text" set that only the write path populates, or dedup on `(row content hash, trigger id)`.
+  - Keep render damage separate.
 
-#### [ARC-043] `screenshot` feature gate is empty; `swash` stays unconditional
-- **Location**: `Cargo.toml:215` (`screenshot = []`), `:148` (`swash = "0.2.7"`, not optional). The only users are `src/screenshot/shaper.rs` and `font_cache.rs`.
-- **Remedy**: `screenshot = ["dep:swash"]` and `swash = { version = "0.2.7", optional = true }`. Verify that `cargo tree -e features -i swash --no-default-features --features rust-only` is empty.
+#### [ARC-067] `Terminal` is still a god object; MacroEngine/TriggerEngine moved no state (recurring: prior ARC-039)
+- **Location**: `src/terminal/mod.rs` (3,637 lines, 170 `pub fn`, fan-in 113); `TriggerEngine` (`trigger.rs:134`) is a unit struct over `term.triggers`.
+- **Remedy**:
+  - Split state ownership into Host config, Services and VT state. This is what ARC-058's rule anticipates.
+  - Then have the engines own their registries.
+  - Continue one service per PR, and do not start before ARC-058 lands.
 
-#### [ARC-044] `mux` library feature pulls `clap`, which only the binaries use
-- **Location**: `Cargo.toml:237` (`mux = [..., "clap"]`), `:63` (`par-mux` `required-features = ["mux"]`). Only `src/bin/par_mux/main.rs` and `src/bin/streaming_server/*` use clap.
-- **Remedy**: Add `mux-bin = ["mux", "clap"]`, point `[[bin]] par-mux` at it, and update the Makefile, CI and deployment invocations and the docs.
+#### [ARC-068] Two-phase spawn still loses early pane output; block is triplicated (recurring: prior ARC-041)
+- **Location**: `src/mux/dispatch.rs:229-273`, `:520-560`, `:692-740`; `src/mux/pane.rs:335-342`.
+- **Remedy**: Carry the output sink in `SpawnContext` so it is installed before the reader starts, and extract a `spawn_two_phase` helper.
 
-#### [ARC-045] `Cargo.lock` gitignored while two binaries and wheels ship from CI (recurring: prior ARC-024)
-- **Location**: `.gitignore:4`. `--locked` is used only by `fuzz.yml:25`. CLAUDE.md:74 records "Cargo.lock is not tracked" as a fact (no recorded decision).
-- **Remedy**: Commit `Cargo.lock`, add `--locked` to CI, release and bench builds, and update the CLAUDE.md Windows playbook note.
+#### [ARC-069] CI is dispatch-only; fuzz and bench run on schedule (recurring: prior ARC-040)
+- **Location**: `.github/workflows/ci.yml:3-4`; `bench.yml:3-8,31`. The ENH-019 `features` job and the xcframework header/link/Swift probes never run automatically.
+- **Remedy**:
+  - Add a cheap Linux job on push/PR: fmt check, clippy, `cargo test --lib`, `make check-features`.
+  - Add a macOS xcframework job on tags.
+  - Rotate the bench tag only after a green CI run.
 
-#### [ARC-046] Layering inversions: lower layers import `terminal`; Python concerns in `streaming` (recurring: prior ARC-026)
-- **Location**: `src/grid/mod.rs:207-208,224`; `src/graphics/mod.rs:399,433`; `src/streaming/protocol.rs:242-268`; `src/streaming/py_convert.rs`; `src/streaming/mux_factory.rs:22`; `src/lib.rs:83`.
-- **Remedy**: Move `GridSnapshot` to `grid/snapshot.rs` and `unix_millis` to `src/time.rs` (with re-exports). Move `py_convert` into `python_bindings`.
+#### [ARC-070] Wheel feature sets diverge across build paths (recurring: prior ARC-042)
+- **Location**: `pyproject.toml:74-77`; `.github/workflows/deployment.yml:269,324,330,375`; `Makefile:120-127`; the `ci.yml` build job.
+- **Remedy**: Make pyproject `[tool.maturin] features` the single source of truth, and add `make dev-fast`.
 
-#### [ARC-047] Streaming binary delivers events by 20 Hz polling through a double lock, in two copies (recurring: prior ARC-027)
-- **Location**: `src/bin/streaming_server/bootstrap.rs:218-226`, `:557-565`; `Arc<Mutex<PtySession>>` at `:38,69,86,96,315`.
-- **Remedy**: Register a `TerminalObserver` per session that feeds an mpsc channel, delete both loops, and use `Arc<PtySession>`.
+#### [ARC-071] `mux` still pulls `clap` (recurring: prior ARC-044)
+- **Location**: `Cargo.toml:255`; `scripts/check_features.sh:73-78` still prints "skip: mux still pulls clap".
+- **Remedy**: Add `mux-bin = ["mux","dep:clap"]` and set `required-features = ["mux-bin"]` on `[[bin]] par-mux`.
 
-#### [ARC-048] WS session prelude and loop written twice; accept loops duplicated (recurring: prior ARC-028)
-- **Location**: `src/streaming/server.rs:1784-1900` (`run_ws_session`) vs `:2078-2240` (`handle_axum_websocket`); accept loops at `:852` vs `:971`. The file is 3,383 lines.
-- **Remedy**: A `WsTransport` trait with one `run_session<T>`, then split `server.rs`.
+#### [ARC-072] `Cargo.lock` untracked while binaries, wheels and an xcframework ship (recurring: prior ARC-045)
+- **Location**: `.gitignore:4`.
+- **Remedy**: Commit the lockfile, and add `--locked` to the CI and release builds (after ARC-069).
 
-#### [ARC-049] Core library logs through a private file logger (recurring: prior ARC-029)
-- **Location**: `src/debug.rs:11,67,193-210`; `src/grid/scroll.rs:152,198` (`eprintln!`).
-- **Remedy**: Re-implement the `debug_*!` macros on the `log` facade.
+#### [ARC-073] Layering inversions persist (recurring: prior ARC-046)
+- **Location**: `src/grid/mod.rs:207-224`; `src/graphics/mod.rs:401,435`; `src/streaming/py_convert.rs`; `src/streaming/protocol.rs:281-790`.
 
-#### [ARC-050] Unfinished public surfaces still exported (recurring: prior ARC-030/031)
-- **Location**: `src/lib.rs:59` (`pub mod ffi;` unconditional); `src/streaming/mod.rs:82` (`pub use broadcaster::Broadcaster`, not deprecated).
-- **Remedy**: Put `ffi` behind an opt-in feature. Mark `Broadcaster` `#[deprecated(since = "0.54.0")]`.
+#### [ARC-074] Streamer delivers events by 20 Hz polling through `Arc<Mutex<PtySession>>`, in two copies (recurring: prior ARC-047)
+- **Location**: `src/bin/streaming_server/bootstrap.rs:218-220`, `:557-559`, `:38,69,86,96,315`.
+
+#### [ARC-075] WS session loop and accept loops duplicated; `server.rs` now 3,572 lines (recurring: prior ARC-048)
+- **Location**: `src/streaming/server.rs:1883` vs `:2187`; accept loops `:886` vs `:1014`.
+
+#### [ARC-076] Core library logs through a private file logger (recurring: prior ARC-049)
+- **Location**: `src/debug.rs:16,71,193-214`; `src/grid/scroll.rs:152,198`. The new receipt, ledger and wake-cadence logs deepen the dependency.
+
+#### [ARC-077] C symbols ship unprefixed inside every Python wheel; `Broadcaster` not deprecated (recurring: prior ARC-050)
+- **Location**: `src/lib.rs:59` (`pub mod ffi;` is unconditional); `src/streaming/mod.rs:81-82`.
+- **Description**: `nm` on `_native.cpython-314-darwin.so` shows 16 global `T _terminal_*` exports. They can collide with any other C terminal library loaded in the same process.
+- **Remedy**:
+  - Gate `ffi` behind an `ffi` feature that only the xcframework build enables.
+  - Rename the exports to `ptec_*`, in the same ABI revision as ARC-063.
+  - Deprecate `Broadcaster`.
+
+#### [ARC-086] Pane metadata is a stringly-typed namespace re-parsed on every roster read
+- **Location**: `src/mux/pane.rs:124,317` (`HashMap<String,String>`); string-literal keys spread across `hooks.rs`, `scrape.rs`, `host_probe.rs` and `dispatch.rs`; JSON blobs re-parsed per roster read (`host_probe.rs:265-289`, `hooks.rs:760`).
+- **Remedy**: Replace the map with a typed `AgentClaim` struct on `MuxPane`. Do it after ARC-060 fixes the wire grammar.
+
+#### [ARC-087] FFI `extern "C"` functions have no `catch_unwind`
+- **Location**: `src/ffi.rs` (all `#[no_mangle]` functions).
+- **Description**: A panic inside `terminal_feed` aborts the host app. Under Rust 1.81+ this is deterministic, not UB, but the header does not document it.
+- **Remedy**: Document the abort in the header (DOC-071), or wrap each entry point in `catch_unwind` and return an error code.
 
 ### Security
 
-#### [SEC-109] Kitty zlib (`o=z`) decompression bomb; APC and chunk buffers unbounded
-- **Location**:
-  - `src/graphics/kitty.rs:548-560` (`decompress_zlib`: `read_to_end`, no limit), `:536-541`, `:505` (`data_chunks.push`, no cap)
-  - `src/terminal/apc_filter.rs:123-146` (`apc_buffer.push`, no cap)
-  - Reached from `src/terminal/mod.rs:2811-2839`
-  - `docs/SECURITY.md:895` wrongly claims zlib decompression is capped at 1 MiB; that cap is the streaming wire's `proto.rs:118-140` only
-- **Evidence**: A 695,776-byte APC carrying 512 MiB of zlib zeros raised peak RSS by 581 MB in 0.08 s before `decode_pixels` rejected it (throwaway in-memory `Terminal`).
-- **Impact**: Any program output (`cat`, SSH to a hostile host, a tailed log) can OOM the embedding process. In par-mux and the streamer, one pane takes down every session.
-- **Remedy**: Stream-decompress through `take(limit + 1)`, with `limit` set to the exact `s*v*{3,4}` when known, else `MAX_IMAGE_PIXELS * 4`. Cap total `data_chunks` bytes and `apc_buffer` length (64 MiB), aborting and resetting the parser on overflow. Correct SECURITY.md. Add a bomb regression test.
-
-#### [SEC-112] Kitty file-media gate is unreachable in two paths: single-session `StreamingServer` ignores `kitty_file_media`, and `PtyTerminal` has no setter (merges SEC-G + DOC-B gap)
-- **Location**: `src/streaming/server.rs:355-371` (`with_config` never calls `set_allow_file_media`, whereas the factory path does at `:590-594`); `src/python_bindings/streaming.rs:543-547`; `src/python_bindings/pty.rs` (no `set_allow_file_media`/`get_allow_file_media`).
-- **Impact**: An embedder that sets `kitty_file_media="off"` to harden a server keeps `temp_only`, silently. `PtyTerminal`, the class that runs untrusted programs, cannot change the mode.
-- **Remedy**: In `with_config`, apply `config.kitty_file_media` to the default terminal. Add `PtyTerminal.set_allow_file_media(mode)` / `get_allow_file_media()` (binding sync: `pty.rs`, `.pyi`, API_REFERENCE, Python test).
+#### [SEC-118] mux control socket: an unterminated line grows unbounded (recurring: prior SEC-110)
+- **Location**: `src/mux/server.rs:509-580`. The `MAX_CONTROL_LINE_BYTES` check (`:521-539`) runs only after `read_line` returns, and on a continuous stream with no newline it never returns. The recv-timeout arm (`:558-567`) keeps the partial line.
+- **Impact**: Any in-pane program can open `$PAR_MUX_SOCKET` (same uid) and stream bytes with no newline, OOMing the daemon and every session on it.
+- **Remedy**: Bound accumulation as it happens, with a `fill_buf` loop or `take(MAX_CONTROL_LINE_BYTES + 1)`. Close the connection past the budget. Also preserve split multibyte UTF-8 across timeout wakes.
 
 ### Code Quality
 
-#### [QA-130] Read-only `PtySession` getters take the terminal *write* lock
-- **Area**: Code Quality (performance / contention) — downgraded from High by orchestrator verification: the Python surface mostly uses read locks already
-- **Location**: `src/pty_session.rs`:
-  - `content` 1369, `export_text` 1381, `export_styled` 1393, `screenshot` 1414, `screenshot_to_file` 1437, `cursor_position` 1443, `size` 1450, `get_line` 1459, `scrollback` 1467, `scrollback_len` 1473, `bell_count` 1550.
-  - The file has 15 `self.terminal.write()` sites and 3 `read()` sites.
-- **Description**: Each getter calls a `&self` Terminal method under `parking_lot::RwLock::write()`. That defeats ARC-009's read concurrency (45af083). The Python `PtyTerminal` binding mostly bypasses them via `term_ref()` (a read lock, `src/python_bindings/pty.rs:33-39`), but it calls `self.inner.size()` at `:211,722`, and Rust embedders (par-term, mux capture paths) call these getters directly. A screenshot holds the write lock for the whole render and stalls the reader thread's `process()`.
-- **Impact**: Rust-side readers serialize against each other and against PTY output. Output latency spikes during screenshots and exports. The module doc (line 5) claims the opposite.
-- **Remedy**: Change every getter that calls only `&self` methods to `.read()`. Add a concurrency test.
+#### [QA-153] PTY input drain busy-polls every 10 ms, retries `try_lock` forever, and does not own all writes (merges ARC-066)
+- **Location**: `src/streaming/session.rs:363-497` (`try_recv` + `sleep(DRAIN_POLL)` loop about `:411-420`; `try_lock` retry about `:440-445`); bypass writers: `src/pty_session.rs:1067-1087` (`PtySession::write` locks the same mutex), `src/python_bindings/streaming.rs:541-551`.
+- **Description**:
+  - e818a37 adopted polling for a stall. 6828c63 then traced that stall to the test itself holding the writer guard.
+  - Each session's thread wakes 100 times a second while idle and adds up to 10 ms of keystroke latency.
+  - A wedged writer becomes a silent infinite spin.
+  - Python `PtyTerminal.write()` on a streamed PTY bypasses the queue, which is the same reorder race 6828c63 fixed only in the test.
+- **Remedy**:
+  - Switch to `recv_timeout(~250 ms)` for shutdown checks, plus `parking_lot::Mutex::try_lock_for` with a logged timeout.
+  - Make the queue the only route to the writer while a session is attached.
+  - Land this after QA-161.
 
-#### [QA-133] Streamer `main` (CC 37, 305 lines) and `handle_csi_report` (CC 54, 240 lines) still oversized; `run_mux_mode` re-implements `serve_until_ctrl_c` (recurring: prior QA-114/ARC-038; merges ARC-P)
-- **Location**: `src/bin/streaming_server/main.rs:168-473`, `:97-143` vs `:588`; `src/terminal/sequences/csi/report.rs:7-247`.
-- **Remedy**: Route `run_mux_mode` through `serve_until_ctrl_c`. Extract `bootstrap::build_config(&args)`. Split `handle_csi_report` by final byte.
+#### [QA-154] Input on a writer-less session closes the WebSocket with no reason; the frontend reconnects in a loop
+- **Location**: `src/streaming/server.rs:1286-1316`, `:1964-1973`, `:2296-2304`; `src/bin/streaming_server/main.rs:344-354,446` (macro mode never attaches a writer, and `default_read_only: false` at `:265`); `src/python_bindings/streaming.rs:540-552`; `web-terminal-frontend/components/Terminal.tsx:744,789-795,811-823`; `web-terminal-frontend/lib/terminal-connection.ts:157-167`.
+- **Description**: Since beffc93, each keystroke, mouse move while tracking, or window focus change on a macro-mode or pre-spawn session disconnects the client. The frontend then reconnects immediately.
+- **Remedy**:
+  - Treat writer-less sessions as read-only: drop and count, but do not close.
+  - Exclude Mouse and FocusChange from the close rule.
+  - Set `default_read_only = true` in macro mode.
+  - If closing is kept, send a shutdown reason the frontend maps to no-retry.
 
-#### [QA-134] Client-registration block copied four times in mux `handle_client`
-- **Location**: `src/mux/server.rs:507-515`, `:544-552`, `:582-590`, `:604-612`. `handle_client` is 193 lines, CC 37, and the #1 hotspot (score 851).
-- **Remedy**: An `ensure_registered` helper, plus extract `read_control_line(...) -> LineRead`.
+#### [QA-155] Host probe `run_git` reads stdout only after exit (pipe deadlock) and daemon shutdown joins the sweep
+- **Location**: `src/mux/host_probe.rs:136-178` (`run_git`), `:118-131` (`git_dirty` uses `ls-files --others --directory`), `:35,39` (the timeouts), `:301-329` (worker); `src/mux/server.rs:362-365` (join).
+- **Description**:
+  - An untracked listing larger than the pipe buffer blocks git. It is killed at 5 s, and `git_dirty` then returns `None`.
+  - The deadline is checked only between panes, so `--stop` can block for about 25 s.
+- **Remedy**:
+  - Drain stdout while polling, or stop at the first byte for the dirty check.
+  - Check the shutdown flag before each git invocation, and correct the worker doc.
+  - Land after SEC-115, which rewrites the same function.
 
-#### [QA-135] Blocking lock + write inside tokio tasks (recurring: prior QA-119, extended)
-- **Location**: `src/streaming/mux_factory.rs:326-335` (resize task: sync `writer.lock()` + `writeln!`/`flush`); `src/bin/streaming_server/main.rs:618-636` (the `--command` initial-command task: map read lock → session mutex → writer mutex → blocking `write_all`, after a 1 s sleep, bypassing the serialized input path).
-- **Remedy**: Resize writes via `spawn_blocking` or a per-link writer thread. Route the initial command through `StreamSessionState::enqueue_pty_input`.
+#### [QA-156] A future-dated `sampled_at_unix_ms` pins a pane's telemetry forever
+- **Location**: `src/mux/hooks.rs:567` (`parse_telemetry_object` accepts any `u64`), the freshness check about `:525`, the backward-step drop about `:528`, and `fresh_telemetry_b64` about `:758-775`.
+- **Remedy**:
+  - Reply with an error when `sampled_at > now + 5 min`.
+  - Add a test that sends a future timestamp followed by a valid one.
 
-#### [QA-136] `unsafe` blocks without SAFETY comments (recurring: prior QA-116)
-- **Location**: `src/mux/foreground.rs:245,285,346,360`; `src/mux/client.rs:404`; `src/mux/pane.rs:666`; `src/mux/tree.rs:1456`; `src/bin/par_mux/main.rs:293,308,349,362`; `src/bin/streaming_server/cli.rs:22`; `src/ffi.rs` (20 sites, 1 comment).
-- **Remedy**: Add SAFETY comments and enable `clippy::undocumented_unsafe_blocks`.
+#### [QA-157] Windows `TOKEN_USER` view is a misaligned reference into a `Vec<u8>` (UB in the named-pipe identity check)
+- **Location**: `src/mux/ipc.rs:188-212` (casts at `:207-208`), `:215-240` (`token_user_buffer` returns `Vec<u8>`).
+- **Remedy**: Allocate a `Vec<u64>` of `needed.div_ceil(8)` elements, or copy the header with `ptr::read_unaligned`. Verify on the Windows VM.
 
-#### [QA-137] Unneeded `unsafe impl Send/Sync` on Python observers (recurring: prior QA-117)
-- **Location**: `src/python_bindings/observer.rs:447-448`, `:487-488`.
-- **Remedy**: Delete them. `Py<PyAny>` is already `Send + Sync`.
+#### [QA-158] ENH-023 geometry mirror goes stale when the terminal is mutated through the shared lock
+- **Location**:
+  - Publish sites in `src/pty_session.rs`: `:243`, `:1001`, `:1115`, `:1204`, `:1415`. The `terminal()` accessor at `:1370` hands out the raw lock.
+  - `src/python_bindings/pty.rs:41-43` (`term_mut`, used by 67 macro methods, for example `flush_synchronized_updates`).
+  - `src/mux/dispatch.rs:559,737` (`terminal().write().process(note)`).
+- **Impact**: `cursor_position()` returns a stale position after Python-side processing or mux notes, until the next PTY output. par-term's renderer reads it (`par-term-terminal/src/terminal/mod.rs:524-527`).
+- **Remedy**:
+  - Return a write guard that publishes the mirror on `Drop`.
+  - Route mux note writes through `with_terminal_mut`.
+  - Add a test.
 
-#### [QA-138] No stub drift check (recurring: prior QA-120)
-- **Location**: `Makefile:303-310`; `python/par_term_emu_core_rust/_native.pyi`.
-- **Remedy**: After a streaming-enabled build, `make stubs && git diff --exit-code python/par_term_emu_core_rust/_native.pyi`.
+#### [QA-159] Tests mutate process environment while other tests run in parallel
+- **Location**: `src/mux/client.rs:583-592,623-624`; `src/pty_session.rs:3302,3345,3364,3436`; `tests/mux_nested.rs:348-355`; `tests/mux_reattach.rs:306`; `src/debug.rs:401-407`.
+- **Remedy**:
+  - Inject paths instead of reading env (for example a `connect_or_spawn_at` seam).
+  - Pass env through `spawn_with_env`.
+  - Move whatever remains into a single-test integration binary.
+  - This blocks any move to edition 2024.
 
-#### [QA-139] Large files keep growing (recurring: prior QA-121)
-- **Location**: `src/streaming/server.rs` (3,383), `src/graphics/kitty.rs` (3,538), `src/mux/server.rs` (2,887), `src/terminal/mod.rs` (3,642), `src/pty_session.rs` (3,307; `start_reader_thread` 763-1006, `spawn_internal` 479-710).
-- **Remedy**: Move the reader thread into `pty_session/reader.rs`. Run `propose_decomposition` on `kitty.rs`.
+#### [QA-160] Trigger actions are capped inconsistently; highlights, bookmarks and Notify/MarkLine/SplitPane results grow without bound
+- **Location**: `src/terminal/trigger.rs:253-262` (highlight push, `duration_ms = 0` never expires), `:262-292`, `:327-345`; `src/terminal/semantic_snapshot.rs:905-917` (`add_bookmark`); the cap at `src/terminal/mod.rs:394,404` applies only to RunCommand, PlaySound and SendText.
+- **Remedy**:
+  - Route every variant through one `push_action_result` helper that enforces `max_action_results`.
+  - Cap highlights and bookmarks with oldest-first eviction.
+  - Prune expired highlights during scans.
 
-#### [QA-140] Fixed-sleep synchronization in Rust PTY tests
-- **Location**: The `src/pty_session.rs` test module: lines 1805, 1845, 2174, 2227, 2274, 2303, 2602, 2610, 2626, 2702 (≈101 sleep sites across tests).
-- **Remedy**: Deadline-bounded polling helpers.
+#### [QA-161] Blocking lock and I/O inside tokio tasks; `--command` write bypasses the ordered queue (recurring: prior QA-135)
+- **Location**: `src/streaming/mux_factory.rs:329-343` (the resize loop takes the `LocalStream` mutex in `tokio::spawn`); `src/bin/streaming_server/main.rs:618-636`.
+- **Remedy**:
+  - Move the resize writes to `spawn_blocking`.
+  - Send the initial command through `get_session("default")` and `enqueue_pty_input`.
+
+#### [QA-162] Client-registration block still copied four times; `handle_client` CC 37 → 41 (recurring: prior QA-134)
+- **Location**: `src/mux/server.rs:523-530`, `:581-588`, `:626-633`, `:675-682`; `handle_client` at `:444` is hotspot #1 (score 1271).
+- **Remedy**: Add an `ensure_registered` helper and extract `read_control_line`. Batch with SEC-118 and QA-170.
+
+#### [QA-163] Streamer `main` (CC 37) and `handle_csi_report` (CC 54) oversized; `run_mux_mode` re-implements `serve_until_ctrl_c` (recurring: prior QA-133)
+- **Location**: `src/bin/streaming_server/main.rs:96-143` vs `:587`, `main` at `:167`; `src/terminal/sequences/csi/report.rs:7`.
+
+#### [QA-164] `unsafe` blocks without SAFETY comments, worse in `ffi.rs` (recurring: prior QA-136)
+- **Location**: clippy `undocumented_unsafe_blocks` reports 34 blocks plus 1 impl.
+  - `src/ffi.rs`: 27 blocks plus `unsafe impl Sync` at `:253`.
+  - `src/mux/foreground.rs`: 4. `src/mux/pane.rs`: 1. `src/mux/host_probe.rs:69`: 1. `src/mux/client.rs`: 1.
+  - Plus `src/bin/par_mux/main.rs` (4), `src/bin/streaming_server/cli.rs` (1), `src/mux/tree.rs` (1), and the Windows blocks in `src/mux/ipc.rs`.
+- **Remedy**: Add SAFETY comments and `#![warn(clippy::undocumented_unsafe_blocks)]` in `lib.rs` and both binaries.
+
+#### [QA-165] Large files keep growing (recurring: prior QA-139; merges ARC-067 size half)
+- **Location**:
+  - `src/mux/hooks.rs`: 1361 → 2108 lines.
+  - `src/streaming/server.rs`: 3383 → 3572. `src/mux/server.rs`: 2887 → 3053. `src/pty_session.rs`: 3307 → 3439.
+  - New files: `src/ffi.rs` (1008), `src/mux/host_probe.rs` (495), `src/keyboard.rs` (474).
+- **Remedy**: Split `hooks.rs` into `hooks/{report,telemetry,release}.rs` and move the PTY reader into `pty_session/reader.rs`. Do this last, after the behavioral fixes in those files.
+
+#### [QA-166] Fixed sleeps stand in for synchronization in PTY tests (recurring: prior QA-140)
+- **Location** (`src/pty_session.rs` tests): `:1888`, `:2257`, `:2357`, `:2386` (trailing sleeps that assert nothing), `:2685`, `:2693`, `:2709` (the generation test), `:2785`.
+- **Remedy**: Use deadline polling and delete the trailing sleeps.
+
+#### [QA-167] Nothing checks the stub against the built module (recurring: prior QA-138)
+- **Location**: `Makefile:300-318` (`stub-check` imports, runs pyright, and compares against API_REFERENCE, but never regenerates and diffs).
+- **Remedy**: Add `stub-drift`: `make dev-streaming && make stubs && git diff --exit-code python/par_term_emu_core_rust/_native.pyi`.
 
 ### Documentation
 
-#### [DOC-041] `kitty_file_media` missing from the StreamingConfig reference; the streamer binary hardcodes it
-- **Location**: `docs/API_REFERENCE.md:2117-2153`; `docs/STREAMING.md:480-500`; `src/bin/streaming_server/main.rs:283`.
-- **Remedy**: Document the parameter and property (`off`/`temp_only`/`all`, default `temp_only`). Note that the binary always runs `temp_only` (or document the flag if ENH-021 lands).
+#### [DOC-070] Other FFI references contradict the shipped surface
+- **Location**: `docs/RUST_USAGE.md:20,577-603` ("C FFI (Future)", with a proposed `terminal_new`); `docs/API_REFERENCE.md:2462-2535` (payload described as "JSON-encoded" and the parameter named `event_json`, but it is actually Debug text; title listed under environment events; the SharedState table omits `scrollback_lines`/`total_lines`); `README.md:118`.
+- **Remedy**:
+  - Replace the RUST_USAGE section with a pointer to FFI_GUIDE and the header.
+  - Fix the API_REFERENCE wording, the field list, and the link.
+  - Update README:118.
 
-#### [DOC-042] Kitty `t=f` example and protocol tables ignore the 0.53.0 default gate
-- **Location**: `docs/ADVANCED_FEATURES.md:1241-1255,1278`; `docs/VT_SEQUENCES.md:511-512`; `docs/VT_TECHNICAL_REFERENCE.md:1137-1138`.
-- **Remedy**: Add `set_allow_file_media("all")` plus a security callout. Annotate both tables.
+#### [DOC-071] `ffi.rs` / `terminal_core.h` contract comments inaccurate or incomplete
+- **Location**: `src/ffi.rs:404-408,461-469,514-520,550-557,587-592,662-672`; `include/terminal_core.h:9-15,203-235`.
+- **Description**:
+  - `terminal_create` returns null on a zero dimension, not on allocation failure (OOM aborts).
+  - `encode_key`, `read_row` and `read_scrollback_row` return 0 when `out` is NULL. The header's "retry larger" advice and the `dirty_ranges` NULL-sizing idiom do not carry over to them.
+  - The `terminal_dirty_ranges` Safety line is a garbled run-on sentence.
+  - Rows and scrollback read the active grid, and the alt grid has 0 scrollback. This is not documented.
+  - There is no threading note and no panic/abort note (ARC-087).
+- **Remedy**: Correct each point in both files.
 
-#### [DOC-043] 0.53.0 CHANGELOG entry does not flag a Rust-embedder break and has no Deprecated section
-- **Location**: `CHANGELOG.md:8-48`; `README.md:22`.
-- **Description**: The screenshot gate removes `screenshot::*` from `default-features = false` builds that don't name `screenshot`/`sim`. The deprecated forwarders are not listed. `TerminalBenchmarks`, `make test-pty` and the ENH-016 bench gate are not mentioned.
-- **Remedy**: Add a Breaking (Rust embedders) bullet, a `### Deprecated` section with a removal target, and a mirror note in README What's New.
+#### [DOC-072] MACROS.md Rust examples call a removed method and deprecated forwarders
+- **Location**: `docs/MACROS.md:813` (`terminal.screenshot()`, removed in 0.55.0), `:294`, `:699-732` (`#[doc(hidden)]` forwarders slated for removal in 0.56.0).
+- **Remedy**: Use `screenshot::render_terminal(&terminal, config, 0)` and `MacroEngine::*(&mut terminal, …)` (`src/terminal/macros.rs:17-143`).
 
-#### [DOC-044] Feature tables omit `screenshot` and misdescribe `sim`/`full` (recurring: prior DOC-026, worse)
-- **Location**: `docs/RUST_USAGE.md:462-476`; `docs/ARCHITECTURE.md:964-1020`; `README.md:246-251`.
-- **Remedy**: Add the `screenshot` row. Fix the `python`/`python-test`/`sim`/`full` rows (and the `mux-bin` row after ARC-044). Replace ARCHITECTURE's verbatim `[features]` block with a link.
+#### [DOC-073] `kitty_file_media` missing from the StreamingConfig reference (recurring: prior DOC-041, partial)
+- **Location**: `docs/API_REFERENCE.md:2143-2159,2163-2180`; `docs/STREAMING.md:482-502`.
+- **Remedy**:
+  - Add the constructor parameter `kitty_file_media: str = "temp_only"`, the property, and a table row.
+  - Add a note that the streamer binary defaults `input_rate_limit` to 1 MiB/s, while the library `StreamingConfig` defaults to 0.
 
-#### [DOC-045] MATURIN_BEST_PRACTICES.md describes a two-generations-old configuration
-- **Location**: `docs/MATURIN_BEST_PRACTICES.md:110-125,128,136-140,238-243` (0.45.0 versions, `maturin>=1.13.3`, no streaming feature).
-- **Remedy**: Point at the real files and describe the ARC-042 single-source feature config.
+#### [DOC-074] SECURITY.md drift: CLI default, caps-table completeness, telemetry, host probe
+- **Location**: `docs/SECURITY.md:890` (says the `--input-rate-limit` default is 0, but it is 1048576), `:901,995` (hardcoded 16 MiB and 4096 despite the claim at :1091 that every cap is in the table), `:917-922` (the mux section is "as of 0.52.0"), `:1023-1052` (no telemetry validation), and no host-probe threat model.
+- **Constants without `/// cap:`**: `WS_MAX_MESSAGE_SIZE`/`WS_MAX_FRAME_SIZE` (`src/streaming/server.rs:45-46`), `CLIENT_QUEUE_DEPTH` (`src/mux/server.rs:77`), `INPUT_QUEUE_MESSAGES` (`src/streaming/session.rs:26`), `MAX_GIT_BRANCH_LEN` (`src/mux/host_probe.rs:42`), and the telemetry model/effort limits (`src/mux/hooks.rs:609-610`).
+- **Remedy**:
+  - Fix :890.
+  - Add `/// cap:` to the listed constants and run `make caps-table`.
+  - Add a telemetry bullet list and a host-probe subsection describing the SEC-115 mitigation. Land after SEC-115.
 
-#### [DOC-046] `cargo install par-term-emu-core-rust --features streaming-bin` likely fails (UNVERIFIED)
-- **Location**: `README.md:277`; `QUICKSTART.md:160`.
-- **Description**: Without `--no-default-features`, this enables `python` (`pyo3/extension-module`), which BUILDING.md:5 says fails at link. Every other doc and CI (`deployment.yml:181`) use `--no-default-features`. **Not run** (multi-minute install); verify before editing.
-- **Remedy**: `cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer`, plus the `par-mux` equivalent (`mux-bin` after ARC-044).
+#### [DOC-075] Feature tables omit or misdescribe `screenshot`/`mux` (recurring: prior DOC-044)
+- **Location**: `docs/RUST_USAGE.md:463-478`; `docs/ARCHITECTURE.md:955-1020`; `docs/BUILDING.md:70-83`; `CLAUDE.md:127` (says `Terminal::screenshot*` are deprecated forwarders, but they were removed in 0.55.0) and `:132` (the `mux` row omits `clap`/`windows-sys`).
+- **Remedy**: Add `screenshot` rows, correct the Includes columns, and replace ARCHITECTURE's verbatim `[features]` block with a link. Fix CLAUDE.md:127 and :132.
 
-#### [DOC-047] README "Running Tests" commands fail (recurring: prior DOC-023)
-- **Location**: `README.md:641-649`. **Remedy**: `make test`/`test-rust`/`test-python`/`test-pty`, and link BUILDING.md.
+#### [DOC-076] CLAUDE.md and CONTRIBUTING.md omit the FFI/iOS artifacts and their sync rules
+- **Location**: `CLAUDE.md:114-118,143-157`, and its "Files that must stay in sync" list; `CONTRIBUTING.md:105-119`.
+- **Remedy**:
+  - Add the `par-mux` binary and the staticlib/xcframework artifacts.
+  - Add `src/ffi.rs`, `include/terminal_core.h`, `src/keyboard.rs` and `scripts/build-xcframework.sh` to the layout.
+  - Add an "FFI sync" rule: ffi.rs ↔ header, `_Static_assert`s, layout tests and FFI_GUIDE.
 
-#### [DOC-048] README web-frontend build uses npm and port 8030 (recurring: prior DOC-024)
-- **Location**: `README.md:596-607`. **Remedy**: `make web-install`/`web-dev`/`web-build-static` (bun, port 3000).
+#### [DOC-077] ARCHITECTURE.md stale for new modules and extracted services (recurring: prior DOC-057, remainder)
+- **Location**: `docs/ARCHITECTURE.md:236,257-271,276-278,813,949+`.
+- **Missing**: `keyboard.rs`, `streaming/mux_factory.rs`, and `mux/host_probe.rs`/`foreground.rs`/`win_resume.rs`, plus the MacroEngine/TriggerEngine/TerminalBenchmarks services.
+- **Stale**: the Mermaid node `Terminal.screenshot` (the method was removed), and there is no xcframework note.
 
-#### [DOC-049] Dependency snippets pinned to `0.50` (recurring: prior DOC-025)
-- **Location**: `README.md:248-251`; `docs/RUST_USAGE.md:82,92,100,102,111,114,313`. **Remedy**: `0.53`, or `cargo add` forms.
+#### [DOC-078] README What's New lost 0.53.0; duplicates 0.54.0 and 0.50.0 (recurring: prior DOC-061)
+- **Location**: `README.md:16-76,24,26,32-49,73`.
+- **Remedy**:
+  - Keep one paragraph each for the latest 2–3 releases, and restore a 0.53.0 line (the file-media security change).
+  - Drop the older sections in favor of CHANGELOG.
 
-#### [DOC-050] Inherited-env drop list shows 6 of 12 (recurring: prior DOC-027)
-- **Location**: `docs/SECURITY.md:261-262,320`; `docs/CROSS_PLATFORM.md:82-83`; source of truth `src/pty_session.rs:575-590`.
-- **Remedy**: List all 12 plus the `PAR_MUX_*` prefix rule.
+#### [DOC-079] Kitty `t=f` examples and protocol tables ignore the default file-media gate (recurring: prior DOC-042)
+- **Location**: `docs/ADVANCED_FEATURES.md:1244-1248,1278`; `docs/VT_SEQUENCES.md:511`; `docs/VT_TECHNICAL_REFERENCE.md:1137`.
 
-#### [DOC-051] CONFIG_REFERENCE says no environment variables are read (recurring: prior DOC-028)
-- **Location**: `docs/CONFIG_REFERENCE.md:825-833`; `--force-web-download`/`PAR_TERM_FORCE_WEB_DOWNLOAD` (`cli.rs:212`) absent from STREAMING.md.
-- **Remedy**: An env-var table, and document the flag.
+#### [DOC-080] STREAMING.md does not describe the new input-drop and connection-close behavior
+- **Location**: `docs/STREAMING.md:1753-1790,1874-1893,1541-1576`.
+- **Remedy**: Document `dropped_messages`, the close-on-writer-less rule (as QA-154 finalizes it), and add a troubleshooting entry.
 
-#### [DOC-052] Stub has no docstrings and mostly `Any` (recurring: prior DOC-029)
-- **Location**: `python/par_term_emu_core_rust/_native.pyi` (1,335 defs, 1,002 `-> Any`, 0 docstrings); `scripts/generate_stubs.py`.
-- **Remedy**: Emit `__doc__` and parameter annotations from `text_signature`.
+#### [DOC-081] Dependency snippets pinned to `0.50` (recurring: prior DOC-049)
+- **Location**: `README.md:252-255`; `docs/RUST_USAGE.md:82,92,100,102,111,114,315`.
 
-#### [DOC-053] Binding docstrings lack Example sections (recurring: prior DOC-030)
-- **Location**: `src/python_bindings/terminal/{bookmark,metrics,notification,scrollback,search,selection,text}_api.rs`; `pty.rs` (7/102); `streaming.rs` (4/77).
-- **Remedy**: Add Example sections per CLAUDE.md.
+#### [DOC-082] README "Running Tests" commands fail (recurring: prior DOC-047)
+- **Location**: `README.md:663-672`.
+- **Remedy**: Use the `make test*` targets.
 
-#### [DOC-054] Mux design decisions cited to an out-of-repo document (recurring: prior DOC-031)
-- **Location**: `docs/par-mux.md:11`; 29 `par-mux.md` citations in `src/` and `Cargo.toml`.
-- **Remedy**: Vendor a one-line-per-D-number decision record into `docs/`.
+#### [DOC-083] README web-frontend build uses npm and port 8030 (recurring: prior DOC-048)
+- **Location**: `README.md:618-632`.
+- **Remedy**: Use `make web-install`, `make web-dev` (port 3000) and `make web-build-static`.
 
-#### [DOC-055] The "kept for one release" legacy-event promise has lapsed (recurring: prior DOC-032)
-- **Location**: `docs/API_REFERENCE.md:922,927`; `src/python_bindings/terminal/mod.rs:1057,1224-1225`; `python/par_term_emu_core_rust/observers.py:14,39,56`.
-- **Description**: `poll_events_legacy()` shipped in 0.50.0 "for one release" and is still present with no `DeprecationWarning`. The docs say "pre-0.51". Observer types are still `dict[str, str]`.
-- **Remedy**: Emit a `DeprecationWarning` now with a removal version. Fix the docs and type hints.
+#### [DOC-084] Inherited-env drop list shows 6 of 12 names (recurring: prior DOC-050)
+- **Location**: `docs/SECURITY.md:23,124,227,262-263,276,321`; `docs/CROSS_PLATFORM.md:82-83`. The source of truth is `src/pty_session.rs:624-640`.
+
+#### [DOC-085] CONFIG_REFERENCE says no environment variables are read (recurring: prior DOC-051)
+- **Location**: `docs/CONFIG_REFERENCE.md:825-833`; `docs/STREAMING.md:281-320`.
+- **Remedy**: Replace the claim with an env-var table.
+
+#### [DOC-086] MATURIN_BEST_PRACTICES.md describes an old configuration (recurring: prior DOC-045)
+- **Location**: `docs/MATURIN_BEST_PRACTICES.md:110-125,128,136-140`.
+
+#### [DOC-087] Stub has no docstrings and mostly `Any` (recurring: prior DOC-052)
+- **Location**: `python/par_term_emu_core_rust/_native.pyi` (0 docstrings, 1004 `-> Any`, 13 classes with a `*args/**kwargs` `__init__`); `scripts/generate_stubs.py`.
+
+#### [DOC-088] Binding docstrings lack Example sections (recurring: prior DOC-053)
+- **Location**: `src/python_bindings/terminal/{bookmark,metrics,notification,scrollback,search,selection,text,image}_api.rs`; `pty.rs` (7 of about 111 have them); `streaming.rs` (4 of about 82).
+
+#### [DOC-089] Mux design decisions cited to an out-of-repo document (recurring: prior DOC-054)
+- **Location**: `docs/par-mux.md:9-11`; `docs/MUX.md:7`.
+
+#### [DOC-090] The "kept for one release" legacy-event promise has lapsed (recurring: prior DOC-055)
+- **Location**: `docs/API_REFERENCE.md:922,927`.
+- **Remedy**: Name a removal version and emit a `DeprecationWarning`.
 
 ---
 
 ## 🔵 Low Priority / Improvements
 
 ### Architecture
-- **[ARC-051]** `checkall` runs the mutating `lint` target (`Makefile:266-275,312`: `clippy --fix`, `cargo fmt`, `ruff --fix`). Add `lint-check` and chain it instead. *(recurring: prior ARC-033)*
-- **[ARC-052]** `tokio` `test-util` is in `[dependencies]` (`Cargo.toml:88`). `serde_yaml_ng` is unconditional (`:82`, used only by `src/macros.rs`). *(recurring: prior ARC-034/035)*
-- **[ARC-053]** 16 `#[macro_export]` binding macros in `src/python_bindings/common.rs` leak into the rlib root. *(recurring: prior ARC-036)*
-- **[ARC-054]** Root clutter (merges DOC-Z): `debug/` ad-hoc scripts and `theme.css`. The root `AUDIT*.md` files are tracked and produce 13 of parsight's 30 broken-link rows. Move them to `docs/audits/` and `scripts/debug/`. Run last. *(recurring: prior ARC-037/DOC-038)*
-- **[ARC-055]** The shutdown save still captures under the tree lock: `src/mux/server.rs:202` → `persist.rs:711-724`. Use `collect_persist_capture()` under the lock and capture after it drops.
-- **[ARC-056]** Build stamp: `build.rs:51-75,125-148` never checks that the git toplevel equals `CARGO_MANIFEST_DIR`, so a vendored copy inside another repo gets the host repo's SHA. The `-dirty` suffix goes stale on source edits until HEAD moves.
-- **[ARC-057]** The mux fuzz targets never run in CI: `.github/workflows/fuzz.yml:18` and `make fuzz-all` (`Makefile:865`) list only the original four targets, while `fuzz/fuzz_targets/` has six (`mux_parse_command`, `mux_hook_report`). ENH-018 is incomplete.
+- **[ARC-078]** `checkall` runs the mutating `lint` target (`Makefile:273-276,328`). *(recurring: prior ARC-051)*
+- **[ARC-079]** `tokio` `test-util` is in `[dependencies]` (`Cargo.toml:88`), and `serde_yaml_ng` is unconditional (`:82`). *(recurring: prior ARC-052)*
+- **[ARC-080]** 17 `#[macro_export]` binding macros leak from `src/python_bindings/common.rs`. *(recurring: prior ARC-053)*
+- **[ARC-081]** Root clutter: `debug/`, `theme.css`, the audit files, and a 16-byte `AGENTS.md`. Run this last. *(recurring: prior ARC-054)*
+- **[ARC-082]** The shutdown save captures under the tree lock (`src/mux/server.rs:202-204`). *(recurring: prior ARC-055)*
+- **[ARC-083]** The build stamp does not check that the git toplevel matches the manifest dir (`build.rs:128-151`). *(recurring: prior ARC-056)*
+- **[ARC-084]** Mux fuzz targets are absent from `fuzz.yml:18` and `make fuzz-all` (`Makefile:893`). *(recurring: prior ARC-057)*
+- **[ARC-085]** `terminal_dirty_ranges` allocates two `Vec`s per call (`src/ffi.rs:471-500`). Covered by ENH-026.
+- **[ARC-088]** Per-consumer damage is destructive: a single `mark_clean` is shared by FFI and Python (`src/ffi.rs:507-511`, `src/python_bindings/terminal/mod.rs:1027-1028`), so two renderers steal each other's damage. Covered by ENH-025.
 
 ### Security
-- **[SEC-110]** The SEC-104 line cap doesn't trigger on a continuous unterminated stream. `BufRead::read_line` (`src/mux/server.rs:494-523`) only returns at a newline, EOF, or a 200 ms recv-timeout wake. The test (`tests/mux_daemon.rs:862-883`) sends a terminated line. The same loop drops a whole read when a timeout wake splits a multibyte UTF-8 character (lost `send-keys -l` data). Fix: a bounded `take()` read or a `fill_buf` loop. *(recurring: prior SEC-104; promoted to Phase 1, conflict file)*
-- **[SEC-111]** The `t=t` validate→open→delete sequence can be raced through a parent-directory swap. `src/graphics/kitty.rs:1063-1098` opens the uncanonicalized `path`, and `:1128-1134`/`:1011` delete through it. Open the canonical path, and check dev/inode before `remove_file`. *(promoted to Phase 1 with SEC-109, same file)*
-- **[SEC-113]** The Python debug log sits at a fixed temp path with no `O_NOFOLLOW`/`0600`: `python/par_term_emu_core_rust/debug.py:25,60`. Mirror `src/debug.rs:66-80`.
-- **[SEC-114]** `paste` 1.0.15 is unmaintained (RUSTSEC-2024-0436), transitive. Track it (and see ARC-045 for lock reproducibility). *(recurring: prior SEC-106)*
+- **[SEC-119]** The kitty `t=t` validate→open→delete sequence has a parent-dir swap TOCTOU (`src/graphics/kitty.rs:1068-1088,1003-1010`). Open the canonical path and check dev/inode before `remove_file`. *(recurring: prior SEC-111)*
+- **[SEC-120]** The Python debug log sits at a fixed shared-temp path with no `O_NOFOLLOW`/`0600` (`python/par_term_emu_core_rust/debug.py:25,60`). Mirror `src/debug.rs:76-80`. *(recurring: prior SEC-113)*
+- **[SEC-121]** `paste` 1.0.15 is unmaintained (RUSTSEC-2024-0436), a transitive dependency. Track it. `bun audit` and `pip-audit` are clean. *(recurring: prior SEC-114)*
+- **[SEC-123]** `summarize_line` logs the first 120 bytes of every control command, including `send-keys` payloads, at `DEBUG_LEVEL≥3` (`src/mux/server.rs:636-642,715-727`). Log the length only for `send-keys`, and document that the debug log records input.
+- **[SEC-124]** The host probe and shutdown can hang on a wedged filesystem. `statvfs` and git have no interruption path, and the shutdown join is unconditional (`src/mux/host_probe.rs:69-84`, `src/mux/server.rs:365`). Bound the join with a timeout.
 
 ### Code Quality
-- **[QA-141]** The `pty_writer`/`pty_input_tx` `std::sync::RwLock` wrappers swallow poisoning via `.ok()` (`src/streaming/session.rs:84,89`). Switch to `parking_lot`. *(recurring: prior QA-118; batch with QA-131)*
-- **[QA-142]** Dead frontend component `web-terminal-frontend/components/TerminalDebug.tsx` (286 lines, zero importers) with an ungated `console.log` at `:87`.
-- **[QA-143]** `too_many_arguments` suppressions went from 18 to 21. QA-114 added three in `src/streaming/server.rs` (`:1251`, `:1471`, `:1617`). Introduce a `ClientCtx`. *(recurring: prior QA-125)*
-- **[QA-144]** Mouse `event_type: String` (`src/streaming/protocol.rs:541,812,1393,1609`) is compared as `!= "release"`, so a typo silently reads as a press. Use an enum. *(recurring: prior QA-124)*
-- **[QA-145]** Near-duplicates: `sample_half_block` (`graphics/mod.rs:519` vs `python_bindings/types/graphics.rs:167`), `resize_pixels` (`python_bindings/terminal/mod.rs:142` vs `pty.rs:187`), the `create_argv_pane` pair plus `create_pane` (`mux/pane.rs:426,613,634`), the underline renderers (`screenshot/renderer.rs:831-910`), and the `enums.rs` From pairs. *(recurring: prior QA-126)*
-- **[QA-146]** `src/ffi.rs:142,207-208`: a separate `cell_count` and `as_mut_ptr` + `mem::forget`. Use `Box::into_raw` with the length from `len()`. *(recurring: prior QA-123)*
-- **[QA-147]** Production unwraps: `src/streaming/server.rs:2408` (`value.parse().unwrap()`) and `src/terminal/file_transfer.rs:165`. *(recurring: prior QA-128)*
-- **[QA-148]** Weak standalone `is not None` asserts: 19 in `tests/test_terminal.py`, 9 in `tests/test_terminal_bindings.py`. *(recurring: prior QA-127)*
-- **[QA-149]** Inconsistent deprecation: `Terminal::screenshot*` are deprecated forwarders, but `PtySession::screenshot`/`screenshot_to_file` (`src/pty_session.rs:1409,1431`) are not.
+- **[QA-168]** Read-only Python `PtyTerminal` methods take the write lock (`src/python_bindings/pty.rs:708,840,865,934,944,954,964`). The comments at `:299-301` misstate where `size`/`cursor_position` come from. *(recurring: prior QA-130, narrowed)*
+- **[QA-169]** The `dirty_row_count` stat reports the bitset word count (`src/terminal/metrics.rs:308`), and placeholders at `:301,303` read "Should be calculated". The test at `terminal_tests.rs:2767` asserts `> 0`.
+- **[QA-170]** Stall-hunt diagnostics were left in hot paths: a per-wake `debug_log!` (`src/mux/server.rs:540-567,610-622`), per-chunk drain logs, and card-narrative comments (`src/streaming/session.rs:374-410`, `src/streaming/mux_factory.rs:760-775`), including one false claim (`session.rs` about :437-438).
+- **[QA-171]** FFI copy loops are duplicated (`src/ffi.rs:519-550` and `:556-587`), and the MouseMode map appears twice (`:115-121`, `:638-644`).
+- **[QA-172]** The kitty key encoder truncates codepoints above U+FFFF (`src/keyboard.rs:273-277`, `c as u16`).
+- **[QA-173]** `unsafe impl Send/Sync` on the Python observers is unnecessary (`src/python_bindings/observer.rs:447-448,487-488`). *(recurring: prior QA-137)*
+- **[QA-174]** Dead `web-terminal-frontend/components/TerminalDebug.tsx` (286 lines, no importers) has an ungated `console.log`. *(recurring: prior QA-142)*
+- **[QA-175]** 21 `too_many_arguments` suppressions (`src/streaming/server.rs:1273,1548,1715,1820,2090`). Introduce a `ClientCtx` after QA-154. *(recurring: prior QA-143)*
+- **[QA-176]** Mouse `event_type` is a `String` compared with `!= "release"` (`src/streaming/protocol.rs:541,812,1393,1609`). *(recurring: prior QA-144)*
+- **[QA-177]** Near-duplicates persist: `sample_half_block`, `resize_pixels`, `create_argv_pane`×2 + `create_pane`, the underline renderers, and the `enums.rs` From pairs. New pairs: `export_visible_screen_styled`/`_lines`, `encode_server_message`/`encode_client_message`, `erase_rectangle`/`_unconditional`. *(recurring: prior QA-145)*
+- **[QA-178]** `SharedState` keeps a separate `cell_count` and uses `as_mut_ptr` + `mem::forget` (`src/ffi.rs:142,162-165`). *(recurring: prior QA-146)*
+- **[QA-179]** Production unwraps remain: `src/streaming/server.rs:2526` and `src/terminal/file_transfer.rs:166`. *(recurring: prior QA-147)*
+- **[QA-180]** Weak `assert … is not None` checks: 25 in `tests/test_terminal.py`, 11 in `tests/test_terminal_bindings.py`. *(recurring: prior QA-148)*
+- **[QA-181]** Dead code:
+  - The DECSERA `'{'` arm in `csi/window.rs` (about :101-121) is unreachable because `csi/mod.rs:106-110` routes elsewhere. That leaves `Grid::erase_rectangle` reachable only from dead code.
+  - `GraphicsStore::with_limits` (`src/graphics/mod.rs:599`) has 0 callers.
+  - `python/par_term_emu_core_rust/debug.py:149-224` helpers are unreferenced.
+  - `PtySession::fire_output_callback` (`src/pty_session.rs:290`) is public API. Check par-term before removing it.
 
 ### Documentation
-- **[DOC-056]** `CONTRIBUTING.md:75` says "Four targets" (there are six). The command at `docs/MUX.md:379-381` lacks `+nightly` and `--`.
-- **[DOC-057]** The `Terminal` struct listing in `docs/ARCHITECTURE.md:344-410` is stale ("~30" sub-structs, actually 34). There is no "Extracted services" paragraph, and the Mermaid diagram at `:813` still starts at `Terminal.screenshot`.
-- **[DOC-058]** The replay pseudo-code at `docs/ADVANCED_FEATURES.md:2436-2440` uses nonexistent `begin_replay_session()`/`current_state()`. The real API is `ReplaySession::new(&manager)`/`current_frame()` (`src/terminal/replay.rs:94`).
-- **[DOC-059]** Broken intra-doc links: `docs/API_REFERENCE.md:858` (needs `../CHANGELOG.md#...` and the right date); the anchors at `docs/SECURITY.md:40-41`. *(recurring: prior DOC-033)*
-- **[DOC-060]** Code fences without language tags (VT_TECHNICAL_REFERENCE 15, ADVANCED_FEATURES 6, MACROS 5, STREAMING 3, TESTING_KITTY_ANIMATIONS 3, and one each in CONFIG_REFERENCE, GRAPHICS_TESTING and MATURIN_BEST_PRACTICES). *(recurring: prior DOC-034)*
-- **[DOC-061]** The README What's New backlog (`README.md:16-73`) sits ahead of Features. `:67-73` cites the dead `python_bindings/types.rs`. *(recurring: prior DOC-035)*
-- **[DOC-062]** CHANGELOG compare links stop at 0.37.0 (`CHANGELOG.md:1713+`). *(recurring: prior DOC-036)*
-- **[DOC-063]** Missing `//!`/item docs: `src/screenshot/mod.rs:1`, `grid/scroll.rs:259`, `mux/ipc.rs:157`, `python_bindings/observer.rs:437,477`. There is no `#![warn(missing_docs)]`. *(recurring: prior DOC-037)*
+- **[DOC-091]** `docs/MUX.md:54` bare-`par-mux` line should mention the `$PAR_MUX_SOCKET` fallback (1367050), and `:413-414` fuzz commands need `-rss_limit_mb=512`. *(recurring: prior DOC-056)*
+- **[DOC-092]** Replay pseudo-code uses nonexistent APIs (`docs/ADVANCED_FEATURES.md:2438-2440`). The real API is `ReplaySession::new`/`current_frame()`. *(recurring: prior DOC-058)*
+- **[DOC-093]** Broken intra-doc links: `docs/API_REFERENCE.md:858`, and the `docs/SECURITY.md:40-41` TOC anchors vs the emoji headings at :141/:164. *(recurring: prior DOC-059)*
+- **[DOC-094]** Code fences without language tags (about 35 across 8 docs, plus `CLAUDE.md:141`). *(recurring: prior DOC-060)*
+- **[DOC-095]** CHANGELOG compare links stop at 0.37.0 (`CHANGELOG.md:1748+`). *(recurring: prior DOC-062)*
+- **[DOC-096]** Missing rustdoc: `src/screenshot/mod.rs:1`, `src/grid/scroll.rs:259`, `src/python_bindings/observer.rs:437,477`, `src/mux/ipc.rs:275`, and `src/keyboard.rs:25-30`. There is no `#![warn(missing_docs)]`. *(recurring: prior DOC-063)*
+- **[DOC-097]** `make help` omits the `xcframework`, `caps-table` and `caps-table-check` targets.
+- **[DOC-098]** Orphan and stale docs:
+  - `docs/research/OSC-9-4-PROGRESS-BAR-IMPLEMENTATION.md` has no inbound links.
+  - The README docs list omits 6 files, and the README examples list omits 9.
+  - `docs/fable/ENH-001…015` are plans for shipped work. Remove them, following the f14c76d precedent.
 
 ---
 
 ## Detailed Findings
 
 ### Architecture & Design
-Health: **Good**. 430 files, 12,768 symbols, 16.3K CALLS edges, 223 communities. Verified remediated since the previous run:
-- ARC-022: the two-phase spawn, with a proof test.
-- ARC-032: the persist capture runs off the lock.
-- ARC-025: native `HAS_STREAMING`.
-- QA-114: the `handle_client_message` split.
+Health: **Good**. The parsight graph covers 444 files, 13,212 symbols, 16.8K CALLS edges, 223 communities and 762 processes.
 
-The remaining structural debt is concentrated in `Terminal` (ARC-039) and the streaming server (ARC-047/048). The new risks come from the remediation's own edges:
-- The spawn window (ARC-041).
-- The half-done feature gates (ARC-043/044).
-- The wheel feature split (ARC-042).
+Of the prior ARC-039…057, only ARC-043 (swash behind `screenshot`) is fixed; the rest recur as ARC-067…084. The new structural risks all come from the surfaces added this cycle:
+- State ownership inside `Terminal`, which is what lets RIS wipe host policy (ARC-058).
+- An unversioned C ABI with Debug-string events and inline observer re-entry (ARC-062/063/077/087).
+- A positional roster grammar that already breaks its one consumer (ARC-060).
 
-Top god files (parsight `find_god_objects`): `terminal/mod.rs` (fan-in 113, total CC 413), `streaming/server.rs` (355), `screenshot/renderer.rs` (226), `graphics/kitty.rs` (205), `mux/command.rs` (203), `mux/dispatch.rs` (192). Top hotspots (14-day churn×CC): `mux::server::handle_client` 851, `dispatch_command` 700, `MuxServer::run_with_state_path` 399.
+Top hotspots (14-day churn × CC): `mux::server::handle_client` 1271, `dispatch::dispatch_command` 1085, `MuxServer::run_with_state_path` 567, `persist::MuxTree::from_persist_state` 378, `hooks::handle_session_report` 345.
 
 ### Security Assessment
-Posture: **Good**. The prior fixes were re-verified:
-- SEC-101/102: the gate is checked before any filesystem access, and deletion happens only after decode.
-- SEC-103: O_NOFOLLOW + fstat.
-- SEC-105: 4 KiB field caps before the lock.
+Posture: **Fair**. The prior cycle's High items are fixed and verified:
+- SEC-108: the client euid check on every connect path.
+- The Windows named-pipe server identity check (`GetNamedPipeServerProcessId` + SID compare, fail closed).
+- The kitty file-media gate reaching `PtyTerminal` and the streamer.
+- The bounded input queue.
 
-Dependency scans: `cargo audit` (448 crates) is clean except `paste` (SEC-114). `bun audit` (486 packages) and `pip-audit` are clean. There are no hardcoded secrets. The one repro (SEC-109) ran in a throwaway in-memory `Terminal`. Highest risk: SEC-108 (daemon impersonation on multi-user Linux).
+The new host-probe surface reintroduces a command-execution path from untrusted output (SEC-115, reproduced end-to-end). The prior kitty zlib bomb is still open (SEC-116).
+
+Scans: `cargo audit` is clean except `paste`, `bun audit` covers 486 packages, and `pip-audit` covers 28. No secrets were found in source or config. CI `claude.yml` is mention-gated with read-only permissions, and no `pull_request_target` checks out untrusted code with secrets.
 
 ### Code Quality
-Health: **Good**. Debt is moderate:
-- 0 TODO/FIXME.
-- 29 non-test `#[allow]` (21 `too_many_arguments`).
-- 7 production `unwrap`, 24 `expect`, each stating its invariant.
-- 40+ files over 500 lines.
+Health: **Good**. There are 0 genuine TODO/FIXME markers and about 40 lint suppressions (21 `too_many_arguments`). Coverage is estimated above 70% (no coverage tool runs in `checkall`).
 
-Coverage is good (above 70%) for the Rust core and mux, and moderate for Python PTY and screenshot. The QA-110 serialized writer is well designed, apart from its unbounded queue (QA-131). The biggest perf defect is QA-130 (write locks on Rust-side read paths; the Python binding mostly uses read locks already).
+The primary concern is the new C FFI: three memory or correctness gaps that no test exercises (QA-150, QA-151, SEC-117). The streaming input path's polling redesign outlived the misdiagnosis that motivated it (QA-153). 17 of the 32 original code-quality items are recurring.
 
 ### Documentation Review
-Health: **Good**. DOC-021/022 are verified fixed, SECURITY.md/MUX.md match 0.53.0, CLAUDE.md's layout and feature table are accurate, and versions are in sync (0.53.0 in all three files, derive 0.45.0). The gaps are parameter-level API drift (DOC-039), the false PtyTerminal inheritance claim (DOC-040), 0.53.0 release notes (DOC-043), and a long recurring tail (DOC-044…063).
+Health: **Good**.
+- `scripts/check_api_reference.py` matches 497/497 signatures.
+- `gen_caps_table.py --check` passes (36 caps).
+- The PtyTerminal availability list matches runtime (222/222).
+- MUX.md was updated in the same commits as the telemetry code.
+
+The gaps:
+- The new FFI embedding surface is effectively undocumented (DOC-065/070/071).
+- The unreleased commits have no CHANGELOG entry (DOC-066).
+- Two copy-paste failures verified at runtime (DOC-068/069).
+- A long tail of recurring README and reference drift.
 
 ---
 
 ## Remediation Roadmap
 
 ### Immediate Actions (Before Next Release)
-1. SEC-108: client-side server-identity check; skip or harden the legacy probe.
-2. SEC-109 + SEC-111: kitty decompression/APC caps and the `t=t` canonical-path fix.
-3. QA-131 + QA-141: bounded streaming input queue.
-4. ARC-041: install the output sink before the reader starts.
-5. DOC-043: 0.53.0 breaking and deprecation notes (embedders are already on 0.53).
+1. SEC-115: harden the host-probe git invocation and stop trusting the OSC 7 cwd.
+2. SEC-116 + SEC-119: kitty zlib/APC caps and the `t=t` canonical-path fix.
+3. SEC-117 + QA-151 (+ QA-178, QA-171): the FFI memory-safety batch in `src/ffi.rs`/`keyboard.rs`.
+4. ARC-058 + QA-150: make RIS keep host policy, add a separate DECSTR soft reset, and complete the damage contract.
+5. ARC-060: fix the roster grammar and its CHANGELOG claim, plus the par-term upstream parser card.
+6. DOC-066, DOC-067, DOC-069: the unreleased CHANGELOG section, the working install line, and the Quick Start fix.
 
 ### Short-term (Next 1–2 Sprints)
-1. QA-130 (read locks), QA-132 (re-enable the tests), SEC-110, SEC-112.
-2. ARC-042/043/044 (the feature and packaging batch) + DOC-044/045/046.
-3. DOC-039/040 (API reference correctness + checker), DOC-041/042.
-4. ARC-040 (push-triggered cheap CI), ARC-045 (lockfile), ARC-057 (mux fuzz in CI).
+1. SEC-118, QA-162, QA-170 (the mux `handle_client` batch). QA-161 → QA-153 → QA-154 (the streaming input batch).
+2. QA-155/156/158/160, SEC-124 (the telemetry and probe robustness batch). ARC-064 (trigger decoupling).
+3. ARC-062/063/077/087 as one C ABI revision, plus DOC-065/070/071.
+4. ARC-069 (push CI) → ARC-072 (lockfile). ARC-070/071 (feature packaging).
 
 ### Long-term (Backlog)
-1. ARC-039 service extraction slices, ARC-046/047/048/049/050.
-2. QA-133…140, DOC-052…055, all Low items.
-3. Enhancements ENH-019…ENH-024 (kanban, `enhancement` tag).
+1. ARC-067 (the Terminal state split), ARC-068, ARC-073…076, ARC-086.
+2. QA-159, QA-163…167, all Low items. DOC-072…098.
+3. Enhancements ENH-025…ENH-032 (kanban, `enhancement` tag; plans in `docs/opus/`).
 
 ---
 
 ## Positive Highlights
 
-1. The ARC-022 two-phase spawn and the ARC-032 capture split are careful lock-scope fixes with proof tests (`a_slow_spawn_does_not_stall_other_clients`, byte-identity capture tests).
-2. The QA-110 input writer uses a `Weak` back-reference, create-once under the write lock, and one documented write site.
-3. The kitty file-media gate follows kitty's own rules: it checks the mode before any filesystem access, so probes leak nothing, and it deletes only after a successful decode.
-4. The par-mux server side is well defended: a `0700` per-UID dir with verified owner and mode, a `0600` socket, a fail-closed euid check on accept that doesn't kill the listener, and unlink on clean exit.
-5. Streaming auth is constant-time throughout, and the dummy-bcrypt path hides whether a username exists. The query-string API key is off by default, and the server binds to `127.0.0.1` by default.
-6. The feature matrix is well designed (`sim`/`python` mutually excluded at compile time, `streaming` and `streaming-bin` split), and the build-time proto checksum and source-digest stamp are content-based and CRLF-normalized.
-7. The fuzz work has already caught a real panic (016b59a), and every production `expect` names its invariant.
-8. SECURITY.md and MUX.md were rewritten in lockstep with the 0.52/0.53 security releases.
+1. The telemetry endpoint re-serializes every report into a canonical form. It bounds and control-character-checks every string, keeps display-only keys out of persistence, never lets telemetry take over a claim, and tests every rejection branch (`src/mux/hooks.rs`).
+2. The C FFI layout is pinned on both sides: Rust `offset_of!` tests plus header `_Static_assert`s, verified by the header smoke-compile and the per-slice link and Swift-import probes in `scripts/build-xcframework.sh`. Every `extern "C"` function has a `# Safety` section.
+3. The bounded input queue (`sync_channel(256)` + 4 MiB byte budget) counts every drop path in `dropped_messages`, rate-limits the logging, and has a stalled-writer regression test.
+4. SEC-108 and the Windows named-pipe identity check fail closed on every connect path, including the legacy probe, which is gated on `XDG_RUNTIME_DIR` and `legacy_socket_is_trustworthy`.
+5. `/// cap:` doc comments generate the SECURITY.md caps table, and `caps-table-check` gates drift. The Python API reference is machine-checked against the stub (497/497).
+6. ENH-023's `GeometryMirror` takes polling getters off the reader's write lock and documents the pair-consistency caveat. e818a37 broke the server ↔ factory `Arc` cycle with `Weak`.
+7. The host probe keeps git off the roster path, takes its targets under the lock, and probes off it, following the ARC-032 pattern. Freshness ages per field.
+8. `sim`/`rust-only` dependency hygiene is enforced mechanically (`scripts/check_features.sh`, the CI `features` job), and ARC-043 is genuinely fixed.
 
 ---
 
@@ -417,10 +673,10 @@ Health: **Good**. DOC-021/022 are verified fixed, SECURITY.md/MUX.md match 0.53.
 
 | Area | Files Reviewed | Confidence |
 |------|---------------|-----------|
-| Architecture | ~60 (plus parsight graph analytics over 430) | High |
-| Security | ~45 (plus cargo/bun/pip audits, 1 in-process repro) | High |
-| Code Quality | ~70 (plus parsight hotspots, duplicate, dead-code and god-object analytics) | High |
-| Documentation | all tracked Markdown (≈30), stub, binding docstrings, runtime introspection | High (DOC-046 unverified) |
+| Architecture | ~70, plus parsight graph analytics over 444 files and ctypes/Python probes of the built 0.55.0 module | High |
+| Security | ~50, plus cargo/bun/pip audits and 3 reproductions (host-probe fsmonitor end-to-end on a throwaway daemon, FFI cwd_len via ctypes, OSC 7 NUL) | High |
+| Code Quality | ~80, plus parsight hotspots/complexity/duplicates/dead-code and a read-only clippy run (macOS; the `python` feature, binaries and Windows code were not linted) | High |
+| Documentation | all tracked Markdown (~35), stub, binding docstrings, the API checker, the caps check, runtime probes, and a scratch `cargo build` of the install path | High |
 
 ---
 
@@ -434,148 +690,197 @@ Health: **Good**. DOC-021/022 are verified fixed, SECURITY.md/MUX.md match 0.53.
 ### Phase Assignments
 
 #### Phase 1 — Critical Security (Sequential, Blocking)
-<!-- No Critical security issues. The High SEC issue and the Security issues on conflict files are promoted here. -->
+<!-- No Critical security issues. The High SEC issues and every Security issue on a conflict file shared with Code Quality are promoted here. -->
 | ID | Title | File(s) | Severity |
 |----|-------|---------|----------|
-| SEC-108 | Client never verifies mux server identity; legacy /tmp probe | `src/mux/client.rs`, `src/mux/ipc.rs`, `docs/SECURITY.md` | High |
-| SEC-109 | Kitty zlib bomb; unbounded APC/chunk buffers | `src/graphics/kitty.rs`, `src/terminal/apc_filter.rs`, `docs/SECURITY.md` | Medium (promoted: kitty.rs conflict with QA-139/QA-145) |
-| SEC-111 | `t=t` parent-dir race; open canonical path | `src/graphics/kitty.rs` | Low (promoted: same batch as SEC-109) |
-| SEC-110 | Mux line cap bypassed by unterminated stream; UTF-8 split drop | `src/mux/server.rs`, `tests/mux_daemon.rs` | Low (promoted: server.rs conflict with QA-134/ARC-041/ARC-055) |
-| SEC-112 | Kitty file-media gate unreachable (single-session server, PtyTerminal) | `src/streaming/server.rs`, `src/python_bindings/pty.rs`, `python/par_term_emu_core_rust/_native.pyi` | Medium (promoted: streaming/server.rs conflict with QA-143/144/147) |
+| SEC-115 | Host probe runs git in an OSC 7-controlled cwd | `src/mux/host_probe.rs`, `src/mux/pane.rs`, `src/terminal/sequences/osc/shell.rs` | High |
+| SEC-117 | FFI title/cwd length vs NUL-truncated C string | `src/ffi.rs`, `src/terminal/sequences/osc/shell.rs`, `src/terminal/sequences/osc/iterm.rs`, `include/terminal_core.h` | High |
+| SEC-116 | Kitty zlib bomb; APC and chunk buffers unbounded | `src/graphics/kitty.rs`, `src/terminal/apc_filter.rs`, `docs/SECURITY.md` | High |
+| SEC-119 | Kitty `t=t` parent-dir-swap TOCTOU | `src/graphics/kitty.rs` | Low (promoted: same file as SEC-116) |
+| SEC-118 | mux control socket unterminated-line growth | `src/mux/server.rs` | Medium (promoted: conflict file with QA-162/QA-170) |
+| SEC-124 | Host probe / shutdown hang on wedged filesystem | `src/mux/host_probe.rs`, `src/mux/server.rs` | Low (promoted: conflict file with QA-155) |
+| SEC-123 | `summarize_line` logs send-keys payloads | `src/mux/server.rs` | Low (promoted: conflict file with QA-170) |
+| SEC-120 | Python debug log without O_NOFOLLOW/0600 | `python/par_term_emu_core_rust/debug.py` | Low (promoted: conflict file with QA-181) |
 
 #### Phase 2 — Critical Architecture (Sequential, Blocking)
-<!-- No Critical architecture issues; these are promoted because they block Code Quality or Documentation issues. -->
+<!-- No Critical architecture issues. ARC-058 is promoted because it blocks QA-150 (RIS marking), ARC-064 and ARC-067; ARC-060 because it blocks DOC work on CHANGELOG/MUX.md and ARC-086. -->
 | ID | Title | File(s) | Severity | Blocks |
 |----|-------|---------|----------|--------|
-| ARC-041 | Early pane output lost; triplicated two-phase spawn | `src/mux/dispatch.rs`, `src/mux/pane.rs`, `src/mux/server.rs`, `src/mux/tree.rs` | Medium | QA-134 |
-| ARC-042 | Wheel feature set diverges across build paths | `pyproject.toml`, `.github/workflows/deployment.yml`, `.github/workflows/publish-testpypi.yml`, `Makefile` | Medium | QA-138, DOC-044, DOC-045 |
-| ARC-043 | `screenshot` gate empty; swash unconditional | `Cargo.toml` | Medium | DOC-044 |
-| ARC-044 | `mux` library feature pulls clap | `Cargo.toml`, `Makefile`, `.github/workflows/*.yml` | Medium | DOC-044, DOC-046 |
+| ARC-058 | RIS/DECSTR rebuild the whole Terminal | `src/terminal/mod.rs`, `src/terminal/sequences/csi/report.rs`, `src/terminal/sequences/esc.rs` | High | QA-150, ARC-064, ARC-067 |
+| ARC-060 | list-agents roster grammar breaks par-term's parser | `src/mux/dispatch.rs`, `src/mux/hooks.rs`, `CHANGELOG.md`, `docs/MUX.md` | High | ARC-086, DOC-066 |
 
 #### Phase 3 — Parallel Execution
 
 **3a — Security (remaining)**
 | ID | Title | File(s) | Severity |
 |----|-------|---------|----------|
-| SEC-113 | Python debug log at predictable temp path | `python/par_term_emu_core_rust/debug.py` | Low |
-| SEC-114 | `paste` unmaintained (RUSTSEC-2024-0436) | `Cargo.toml` / lock | Low |
+| SEC-121 | `paste` unmaintained (track) | `Cargo.lock` (transitive) | Low |
 
 **3b — Architecture (remaining)**
 | ID | Title | File(s) | Severity |
 |----|-------|---------|----------|
-| ARC-039 | Terminal god object: MacroEngine + TriggerEngine slice | `src/terminal/macros.rs`, `src/terminal/trigger.rs`, `src/terminal/mod.rs` | High |
-| ARC-040 | Push-triggered cheap CI; bench rotates only on green | `.github/workflows/ci.yml`, `.github/workflows/bench.yml` | Medium |
-| ARC-045 | Commit Cargo.lock + `--locked` | `.gitignore`, `Cargo.lock`, workflows, `CLAUDE.md` | Medium |
-| ARC-046 | Layering inversions | `src/grid/mod.rs`, `src/graphics/mod.rs`, `src/streaming/protocol.rs`, `src/streaming/py_convert.rs` | Medium |
-| ARC-047 | Push-based events in streaming binary | `src/bin/streaming_server/bootstrap.rs`, `src/bin/streaming_server/main.rs` | Medium |
-| ARC-048 | WsTransport unification | `src/streaming/server.rs` | Medium |
-| ARC-049 | `debug_*!` on the log facade | `src/debug.rs`, `src/grid/scroll.rs` | Medium |
-| ARC-050 | `ffi` feature; deprecate Broadcaster | `src/lib.rs`, `src/streaming/mod.rs`, `Cargo.toml` | Medium |
-| ARC-051 | Non-mutating `lint-check` in checkall | `Makefile` | Low |
-| ARC-052 | tokio test-util / serde_yaml_ng gating | `Cargo.toml` | Low |
-| ARC-053 | `#[macro_export]` binding macros leak | `src/python_bindings/common.rs` | Low |
-| ARC-055 | Shutdown save captures under tree lock | `src/mux/server.rs`, `src/mux/persist.rs` | Low |
-| ARC-056 | Build stamp toplevel check | `build.rs` | Low |
-| ARC-057 | Mux fuzz targets missing from CI/fuzz-all | `.github/workflows/fuzz.yml`, `Makefile` | Low |
-| ARC-054 | Root clutter / archived audits (run LAST) | `debug/`, `theme.css`, `AUDIT*.md` | Low |
+| ARC-062 | FFI readback discards palette/theme/graphemes | `src/ffi.rs`, `include/terminal_core.h`, `src/color.rs`, `src/python_bindings/common.rs`, `src/screenshot/renderer.rs` | Medium |
+| ARC-063 | C ABI version, event payload, re-entrancy | `src/ffi.rs`, `include/terminal_core.h` | Medium |
+| ARC-077 | Gate `ffi` feature; prefix C symbols; deprecate Broadcaster | `src/lib.rs`, `Cargo.toml`, `src/ffi.rs`, `include/terminal_core.h`, `scripts/build-xcframework.sh`, `src/streaming/mod.rs` | Medium |
+| ARC-087 | FFI has no catch_unwind | `src/ffi.rs`, `include/terminal_core.h` | Medium |
+| ARC-064 | Triggers ride render damage | `src/terminal/mod.rs`, `src/terminal/trigger.rs`, `src/terminal/write.rs` | Medium |
+| ARC-067 | Terminal god object: state split | `src/terminal/mod.rs`, `src/terminal/trigger.rs`, `src/terminal/macros.rs` | Medium |
+| ARC-068 | Two-phase spawn loses early output | `src/mux/dispatch.rs`, `src/mux/pane.rs`, `src/mux/tree.rs` | Medium |
+| ARC-069 | CI dispatch-only | `.github/workflows/ci.yml`, `.github/workflows/bench.yml` | Medium |
+| ARC-070 | Wheel feature sets diverge | `pyproject.toml`, `.github/workflows/deployment.yml`, `Makefile` | Medium |
+| ARC-071 | `mux` pulls `clap` | `Cargo.toml`, `scripts/check_features.sh` | Medium |
+| ARC-072 | `Cargo.lock` untracked | `.gitignore`, `Cargo.lock`, `.github/workflows/*.yml` | Medium |
+| ARC-073 | Layering inversions | `src/grid/mod.rs`, `src/graphics/mod.rs`, `src/streaming/protocol.rs`, `src/streaming/py_convert.rs` | Medium |
+| ARC-074 | Streamer 20 Hz polling | `src/bin/streaming_server/bootstrap.rs` | Medium |
+| ARC-075 | WS loops duplicated | `src/streaming/server.rs` | Medium |
+| ARC-076 | Private file logger | `src/debug.rs`, `src/grid/scroll.rs` | Medium |
+| ARC-086 | Stringly-typed pane metadata | `src/mux/pane.rs`, `src/mux/hooks.rs`, `src/mux/scrape.rs`, `src/mux/host_probe.rs`, `src/mux/dispatch.rs` | Medium |
+| ARC-078 | checkall runs mutating lint | `Makefile` | Low |
+| ARC-079 | test-util / serde_yaml_ng placement | `Cargo.toml` | Low |
+| ARC-080 | macro_export leak | `src/python_bindings/common.rs` | Low |
+| ARC-082 | Shutdown save under tree lock | `src/mux/server.rs`, `src/mux/persist.rs` | Low |
+| ARC-083 | Build stamp toplevel check | `build.rs` | Low |
+| ARC-084 | Mux fuzz targets not in CI | `.github/workflows/fuzz.yml`, `Makefile` | Low |
+| ARC-085 | dirty_ranges allocates per call | `src/ffi.rs` | Low |
+| ARC-088 | Destructive shared mark_clean | `src/terminal/mod.rs`, `src/ffi.rs`, `src/python_bindings/terminal/mod.rs` | Low |
+| ARC-081 | Root clutter (run last) | repo root | Low |
 
 **3c — Code Quality (all)**
 | ID | Title | File(s) | Severity |
 |----|-------|---------|----------|
-| QA-130 | Read-only PtySession getters take write lock | `src/pty_session.rs` | Medium |
-| QA-131 | Unbounded streaming input queue (+SEC-D) | `src/streaming/session.rs`, `src/streaming/config.rs` | High |
-| QA-132 | Unconditionally skipped screenshot/emoji tests | `tests/test_screenshot.py`, `tests/test_streaming.py`, `Makefile` | High |
-| QA-133 | Streamer main / run_mux_mode / csi report size | `src/bin/streaming_server/main.rs`, `src/terminal/sequences/csi/report.rs` | Medium |
-| QA-134 | Mux handle_client registration x4 | `src/mux/server.rs` | Medium |
-| QA-135 | Blocking writes in tokio tasks | `src/streaming/mux_factory.rs`, `src/bin/streaming_server/main.rs` | Medium |
-| QA-136 | unsafe SAFETY comments | `src/mux/*.rs`, `src/bin/*`, `src/ffi.rs` | Medium |
-| QA-137 | Remove unsafe impl Send/Sync | `src/python_bindings/observer.rs` | Medium |
-| QA-138 | Stub drift check | `Makefile`, `.github/workflows/ci.yml` | Medium |
-| QA-139 | Large files (pty_session reader split) | `src/pty_session.rs` | Medium |
-| QA-140 | Fixed sleeps in PTY tests | `src/pty_session.rs` (tests) | Medium |
-| QA-141 | parking_lot for session RwLocks | `src/streaming/session.rs` | Low |
-| QA-142 | Dead TerminalDebug.tsx | `web-terminal-frontend/components/TerminalDebug.tsx` | Low |
-| QA-143 | ClientCtx for streaming handlers | `src/streaming/server.rs` | Low |
-| QA-144 | Mouse event enum | `src/streaming/protocol.rs`, `src/streaming/server.rs`, `src/streaming/proto.rs` | Low |
-| QA-145 | Near-duplicate helpers | `src/graphics/mod.rs`, `src/python_bindings/*`, `src/mux/pane.rs`, `src/screenshot/renderer.rs` | Low |
-| QA-146 | ffi Box::into_raw | `src/ffi.rs` | Low |
-| QA-147 | Production unwraps | `src/streaming/server.rs`, `src/terminal/file_transfer.rs` | Low |
-| QA-148 | Weak test asserts | `tests/test_terminal.py`, `tests/test_terminal_bindings.py` | Low |
-| QA-149 | PtySession screenshot deprecation parity | `src/pty_session.rs` | Low |
+| QA-151 | TermKeyEvent enum UB across FFI | `src/keyboard.rs`, `src/ffi.rs`, `include/terminal_core.h`, `scripts/build-xcframework.sh` | High |
+| QA-150 | Damage contract gaps (ICH/DCH/rect/RIS/restore) | `src/terminal/sequences/csi/edit.rs`, `src/terminal/sequences/csi/window.rs`, `src/terminal/mod.rs`, `src/terminal/replay_snapshot.rs`, `src/ffi.rs` | High |
+| QA-153 | PTY input drain busy-polls; not sole writer | `src/streaming/session.rs`, `src/pty_session.rs`, `src/python_bindings/streaming.rs` | Medium |
+| QA-154 | Writer-less input closes WS; reconnect loop | `src/streaming/server.rs`, `src/bin/streaming_server/main.rs`, `src/python_bindings/streaming.rs`, `web-terminal-frontend/lib/terminal-connection.ts`, `web-terminal-frontend/components/Terminal.tsx` | Medium |
+| QA-155 | run_git pipe deadlock; shutdown joins sweep | `src/mux/host_probe.rs`, `src/mux/server.rs` | Medium |
+| QA-156 | Future-dated telemetry pins pane | `src/mux/hooks.rs` | Medium |
+| QA-157 | Misaligned TOKEN_USER reference (Windows) | `src/mux/ipc.rs` | Medium |
+| QA-158 | Geometry mirror stale after bypass writes | `src/pty_session.rs`, `src/python_bindings/pty.rs`, `src/python_bindings/common.rs`, `src/mux/dispatch.rs` | Medium |
+| QA-159 | Tests mutate process env in parallel | `src/mux/client.rs`, `src/pty_session.rs`, `tests/mux_nested.rs`, `tests/mux_reattach.rs`, `src/debug.rs` | Medium |
+| QA-160 | Trigger actions capped inconsistently | `src/terminal/trigger.rs`, `src/terminal/semantic_snapshot.rs`, `src/terminal/mod.rs` | Medium |
+| QA-161 | Blocking I/O in tokio tasks; --command bypasses queue | `src/streaming/mux_factory.rs`, `src/bin/streaming_server/main.rs` | Medium |
+| QA-162 | handle_client registration block ×4 | `src/mux/server.rs` | Medium |
+| QA-163 | Streamer main / handle_csi_report oversized | `src/bin/streaming_server/main.rs`, `src/terminal/sequences/csi/report.rs` | Medium |
+| QA-164 | unsafe without SAFETY comments | `src/ffi.rs`, `src/mux/*.rs`, `src/bin/par_mux/main.rs`, `src/bin/streaming_server/cli.rs`, `src/lib.rs` | Medium |
+| QA-166 | Fixed sleeps in PTY tests | `src/pty_session.rs` | Medium |
+| QA-167 | No stub drift check | `Makefile` | Medium |
+| QA-168 | Python PtyTerminal read methods take write lock | `src/python_bindings/pty.rs` | Low |
+| QA-169 | dirty_row_count stat wrong | `src/terminal/metrics.rs`, `src/python_bindings/common.rs`, `src/terminal/tests/terminal_tests.rs` | Low |
+| QA-170 | Stall-hunt diagnostics in hot paths | `src/mux/server.rs`, `src/streaming/session.rs`, `src/streaming/mux_factory.rs` | Low |
+| QA-171 | FFI duplicated copy loops | `src/ffi.rs` | Low |
+| QA-172 | Kitty encoder truncates astral codepoints | `src/keyboard.rs` | Low |
+| QA-173 | Unneeded unsafe Send/Sync on observers | `src/python_bindings/observer.rs` | Low |
+| QA-174 | Dead TerminalDebug.tsx | `web-terminal-frontend/components/TerminalDebug.tsx` | Low |
+| QA-175 | too_many_arguments ×21 | `src/streaming/server.rs` | Low |
+| QA-176 | Mouse event_type stringly typed | `src/streaming/protocol.rs`, `src/streaming/server.rs`, `src/streaming/proto.rs` | Low |
+| QA-177 | Near-duplicates | multiple (see finding) | Low |
+| QA-178 | SharedState cell_count + mem::forget | `src/ffi.rs` | Low |
+| QA-179 | Production unwraps | `src/streaming/server.rs`, `src/terminal/file_transfer.rs` | Low |
+| QA-180 | Weak `is not None` asserts | `tests/test_terminal.py`, `tests/test_terminal_bindings.py` | Low |
+| QA-181 | Dead code | `src/terminal/sequences/csi/window.rs`, `src/grid/rect.rs`, `src/graphics/mod.rs`, `python/par_term_emu_core_rust/debug.py` | Low |
+| QA-165 | Large files keep growing (run last) | `src/mux/hooks.rs`, `src/pty_session.rs` | Medium |
 
 **3d — Documentation (all)**
 | ID | Title | File(s) | Severity |
 |----|-------|---------|----------|
-| DOC-039 | API_REFERENCE parameter lists + checker | `docs/API_REFERENCE.md`, `scripts/check_api_reference.py`, `Makefile` | High |
-| DOC-040 | PtyTerminal "inherits all" false | `docs/API_REFERENCE.md`, `docs/SECURITY.md`, `README.md` | High |
-| DOC-041 | kitty_file_media config docs | `docs/API_REFERENCE.md`, `docs/STREAMING.md` | Medium |
-| DOC-042 | Kitty t=f examples/tables | `docs/ADVANCED_FEATURES.md`, `docs/VT_SEQUENCES.md`, `docs/VT_TECHNICAL_REFERENCE.md` | Medium |
-| DOC-043 | 0.53.0 breaking/deprecated notes | `CHANGELOG.md`, `README.md` | Medium |
-| DOC-044 | Feature tables | `docs/RUST_USAGE.md`, `docs/ARCHITECTURE.md`, `README.md` | Medium |
-| DOC-045 | MATURIN_BEST_PRACTICES stale | `docs/MATURIN_BEST_PRACTICES.md` | Medium |
-| DOC-046 | cargo install command (verify first) | `README.md`, `QUICKSTART.md` | Medium |
-| DOC-047 | README Running Tests | `README.md` | Medium |
-| DOC-048 | README web frontend | `README.md` | Medium |
-| DOC-049 | Dependency pins 0.50 | `README.md`, `docs/RUST_USAGE.md` | Medium |
-| DOC-050 | Env drop list | `docs/SECURITY.md`, `docs/CROSS_PLATFORM.md` | Medium |
-| DOC-051 | CONFIG_REFERENCE env vars | `docs/CONFIG_REFERENCE.md`, `docs/STREAMING.md` | Medium |
-| DOC-052 | Stub docstrings/types | `scripts/generate_stubs.py`, `python/par_term_emu_core_rust/_native.pyi` | Medium |
-| DOC-053 | Binding Example sections | `src/python_bindings/terminal/*_api.rs`, `src/python_bindings/pty.rs`, `src/python_bindings/streaming.rs` | Medium |
-| DOC-054 | Vendor mux decision record | `docs/par-mux.md`, `docs/MUX_DECISIONS.md` | Medium |
-| DOC-055 | Legacy events deprecation | `src/python_bindings/terminal/mod.rs`, `docs/API_REFERENCE.md`, `python/par_term_emu_core_rust/observers.py` | Medium |
-| DOC-056 | Fuzz target count / command | `CONTRIBUTING.md`, `docs/MUX.md` | Low |
-| DOC-057 | ARCHITECTURE Terminal listing | `docs/ARCHITECTURE.md` | Low |
-| DOC-058 | Replay pseudo-code | `docs/ADVANCED_FEATURES.md` | Low |
-| DOC-059 | Broken intra-doc links | `docs/API_REFERENCE.md`, `docs/SECURITY.md` | Low |
-| DOC-060 | Fence language tags | `docs/*.md` | Low |
-| DOC-061 | README What's New trim | `README.md` | Low |
-| DOC-062 | CHANGELOG compare links | `CHANGELOG.md` | Low |
-| DOC-063 | Missing rustdoc | `src/screenshot/mod.rs`, `src/grid/scroll.rs`, `src/mux/ipc.rs`, `src/python_bindings/observer.rs` | Low |
+| DOC-066 | Unreleased CHANGELOG section; README xcframework claim | `CHANGELOG.md`, `README.md`, `docs/MUX.md` | High |
+| DOC-067 | cargo install line fails | `README.md`, `QUICKSTART.md` | High |
+| DOC-068 | TmuxNotification type strings | `docs/API_REFERENCE.md` | High |
+| DOC-069 | README screenshot HTML example | `README.md` | High |
+| DOC-065 | FFI_GUIDE rewrite | `docs/FFI_GUIDE.md` | High |
+| DOC-070 | Other FFI references contradict surface | `docs/RUST_USAGE.md`, `docs/API_REFERENCE.md`, `README.md` | Medium |
+| DOC-071 | ffi.rs / header contract comments | `src/ffi.rs`, `include/terminal_core.h` | Medium |
+| DOC-072 | MACROS.md removed/deprecated calls | `docs/MACROS.md` | Medium |
+| DOC-073 | kitty_file_media missing from StreamingConfig docs | `docs/API_REFERENCE.md`, `docs/STREAMING.md` | Medium |
+| DOC-074 | SECURITY.md drift + caps | `docs/SECURITY.md`, `src/streaming/server.rs`, `src/mux/server.rs`, `src/streaming/session.rs`, `src/mux/hooks.rs`, `src/mux/host_probe.rs` | Medium |
+| DOC-075 | Feature tables; CLAUDE.md:127/132 | `docs/RUST_USAGE.md`, `docs/ARCHITECTURE.md`, `docs/BUILDING.md`, `CLAUDE.md` | Medium |
+| DOC-076 | FFI/iOS artifacts and sync rule | `CLAUDE.md`, `CONTRIBUTING.md` | Medium |
+| DOC-077 | ARCHITECTURE.md modules/services | `docs/ARCHITECTURE.md` | Medium |
+| DOC-078 | README What's New | `README.md` | Medium |
+| DOC-079 | Kitty t=f gate in examples/tables | `docs/ADVANCED_FEATURES.md`, `docs/VT_SEQUENCES.md`, `docs/VT_TECHNICAL_REFERENCE.md` | Medium |
+| DOC-080 | STREAMING.md input-drop behavior | `docs/STREAMING.md` | Medium |
+| DOC-081 | Dependency snippets 0.50 | `README.md`, `docs/RUST_USAGE.md` | Medium |
+| DOC-082 | README Running Tests | `README.md` | Medium |
+| DOC-083 | README web build npm/8030 | `README.md` | Medium |
+| DOC-084 | Env drop list 6 of 12 | `docs/SECURITY.md`, `docs/CROSS_PLATFORM.md` | Medium |
+| DOC-085 | CONFIG_REFERENCE env vars | `docs/CONFIG_REFERENCE.md`, `docs/STREAMING.md` | Medium |
+| DOC-086 | MATURIN_BEST_PRACTICES stale | `docs/MATURIN_BEST_PRACTICES.md` | Medium |
+| DOC-087 | Stub docstrings / types | `scripts/generate_stubs.py`, `python/par_term_emu_core_rust/_native.pyi` | Medium |
+| DOC-088 | Binding docstring Examples | `src/python_bindings/terminal/*_api.rs`, `src/python_bindings/pty.rs`, `src/python_bindings/streaming.rs` | Medium |
+| DOC-089 | Out-of-repo decision citations | `docs/par-mux.md`, `docs/MUX.md` | Medium |
+| DOC-090 | Legacy-event removal version | `docs/API_REFERENCE.md`, `src/python_bindings/terminal/mod.rs` | Medium |
+| DOC-091 | MUX.md CLI line + fuzz flags | `docs/MUX.md` | Low |
+| DOC-092 | Replay pseudo-code | `docs/ADVANCED_FEATURES.md` | Low |
+| DOC-093 | Broken intra-doc links | `docs/API_REFERENCE.md`, `docs/SECURITY.md` | Low |
+| DOC-094 | Untagged code fences | multiple docs, `CLAUDE.md` | Low |
+| DOC-095 | CHANGELOG compare links | `CHANGELOG.md` | Low |
+| DOC-096 | Missing rustdoc | `src/screenshot/mod.rs`, `src/grid/scroll.rs`, `src/python_bindings/observer.rs`, `src/mux/ipc.rs`, `src/keyboard.rs` | Low |
+| DOC-097 | make help omissions | `Makefile` | Low |
+| DOC-098 | Orphan/stale docs | `docs/research/`, `docs/fable/`, `README.md` | Low |
 
 ### File Conflict Map
+<!-- Files touched by issues in multiple domains. Fix agents must read current file state
+     before editing — a prior agent may have already changed these. -->
 
 | File | Domains | Issues | Risk |
 |------|---------|--------|------|
-| `src/mux/server.rs` | Security + Architecture + Code Quality | SEC-110, ARC-041, ARC-055, QA-134, QA-139 | ⚠️ Read before edit — order SEC-110 → ARC-041 → QA-134 → ARC-055 |
-| `src/graphics/kitty.rs` | Security + Code Quality | SEC-109, SEC-111, QA-139 | ⚠️ Read before edit |
-| `src/streaming/server.rs` | Security + Architecture + Code Quality | SEC-112, ARC-048, QA-143, QA-144, QA-147 | ⚠️ Order QA-144 → QA-143 → QA-147 → ARC-048 |
-| `src/streaming/session.rs` | Code Quality (+Security SEC-D merged) | QA-131, QA-141, QA-135 (enqueue path) | ⚠️ One batch: QA-131+QA-141, then QA-135 |
-| `src/pty_session.rs` | Code Quality + Documentation | QA-130, QA-139, QA-140, QA-149, DOC-050 (source reference only) | ⚠️ QA-130 before QA-139's file split |
-| `src/python_bindings/pty.rs` | Security + Documentation + Code Quality | SEC-112, DOC-053, QA-145 | ⚠️ Read before edit |
-| `src/bin/streaming_server/main.rs` | Architecture + Code Quality + Documentation | ARC-047, QA-133, QA-135, DOC-041 (reference) | ⚠️ QA-135 → QA-133 → ARC-047 |
-| `Cargo.toml` | Architecture + Security | ARC-043, ARC-044, ARC-045, ARC-050, ARC-052, SEC-114 | ⚠️ ARC-043+044 in Phase 2, then ARC-045, then ARC-050/052 |
-| `Makefile` | Architecture + Code Quality + Documentation | ARC-042, ARC-044, ARC-051, ARC-057, QA-132, QA-138, DOC-039 | ⚠️ Read before edit |
-| `.github/workflows/ci.yml` | Architecture + Code Quality | ARC-040, ARC-045, QA-138 | ⚠️ ARC-040 first |
-| `docs/SECURITY.md` | Security + Documentation | SEC-108, SEC-109, DOC-040, DOC-050, DOC-059 | ⚠️ Security edits first |
-| `docs/API_REFERENCE.md` | Documentation + Security | DOC-039, DOC-040, DOC-041, DOC-055, DOC-059, SEC-112 | ⚠️ SEC-112 adds entries; DOC-039 then rewrites lines |
-| `README.md` | Documentation | DOC-040, 043, 044, 046, 047, 048, 049, 061 | Single doc agent, sequential |
-| `src/terminal/mod.rs` | Architecture + Code Quality | ARC-039, QA-139 | ⚠️ Read before edit |
-| `src/python_bindings/terminal/mod.rs` | Documentation + Code Quality | DOC-055, QA-145 | Read before edit |
+| `src/ffi.rs` | Security + Architecture + Code Quality + Documentation | SEC-117, ARC-062, ARC-063, ARC-077, ARC-085, ARC-087, ARC-088, QA-150, QA-151, QA-164, QA-171, QA-178, DOC-071 | ⚠️ Read before edit — sequence as one batch |
+| `include/terminal_core.h` | Security + Architecture + Code Quality + Documentation | SEC-117, ARC-062, ARC-063, ARC-077, ARC-087, QA-151, DOC-071 | ⚠️ Read before edit |
+| `src/terminal/mod.rs` | Architecture + Code Quality | ARC-058, ARC-064, ARC-067, ARC-088, QA-150, QA-160 | ⚠️ Read before edit |
+| `src/mux/host_probe.rs` | Security + Architecture + Code Quality + Documentation | SEC-115, SEC-124, ARC-086, QA-155, QA-164, DOC-074 | ⚠️ Read before edit |
+| `src/mux/server.rs` | Security + Architecture + Code Quality + Documentation | SEC-118, SEC-123, SEC-124, ARC-082, QA-155, QA-162, QA-170, DOC-074 | ⚠️ Read before edit |
+| `src/mux/hooks.rs` | Architecture + Code Quality + Documentation | ARC-060, ARC-086, QA-156, QA-165, DOC-074 | ⚠️ Read before edit |
+| `src/mux/dispatch.rs` | Architecture + Code Quality | ARC-060, ARC-068, ARC-086, QA-158 | ⚠️ Read before edit |
+| `src/mux/pane.rs` | Security + Architecture + Code Quality | SEC-115, ARC-068, ARC-086, QA-164, QA-177 | ⚠️ Read before edit |
+| `src/graphics/kitty.rs` | Security + Code Quality | SEC-116, SEC-119, QA-165 | ⚠️ Read before edit |
+| `src/terminal/sequences/osc/shell.rs` | Security + Code Quality | SEC-115, SEC-117 | ⚠️ Read before edit |
+| `src/keyboard.rs` | Code Quality + Documentation | QA-151, QA-172, DOC-096 | ⚠️ Read before edit |
+| `src/streaming/session.rs` | Code Quality + Documentation | QA-153, QA-170, DOC-074 | ⚠️ Read before edit |
+| `src/streaming/server.rs` | Architecture + Code Quality + Documentation | ARC-075, QA-154, QA-175, QA-176, QA-179, DOC-074 | ⚠️ Read before edit |
+| `src/pty_session.rs` | Code Quality | QA-153, QA-158, QA-159, QA-165, QA-166, QA-181 | ⚠️ Read before edit |
+| `src/python_bindings/pty.rs` | Code Quality + Documentation | QA-158, QA-168, QA-177, DOC-088 | ⚠️ Read before edit |
+| `src/python_bindings/common.rs` | Architecture + Code Quality | ARC-062, ARC-080, QA-158, QA-169 | ⚠️ Read before edit |
+| `src/terminal/sequences/csi/window.rs` | Code Quality | QA-150, QA-181 | ⚠️ Read before edit |
+| `src/terminal/sequences/csi/report.rs` | Architecture + Code Quality | ARC-058, QA-163 | ⚠️ Read before edit |
+| `Cargo.toml` | Architecture | ARC-071, ARC-077, ARC-079 | ⚠️ Read before edit |
+| `Makefile` | Architecture + Code Quality + Documentation | ARC-070, ARC-078, ARC-084, QA-167, DOC-097 | ⚠️ Read before edit |
+| `README.md` | Documentation | DOC-066, 067, 069, 070, 078, 081, 082, 083, 098 | ⚠️ One agent, sequential |
+| `docs/API_REFERENCE.md` | Documentation | DOC-068, 070, 073, 090, 093 | ⚠️ One agent; `make stub-check` after |
+| `docs/SECURITY.md` | Security + Documentation | SEC-116, DOC-074, DOC-084, DOC-093 | ⚠️ Read before edit |
+| `CHANGELOG.md` | Architecture + Documentation | ARC-060, DOC-066, DOC-095 | ⚠️ Read before edit |
+| `CLAUDE.md` | Documentation | DOC-075, DOC-076, DOC-094 | ⚠️ One agent |
+| `python/par_term_emu_core_rust/debug.py` | Security + Code Quality | SEC-120, QA-181 | ⚠️ Read before edit |
 
 ### Blocking Relationships
-- SEC-110 → QA-134: SEC-110 restructures the `handle_client` read loop that QA-134 extracts into `read_control_line`.
-- ARC-041 → QA-134: both edit `src/mux/server.rs` (`wire_all_pane_outputs` vs `handle_client`). Sequence them to avoid conflicting diffs.
-- SEC-112 → DOC-040, DOC-041: document the new `PtyTerminal.set_allow_file_media` and the single-session fix, not the limitation.
-- SEC-109 → DOC-059/SECURITY.md edits: SEC-109 corrects the SECURITY.md:895 zlib claim itself.
-- ARC-042 → QA-138: the stub drift check needs one canonical streaming-enabled build.
-- ARC-042 → DOC-044, DOC-045: the documented feature and install config changes.
-- ARC-043 → DOC-044: the `screenshot` row describes the new optional dependency.
-- ARC-044 → DOC-044, DOC-046: the new `mux-bin` feature name appears in both.
-- QA-131 → QA-135: the initial-command fix routes through the bounded enqueue path.
-- QA-130 → QA-132: the re-enabled screenshot tests exercise the new read-lock path.
-- QA-144 → QA-143: the `ClientCtx` signature change follows the mouse enum change in `handle_mouse`.
-- DOC-039 → DOC-052: the API-reference checker becomes the regression guard for stub parameter names.
-- ARC-040 → ARC-045: the new CI job adopts `--locked` once the lockfile is tracked.
-- ARC-045 → SEC-114: tracking a lockfile makes the advisory check reproducible.
-- ARC-054 runs last: it archives this cycle's audit files.
+<!-- Format: [blocker issue] → [blocked issue] — reason -->
+- SEC-115 → QA-155: SEC-115 rewrites `run_git`'s argument list and the cwd source; QA-155's pipe-drain rewrite must build on it.
+- SEC-115 → DOC-074: the SECURITY.md host-probe subsection describes the mitigation SEC-115 lands.
+- SEC-116 → SEC-119: both edit `get_data`/`load_file_data` in `kitty.rs`; caps first, then the TOCTOU fix.
+- SEC-117 → QA-151: same `src/ffi.rs` batch; land SEC-117's `SharedState` change first, then the key-event field change.
+- QA-151 → ARC-063: the ABI revision (version constant, event struct) must include the `key: u16` field change.
+- ARC-058 → QA-150: RIS must mark every row dirty after the state-preserving reset lands.
+- ARC-058 → ARC-067: the host/services/VT ownership rule decided in ARC-058 is the basis of the struct split.
+- QA-150 → ARC-064: decouple triggers from render damage after damage marking is complete (more marking = more re-fires).
+- ARC-060 → ARC-086: fix the wire grammar before retyping the metadata it is built from.
+- ARC-060 → DOC-066: the Unreleased CHANGELOG section must include the roster grammar change and the corrected compatibility statement.
+- QA-161 → QA-153: the drain can stop polling only after every writer (including `--command`) goes through the queue.
+- QA-154 → QA-175: the `ClientCtx` refactor follows the `handle_client_message` outcome change.
+- QA-154 → DOC-080: STREAMING.md documents the close rule QA-154 finalizes.
+- SEC-118 → QA-162: both rewrite the `handle_client` read loop; bound the read first, then extract helpers.
+- QA-162 → QA-170: diagnostic cleanup last in `handle_client`.
+- ARC-069 → ARC-072: the new push-triggered CI job adopts `--locked`.
+- QA-158 → QA-165: the terminal-access API change precedes the `pty_session.rs` split.
+- QA-159 → (edition-2024 migration, not filed).
+- DOC-071 → DOC-065, DOC-070: the guide describes whatever null-handling contract DOC-071/ARC-087 settle.
+- ARC-081 runs last (it archives this cycle's audit files).
 
 ### Dependency Diagram
 
 ```mermaid
 graph TD
-    P1["Phase 1: Security (SEC-108, 109, 111, 110, 112)"]
-    P2["Phase 2: Architecture (ARC-041, 042, 043, 044)"]
-    P3a["Phase 3a: Security (SEC-113, 114)"]
+    P1["Phase 1: Security (SEC-115/117/116/119/118/124/123/120)"]
+    P2["Phase 2: Architecture (ARC-058, ARC-060)"]
+    P3a["Phase 3a: Security (remaining)"]
     P3b["Phase 3b: Architecture (remaining)"]
     P3c["Phase 3c: Code Quality"]
     P3d["Phase 3d: Documentation"]
@@ -585,17 +890,31 @@ graph TD
     P2 --> P3a & P3b & P3c & P3d
     P3a & P3b & P3c & P3d --> P4
 
-    SEC110["SEC-110"] -->|blocks| QA134["QA-134"]
-    ARC041["ARC-041"] -->|blocks| QA134
-    SEC112["SEC-112"] -->|blocks| DOC040["DOC-040"]
-    SEC112 -->|blocks| DOC041["DOC-041"]
-    ARC042["ARC-042"] -->|blocks| QA138["QA-138"]
-    ARC042 -->|blocks| DOC044["DOC-044"]
-    ARC043["ARC-043"] -->|blocks| DOC044
-    ARC044["ARC-044"] -->|blocks| DOC046["DOC-046"]
-    QA131["QA-131"] -->|blocks| QA135["QA-135"]
-    QA130["QA-130"] -->|blocks| QA132["QA-132"]
-    QA144["QA-144"] -->|blocks| QA143["QA-143"]
-    DOC039["DOC-039"] -->|blocks| DOC052["DOC-052"]
-    ARC045["ARC-045"] -->|blocks| SEC114["SEC-114"]
+    SEC115["SEC-115"] -->|blocks| QA155["QA-155"]
+    SEC115 -->|blocks| DOC074["DOC-074"]
+    SEC116["SEC-116"] -->|blocks| SEC119["SEC-119"]
+    SEC117["SEC-117"] -->|blocks| QA151["QA-151"]
+    QA151 -->|blocks| ARC063["ARC-063"]
+    ARC058["ARC-058"] -->|blocks| QA150["QA-150"]
+    ARC058 -->|blocks| ARC067["ARC-067"]
+    QA150 -->|blocks| ARC064["ARC-064"]
+    ARC060["ARC-060"] -->|blocks| ARC086["ARC-086"]
+    ARC060 -->|blocks| DOC066["DOC-066"]
+    QA161["QA-161"] -->|blocks| QA153["QA-153"]
+    QA154["QA-154"] -->|blocks| QA175["QA-175"]
+    QA154 -->|blocks| DOC080["DOC-080"]
+    SEC118["SEC-118"] -->|blocks| QA162["QA-162"]
+    QA162 -->|blocks| QA170["QA-170"]
+    ARC069["ARC-069"] -->|blocks| ARC072["ARC-072"]
+    QA158["QA-158"] -->|blocks| QA165["QA-165"]
+    DOC071["DOC-071"] -->|blocks| DOC065["DOC-065"]
+
+    classDef sec fill:#F44336,stroke:#E6E6E6,color:#E6E6E6
+    classDef arc fill:#2196F3,stroke:#E6E6E6,color:#E6E6E6
+    classDef qa fill:#FFC107,stroke:#1E1E1E,color:#1E1E1E
+    classDef doc fill:#4CAF50,stroke:#E6E6E6,color:#E6E6E6
+    class SEC115,SEC116,SEC117,SEC118,SEC119 sec
+    class ARC058,ARC060,ARC063,ARC064,ARC067,ARC069,ARC072,ARC086 arc
+    class QA150,QA151,QA153,QA154,QA155,QA158,QA161,QA162,QA165,QA170,QA175 qa
+    class DOC065,DOC066,DOC071,DOC074,DOC080 doc
 ```
