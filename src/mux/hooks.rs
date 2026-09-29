@@ -28,6 +28,7 @@ use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use base64::Engine as _;
 use parking_lot::Mutex;
+use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -568,31 +569,114 @@ fn handle_telemetry_report(
     )
 }
 
-/// Validate the `telemetry` object into its canonical stored form — the
-/// same fields re-serialized from validated values, so nothing unbounded
-/// or unknown reaches pane metadata. Mirrors the hub normalizer's bounds:
-/// `model` ≤ 128 chars, `effort` ≤ 32, percents finite 0-100 rounded,
-/// strings trimmed, non-empty, control-character-free.
-fn parse_telemetry_object(params: &serde_json::Value) -> Result<(String, u64), String> {
-    let object = match params.get("telemetry") {
+/// The canonical stored form of a v1 telemetry report: exactly the
+/// fields [`TelemetryV1::from_wire`] validates, re-serialized from
+/// validated values so nothing unbounded or unknown reaches pane
+/// metadata. Mirrors the hub normalizer's bounds: `model` ≤ 128 chars,
+/// `effort` ≤ 32, percents finite 0-100 rounded, strings trimmed,
+/// non-empty, control-character-free.
+///
+/// Declaration order IS the canonical key order — alphabetical, the
+/// shape the pre-ENH-029 `serde_json::Map` (BTreeMap, no
+/// `preserve_order` feature) emitted — so stored blobs stay
+/// byte-identical, pinned by test. `skip_serializing_if` keeps absent
+/// optional fields out of the blob, like the per-field inserts before.
+#[derive(Serialize)]
+struct TelemetryV1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_remaining_percent: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_used_percent: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    five_hour_remaining_percent: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    five_hour_resets_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    sampled_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seven_day_remaining_percent: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seven_day_resets_at_unix_ms: Option<u64>,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_enabled: Option<bool>,
+    version: u64,
+}
+
+impl TelemetryV1 {
+    /// Validate a wire `telemetry` object into the canonical form.
+    /// Unknown keys are ignored, not rejected — the hub may add fields
+    /// before a version bump, so `deny_unknown_fields` would break the
+    /// wire contract. Field order preserves the historical validation
+    /// order (required fields first), which decides which error a
+    /// multiply-invalid payload reports.
+    fn from_wire(object: &serde_json::Map<String, serde_json::Value>) -> Result<Self, String> {
+        let version = required_u64(object, "version")?;
+        if version != 1 {
+            return Err(format!(
+                "unsupported telemetry version: {version} (expected 1)"
+            ));
+        }
+        let source = telemetry_source(object)?;
+        let sampled_at_unix_ms = required_u64(object, "sampled_at_unix_ms")?;
+        let model = bounded_string(object, "model", 128)?;
+        let effort = bounded_string(object, "effort", 32)?;
+        let thinking_enabled = optional_bool(object, "thinking_enabled")?;
+        let context_used_percent = parse_percent(object, "context_used_percent")?;
+        let context_remaining_percent = parse_percent(object, "context_remaining_percent")?;
+        let five_hour_remaining_percent = parse_percent(object, "five_hour_remaining_percent")?;
+        let seven_day_remaining_percent = parse_percent(object, "seven_day_remaining_percent")?;
+        let five_hour_resets_at_unix_ms = unix_ms_field(object, "five_hour_resets_at_unix_ms")?;
+        let seven_day_resets_at_unix_ms = unix_ms_field(object, "seven_day_resets_at_unix_ms")?;
+        Ok(Self {
+            version,
+            source,
+            sampled_at_unix_ms,
+            model,
+            effort,
+            thinking_enabled,
+            context_used_percent,
+            context_remaining_percent,
+            five_hour_remaining_percent,
+            seven_day_remaining_percent,
+            five_hour_resets_at_unix_ms,
+            seven_day_resets_at_unix_ms,
+        })
+    }
+}
+
+/// The wire report's `telemetry` member as an object.
+fn telemetry_wire_object(
+    params: &serde_json::Value,
+) -> Result<&serde_json::Map<String, serde_json::Value>, String> {
+    match params.get("telemetry") {
         Some(value) => value
             .as_object()
-            .ok_or_else(|| "telemetry must be an object".to_string())?,
-        None => return Err("missing telemetry".to_string()),
-    };
+            .ok_or_else(|| "telemetry must be an object".to_string()),
+        None => Err("missing telemetry".to_string()),
+    }
+}
 
-    let version = match object.get("version") {
+/// One required non-negative-integer field (`version`,
+/// `sampled_at_unix_ms`).
+fn required_u64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<u64, String> {
+    match object.get(field) {
         Some(value) => value
             .as_u64()
-            .ok_or_else(|| "telemetry version must be a non-negative integer".to_string())?,
-        None => return Err("telemetry missing version".to_string()),
-    };
-    if version != 1 {
-        return Err(format!(
-            "unsupported telemetry version: {version} (expected 1)"
-        ));
+            .ok_or_else(|| format!("telemetry {field} must be a non-negative integer")),
+        None => Err(format!("telemetry missing {field}")),
     }
+}
 
+/// The required `source` string: trimmed, non-empty,
+/// control-character-free, length-checked.
+fn telemetry_source(object: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
     let source = match object.get("source") {
         Some(value) => value
             .as_str()
@@ -607,75 +691,31 @@ fn parse_telemetry_object(params: &serde_json::Value) -> Result<(String, u64), S
         return Err("telemetry source must not contain control characters".to_string());
     }
     check_value_len("telemetry source", source)?;
+    Ok(source.to_string())
+}
 
-    let sampled_at = match object.get("sampled_at_unix_ms") {
-        Some(value) => value.as_u64().ok_or_else(|| {
-            "telemetry sampled_at_unix_ms must be a non-negative integer".to_string()
-        })?,
-        None => return Err("telemetry missing sampled_at_unix_ms".to_string()),
-    };
-
-    let model = bounded_string(object, "model", 128)?;
-    let effort = bounded_string(object, "effort", 32)?;
-    let thinking_enabled = match object.get("thinking_enabled") {
-        Some(value) => Some(
-            value
-                .as_bool()
-                .ok_or_else(|| "telemetry thinking_enabled must be a boolean".to_string())?,
-        ),
-        None => None,
-    };
-    let context_used = parse_percent(object, "context_used_percent")?;
-    let context_remaining = parse_percent(object, "context_remaining_percent")?;
-    let five_hour_remaining = parse_percent(object, "five_hour_remaining_percent")?;
-    let seven_day_remaining = parse_percent(object, "seven_day_remaining_percent")?;
-    let five_hour_resets = unix_ms_field(object, "five_hour_resets_at_unix_ms")?;
-    let seven_day_resets = unix_ms_field(object, "seven_day_resets_at_unix_ms")?;
-
-    let mut validated = serde_json::Map::new();
-    validated.insert("version".to_string(), serde_json::Value::from(1));
-    validated.insert(
-        "source".to_string(),
-        serde_json::Value::String(source.to_string()),
-    );
-    validated.insert(
-        "sampled_at_unix_ms".to_string(),
-        serde_json::Value::from(sampled_at),
-    );
-    if let Some(model) = model {
-        validated.insert("model".to_string(), serde_json::Value::String(model));
-    }
-    if let Some(effort) = effort {
-        validated.insert("effort".to_string(), serde_json::Value::String(effort));
-    }
-    if let Some(thinking_enabled) = thinking_enabled {
-        validated.insert(
-            "thinking_enabled".to_string(),
-            serde_json::Value::Bool(thinking_enabled),
-        );
-    }
-    for (field, percent) in [
-        ("context_used_percent", context_used),
-        ("context_remaining_percent", context_remaining),
-        ("five_hour_remaining_percent", five_hour_remaining),
-        ("seven_day_remaining_percent", seven_day_remaining),
-    ] {
-        if let Some(percent) = percent {
-            validated.insert(field.to_string(), serde_json::Value::from(percent));
+/// One optional boolean field.
+fn optional_bool(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<bool>, String> {
+    match object.get(field) {
+        Some(value) => {
+            Ok(Some(value.as_bool().ok_or_else(|| {
+                format!("telemetry {field} must be a boolean")
+            })?))
         }
+        None => Ok(None),
     }
-    for (field, resets) in [
-        ("five_hour_resets_at_unix_ms", five_hour_resets),
-        ("seven_day_resets_at_unix_ms", seven_day_resets),
-    ] {
-        if let Some(resets) = resets {
-            validated.insert(field.to_string(), serde_json::Value::from(resets));
-        }
-    }
+}
 
-    let canonical = serde_json::Value::Object(validated).to_string();
+/// Validate the `telemetry` object into its canonical stored form (see
+/// [`TelemetryV1`]).
+fn parse_telemetry_object(params: &serde_json::Value) -> Result<(String, u64), String> {
+    let telemetry = TelemetryV1::from_wire(telemetry_wire_object(params)?)?;
+    let canonical = serde_json::to_string(&telemetry).map_err(|error| error.to_string())?;
     check_value_len("telemetry", &canonical)?;
-    Ok((canonical, sampled_at))
+    Ok((canonical, telemetry.sampled_at_unix_ms))
 }
 
 /// One optional bounded string field: trimmed, non-empty, printable-ish
@@ -1233,6 +1273,44 @@ mod tests {
             !pane.metadata().contains_key("agent_seq"),
             "a rejected report writes nothing, not even the sequence stamp"
         );
+    }
+
+    /// ENH-029: the typed schema's canonical blob is byte-identical to
+    /// the hand-rolled validator's output. The literal was captured from
+    /// the pre-change code (full-field sample, fixed sampled_at).
+    #[test]
+    fn telemetry_canonical_blob_is_byte_identical() {
+        let params: serde_json::Value = serde_json::from_str(
+            r#"{"telemetry":{"version":1,"source":"claude_code","sampled_at_unix_ms":1700000000000,"model":"GLM-5.3","effort":"high","thinking_enabled":true,"context_used_percent":63,"context_remaining_percent":37,"five_hour_remaining_percent":80,"seven_day_remaining_percent":95,"five_hour_resets_at_unix_ms":1700003600000,"seven_day_resets_at_unix_ms":1700086400000}}"#,
+        )
+        .unwrap();
+        let (canonical, sampled_at) = parse_telemetry_object(&params).unwrap();
+        assert_eq!(sampled_at, 1_700_000_000_000);
+        assert_eq!(
+            canonical,
+            r#"{"context_remaining_percent":37,"context_used_percent":63,"effort":"high","five_hour_remaining_percent":80,"five_hour_resets_at_unix_ms":1700003600000,"model":"GLM-5.3","sampled_at_unix_ms":1700000000000,"seven_day_remaining_percent":95,"seven_day_resets_at_unix_ms":1700086400000,"source":"claude_code","thinking_enabled":true,"version":1}"#
+        );
+    }
+
+    /// ENH-029: unknown keys are ignored, not rejected — the hub may add
+    /// fields before a version bump, so the wire contract tolerates them.
+    #[test]
+    fn telemetry_unknown_keys_are_ignored() {
+        let base = sample_telemetry(now_unix_ms() - 1_000);
+        let mut object: serde_json::Value = serde_json::from_str(&base).unwrap();
+        object
+            .as_object_mut()
+            .unwrap()
+            .insert("new_hub_field".to_string(), serde_json::Value::from("x"));
+        let params = serde_json::json!({ "telemetry": object });
+        let (canonical, _) =
+            parse_telemetry_object(&params).expect("unknown keys do not reject the report");
+        let (without, _) = parse_telemetry_object(&serde_json::json!({
+            "telemetry": serde_json::from_str::<serde_json::Value>(&base).unwrap()
+        }))
+        .unwrap();
+        assert_eq!(canonical, without);
+        assert!(!canonical.contains("new_hub_field"));
     }
 
     #[test]
