@@ -12,12 +12,13 @@ method surface, ``make dev`` covers the same class/function names):
     uv run python scripts/generate_stubs.py
 
 Known limitations (deliberate, see AUDIT.md ARC-002):
-- PyO3 does not expose ``__text_signature__`` for ``#[new]`` constructors, so
-  every class gets ``def __init__(self, *args: Any, **kwargs: Any)``.
 - All value types are ``Any``: signatures carry parameter names, kinds and
   defaults (the parts PyO3 exposes) but not types.
 - Properties are emitted with both a getter and a setter; read-only
   properties are over-promised in the stub (harmless for type checking).
+- Constructors fall back to ``*args``/``**kwargs`` only for classes whose
+  ``#[new]`` exposes no ``__text_signature__`` (ENH-030; PyO3 0.29 sets the
+  class-level signature from ``#[new]``/``#[pyo3(signature=…)]``).
 
 The script self-checks its output with :mod:`ast` and verifies that every
 public ``dir()`` member of the module appears in the stub.
@@ -68,9 +69,9 @@ HEADER = """\
 # Regenerate with: make dev-streaming && make stubs
 #
 # Runtime-introspected stub for the PyO3 `_native` module (ARC-002).
-# Parameter names, kinds and defaults come from PyO3 `__text_signature__`;
-# value types are `Any` because the native layer does not expose them, and
-# constructors are `*args`/`**kwargs` because PyO3 omits `#[new]` signatures.
+# Parameter names, kinds and defaults come from PyO3 `__text_signature__`
+# (methods, and constructors via the class-level signature — ENH-030);
+# value types are `Any` because the native layer does not expose them.
 
 from types import TracebackType
 from typing import Any
@@ -206,11 +207,17 @@ def render_class(cls: type) -> list[str]:
         ):
             ts = getattr(obj, "__text_signature__", None)
             if attr_name == "__new__":
-                # PyO3 leaves `#[new]` signatures generic; expose the
-                # constructor through __init__ instead.
-                lines.append(
-                    "    def __init__(self, *args: Any, **kwargs: Any) -> None: ..."
-                )
+                # ENH-030: PyO3 0.29 sets the CLASS-level
+                # `__text_signature__` from `#[new]`/`#[pyo3(signature=…)]`
+                # (e.g. Terminal's '(cols, rows, scrollback=10000)'), while
+                # `__new__`'s own descriptor stays generic. Render __init__
+                # from the class signature; `*args`/`**kwargs` only when the
+                # class exposes none.
+                cls_ts = getattr(cls, "__text_signature__", None)
+                params = render_params(cls_ts, implicit_self=True)
+                if params is None:
+                    params = ["*args: Any", "**kwargs: Any"]
+                lines.append(f"    def __init__({', '.join(params)}) -> None: ...")
                 emitted_any = True
                 continue
             if attr_name == "__exit__":
@@ -283,6 +290,17 @@ def main() -> None:
             raise SystemExit(msg)
 
     out: list[str] = [HEADER]
+
+    # The non-streaming build ships a placeholder StreamingConfig whose
+    # constructor is '()' — a stub generated from it would silently lie
+    # about the real surface (project memory: stub-regen-needs-dev-streaming).
+    if getattr(native.StreamingConfig, "__text_signature__", None) in (None, "()"):
+        msg = (
+            "StreamingConfig has no real constructor signature — the module "
+            "was built without the streaming feature. Run "
+            "`make dev-streaming` before `make stubs`."
+        )
+        raise SystemExit(msg)
 
     for name in sorted(constants):
         value = constants[name]
