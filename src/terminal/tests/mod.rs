@@ -13,6 +13,8 @@ mod coverage_gaps;
 #[cfg(test)]
 mod cursor;
 #[cfg(test)]
+mod damage_props;
+#[cfg(test)]
 mod detection;
 #[cfg(test)]
 mod editing;
