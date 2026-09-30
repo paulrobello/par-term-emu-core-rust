@@ -2528,9 +2528,12 @@ mod tests {
         let result = session.spawn_with_env("cmd.exe", &["/C", "echo hello"], Some(&env), None);
 
         assert!(result.is_ok());
-
-        // Give it time to execute
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            session.wait_until(std::time::Duration::from_secs(30), |t| t
+                .content()
+                .contains("hello")),
+            "the spawned command's output never arrived"
+        );
     }
 
     #[test]
@@ -2629,9 +2632,6 @@ mod tests {
 
         assert!(result.is_ok());
 
-        // Give it time to execute
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
         // Verify env var was NOT leaked to parent process
         assert!(
             std::env::var(unique_var).is_err(),
@@ -2657,9 +2657,12 @@ mod tests {
         let result = session.spawn_with_env("cmd.exe", &["/C", "echo test"], Some(&env), None);
 
         assert!(result.is_ok());
-
-        // Give it time to execute
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            session.wait_until(std::time::Duration::from_secs(30), |t| t
+                .content()
+                .contains("test")),
+            "the spawned command's output never arrived"
+        );
     }
 
     #[test]
@@ -2948,6 +2951,9 @@ mod tests {
     #[test]
     fn test_generation_counter_after_ctrl_c() {
         let mut session = PtySession::new(80, 24, 1000);
+        // Read before the spawn, so a prompt that lands before the wait below
+        // still counts as the shell having started.
+        let gen_before_spawn = session.update_generation();
 
         // Spawn a shell
         #[cfg(unix)]
@@ -2957,32 +2963,26 @@ mod tests {
 
         assert!(result.is_ok());
 
-        // Wait for shell to start
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let gen_before_ctrl_c = session.update_generation();
+        // The shell is up once it has printed something (its prompt); a
+        // Ctrl+C sent earlier could reach it before its SIGINT handling.
+        session
+            .update_waiter()
+            .wait_for_update(gen_before_spawn, std::time::Duration::from_secs(30))
+            .expect("shell printed a prompt");
 
         // Send Ctrl+C
         session.write(b"\x03").unwrap();
-
-        // Wait for Ctrl+C to be processed
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
-        // Generation should have incremented due to shell prompt redraw after Ctrl+C
-        let gen_after_ctrl_c = session.update_generation();
-        assert!(
-            gen_after_ctrl_c >= gen_before_ctrl_c,
-            "generation counter should have incremented after Ctrl+C: was {}, now {}",
-            gen_before_ctrl_c,
-            gen_after_ctrl_c
-        );
 
         // Now send a normal command
         let gen_before_echo = session.update_generation();
         session.write(b"echo TEST_GENERATION\r\n").unwrap();
 
-        // Wait for output
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(
+            session.wait_until(std::time::Duration::from_secs(30), |t| t
+                .content()
+                .contains("TEST_GENERATION")),
+            "the echo never reached the screen after Ctrl+C"
+        );
 
         // Generation MUST increment for the echo output
         let gen_after_echo = session.update_generation();
@@ -3034,10 +3034,12 @@ mod tests {
 
         impl TerminalObserver for LockProbeObserver {
             fn on_event(&self, _event: &TerminalEvent) {
-                self.saw_any_invocation.store(true, Ordering::SeqCst);
                 if self.terminal.try_write().is_some() {
                     self.lock_was_free.store(true, Ordering::SeqCst);
                 }
+                // Published last: the test polls this flag, and once it is
+                // set this invocation's lock verdict is already visible.
+                self.saw_any_invocation.store(true, Ordering::SeqCst);
             }
         }
 
@@ -3058,12 +3060,14 @@ mod tests {
         assert!(result.is_ok(), "spawn should succeed: {:?}", result);
 
         // Wait for the reader thread to read the BEL byte and dispatch it.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        assert!(
-            probe.saw_any_invocation.load(Ordering::SeqCst),
-            "observer should have been invoked for the BEL event"
-        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !probe.saw_any_invocation.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "observer should have been invoked for the BEL event"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(
             probe.lock_was_free.load(Ordering::SeqCst),
             "try_write() must succeed from inside the observer callback -- the \
