@@ -290,6 +290,12 @@ impl Terminal {
         let (cols, rows) = self.size();
         let scrollback_lines = self.grid.scrollback_len();
         let total_cells = (rows * cols) + (scrollback_lines * cols);
+        let hyperlink_memory_bytes = self
+            .hyperlink_state
+            .hyperlinks
+            .values()
+            .map(|url| url.len() + std::mem::size_of::<u32>() + std::mem::size_of::<String>())
+            .sum();
 
         TerminalStats {
             cols,
@@ -298,9 +304,9 @@ impl Terminal {
             total_cells,
             non_whitespace_lines: self.count_non_whitespace_lines(),
             graphics_count: self.graphics.graphics_store.graphics_count(),
-            estimated_memory_bytes: 0, // Should be calculated
+            estimated_memory_bytes: total_cells * std::mem::size_of::<crate::cell::Cell>(),
             hyperlink_count: self.hyperlink_state.hyperlinks.len(),
-            hyperlink_memory_bytes: 0, // Should be calculated
+            hyperlink_memory_bytes,
             color_stack_depth: self.theme.color_stack.len(),
             title_stack_depth: self.title_state.title_stack.len(),
             keyboard_stack_depth: self.keyboard_state.keyboard_stack.len(),
@@ -327,11 +333,13 @@ pub struct TerminalStats {
     pub non_whitespace_lines: usize,
     /// Number of Sixel graphics
     pub graphics_count: usize,
-    /// Estimated memory usage in bytes
+    /// Estimated memory usage in bytes (lower bound): `total_cells` times the
+    /// inline cell size; heap-spilled combining characters are not counted
     pub estimated_memory_bytes: usize,
     /// Number of hyperlinks stored
     pub hyperlink_count: usize,
-    /// Estimated memory used by hyperlink storage (bytes)
+    /// Estimated memory used by hyperlink storage in bytes (lower bound): URL
+    /// bytes plus the per-entry key and `String` header, excluding map overhead
     pub hyperlink_memory_bytes: usize,
     /// Color stack depth
     pub color_stack_depth: usize,

@@ -2869,6 +2869,11 @@ fn test_enhanced_stats() {
     assert_eq!(stats.cols, 80);
     assert_eq!(stats.rows, 24);
     assert!(stats.hyperlink_count > 0);
+    assert!(
+        stats.estimated_memory_bytes
+            >= stats.total_cells * std::mem::size_of::<crate::cell::Cell>()
+    );
+    assert!(stats.hyperlink_memory_bytes >= "https://example.com".len());
     assert_eq!(stats.color_stack_depth, 0);
     assert_eq!(stats.title_stack_depth, 0);
     assert_eq!(stats.keyboard_stack_depth, 0);
