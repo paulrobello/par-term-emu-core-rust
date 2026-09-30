@@ -782,6 +782,18 @@ class ImageProtocol:
 
 class InlineImage:
     """Inline image"""
+    def __init__(
+        self,
+        protocol: Any,
+        format: Any,
+        data: Any,
+        width: Any,
+        height: Any,
+        position: Any,
+        display_cols: Any,
+        display_rows: Any,
+        id: Any = None,
+    ) -> None: ...
     @property
     def data(self) -> Any:
         """Raw encoded image bytes"""
@@ -4019,21 +4031,18 @@ class Terminal:
         """Add an inline image
 
         Args:
-            image: PyInlineImage to add
+            image: InlineImage to add
 
         Raises:
             ValueError: If the image's protocol or format name is not recognized
 
         Example:
             ```python
-            from par_term_emu_core_rust import Terminal
-            # InlineImage has no Python constructor, so images come from
-            # another terminal's store (get_all_images/get_images_at/get_image_by_id).
-            source = Terminal(80, 24)
+            from par_term_emu_core_rust import Terminal, InlineImage
             term = Terminal(80, 24)
-            for image in source.get_all_images():
-                term.add_inline_image(image)
-            len(term.get_all_images()) == len(source.get_all_images())   # True
+            img = InlineImage("iterm2", "png", b"\\x89PNG...", 8, 4, (0, 0), 8, 2)
+            term.add_inline_image(img)
+            len(term.get_all_images())   # 1
             ```
         """
     def add_observer(self, callback: Any, kinds: Any = None) -> int:
@@ -4291,15 +4300,24 @@ class Terminal:
     def check_activity(self) -> Any:
         """Check for activity notifications
 
-        Activity detection is not implemented yet: this call never queues an
-        event, even with `activity_enabled` set.
+        Queues an Activity/Visual event when `activity_enabled` is set and
+        `update_activity` was called since the previous event, rate-limited to
+        at most one event per `activity_threshold` seconds.
 
         Example:
             ```python
+            import time
             from par_term_emu_core_rust import Terminal
             term = Terminal(80, 24)
+            config = term.get_notification_config()
+            config.activity_enabled = True
+            config.activity_threshold = 0
+            term.set_notification_config(config)
+            term.update_activity()
+            time.sleep(0.01)
             term.check_activity()
-            term.get_notification_events()   # []
+            [(e.trigger, e.message) for e in term.get_notification_events()]
+            # [('Activity', 'Terminal activity detected')]
             ```
         """
     def check_silence(self) -> Any:

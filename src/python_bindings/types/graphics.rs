@@ -286,6 +286,45 @@ pub struct PyInlineImage {
 
 #[pymethods]
 impl PyInlineImage {
+    /// Create an inline image
+    ///
+    /// Args:
+    ///     protocol: "sixel", "iterm2", or "kitty"
+    ///     format: "png", "jpeg", "gif", "bmp", "rgba", or "rgb"
+    ///     data: Raw encoded image bytes
+    ///     width: Image width in pixels
+    ///     height: Image height in pixels
+    ///     position: Anchor position as (col, row)
+    ///     display_cols: Display width in terminal columns
+    ///     display_rows: Display height in terminal rows
+    ///     id: Image identifier (iTerm2 name / Kitty id), or None
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (protocol, format, data, width, height, position, display_cols, display_rows, id=None))]
+    fn new(
+        protocol: String,
+        format: String,
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        position: (usize, usize),
+        display_cols: usize,
+        display_rows: usize,
+        id: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            protocol,
+            format,
+            data,
+            width,
+            height,
+            position,
+            display_cols,
+            display_rows,
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "InlineImage(protocol={}, format={}, size={}x{}, pos={:?})",

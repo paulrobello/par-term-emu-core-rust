@@ -378,6 +378,8 @@ pub(crate) struct NotificationState {
     pub(crate) last_activity_time: u64,
     /// Last silence check timestamp
     pub(crate) last_silence_check: u64,
+    /// Last activity notification check timestamp (activity monitoring)
+    pub(crate) last_activity_check: u64,
     /// Maximum OSC 9/777 notifications retained
     pub(crate) max_notifications: usize,
     /// Custom notification triggers (ID -> message)
@@ -396,6 +398,7 @@ impl Default for NotificationState {
             notification_events: Vec::new(),
             last_activity_time: now,
             last_silence_check: now,
+            last_activity_check: now,
             max_notifications: DEFAULT_MAX_NOTIFICATIONS,
             custom_triggers: HashMap::new(),
             osc99_pending: HashMap::new(),

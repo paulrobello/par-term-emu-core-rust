@@ -260,15 +260,24 @@ impl PyTerminal {
 
     /// Check for activity notifications
     ///
-    /// Activity detection is not implemented yet: this call never queues an
-    /// event, even with `activity_enabled` set.
+    /// Queues an Activity/Visual event when `activity_enabled` is set and
+    /// `update_activity` was called since the previous event, rate-limited to
+    /// at most one event per `activity_threshold` seconds.
     ///
     /// Example:
     ///     ```python
+    ///     import time
     ///     from par_term_emu_core_rust import Terminal
     ///     term = Terminal(80, 24)
+    ///     config = term.get_notification_config()
+    ///     config.activity_enabled = True
+    ///     config.activity_threshold = 0
+    ///     term.set_notification_config(config)
+    ///     term.update_activity()
+    ///     time.sleep(0.01)
     ///     term.check_activity()
-    ///     term.get_notification_events()   # []
+    ///     [(e.trigger, e.message) for e in term.get_notification_events()]
+    ///     # [('Activity', 'Terminal activity detected')]
     ///     ```
     fn check_activity(&mut self) -> PyResult<()> {
         self.inner.check_activity();

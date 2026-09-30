@@ -417,7 +417,7 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 - `clear_notification_events()`: Clear notification events
 - `update_activity()`: Update activity tracking
 - `check_silence()`: Check if silence threshold exceeded
-- `check_activity()`: Check if activity occurred after inactivity
+- `check_activity()`: Queue an Activity event when `update_activity` was called since the last check (rate-limited by `activity_threshold`)
 - `handle_bell_notification()`: Triggers configured bell alerts
 
 #### Graphics
@@ -1627,6 +1627,9 @@ Image format enumeration.
 ### InlineImage
 
 Inline image metadata.
+
+**Constructor:**
+`InlineImage(protocol, format, data, width, height, position, display_cols, display_rows, id=None)` — `protocol`/`format` are validated by `add_inline_image()` when the image is stored.
 
 **Properties:**
 - `id: str | None`: Image identifier (string when provided by the source, else `None`)

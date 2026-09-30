@@ -116,7 +116,7 @@ impl PyTerminal {
         Ok(items
             .iter()
             .map(|item| match item {
-                DetectedItem::Url(text, row, col) => {
+                DetectedItem::Url(text, col, row) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "url".to_string(),
                         text: text.clone(),
@@ -149,7 +149,7 @@ impl PyTerminal {
         Ok(items
             .iter()
             .map(|item| match item {
-                DetectedItem::FilePath(text, row, col, line_num) => {
+                DetectedItem::FilePath(text, col, row, line_num) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "filepath".to_string(),
                         text: text.clone(),
@@ -184,7 +184,7 @@ impl PyTerminal {
         Ok(items
             .iter()
             .map(|item| match item {
-                DetectedItem::Url(text, row, col) => {
+                DetectedItem::Url(text, col, row) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "url".to_string(),
                         text: text.clone(),
@@ -202,7 +202,7 @@ impl PyTerminal {
                         line_number: *line_num,
                     }
                 }
-                DetectedItem::GitHash(text, row, col) => {
+                DetectedItem::GitHash(text, col, row) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "git_hash".to_string(),
                         text: text.clone(),
@@ -211,7 +211,7 @@ impl PyTerminal {
                         line_number: None,
                     }
                 }
-                DetectedItem::IpAddress(text, row, col) => {
+                DetectedItem::IpAddress(text, col, row) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "ip".to_string(),
                         text: text.clone(),
@@ -220,7 +220,7 @@ impl PyTerminal {
                         line_number: None,
                     }
                 }
-                DetectedItem::Email(text, row, col) => {
+                DetectedItem::Email(text, col, row) => {
                     crate::python_bindings::types::PyDetectedItem {
                         item_type: "email".to_string(),
                         text: text.clone(),

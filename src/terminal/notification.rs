@@ -253,13 +253,30 @@ impl Terminal {
     }
 
     /// Check for activity notification trigger
+    ///
+    /// Queues an `Activity`/`Visual` event when `activity_enabled` is set and
+    /// `update_activity` was called since the previous event, rate-limited to
+    /// at most one event per `activity_threshold` seconds.
     pub fn check_activity(&mut self) {
-        if self
+        if !self
             .notifications_state
             .notification_config
             .activity_enabled
         {
-            // Implementation for activity check
+            return;
+        }
+        let now = crate::terminal::unix_millis();
+        let state = &self.notifications_state;
+        let has_new_activity = state.last_activity_time > state.last_activity_check;
+        let due = now.saturating_sub(state.last_activity_check)
+            > state.notification_config.activity_threshold * 1000;
+        if has_new_activity && due {
+            self.add_notification_event(
+                NotificationTrigger::Activity,
+                NotificationAlert::Visual,
+                Some("Terminal activity detected".to_string()),
+            );
+            self.notifications_state.last_activity_check = now;
         }
     }
 
@@ -304,6 +321,70 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_check_activity_disabled_never_fires() {
+        let mut term = Terminal::new(80, 24);
+        term.notifications_state
+            .notification_config
+            .activity_enabled = false;
+        term.update_activity();
+        term.check_activity();
+        assert!(term.get_notification_events().is_empty());
+    }
+
+    #[test]
+    fn test_check_activity_ignores_construction_time_baseline() {
+        let mut term = Terminal::new(80, 24);
+        term.notifications_state
+            .notification_config
+            .activity_enabled = true;
+        term.notifications_state
+            .notification_config
+            .activity_threshold = 0;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        // No update_activity since construction: nothing counts as new.
+        term.check_activity();
+        assert!(term.get_notification_events().is_empty());
+    }
+
+    #[test]
+    fn test_check_activity_fires_after_update_activity() {
+        let mut term = Terminal::new(80, 24);
+        term.notifications_state
+            .notification_config
+            .activity_enabled = true;
+        term.notifications_state
+            .notification_config
+            .activity_threshold = 0;
+        // Timestamps have millisecond resolution: land construction and
+        // update_activity in distinct milliseconds.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        term.update_activity();
+        term.check_activity();
+        let events = term.get_notification_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].trigger, NotificationTrigger::Activity);
+        assert_eq!(events[0].alert, NotificationAlert::Visual);
+        assert_eq!(
+            events[0].message.as_deref(),
+            Some("Terminal activity detected")
+        );
+    }
+
+    #[test]
+    fn test_check_activity_rate_limited_by_threshold() {
+        let mut term = Terminal::new(80, 24);
+        term.notifications_state
+            .notification_config
+            .activity_enabled = true;
+        term.notifications_state
+            .notification_config
+            .activity_threshold = 3600;
+        term.update_activity();
+        term.check_activity();
+        assert!(term.get_notification_events().is_empty());
+    }
 
     #[test]
     fn test_notification_new() {

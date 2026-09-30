@@ -14,21 +14,18 @@ impl PyTerminal {
     /// Add an inline image
     ///
     /// Args:
-    ///     image: PyInlineImage to add
+    ///     image: InlineImage to add
     ///
     /// Raises:
     ///     ValueError: If the image's protocol or format name is not recognized
     ///
     /// Example:
     ///     ```python
-    ///     from par_term_emu_core_rust import Terminal
-    ///     # InlineImage has no Python constructor, so images come from
-    ///     # another terminal's store (get_all_images/get_images_at/get_image_by_id).
-    ///     source = Terminal(80, 24)
+    ///     from par_term_emu_core_rust import Terminal, InlineImage
     ///     term = Terminal(80, 24)
-    ///     for image in source.get_all_images():
-    ///         term.add_inline_image(image)
-    ///     len(term.get_all_images()) == len(source.get_all_images())   # True
+    ///     img = InlineImage("iterm2", "png", b"\x89PNG...", 8, 4, (0, 0), 8, 2)
+    ///     term.add_inline_image(img)
+    ///     len(term.get_all_images())   # 1
     ///     ```
     fn add_inline_image(
         &mut self,

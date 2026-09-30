@@ -1288,7 +1288,7 @@ sections; the numbers live here.
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:158` | Bytes retained for one queued clipboard sync event. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:164` | Unpolled terminal events retained from processed output. |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:168` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:942` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:945` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_BOOKMARKS` | 1,000 | `src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
