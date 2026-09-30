@@ -1560,7 +1560,8 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirror
 | Terminal queries | The daemon's pane answers them; the mirror's own replies are discarded so nothing is answered twice. |
 | Size | **Latest resize wins.** The mirror starts at the pane's current size (`pane-info`), never the viewer's, so opening a viewer never resizes the pane. A viewer's `Resize` message becomes `refresh-client -t %N -C WxH` and resizes the pane for every client, par-term included. The mirror re-fits whenever the pane's layout changes, whoever caused it, and sends viewers a `resize`. |
 | Several viewers | Each streaming session has its own daemon connection; two viewers of one pane both stay live. |
-| Pane closes | A pane killed, reaped, or missing from its window's new layout, a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
+| Pane closes | A pane killed (`kill-pane`, `kill-window`, `kill-session`) or missing from its window's new layout (moved away by `break-pane`/`join-pane`), a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
+| Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen, and viewers get no exit cue. `respawn-pane` restarts the process in the same pane, and its output reaches the same session. |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
 
 The bundled web frontend handles the size policy per viewer; the pane itself keeps one size:
