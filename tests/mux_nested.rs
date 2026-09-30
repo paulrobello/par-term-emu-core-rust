@@ -14,7 +14,7 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
-use common::{spawn_daemon, wait_listening, MuxFixture};
+use common::{rerun_isolated, spawn_daemon, wait_listening, MuxFixture, REEXEC_MARKER};
 use par_term_emu_core_rust::mux::connect_local_stream;
 use std::io::Read;
 use std::path::Path;
@@ -348,17 +348,30 @@ fn cmd_restart_and_stop_keep_working_inside_a_pane() {
 /// `connect_or_spawn` from inside a pane: attaching to a live daemon works,
 /// auto-spawning when none owns the socket is refused fast instead of
 /// burning the ten-second connect deadline on a daemon the guard kills.
+///
+/// The pane marker is set in an isolated re-run of this test, never in this
+/// process: the other tests here spawn daemons that inherit this env, and a
+/// concurrent `PAR_MUX_ENV=1` would make the nesting guard refuse them.
 #[test]
 fn auto_spawn_inside_a_pane_is_refused_fast() {
+    if std::env::var_os(REEXEC_MARKER).is_none() {
+        assert!(
+            rerun_isolated(
+                "auto_spawn_inside_a_pane_is_refused_fast",
+                &[("PAR_MUX_ENV", "1")],
+                &["PAR_MUX_ALLOW_NESTED"],
+            ),
+            "the isolated re-run passes"
+        );
+        return;
+    }
     let fixture = MuxFixture::new("nestrsp");
-    std::env::set_var("PAR_MUX_ENV", "1");
     let started = Instant::now();
     let err = match par_term_emu_core_rust::mux::MuxClient::connect_or_spawn_at(fixture.socket()) {
         Err(err) => err,
         Ok(_client) => panic!("auto-spawn inside a pane is refused"),
     };
     let elapsed = started.elapsed();
-    std::env::remove_var("PAR_MUX_ENV");
     assert!(
         err.to_string().contains("nested daemon"),
         "the error names nesting: {err}"

@@ -199,6 +199,70 @@ pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
     DaemonGuard(child)
 }
 
+/// Set in the child [`rerun_isolated`] starts, so the test body knows it is
+/// the isolated copy.
+pub const REEXEC_MARKER: &str = "PAR_TEST_REEXEC";
+
+/// Upper bound on one isolated re-run. A wedged child must fail the parent
+/// test, not hang the run.
+const REEXEC_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Run `test` (exact name) in a fresh copy of this test binary with `set`
+/// and `unset` applied to the CHILD's environment, and return whether it
+/// passed. The child sees [`REEXEC_MARKER`].
+///
+/// This is how a test that needs a different process env gets one without
+/// mutating this process's env, which every parallel test (and every daemon
+/// they spawn) shares (QA-196). A test using it starts with
+/// `if std::env::var_os(REEXEC_MARKER).is_none() { assert!(rerun_isolated(..)); return; }`.
+/// The child's stdout and stderr go to a temp file, printed when it fails.
+pub fn rerun_isolated(test: &str, set: &[(&str, &str)], unset: &[&str]) -> bool {
+    use std::process::Stdio;
+    let log = tempfile::NamedTempFile::new().expect("create re-exec log file");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test exe"));
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(REEXEC_MARKER, "1")
+        .stdin(Stdio::null())
+        .stdout(log.reopen().expect("reopen log for stdout"))
+        .stderr(log.reopen().expect("reopen log for stderr"));
+    for (key, value) in set {
+        command.env(key, value);
+    }
+    for key in unset {
+        command.env_remove(key);
+    }
+    let mut child = command.spawn().expect("re-exec the test binary");
+    let deadline = Instant::now() + REEXEC_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the re-exec child") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let output = std::fs::read_to_string(log.path()).unwrap_or_default();
+    // A name `--exact` matches nothing still exits 0 with zero tests run, so
+    // require that the one test actually ran.
+    let ran_one = output.contains("test result: ok. 1 passed");
+    let passed = status.is_some_and(|s| s.success()) && ran_one;
+    if !passed {
+        eprintln!(
+            "isolated re-run of {test} {}:\n{output}",
+            match status {
+                None => format!("timed out after {REEXEC_DEADLINE:?}"),
+                Some(status) if !status.success() => format!("failed ({status})"),
+                Some(_) => "ran no test (name mismatch?)".to_string(),
+            }
+        );
+    }
+    passed
+}
+
 /// Poll until the daemon's socket accepts connections (its listener is up).
 pub fn wait_listening(path: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(5);

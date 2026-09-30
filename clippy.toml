@@ -1,0 +1,9 @@
+# Process env is global to a test binary, and its tests run in parallel:
+# a set_var in one test races every other test and every child it spawns
+# (QA-196). Inject values instead, or re-run the test in an isolated child
+# process (tests/common/mod.rs `rerun_isolated`). Both become `unsafe` in
+# edition 2024.
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "process env is shared by parallel tests; inject the value or use rerun_isolated (QA-196)" },
+    { path = "std::env::remove_var", reason = "process env is shared by parallel tests; inject the value or use rerun_isolated (QA-196)" },
+]

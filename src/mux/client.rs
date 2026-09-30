@@ -55,19 +55,33 @@ impl MuxClient {
     /// dir — and the connect itself verifies the serving daemon's euid.
     pub fn connect_or_spawn(name: &str) -> io::Result<Self> {
         let path = default_socket_path(name);
-        if let Ok(client) = Self::connect(&path) {
+        #[cfg(unix)]
+        let legacy = std::env::var_os("XDG_RUNTIME_DIR")
+            .is_none()
+            .then(|| crate::mux::ipc::legacy_socket_path(name));
+        #[cfg(not(unix))]
+        let legacy: Option<PathBuf> = None;
+        Self::connect_or_spawn_paths(&path, legacy.as_deref())
+    }
+
+    /// [`Self::connect_or_spawn`] with its env-derived paths already resolved:
+    /// `legacy` is the pre-0.52 path to probe before spawning (Unix only).
+    /// Tests pass paths here instead of mutating the process env (QA-196).
+    fn connect_or_spawn_paths(path: &Path, legacy: Option<&Path>) -> io::Result<Self> {
+        if let Ok(client) = Self::connect(path) {
             return Ok(client);
         }
         #[cfg(unix)]
-        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
-            let legacy = crate::mux::ipc::legacy_socket_path(name);
-            if crate::mux::ipc::legacy_socket_is_trustworthy(&legacy) {
-                if let Ok(client) = Self::connect(&legacy) {
+        if let Some(legacy) = legacy {
+            if crate::mux::ipc::legacy_socket_is_trustworthy(legacy) {
+                if let Ok(client) = Self::connect(legacy) {
                     return Ok(client);
                 }
             }
         }
-        Self::connect_or_spawn_at(&path)
+        #[cfg(not(unix))]
+        let _ = legacy;
+        Self::connect_or_spawn_at(path)
     }
 
     /// Connect to a daemon at `path`, spawning one when no live server owns it.
@@ -571,61 +585,20 @@ mod tests {
         drop(dir);
     }
 
-    /// Restores `TMPDIR` and `XDG_RUNTIME_DIR` when dropped, so the env
-    /// mutations of the legacy-probe test cannot leak into later tests even
-    /// on a panic. Mutating process env is NOT thread-safe — tests run in
-    /// parallel under the `mux::` cargo filter — but the only readers at
-    /// risk are tempfile creations, and the sandbox they may land in is
-    /// never recursively deleted (see `keep` in the legacy test), so
-    /// a concurrent creation at worst leaks its file into that sandbox,
-    /// where its own guard still deletes it.
-    struct EnvGuard {
-        tmpdir: Option<std::ffi::OsString>,
-        xdg: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.tmpdir.take() {
-                Some(v) => std::env::set_var("TMPDIR", v),
-                None => std::env::remove_var("TMPDIR"),
-            }
-            match self.xdg.take() {
-                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
-                None => std::env::remove_var("XDG_RUNTIME_DIR"),
-            }
-        }
-    }
-
     /// A daemon answering on the pre-0.52 default path must be attached, not
     /// silently replaced: 0.52 moved the default socket into a per-UID
     /// directory, and without the probe a fresh daemon would be spawned for
     /// the same name while the old one kept its sessions invisibly.
+    ///
+    /// Drives the path-injected seam: the env-derived paths `connect_or_spawn`
+    /// computes are passed in, so no process env is mutated (QA-196).
     #[cfg(unix)]
     #[test]
     fn a_legacy_path_daemon_is_attached_not_replaced_by_a_second_spawn() {
-        // Short name: the default path nests two directories deep, and
-        // macOS caps a Unix socket path at 104 bytes — a long name would
-        // make a regressed run fail on path length instead of on the
-        // second spawn it actually performed.
-        let name = format!("lp-{}", std::process::id());
-        let (dir, legacy) = temp_socket(&format!("par-mux-{name}.sock"));
-        // Take ownership without TempDir's recursive delete. While TMPDIR
-        // points at this sandbox, any concurrently running test that calls
-        // tempfile (env temp is process-global) lands its own files in
-        // here — a recursive drop deletes those too and fails that test
-        // (QA-133: the kitty t=t and persist flakes). Cleanup at the end
-        // is a non-recursive remove_dir instead.
-        let sandbox = dir.keep();
-        // The new default path must land somewhere else inside this temp
-        // dir root: point TMPDIR at it and keep XDG_RUNTIME_DIR out of the
-        // way so the per-UID fallback applies.
-        let guard = EnvGuard {
-            tmpdir: std::env::var_os("TMPDIR"),
-            xdg: std::env::var_os("XDG_RUNTIME_DIR"),
-        };
-        std::env::set_var("TMPDIR", &sandbox);
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        let (dir, legacy) = temp_socket("legacy.sock");
+        // Where the post-0.52 default would live: absent, so the connect
+        // there fails and the legacy probe runs.
+        let new_path = dir.path().join("new").join("default.sock");
 
         // The "legacy daemon": a listener on the pre-0.52 path. MuxClient
         // sends no handshake at connect, so a held accept is a live daemon
@@ -637,8 +610,8 @@ mod tests {
             drop(stream);
         });
 
-        let new_path = default_socket_path(&name);
-        let client = MuxClient::connect_or_spawn(&name).expect("attach to the legacy daemon");
+        let client = MuxClient::connect_or_spawn_paths(&new_path, Some(&legacy))
+            .expect("attach to the legacy daemon");
 
         assert!(
             client.spawned_daemon.is_none(),
@@ -654,12 +627,7 @@ mod tests {
 
         drop(client);
         holder.join().expect("holder thread");
-        drop(guard);
-        // Non-recursive on purpose: a concurrent test's tempfile may still
-        // occupy the sandbox (see the into_path note above). ENOTEMPTY
-        // just leaves the empty-behind dir for the OS temp cleaner after
-        // that test's own guard deletes its file.
-        let _ = std::fs::remove_dir(&sandbox);
+        drop(dir);
     }
 
     #[test]

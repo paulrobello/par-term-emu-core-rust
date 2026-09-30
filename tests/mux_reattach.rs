@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{wait_listening, MuxFixture};
+use common::{rerun_isolated, wait_listening, MuxFixture, REEXEC_MARKER};
 use par_term_emu_core_rust::mux::{MuxClient, MuxServer};
 use par_term_emu_core_rust::terminal::Terminal;
 use par_term_emu_core_rust::tmux_control::TmuxNotification;
@@ -298,12 +298,23 @@ fn forged_framing_lines_in_a_reply_body_do_not_desync_the_client() {
 
 #[test]
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
+    // This test DELIBERATELY starts a daemon, which the nesting guard
+    // refuses when the suite itself runs inside a mux pane. The pane marker
+    // is cleared in an isolated re-run of this test, never in this process
+    // (QA-196).
+    if std::env::var_os(REEXEC_MARKER).is_none() {
+        assert!(
+            rerun_isolated(
+                "connect_or_spawn_starts_a_daemon_when_none_is_running",
+                &[],
+                &["PAR_MUX_ENV"],
+            ),
+            "the isolated re-run passes"
+        );
+        return;
+    }
     let fixture = MuxFixture::new("spawn");
     let path = fixture.socket();
-    // This test DELIBERATELY starts a daemon, which the nesting guard
-    // refuses when the suite itself runs inside a mux pane — clear the
-    // pane marker so the spawn is judged on its own.
-    std::env::remove_var("PAR_MUX_ENV");
     // Nothing is listening. The client must start one.
     let mut client = SpawnedClient(
         MuxClient::connect_or_spawn_at(path).expect("connect_or_spawn starts a daemon"),

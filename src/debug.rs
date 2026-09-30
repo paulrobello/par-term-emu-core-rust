@@ -52,16 +52,17 @@ impl DebugLevel {
     }
 
     fn from_env() -> Self {
-        match std::env::var("DEBUG_LEVEL") {
-            Ok(val) => match val.trim().parse::<u8>() {
-                Ok(0) => DebugLevel::Off,
-                Ok(1) => DebugLevel::Error,
-                Ok(2) => DebugLevel::Info,
-                Ok(3) => DebugLevel::Debug,
-                Ok(4) => DebugLevel::Trace,
-                _ => DebugLevel::Off,
-            },
-            Err(_) => DebugLevel::Off,
+        Self::from_value(std::env::var("DEBUG_LEVEL").ok().as_deref())
+    }
+
+    /// Parse a `DEBUG_LEVEL` value; unset or unparseable means `Off`.
+    fn from_value(raw: Option<&str>) -> Self {
+        match raw.map(|val| val.trim().parse::<u8>()) {
+            Some(Ok(1)) => DebugLevel::Error,
+            Some(Ok(2)) => DebugLevel::Info,
+            Some(Ok(3)) => DebugLevel::Debug,
+            Some(Ok(4)) => DebugLevel::Trace,
+            _ => DebugLevel::Off,
         }
     }
 }
@@ -444,13 +445,11 @@ mod tests {
 
     #[test]
     fn test_debug_level_parsing() {
-        std::env::set_var("DEBUG_LEVEL", "3");
-        assert_eq!(DebugLevel::from_env(), DebugLevel::Debug);
-
-        std::env::set_var("DEBUG_LEVEL", "0");
-        assert_eq!(DebugLevel::from_env(), DebugLevel::Off);
-
-        std::env::remove_var("DEBUG_LEVEL");
-        assert_eq!(DebugLevel::from_env(), DebugLevel::Off);
+        assert_eq!(DebugLevel::from_value(Some("3")), DebugLevel::Debug);
+        assert_eq!(DebugLevel::from_value(Some(" 4 ")), DebugLevel::Trace);
+        assert_eq!(DebugLevel::from_value(Some("0")), DebugLevel::Off);
+        assert_eq!(DebugLevel::from_value(None), DebugLevel::Off);
+        assert_eq!(DebugLevel::from_value(Some("junk")), DebugLevel::Off);
+        assert_eq!(DebugLevel::from_value(Some("9")), DebugLevel::Off);
     }
 }

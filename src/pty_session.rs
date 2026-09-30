@@ -161,6 +161,11 @@ pub struct PtySession {
     /// so a test can make the child exit before any output is read.
     #[cfg(test)]
     first_read_delay: Option<std::time::Duration>,
+    /// Test seam: the parent environment a spawn inherits, in place of the
+    /// real process env, so env-drop tests need no process-global `set_var`
+    /// (QA-196).
+    #[cfg(test)]
+    parent_env_override: Option<Vec<(std::ffi::OsString, std::ffi::OsString)>>,
     /// Test seam: SIGWINCH deliveries this session attempted.
     #[cfg(all(test, unix))]
     signals_sent: Arc<std::sync::atomic::AtomicUsize>,
@@ -290,11 +295,23 @@ impl PtySession {
             reaped: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             first_read_delay: None,
+            #[cfg(test)]
+            parent_env_override: None,
             #[cfg(all(test, unix))]
             signals_sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         session.geometry.publish(&session.terminal.read());
         session
+    }
+
+    /// The environment a spawn inherits: the real process env, or the test
+    /// override when one is set.
+    fn parent_env(&self) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        #[cfg(test)]
+        if let Some(env) = &self.parent_env_override {
+            return env.clone();
+        }
+        std::env::vars_os().collect()
     }
 
     /// Set an environment variable for the spawned process
@@ -704,22 +721,29 @@ impl PtySession {
         fn dropped_by_name(name: &str) -> bool {
             DROP_VARS.contains(&name) || name.starts_with("PAR_MUX_")
         }
-        let mut dropped: Vec<&str> = Vec::new();
-        for &var in DROP_VARS {
-            if std::env::var_os(var).is_some() {
-                cmd.env_remove(var);
-                dropped.push(var);
-            }
+        // A test override replaces the preloaded real env wholesale.
+        #[cfg(test)]
+        if self.parent_env_override.is_some() {
+            cmd.env_clear();
         }
-        let mut mux_dropped = false;
-        for (key, _value) in std::env::vars() {
-            if key.starts_with("PAR_MUX_") {
-                cmd.env_remove(&key);
-                mux_dropped = true;
+        // One pass over the parent env: remove each dropped name, and re-apply
+        // the rest (overriding get_base_env values with current ones).
+        let mut dropped: Vec<String> = Vec::new();
+        for (key, value) in self.parent_env() {
+            let name = key.to_string_lossy();
+            if !dropped_by_name(&name) {
+                cmd.env(&key, &value);
+                continue;
             }
-        }
-        if mux_dropped {
-            dropped.push("PAR_MUX_*");
+            cmd.env_remove(&key);
+            let label = if name.starts_with("PAR_MUX_") {
+                "PAR_MUX_*".to_string()
+            } else {
+                name.into_owned()
+            };
+            if !dropped.contains(&label) {
+                dropped.push(label);
+            }
         }
         if !dropped.is_empty() {
             debug::log(
@@ -727,14 +751,6 @@ impl PtySession {
                 "PTY_SPAWN",
                 &format!("Dropped env vars: {}", dropped.join(", ")),
             );
-        }
-
-        // Re-apply parent env vars (overrides get_base_env values with current ones),
-        // but skip the vars we just removed so we don't re-add them.
-        for (key, value) in std::env::vars() {
-            if !dropped_by_name(&key) {
-                cmd.env(&key, &value);
-            }
         }
 
         // Set terminal-specific environment variables
@@ -3557,10 +3573,37 @@ mod tests {
     /// back — which is exactly how mux panes seed their own values. The
     /// synthetic var proves the prefix rule covers identity vars beyond the
     /// ones a daemon exports today.
+    /// A parent env for the env-drop tests: the real env's spawn essentials
+    /// (cmd.exe will not start without `SystemRoot`/`COMSPEC`, and a present
+    /// `HOME` keeps portable-pty off its non-thread-safe `getpwuid` fallback)
+    /// plus `outer`, the vars under test. Injected through
+    /// `parent_env_override`, so no test mutates the process env (QA-196).
+    fn parent_env_with(outer: &[(&str, &str)]) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        const ESSENTIALS: &[&str] = &[
+            "PATH",
+            "HOME",
+            "SystemRoot",
+            "COMSPEC",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+        ];
+        let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = ESSENTIALS
+            .iter()
+            .filter_map(|&key| std::env::var_os(key).map(|value| (key.into(), value)))
+            .collect();
+        env.extend(outer.iter().map(|&(key, value)| (key.into(), value.into())));
+        env
+    }
+
     #[test]
     fn par_mux_env_does_not_leak_into_spawned_ptys() {
-        std::env::set_var("PAR_MUX_LEAK_PROBE", "stale-outer-value");
         let mut session = PtySession::new(80, 24, 1000);
+        session.parent_env_override = Some(parent_env_with(&[(
+            "PAR_MUX_LEAK_PROBE",
+            "stale-outer-value",
+        )]));
         // set_env runs after the drop, so this one survives as the pane's own.
         session.set_env("PAR_MUX_PANE_ID", "42");
 
@@ -3602,7 +3645,6 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        std::env::remove_var("PAR_MUX_LEAK_PROBE");
     }
 
     /// A PTY spawned from an environment carrying the OUTER agent session's
@@ -3613,17 +3655,15 @@ mod tests {
     /// from rosters. set_env opts back in for an intentional child session.
     #[test]
     fn outer_agent_identity_env_does_not_leak_into_spawned_ptys() {
-        for (key, value) in [
+        let mut session = PtySession::new(80, 24, 1000);
+        session.parent_env_override = Some(parent_env_with(&[
             ("CLAUDECODE", "1"),
             ("CLAUDE_CODE_SESSION_ID", "outer-session"),
             ("CLAUDE_CODE_CHILD_SESSION", "1"),
             ("CLAUDE_CODE_MESSAGING_TOKEN", "outer-token"),
             ("OMPCODE", "1"),
             ("CODEX_THREAD_ID", "outer-thread"),
-        ] {
-            std::env::set_var(key, value);
-        }
-        let mut session = PtySession::new(80, 24, 1000);
+        ]));
         // set_env runs after the drop, so an intentional child session can
         // opt back in.
         session.set_env("OMPCODE", "1");
@@ -3684,16 +3724,6 @@ mod tests {
                 "probe never ran; screen so far: {screen}"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        for key in [
-            "CLAUDECODE",
-            "CLAUDE_CODE_SESSION_ID",
-            "CLAUDE_CODE_CHILD_SESSION",
-            "CLAUDE_CODE_MESSAGING_TOKEN",
-            "OMPCODE",
-            "CODEX_THREAD_ID",
-        ] {
-            std::env::remove_var(key);
         }
     }
 }
