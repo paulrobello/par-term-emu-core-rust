@@ -1219,15 +1219,20 @@ fn an_unterminated_stream_over_budget_closes_the_connection() {
 
         let mut reply = String::new();
         let mut closed = false;
+        // Outside the loop: a recv-timeout wake mid-line leaves the partial
+        // in `line` for the next read to finish.
+        let mut line = String::new();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            let mut line = String::new();
             match reader.read_line(&mut line) {
                 Ok(0) => {
                     closed = true;
                     break;
                 }
-                Ok(_) => reply.push_str(&line),
+                Ok(_) => {
+                    reply.push_str(&line);
+                    line.clear();
+                }
                 Err(err)
                     if matches!(
                         err.kind(),

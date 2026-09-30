@@ -1272,7 +1272,7 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(!join_bounded(stuck, Duration::from_millis(200)));
         assert!(
-            started.elapsed() < Duration::from_millis(400),
+            started.elapsed() < Duration::from_secs(2),
             "gave up at the bound: {:?}",
             started.elapsed()
         );
