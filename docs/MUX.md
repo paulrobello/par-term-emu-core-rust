@@ -423,12 +423,11 @@ The control-socket parser is an adversarial-input surface (it executes commands,
 - `mux_parse_command` — `parse_line`/`parse_command` over arbitrary lines, including multi-line inputs and `%`-notification-looking shapes.
 - `mux_hook_report` — the `{`-shaped hook-report JSON grammar through `handle_report` against an empty tree (JSON parse, header validation, SEC-105 value caps; no panes exist, so nothing downstream can be corrupted).
 
-Run them locally (nightly toolchain, first build is slow — the sanitizer instruments the whole dependency tree):
+Run them locally from the repository root (nightly toolchain, first build is slow — the sanitizer instruments the whole dependency tree). Each runs for `FUZZ_SECONDS` (default 60) under `-rss_limit_mb=512`:
 
 ```bash
-cd fuzz
-cargo fuzz run mux_parse_command -max_total_time=60
-cargo fuzz run mux_hook_report -max_total_time=60
+make fuzz-mux_parse_command
+make fuzz-mux_hook_report
 ```
 
 Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new command or report shape.
