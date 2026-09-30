@@ -6,7 +6,7 @@
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
         streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install \
-        stubs stub-check \
+        stubs stub-check stub-drift \
         grind-start grind-start-anthropic grind-start-zai grind-start-grok grind-start-codex grind-start-omp grind-stop grind-clean-logs
 
 help:
@@ -54,6 +54,7 @@ help:
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
 	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after make dev)"
 	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
+	@echo "  stub-drift      - Rebuild (dev-streaming), regenerate the stub, and fail if it differs from the committed file"
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
@@ -336,6 +337,12 @@ stub-check:
 	uv run python -c "import par_term_emu_core_rust"
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 	uv run python scripts/check_api_reference.py
+
+# QA-204: regenerate the stub from a streaming build and fail on drift.
+# Not in checkall: it rebuilds the extension. The stub must come from a
+# streaming build; since ARC-105 `dev` is one (dev-streaming is its alias).
+stub-drift: dev-streaming stubs
+	git diff --exit-code -- python/par_term_emu_core_rust/_native.pyi
 
 # ENH-022: regenerate the resource-caps table in docs/SECURITY.md from the
 # `/// cap:` doc comments on the size constants; the check flavor gates drift.
