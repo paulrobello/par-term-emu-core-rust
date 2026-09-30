@@ -644,38 +644,58 @@ impl From<&AppClientMessage> for pb::ClientMessage {
     }
 }
 
-impl From<AppEventType> for i32 {
-    fn from(event: AppEventType) -> Self {
-        match event {
-            AppEventType::Output => pb::EventType::Output as i32,
-            AppEventType::Cursor => pb::EventType::Cursor as i32,
-            AppEventType::Bell => pb::EventType::Bell as i32,
-            AppEventType::Title => pb::EventType::Title as i32,
-            AppEventType::Resize => pb::EventType::Resize as i32,
-            AppEventType::Cwd => pb::EventType::Cwd as i32,
-            AppEventType::Trigger => pb::EventType::Trigger as i32,
-            AppEventType::Action => pb::EventType::Action as i32,
-            AppEventType::Mode => pb::EventType::Mode as i32,
-            AppEventType::Graphics => pb::EventType::Graphics as i32,
-            AppEventType::Hyperlink => pb::EventType::Hyperlink as i32,
-            AppEventType::UserVar => pb::EventType::UserVar as i32,
-            AppEventType::ProgressBar => pb::EventType::ProgressBar as i32,
-            AppEventType::Badge => pb::EventType::Badge as i32,
-            AppEventType::Selection => pb::EventType::Selection as i32,
-            AppEventType::Clipboard => pb::EventType::Clipboard as i32,
-            AppEventType::Shell => pb::EventType::Shell as i32,
-            AppEventType::SystemStats => pb::EventType::SystemStats as i32,
-            AppEventType::Zone => pb::EventType::Zone as i32,
-            AppEventType::Environment => pb::EventType::Environment as i32,
-            AppEventType::RemoteHost => pb::EventType::RemoteHost as i32,
-            AppEventType::SubShell => pb::EventType::SubShell as i32,
-            AppEventType::Snapshot => pb::EventType::Snapshot as i32,
-            AppEventType::FileTransfer => pb::EventType::FileTransfer as i32,
-            AppEventType::UploadRequest => pb::EventType::UploadRequest as i32,
-            AppEventType::ScreenCleared => pb::EventType::ScreenCleared as i32,
+/// Both event-type conversions from one variant list (QA-214): app → wire
+/// (`i32`) and wire → app. `pb::EventType::Unspecified`, which has no app
+/// variant, decodes as `Output`.
+macro_rules! event_type_conversions {
+    ($($variant:ident),+ $(,)?) => {
+        impl From<AppEventType> for i32 {
+            fn from(event: AppEventType) -> Self {
+                match event {
+                    $(AppEventType::$variant => pb::EventType::$variant as i32,)+
+                }
+            }
         }
-    }
+
+        impl From<pb::EventType> for AppEventType {
+            fn from(event: pb::EventType) -> Self {
+                match event {
+                    pb::EventType::Unspecified => AppEventType::Output, // Default fallback
+                    $(pb::EventType::$variant => AppEventType::$variant,)+
+                }
+            }
+        }
+    };
 }
+
+event_type_conversions!(
+    Output,
+    Cursor,
+    Bell,
+    Title,
+    Resize,
+    Cwd,
+    Trigger,
+    Action,
+    Mode,
+    Graphics,
+    Hyperlink,
+    UserVar,
+    ProgressBar,
+    Badge,
+    Selection,
+    Clipboard,
+    Shell,
+    SystemStats,
+    Zone,
+    Environment,
+    RemoteHost,
+    SubShell,
+    Snapshot,
+    FileTransfer,
+    UploadRequest,
+    ScreenCleared,
+);
 
 // =============================================================================
 // Conversion: Proto types -> App types
@@ -1040,40 +1060,6 @@ impl TryFrom<pb::ClientMessage> for AppClientMessage {
             None => Err(StreamingError::InvalidMessage(
                 "Empty client message".into(),
             )),
-        }
-    }
-}
-
-impl From<pb::EventType> for AppEventType {
-    fn from(event: pb::EventType) -> Self {
-        match event {
-            pb::EventType::Unspecified => AppEventType::Output, // Default fallback
-            pb::EventType::Output => AppEventType::Output,
-            pb::EventType::Cursor => AppEventType::Cursor,
-            pb::EventType::Bell => AppEventType::Bell,
-            pb::EventType::Title => AppEventType::Title,
-            pb::EventType::Resize => AppEventType::Resize,
-            pb::EventType::Cwd => AppEventType::Cwd,
-            pb::EventType::Trigger => AppEventType::Trigger,
-            pb::EventType::Action => AppEventType::Action,
-            pb::EventType::Mode => AppEventType::Mode,
-            pb::EventType::Graphics => AppEventType::Graphics,
-            pb::EventType::Hyperlink => AppEventType::Hyperlink,
-            pb::EventType::UserVar => AppEventType::UserVar,
-            pb::EventType::ProgressBar => AppEventType::ProgressBar,
-            pb::EventType::Badge => AppEventType::Badge,
-            pb::EventType::Selection => AppEventType::Selection,
-            pb::EventType::Clipboard => AppEventType::Clipboard,
-            pb::EventType::Shell => AppEventType::Shell,
-            pb::EventType::SystemStats => AppEventType::SystemStats,
-            pb::EventType::Zone => AppEventType::Zone,
-            pb::EventType::Environment => AppEventType::Environment,
-            pb::EventType::RemoteHost => AppEventType::RemoteHost,
-            pb::EventType::SubShell => AppEventType::SubShell,
-            pb::EventType::Snapshot => AppEventType::Snapshot,
-            pb::EventType::FileTransfer => AppEventType::FileTransfer,
-            pb::EventType::UploadRequest => AppEventType::UploadRequest,
-            pb::EventType::ScreenCleared => AppEventType::ScreenCleared,
         }
     }
 }

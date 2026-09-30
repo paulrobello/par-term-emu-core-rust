@@ -6,6 +6,17 @@
 
 use pyo3::prelude::*;
 
+/// The size check every `Terminal`/`PtyTerminal` constructor and resize
+/// binding applies: both dimensions must be non-zero (QA-214).
+pub(crate) fn check_positive_dims(cols: usize, rows: usize) -> PyResult<()> {
+    if cols == 0 || rows == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Dimensions must be greater than 0",
+        ));
+    }
+    Ok(())
+}
+
 /// Parse sixel rendering mode from string
 pub fn parse_sixel_mode(mode: &str) -> PyResult<crate::screenshot::SixelRenderMode> {
     match mode.to_lowercase().as_str() {

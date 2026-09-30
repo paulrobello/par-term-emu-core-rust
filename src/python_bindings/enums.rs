@@ -5,6 +5,31 @@
 
 use pyo3::prelude::*;
 
+use crate::unicode_normalization_config::NormalizationForm as CoreNormalizationForm;
+use crate::unicode_width_config::UnicodeVersion as CoreUnicodeVersion;
+
+/// Both `From` directions between a Python enum and its core enum, from one
+/// `PyVariant => CoreVariant` list (QA-214).
+macro_rules! bidirectional_from {
+    ($py:ident <=> $core:ident { $($py_variant:ident => $core_variant:ident),+ $(,)? }) => {
+        impl From<$core> for $py {
+            fn from(value: $core) -> Self {
+                match value {
+                    $($core::$core_variant => $py::$py_variant,)+
+                }
+            }
+        }
+
+        impl From<$py> for $core {
+            fn from(value: $py) -> Self {
+                match value {
+                    $($py::$py_variant => $core::$core_variant,)+
+                }
+            }
+        }
+    };
+}
+
 /// Cursor style/shape (DECSCUSR)
 #[pyclass(name = "CursorStyle", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,43 +277,18 @@ impl PyUnicodeVersion {
     }
 }
 
-impl From<crate::unicode_width_config::UnicodeVersion> for PyUnicodeVersion {
-    fn from(version: crate::unicode_width_config::UnicodeVersion) -> Self {
-        match version {
-            crate::unicode_width_config::UnicodeVersion::Unicode9 => PyUnicodeVersion::Unicode9,
-            crate::unicode_width_config::UnicodeVersion::Unicode10 => PyUnicodeVersion::Unicode10,
-            crate::unicode_width_config::UnicodeVersion::Unicode11 => PyUnicodeVersion::Unicode11,
-            crate::unicode_width_config::UnicodeVersion::Unicode12 => PyUnicodeVersion::Unicode12,
-            crate::unicode_width_config::UnicodeVersion::Unicode13 => PyUnicodeVersion::Unicode13,
-            crate::unicode_width_config::UnicodeVersion::Unicode14 => PyUnicodeVersion::Unicode14,
-            crate::unicode_width_config::UnicodeVersion::Unicode15 => PyUnicodeVersion::Unicode15,
-            crate::unicode_width_config::UnicodeVersion::Unicode15_1 => {
-                PyUnicodeVersion::Unicode15_1
-            }
-            crate::unicode_width_config::UnicodeVersion::Unicode16 => PyUnicodeVersion::Unicode16,
-            crate::unicode_width_config::UnicodeVersion::Auto => PyUnicodeVersion::Auto,
-        }
-    }
-}
-
-impl From<PyUnicodeVersion> for crate::unicode_width_config::UnicodeVersion {
-    fn from(version: PyUnicodeVersion) -> Self {
-        match version {
-            PyUnicodeVersion::Unicode9 => crate::unicode_width_config::UnicodeVersion::Unicode9,
-            PyUnicodeVersion::Unicode10 => crate::unicode_width_config::UnicodeVersion::Unicode10,
-            PyUnicodeVersion::Unicode11 => crate::unicode_width_config::UnicodeVersion::Unicode11,
-            PyUnicodeVersion::Unicode12 => crate::unicode_width_config::UnicodeVersion::Unicode12,
-            PyUnicodeVersion::Unicode13 => crate::unicode_width_config::UnicodeVersion::Unicode13,
-            PyUnicodeVersion::Unicode14 => crate::unicode_width_config::UnicodeVersion::Unicode14,
-            PyUnicodeVersion::Unicode15 => crate::unicode_width_config::UnicodeVersion::Unicode15,
-            PyUnicodeVersion::Unicode15_1 => {
-                crate::unicode_width_config::UnicodeVersion::Unicode15_1
-            }
-            PyUnicodeVersion::Unicode16 => crate::unicode_width_config::UnicodeVersion::Unicode16,
-            PyUnicodeVersion::Auto => crate::unicode_width_config::UnicodeVersion::Auto,
-        }
-    }
-}
+bidirectional_from!(PyUnicodeVersion <=> CoreUnicodeVersion {
+    Unicode9 => Unicode9,
+    Unicode10 => Unicode10,
+    Unicode11 => Unicode11,
+    Unicode12 => Unicode12,
+    Unicode13 => Unicode13,
+    Unicode14 => Unicode14,
+    Unicode15 => Unicode15,
+    Unicode15_1 => Unicode15_1,
+    Unicode16 => Unicode16,
+    Auto => Auto,
+});
 
 /// Treatment of East Asian Ambiguous width characters.
 ///
@@ -488,41 +488,13 @@ impl PyNormalizationForm {
     }
 }
 
-impl From<crate::unicode_normalization_config::NormalizationForm> for PyNormalizationForm {
-    fn from(form: crate::unicode_normalization_config::NormalizationForm) -> Self {
-        match form {
-            crate::unicode_normalization_config::NormalizationForm::None => {
-                PyNormalizationForm::Disabled
-            }
-            crate::unicode_normalization_config::NormalizationForm::NFC => PyNormalizationForm::NFC,
-            crate::unicode_normalization_config::NormalizationForm::NFD => PyNormalizationForm::NFD,
-            crate::unicode_normalization_config::NormalizationForm::NFKC => {
-                PyNormalizationForm::NFKC
-            }
-            crate::unicode_normalization_config::NormalizationForm::NFKD => {
-                PyNormalizationForm::NFKD
-            }
-        }
-    }
-}
-
-impl From<PyNormalizationForm> for crate::unicode_normalization_config::NormalizationForm {
-    fn from(form: PyNormalizationForm) -> Self {
-        match form {
-            PyNormalizationForm::Disabled => {
-                crate::unicode_normalization_config::NormalizationForm::None
-            }
-            PyNormalizationForm::NFC => crate::unicode_normalization_config::NormalizationForm::NFC,
-            PyNormalizationForm::NFD => crate::unicode_normalization_config::NormalizationForm::NFD,
-            PyNormalizationForm::NFKC => {
-                crate::unicode_normalization_config::NormalizationForm::NFKC
-            }
-            PyNormalizationForm::NFKD => {
-                crate::unicode_normalization_config::NormalizationForm::NFKD
-            }
-        }
-    }
-}
+bidirectional_from!(PyNormalizationForm <=> CoreNormalizationForm {
+    Disabled => None,
+    NFC => NFC,
+    NFD => NFD,
+    NFKC => NFKC,
+    NFKD => NFKD,
+});
 
 #[cfg(test)]
 mod tests {

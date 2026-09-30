@@ -111,9 +111,7 @@ impl PyPtyTerminal {
     #[new]
     #[pyo3(signature = (cols, rows, scrollback=10000))]
     fn new(cols: usize, rows: usize, scrollback: usize) -> PyResult<Self> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         Ok(Self {
             inner: pty_session::PtySession::new(cols, rows, scrollback),
         })
@@ -203,9 +201,7 @@ impl PyPtyTerminal {
     ///     cols: New number of columns
     ///     rows: New number of rows
     fn resize(&mut self, cols: usize, rows: usize) -> PyResult<()> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         self.inner
             .resize(to_u16("cols", cols)?, to_u16("rows", rows)?)?;
         Ok(())
@@ -226,9 +222,7 @@ impl PyPtyTerminal {
         pixel_width: usize,
         pixel_height: usize,
     ) -> PyResult<()> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         self.inner.resize_with_pixels(
             to_u16("cols", cols)?,
             to_u16("rows", rows)?,

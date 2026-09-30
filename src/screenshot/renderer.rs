@@ -843,6 +843,26 @@ impl Renderer {
         }
     }
 
+    /// Paint the cell-width row `line_y` starting at `x`, at each column
+    /// offset `dx` for which `draw_at(dx)` holds, clipped to the canvas —
+    /// the row pattern the straight, double, dotted and dashed underlines
+    /// share (QA-214).
+    fn render_underline_row(
+        &self,
+        image: &mut RgbaImage,
+        x: u32,
+        line_y: u32,
+        color: (u8, u8, u8),
+        draw_at: impl Fn(u32) -> bool,
+    ) {
+        for dx in 0..self.cell_width {
+            let px = x + dx;
+            if draw_at(dx) && px < self.canvas_width && line_y < self.canvas_height {
+                image.put_pixel(px, line_y, Rgba([color.0, color.1, color.2, 255]));
+            }
+        }
+    }
+
     /// Render straight underline
     fn render_straight_underline(
         &self,
@@ -852,29 +872,15 @@ impl Renderer {
         color: (u8, u8, u8),
     ) {
         let line_y = y + self.cell_height - 2;
-        for dx in 0..self.cell_width {
-            let px = x + dx;
-            if px < self.canvas_width && line_y < self.canvas_height {
-                image.put_pixel(px, line_y, Rgba([color.0, color.1, color.2, 255]));
-            }
-        }
+        self.render_underline_row(image, x, line_y, color, |_| true);
     }
 
     /// Render double underline
     fn render_double_underline(&self, image: &mut RgbaImage, x: u32, y: u32, color: (u8, u8, u8)) {
         let line_y1 = y + self.cell_height - 3;
         let line_y2 = y + self.cell_height - 1;
-        for dx in 0..self.cell_width {
-            let px = x + dx;
-            if px < self.canvas_width {
-                if line_y1 < self.canvas_height {
-                    image.put_pixel(px, line_y1, Rgba([color.0, color.1, color.2, 255]));
-                }
-                if line_y2 < self.canvas_height {
-                    image.put_pixel(px, line_y2, Rgba([color.0, color.1, color.2, 255]));
-                }
-            }
-        }
+        self.render_underline_row(image, x, line_y1, color, |_| true);
+        self.render_underline_row(image, x, line_y2, color, |_| true);
     }
 
     /// Render curly underline (approximated with sine wave)
@@ -896,12 +902,7 @@ impl Renderer {
     /// Render dotted underline
     fn render_dotted_underline(&self, image: &mut RgbaImage, x: u32, y: u32, color: (u8, u8, u8)) {
         let line_y = y + self.cell_height - 2;
-        for dx in (0..self.cell_width).step_by(3) {
-            let px = x + dx;
-            if px < self.canvas_width && line_y < self.canvas_height {
-                image.put_pixel(px, line_y, Rgba([color.0, color.1, color.2, 255]));
-            }
-        }
+        self.render_underline_row(image, x, line_y, color, |dx| dx % 3 == 0);
     }
 
     /// Render dashed underline
@@ -909,20 +910,9 @@ impl Renderer {
         let line_y = y + self.cell_height - 2;
         let dash_length = 4;
         let gap_length = 2;
-
-        let mut dx = 0;
-        while dx < self.cell_width {
-            for i in 0..dash_length {
-                let px = x + dx + i;
-                if dx + i >= self.cell_width {
-                    break;
-                }
-                if px < self.canvas_width && line_y < self.canvas_height {
-                    image.put_pixel(px, line_y, Rgba([color.0, color.1, color.2, 255]));
-                }
-            }
-            dx += dash_length + gap_length;
-        }
+        self.render_underline_row(image, x, line_y, color, |dx| {
+            dx % (dash_length + gap_length) < dash_length
+        });
     }
 
     /// Render strikethrough
@@ -1743,6 +1733,37 @@ mod tests {
             image.get_pixel(x, expected_y)[1] == 255
         });
         assert!(found, "overline should be drawn at y+1={}", expected_y);
+    }
+
+    /// Pins the dotted (every 3rd column) and dashed (4 on, 2 off) pixel
+    /// patterns across a whole cell (QA-214 moved both onto one row loop).
+    #[test]
+    fn test_render_dotted_and_dashed_underline_pixel_patterns() {
+        let renderer = make_test_renderer();
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let x = renderer.config.padding_px;
+        let y = renderer.config.padding_px;
+        let line_y = y + renderer.cell_height - 2;
+        let red = Rgba([255, 0, 0, 255]);
+
+        let mut dotted = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        renderer.render_dotted_underline(&mut dotted, x, y, (255, 0, 0));
+        let mut dashed = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        renderer.render_dashed_underline(&mut dashed, x, y, (255, 0, 0));
+
+        for dx in 0..renderer.cell_width {
+            assert_eq!(
+                *dotted.get_pixel(x + dx, line_y) == red,
+                dx % 3 == 0,
+                "dotted underline at dx={dx}"
+            );
+            assert_eq!(
+                *dashed.get_pixel(x + dx, line_y) == red,
+                dx % 6 < 4,
+                "dashed underline at dx={dx}"
+            );
+        }
     }
 
     #[test]

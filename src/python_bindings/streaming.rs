@@ -1163,16 +1163,36 @@ pub fn encode_server_message<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     use crate::streaming::protocol::ServerMessage;
 
-    let msg = ServerMessage::from_py_kwargs(message_type, kwargs)?.ok_or_else(|| {
+    encode_tagged_message(
+        py,
+        message_type,
+        ServerMessage::from_py_kwargs(message_type, kwargs)?,
+        ServerMessage::py_type_tags(),
+        crate::streaming::encode_server_message,
+    )
+}
+
+/// The shared tail of `encode_server_message`/`encode_client_message`:
+/// reject an unknown `message_type` (listing `type_tags`), then protobuf-
+/// encode the decoded message with `encode`.
+#[cfg(feature = "streaming")]
+fn encode_tagged_message<'py, M>(
+    py: Python<'py>,
+    message_type: &str,
+    msg: Option<M>,
+    type_tags: &[&str],
+    encode: impl FnOnce(&M) -> crate::streaming::Result<Vec<u8>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let msg = msg.ok_or_else(|| {
         PyRuntimeError::new_err(format!(
             "Unknown message type: {}. Valid types: {}",
             message_type,
-            ServerMessage::py_type_tags().join(", ")
+            type_tags.join(", ")
         ))
     })?;
 
-    let encoded = crate::streaming::encode_server_message(&msg)
-        .map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
+    let encoded =
+        encode(&msg).map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
 
     Ok(PyBytes::new(py, &encoded))
 }
@@ -1236,18 +1256,13 @@ pub fn encode_client_message<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     use crate::streaming::protocol::ClientMessage;
 
-    let msg = ClientMessage::from_py_kwargs(message_type, kwargs)?.ok_or_else(|| {
-        PyRuntimeError::new_err(format!(
-            "Unknown message type: {}. Valid types: {}",
-            message_type,
-            ClientMessage::py_type_tags().join(", ")
-        ))
-    })?;
-
-    let encoded = crate::streaming::encode_client_message(&msg)
-        .map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
-
-    Ok(PyBytes::new(py, &encoded))
+    encode_tagged_message(
+        py,
+        message_type,
+        ClientMessage::from_py_kwargs(message_type, kwargs)?,
+        ClientMessage::py_type_tags(),
+        crate::streaming::encode_client_message,
+    )
 }
 
 /// Decode a binary protobuf client message

@@ -7,6 +7,29 @@ use pyo3::prelude::*;
 
 use super::PyTerminal;
 
+/// Parse a Python notification alert string ("Desktop", "Sound(volume)",
+/// "Visual"), shared by `trigger_notification` and
+/// `trigger_custom_notification`.
+fn parse_notification_alert(alert: &str) -> PyResult<crate::terminal::NotificationAlert> {
+    use crate::terminal::NotificationAlert;
+
+    if alert.to_lowercase() == "desktop" {
+        Ok(NotificationAlert::Desktop)
+    } else if alert.starts_with("Sound(") && alert.ends_with(')') {
+        let vol_str = &alert[6..alert.len() - 1];
+        let vol: u8 = vol_str
+            .parse()
+            .map_err(|_| PyValueError::new_err("Invalid sound volume"))?;
+        Ok(NotificationAlert::Sound(vol))
+    } else if alert.to_lowercase() == "visual" {
+        Ok(NotificationAlert::Visual)
+    } else {
+        Err(PyValueError::new_err(
+            "Invalid alert type (use 'Desktop', 'Sound(volume)', or 'Visual')",
+        ))
+    }
+}
+
 #[pymethods]
 impl PyTerminal {
     // === Feature 37: Terminal Notifications ===
@@ -78,7 +101,7 @@ impl PyTerminal {
         alert: &str,
         message: Option<String>,
     ) -> PyResult<()> {
-        use crate::terminal::{NotificationAlert, NotificationTrigger};
+        use crate::terminal::NotificationTrigger;
 
         let trigger_parsed = if trigger.to_lowercase() == "bell" {
             NotificationTrigger::Bell
@@ -98,21 +121,7 @@ impl PyTerminal {
             ));
         };
 
-        let alert_parsed = if alert.to_lowercase() == "desktop" {
-            NotificationAlert::Desktop
-        } else if alert.starts_with("Sound(") && alert.ends_with(')') {
-            let vol_str = &alert[6..alert.len() - 1];
-            let vol: u8 = vol_str
-                .parse()
-                .map_err(|_| PyValueError::new_err("Invalid sound volume"))?;
-            NotificationAlert::Sound(vol)
-        } else if alert.to_lowercase() == "visual" {
-            NotificationAlert::Visual
-        } else {
-            return Err(PyValueError::new_err(
-                "Invalid alert type (use 'Desktop', 'Sound(volume)', or 'Visual')",
-            ));
-        };
+        let alert_parsed = parse_notification_alert(alert)?;
 
         self.inner
             .trigger_notification(trigger_parsed, alert_parsed, message);
@@ -304,23 +313,7 @@ impl PyTerminal {
     ///     # [('Custom(1)', 'Visual', 'tests finished')]
     ///     ```
     fn trigger_custom_notification(&mut self, id: u32, alert: &str) -> PyResult<()> {
-        use crate::terminal::NotificationAlert;
-
-        let alert_parsed = if alert.to_lowercase() == "desktop" {
-            NotificationAlert::Desktop
-        } else if alert.starts_with("Sound(") && alert.ends_with(')') {
-            let vol_str = &alert[6..alert.len() - 1];
-            let vol: u8 = vol_str
-                .parse()
-                .map_err(|_| PyValueError::new_err("Invalid sound volume"))?;
-            NotificationAlert::Sound(vol)
-        } else if alert.to_lowercase() == "visual" {
-            NotificationAlert::Visual
-        } else {
-            return Err(PyValueError::new_err(
-                "Invalid alert type (use 'Desktop', 'Sound(volume)', or 'Visual')",
-            ));
-        };
+        let alert_parsed = parse_notification_alert(alert)?;
 
         self.inner.trigger_custom_notification(id, alert_parsed);
         Ok(())
