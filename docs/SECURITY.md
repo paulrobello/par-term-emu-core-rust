@@ -1143,7 +1143,7 @@ controls, so the probe:
 
 ### Pane Respawn
 
-`respawn-pane -t %N [-k] [-c dir] [command]` runs a new process in an
+`respawn-pane -t %N [-k] [-c dir] [--] [command]` runs a new process in an
 existing pane, so any client of the control socket can replace a pane's
 program. That is the same same-user power `split-window` and `send-keys`
 already grant: the command runs through the default shell like every
