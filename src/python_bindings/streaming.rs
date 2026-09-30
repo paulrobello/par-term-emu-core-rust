@@ -738,6 +738,35 @@ impl PyStreamingServer {
         }
     }
 
+    /// Queue bytes for the PTY on the same input path client input takes
+    ///
+    /// The bytes join the session's serialized input queue, so they reach
+    /// the PTY in order with keystrokes from connected clients and under
+    /// the same queue bounds (input past them is dropped and counted). The
+    /// call never blocks on the PTY. `PtyTerminal.write()` bypasses this
+    /// queue: mixing it with client input has no cross-producer ordering.
+    ///
+    /// Args:
+    ///     data: Raw bytes to send to the PTY
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
+    ///
+    /// Example:
+    ///     >>> server.send_input(b"ls -la\n")
+    fn send_input(&self, data: &[u8]) -> PyResult<()> {
+        let Some(server) = &self.server else {
+            return Err(PyRuntimeError::new_err("Server has been stopped"));
+        };
+        match server.get_session("default") {
+            Some(session) => {
+                session.send_input(data.to_vec());
+                Ok(())
+            }
+            None => Err(PyRuntimeError::new_err("No default session")),
+        }
+    }
+
     /// Send a resize event to all clients
     ///
     /// Args:

@@ -932,23 +932,12 @@ mod tests {
         wait_mirror(&b, "DELTA-AFTER");
     }
 
-    /// The residual single-frame loss (card 01a0e80db3e870e282af0cf84405043b)
-    /// never reproduced on demand; this is the standing repro. Every frame
-    /// the client types — alternating the server's enqueue path (queue ->
-    /// drain -> writer) with the writer directly, across interleaved resizes
-    /// and a second viewer's daemon connection — must append exactly one
-    /// line to the pane-side file. It reproduced the residual as a STALL,
-    /// not a loss: the enqueue drain's park (first tokio `blocking_recv`,
-    /// then std `recv`) held queued chunks for the full deadline until an
-    /// unrelated thread unpark released them; the drain is now a polling
-    /// loop over the channel, the writer mutex, and a plain thread. The
-    /// "drain thread stops executing" reading of the last stall was wrong:
-    /// the test's direct EOF write both held the PTY-writer guard across
-    /// its own deadline poll (mid-stall sampling shows the drain looping
-    /// on `try_lock` against that guard) and jumped the queue so `cat`
-    /// exited before the queued frames arrived. EOF now takes the queue.
-    /// Run with DEBUG_LEVEL=3 for the MUX receipt log, PTY_WRITE ledger,
-    /// and the enqueue/drain pickup logs.
+    /// Every typed frame, alternating the queued path (queue -> drain ->
+    /// writer) and the direct writer across resizes and a second viewer's
+    /// daemon connection, lands exactly once in the pane-side file. The
+    /// standing repro for the input drain (card
+    /// 01a0e80db3e870e282af0cf84405043b). Run with DEBUG_LEVEL=3 for the MUX
+    /// receipt log and the PTY_WRITE ledger.
     #[test]
     fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
         let rt = runtime();
