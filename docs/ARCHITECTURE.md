@@ -961,85 +961,12 @@ graph TD
 
 The project uses conditional PyO3 feature compilation to support both production builds and testing:
 
-**Cargo.toml features:**
-```toml
-[dependencies]
-pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
-par-term-emu-derive = { path = "derive", version = "0.45.0", optional = true }
+**Features:** the authoritative list is `[features]` in [`Cargo.toml`](../Cargo.toml), and [RUST_USAGE.md](RUST_USAGE.md#feature-flags) describes each feature. The PyO3 split this section is about:
 
-[dev-dependencies]
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
-
-[features]
-default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session"]
-# The `python` feature's deps WITHOUT pyo3/extension-module, so the bindings
-# (and their #[cfg(test)] unit tests) link a real interpreter in `cargo test`.
-# maturin needs no knowledge of this: pyproject's [tool.maturin] features add
-# pyo3/extension-module to wheel builds independently.
-python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_session"]
-
-# Real PTY backend (PtySession/PtyTerminal): portable-pty + Unix signal deps.
-# Enabled by `python` (PyPtyTerminal binding) and `streaming-bin` (the server
-# binary spawns real shells). Headless `sim` consumers omit it to stay
-# PTY-free — they vendor the Terminal as a pure screen model with no process.
-pty_session = ["portable-pty", "nix"]
-# Library streaming: WebSocket/protobuf server for embedders. Excludes the
-# binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo", "subtle", "zeroize"]
-
-# Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
-# deps the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
-
-# Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
-# control-mode socket. Needs real PTYs and a local socket, so it is
-# deliberately absent from `default` and `sim` — see par-mux.md D1.
-# `widestring` exists only under [target.'cfg(windows)'.dependencies], so it is
-# pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
-# are intrinsic to the daemon now that it persists its tree on disk — a mux
-# build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "interprocess", "widestring", "serde", "dirs", "dep:toml"]
-
-# Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
-# their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
-# D3.1). serde itself is already a required dependency, so this feature only
-# gates whether the derives are compiled in; the smallvec/bitflags serde
-# integrations are pulled in only while this feature is enabled.
-serde = ["smallvec/serde", "bitflags/serde"]
-
-# jemalloc for better server performance (5-15% throughput improvement)
-# Automatically included with streaming on non-Windows platforms
-jemalloc = ["tikv-jemallocator"]
-
-# Regenerate protobuf code from proto/terminal.proto (requires protoc installed)
-regenerate-proto = ["prost-build"]
-
-# Convenience feature combinations
-rust-only = []
-# Headless simulation profile: grid + terminal + screenshot only. Excludes the
-# real-PTY backend, Python bindings, and streaming server, so a pure-Rust
-# embedder (e.g. par-hack's server-side screen model) can vendor the crate with
-# `default-features = false, features = ["sim"]` and pull in neither portable-pty
-# nor the PyO3/streaming dep trees. graphics/sixel stay compiled because the
-# Terminal and the screenshot renderer depend on them intrinsically.
-# Intentionally an empty feature list: `sim` enables nothing itself — it only
-# names the profile, and src/lib.rs rejects combining it with `python`.
-sim = []
-full = ["python", "streaming", "streaming-bin"]
-
-# Binary targets (required-features gate each build):
-[[bin]]
-name = "par-term-streamer"
-path = "src/bin/streaming_server/main.rs"
-required-features = ["streaming-bin"]
-
-# panes outlive every client (par-mux.md D5).
-[[bin]]
-name = "par-mux"
-path = "src/bin/par_mux/main.rs"
-required-features = ["mux"]
-```
+- `python` (default) enables `pyo3` with `pyo3/extension-module`, which wheels need: the extension must not link libpython.
+- `python-test` enables the same bindings with `pyo3/auto-initialize` instead, so `cargo test` can link a real interpreter.
+- The `pyo3` dev-dependency also enables `auto-initialize` for Rust tests.
+- Binary targets are gated by `required-features`: `par-term-streamer` needs `streaming-bin`, and `par-mux` needs `mux`.
 
 **Build commands:**
 - **Development build:** `maturin develop --release` (uses `extension-module` feature)

@@ -83,9 +83,12 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 The library supports several optional features that can be enabled during the build:
 
 - **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`); also enables `pty_session`
+- **`screenshot`** - Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts via `swash`). Enabled by `python`; opt-in for `sim` (`features = ["sim", "screenshot"]`)
 - **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
 - **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar)
+- **`mux`** - The par-mux multiplexer daemon (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`. Build the binary with `cargo build --bin par-mux --no-default-features --features mux`
+- **`serde`** - Serde derives on the replay-snapshot types, which are the par-mux persistence format. Enabled by `mux`
 - **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
 - **`regenerate-proto`** - Regenerate Protocol Buffers code from `proto/terminal.proto` (requires `protoc` installed)
 - **`rust-only`** - Build without Python bindings (for pure Rust usage)

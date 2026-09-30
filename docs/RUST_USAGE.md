@@ -454,12 +454,13 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 
 | Feature | Description | Includes |
 |---------|-------------|----------|
-| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session` |
-| `python-test` | The `python` feature's deps with `pyo3/auto-initialize` instead of `extension-module`, so the bindings link a real interpreter under `cargo test` | `pyo3`, `pyo3/auto-initialize`, `par-term-emu-derive`, `pty_session` |
+| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session`, `screenshot` |
+| `python-test` | The `python` feature's deps with `pyo3/auto-initialize` instead of `extension-module`, so the bindings link a real interpreter under `cargo test` | `pyo3`, `pyo3/auto-initialize`, `par-term-emu-derive`, `pty_session`, `screenshot` |
+| `screenshot` | Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts). Enabled by `python` and `python-test`; opt-in for `sim` (`features = ["sim", "screenshot"]`) | `swash` |
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signal deps. Auto-enabled by `python`, `streaming-bin`, and `mux` | `portable-pty`, `nix` |
 | `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo`, `subtle`, `zeroize` |
 | `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `pty_session` |
-| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` (Windows only), `serde`, `dirs`, `toml` |
+| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` and `windows-sys` (Windows only), `serde`, `dirs`, `toml`, `clap` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence | `smallvec/serde`, `bitflags/serde` |
 | `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |
 | `sim` | Headless profile: grid + terminal only — no PTY, Python, streaming, or screenshot (screenshot is opt-in since 0.54.0, ENH-024). Cannot be combined with `python` | (none — names the profile only) |

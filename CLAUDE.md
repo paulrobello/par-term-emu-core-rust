@@ -140,7 +140,7 @@ The crate produces three artifacts:
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |
 | `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
 | `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session`) |
-| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml` |
+| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, `clap`, and on Windows `widestring`/`windows-sys` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
 | `rust-only` | No Python bindings (empty convenience feature) |
 | `sim` | Headless profile: grid + terminal only (no PTY/python/streaming/screenshot — screenshot is opt-in since 0.54.0). For pure-Rust embedders, e.g. a server-side screen model |
