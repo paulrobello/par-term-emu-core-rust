@@ -503,6 +503,105 @@ fn fill_line_bounded<R: BufRead>(
     }
 }
 
+/// What [`read_control_line`] produced for one line of a connection.
+#[derive(Debug, PartialEq, Eq)]
+enum ControlLine {
+    /// A complete line (still carrying its `\n` when it had one), or an
+    /// unterminated final line read before EOF.
+    Line(String),
+    /// The line passed the budget; the caller answers %error and closes.
+    Oversize,
+    /// A line that is not UTF-8, read through its newline so framing
+    /// survives; carries its byte length.
+    Undecodable(usize),
+    /// EOF with nothing pending, a read fault, or eviction: stop serving.
+    Closed,
+}
+
+/// Read one control line (SEC-127's bounded accumulation). Bytes stay raw
+/// across recv-timeout wakes — `read_line` would discard a partial whose
+/// tail splits a multi-byte char — so a healthy sender's pause costs
+/// nothing and only an evicted connection ends; the budget is checked per
+/// chunk, so an unterminated stream trips it without a newline; UTF-8 is
+/// decoded once, after the line is complete. An unterminated final line is
+/// returned before EOF, matching `Lines`' last-item behavior.
+fn read_control_line<R: BufRead>(
+    reader: &mut R,
+    evicted: &AtomicBool,
+    client_id: u64,
+) -> ControlLine {
+    let mut buf: Vec<u8> = Vec::new();
+    let pickup_started = std::time::Instant::now();
+    let mut wakes = 0u32;
+    loop {
+        match fill_line_bounded(reader, &mut buf, MAX_CONTROL_LINE_BYTES) {
+            Ok(LineFill::Eof) if buf.is_empty() => return ControlLine::Closed,
+            Ok(LineFill::Eof) => break,
+            Ok(LineFill::Oversize) => return ControlLine::Oversize,
+            Ok(LineFill::Complete) => {
+                // Wake-cadence evidence (card 01a0e80db3e870e282af0cf84405043b):
+                // a line that took poll wakes or >1 poll interval to arrive
+                // is the signature of a parked read loop — log it so a
+                // stall's cadence is readable in the debug file.
+                let waited = pickup_started.elapsed();
+                if wakes > 0 || waited > EVICTION_POLL {
+                    crate::debug_log!(
+                        "MUX",
+                        "client {client_id} picked up a {} B line after {:?} and {wakes} poll wakes",
+                        buf.len(),
+                        waited
+                    );
+                }
+                break;
+            }
+            Err(err) if is_poll_wake(&err) => {
+                wakes += 1;
+                crate::debug_log!(
+                    "MUX",
+                    "client {client_id} read poll wake #{wakes} ({:?} since line start)",
+                    pickup_started.elapsed()
+                );
+                if evicted.load(Ordering::Relaxed) {
+                    return ControlLine::Closed;
+                }
+            }
+            Err(_) => return ControlLine::Closed,
+        }
+    }
+    match String::from_utf8(buf) {
+        Ok(line) => ControlLine::Line(line),
+        Err(err) => ControlLine::Undecodable(err.as_bytes().len()),
+    }
+}
+
+/// A connection's one-time join to the broadcast registry. Deferred until
+/// the first control command (or error reply), so hook-only connections
+/// never receive pushes; the abort handle moves into the registry then.
+struct Registration {
+    done: bool,
+    abort: Option<ConnectionAbort>,
+}
+
+impl Registration {
+    fn ensure(
+        &mut self,
+        clients: &Clients,
+        client_id: u64,
+        tx: &SyncSender<String>,
+        evicted: &Arc<AtomicBool>,
+    ) {
+        if !self.done {
+            clients.lock().push((
+                client_id,
+                tx.clone(),
+                Arc::clone(evicted),
+                self.abort.take().expect("abort is registered once"),
+            ));
+            self.done = true;
+        }
+    }
+}
+
 /// Serve one connected client: a writer thread draining a channel, and this
 /// thread reading lines. The socket carries two grammars (Phase 5),
 /// classified by [`parse_line`]: a JSON hook report (a line whose first
@@ -539,10 +638,12 @@ fn handle_client(
     // blocked in a full socket buffer and the queued lines are retained
     // forever (measured live).
     let evicted = Arc::new(AtomicBool::new(false));
-    let mut registered = false;
-    // Handed to the registry on first registration — hook connections never
-    // register and drop theirs with the frame.
-    let mut abort = Some(abort);
+    // The abort handle moves to the registry on first registration — hook
+    // connections never register and drop theirs with the frame.
+    let mut registration = Registration {
+        done: false,
+        abort: Some(abort),
+    };
 
     let mut writer = match stream.try_clone() {
         Ok(stream) => stream,
@@ -569,95 +670,30 @@ fn handle_client(
     let _ = stream.set_recv_timeout(Some(EVICTION_POLL));
     let mut reader = BufReader::new(stream);
     let mut command_number = 0u32;
-    'connection: loop {
-        // One line, accumulated as raw bytes across recv-timeout wakes: a
-        // wake mid-line keeps every byte read so far (`read_line` would
-        // discard a partial whose tail splits a multi-byte char), so a
-        // healthy sender's pause costs nothing; only an evicted connection
-        // breaks out. The budget is checked per chunk, so an unterminated
-        // stream trips it without a newline ever arriving (SEC-127), and
-        // UTF-8 is decoded once, after the line is complete. An
-        // unterminated final line is processed before EOF, matching
-        // `Lines`' last-item behavior.
-        let mut buf: Vec<u8> = Vec::new();
-        let pickup_started = std::time::Instant::now();
-        let mut wakes = 0u32;
-        loop {
-            match fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES) {
-                Ok(LineFill::Eof) => {
-                    if buf.is_empty() {
-                        break 'connection;
-                    }
-                    break;
-                }
-                // SEC-104: over-budget accumulation is answered like a
-                // malformed command and the connection is closed, whether
-                // the line is complete or still unterminated.
-                Ok(LineFill::Oversize) => {
-                    if !registered {
-                        clients.lock().push((
-                            client_id,
-                            tx.clone(),
-                            Arc::clone(&evicted),
-                            abort.take().expect("abort is registered once"),
-                        ));
-                        registered = true;
-                    }
-                    command_number += 1;
-                    let _ = tx.send(emit_block(
-                        command_number,
-                        "line exceeds 1 MiB budget, closing connection",
-                        false,
-                    ));
-                    break 'connection;
-                }
-                Ok(LineFill::Complete) => {
-                    // Wake-cadence evidence (card 01a0e80db3e870e282af0cf84405043b):
-                    // a line that took poll wakes or >1 poll interval to arrive
-                    // is the signature of a parked read loop — log it so a
-                    // stall's cadence is readable in the debug file.
-                    let waited = pickup_started.elapsed();
-                    if wakes > 0 || waited > EVICTION_POLL {
-                        crate::debug_log!(
-                            "MUX",
-                            "client {client_id} picked up a {} B line after {:?} and {wakes} poll wakes",
-                            buf.len(),
-                            waited
-                        );
-                    }
-                    break;
-                }
-                Err(err) if is_poll_wake(&err) => {
-                    wakes += 1;
-                    crate::debug_log!(
-                        "MUX",
-                        "client {client_id} read poll wake #{wakes} ({:?} since line start)",
-                        pickup_started.elapsed()
-                    );
-                    if evicted.load(Ordering::Relaxed) {
-                        break 'connection;
-                    }
-                }
-                Err(_) => break 'connection,
+    loop {
+        let mut line = match read_control_line(&mut reader, &evicted, client_id) {
+            ControlLine::Line(line) => line,
+            ControlLine::Closed => break,
+            // SEC-104: over-budget accumulation is answered like a
+            // malformed command and the connection is closed, whether the
+            // line is complete or still unterminated.
+            ControlLine::Oversize => {
+                registration.ensure(&clients, client_id, &tx, &evicted);
+                command_number += 1;
+                let _ = tx.send(emit_block(
+                    command_number,
+                    "line exceeds 1 MiB budget, closing connection",
+                    false,
+                ));
+                break;
             }
-        }
-        // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1 bytes) was
-        // read through its newline, so the stream stays line-framed, but
-        // its contents are unusable. Answer it like a parse error — a
-        // numbered %error block — instead of dropping the whole client.
-        let mut line = match String::from_utf8(buf) {
-            Ok(line) => line,
-            Err(err) => {
-                let undecodable_len = err.as_bytes().len();
-                if !registered {
-                    clients.lock().push((
-                        client_id,
-                        tx.clone(),
-                        Arc::clone(&evicted),
-                        abort.take().expect("abort is registered once"),
-                    ));
-                    registered = true;
-                }
+            // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1 bytes)
+            // was read through its newline, so the stream stays
+            // line-framed, but its contents are unusable. Answer it like a
+            // parse error — a numbered %error block — instead of dropping
+            // the whole client.
+            ControlLine::Undecodable(undecodable_len) => {
+                registration.ensure(&clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_error!(
                     "MUX",
@@ -670,7 +706,7 @@ fn handle_client(
                     .send(emit_block(command_number, "line is not valid UTF-8", false))
                     .is_err()
                 {
-                    break 'connection;
+                    break;
                 }
                 continue;
             }
@@ -691,19 +727,11 @@ fn handle_client(
                     broadcast_notification(&clients, &notification);
                 }
                 if tx.send(reply).is_err() {
-                    break 'connection;
+                    break;
                 }
             }
             Ok(Line::Control(command)) => {
-                if !registered {
-                    clients.lock().push((
-                        client_id,
-                        tx.clone(),
-                        Arc::clone(&evicted),
-                        abort.take().expect("abort is registered once"),
-                    ));
-                    registered = true;
-                }
+                registration.ensure(&clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_log!(
                     "MUX",
@@ -740,19 +768,11 @@ fn handle_client(
                     );
                 }
                 if tx.send(reply).is_err() {
-                    break 'connection;
+                    break;
                 }
             }
             Err(err) => {
-                if !registered {
-                    clients.lock().push((
-                        client_id,
-                        tx.clone(),
-                        Arc::clone(&evicted),
-                        abort.take().expect("abort is registered once"),
-                    ));
-                    registered = true;
-                }
+                registration.ensure(&clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_error!(
                     "MUX",
@@ -763,12 +783,12 @@ fn handle_client(
                     err
                 );
                 if tx.send(emit_block(command_number, &err, false)).is_err() {
-                    break 'connection;
+                    break;
                 }
             }
         }
     }
-    if registered {
+    if registration.done {
         clients.lock().retain(|(id, _, _, _)| *id != client_id);
     }
 }
@@ -1418,6 +1438,73 @@ mod tests {
             fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES).expect("no I/O error");
         assert_eq!(fill, LineFill::Complete);
         assert_eq!(buf, b"list-panes\n", "the second line stays buffered");
+    }
+
+    /// QA-199: complete lines, then the unterminated final line before EOF,
+    /// then Closed.
+    #[test]
+    fn read_control_line_classifies_lines() {
+        let evicted = AtomicBool::new(false);
+        let mut reader = std::io::Cursor::new(b"a\nb".to_vec());
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Line("a\n".to_string())
+        );
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Line("b".to_string())
+        );
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Closed
+        );
+    }
+
+    /// QA-199: an unterminated stream past the budget is Oversize.
+    #[test]
+    fn read_control_line_rejects_oversize() {
+        let evicted = AtomicBool::new(false);
+        let mut reader = std::io::Cursor::new(vec![b'x'; MAX_CONTROL_LINE_BYTES + 10]);
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Oversize
+        );
+    }
+
+    /// QA-199: a non-UTF-8 line is flagged with its length, and framing
+    /// survives — the next line still reads.
+    #[test]
+    fn read_control_line_flags_invalid_utf8() {
+        let evicted = AtomicBool::new(false);
+        let mut reader = std::io::Cursor::new(b"\xff\nok\n".to_vec());
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Undecodable(2)
+        );
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Line("ok\n".to_string())
+        );
+    }
+
+    /// QA-199: a poll wake keeps the partial line; eviction observed at a
+    /// wake closes instead.
+    #[test]
+    fn read_control_line_survives_a_wake_and_stops_when_evicted() {
+        let wake = || Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+        let evicted = AtomicBool::new(false);
+        let mut reader =
+            ScriptedReader::new(vec![Ok(b"vers".to_vec()), wake(), Ok(b"ion\n".to_vec())]);
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Line("version\n".to_string())
+        );
+        evicted.store(true, Ordering::Relaxed);
+        let mut reader = ScriptedReader::new(vec![Ok(b"vers".to_vec()), wake()]);
+        assert_eq!(
+            read_control_line(&mut reader, &evicted, 0),
+            ControlLine::Closed
+        );
     }
 
     #[cfg(unix)]
