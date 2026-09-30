@@ -161,9 +161,9 @@ fn process_user_sid_equals_ours(pid: u32) -> bool {
         GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    // The FFI contract: handles come back null on failure, BOOL is zero on
-    // failure, and GetTokenInformation (in token_user_buffer) sizes its own
-    // output buffer.
+    // SAFETY: every handle is null-checked before use and closed exactly once
+    // on every path; the token out-pointers are live locals; BOOL results are
+    // compared against zero before the token they fill is read.
     unsafe {
         let server = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if server.is_null() {
@@ -193,16 +193,17 @@ fn token_user_sids_equal(
 ) -> bool {
     use windows_sys::Win32::Security::{EqualSid, TOKEN_USER};
 
-    // The TOKEN_USER each query returns points its SID into that query's
-    // buffer, so the buffers must outlive the PSID borrows. The buffer
-    // lengths are the ones GetTokenInformation itself asked for, so the
-    // TOKEN_USER views are in-bounds.
     let (Some(server_buf), Some(own_buf)) = (
         token_user_buffer(server_token),
         token_user_buffer(own_token),
     ) else {
         return false;
     };
+    // SAFETY: each buffer is 8-aligned (a `Vec<u64>`, and TOKEN_USER's
+    // alignment is at most 8 — asserted beside `token_user_buffer`) and at
+    // least as long as GetTokenInformation asked for, so the TOKEN_USER views
+    // are aligned and in-bounds. Each SID points into its own buffer, and
+    // both buffers outlive the borrows below.
     unsafe {
         let server_user = &*(server_buf.as_ptr().cast::<TOKEN_USER>());
         let own_user = &*(own_buf.as_ptr().cast::<TOKEN_USER>());
@@ -212,13 +213,24 @@ fn token_user_sids_equal(
     }
 }
 
-/// The raw TOKEN_USER bytes of `token`'s user, or `None` on any failure. The
-/// first query with a zero-length buffer is the sizing call — it always
-/// "fails", its value is the needed length.
+// A `Vec<u8>` guarantees alignment 1 only; TOKEN_USER holds a pointer, so
+// `token_user_buffer` backs the bytes with u64 words to make the
+// `*const TOKEN_USER` view in `token_user_sids_equal` aligned.
 #[cfg(windows)]
-fn token_user_buffer(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u8>> {
+const _: () = assert!(
+    std::mem::align_of::<windows_sys::Win32::Security::TOKEN_USER>() <= std::mem::align_of::<u64>()
+);
+
+/// The raw TOKEN_USER bytes of `token`'s user in an 8-aligned buffer, or
+/// `None` on any failure. The first query with a zero-length buffer is the
+/// sizing call — it always "fails", its value is the needed length.
+#[cfg(windows)]
+fn token_user_buffer(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u64>> {
     use windows_sys::Win32::Security::GetTokenInformation;
 
+    // SAFETY: the sizing call passes a null buffer with length 0, which the
+    // API permits. The second call's buffer holds `needed.div_ceil(8)` u64
+    // words, so it is at least `needed` bytes long and 8-aligned.
     unsafe {
         let mut needed = 0u32;
         GetTokenInformation(
@@ -231,7 +243,7 @@ fn token_user_buffer(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Ve
         if needed == 0 {
             return None;
         }
-        let mut buffer = vec![0u8; needed as usize];
+        let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
         let ok = GetTokenInformation(
             token,
             windows_sys::Win32::Security::TokenUser,
@@ -802,6 +814,33 @@ mod tests {
         // unprovable server is not a same-user server.
         assert!(!process_user_sid_equals_ours(0));
         assert!(!process_user_sid_equals_ours(u32::MAX));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn token_user_buffer_is_aligned_and_self_equal() {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::{TOKEN_QUERY, TOKEN_USER};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        let mut token = std::ptr::null_mut();
+        // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
+        // close; `token` is a live out-pointer, read only after success.
+        let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+        assert_ne!(opened, 0, "open own process token");
+
+        let buffer = token_user_buffer(token).expect("query own TOKEN_USER");
+        assert_eq!(
+            buffer.as_ptr() as usize % std::mem::align_of::<TOKEN_USER>(),
+            0,
+            "TOKEN_USER view must be aligned"
+        );
+        assert!(token_user_sids_equal(token, token));
+
+        // SAFETY: `token` was opened above and is closed exactly once.
+        unsafe {
+            CloseHandle(token);
+        }
     }
 
     #[cfg(unix)]
