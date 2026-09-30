@@ -442,7 +442,7 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `src/mux/dispatch.rs` | Per-command handlers (`cmd_<name>`) plus the shared emit-and-save tail |
 | `src/mux/command.rs` | Control-command parsing: the `COMMANDS` table, one `parse_<cmd>` per command, `MuxCommand`, and the `mutates()` persistence rule |
 | `src/mux/emit.rs` | `TmuxNotification` → wire lines, reply blocks, octal output escaping |
-| `src/mux/tree.rs` | The session/window/pane tree and its operations |
+| `src/mux/tree/` | The session/window/pane tree and its operations (`mod.rs` types, accessors, and target resolvers; `lifecycle.rs` create/respawn/kill; `layout_ops.rs` splits, moves, resizes, and the `mutate_layout` choke point) |
 | `src/mux/layout.rs` | The binary `LayoutTree` split geometry and tmux layout strings |
 | `src/mux/pane.rs` | `MuxPane` (PTY + `Terminal`), `PaneFactory`, `ShellPaneFactory`, the env contract |
 | `src/mux/ids.rs` | `SessionId`/`WindowId`/`PaneId` (`$N`/`@N`/`%N`) and id allocation |
