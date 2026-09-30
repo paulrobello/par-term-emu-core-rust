@@ -259,7 +259,7 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 | `PAR_MUX_WINDOW_ID` | The owning window's id (`@N`) |
 | `PAR_MUX_BIN` | The daemon executable, so a pane script can run client mode without `par-mux` on `PATH`: `"$PAR_MUX_BIN" --socket "$PAR_MUX_SOCKET" --cmd list-sessions`. Set by the `par-mux` binary; an embedded `MuxServer` leaves it unset unless its factory supplies `bin_path` |
 
-These are set for every spawn path: `new-session`, `new-window`, `split-window`, and restore. They are **fixed at spawn**, as tmux's `TMUX`/`TMUX_PANE` are: a later `rename-session` leaves `PAR_MUX_SESSION` stale, and a `swap-pane` across windows leaves `PAR_MUX_WINDOW_ID` stale. The ids stay valid; the name is advisory. `PAR_MUX_SOCKET`, `PAR_MUX_ENV`, and `PAR_MUX_BIN` are absent when the server has no socket path or binary path to export.
+These are set for every spawn path: `new-session`, `new-window`, `split-window`, `respawn-pane`, and restore. They are **fixed at spawn**, as tmux's `TMUX`/`TMUX_PANE` are: a later `rename-session` leaves `PAR_MUX_SESSION` stale, and a `swap-pane` across windows or a `break-pane`/`join-pane` that moves the pane to another window leaves `PAR_MUX_WINDOW_ID` stale (and the session variables too when the move crosses sessions). `respawn-pane` re-seeds them with the pane's current ids. The ids stay valid; the name is advisory. `PAR_MUX_SOCKET`, `PAR_MUX_ENV`, and `PAR_MUX_BIN` are absent when the server has no socket path or binary path to export.
 
 Four methods (`src/mux/hooks.rs`):
 
@@ -364,8 +364,6 @@ Held panes are for clients that might come back. A persisting daemon where every
 
 A structurally killed pane is reaped at kill time instead: `PtySession::kill` follows its signal escalation (SIGHUP → SIGKILL inside portable-pty) with a bounded wait, so a child that traps SIGHUP cannot linger as a zombie until the daemon exits. The kill also runs off the tree lock on a short-lived thread once the pane is removed from the tree — the ~200 ms SIGHUP-grace poll and the reap wait would otherwise stall every command for their duration (tmux kills from its child reaper, off the layout lock, for the same reason).
 
-A structurally killed pane is reaped at kill time instead: `PtySession::kill` follows its signal escalation (SIGHUP → SIGKILL inside portable-pty) with a bounded wait, so a child that traps SIGHUP cannot linger as a zombie until the daemon exits. The kill also runs off the tree lock on a short-lived thread once the pane is removed from the tree — the ~200 ms SIGHUP-grace poll and the reap wait would otherwise stall every command for their duration (tmux kills from its child reaper, off the layout lock, for the same reason).
-
 ## Shutdown Semantics
 
 - **SIGTERM**: the handler makes one atomic store on the server's per-instance shutdown flag. The accept loop notices on its idle tick, broadcasts `%exit` to every client, and a final save captures content that arrived since the last structural save.
@@ -420,7 +418,7 @@ The integration suites live in `tests/mux_*.rs` (`mux_daemon`, `mux_restart`, `m
 
 ### Fuzzing the control protocol
 
-The control-socket parser is an adversarial-input surface (it executes commands, spawns panes, and persists state), so its two grammars have cargo-fuzz targets in the detached `fuzz/` workspace (see `docs/fable/ENH-014-parser-fuzz-targets.md` for the harness setup):
+The control-socket parser is an adversarial-input surface (it executes commands, spawns panes, and persists state), so its two grammars have cargo-fuzz targets in the detached `fuzz/` workspace (see [Fuzzing](../CONTRIBUTING.md#fuzzing) for toolchain setup and the crash-to-regression policy):
 
 - `mux_parse_command` — `parse_line`/`parse_command` over arbitrary lines, including multi-line inputs and `%`-notification-looking shapes.
 - `mux_hook_report` — the `{`-shaped hook-report JSON grammar through `handle_report` against an empty tree (JSON parse, header validation, SEC-105 value caps; no panes exist, so nothing downstream can be corrupted).
