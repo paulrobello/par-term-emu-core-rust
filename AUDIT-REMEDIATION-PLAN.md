@@ -710,7 +710,7 @@
   - `cargo test --lib --no-default-features --features rust-only,mux,serde mux::`
   - `cargo test --test mux_daemon --no-default-features --features rust-only,mux,serde` (the split-output test, fixture `splitout`, at `:503`, and respawn at `:371`).
   - `cargo test --test mux_end_to_end --no-default-features --features rust-only,mux,serde`
-  - `cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming streaming::mux_factory` (the streaming bridge consumes `%output`).
+  - `cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory` (the streaming bridge consumes `%output`; without `mux` the filter matches zero tests).
   - Windows VM: both `cargo check` commands, and the `mux::` lib run (`create_argv_pane` on Windows goes through `configured_session`).
   - `make checkall`
 
