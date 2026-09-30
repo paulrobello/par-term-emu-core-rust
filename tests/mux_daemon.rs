@@ -449,6 +449,58 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     );
 }
 
+/// SEC-126: `respawn-pane` flags stop at the first command word, so a
+/// `-k` or `-c` inside the command neither kills a live pane nor becomes
+/// the start directory.
+#[cfg(unix)]
+#[test]
+fn respawn_pane_ignores_flags_inside_the_command() {
+    let fixture = MuxFixture::new("flags");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s flags").expect("new-session");
+
+    // `sort -k` is the command's own flag: the live pane must be refused.
+    let refused = client
+        .send("respawn-pane -t %0 sh -c 'echo X; sort -k 1 /dev/null; sleep 600'")
+        .expect("refuse")
+        .join("");
+    assert!(
+        refused.contains("still running"),
+        "a -k inside the command must not kill a live pane: {refused}"
+    );
+
+    // With a leading -k the restart runs the WHOLE command: `sh -c` keeps
+    // its script instead of the inner `-c` being taken as a start dir.
+    client
+        .send("respawn-pane -t %0 -k sh -c 'echo RESP-$((6*7))'")
+        .expect("restart");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (mut respawned, mut output) = (false, false);
+    while Instant::now() < deadline && !(respawned && output) {
+        match client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned {
+                pane_id,
+            }) if pane_id == "%0" => respawned = true,
+            Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
+                pane_id,
+                data,
+            }) if pane_id == "%0" && String::from_utf8_lossy(&data).contains("RESP-42") => {
+                output = true
+            }
+            _ => {}
+        }
+    }
+    assert!(respawned, "the -k restart must be announced");
+    assert!(output, "the respawned pane must run the whole sh -c script");
+}
+
 /// `kill-server` stops the daemon through the same path SIGTERM takes: the
 /// reply block answers first, the accept loop exits, and the final state
 /// save captures the tree — which is what `par-mux --stop` / `--restart`
