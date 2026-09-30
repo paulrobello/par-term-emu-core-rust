@@ -581,7 +581,7 @@ def test_background_colors():
     term.process_str("\x1b[42mGreen BG\x1b[0m")  # Green background
 
     bg_color = term.get_bg_color(0, 0)
-    assert bg_color is not None
+    assert bg_color == (0, 128, 0)
 
 
 def test_256_color_foreground():
@@ -590,7 +590,7 @@ def test_256_color_foreground():
     term.process_str("\x1b[38;5;196mRed\x1b[0m")  # 256-color red
 
     fg_color = term.get_fg_color(0, 0)
-    assert fg_color is not None
+    assert fg_color == (255, 0, 0)
 
 
 def test_256_color_background():
@@ -599,7 +599,7 @@ def test_256_color_background():
     term.process_str("\x1b[48;5;21mBlue BG\x1b[0m")  # 256-color blue background
 
     bg_color = term.get_bg_color(0, 0)
-    assert bg_color is not None
+    assert bg_color == (0, 0, 255)
 
 
 def test_multiple_attributes():
