@@ -719,8 +719,17 @@ fn split_leading_flags<'a>(
                 if matches!(kind, LeadingFlag::Valued(_)) && lead.has(flag) {
                     return Err(format!("{name}: duplicate {flag}"));
                 }
-                let (_, value_end, value) = next_shell_word(line, end)
+                let (value_start, value_end, unquoted) = next_shell_word(line, end)
                     .ok_or_else(|| format!("{name}: {flag} requires a value"))?;
+                // Same rule as `Args::quoted_flag`: only a value that opens
+                // a quote is unquoted, so a bare `C:\Users\me` or `a\b`
+                // stays byte-for-byte.
+                let raw = &line[value_start..value_end];
+                let value = if raw.starts_with(['\'', '"']) {
+                    unquoted
+                } else {
+                    raw.to_string()
+                };
                 lead.flags.push((flag, Some(value)));
                 pos = value_end;
             }
@@ -2552,6 +2561,16 @@ mod tests {
             (r"respawn-pane -t %0 -c ''", Err(())),
             (r"respawn-pane -t %0 -kt %1", Err(())),
             (r"respawn-pane -t '' top", Err(())),
+            // An unquoted value keeps its backslashes (a Windows path, a
+            // name), as `Args::quoted_flag` does for every other command.
+            (
+                r"respawn-pane -t %0 -c C:\Users\me top",
+                Ok((id(0), false, Some(r"C:\Users\me"), Some("top"))),
+            ),
+            (
+                r"respawn-pane -t a\b top",
+                Ok((Target::Name(r"a\b".to_string()), false, None, Some("top"))),
+            ),
             // Not in the plan's table: a leading-whitespace line and a
             // non-ASCII command must slice on char boundaries.
             (
