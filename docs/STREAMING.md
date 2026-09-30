@@ -32,6 +32,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
 - [HTTP Endpoints](#http-endpoints)
   - [Terminal WebSocket](#terminal-websocket-ws)
   - [Sessions Endpoint](#sessions-endpoint-sessions)
+  - [Input Drops](#input-drops)
   - [System Stats WebSocket](#system-stats-websocket-stats)
 - [Advanced Features](#advanced-features)
   - [Multi-Session Management](#multi-session-management)
@@ -1357,17 +1358,42 @@ Response:
   "sessions": [
     {
       "id": "default",
+      "created": 1707840000,
       "clients": 1,
+      "idle_seconds": 0,
       "cols": 120,
       "rows": 40,
-      "created": 1707840000,
-      "idle_seconds": 5
+      "cwd": "/home/user",
+      "messages_sent": 1532,
+      "bytes_sent": 482113,
+      "input_bytes": 2048,
+      "errors": 0,
+      "dropped_messages": 0
     }
   ],
   "max_sessions": 10,
   "available": 9
 }
 ```
+
+`cwd` is `null` until the shell reports a working directory.
+
+### Input Drops
+
+Client input can be dropped before it reaches the PTY. Every input drop increments the session's `dropped_messages` counter, which `/sessions` reports, and is logged. Queue drops are logged at most once per second.
+
+| Cause | Behavior |
+|-------|----------|
+| Input or Paste payload over its size cap (`MAX_INPUT_PAYLOAD_BYTES`, `MAX_PASTE_PAYLOAD_BYTES`) | That message is dropped |
+| Client over its `--input-rate-limit` budget | That message is dropped |
+| Session input queue full (`INPUT_QUEUE_MESSAGES` chunks, in `src/streaming/session.rs`) or over its byte budget (`MAX_QUEUED_INPUT_BYTES`), because the child is not reading stdin | The chunk is dropped |
+| Session has no PTY writer | See below |
+
+Cap values are in the [SECURITY.md Resource Limits Reference](SECURITY.md#resource-limits-reference).
+
+A session with no PTY writer (macro playback, or a session whose PTY was detached) drops Input, Paste, Mouse and FocusChange from a non-read-only client, counts it, and closes that WebSocket. Read-only viewers stay connected. The bundled frontend reconnects, so a viewer that sends input to a writer-less session reconnects repeatedly. Connect such viewers with `?readonly=true`.
+
+`dropped_messages` is not input-only: a server message broadcast while the session has no connected client also counts, so the counter grows on an idle session that keeps producing output. To diagnose input loss, compare the counter before and after typing while a client is connected.
 
 ### System Stats WebSocket (`/stats`)
 
@@ -1891,6 +1917,13 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - Verify PTY session is running: `pty_terminal.is_running()`
 - Ensure output callback is set correctly
 - Test with simple output: `server.send_output("test\r\n")`
+
+**Problem:** Keystrokes have no effect, or the WebSocket closes when you type
+
+**Solutions:**
+- Check `dropped_messages` for the session: `curl http://localhost:8099/sessions`
+- A writer-less session (macro playback) does not accept input and closes a writing client's connection; connect viewers with `?readonly=true`
+- A count that rises while you type with a client connected means the rate limit or the input queue is dropping input; raise `--input-rate-limit`, or check that the child process reads stdin. See [Input Drops](#input-drops)
 
 ### Rendering Issues
 
