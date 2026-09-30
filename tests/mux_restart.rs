@@ -307,9 +307,52 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
     // The race's losing branch: SIGTERM racing the reaper's death persist.
     // Dead panes are HELD now (remain-on-exit) — the tree never empties
     // on its own, so every interleaving of this race restores both panes.
-    // Give the reaper its pass (REAP_INTERVAL is 250ms) so the exercised
-    // interleaving is the one where the deaths ARE persisted first.
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    // Wait out the reaper by observation, not a fixed sleep: pane-info
+    // flags a held-dead pane ` exited=`, and flagging happens in the very
+    // reap pass that enqueues the death persist — so once BOTH panes show
+    // it, the state file's mtime must move past that moment before
+    // SIGTERM, and the exercised interleaving is the one where the deaths
+    // ARE persisted first.
+    let flagged_at = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let left_info =
+                command(&mut writer, &mut reader, &format!("pane-info -t {left}")).join("");
+            let right_info =
+                command(&mut writer, &mut reader, &format!("pane-info -t {right}")).join("");
+            if left_info.contains(" exited=") && right_info.contains(" exited=") {
+                break std::time::SystemTime::now();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reaper never flagged both panes dead: {left_info}{right_info}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    {
+        let state = fixture.state_path();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // A structural command enqueues a save whose capture happens NOW —
+        // strictly after both panes were flagged dead — so its write is a
+        // post-death save by construction, whatever the reaper's own save
+        // (same pass as the flag) already wrote before the flag was seen.
+        command(&mut writer, &mut reader, "set-buffer reaped");
+        loop {
+            let written = std::fs::metadata(&state)
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|mtime| mtime > flagged_at);
+            if written {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the death persist never landed in {}",
+                state.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
     drop((writer, reader));
 
     // The raced stop: SIGTERM after the burst. Its final save is empty and

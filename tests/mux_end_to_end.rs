@@ -247,12 +247,17 @@ fn a_slow_spawn_does_not_stall_other_clients() {
     };
     use par_term_emu_core_rust::mux::{MuxServer, MuxTree, PaneId};
 
-    /// The real factory behind a fixed stall in `create_pane`.
-    struct SleepingFactory {
+    /// The real factory behind a gate in `create_pane`: it PROVES the
+    /// dispatcher reached the spawn by sending on `entered`, then parks
+    /// until released. The bounded release wait turns a lost release into
+    /// a factory error instead of a hung daemon worker.
+    struct GatedFactory {
         inner: ShellPaneFactory,
-        stall: Duration,
+        entered: std::sync::mpsc::Sender<()>,
+        /// `Mutex` supplies the `Sync` `PaneFactory` demands; one waiter.
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
     }
-    impl PaneFactory for SleepingFactory {
+    impl PaneFactory for GatedFactory {
         fn create_pane(
             &self,
             id: PaneId,
@@ -261,21 +266,29 @@ fn a_slow_spawn_does_not_stall_other_clients() {
             command: Option<&str>,
             context: &SpawnContext<'_>,
         ) -> Result<MuxPane, MuxError> {
-            std::thread::sleep(self.stall);
+            let _ = self.entered.send(());
+            let _ = self
+                .release
+                .lock()
+                .expect("release gate mutex")
+                .recv_timeout(Duration::from_secs(30));
             self.inner.create_pane(id, cols, rows, command, context)
         }
     }
 
     let (_dir, path) = socket_path("slowspawn");
-    let tree = MuxTree::new(Box::new(SleepingFactory {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let tree = MuxTree::new(Box::new(GatedFactory {
         inner: ShellPaneFactory::default(),
-        stall: Duration::from_millis(1500),
+        entered: entered_tx,
+        release: std::sync::Mutex::new(release_rx),
     }));
     let server = MuxServer::bind_with_tree(&path, tree).expect("server binds");
     let handle = std::thread::spawn(move || server.run());
 
-    // Client A starts a session whose pane spawn stalls 1.5 s. Its reply
-    // arrives only after the spawn, so drive A from its own thread.
+    // Client A starts a session whose pane spawn parks in the gate. Its
+    // reply arrives only after the release, so drive A from its own thread.
     let (mut writer_a, mut reader_a) = connect(&path);
     let session_a = std::thread::spawn(move || {
         writeln!(writer_a, "new-session -s slow").expect("A: write new-session");
@@ -283,21 +296,33 @@ fn a_slow_spawn_does_not_stall_other_clients() {
         read_reply_block(&mut reader_a)
     });
 
-    // Let the dispatcher reach the factory stall, then time client B's
-    // list-panes. Old behavior: B blocks on the tree lock until the stall
-    // ends (≥1.2 s from here). New: B answers in scheduler time while the
-    // spawn is still in flight.
-    std::thread::sleep(Duration::from_millis(300));
+    // Deterministic readiness: the dispatcher has REACHED the factory —
+    // no sleep, no clock.
+    entered_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the dispatcher never reached the factory");
+
+    // While the spawn is parked in the gate, client B's list-panes must
+    // answer. Old behavior: B queues on the tree lock behind the spawn, so
+    // B's reply can only exist once the gate opens — the ordering is the
+    // assertion, no elapsed-time budget involved.
     let (mut writer_b, mut reader_b) = connect(&path);
     writeln!(writer_b, "list-panes").expect("B: write list-panes");
     writer_b.flush().expect("B: flush");
-    let started = Instant::now();
-    let body_b = read_reply_block(&mut reader_b);
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed < Duration::from_millis(800),
-        "list-panes queued behind the in-flight spawn ({elapsed:?}); the \
-         spawn must run off the tree lock"
+    let (body_tx, body_rx) = std::sync::mpsc::channel();
+    let mut reader_bg = BufReader::new(
+        reader_b
+            .get_mut()
+            .try_clone()
+            .expect("clone B's reader for the gated check"),
+    );
+    std::thread::spawn(move || {
+        let body = read_reply_block(&mut reader_bg);
+        let _ = body_tx.send(body);
+    });
+    let body_b = body_rx.recv_timeout(Duration::from_secs(10)).expect(
+        "list-panes did not answer while the spawn was parked in the gate; \
+         the spawn must run off the tree lock",
     );
     // Two-phase semantics: the pane is invisible until the insert lands —
     // an empty body is the correct answer mid-spawn.
@@ -306,7 +331,10 @@ fn a_slow_spawn_does_not_stall_other_clients() {
         "no pane exists yet while the spawn is in flight: {body_b:?}"
     );
 
-    // The stalled spawn still completes and becomes visible.
+    // The gated spawn still completes and becomes visible.
+    release_tx
+        .send(())
+        .expect("the factory never arrived at its release wait");
     session_a.join().expect("A: session thread");
     writeln!(writer_b, "list-panes").expect("B: write list-panes again");
     writer_b.flush().expect("B: flush again");
