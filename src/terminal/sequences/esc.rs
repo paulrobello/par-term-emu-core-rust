@@ -43,11 +43,7 @@ impl Terminal {
                     // At top of scroll region, scroll down
                     let scroll_top = self.margins.scroll_region_top;
                     let scroll_bottom = self.margins.scroll_region_bottom;
-                    self.active_grid_mut()
-                        .scroll_region_down(1, scroll_top, scroll_bottom);
-                    // Adjust graphics to scroll with content
-                    self.adjust_graphics_for_scroll_down(1, scroll_top, scroll_bottom);
-                    self.shift_pending_trigger_rows(true, 1, scroll_top, scroll_bottom);
+                    self.scroll_region_down_tracked(1, scroll_top, scroll_bottom);
                 }
             }
             (b'D', _) => {
@@ -67,11 +63,7 @@ impl Terminal {
                     let scroll_top = self.margins.scroll_region_top;
                     let scroll_bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("ind-at-scroll-bottom", scroll_top, scroll_bottom, 1);
-                    self.active_grid_mut()
-                        .scroll_region_up(1, scroll_top, scroll_bottom);
-                    // Adjust graphics to scroll with content
-                    self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                    self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
+                    self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 }
             }
             (b'E', _) => {
@@ -95,11 +87,7 @@ impl Terminal {
                     let scroll_top = self.margins.scroll_region_top;
                     let scroll_bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("nel-at-scroll-bottom", scroll_top, scroll_bottom, 1);
-                    self.active_grid_mut()
-                        .scroll_region_up(1, scroll_top, scroll_bottom);
-                    // Adjust graphics to scroll with content
-                    self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                    self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
+                    self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 }
             }
             (b'c', _) => {

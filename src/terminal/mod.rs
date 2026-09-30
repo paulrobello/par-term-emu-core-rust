@@ -3392,14 +3392,9 @@ impl Terminal {
     /// Move pending trigger rows with their content after a region scroll.
     ///
     /// Rows outside the scrolled region are untouched. A row whose content
-    /// left the region is dropped — that text is no longer on screen.
-    pub(crate) fn shift_pending_trigger_rows(
-        &mut self,
-        down: bool,
-        n: usize,
-        top: usize,
-        bottom: usize,
-    ) {
+    /// left the region was already scanned by
+    /// `scan_departing_trigger_rows`; any still listed is dropped here.
+    fn shift_pending_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
         if self.triggers.pending_trigger_rows.is_empty() {
             return;
         }
@@ -3416,6 +3411,84 @@ impl Terminal {
                 }
             })
             .collect();
+    }
+
+    /// Scan the pending rows a region scroll is about to push off the
+    /// screen, before the grid moves them (ARC-091).
+    ///
+    /// `down`/`n`/`top`/`bottom` mean what they mean to
+    /// `shift_pending_trigger_rows`: content moving up leaves at `top`,
+    /// content moving down leaves at `bottom`. Only rows already pending
+    /// are scanned (the ARC-064 written-text rule), and each is removed
+    /// from the set first, so it is scanned exactly once. A departing
+    /// row's match reports the row it occupied before the scroll.
+    fn scan_departing_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
+        if self.triggers.pending_trigger_rows.is_empty()
+            || !self.triggers.trigger_registry.has_active_triggers()
+        {
+            return;
+        }
+        let bottom = bottom.min(self.active_grid().rows().saturating_sub(1));
+        if n == 0 || top > bottom {
+            return;
+        }
+        let n = n.min(bottom - top + 1);
+        let (first, last) = if down {
+            (bottom + 1 - n, bottom)
+        } else {
+            (top, top + n - 1)
+        };
+        let mut departing: Vec<usize> = self
+            .triggers
+            .pending_trigger_rows
+            .iter()
+            .copied()
+            .filter(|r| (first..=last).contains(r))
+            .collect();
+        if departing.is_empty() {
+            return;
+        }
+        departing.sort_unstable();
+        for r in &departing {
+            self.triggers.pending_trigger_rows.remove(r);
+        }
+        crate::terminal::TriggerEngine::scan_rows(self, departing);
+    }
+
+    /// Scroll `[top, bottom]` of the active grid up by `n`, keeping
+    /// graphics and pending trigger rows with their content. Every
+    /// Terminal-level region scroll goes through here so none can skip
+    /// the trigger bookkeeping (ARC-091).
+    pub(crate) fn scroll_region_up_tracked(&mut self, n: usize, top: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(false, n, top, bottom);
+        self.active_grid_mut().scroll_region_up(n, top, bottom);
+        self.adjust_graphics_for_scroll_up(n, top, bottom);
+        self.shift_pending_trigger_rows(false, n, top, bottom);
+    }
+
+    /// Scroll `[top, bottom]` of the active grid down by `n`; the mirror of
+    /// [`Terminal::scroll_region_up_tracked`].
+    pub(crate) fn scroll_region_down_tracked(&mut self, n: usize, top: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(true, n, top, bottom);
+        self.active_grid_mut().scroll_region_down(n, top, bottom);
+        self.adjust_graphics_for_scroll_down(n, top, bottom);
+        self.shift_pending_trigger_rows(true, n, top, bottom);
+    }
+
+    /// IL: insert `n` blank lines at `row`, pushing `[row, bottom]` down.
+    /// Rows pushed past `bottom` are scanned first (ARC-091).
+    pub(crate) fn insert_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(true, n, row, bottom);
+        self.active_grid_mut().insert_lines(n, row, bottom);
+        self.shift_pending_trigger_rows(true, n, row, bottom);
+    }
+
+    /// DL: delete `n` lines at `row`, pulling `[row, bottom]` up. The
+    /// deleted rows are scanned first (ARC-091).
+    pub(crate) fn delete_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(false, n, row, bottom);
+        self.active_grid_mut().delete_lines(n, row, bottom);
+        self.shift_pending_trigger_rows(false, n, row, bottom);
     }
 
     /// Scan pending rows before content moves somewhere row indices cannot

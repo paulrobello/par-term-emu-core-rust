@@ -580,23 +580,8 @@ impl Terminal {
                         let scroll_bottom = self.margins.scroll_region_bottom;
 
                         // Scroll the grid and existing graphics
-                        self.active_grid_mut().scroll_region_up(
-                            scroll_amount,
-                            scroll_top,
-                            scroll_bottom,
-                        );
-                        self.adjust_graphics_for_scroll_up(
-                            scroll_amount,
-                            scroll_top,
-                            scroll_bottom,
-                        );
+                        self.scroll_region_up_tracked(scroll_amount, scroll_top, scroll_bottom);
                         self.mark_rows_dirty(scroll_top, scroll_bottom);
-                        self.shift_pending_trigger_rows(
-                            false,
-                            scroll_amount,
-                            scroll_top,
-                            scroll_bottom,
-                        );
 
                         // Adjust new graphic's position for the scroll
                         let original_row = graphic.position.1;

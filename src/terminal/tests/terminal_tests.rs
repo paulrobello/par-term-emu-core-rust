@@ -4435,3 +4435,90 @@ fn wrapped_line_is_scanned_where_the_scroll_left_it() {
         "the scan follows scrolled content, not the write index"
     );
 }
+
+// --- ARC-091: a written row that leaves the screen before the next scan is
+// still scanned, exactly once, at the row it occupied as it left ---
+
+fn error_trigger_terminal(rows: usize) -> Terminal {
+    let mut term = Terminal::new(80, rows);
+    TriggerEngine::add_trigger(&mut term, "err".into(), "ERROR".into(), vec![]).unwrap();
+    term
+}
+
+#[test]
+fn trigger_matches_row_scrolled_out_before_scan() {
+    let mut term = error_trigger_terminal(5);
+    let mut feed = b"ERROR lost\r\n".to_vec();
+    for _ in 0..10 {
+        feed.extend_from_slice(b"line\r\n");
+    }
+    term.process(&feed);
+    TriggerEngine::process_trigger_scans(&mut term);
+
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
+    assert_eq!(matches.len(), 1, "the row scrolled into history is scanned");
+    assert_eq!(matches[0].text, "ERROR");
+    assert_eq!(matches[0].row, 0, "the row it occupied as it left");
+}
+
+#[test]
+fn trigger_matches_row_discarded_by_region_scroll() {
+    let mut term = error_trigger_terminal(5);
+    // DECSTBM rows 2-4, cursor to the region top, then SU past the region.
+    term.process(b"\x1b[2;4r\x1b[2;1HERROR r\x1b[5S");
+    TriggerEngine::process_trigger_scans(&mut term);
+
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
+    assert_eq!(
+        matches.len(),
+        1,
+        "a row a region scroll discards is scanned"
+    );
+    assert_eq!(matches[0].row, 1);
+}
+
+#[test]
+fn trigger_matches_row_pushed_off_bottom_by_ri() {
+    let mut term = error_trigger_terminal(5);
+    term.process(b"\x1b[5;1HERROR b\x1b[H\x1bM\x1bM\x1bM");
+    TriggerEngine::process_trigger_scans(&mut term);
+
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
+    assert_eq!(
+        matches.len(),
+        1,
+        "a row RI pushes off the bottom is scanned"
+    );
+    assert_eq!(matches[0].row, 4);
+}
+
+#[test]
+fn trigger_matches_rows_removed_by_il_and_dl() {
+    let mut term = error_trigger_terminal(5);
+    // IL at row 1 pushes row 4 off the bottom; DL at row 0 deletes row 0.
+    term.process(b"\x1b[1;1HERROR top\x1b[5;1HERROR bottom\x1b[2;1H\x1b[L\x1b[1;1H\x1b[M");
+    TriggerEngine::process_trigger_scans(&mut term);
+
+    let mut rows: Vec<usize> = TriggerEngine::poll_trigger_matches(&mut term)
+        .iter()
+        .map(|m| m.row)
+        .collect();
+    rows.sort_unstable();
+    assert_eq!(rows, vec![0, 4]);
+}
+
+#[test]
+fn wide_char_wrap_scroll_keeps_pending_rows() {
+    let mut term = error_trigger_terminal(5);
+    // Fill the bottom row to column 78 so the cursor sits at column 79; a
+    // wide char there wraps and scrolls the region by one.
+    let mut feed = b"\x1b[5;1HERROR w".to_vec();
+    feed.extend(std::iter::repeat_n(b'.', 79 - "ERROR w".len()));
+    feed.extend_from_slice("世".as_bytes());
+    term.process(&feed);
+    TriggerEngine::process_trigger_scans(&mut term);
+
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
+    assert_eq!(matches.len(), 1, "the wrapped row is still pending");
+    assert_eq!(matches[0].row, 3, "the row the wrap scroll moved it to");
+}

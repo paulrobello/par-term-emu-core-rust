@@ -22,9 +22,7 @@ impl Terminal {
                 let n = if n == 0 { 1 } else { n };
                 // Insert lines within current scroll region if cursor is inside it
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
-                    self.active_grid_mut()
-                        .insert_lines(n, cursor_row, scroll_bottom);
-                    self.shift_pending_trigger_rows(true, n, cursor_row, scroll_bottom);
+                    self.insert_lines_tracked(n, cursor_row, scroll_bottom);
                 }
             }
             'M' => {
@@ -38,9 +36,7 @@ impl Terminal {
                 let n = if n == 0 { 1 } else { n };
                 // Delete lines within current scroll region if cursor is inside it
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
-                    self.active_grid_mut()
-                        .delete_lines(n, cursor_row, scroll_bottom);
-                    self.shift_pending_trigger_rows(false, n, cursor_row, scroll_bottom);
+                    self.delete_lines_tracked(n, cursor_row, scroll_bottom);
                 }
             }
             '@' => {
