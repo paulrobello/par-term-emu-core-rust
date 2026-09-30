@@ -430,7 +430,7 @@ impl Grid {
             "Grid: {}x{} (scrollback: {}/{})",
             self.cols, self.rows, self.scrollback_lines, self.max_scrollback
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
         for row in 0..self.rows {
             let line: String = (0..self.cols)
                 .map(|col| {
@@ -445,7 +445,7 @@ impl Grid {
                     }
                 })
                 .collect();
-            writeln!(output, "{:3}: |{}|", row, line).unwrap();
+            writeln!(output, "{:3}: |{}|", row, line).expect("writing to a String cannot fail");
         }
         output
     }

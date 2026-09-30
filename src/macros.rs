@@ -219,15 +219,21 @@ impl KeyParser {
         // Get the main key (last part)
         let main_key = parts.last().copied().unwrap_or("");
 
+        // Single-byte (ASCII) key. Multi-byte characters take the raw-bytes
+        // arm below.
+        if let [byte] = *main_key.as_bytes() {
+            return if has_ctrl && byte.is_ascii_alphabetic() {
+                // Control character (Ctrl+key); key_lower makes it a-z
+                vec![byte - b'a' + 1]
+            } else if has_alt {
+                vec![0x1b, byte]
+            } else {
+                vec![byte]
+            };
+        }
+
         // Handle special keys
         match main_key {
-            // Control characters (Ctrl+key)
-            k if has_ctrl && k.len() == 1 && k.chars().next().unwrap().is_ascii_alphabetic() => {
-                let ch = k.chars().next().unwrap();
-                let ctrl_code = ch as u8 - b'a' + 1;
-                vec![ctrl_code]
-            }
-
             // Function keys
             "f1" => vec![0x1b, b'O', b'P'],
             "f2" => vec![0x1b, b'O', b'Q'],
@@ -266,19 +272,6 @@ impl KeyParser {
             "pageup" | "pgup" => vec![0x1b, b'[', b'5', b'~'],
             "pagedown" | "pgdn" => vec![0x1b, b'[', b'6', b'~'],
             "insert" | "ins" => vec![0x1b, b'[', b'2', b'~'],
-
-            // Regular character
-            k if k.len() == 1 => {
-                let ch = k.chars().next().unwrap();
-                if has_alt {
-                    vec![0x1b, ch as u8]
-                } else if has_ctrl && ch.is_ascii_alphabetic() {
-                    let ctrl_code = ch as u8 - b'a' + 1;
-                    vec![ctrl_code]
-                } else {
-                    vec![ch as u8]
-                }
-            }
 
             // Unknown key - return it as-is
             _ => key.as_bytes().to_vec(),
@@ -419,6 +412,19 @@ mod tests {
         assert_eq!(KeyParser::parse_key("enter"), vec![b'\r']);
         assert_eq!(KeyParser::parse_key("tab"), vec![b'\t']);
         assert_eq!(KeyParser::parse_key("a"), vec![b'a']);
+    }
+
+    #[test]
+    fn test_key_parser_single_char_modifiers() {
+        // Ctrl wins over Alt for an alphabetic key
+        assert_eq!(KeyParser::parse_key("ctrl+alt+a"), vec![1]);
+        assert_eq!(KeyParser::parse_key("Ctrl+Z"), vec![26]);
+        assert_eq!(KeyParser::parse_key("alt+x"), vec![0x1b, b'x']);
+        // Ctrl on a non-alphabetic key sends the key itself
+        assert_eq!(KeyParser::parse_key("ctrl+1"), vec![b'1']);
+        // Multi-byte characters are passed through as the original key bytes
+        assert_eq!(KeyParser::parse_key("é"), "é".as_bytes().to_vec());
+        assert_eq!(KeyParser::parse_key("alt+é"), "alt+é".as_bytes().to_vec());
     }
 
     #[cfg(feature = "macro-yaml")]
