@@ -1839,6 +1839,7 @@ Tmux control mode notification.
 - `window_id: str | None`: Window identifier
 - `session_id: str | None`: Session identifier
 - `name: str | None`: Session/window name; for `agent-state-changed`, `agent-released` and `agent-telemetry-changed`, the agent label
+- `exit_code: int | None`: For `pane-exited`, the held pane's exit code; `None` when it was unreadable (signal death, or reaped before the daemon read it) and for every other notification type
 - `client: str | None`: Client name
 - `data: bytes | None`: Raw notification data
 - `timestamp: int | None`: Notification timestamp

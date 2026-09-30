@@ -8267,6 +8267,13 @@ class TmuxNotification:
     @delay_ms.setter
     def delay_ms(self, value: Any) -> None: ...
     @property
+    def exit_code(self) -> Any:
+        """Exit code of the pane's process (for `pane-exited`); None on signal
+        death, when unreadable, and for every other notification type
+        """
+    @exit_code.setter
+    def exit_code(self, value: Any) -> None: ...
+    @property
     def flags(self) -> Any:
         """Flags (for begin/end/error notifications)"""
     @flags.setter
