@@ -6,6 +6,12 @@
 
 #![cfg(feature = "mux")]
 
+// ARC-106: cargo sets CARGO_BIN_EXE_par-mux even when the bin's
+// required-features are unmet, so a plain-`mux` build would silently exec a
+// stale target/debug/par-mux. Fail loudly instead.
+#[cfg(not(feature = "mux-bin"))]
+compile_error!("this test drives the par-mux binary: build it with --features mux-bin");
+
 mod common;
 
 use common::{spawn_daemon, wait_listening, MuxFixture};

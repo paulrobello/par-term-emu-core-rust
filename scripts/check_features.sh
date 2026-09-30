@@ -2,7 +2,8 @@
 # Feature-hygiene gate (ENH-019): every feature builds on its own, and heavy
 # dependencies stay out of the slim profiles. Catches the ARC-043 class
 # (`screenshot = []` leaving swash unconditional) and the ARC-044 class (`mux`
-# pulling binary-only clap) mechanically, before they ship.
+# pulling binary-only clap; binary split out as `mux-bin` by ARC-106)
+# mechanically, before they ship.
 #
 # Run via `make check-features` after any [features] or dependency edit in
 # Cargo.toml. Not part of `make checkall` — the matrix takes minutes.
@@ -27,6 +28,7 @@ cargo hack check --each-feature \
 
 echo "=== 2/3 explicit combinations + python-test ==="
 cargo check --no-default-features --features rust-only,mux
+cargo check --no-default-features --features rust-only,mux-bin
 cargo check --no-default-features --features rust-only,streaming
 cargo check --no-default-features --features streaming-bin
 # pyo3 needs an interpreter at build-script time; the lib alone is enough to
@@ -68,12 +70,8 @@ assert_absent sim swash
 
 # mux: a daemon, not a WebSocket client — no streaming client stack.
 assert_absent rust-only,mux tokio-tungstenite
-# Guarded on ARC-044 (mux dropping binary-only clap).
-if ! grep -Eq '^mux = \[[^]]*"clap"' Cargo.toml; then
-    assert_absent rust-only,mux clap
-else
-    echo "  skip: mux still pulls clap (ARC-044 not landed)"
-fi
+# The CLI parser belongs to the `mux-bin` binary feature only (ARC-106).
+assert_absent rust-only,mux clap
 
 # streaming (the library feature): the CLI/logging/download deps belong to
 # streaming-bin only.

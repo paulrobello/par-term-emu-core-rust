@@ -56,11 +56,12 @@ path = "src/bin/streaming_server/main.rs"
 required-features = ["streaming-bin"]
 
 # The par-mux daemon: owns PTYs and serves control mode over a local socket;
-# panes outlive every client (par-mux.md D5).
+# panes outlive every client (par-mux.md D5). `mux-bin` (not `mux`) so the
+# library feature stays free of the binary-only CLI parser (ARC-106).
 [[bin]]
 name = "par-mux"
 path = "src/bin/par_mux/main.rs"
-required-features = ["mux"]
+required-features = ["mux-bin"]
 
 [dependencies]
 log = "0.4"
@@ -255,7 +256,13 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "interprocess", "widestring", "windows-sys", "serde", "dirs", "dep:toml", "clap"]
+mux = ["pty_session", "interprocess", "widestring", "windows-sys", "serde", "dirs", "dep:toml"]
+
+# The `par-mux` daemon binary (ARC-106): the `mux` library plus its CLI parser,
+# mirroring the `streaming`/`streaming-bin` split, so library embedders
+# (par-term) never compile clap. `"clap"`, not `"dep:clap"`: a `dep:` reference
+# removes clap's implicit feature, which `streaming-bin` relies on.
+mux-bin = ["mux", "clap"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md

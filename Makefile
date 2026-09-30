@@ -240,7 +240,7 @@ test-rust:
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
 	cargo test --lib --no-default-features --features rust-only,serde
 	@echo "Running the full mux suite (lib unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
-	cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
+	cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 
@@ -291,7 +291,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:
@@ -306,12 +306,12 @@ check:
 
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
-	cargo check --all-targets --features python,streaming,mux
+	cargo check --all-targets --features python,streaming,mux,mux-bin
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Build with streaming first so streaming-only methods are captured:
