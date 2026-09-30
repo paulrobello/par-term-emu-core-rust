@@ -249,6 +249,17 @@ impl TriggerState {
         self.pending_trigger_rows.clear();
     }
 
+    /// Queue an ActionResult for frontend polling under the
+    /// `max_action_results` cap (QA-197). When the buffer is full the new
+    /// result is dropped, matching the RunCommand/PlaySound/SendText arms
+    /// that capped inline before this helper existed; Notify/MarkLine/
+    /// SplitPane previously grew the buffer without bound.
+    pub(crate) fn push_action_result(&mut self, result: ActionResult) {
+        if self.trigger_action_results.len() < self.max_action_results {
+            self.trigger_action_results.push(result);
+        }
+    }
+
     /// Carry the registry across RIS: `self` is the fresh state, `old` the
     /// state being replaced. Highlights, action results, and pending scan
     /// rows reset.
@@ -398,6 +409,13 @@ impl TriggerEngine {
                         bg: *bg,
                         expiry,
                     });
+                    // Permanent highlights (duration_ms == 0, expiry u64::MAX)
+                    // never age out, so the buffer is bounded by evicting the
+                    // oldest instead (QA-197).
+                    while term.triggers.trigger_highlights.len() > term.triggers.max_action_results
+                    {
+                        term.triggers.trigger_highlights.remove(0);
+                    }
                 }
                 TriggerAction::Notify { title, message } => {
                     let title = substitute_captures(title, &trigger_match.captures);
@@ -409,13 +427,11 @@ impl TriggerEngine {
                         title.clone(),
                         message.clone(),
                     ));
-                    term.triggers
-                        .trigger_action_results
-                        .push(ActionResult::Notify {
-                            trigger_id: trigger_match.trigger_id,
-                            title,
-                            message,
-                        });
+                    term.triggers.push_action_result(ActionResult::Notify {
+                        trigger_id: trigger_match.trigger_id,
+                        title,
+                        message,
+                    });
                 }
                 TriggerAction::MarkLine { label, color } => {
                     let label = label
@@ -425,14 +441,12 @@ impl TriggerEngine {
                     // reflects trigger-driven marks, consistent with SetVariable/Highlight.
                     // The ActionResult below is retained for host-side polling.
                     term.add_bookmark(trigger_match.row as isize, label.clone());
-                    term.triggers
-                        .trigger_action_results
-                        .push(ActionResult::MarkLine {
-                            trigger_id: trigger_match.trigger_id,
-                            row: trigger_match.row,
-                            label,
-                            color: *color,
-                        });
+                    term.triggers.push_action_result(ActionResult::MarkLine {
+                        trigger_id: trigger_match.trigger_id,
+                        row: trigger_match.row,
+                        label,
+                        color: *color,
+                    });
                 }
                 TriggerAction::SetVariable { name, value } => {
                     let name = substitute_captures(name, &trigger_match.captures);
@@ -448,42 +462,27 @@ impl TriggerEngine {
                         .iter()
                         .map(|a| substitute_captures(a, &trigger_match.captures))
                         .collect();
-                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
-                    {
-                        term.triggers
-                            .trigger_action_results
-                            .push(ActionResult::RunCommand {
-                                trigger_id,
-                                command,
-                                args,
-                            });
-                    }
+                    term.triggers.push_action_result(ActionResult::RunCommand {
+                        trigger_id,
+                        command,
+                        args,
+                    });
                 }
                 TriggerAction::PlaySound { sound_id, volume } => {
                     let sound_id = substitute_captures(sound_id, &trigger_match.captures);
-                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
-                    {
-                        term.triggers
-                            .trigger_action_results
-                            .push(ActionResult::PlaySound {
-                                trigger_id,
-                                sound_id,
-                                volume: *volume,
-                            });
-                    }
+                    term.triggers.push_action_result(ActionResult::PlaySound {
+                        trigger_id,
+                        sound_id,
+                        volume: *volume,
+                    });
                 }
                 TriggerAction::SendText { text, delay_ms } => {
                     let text = substitute_captures(text, &trigger_match.captures);
-                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
-                    {
-                        term.triggers
-                            .trigger_action_results
-                            .push(ActionResult::SendText {
-                                trigger_id,
-                                text,
-                                delay_ms: *delay_ms,
-                            });
-                    }
+                    term.triggers.push_action_result(ActionResult::SendText {
+                        trigger_id,
+                        text,
+                        delay_ms: *delay_ms,
+                    });
                 }
                 TriggerAction::SplitPane {
                     direction,
@@ -491,16 +490,14 @@ impl TriggerEngine {
                     focus_new_pane,
                     target,
                 } => {
-                    term.triggers
-                        .trigger_action_results
-                        .push(ActionResult::SplitPane {
-                            trigger_id,
-                            direction: direction.clone(),
-                            command: command.clone(),
-                            focus_new_pane: *focus_new_pane,
-                            target: target.clone(),
-                            source_pane_id: None, // per-pane polling not yet wired
-                        });
+                    term.triggers.push_action_result(ActionResult::SplitPane {
+                        trigger_id,
+                        direction: direction.clone(),
+                        command: command.clone(),
+                        focus_new_pane: *focus_new_pane,
+                        target: target.clone(),
+                        source_pane_id: None, // per-pane polling not yet wired
+                    });
                 }
                 TriggerAction::StopPropagation => {
                     break;

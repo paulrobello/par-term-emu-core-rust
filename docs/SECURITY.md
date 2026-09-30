@@ -1270,7 +1270,7 @@ sections; the numbers live here.
 | `SIXEL_DEFAULT_MAX_HEIGHT` | 1 KiB | `src/sixel.rs:42` | Default ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
 | `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
-| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:46` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
+| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
@@ -1283,12 +1283,13 @@ sections; the numbers live here.
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:150` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:152` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:154` | Bytes retained for one queued clipboard sync event. |
-| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:160` | Unpolled terminal events retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:164` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:154` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:156` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:158` | Bytes retained for one queued clipboard sync event. |
+| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:164` | Unpolled terminal events retained from processed output. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:168` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:942` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `MAX_BOOKMARKS` | 1,000 | `src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:12` | Color registers accepted in a sixel palette from a DCS payload. |

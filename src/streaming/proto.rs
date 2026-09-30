@@ -13,17 +13,11 @@
 
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
-    AgentEntry as AppAgentEntry,
-    ClientMessage as AppClientMessage,
-    CpuStats as AppCpuStats,
-    DiskStats as AppDiskStats,
-    EventType as AppEventType,
-    LoadAverage as AppLoadAverage,
-    MemoryStats as AppMemoryStats,
-    MouseEventType,
-    NetworkInterfaceStats as AppNetworkInterfaceStats,
-
-    ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
+    AgentEntry as AppAgentEntry, ClientMessage as AppClientMessage, CpuStats as AppCpuStats,
+    DiskStats as AppDiskStats, EventType as AppEventType, LoadAverage as AppLoadAverage,
+    MemoryStats as AppMemoryStats, MouseEventType,
+    NetworkInterfaceStats as AppNetworkInterfaceStats, ServerMessage as AppServerMessage,
+    ThemeInfo as AppThemeInfo,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;

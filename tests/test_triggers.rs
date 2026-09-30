@@ -1,5 +1,5 @@
 // Integration tests for trigger system (Feature 18)
-use par_term_emu_core_rust::terminal::trigger::TriggerAction;
+use par_term_emu_core_rust::terminal::trigger::{ActionResult, TriggerAction};
 use par_term_emu_core_rust::terminal::Terminal;
 use par_term_emu_core_rust::terminal::TriggerEngine;
 
@@ -321,4 +321,78 @@ fn test_trigger_frontend_actions() {
 
     let results = TriggerEngine::poll_action_results(&mut term);
     assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn test_trigger_highlight_cap_evicts_oldest() {
+    // 200 rows so 150 matching lines never scroll; line i lands on row i.
+    // Scan after every line, as the PTY reader does, so highlight push order
+    // is chronological.
+    let mut term = Terminal::new(80, 200);
+    TriggerEngine::add_trigger(
+        &mut term,
+        "hl".into(),
+        "MATCH".into(),
+        vec![TriggerAction::Highlight {
+            fg: Some((255, 0, 0)),
+            bg: None,
+            // duration 0 = permanent: the never-expiring case is exactly the
+            // one that must be bounded by eviction
+            duration_ms: 0,
+        }],
+    )
+    .unwrap();
+
+    for i in 0..150 {
+        term.process(format!("MATCH line {i}\r\n").as_bytes());
+        TriggerEngine::process_trigger_scans(&mut term);
+    }
+
+    let highlights = TriggerEngine::get_trigger_highlights(&term);
+    assert_eq!(
+        highlights.len(),
+        100,
+        "highlights must be capped at max_action_results"
+    );
+    // Oldest evicted: the first survivor is the 51st match, and the newest survives.
+    assert_eq!(highlights[0].row, 50);
+    assert_eq!(highlights[99].row, 149);
+}
+
+#[test]
+fn test_trigger_markline_result_cap_drops_newest() {
+    let mut term = Terminal::new(80, 200);
+    TriggerEngine::add_trigger(
+        &mut term,
+        "mk".into(),
+        "MATCH".into(),
+        vec![TriggerAction::MarkLine {
+            label: Some("mark".into()),
+            color: None,
+        }],
+    )
+    .unwrap();
+
+    for i in 0..150 {
+        term.process(format!("MATCH line {i}\r\n").as_bytes());
+        TriggerEngine::process_trigger_scans(&mut term);
+    }
+
+    let results = TriggerEngine::poll_action_results(&mut term);
+    assert_eq!(
+        results.len(),
+        100,
+        "action results must be capped at max_action_results"
+    );
+    // Drop-new, consistent with the already-capped RunCommand/PlaySound/SendText
+    // variants: the first 100 results are retained and later rows never enqueue.
+    let rows: Vec<usize> = results
+        .iter()
+        .map(|r| match r {
+            ActionResult::MarkLine { row, .. } => *row,
+            other => panic!("unexpected result: {other:?}"),
+        })
+        .collect();
+    assert_eq!(rows[0], 0);
+    assert_eq!(rows[99], 99);
 }

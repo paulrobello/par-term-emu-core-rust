@@ -536,6 +536,13 @@ pub struct Bookmark {
     pub label: String,
 }
 
+/// Maximum bookmarks retained. `add_bookmark` is fed by both the user API
+/// and trigger `MarkLine` actions, which can fire on every written line, so
+/// the list is bounded by evicting the oldest (QA-197).
+///
+/// cap: Bookmark entries retained for one terminal session.
+const MAX_BOOKMARKS: usize = 1000;
+
 /// Type of change in a diff
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiffChangeType {
@@ -901,7 +908,8 @@ impl Terminal {
     /// * `row` - Row index (negative for scrollback, 0+ for visible screen)
     /// * `label` - Optional label for the bookmark
     ///
-    /// Returns the bookmark ID.
+    /// Returns the bookmark ID. The list is capped at MAX_BOOKMARKS (1000)
+    /// entries; adding beyond the cap evicts the oldest bookmark.
     pub fn add_bookmark(&mut self, row: isize, label: Option<String>) -> usize {
         let id = self.bookmarks_state.next_bookmark_id;
         self.bookmarks_state.next_bookmark_id += 1;
@@ -913,6 +921,9 @@ impl Terminal {
         };
 
         self.bookmarks_state.bookmarks.push(bookmark);
+        while self.bookmarks_state.bookmarks.len() > MAX_BOOKMARKS {
+            self.bookmarks_state.bookmarks.remove(0);
+        }
         id
     }
 
