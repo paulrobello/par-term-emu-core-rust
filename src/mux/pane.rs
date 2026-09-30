@@ -423,6 +423,14 @@ impl MuxPane {
         self.session.set_output_callback(Arc::new(callback));
     }
 
+    /// Stop forwarding this pane's output (ARC-089). On return, no sink
+    /// call is in flight and none will start: the reader invokes the sink
+    /// while holding the same lock this takes. The terminal keeps
+    /// processing output; only the forward stops.
+    pub fn detach_output(&mut self) {
+        self.session.clear_output_callback();
+    }
+
     /// Write client input to the pane's PTY.
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), MuxError> {
         self.session.write(bytes).map_err(MuxError::from)
@@ -452,8 +460,10 @@ impl MuxPane {
             .map_err(MuxError::from)
     }
 
-    /// Terminate the pane's child process.
+    /// Terminate the pane's child process. Its output stops forwarding
+    /// first, so a SIGHUP handler's parting bytes never reach the sink.
     pub fn kill(&mut self) -> Result<(), MuxError> {
+        self.detach_output();
         self.session.kill().map_err(MuxError::from)
     }
 }
@@ -939,6 +949,52 @@ mod tests {
         assert!(
             seen.load(Ordering::Relaxed) > 0,
             "output callback should have received PTY bytes within 5s"
+        );
+    }
+
+    /// ARC-089: a killed pane's exit output (a SIGHUP trap, a TUI's
+    /// alt-screen exit) must not reach its sink — the id may already
+    /// belong to a respawned replacement.
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_panes_late_output_is_not_forwarded() {
+        // `sleep & wait`, not a foreground sleep: the shell runs a trap only
+        // after its foreground child returns, which a 1 s sleep delays past
+        // portable-pty's ~200 ms SIGHUP grace, so SIGKILL would win and the
+        // test would pass without the fix. `wait` returns on the signal.
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory
+            .create_pane(
+                PaneId(3),
+                80,
+                24,
+                Some("trap 'echo OLD-PANE-BYE; exit 0' HUP; echo READY-MARK; while :; do sleep 5 & wait; done"),
+                &SpawnContext::default(),
+            )
+            .expect("pane should spawn");
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&collected);
+        pane.on_output(move |bytes: &[u8]| sink.lock().extend_from_slice(bytes));
+
+        // The marker proves the trap is installed; a SIGHUP before it
+        // kills the shell without running the trap. Read it off the screen:
+        // the shell can print it before `on_output` registers.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pane.terminal().read().content().contains("READY-MARK") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the ready marker never reached the pane screen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        pane.kill().expect("kill succeeds");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let seen = String::from_utf8_lossy(&collected.lock()).into_owned();
+        assert!(
+            !seen.contains("OLD-PANE-BYE"),
+            "the dying process's output was forwarded: {seen:?}"
         );
     }
 

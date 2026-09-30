@@ -15,6 +15,10 @@ use std::sync::Arc;
 /// duration. The thread always exits — SIGKILL cannot be trapped — and the
 /// pane it owns is dropped reaped.
 fn kill_detached(mut pane: MuxPane) {
+    // Stop forwarding before the SIGHUP, on this thread: the pane's id may
+    // already belong to a replacement (respawn), and the reader can deliver
+    // bytes before the kill thread first runs (ARC-089).
+    pane.detach_output();
     std::thread::spawn(move || {
         let _ = pane.kill();
     });
@@ -2993,6 +2997,87 @@ mod tests {
         let gone = dir.path().join("gone");
         let cwd = respawn_cwd_after_osc7("localhost", &gone);
         assert_ne!(cwd.as_deref(), Some(gone.as_path()), "missing dir was used");
+    }
+
+    /// ARC-089: `respawn-pane -k` reuses the pane id, so the dying
+    /// process's SIGHUP output must not reach the id's output sink — it
+    /// would land on the replacement's fresh screen in every client.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_does_not_forward_the_old_processes_exit_output() {
+        type Chunks = Arc<parking_lot::Mutex<Vec<(u8, Vec<u8>)>>>;
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        // `sleep & wait` lets the trap run inside portable-pty's SIGHUP
+        // grace; see `a_killed_panes_late_output_is_not_forwarded`.
+        let pane = tree
+            .split_pane(
+                first,
+                SplitDirection::Vertical,
+                0.5,
+                Some("trap 'echo OLD-PANE-BYE; exit 0' HUP; echo READY-MARK; while :; do sleep 5 & wait; done"),
+            )
+            .unwrap();
+        let chunks: Chunks = Arc::default();
+        let tagged = |generation: u8| {
+            let chunks = Arc::clone(&chunks);
+            move |bytes: &[u8]| chunks.lock().push((generation, bytes.to_vec()))
+        };
+        let seen_from = |generation: u8| -> String {
+            chunks
+                .lock()
+                .iter()
+                .filter(|(g, _)| *g == generation)
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                .collect()
+        };
+        tree.pane_mut(pane).unwrap().on_output(tagged(0));
+        // Read the marker off the screen, not the sink: the shell can print
+        // it before `on_output` registers, since `split_pane` spawns first.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !tree
+            .pane(pane)
+            .unwrap()
+            .terminal()
+            .read()
+            .content()
+            .contains("READY-MARK")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trap's ready marker never reached the pane screen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        let factory = tree.factory();
+        let plan = tree
+            .begin_respawn(pane, true, Some("sleep 60".to_string()), None)
+            .unwrap();
+        let replacement = factory
+            .create_pane(
+                plan.pane_id,
+                plan.cols,
+                plan.rows,
+                plan.command.as_deref(),
+                &plan.context(),
+            )
+            .expect("respawn spawns");
+        tree.complete_respawn(plan, replacement).unwrap();
+        tree.pane_mut(pane).unwrap().on_output(tagged(1));
+        // Longer than portable-pty's SIGHUP grace plus the 500 ms reap.
+        std::thread::sleep(std::time::Duration::from_millis(700));
+
+        let old = seen_from(0);
+        assert!(
+            !old.contains("OLD-PANE-BYE"),
+            "the old process's exit output reached the respawned id: {old:?}"
+        );
+        for id in [first, pane] {
+            let _ = tree.pane_mut(id).unwrap().kill();
+        }
     }
 
     #[test]
