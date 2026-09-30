@@ -437,6 +437,51 @@ fn persist_worker_loop<W>(
     }
 }
 
+/// How one bounded fill attempt ended (SEC-127).
+#[derive(Debug, PartialEq, Eq)]
+enum LineFill {
+    /// `buf` ends in `\n`.
+    Complete,
+    /// `buf` grew past `max`; the caller answers %error and closes.
+    Oversize,
+    /// EOF; `buf` holds any unterminated final line.
+    Eof,
+}
+
+/// Append bytes from `reader` to `buf` until a newline, EOF, or the budget
+/// trips. Errors (a recv-timeout poll wake above all) propagate with `buf`
+/// intact: the bytes stay raw until the line completes, so a wake that
+/// splits a multi-byte UTF-8 char loses nothing.
+fn fill_line_bounded<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<LineFill> {
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        if chunk.is_empty() {
+            return Ok(LineFill::Eof);
+        }
+        // max + 1 - len >= 1 while len <= max, and the Oversize return below
+        // stops the loop the moment len exceeds max.
+        let budget = max + 1 - buf.len();
+        let newline = chunk.iter().position(|&b| b == b'\n');
+        let take = newline.map_or(chunk.len(), |i| i + 1).min(budget);
+        buf.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if buf.len() > max {
+            return Ok(LineFill::Oversize);
+        }
+        if buf.last() == Some(&b'\n') {
+            return Ok(LineFill::Complete);
+        }
+    }
+}
+
 /// Serve one connected client: a writer thread draining a channel, and this
 /// thread reading lines. The socket carries two grammars (Phase 5),
 /// classified by [`parse_line`]: a JSON hook report (a line whose first
@@ -504,28 +549,30 @@ fn handle_client(
     let mut reader = BufReader::new(stream);
     let mut command_number = 0u32;
     'connection: loop {
-        // One line, accumulated across recv-timeout wakes: a wake mid-line
-        // retries with the partial preserved (`Lines` would drop it), so a
-        // healthy sender's pause must not cost bytes; only an evicted
-        // connection breaks out. An unterminated final line is processed
-        // before EOF, matching `Lines`' last-item behavior.
-        let mut line = String::new();
-        let mut undecodable = false;
+        // One line, accumulated as raw bytes across recv-timeout wakes: a
+        // wake mid-line keeps every byte read so far (`read_line` would
+        // discard a partial whose tail splits a multi-byte char), so a
+        // healthy sender's pause costs nothing; only an evicted connection
+        // breaks out. The budget is checked per chunk, so an unterminated
+        // stream trips it without a newline ever arriving (SEC-127), and
+        // UTF-8 is decoded once, after the line is complete. An
+        // unterminated final line is processed before EOF, matching
+        // `Lines`' last-item behavior.
+        let mut buf: Vec<u8> = Vec::new();
         let pickup_started = std::time::Instant::now();
         let mut wakes = 0u32;
         loop {
-            match reader.read_line(&mut line) {
-                Ok(0) => {
-                    if line.is_empty() {
+            match fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES) {
+                Ok(LineFill::Eof) => {
+                    if buf.is_empty() {
                         break 'connection;
                     }
                     break;
                 }
                 // SEC-104: over-budget accumulation is answered like a
-                // malformed command and the connection is closed. Checked
-                // before the newline arm so a complete-but-oversized line is
-                // caught too, not only an unterminated one.
-                Ok(_) if line.len() > MAX_CONTROL_LINE_BYTES => {
+                // malformed command and the connection is closed, whether
+                // the line is complete or still unterminated.
+                Ok(LineFill::Oversize) => {
                     if !registered {
                         clients.lock().push((
                             client_id,
@@ -543,7 +590,7 @@ fn handle_client(
                     ));
                     break 'connection;
                 }
-                Ok(_) if line.ends_with('\n') => {
+                Ok(LineFill::Complete) => {
                     // Wake-cadence evidence (card 01a0e80db3e870e282af0cf84405043b):
                     // a line that took poll wakes or >1 poll interval to arrive
                     // is the signature of a parked read loop — log it so a
@@ -553,13 +600,12 @@ fn handle_client(
                         crate::debug_log!(
                             "MUX",
                             "client {client_id} picked up a {} B line after {:?} and {wakes} poll wakes",
-                            line.len(),
+                            buf.len(),
                             waited
                         );
                     }
                     break;
                 }
-                Ok(_) => continue,
                 Err(err) if is_poll_wake(&err) => {
                     wakes += 1;
                     crate::debug_log!(
@@ -571,44 +617,43 @@ fn handle_client(
                         break 'connection;
                     }
                 }
-                // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1
-                // bytes): read_line consumed it through the newline, so the
-                // stream stays line-framed, but the buffer's contents are
-                // unusable. Answer it like a parse error — a numbered
-                // %error block — instead of dropping the whole client.
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
-                    undecodable = true;
-                    break;
-                }
                 Err(_) => break 'connection,
             }
         }
-        if undecodable {
-            if !registered {
-                clients.lock().push((
+        // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1 bytes) was
+        // read through its newline, so the stream stays line-framed, but
+        // its contents are unusable. Answer it like a parse error — a
+        // numbered %error block — instead of dropping the whole client.
+        let mut line = match String::from_utf8(buf) {
+            Ok(line) => line,
+            Err(err) => {
+                let undecodable_len = err.as_bytes().len();
+                if !registered {
+                    clients.lock().push((
+                        client_id,
+                        tx.clone(),
+                        Arc::clone(&evicted),
+                        abort.take().expect("abort is registered once"),
+                    ));
+                    registered = true;
+                }
+                command_number += 1;
+                crate::debug_error!(
+                    "MUX",
+                    "non-UTF-8 command line #{} from client {} ({} bytes)",
+                    command_number,
                     client_id,
-                    tx.clone(),
-                    Arc::clone(&evicted),
-                    abort.take().expect("abort is registered once"),
-                ));
-                registered = true;
+                    undecodable_len
+                );
+                if tx
+                    .send(emit_block(command_number, "line is not valid UTF-8", false))
+                    .is_err()
+                {
+                    break 'connection;
+                }
+                continue;
             }
-            command_number += 1;
-            crate::debug_error!(
-                "MUX",
-                "non-UTF-8 command line #{} from client {} ({} bytes)",
-                command_number,
-                client_id,
-                line.len()
-            );
-            if tx
-                .send(emit_block(command_number, "line is not valid UTF-8", false))
-                .is_err()
-            {
-                break 'connection;
-            }
-            continue;
-        }
+        };
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();
         }
@@ -1181,6 +1226,109 @@ mod tests {
         assert!(cut.contains(&format!("{} bytes total", multibyte.len())));
         assert!(cut.ends_with("bytes total)"));
         assert!(cut.is_char_boundary(cut.find("...").expect("ellipsis marker")));
+    }
+
+    /// A reader that serves a fixed script of chunks and errors, one per
+    /// `fill_buf`, so the bounded fill can be driven through poll wakes.
+    struct ScriptedReader {
+        script: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+        current: Vec<u8>,
+        pos: usize,
+    }
+
+    impl ScriptedReader {
+        fn new(script: Vec<std::io::Result<Vec<u8>>>) -> Self {
+            Self {
+                script: script.into(),
+                current: Vec::new(),
+                pos: 0,
+            }
+        }
+    }
+
+    impl std::io::Read for ScriptedReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let available = self.fill_buf()?;
+            let n = available.len().min(out.len());
+            out[..n].copy_from_slice(&available[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl BufRead for ScriptedReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.pos >= self.current.len() {
+                match self.script.pop_front() {
+                    Some(Ok(chunk)) => {
+                        self.current = chunk;
+                        self.pos = 0;
+                    }
+                    Some(Err(err)) => return Err(err),
+                    None => return Ok(&[]),
+                }
+            }
+            Ok(&self.current[self.pos..])
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.pos += amount;
+        }
+    }
+
+    #[test]
+    fn fill_line_bounded_trips_the_budget_without_a_newline() {
+        let chunks = (0..4).map(|_| Ok(vec![b'x'; 64 * 1024])).collect();
+        let mut reader = ScriptedReader::new(chunks);
+        let mut buf = Vec::new();
+        let fill = fill_line_bounded(&mut reader, &mut buf, 100_000).expect("no I/O error");
+        assert_eq!(fill, LineFill::Oversize);
+        assert_eq!(buf.len(), 100_001, "nothing past max + 1 is copied");
+    }
+
+    #[test]
+    fn fill_line_bounded_keeps_a_split_utf8_char_across_a_wake() {
+        let mut reader = ScriptedReader::new(vec![
+            Ok(b"set-buffer caf\xc3".to_vec()),
+            Err(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+            Ok(b"\xa9\n".to_vec()),
+        ]);
+        let mut buf = Vec::new();
+        let wake = fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES)
+            .expect_err("the wake propagates");
+        assert_eq!(wake.kind(), std::io::ErrorKind::TimedOut);
+        let fill = fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES)
+            .expect("the line completes");
+        assert_eq!(fill, LineFill::Complete);
+        assert_eq!(
+            String::from_utf8(buf).expect("valid UTF-8 once whole"),
+            "set-buffer café\n"
+        );
+    }
+
+    #[test]
+    fn fill_line_bounded_reports_eof_with_a_partial() {
+        let mut reader = ScriptedReader::new(vec![Ok(b"version".to_vec())]);
+        let mut buf = Vec::new();
+        let fill =
+            fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES).expect("no I/O error");
+        assert_eq!(fill, LineFill::Eof);
+        assert_eq!(buf, b"version");
+    }
+
+    #[test]
+    fn fill_line_bounded_stops_at_the_first_newline() {
+        let mut reader = ScriptedReader::new(vec![Ok(b"version\nlist-panes\n".to_vec())]);
+        let mut buf = Vec::new();
+        let fill =
+            fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES).expect("no I/O error");
+        assert_eq!(fill, LineFill::Complete);
+        assert_eq!(buf, b"version\n");
+        buf.clear();
+        let fill =
+            fill_line_bounded(&mut reader, &mut buf, MAX_CONTROL_LINE_BYTES).expect("no I/O error");
+        assert_eq!(fill, LineFill::Complete);
+        assert_eq!(buf, b"list-panes\n", "the second line stays buffered");
     }
 
     #[cfg(unix)]

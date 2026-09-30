@@ -205,6 +205,36 @@ fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
     );
 }
 
+/// SEC-127: a multi-byte char split across a recv-timeout wake survives.
+/// `read_line` truncates the bytes it appended when the call errors and
+/// they are not valid UTF-8, after the `BufReader` already consumed them,
+/// so the old loop dropped the partial and answered `%error` for the tail.
+#[test]
+fn a_multibyte_char_split_across_a_poll_wake_survives() {
+    let (_dir, path) = socket_path("utf8split");
+    let _handle = spawn_server(&path);
+    let (mut writer, mut reader) = connect(&path);
+
+    writer
+        .write_all(b"set-buffer caf\xc3")
+        .expect("write the head");
+    writer.flush().expect("flush");
+    // More than two EVICTION_POLL (200 ms) recv-timeout wakes.
+    std::thread::sleep(Duration::from_millis(450));
+    writer.write_all(b"\xa9\n").expect("write the tail");
+    writer.flush().expect("flush");
+    let (ok, _) = read_block_verdict(&mut reader);
+    assert!(ok, "the split line is one valid command");
+
+    writer
+        .write_all(b"show-buffer\n")
+        .expect("write show-buffer");
+    writer.flush().expect("flush");
+    let (ok, body) = read_block_verdict(&mut reader);
+    assert!(ok, "show-buffer succeeds");
+    assert_eq!(body, vec!["café".to_string()], "the char arrived whole");
+}
+
 /// ARC-022: the pane spawn (fork/exec + reader start) runs OFF the tree
 /// lock. A factory that stalls mid-spawn proves it: while client A's
 /// new-session is still inside the factory, client B's list-panes must

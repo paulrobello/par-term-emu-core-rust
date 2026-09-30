@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **FFI `terminal_scrollback_total_scrolled`**: total lines ever pushed into scrollback, so an embedder mirroring the scrollback window (ParDeck's history view) derives head evictions and tail appends from the `total`/`count` pair instead of re-reading the whole buffer — the count alone freezes at the ring cap. Pinned by `ffi_scrollback_total_scrolled_tracks_the_window` (invariant `count == min(total, cap)`, cap freeze, alt-screen active-grid reads, ED 3J reset). Note for ENH-038: this counter is a window cursor, not a scroll-damage source — the four failure modes listed there are exactly why.
 
+### Security
+- **The par-mux control socket's 1 MiB line budget now holds for a line that never ends** (audit SEC-127, recurring SEC-118; `src/mux/server.rs`). The budget was checked only after `read_line` returned, and `read_line` never returns without a newline, so any same-user program (including one inside a pane via `$PAR_MUX_SOCKET`) could stream bytes with no newline and grow the daemon until it OOMed, taking every session with it (reproduced: 256 MiB in, RSS 12 → 279 MiB, connection still open). The read loop now accumulates raw bytes through a bounded `fill_buf` loop that checks the budget per chunk, so an unterminated stream is answered with the same `%error` block and closed near 1 MiB. The same change fixes a silent data loss: a recv-timeout wake that split a multi-byte UTF-8 character made `read_line` discard the partial it had already consumed, so the rest of the line was answered with `%error`. Bytes now stay raw until the line completes and UTF-8 is decoded once.
+
 ## [0.57.0] - 2026-09-29
 
 ### Added

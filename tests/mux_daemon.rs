@@ -1108,9 +1108,8 @@ fn accept_emfile_keeps_the_daemon_serving() {
 
 /// SEC-104: a control line over the 1 MiB budget is answered with one
 /// `%error` block and the connection is closed — and the daemon keeps
-/// serving other clients afterwards. The budget check fires before the
-/// newline arm, so this complete-but-oversized line covers the
-/// unterminated-growth case too.
+/// serving other clients afterwards. This is the complete-line case; the
+/// unterminated stream is `an_unterminated_stream_over_budget_closes_the_connection`.
 #[test]
 fn oversized_control_line_gets_error_and_close() {
     use std::io::{BufRead, Write as _};
@@ -1166,6 +1165,103 @@ fn oversized_control_line_gets_error_and_close() {
     let listed = command(&mut writer, &mut reader, "list-panes").join("");
     assert!(
         listed.contains('%'),
+        "the daemon must keep serving other clients: {listed}"
+    );
+
+    drop(writer);
+    drop(reader);
+    let _ = handle;
+    drop(fixture);
+}
+
+/// SEC-127: a client streaming bytes with no newline at all is cut off near
+/// the 1 MiB budget. The old loop only checked the budget after `read_line`
+/// returned, and `read_line` never returns without a newline, so the daemon
+/// kept consuming (measured: 256 MiB in, RSS 12 → 279 MiB) and never
+/// answered.
+#[test]
+fn an_unterminated_stream_over_budget_closes_the_connection() {
+    use interprocess::local_socket::traits::Stream as _;
+    use std::io::{BufRead, Write as _};
+
+    const TOTAL: usize = 8 * 1024 * 1024;
+    const CHUNK: usize = 64 * 1024;
+
+    let fixture = MuxFixture::new("sec127");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    {
+        let stream = connect_local_stream(path).expect("connect");
+        // Unix only (named pipes reject I/O timeouts): keeps a daemon that
+        // never answers from parking this test in `read_line` forever.
+        let _ = stream.set_recv_timeout(Some(Duration::from_millis(250)));
+        let mut writer = stream.try_clone().expect("clone");
+        let _ = writer.set_send_timeout(Some(Duration::from_secs(5)));
+        let mut reader = BufReader::new(stream);
+
+        let pushed = std::thread::spawn(move || {
+            let mut total = 0usize;
+            if writer.write_all(b"send-keys -l ").is_err() {
+                return total;
+            }
+            let chunk = vec![b'x'; CHUNK];
+            while total < TOTAL {
+                if writer.write_all(&chunk).is_err() {
+                    break;
+                }
+                total += CHUNK;
+            }
+            total
+        });
+
+        let mut reply = String::new();
+        let mut closed = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    closed = true;
+                    break;
+                }
+                Ok(_) => reply.push_str(&line),
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                // A reset after the %error block is the close, too.
+                Err(_) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            reply.contains("%error") && reply.contains("1 MiB"),
+            "an unterminated over-budget stream must be answered with the budget %error: {reply:?}"
+        );
+        assert!(closed, "the connection must close after the %error block");
+        let total = pushed.join().expect("writer thread");
+        assert!(
+            total < 4 * 1024 * 1024,
+            "the daemon must stop consuming near the budget, but it took {total} bytes"
+        );
+    }
+
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("second connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let listed = command(&mut writer, &mut reader, "list-panes").join("");
+    assert!(
+        listed.contains("%end"),
         "the daemon must keep serving other clients: {listed}"
     );
 
