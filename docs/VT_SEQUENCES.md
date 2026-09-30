@@ -406,6 +406,8 @@ ConEmu/Windows Terminal style progress indicator:
 - `OSC 9;4;3;N ST` - Warning progress at N%
 - `OSC 9;4;4;N ST` - Error progress at N%
 
+Implementation notes: [OSC 9;4 implementation guide](research/OSC-9-4-PROGRESS-BAR-IMPLEMENTATION.md) (dated research, 2026-02-09).
+
 ### Named Progress Bars (OSC 934)
 
 Multiple concurrent progress bars with IDs and labels:

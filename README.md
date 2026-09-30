@@ -162,6 +162,13 @@ Every other release is documented in [CHANGELOG.md](CHANGELOG.md).
 - **[Instant Replay](docs/INSTANT_REPLAY.md)** - Cell-level snapshots and timeline navigation
 - **[FFI Guide](docs/FFI_GUIDE.md)** - C-compatible embedding API for Swift/JNI/C/C++
 - **[Graphics Testing](docs/GRAPHICS_TESTING.md)** - Testing graphics protocol implementations
+- **[Benchmarking](docs/BENCHMARKING.md)** - Criterion throughput benches and interleaved A/B comparison
+- **[Testing Kitty Animations](docs/TESTING_KITTY_ANIMATIONS.md)** - Testing Kitty graphics animation support
+- **[Regional Flag Limitation](docs/REGIONAL_FLAG_LIMITATION.md)** - Why regional-indicator flag emoji may not render as one glyph in some frontends
+- **[Maturin Best Practices](docs/MATURIN_BEST_PRACTICES.md)** - Wheel build and packaging compliance review
+- **[par-mux Design Pointer](docs/par-mux.md)** - Where the par-mux design plan lives
+- **[par-mux Design Decisions](docs/MUX_DECISIONS.md)** - One-line summaries of the D-numbered decisions cited in code
+- **[Documentation Style Guide](docs/DOCUMENTATION_STYLE_GUIDE.md)** - Standards for writing project documentation
 
 ## Installation
 
@@ -550,6 +557,17 @@ par-term-streamer --help
 ```
 
 **Available Themes:** `iterm2-dark`, `monokai`, `dracula`, `solarized-dark`
+
+### Diagnostics and Test Scripts
+- `bce_scroll_test.py` - Background color erase (BCE) during scrolling
+- `char_test.py` - Character-specific rendering test
+- `gradient_test.py` - Minimal gradient test for terminal wrap behavior
+- `rich_mimic_test.py` - Rich-style output rendering test
+- `scroll_timing_test.py` - Scroll timing test
+- `streaming_debug.py` - Streaming server debug tool
+- `test_tui_clipboard.py` - TUI clipboard and selection features
+- `test_underline_styles.py` - Underline styles (SGR 4:x)
+- `render_utils.py` - Rendering helpers imported by the other examples (not run directly)
 
 ### Web Terminal Frontend
 
