@@ -824,12 +824,24 @@ term.process(b"\x1b[?1006h")  # SGR mouse encoding
 
 ## Environment Variables
 
-The terminal emulator itself does not read environment variables, but host applications typically set:
+The library reads the environment variables below. The streaming server binary reads additional `PAR_TERM_*` variables, listed in [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables).
 
-- `TERM` - Terminal type (e.g., `xterm-256color`)
-- `COLORTERM` - True color support indicator (e.g., `truecolor`)
-- `TERM_PROGRAM` - Terminal program name
-- `TERM_PROGRAM_VERSION` - Version string
+| Variable | Read by | Default | Purpose |
+|----------|---------|---------|---------|
+| `DEBUG_LEVEL` | Rust debug logger and the Python `debug` module | `0` (off) | Log verbosity `0`-`4` (off, error, info, debug, trace); logs go to the system temp directory |
+| `PAR_TERM_REPLY_XTWINOPS` | `PtyTerminal`/`PtySession` construction (read once) | replies on | `0` or `false` suppresses XTWINOPS (`CSI t`) query replies |
+| `SHELL` | Default shell lookup (Unix) | `/bin/bash` | Shell for `spawn_shell()` |
+| `COMSPEC` | Default shell lookup (Windows) | `cmd.exe` | Shell for `spawn_shell()` on Windows |
+| `PAR_MUX_SOCKET` | `par-mux` binary | unset | Socket path when neither `--socket` nor a name is given; set inside every mux pane |
+| `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
+| `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
+| `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
+| `TMPDIR` | System temp directory (Unix) | `/tmp` | Base for the per-UID socket fallback and debug logs |
+| `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |
+| `PATH` | par-mux client and Windows resume | — | Locating the `par-mux` binary; resolving `argv[0]` for Windows agent resume |
+| `COMPUTERNAME` | par-mux (Windows) | — | Local hostname for deciding whether an OSC 7 directory report is from this machine |
+
+Spawned child processes receive `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1` and `KITTY_PID=<pid>`. Override any of them with the `env` argument to `spawn()`/`spawn_shell()` (Python) or `PtySession::set_env()` (Rust). Inherited variables the library drops are listed in [SECURITY.md](SECURITY.md#inherited-environment).
 
 ---
 
