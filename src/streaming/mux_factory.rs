@@ -430,10 +430,17 @@ impl SessionFactory for MuxSessionFactory {
         tokio::spawn(async move {
             let mut rx = resize_rx.lock().await;
             while let Some((cols, rows)) = rx.recv().await {
-                let mut stream = writer.lock();
-                let sent = writeln!(stream, "refresh-client -t %{pane} -C {cols}x{rows}")
-                    .and_then(|()| stream.flush());
-                if sent.is_err() {
+                // The writer mutex is shared with the input path and the
+                // socket write can block on the daemon: both stay off the
+                // runtime worker.
+                let writer = Arc::clone(&writer);
+                let sent = tokio::task::spawn_blocking(move || {
+                    let mut stream = writer.lock();
+                    writeln!(stream, "refresh-client -t %{pane} -C {cols}x{rows}")
+                        .and_then(|()| stream.flush())
+                })
+                .await;
+                if !matches!(sent, Ok(Ok(()))) {
                     break;
                 }
             }

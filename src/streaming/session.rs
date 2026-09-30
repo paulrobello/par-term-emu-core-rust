@@ -494,6 +494,14 @@ impl StreamSessionState {
         }
     }
 
+    /// Queue `bytes` for the PTY through the session's serialized input
+    /// path, the same path client `Input` messages take: they reach the PTY
+    /// in order with client input, under the same queue bounds, and the
+    /// call never blocks on the PTY writer.
+    pub fn send_input(self: &Arc<Self>, bytes: Vec<u8>) {
+        self.enqueue_pty_input(bytes);
+    }
+
     /// Enqueue one chunk under the QA-131 bounds, dropping and counting on
     /// overflow instead of blocking or growing.
     fn try_enqueue_pty_input(&self, tx: &std::sync::mpsc::SyncSender<Vec<u8>>, bytes: Vec<u8>) {
@@ -906,6 +914,50 @@ mod tests {
         drop(gate_rx);
         session.enqueue_pty_input(b"tail".to_vec());
     }
+    /// A `Write` whose bytes the test can read back through a shared handle.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Block until the sink holds exactly `want`, or panic after 5 s.
+    fn wait_for_bytes(sink: &SharedSink, want: &[u8]) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while sink.0.lock().as_slice() != want {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "writer holds {:?}, want {:?}",
+                String::from_utf8_lossy(&sink.0.lock()),
+                String::from_utf8_lossy(want)
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn send_input_is_written_through_the_drain() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "send-input".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let sink = SharedSink::default();
+        session.set_pty_writer(Arc::new(Mutex::new(Box::new(sink.clone()))));
+
+        session.send_input(b"echo hi\n".to_vec());
+        wait_for_bytes(&sink, b"echo hi\n");
+        assert_eq!(session.metrics.dropped_messages.load(Ordering::Relaxed), 0);
+    }
+
     #[tokio::test]
     async fn test_session_registry_basic() {
         let registry = SessionRegistry::new(10);

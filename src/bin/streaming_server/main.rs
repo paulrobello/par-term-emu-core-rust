@@ -614,28 +614,19 @@ async fn serve_until_ctrl_c(
         .await?;
     } else {
         // Shell mode: factory handles per-session resize, PTY monitoring, and event polling.
-        // Send initial command to default session if specified
+        // Send initial command to default session if specified. It takes the
+        // session's input queue, so it is ordered with client input and never
+        // blocks a runtime worker on the PTY writer.
         if let Some(command) = &args.command {
-            let factory_ref = factory.cloned();
+            let server = Arc::clone(&streaming_server);
             let command = command.clone();
             tokio::spawn(async move {
                 // Wait 1 second for shell prompt to settle
                 time::sleep(Duration::from_secs(1)).await;
                 info!("Sending initial command: {}", command);
-
-                if let Some(ref factory) = factory_ref {
-                    let sessions = factory.pty_sessions.read();
-                    if let Some(pty_session) = sessions.get("default") {
-                        let session = pty_session.lock();
-                        if let Some(writer) = session.get_writer() {
-                            let mut w = writer.lock();
-                            let cmd_with_newline = format!("{}\n", command);
-                            if let Err(e) = w.write_all(cmd_with_newline.as_bytes()) {
-                                error!("Failed to send initial command: {}", e);
-                            }
-                            let _ = w.flush();
-                        }
-                    }
+                match server.get_session("default") {
+                    Some(session) => session.send_input(format!("{command}\n").into_bytes()),
+                    None => error!("Failed to send initial command: no default session"),
                 }
             });
         }
