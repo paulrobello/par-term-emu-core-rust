@@ -1219,6 +1219,9 @@ sections; the numbers live here.
 | `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1280` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:374` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:376` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:378` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
@@ -1239,14 +1242,14 @@ sections; the numbers live here.
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:34` | Client input bytes queued per session pending write to the PTY. |
 | `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:87` | Bytes accepted for one file-transfer payload. |
-| `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:91` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
+| `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
 | `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:150` | Terminal notifications queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:152` | Clipboard sync events queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:154` | Bytes retained for one queued clipboard sync event. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:160` | Unpolled terminal events retained from processed output. |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:164` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:952` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:968` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:12` | Color registers accepted in a sixel palette from a DCS payload. |
