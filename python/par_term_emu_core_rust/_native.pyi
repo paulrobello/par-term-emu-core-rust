@@ -3988,6 +3988,14 @@ class Terminal:
 
         Returns:
             Bookmark ID
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.add_bookmark(0, "build start")   # 0
+            term.add_bookmark(-3)                 # 1 (labelled "Bookmark 1")
+            ```
         """
     def add_damage_region(self, left: Any, top: Any, right: Any, bottom: Any) -> Any:
         """Add a damage region marking a rectangular area of the grid as dirty
@@ -4012,6 +4020,21 @@ class Terminal:
 
         Args:
             image: PyInlineImage to add
+
+        Raises:
+            ValueError: If the image's protocol or format name is not recognized
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            # InlineImage has no Python constructor, so images come from
+            # another terminal's store (get_all_images/get_images_at/get_image_by_id).
+            source = Terminal(80, 24)
+            term = Terminal(80, 24)
+            for image in source.get_all_images():
+                term.add_inline_image(image)
+            len(term.get_all_images()) == len(source.get_all_images())   # True
+            ```
         """
     def add_observer(self, callback: Any, kinds: Any = None) -> int:
         """Register a synchronous observer callback
@@ -4162,6 +4185,14 @@ class Terminal:
 
         Returns:
             PyBenchmarkResult with timing statistics
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            result = term.benchmark_grid_ops(10)
+            (result.name, result.iterations)   # ('Grid Ops', 10)
+            ```
         """
     def benchmark_parsing(self, text: Any, iterations: Any) -> Any:
         """Run escape sequence parsing benchmark
@@ -4172,6 +4203,14 @@ class Terminal:
 
         Returns:
             PyBenchmarkResult with timing statistics
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            result = term.benchmark_parsing("\\x1b[1mbold\\x1b[0m\\r\\n", 10)
+            (result.name, result.iterations)   # ('Parsing', 10)
+            ```
         """
     def benchmark_rendering(self, iterations: Any) -> Any:
         """Run rendering benchmark
@@ -4181,6 +4220,15 @@ class Terminal:
 
         Returns:
             PyBenchmarkResult with timing statistics
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            result = term.benchmark_rendering(10)
+            (result.name, result.iterations)   # ('Text Rendering', 10)
+            result.avg_time_us                 # timing varies by machine
+            ```
         """
     def bold_brightening(self) -> Any:
         """Check if bold brightening is enabled
@@ -4241,9 +4289,41 @@ class Terminal:
             int: The display width in cells (0, 1, or 2)
         """
     def check_activity(self) -> Any:
-        """Check for activity and trigger notification if needed"""
+        """Check for activity notifications
+
+        Activity detection is not implemented yet: this call never queues an
+        event, even with `activity_enabled` set.
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.check_activity()
+            term.get_notification_events()   # []
+            ```
+        """
     def check_silence(self) -> Any:
-        """Check for silence and trigger notification if needed"""
+        """Check for silence and trigger notification if needed
+
+        Queues a Silence/Visual event when silence notifications are enabled
+        and more than `silence_threshold` seconds have passed since the last
+        `update_activity` call and the last silence notification.
+
+        Example:
+            ```python
+            import time
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            config = term.get_notification_config()
+            config.silence_enabled = True
+            config.silence_threshold = 0
+            term.set_notification_config(config)
+            time.sleep(0.01)
+            term.check_silence()
+            [(e.trigger, e.message) for e in term.get_notification_events()]
+            # [('Silence', 'Terminal is silent')]
+            ```
+        """
     def clear_all_clipboard_history(self) -> Any:
         """Clear all clipboard history"""
     def clear_all_tab_stops(self) -> Any:
@@ -4254,7 +4334,17 @@ class Terminal:
         Removes any previously set badge format template.
         """
     def clear_bookmarks(self) -> Any:
-        """Clear all bookmarks"""
+        """Clear all bookmarks
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.add_bookmark(0, "build start")
+            term.clear_bookmarks()
+            term.get_bookmarks()   # []
+            ```
+        """
     def clear_clipboard_history(self, slot: Any) -> Any:
         """Clear clipboard history for a slot
 
@@ -4278,22 +4368,63 @@ class Terminal:
     def clear_graphics(self) -> Any:
         """Clear all graphics"""
     def clear_images(self) -> Any:
-        """Clear all inline images"""
+        """Clear all inline images
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.clear_images()
+            term.get_all_images()   # []
+            ```
+        """
     def clear_mouse_history(self) -> Any:
         """Clear mouse history"""
     def clear_notification_events(self) -> Any:
-        """Clear notification events"""
+        """Clear notification events
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.trigger_notification("Bell", "Visual", None)
+            term.clear_notification_events()
+            term.get_notification_events()   # []
+            ```
+        """
     def clear_progress(self) -> Any:
         """Clear/hide the progress bar
 
         Equivalent to receiving OSC 9;4;0 (hidden state).
         """
     def clear_regex_matches(self) -> Any:
-        """Clear regex search cache"""
+        """Clear regex search cache
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("id=42 id=7\\r\\n")
+            term.regex_search(r"id=(\\d+)")
+            term.clear_regex_matches()
+            term.get_regex_matches()           # []
+            term.get_current_regex_pattern()   # None
+            ```
+        """
     def clear_rendering_hints(self) -> Any:
         """Clear rendering hints"""
     def clear_selection(self) -> Any:
-        """Clear the current selection"""
+        """Clear the current selection
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.set_selection((0, 0), (4, 0), "character")
+            term.clear_selection()
+            term.get_selection()   # None
+            ```
+        """
     def clear_tab_stop(self, col: Any) -> Any:
         """Clear a tab stop at the specified column
 
@@ -4484,24 +4615,57 @@ class Terminal:
 
         Returns:
             True if image was found and deleted
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.delete_image("logo")   # False (no image with that ID)
+            ```
         """
     def detect_file_paths(self) -> Any:
         """Detect file paths in the visible screen
 
         Returns:
             List of DetectedItem objects for file paths
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("error in /usr/src/app/main.py:42\\r\\n")
+            [(i.text, i.line_number) for i in term.detect_file_paths()]
+            # [('/usr/src/app/main.py', 42)]
+            ```
         """
     def detect_semantic_items(self) -> Any:
         """Detect semantic items (URLs, file paths, git hashes, IPs, emails)
 
         Returns:
             List of all detected semantic items
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("mail admin@example.com from 192.168.1.10\\r\\n")
+            [(i.item_type, i.text) for i in term.detect_semantic_items()]
+            # [('ip', '192.168.1.10'), ('email', 'admin@example.com')]
+            ```
         """
     def detect_urls(self) -> Any:
         """Detect URLs in the visible screen
 
         Returns:
             List of DetectedItem objects for URLs
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("docs at https://example.com\\r\\n")
+            [(i.item_type, i.text) for i in term.detect_urls()]   # [('url', 'https://example.com')]
+            ```
         """
     def diff_snapshots(self, old_snapshot: Any, new_snapshot: Any) -> Any:
         """Compare two semantic snapshots and return their differences.
@@ -4542,7 +4706,17 @@ class Terminal:
             True if insecure sequences are blocked, False otherwise
         """
     def disable_profiling(self) -> Any:
-        """Disable performance profiling"""
+        """Disable performance profiling
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.disable_profiling()
+            term.is_profiling_enabled()   # False
+            ```
+        """
     def drain_bell_events(self) -> list[str]:
         """Drain all pending bell events
 
@@ -4579,7 +4753,16 @@ class Terminal:
             List of TmuxNotification objects
         """
     def enable_profiling(self) -> Any:
-        """Enable performance profiling"""
+        """Enable performance profiling
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.get_profiling_data()   # ProfilingData(categories=0, allocations=0, peak_memory=0)
+            ```
+        """
     def encode_key(
         self,
         key: Any,
@@ -4711,6 +4894,17 @@ class Terminal:
 
         Returns:
             Exported content as string
+
+        Raises:
+            ValueError: If format is not "plain", "html", or "ansi"
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 2)
+            term.process_str("error: disk full\\r\\nok\\r\\n")   # first line scrolls off
+            term.export_scrollback().rstrip()   # 'error: disk full'
+            ```
         """
     def export_styled(self) -> Any:
         """Export entire buffer (scrollback + current screen) with ANSI styling
@@ -4802,6 +4996,14 @@ class Terminal:
 
         Returns:
             Formatted compliance report string
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            report = Terminal(80, 24).test_compliance("vt100")
+            Terminal.format_compliance_report(report).splitlines()[:3]
+            # ['Compliance Report for par-term-emu-core-rust', 'Level: VT100', 'Score: 100.0% (1 passed, 0 failed)']
+            ```
         """
     def generate_color_palette(self, r: Any, g: Any, b: Any, mode: Any) -> ColorPalette:
         """Generate a themed color palette from a base RGB color
@@ -4846,6 +5048,13 @@ class Terminal:
 
         Returns:
             List of all PyInlineImage
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_all_images()   # []
+            ```
         """
     def get_allow_file_media(self) -> str:
         """Get the current Kitty file-media mode.
@@ -4888,6 +5097,15 @@ class Terminal:
 
         Returns:
             int: Mean frame processing time in microseconds
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.record_frame_timing(1500, 120, 64)
+            term.record_frame_timing(2500, 80, 32)
+            term.get_average_frame_time()   # 2000
+            ```
         """
     def get_badge_session_variable(self, name: Any) -> Any:
         """Get a session variable value by name
@@ -4925,6 +5143,14 @@ class Terminal:
 
         Returns:
             List of Bookmark objects
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.add_bookmark(0, "build start")
+            term.get_bookmarks()   # [Bookmark(id=0, row=0, label="build start")]
+            ```
         """
     def get_char(self, col: Any, row: Any) -> Any:
         """Get a cell's character at the specified position (includes combining characters/modifiers)
@@ -5074,6 +5300,15 @@ class Terminal:
 
         Returns:
             str | None: The active regex pattern, or None if no search ran
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_current_regex_pattern()   # None
+            term.regex_search("id=[0-9]+")
+            term.get_current_regex_pattern()   # 'id=[0-9]+'
+            ```
         """
     def get_cwd_changes(self) -> Any:
         """Get CWD change history
@@ -5143,7 +5378,17 @@ class Terminal:
         """Get frames per second
 
         Returns:
-            float: Recent frame rate in frames per second
+            float: Recent frame rate in frames per second (0.0 with no timings)
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_fps()   # 0.0
+            term.record_frame_timing(1500, 120, 64)
+            term.record_frame_timing(2500, 80, 32)
+            term.get_fps()   # 500.0
+            ```
         """
     def get_frame_timings(self, count: Any = None) -> list[FrameTiming]:
         """Get recent frame timings
@@ -5153,6 +5398,16 @@ class Terminal:
 
         Returns:
             list[FrameTiming]: Most recent frame timings, oldest first
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.record_frame_timing(1500, 120, 64)
+            term.record_frame_timing(2500, 80, 32)
+            [t.processing_us for t in term.get_frame_timings()]    # [1500, 2500]
+            [t.processing_us for t in term.get_frame_timings(1)]   # [2500]
+            ```
         """
     def get_hyperlink(self, col: Any, row: Any) -> Any:
         """Get hyperlink URL at the specified position
@@ -5172,6 +5427,13 @@ class Terminal:
 
         Returns:
             PyInlineImage if found, None otherwise
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_image_by_id("logo")   # None
+            ```
         """
     def get_images_at(self, col: Any, row: Any) -> Any:
         """Get inline images at a specific position
@@ -5182,6 +5444,13 @@ class Terminal:
 
         Returns:
             List of PyInlineImage at the position
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_images_at(0, 0)   # []
+            ```
         """
     def get_last_mouse_position(self) -> MousePosition | None:
         """Get the most recently recorded mouse position
@@ -5254,6 +5523,15 @@ class Terminal:
 
         Returns:
             List of text lines
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("one\\r\\ntwo\\r\\nthree\\r\\nfour\\r\\n")
+            [line.rstrip() for line in term.get_line_context(2, 1, 1)]
+            # ['two', 'three', 'four']
+            ```
         """
     def get_line_unwrapped(self, row: Any) -> Any:
         """Get full logical line following wrapping
@@ -5269,6 +5547,14 @@ class Terminal:
 
         Returns:
             list[str]: Logical lines with wrapped segments joined
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(10, 5)
+            term.process_str("abcdefghijklmno\\r\\n")   # wraps onto row 1
+            term.get_logical_lines()[0]   # 'abcdefghijklmno'
+            ```
         """
     def get_max_clipboard_event_bytes(self) -> int:
         """Get maximum bytes cached per clipboard sync event
@@ -5289,6 +5575,13 @@ class Terminal:
 
         Returns:
             int: Maximum notifications buffered (0 means buffering is disabled)
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_max_notifications()   # 128
+            ```
         """
     def get_max_transfer_size(self) -> Any:
         """Get the current maximum allowed file transfer size in bytes
@@ -5346,12 +5639,29 @@ class Terminal:
 
         Returns:
             NotificationConfig: Current notification settings
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_notification_config()
+            # NotificationConfig(bell_desktop=false, bell_visual=true, activity=false, silence=false)
+            ```
         """
     def get_notification_events(self) -> Any:
         """Get notification events
 
         Returns:
             List of NotificationEvent objects
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.trigger_notification("Custom(7)", "Desktop", "deploy finished")
+            [(e.trigger, e.alert, e.message) for e in term.get_notification_events()]
+            # [('Custom(7)', 'Desktop', 'deploy finished')]
+            ```
         """
     def get_paragraph_at(self, row: Any) -> Any:
         """Get the paragraph at the given position
@@ -5363,6 +5673,15 @@ class Terminal:
 
         Returns:
             Paragraph text as string
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("first line\\r\\nsecond line\\r\\n\\r\\nother\\r\\n")
+            [line.rstrip() for line in term.get_paragraph_at(0).split("\\n")]
+            # ['first line', 'second line']
+            ```
         """
     def get_paste_end(self) -> Any:
         """Get bracketed paste end sequence
@@ -5381,12 +5700,34 @@ class Terminal:
 
         Returns:
             PerformanceMetrics: Aggregate counters since the last reset
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.record_frame_timing(1500, 120, 64)
+            m = term.get_performance_metrics()
+            (m.frames_rendered, m.cells_updated, m.bytes_processed, m.peak_frame_us)
+            # (1, 120, 64, 1500)
+            ```
         """
     def get_profiling_data(self) -> ProfilingData | None:
         """Get profiling data
 
         Returns:
-            ProfilingData | None: Collected profiling data, or None if empty
+            ProfilingData | None: Collected profiling data, or None when no data
+            is held (profiling never enabled, or reset while disabled)
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_profiling_data()   # None
+            term.enable_profiling()
+            term.record_escape_sequence("csi", 12)
+            term.get_profiling_data().categories
+            # {'csi': EscapeSequenceProfile(count=1, avg_us=12, peak_us=12)}
+            ```
         """
     def get_recording_session(self) -> Any:
         """Get current recording session
@@ -5415,6 +5756,15 @@ class Terminal:
 
         Returns:
             list[RegexMatch]: Matches from the most recent regex search
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("id=42 id=7\\r\\n")
+            term.regex_search(r"id=(\\d+)")
+            [m.text for m in term.get_regex_matches()]   # ['id=42', 'id=7']
+            ```
         """
     def get_rendering_hints(self, sort_by_priority: Any = False) -> list[RenderingHint]:
         """Get all pending rendering hints without clearing them
@@ -5448,12 +5798,31 @@ class Terminal:
 
         Returns:
             Selected text as string, or None if no selection
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("hello world\\r\\n")
+            term.get_selected_text()   # None
+            term.set_selection((6, 0), (11, 0), "character")
+            term.get_selected_text()   # 'world'
+            ```
         """
     def get_selection(self) -> Any:
         """Get the current selection
 
         Returns:
             Selection object or None if no selection
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.get_selection()   # None
+            term.set_selection((0, 0), (4, 0), "character")
+            term.get_selection()   # Selection(start=(0, 0), end=(4, 0), mode=character)
+            ```
         """
     def get_semantic_snapshot(
         self, scope: Any = "visible", max_commands: Any = 10
@@ -5724,7 +6093,20 @@ class Terminal:
             Total count of Sixel graphics
         """
     def handle_bell_notification(self) -> Any:
-        """Handle bell event with notification"""
+        """Handle bell event with notification
+
+        Queues a Bell event whose alert follows the config: Desktop when
+        `bell_desktop` is set, else Sound when `bell_sound` > 0, else Visual.
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.handle_bell_notification()
+            [(e.trigger, e.alert, e.message) for e in term.get_notification_events()]
+            # [('Bell', 'Visual', 'Bell rang')]
+            ```
+        """
     def has_notifications(self) -> Any:
         """Check if there are pending notifications
 
@@ -5821,6 +6203,15 @@ class Terminal:
 
         Returns:
             bool: True if the row begins a new logical line
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(10, 5)
+            term.process_str("abcdefghijklmno\\r\\n")   # wraps onto row 1
+            term.is_line_start(0)   # True
+            term.is_line_start(1)   # False (continuation of row 0)
+            ```
         """
     def is_line_wrapped(self, row: Any) -> Any:
         """Check if a line wraps to the next row
@@ -5836,6 +6227,15 @@ class Terminal:
 
         Returns:
             bool: True if performance profiling is collecting data
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.is_profiling_enabled()   # False
+            term.enable_profiling()
+            term.is_profiling_enabled()   # True
+            ```
         """
     def is_recording(self) -> Any:
         """Check if currently recording
@@ -5862,7 +6262,18 @@ class Terminal:
             start_row: Row (0-indexed) whose logical line to rejoin
 
         Returns:
-            JoinedLines | None: The rejoined line, or None if the row is empty
+            JoinedLines | None: The rejoined line, or None if the row is out of range
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(10, 5)
+            term.process_str("abcdefghijklmno\\r\\n")   # wraps onto row 1
+            joined = term.join_wrapped_lines(0)
+            (joined.start_row, joined.end_row, joined.lines_joined)   # (0, 1, 2)
+            joined.text.rstrip()           # 'abcdefghijklmno'
+            term.join_wrapped_lines(99)    # None
+            ```
         """
     def keyboard_flags(self) -> Any:
         """Get current Kitty Keyboard Protocol flags
@@ -5907,7 +6318,16 @@ class Terminal:
         """Mark a notification as delivered
 
         Args:
-            index: Index of the notification event
+            index: Index of the notification event; out-of-range indices are ignored
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.trigger_notification("Bell", "Visual", None)
+            term.mark_notification_delivered(0)
+            term.get_notification_events()[0].delivered   # True
+            ```
         """
     def mark_row_dirty(self, row: Any) -> Any:
         """Mark a specific row as dirty
@@ -5990,7 +6410,17 @@ class Terminal:
             from_col: Column to search from (0-indexed)
 
         Returns:
-            RegexMatch | None: Next match at or after the position, if any
+            RegexMatch | None: Next cached match strictly after the position, if any
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("id=42 id=7\\r\\n")
+            term.regex_search(r"id=(\\d+)")
+            term.next_regex_match(0, 0)   # RegexMatch(row=0, col=6, text="id=7")
+            term.next_regex_match(0, 6)   # None
+            ```
         """
     def normalization_form(self) -> NormalizationForm:
         """Get the current Unicode normalization form
@@ -6127,7 +6557,17 @@ class Terminal:
             from_col: Column to search from (0-indexed)
 
         Returns:
-            RegexMatch | None: Previous match at or before the position, if any
+            RegexMatch | None: Previous cached match strictly before the position, if any
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("id=42 id=7\\r\\n")
+            term.regex_search(r"id=(\\d+)")
+            term.prev_regex_match(0, 6)   # RegexMatch(row=0, col=0, text="id=42")
+            term.prev_regex_match(0, 0)   # None
+            ```
         """
     def process(self, data: Any) -> Any:
         """Process input bytes (can contain ANSI escape sequences)
@@ -6208,6 +6648,16 @@ class Terminal:
 
         Args:
             bytes: Number of bytes allocated
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.record_allocation(4096)
+            data = term.get_profiling_data()
+            (data.allocations, data.bytes_allocated)   # (1, 4096)
+            ```
         """
     def record_clipboard_sync(
         self, target: Any, operation: Any, content: Any, is_remote: Any
@@ -6256,7 +6706,22 @@ class Terminal:
 
         Args:
             category: One of "csi", "osc", "esc", "dcs", "print", "control"
+                (case-insensitive)
             time_us: Execution time in microseconds
+
+        Raises:
+            ValueError: If category is not one of the names above
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.record_escape_sequence("csi", 12)
+            term.record_escape_sequence("CSI", 8)
+            term.get_profiling_data().categories["csi"]
+            # EscapeSequenceProfile(count=2, avg_us=10, peak_us=12)
+            ```
         """
     def record_frame_timing(
         self, processing_us: Any, cells_updated: Any, bytes_processed: Any
@@ -6267,6 +6732,14 @@ class Terminal:
             processing_us: Frame processing time in microseconds
             cells_updated: Number of cells updated in the frame
             bytes_processed: Number of input bytes processed in the frame
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.record_frame_timing(1500, 120, 64)
+            term.get_frame_timings()   # [FrameTiming(frame=1, time=1500us, cells=120)]
+            ```
         """
     def record_input(self, data: Any) -> Any:
         """Record input data
@@ -6360,6 +6833,15 @@ class Terminal:
 
         Raises:
             ValueError: If the pattern is not a valid regex
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("id=42 id=7\\r\\n")
+            term.regex_search(r"id=(\\d+)")
+            # [RegexMatch(row=0, col=0, text="id=42"), RegexMatch(row=0, col=6, text="id=7")]
+            ```
         """
     def register_custom_trigger(self, id: Any, message: Any) -> Any:
         """Register a custom notification trigger
@@ -6367,6 +6849,15 @@ class Terminal:
         Args:
             id: Trigger ID
             message: Message for the trigger
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.register_custom_trigger(1, "tests finished")
+            term.trigger_custom_notification(1, "Visual")
+            term.get_notification_events()[0].message   # 'tests finished'
+            ```
         """
     def remote_session_id(self) -> Any:
         """Get remote session ID
@@ -6384,6 +6875,15 @@ class Terminal:
 
         Returns:
             True if bookmark was removed, False if not found
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            bookmark_id = term.add_bookmark(0, "build start")
+            term.remove_bookmark(bookmark_id)   # True
+            term.remove_bookmark(bookmark_id)   # False
+            ```
         """
     def remove_named_progress_bar(self, id: Any) -> Any:
         """Remove a named progress bar by ID
@@ -6431,9 +6931,33 @@ class Terminal:
         sent.
         """
     def reset_performance_metrics(self) -> Any:
-        """Reset performance metrics"""
+        """Reset performance metrics
+
+        Also clears the buffered frame timings.
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.record_frame_timing(1500, 120, 64)
+            term.reset_performance_metrics()
+            term.get_performance_metrics().frames_rendered   # 0
+            term.get_frame_timings()                         # []
+            ```
+        """
     def reset_profiling_data(self) -> Any:
-        """Reset profiling data"""
+        """Reset profiling data
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.record_allocation(4096)
+            term.reset_profiling_data()
+            term.get_profiling_data()   # ProfilingData(categories=0, allocations=0, peak_memory=0)
+            ```
+        """
     def resize(self, cols: Any, rows: Any) -> Any:
         """Resize the terminal
 
@@ -6496,6 +7020,14 @@ class Terminal:
 
         Returns:
             PyBenchmarkSuite with all benchmark results
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            suite = term.run_benchmark_suite("smoke")
+            [r.name for r in suite.results]   # ['Text Rendering', 'Grid Ops']
+            ```
         """
     def screenshot(
         self,
@@ -6648,16 +7180,37 @@ class Terminal:
 
         Returns:
             ScrollbackStats object with total lines, memory usage, and wrap status
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 2)
+            term.process_str("error: disk full\\r\\nok\\r\\n")   # first line scrolls off
+            stats = term.scrollback_stats()
+            (stats.total_lines, stats.has_wrapped)   # (1, False)
+            ```
         """
     def search(self, query: Any, case_sensitive: Any = False) -> Any:
         """Search for text in the visible screen
 
         Args:
-            query: Text to search for
+            query: Regular expression to search for (escape metacharacters
+                such as ``.`` or ``(`` to match them literally)
             case_sensitive: Whether the search should be case-sensitive
 
         Returns:
             List of SearchMatch objects with position and matched text
+
+        Raises:
+            RuntimeError: If the query is not a valid regular expression
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("first\\r\\nsay hello\\r\\n")
+            term.search("hello")   # [SearchMatch(row=1, col=4, length=5, text="hello")]
+            ```
         """
     def search_clipboard_history(
         self, query: Any, slot: Any = None
@@ -6696,12 +7249,30 @@ class Terminal:
 
         Returns:
             List of SearchMatch objects with negative row indices for scrollback
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 2)
+            term.process_str("error: disk full\\r\\nok\\r\\n")   # first line scrolls off
+            term.search_scrollback("disk")   # [SearchMatch(row=-1, col=7, length=4, text="disk")]
+            ```
         """
     def select_line(self, row: Any) -> Any:
         """Select the entire line at the given row
 
         Args:
             row: Row index
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("hello world\\r\\n")
+            term.select_line(0)
+            term.get_selection().mode          # 'line'
+            term.get_selected_text().rstrip()  # 'hello world'
+            ```
         """
     def select_semantic_region(self, col: Any, row: Any, delimiters: Any) -> Any:
         """Select text within semantic delimiters
@@ -6734,6 +7305,15 @@ class Terminal:
         Args:
             col: Column index
             row: Row index
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("hello world\\r\\n")
+            term.select_word_at(7, 0)
+            term.get_selected_text()   # 'world'
+            ```
         """
     def selection_bg_color(self) -> Any:
         """Get selection background color
@@ -7087,7 +7667,15 @@ class Terminal:
         """Set maximum inline images
 
         Args:
-            max: Maximum number of images to keep
+            max: Maximum number of images to keep; the oldest images are
+                dropped when the store exceeds it
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.set_max_inline_images(10)
+            ```
         """
     def set_max_mouse_history(self, max: Any) -> Any:
         """Set maximum mouse history size"""
@@ -7096,6 +7684,15 @@ class Terminal:
 
         Args:
             max: Maximum notifications to buffer (0 disables buffering)
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.set_max_notifications(2)
+            term.process_str("\\x1b]9;one\\x07\\x1b]9;two\\x07\\x1b]9;three\\x07")
+            term.take_notifications()   # [('', 'two'), ('', 'three')]
+            ```
         """
     def set_max_osc_data_length(self, max: Any) -> Any:
         """Set the maximum total OSC data length in bytes (QA-012)
@@ -7169,6 +7766,16 @@ class Terminal:
 
         Args:
             config: NotificationConfig object with settings
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            config = term.get_notification_config()
+            config.bell_desktop = True
+            term.set_notification_config(config)
+            term.get_notification_config().bell_desktop   # True
+            ```
         """
     def set_progress(self, state: Any, progress: Any) -> Any:
         """Manually set the progress bar state
@@ -7193,6 +7800,18 @@ class Terminal:
             start: Start position (col, row) tuple
             end: End position (col, row) tuple
             mode: Selection mode: "character", "line", or "block"
+
+        Raises:
+            ValueError: If mode is not one of the three names above
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.process_str("hello world\\r\\n")
+            term.set_selection((0, 0), (5, 0), "character")
+            term.get_selected_text()   # 'hello'
+            ```
         """
     def set_selection_bg_color(self, r: Any, g: Any, b: Any) -> Any:
         """Set selection background color
@@ -7475,6 +8094,17 @@ class Terminal:
 
         Returns:
             PyComplianceReport with test results
+
+        Raises:
+            ValueError: If level is not one of the names above
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.test_compliance("vt100")
+            # ComplianceReport(level=vt100, passed=1/1, compliance=100.0%)
+            ```
         """
     def title(self) -> Any:
         """Get the terminal title
@@ -7488,6 +8118,19 @@ class Terminal:
         Args:
             id: Trigger ID
             alert: Alert type ("Desktop", "Sound(volume)", "Visual")
+
+        Raises:
+            ValueError: If the alert string is not recognized
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.register_custom_trigger(1, "tests finished")
+            term.trigger_custom_notification(1, "Visual")
+            [(e.trigger, e.alert, e.message) for e in term.get_notification_events()]
+            # [('Custom(1)', 'Visual', 'tests finished')]
+            ```
         """
     def trigger_notification(self, trigger: Any, alert: Any, message: Any) -> Any:
         """Trigger a notification
@@ -7495,10 +8138,32 @@ class Terminal:
         Args:
             trigger: Trigger type ("Bell", "Activity", "Silence", "Custom(id)")
             alert: Alert type ("Desktop", "Sound(volume)", "Visual")
-            message: Optional message string
+            message: Message string, or None; the argument itself is required
+
+        Raises:
+            ValueError: If the trigger or alert string is not recognized
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.trigger_notification("Bell", "Sound(50)", "build done")
+            term.get_notification_events()
+            # [NotificationEvent(trigger=Bell, alert=Sound(50), delivered=false)]
+            ```
         """
     def update_activity(self) -> Any:
-        """Update activity timestamp"""
+        """Update activity timestamp
+
+        Resets the silence timer that `check_silence` measures against.
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.update_activity()
+            ```
+        """
     def update_animations(self) -> Any:
         """Update all Kitty graphics animations and trigger refresh if frames changed
 
@@ -7513,7 +8178,18 @@ class Terminal:
         """Update peak memory usage
 
         Args:
-            current_bytes: Current total memory usage in bytes
+            current_bytes: Current total memory usage in bytes; recorded only
+                when it exceeds the stored peak
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.enable_profiling()
+            term.update_peak_memory(1048576)
+            term.update_peak_memory(4096)
+            term.get_profiling_data().peak_memory   # 1048576
+            ```
         """
     def use_alt_screen(self) -> Any:
         """Switch to alternate screen buffer
