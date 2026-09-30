@@ -1257,7 +1257,7 @@ sections; the numbers live here.
 | `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:440` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:442` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:76` | Broadcast lines queued per control-socket client before the daemon evicts it. |
@@ -1288,7 +1288,7 @@ sections; the numbers live here.
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:154` | Bytes retained for one queued clipboard sync event. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:160` | Unpolled terminal events retained from processed output. |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:164` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:968` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:12` | Color registers accepted in a sixel palette from a DCS payload. |
