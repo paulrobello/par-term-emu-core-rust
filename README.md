@@ -625,19 +625,14 @@ See [web-terminal-frontend/README.md](web-terminal-frontend/README.md) for detai
 A modern Next.js-based web terminal frontend source is in `web-terminal-frontend/`:
 
 ```bash
-cd web-terminal-frontend
+# Install dependencies (bun)
+make web-install
 
-# Install dependencies
-npm install
+# Development server on http://localhost:3000
+make web-dev
 
-# Development server (runs on port 8030)
-npm run dev
-
-# Build for production (outputs to out/)
-npm run build
-
-# Copy to web_term for serving
-cp -r out/* ../web_term/
+# Static build copied to web_term/ for par-term-streamer --web-root
+make web-build-static
 ```
 
 **Features:**
@@ -672,12 +667,14 @@ A full-featured TUI (Text User Interface) application is available in the sister
 ## Running Tests
 
 ```bash
-# Run Rust tests
-cargo test
+# All tests: Rust, Rust streaming, and Python (rebuilds the extension first)
+make test
 
-# Run Python tests
-uv sync  # Install dependencies including pytest
-pytest tests/
+# Rust tests only (plain `cargo test` fails to link under the default `python` feature)
+make test-rust
+
+# Python tests only (runs `make dev` first)
+make test-python
 ```
 
 ## Performance
