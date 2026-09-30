@@ -262,7 +262,7 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 
 These are set for every spawn path: `new-session`, `new-window`, `split-window`, `respawn-pane`, and restore. They are **fixed at spawn**, as tmux's `TMUX`/`TMUX_PANE` are: a later `rename-session` leaves `PAR_MUX_SESSION` stale, and a `swap-pane` across windows or a `break-pane`/`join-pane` that moves the pane to another window leaves `PAR_MUX_WINDOW_ID` stale (and the session variables too when the move crosses sessions). `respawn-pane` re-seeds them with the pane's current ids. The ids stay valid; the name is advisory. `PAR_MUX_SOCKET`, `PAR_MUX_ENV`, and `PAR_MUX_BIN` are absent when the server has no socket path or binary path to export.
 
-Four methods (`src/mux/hooks.rs`):
+Four methods (`src/mux/hooks/`):
 
 ```json
 {"id":1,"method":"pane.report_agent","params":{
@@ -449,7 +449,7 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
 | `src/mux/host_probe.rs` | The host telemetry probe: disk + git per pane cwd, its 30 s cadence thread, and per-field freshness serving |
-| `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.report_agent_telemetry`, `pane.release_agent` |
+| `src/mux/hooks/` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.report_agent_telemetry`, `pane.release_agent` (`mod.rs` dispatch + shared header/seq/reply helpers, `report.rs` state and session, `telemetry.rs`, `release.rs`) |
 | `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick, incl. the claim liveness sweep |
 | `src/mux/foreground.rs` | Process-table snapshot + descendant-tree liveness probe for hook claims (macOS `sysctl KERN_PROC_ALL` + `KERN_PROCARGS2` — libproc is ancestry-gated; Linux `/proc`; inert on Windows) |
 | `src/mux/agent_resume.rs` | The per-agent resume invocation table |

@@ -948,7 +948,7 @@ budget, per-value hook caps, the host probe, and pane respawn. The
 budgets' current values live in the
 [Resource Limits Reference](#resource-limits-reference) table. Every
 statement is verified against
-`src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks.rs`,
+`src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks/`,
 `src/mux/host_probe.rs`, `src/mux/persist.rs`, and `src/mux/win_resume.rs`.
 
 ### Threat Model
@@ -1257,7 +1257,7 @@ sections; the numbers live here.
 | `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:440` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:442` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:91` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:76` | Broadcast lines queued per control-socket client before the daemon evicts it. |
