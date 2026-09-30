@@ -84,6 +84,10 @@ const CLIENT_QUEUE_DEPTH: usize = 4096;
 /// cap: Bytes accumulated from one control-socket client line before the daemon closes it.
 const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
 
+/// How long shutdown waits for the host-probe worker before detaching it
+/// (SEC-133).
+const PROBE_JOIN_BOUND: Duration = Duration::from_secs(1);
+
 /// How often an evicted client's connection threads re-check the eviction
 /// flag. Both the writer and the reader of a connection run with
 /// send/recv timeouts of this length, so eviction tears a wedged client
@@ -366,9 +370,12 @@ impl MuxServer {
             if let Some(worker) = persist_worker {
                 let _ = worker.join();
             }
-            // Bounded by one 500 ms poll plus an in-flight sweep, itself
-            // capped by SWEEP_DEADLINE.
-            let _ = probe_worker.join();
+            // At most PROBE_JOIN_BOUND, then detached (SEC-133): the worker
+            // normally exits within one poll, but a probe blocked on a
+            // wedged filesystem must not hold the daemon's exit.
+            if !join_bounded(probe_worker, PROBE_JOIN_BOUND) {
+                crate::debug_error!("MUX", "host probe still running at shutdown; detached");
+            }
         }
         // The socket file dies with the listener (on Windows, the marker
         // file does): remove it so `ls par-mux-*.sock` lists only live
@@ -378,6 +385,20 @@ impl MuxServer {
         let _ = std::fs::remove_file(&self.path);
         exit
     }
+}
+
+/// Join `handle` if it finishes within `bound`, else drop it (detaching the
+/// thread). Returns whether it was joined.
+fn join_bounded(handle: JoinHandle<()>, bound: Duration) -> bool {
+    let deadline = std::time::Instant::now() + bound;
+    while !handle.is_finished() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let _ = handle.join();
+    true
 }
 
 /// Spawn the persist worker (ARC-003): the one thread that serializes and
@@ -1242,6 +1263,22 @@ mod tests {
         assert!(cut.contains(&format!("{} bytes total", multibyte.len())));
         assert!(cut.ends_with("bytes total)"));
         assert!(cut.is_char_boundary(cut.find("...").expect("ellipsis marker")));
+    }
+
+    /// SEC-133: a stuck thread is detached at the bound, not awaited.
+    #[test]
+    fn join_bounded_detaches_a_stuck_thread() {
+        let stuck = std::thread::spawn(|| std::thread::sleep(Duration::from_secs(5)));
+        let started = std::time::Instant::now();
+        assert!(!join_bounded(stuck, Duration::from_millis(200)));
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "gave up at the bound: {:?}",
+            started.elapsed()
+        );
+
+        let quick = std::thread::spawn(|| {});
+        assert!(join_bounded(quick, Duration::from_secs(1)));
     }
 
     /// SEC-132: typed input and clipboard content never reach the debug log.
