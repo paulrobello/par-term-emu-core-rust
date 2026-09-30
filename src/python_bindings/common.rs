@@ -2256,26 +2256,9 @@ macro_rules! impl_terminal_exports {
                 // Get bold brightening setting
                 let bold_brightening = t.bold_brightening();
 
-                // Get ANSI palette for color resolution
-                let ansi_palette = t.get_ansi_palette();
-
-                // Resolve a color through the ANSI palette for the 16 base slots
-                let resolve_color = |color: $crate::color::Color| -> (u8, u8, u8) {
-                    match color {
-                        $crate::color::Color::Named(named) => {
-                            let palette_idx = named as usize;
-                            if palette_idx < 16 {
-                                ansi_palette[palette_idx].to_rgb()
-                            } else {
-                                color.to_rgb()
-                            }
-                        }
-                        $crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
-                            ansi_palette[idx as usize].to_rgb()
-                        }
-                        _ => color.to_rgb(),
-                    }
-                };
+                // Resolve through the live ANSI palette (the core resolver, ARC-101)
+                let resolve_color =
+                    |color: $crate::color::Color| -> (u8, u8, u8) { t.resolve_color(&color) };
 
                 // Capture all lines while holding terminal reference
                 let mut lines = Vec::with_capacity(rows);
