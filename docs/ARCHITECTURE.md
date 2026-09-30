@@ -877,68 +877,68 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3` (0.29) - Python bindings (optional, feature-gated; uses `multiple-pymethods` to allow the split `*_api.rs` impl blocks)
+- `pyo3` - Python bindings (optional, feature-gated; uses `multiple-pymethods` to allow the split `*_api.rs` impl blocks)
 - `par-term-emu-derive` (path `derive/`) - Local proc-macro crate for derived impls
-- `vte` (0.15.0) - ANSI parser
-- `unicode-width` (0.2.2) - Character width calculation
-- `portable-pty` (0.9.0) - PTY support
-- `base64` (0.22.1) - Base64 encoding/decoding
-- `bitflags` (2.13.0) - Bit flag management
-- `regex` (1.12.3) - Regular expression support
-- `serde` (1.0.228) + `serde_json` (1.0.150) + `serde_yaml_ng` (0.10.0) - Serialization support
+- `vte` - ANSI parser
+- `unicode-width` - Character width calculation
+- `portable-pty` - PTY support
+- `base64` - Base64 encoding/decoding
+- `bitflags` - Bit flag management
+- `regex` - Regular expression support
+- `serde` + `serde_json` + `serde_yaml_ng` - Serialization support
 
 **Screenshot/rendering support:**
-- `image` (0.25.10) - Image encoding/decoding (PNG, JPEG, BMP)
-- `swash` (0.2.7) - Pure Rust font rendering and text shaping with color emoji support
+- `image` - Image encoding/decoding (PNG, JPEG, BMP)
+- `swash` - Pure Rust font rendering and text shaping with color emoji support
 
 **Streaming server dependencies (optional, feature-gated):**
-- `tokio` (1.52.3) - Async runtime with full features
-- `tokio-tungstenite` (0.29) - WebSocket support
-- `axum` (0.8.9) - Web framework with WebSocket support
-- `tower-http` (0.6.11) - HTTP middleware (fs, trace, cors)
-- `futures-util` (0.3.32) - Future utilities
-- `uuid` (1.23.2) - UUID generation with v4 and serde support
-- `clap` (4.6.1) - CLI parsing with derive feature (binary-only, via `streaming-bin`)
-- `anyhow` (1.0.102) - Error handling (binary-only, via `streaming-bin`)
-- `tracing` (0.1.44) + `tracing-subscriber` (0.3.23) - Logging (binary-only, via `streaming-bin`)
-- `reqwest` (0.13.4) - HTTP client with rustls-tls, for frontend downloads (binary-only, via `streaming-bin`)
-- `flate2` (1.1.9) + `tar` (0.4.46) - Archive extraction (tar is binary-only, via `streaming-bin`)
-- `prost` (0.14.3) + `prost-build` (0.14.3) - Protocol Buffers (`prost-build` only via `regenerate-proto`)
-- `rustls` (0.23.40) + `tokio-rustls` (0.26.4) - TLS support
-- `axum-server` (0.8.0) - TLS server support
-- `bcrypt` (0.19.1) + `md-5` (0.11.0) + `sha1` (0.11.0) - HTTP Basic Auth hash verification (SEC-003; replaced the unmaintained `rustls-pemfile` per RUSTSEC-2025-0134)
-- `headers` (0.4.1) - HTTP header types for auth
-- `sysinfo` (0.39.3) - System resource statistics for `SystemStats` events
+- `tokio` - Async runtime with full features
+- `tokio-tungstenite` - WebSocket support
+- `axum` - Web framework with WebSocket support
+- `tower-http` - HTTP middleware (fs, trace, cors)
+- `futures-util` - Future utilities
+- `uuid` - UUID generation with v4 and serde support
+- `clap` - CLI parsing with derive feature (binary-only, via `streaming-bin`)
+- `anyhow` - Error handling (binary-only, via `streaming-bin`)
+- `tracing` + `tracing-subscriber` - Logging (binary-only, via `streaming-bin`)
+- `reqwest` - HTTP client with rustls-tls, for frontend downloads (binary-only, via `streaming-bin`)
+- `flate2` + `tar` - Archive extraction (tar is binary-only, via `streaming-bin`)
+- `prost` + `prost-build` - Protocol Buffers (`prost-build` only via `regenerate-proto`)
+- `rustls` + `tokio-rustls` - TLS support
+- `axum-server` - TLS server support
+- `bcrypt` + `md-5` + `sha1` - HTTP Basic Auth hash verification (SEC-003; replaced the unmaintained `rustls-pemfile` per RUSTSEC-2025-0134)
+- `headers` - HTTP header types for auth
+- `sysinfo` - System resource statistics for `SystemStats` events
 
 **Development dependencies:**
-- `pyo3` (0.29, features: auto-initialize) - Python test support
-- `proptest` (1.11.0) - Property-based testing framework
-- `tempfile` (3.27) - Temporary file management for tests
+- `pyo3` (features: auto-initialize) - Python test support
+- `proptest` - Property-based testing framework
+- `tempfile` - Temporary file management for tests
 
 **Platform-specific:**
-- `libc` (0.2.186) - Unix system calls (Unix only)
+- `libc` - Unix system calls (Unix only)
 
 > **📝 Note:** See `Cargo.toml` for current version requirements
 
 ### Python
 
 **Build and development tools:**
-- `maturin` (>=1.13.3,<2.0) - Build system for PyO3 bindings
+- `maturin` - Build system for PyO3 bindings
 - `uv` - Fast Python package installer and resolver (recommended)
 
 **Runtime dependencies:**
-- `pillow` (>=12.2.0) - Image processing for sixel examples and screenshot features
+- `pillow` - Image processing for sixel examples and screenshot features
 
 **Testing:**
-- `pytest` (>=9.0.3) - Testing framework
-- `pytest-timeout` (>=2.4.0) - Test timeout protection (5-second default)
-- `pytest-asyncio` (>=1.4.0) - Async test support
-- `pytest-cov` (>=5.0.0) - Coverage reporting
+- `pytest` - Testing framework
+- `pytest-timeout` - Test timeout protection (5-second default)
+- `pytest-asyncio` - Async test support
+- `pytest-cov` - Coverage reporting
 
 **Code quality:**
-- `ruff` (>=0.15.16) - Linting and formatting
-- `pyright` (>=1.1.410) - Static type checking
-- `pre-commit` (>=4.6.0) - Git hook management
+- `ruff` - Linting and formatting
+- `pyright` - Static type checking
+- `pre-commit` - Git hook management
 
 **Python version requirements:** 3.12, 3.13, 3.14
 
