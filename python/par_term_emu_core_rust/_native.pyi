@@ -3,8 +3,11 @@
 #
 # Runtime-introspected stub for the PyO3 `_native` module (ARC-002).
 # Parameter names, kinds and defaults come from PyO3 `__text_signature__`
-# (methods, and constructors via the class-level signature — ENH-030);
-# value types are `Any` because the native layer does not expose them.
+# (methods, and constructors via the class-level signature — ENH-030).
+# Docstrings are copied from `__doc__` (DOC-116). Return types come from a
+# Google-style `Returns:` line whose first token is a type over builtins and
+# native classes, and parameter types from `name (TYPE):` Args entries.
+# Everything else, including every property, is `Any`.
 
 from types import TracebackType
 from typing import Any
@@ -18,322 +21,416 @@ SIXEL_HALFBLOCKS: str = "halfblocks"
 SIXEL_PIXELS: str = "pixels"
 
 class AmbiguousWidth:
+    """Treatment of East Asian Ambiguous width characters.
+
+    Ambiguous characters include Greek/Cyrillic letters, some symbols, and
+    other characters that may display as either 1 or 2 cells depending on context.
+    """
+
     Narrow: AmbiguousWidth
     Wide: AmbiguousWidth
-    def __int__(self, /) -> Any: ...
-    def is_narrow(self) -> Any: ...
-    def is_wide(self) -> Any: ...
-    def width(self) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
+    def is_narrow(self) -> Any:
+        """Check if this is the narrow setting"""
+    def is_wide(self) -> Any:
+        """Check if this is the wide setting"""
+    def width(self) -> Any:
+        """Get the width value (1 or 2)"""
 
 class Attributes:
+    """Cell attributes"""
     @property
-    def blink(self) -> Any: ...
+    def blink(self) -> Any:
+        """Blink attribute (SGR 5)"""
     @blink.setter
     def blink(self, value: Any) -> None: ...
     @property
-    def bold(self) -> Any: ...
+    def bold(self) -> Any:
+        """Bold attribute (SGR 1)"""
     @bold.setter
     def bold(self, value: Any) -> None: ...
     @property
-    def dim(self) -> Any: ...
+    def dim(self) -> Any:
+        """Dim/faint attribute (SGR 2)"""
     @dim.setter
     def dim(self, value: Any) -> None: ...
     @property
-    def hidden(self) -> Any: ...
+    def hidden(self) -> Any:
+        """Hidden/concealed attribute (SGR 8)"""
     @hidden.setter
     def hidden(self, value: Any) -> None: ...
     @property
-    def hyperlink_id(self) -> Any: ...
+    def hyperlink_id(self) -> Any:
+        """Hyperlink ID for OSC 8 links, if the cell is a link"""
     @hyperlink_id.setter
     def hyperlink_id(self, value: Any) -> None: ...
     @property
-    def italic(self) -> Any: ...
+    def italic(self) -> Any:
+        """Italic attribute (SGR 3)"""
     @italic.setter
     def italic(self, value: Any) -> None: ...
     @property
-    def reverse(self) -> Any: ...
+    def reverse(self) -> Any:
+        """Reverse video attribute (SGR 7)"""
     @reverse.setter
     def reverse(self, value: Any) -> None: ...
     @property
-    def strikethrough(self) -> Any: ...
+    def strikethrough(self) -> Any:
+        """Strikethrough attribute (SGR 9)"""
     @strikethrough.setter
     def strikethrough(self, value: Any) -> None: ...
     @property
-    def underline(self) -> Any: ...
+    def underline(self) -> Any:
+        """Underline attribute (SGR 4)"""
     @underline.setter
     def underline(self, value: Any) -> None: ...
     @property
-    def underline_style(self) -> Any: ...
+    def underline_style(self) -> Any:
+        """Underline style (curl, dotted, dashed, ...)"""
     @underline_style.setter
     def underline_style(self, value: Any) -> None: ...
     @property
-    def wide_char(self) -> Any: ...
+    def wide_char(self) -> Any:
+        """Whether the cell holds the first half of a double-width character"""
     @wide_char.setter
     def wide_char(self, value: Any) -> None: ...
     @property
-    def wide_char_spacer(self) -> Any: ...
+    def wide_char_spacer(self) -> Any:
+        """Whether the cell is the spacer following a double-width character"""
     @wide_char_spacer.setter
     def wide_char_spacer(self, value: Any) -> None: ...
 
 class BenchmarkResult:
+    """Benchmark result"""
     @property
-    def avg_time_us(self) -> Any: ...
+    def avg_time_us(self) -> Any:
+        """Average iteration time, in microseconds"""
     @avg_time_us.setter
     def avg_time_us(self, value: Any) -> None: ...
     @property
-    def category(self) -> Any: ...
+    def category(self) -> Any:
+        """Benchmark category (e.g. "parsing", "rendering")"""
     @category.setter
     def category(self, value: Any) -> None: ...
     @property
-    def iterations(self) -> Any: ...
+    def iterations(self) -> Any:
+        """Number of iterations run"""
     @iterations.setter
     def iterations(self, value: Any) -> None: ...
     @property
-    def max_time_us(self) -> Any: ...
+    def max_time_us(self) -> Any:
+        """Slowest iteration time, in microseconds"""
     @max_time_us.setter
     def max_time_us(self, value: Any) -> None: ...
     @property
-    def memory_bytes(self) -> Any: ...
+    def memory_bytes(self) -> Any:
+        """Peak memory used during the benchmark, in bytes (if measured)"""
     @memory_bytes.setter
     def memory_bytes(self, value: Any) -> None: ...
     @property
-    def min_time_us(self) -> Any: ...
+    def min_time_us(self) -> Any:
+        """Fastest iteration time, in microseconds"""
     @min_time_us.setter
     def min_time_us(self, value: Any) -> None: ...
     @property
-    def name(self) -> Any: ...
+    def name(self) -> Any:
+        """Benchmark name"""
     @name.setter
     def name(self, value: Any) -> None: ...
     @property
-    def ops_per_sec(self) -> Any: ...
+    def ops_per_sec(self) -> Any:
+        """Throughput in operations per second"""
     @ops_per_sec.setter
     def ops_per_sec(self, value: Any) -> None: ...
     @property
-    def total_time_us(self) -> Any: ...
+    def total_time_us(self) -> Any:
+        """Total benchmark time, in microseconds"""
     @total_time_us.setter
     def total_time_us(self, value: Any) -> None: ...
 
 class BenchmarkSuite:
+    """Benchmark suite"""
     @property
-    def results(self) -> Any: ...
+    def results(self) -> Any:
+        """Individual benchmark results"""
     @results.setter
     def results(self, value: Any) -> None: ...
     @property
-    def suite_name(self) -> Any: ...
+    def suite_name(self) -> Any:
+        """Suite name"""
     @suite_name.setter
     def suite_name(self, value: Any) -> None: ...
     @property
-    def total_time_ms(self) -> Any: ...
+    def total_time_ms(self) -> Any:
+        """Total suite wall time, in milliseconds"""
     @total_time_ms.setter
     def total_time_ms(self, value: Any) -> None: ...
 
 class Bookmark:
+    """Bookmark"""
     @property
-    def id(self) -> Any: ...
+    def id(self) -> Any:
+        """Bookmark ID"""
     @id.setter
     def id(self, value: Any) -> None: ...
     @property
-    def label(self) -> Any: ...
+    def label(self) -> Any:
+        """Bookmark label"""
     @label.setter
     def label(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row index (negative for scrollback, 0+ for visible screen)"""
     @row.setter
     def row(self, value: Any) -> None: ...
 
 class ClipboardEntry:
+    """Clipboard entry"""
     @property
-    def content(self) -> Any: ...
+    def content(self) -> Any:
+        """Clipboard text content"""
     @content.setter
     def content(self, value: Any) -> None: ...
     @property
-    def label(self) -> Any: ...
+    def label(self) -> Any:
+        """Optional source label"""
     @label.setter
     def label(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when captured"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class ClipboardHistoryEntry:
+    """Clipboard history entry"""
     @property
-    def content(self) -> Any: ...
+    def content(self) -> Any:
+        """Clipboard text content"""
     @content.setter
     def content(self, value: Any) -> None: ...
     @property
-    def source(self) -> Any: ...
+    def source(self) -> Any:
+        """Optional origin description"""
     @source.setter
     def source(self, value: Any) -> None: ...
     @property
-    def target(self) -> Any: ...
+    def target(self) -> Any:
+        """Clipboard target this entry came from"""
     @target.setter
     def target(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when captured"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class ClipboardSyncEvent:
+    """Clipboard sync event"""
     @property
-    def content(self) -> Any: ...
+    def content(self) -> Any:
+        """Clipboard content (None for clears/requests)"""
     @content.setter
     def content(self, value: Any) -> None: ...
     @property
-    def is_remote(self) -> Any: ...
+    def is_remote(self) -> Any:
+        """True if the sync originated from a remote host"""
     @is_remote.setter
     def is_remote(self, value: Any) -> None: ...
     @property
-    def is_write(self) -> Any: ...
+    def is_write(self) -> Any:
+        """True for writes, False for reads"""
     @is_write.setter
     def is_write(self, value: Any) -> None: ...
     @property
-    def operation(self) -> Any: ...
+    def operation(self) -> Any:
+        """Sync operation kind (e.g. "set", "request")"""
     @operation.setter
     def operation(self, value: Any) -> None: ...
     @property
-    def target(self) -> Any: ...
+    def target(self) -> Any:
+        """Clipboard target (e.g. "system", "terminal")"""
     @target.setter
     def target(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the event occurred"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class ColorHSL:
+    """HSL color"""
     def __init__(self, h: Any, s: Any, l: Any) -> None: ...
     @property
-    def h(self) -> Any: ...
+    def h(self) -> Any:
+        """Hue in degrees (0.0-360.0)"""
     @h.setter
     def h(self, value: Any) -> None: ...
     @property
-    def l(self) -> Any: ...
+    def l(self) -> Any:
+        """Lightness (0.0-1.0)"""
     @l.setter
     def l(self, value: Any) -> None: ...
     @property
-    def s(self) -> Any: ...
+    def s(self) -> Any:
+        """Saturation (0.0-1.0)"""
     @s.setter
     def s(self, value: Any) -> None: ...
 
 class ColorHSV:
+    """HSV color"""
     def __init__(self, h: Any, s: Any, v: Any) -> None: ...
     @property
-    def h(self) -> Any: ...
+    def h(self) -> Any:
+        """Hue in degrees (0.0-360.0)"""
     @h.setter
     def h(self, value: Any) -> None: ...
     @property
-    def s(self) -> Any: ...
+    def s(self) -> Any:
+        """Saturation (0.0-1.0)"""
     @s.setter
     def s(self, value: Any) -> None: ...
     @property
-    def v(self) -> Any: ...
+    def v(self) -> Any:
+        """Value/brightness (0.0-1.0)"""
     @v.setter
     def v(self, value: Any) -> None: ...
 
 class ColorPalette:
+    """Color palette"""
     @property
-    def base(self) -> Any: ...
+    def base(self) -> Any:
+        """Base color the palette was generated from (r, g, b)"""
     @base.setter
     def base(self, value: Any) -> None: ...
     @property
-    def colors(self) -> Any: ...
+    def colors(self) -> Any:
+        """Generated palette colors as (r, g, b) tuples"""
     @colors.setter
     def colors(self, value: Any) -> None: ...
     @property
-    def mode(self) -> Any: ...
+    def mode(self) -> Any:
+        """Palette generation mode"""
     @mode.setter
     def mode(self, value: Any) -> None: ...
 
 class CommandExecution:
+    """Command execution record"""
     @property
-    def command(self) -> Any: ...
+    def command(self) -> Any:
+        """The command line that was executed"""
     @command.setter
     def command(self, value: Any) -> None: ...
     @property
-    def cwd(self) -> Any: ...
+    def cwd(self) -> Any:
+        """Working directory the command ran in, if known"""
     @cwd.setter
     def cwd(self, value: Any) -> None: ...
     @property
-    def duration_ms(self) -> Any: ...
+    def duration_ms(self) -> Any:
+        """Wall-clock duration in milliseconds (None while running)"""
     @duration_ms.setter
     def duration_ms(self, value: Any) -> None: ...
     @property
-    def end_time(self) -> Any: ...
+    def end_time(self) -> Any:
+        """Unix epoch milliseconds when the command finished (None while running)"""
     @end_time.setter
     def end_time(self, value: Any) -> None: ...
     @property
-    def exit_code(self) -> Any: ...
+    def exit_code(self) -> Any:
+        """Exit code (None while running)"""
     @exit_code.setter
     def exit_code(self, value: Any) -> None: ...
     @property
-    def output_end_row(self) -> Any: ...
+    def output_end_row(self) -> Any:
+        """Last row of the command's output, if any"""
     @output_end_row.setter
     def output_end_row(self, value: Any) -> None: ...
     @property
-    def output_start_row(self) -> Any: ...
+    def output_start_row(self) -> Any:
+        """First row of the command's output, if any"""
     @output_start_row.setter
     def output_start_row(self, value: Any) -> None: ...
     @property
-    def start_time(self) -> Any: ...
+    def start_time(self) -> Any:
+        """Unix epoch milliseconds when the command started"""
     @start_time.setter
     def start_time(self, value: Any) -> None: ...
     @property
-    def success(self) -> Any: ...
+    def success(self) -> Any:
+        """Whether the command succeeded (exit code 0; None while running)"""
     @success.setter
     def success(self, value: Any) -> None: ...
 
 class ComplianceReport:
+    """Compliance report"""
     @property
-    def compliance_percent(self) -> Any: ...
+    def compliance_percent(self) -> Any:
+        """Percentage of tests passed (0.0-100.0)"""
     @compliance_percent.setter
     def compliance_percent(self, value: Any) -> None: ...
     @property
-    def failed(self) -> Any: ...
+    def failed(self) -> Any:
+        """Number of tests failed"""
     @failed.setter
     def failed(self, value: Any) -> None: ...
     @property
-    def level(self) -> Any: ...
+    def level(self) -> Any:
+        """VT conformance level tested against"""
     @level.setter
     def level(self, value: Any) -> None: ...
     @property
-    def passed(self) -> Any: ...
+    def passed(self) -> Any:
+        """Number of tests passed"""
     @passed.setter
     def passed(self, value: Any) -> None: ...
     @property
-    def terminal_info(self) -> Any: ...
+    def terminal_info(self) -> Any:
+        """Description of the terminal under test"""
     @terminal_info.setter
     def terminal_info(self, value: Any) -> None: ...
     @property
-    def tests(self) -> Any: ...
+    def tests(self) -> Any:
+        """Individual test results"""
     @tests.setter
     def tests(self, value: Any) -> None: ...
 
 class ComplianceTest:
+    """Compliance test"""
     @property
-    def actual(self) -> Any: ...
+    def actual(self) -> Any:
+        """Actual value (rendered as string)"""
     @actual.setter
     def actual(self, value: Any) -> None: ...
     @property
-    def category(self) -> Any: ...
+    def category(self) -> Any:
+        """Test category"""
     @category.setter
     def category(self, value: Any) -> None: ...
     @property
-    def expected(self) -> Any: ...
+    def expected(self) -> Any:
+        """Expected value (rendered as string)"""
     @expected.setter
     def expected(self, value: Any) -> None: ...
     @property
-    def name(self) -> Any: ...
+    def name(self) -> Any:
+        """Test name"""
     @name.setter
     def name(self, value: Any) -> None: ...
     @property
-    def notes(self) -> Any: ...
+    def notes(self) -> Any:
+        """Additional notes about the test"""
     @notes.setter
     def notes(self, value: Any) -> None: ...
     @property
-    def passed(self) -> Any: ...
+    def passed(self) -> Any:
+        """Whether the test passed"""
     @passed.setter
     def passed(self, value: Any) -> None: ...
 
 class CoprocessConfig:
+    """Coprocess configuration (constructable from Python)"""
     def __init__(
         self,
         command: Any,
@@ -345,609 +442,841 @@ class CoprocessConfig:
         restart_delay_ms: Any = 0,
     ) -> None: ...
     @property
-    def args(self) -> Any: ...
+    def args(self) -> Any:
+        """Command arguments"""
     @args.setter
     def args(self, value: Any) -> None: ...
     @property
-    def command(self) -> Any: ...
+    def command(self) -> Any:
+        """Command to execute"""
     @command.setter
     def command(self, value: Any) -> None: ...
     @property
-    def copy_terminal_output(self) -> Any: ...
+    def copy_terminal_output(self) -> Any:
+        """Whether terminal output is piped to the coprocess stdin"""
     @copy_terminal_output.setter
     def copy_terminal_output(self, value: Any) -> None: ...
     @property
-    def cwd(self) -> Any: ...
+    def cwd(self) -> Any:
+        """Working directory (None = inherit)"""
     @cwd.setter
     def cwd(self, value: Any) -> None: ...
     @property
-    def env(self) -> Any: ...
+    def env(self) -> Any:
+        """Environment variables for the coprocess"""
     @env.setter
     def env(self, value: Any) -> None: ...
     @property
-    def restart_delay_ms(self) -> Any: ...
+    def restart_delay_ms(self) -> Any:
+        """Delay in milliseconds before restarting (0 = immediate)"""
     @restart_delay_ms.setter
     def restart_delay_ms(self, value: Any) -> None: ...
     @property
-    def restart_policy(self) -> Any: ...
+    def restart_policy(self) -> Any:
+        """Restart policy: "never" (default), "always", or "on_failure\""""
     @restart_policy.setter
     def restart_policy(self, value: Any) -> None: ...
 
 class CursorStyle:
+    """Cursor style/shape (DECSCUSR)"""
+
     BlinkingBar: CursorStyle
     BlinkingBlock: CursorStyle
     BlinkingUnderline: CursorStyle
     SteadyBar: CursorStyle
     SteadyBlock: CursorStyle
     SteadyUnderline: CursorStyle
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class CwdChange:
+    """CWD change notification"""
     @property
-    def hostname(self) -> Any: ...
+    def hostname(self) -> Any:
+        """Host the directory change occurred on, if reported"""
     @hostname.setter
     def hostname(self, value: Any) -> None: ...
     @property
-    def new_cwd(self) -> Any: ...
+    def new_cwd(self) -> Any:
+        """New working directory"""
     @new_cwd.setter
     def new_cwd(self, value: Any) -> None: ...
     @property
-    def old_cwd(self) -> Any: ...
+    def old_cwd(self) -> Any:
+        """Previous working directory (None for the first report)"""
     @old_cwd.setter
     def old_cwd(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the change was observed"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
     @property
-    def username(self) -> Any: ...
+    def username(self) -> Any:
+        """User who changed directory, if reported"""
     @username.setter
     def username(self, value: Any) -> None: ...
 
 class DamageRegion:
+    """Damage region"""
     @property
-    def bottom(self) -> Any: ...
+    def bottom(self) -> Any:
+        """Bottom row of the damaged region (exclusive)"""
     @bottom.setter
     def bottom(self, value: Any) -> None: ...
     @property
-    def left(self) -> Any: ...
+    def left(self) -> Any:
+        """Left column of the damaged region (inclusive)"""
     @left.setter
     def left(self, value: Any) -> None: ...
     @property
-    def right(self) -> Any: ...
+    def right(self) -> Any:
+        """Right column of the damaged region (exclusive)"""
     @right.setter
     def right(self, value: Any) -> None: ...
     @property
-    def top(self) -> Any: ...
+    def top(self) -> Any:
+        """Top row of the damaged region (inclusive)"""
     @top.setter
     def top(self, value: Any) -> None: ...
 
 class DetectedItem:
+    """Detected semantic item"""
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column index"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def item_type(self) -> Any: ...
+    def item_type(self) -> Any:
+        """Item type: "url", "filepath", "git_hash", "ip", or "email\""""
     @item_type.setter
     def item_type(self, value: Any) -> None: ...
     @property
-    def line_number(self) -> Any: ...
+    def line_number(self) -> Any:
+        """Optional line number (for file paths like "file.txt:123")"""
     @line_number.setter
     def line_number(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row index"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def text(self) -> Any: ...
+    def text(self) -> Any:
+        """The detected text"""
     @text.setter
     def text(self, value: Any) -> None: ...
 
 class EscapeSequenceProfile:
+    """Escape sequence profile"""
     @property
-    def avg_time_us(self) -> Any: ...
+    def avg_time_us(self) -> Any:
+        """Average processing time, in microseconds"""
     @avg_time_us.setter
     def avg_time_us(self, value: Any) -> None: ...
     @property
-    def count(self) -> Any: ...
+    def count(self) -> Any:
+        """Number of sequences of this category processed"""
     @count.setter
     def count(self, value: Any) -> None: ...
     @property
-    def peak_time_us(self) -> Any: ...
+    def peak_time_us(self) -> Any:
+        """Slowest single sequence, in microseconds"""
     @peak_time_us.setter
     def peak_time_us(self, value: Any) -> None: ...
     @property
-    def total_time_us(self) -> Any: ...
+    def total_time_us(self) -> Any:
+        """Total processing time, in microseconds"""
     @total_time_us.setter
     def total_time_us(self, value: Any) -> None: ...
 
 class FrameTiming:
+    """Frame timing"""
     @property
-    def bytes_processed(self) -> Any: ...
+    def bytes_processed(self) -> Any:
+        """Number of bytes processed in this frame"""
     @bytes_processed.setter
     def bytes_processed(self, value: Any) -> None: ...
     @property
-    def cells_updated(self) -> Any: ...
+    def cells_updated(self) -> Any:
+        """Number of cells updated in this frame"""
     @cells_updated.setter
     def cells_updated(self, value: Any) -> None: ...
     @property
-    def frame_number(self) -> Any: ...
+    def frame_number(self) -> Any:
+        """Sequential frame index"""
     @frame_number.setter
     def frame_number(self, value: Any) -> None: ...
     @property
-    def processing_us(self) -> Any: ...
+    def processing_us(self) -> Any:
+        """Time to process this frame, in microseconds"""
     @processing_us.setter
     def processing_us(self, value: Any) -> None: ...
 
 class Graphic:
+    """Graphics representation (Sixel, iTerm2, or Kitty)"""
     @property
-    def cell_dimensions(self) -> Any: ...
+    def cell_dimensions(self) -> Any:
+        """Cell size (width, height) in pixels when the graphic was placed"""
     @cell_dimensions.setter
     def cell_dimensions(self, value: Any) -> None: ...
-    def cell_size(self, cell_width: Any, cell_height: Any) -> Any: ...
-    def get_pixel(self, x: Any, y: Any) -> Any: ...
+    def cell_size(self, cell_width: Any, cell_height: Any) -> Any:
+        """Get size in terminal cells"""
+    def get_pixel(self, x: Any, y: Any) -> Any:
+        """Get pixel color at (x, y) coordinates
+
+        Args:
+            x: X coordinate (0-based)
+            y: Y coordinate (0-based)
+
+        Returns:
+            Tuple of (r, g, b, a) values, or None if out of bounds
+        """
     @property
-    def height(self) -> Any: ...
+    def height(self) -> Any:
+        """Displayed height in pixels (after scaling)"""
     @height.setter
     def height(self, value: Any) -> None: ...
     @property
-    def id(self) -> Any: ...
+    def id(self) -> Any:
+        """Unique graphic identifier"""
     @id.setter
     def id(self, value: Any) -> None: ...
     @property
-    def original_height(self) -> Any: ...
+    def original_height(self) -> Any:
+        """Original image height in pixels"""
     @original_height.setter
     def original_height(self, value: Any) -> None: ...
     @property
-    def original_width(self) -> Any: ...
+    def original_width(self) -> Any:
+        """Original image width in pixels"""
     @original_width.setter
     def original_width(self, value: Any) -> None: ...
-    def pixels(self) -> Any: ...
+    def pixels(self) -> Any:
+        """Get raw pixel data as bytes (RGBA format)
+
+        Returns:
+            Bytes containing RGBA pixel data in row-major order
+        """
     @property
-    def placement(self) -> Any: ...
+    def placement(self) -> Any:
+        """Placement metadata (sizing, offsets, z-index)"""
     @placement.setter
     def placement(self, value: Any) -> None: ...
     @property
-    def position(self) -> Any: ...
+    def position(self) -> Any:
+        """Anchor position as (col, row)"""
     @position.setter
     def position(self, value: Any) -> None: ...
     @property
-    def protocol(self) -> Any: ...
+    def protocol(self) -> Any:
+        """Source protocol: "sixel", "iterm2", or "kitty\""""
     @protocol.setter
     def protocol(self, value: Any) -> None: ...
     def sample_half_block(
         self, cell_col: Any, cell_row: Any, cell_width: Any, cell_height: Any
-    ) -> Any: ...
+    ) -> Any:
+        """Sample for half-block rendering at cell (col, row)
+        Returns ((top_r, top_g, top_b, top_a), (bottom_r, bottom_g, bottom_b, bottom_a))
+        """
     @property
-    def scroll_offset_rows(self) -> Any: ...
+    def scroll_offset_rows(self) -> Any:
+        """Rows the graphic has scrolled up out of view"""
     @scroll_offset_rows.setter
     def scroll_offset_rows(self, value: Any) -> None: ...
     @property
-    def was_compressed(self) -> Any: ...
+    def was_compressed(self) -> Any:
+        """Whether the pixel data was stored compressed"""
     @was_compressed.setter
     def was_compressed(self, value: Any) -> None: ...
     @property
-    def width(self) -> Any: ...
+    def width(self) -> Any:
+        """Displayed width in pixels (after scaling)"""
     @width.setter
     def width(self, value: Any) -> None: ...
 
 class ImageDimension:
-    def is_auto(self) -> Any: ...
+    """Image dimension with unit for sizing"""
+    def is_auto(self) -> Any:
+        """Check if this is an auto dimension"""
     @property
-    def unit(self) -> Any: ...
+    def unit(self) -> Any:
+        """Unit: "auto", "cells", "pixels", or "percent\""""
     @unit.setter
     def unit(self, value: Any) -> None: ...
     @property
-    def value(self) -> Any: ...
+    def value(self) -> Any:
+        """Numeric value (0 means auto)"""
     @value.setter
     def value(self, value: Any) -> None: ...
 
 class ImageFormat:
+    """Image format"""
+
     BMP: ImageFormat
     GIF: ImageFormat
     JPEG: ImageFormat
     PNG: ImageFormat
     RGB: ImageFormat
     RGBA: ImageFormat
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class ImagePlacement:
+    """Image placement metadata for rendering"""
     @property
-    def columns(self) -> Any: ...
+    def columns(self) -> Any:
+        """Number of columns to display (Kitty)"""
     @columns.setter
     def columns(self, value: Any) -> None: ...
     @property
-    def display_mode(self) -> Any: ...
+    def display_mode(self) -> Any:
+        """Display mode: "inline" or "download\""""
     @display_mode.setter
     def display_mode(self, value: Any) -> None: ...
     @property
-    def preserve_aspect_ratio(self) -> Any: ...
+    def preserve_aspect_ratio(self) -> Any:
+        """Whether to preserve aspect ratio when scaling"""
     @preserve_aspect_ratio.setter
     def preserve_aspect_ratio(self, value: Any) -> None: ...
     @property
-    def requested_height(self) -> Any: ...
+    def requested_height(self) -> Any:
+        """Requested height dimension"""
     @requested_height.setter
     def requested_height(self, value: Any) -> None: ...
     @property
-    def requested_width(self) -> Any: ...
+    def requested_width(self) -> Any:
+        """Requested width dimension"""
     @requested_width.setter
     def requested_width(self, value: Any) -> None: ...
     @property
-    def rows(self) -> Any: ...
+    def rows(self) -> Any:
+        """Number of rows to display (Kitty)"""
     @rows.setter
     def rows(self, value: Any) -> None: ...
     @property
-    def x_offset(self) -> Any: ...
+    def x_offset(self) -> Any:
+        """X offset within the cell in pixels"""
     @x_offset.setter
     def x_offset(self, value: Any) -> None: ...
     @property
-    def y_offset(self) -> Any: ...
+    def y_offset(self) -> Any:
+        """Y offset within the cell in pixels"""
     @y_offset.setter
     def y_offset(self, value: Any) -> None: ...
     @property
-    def z_index(self) -> Any: ...
+    def z_index(self) -> Any:
+        """Z-index for layering"""
     @z_index.setter
     def z_index(self, value: Any) -> None: ...
 
 class ImageProtocol:
+    """Image protocol"""
+
     ITerm2: ImageProtocol
     Kitty: ImageProtocol
     Sixel: ImageProtocol
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class InlineImage:
+    """Inline image"""
     @property
-    def data(self) -> Any: ...
+    def data(self) -> Any:
+        """Raw encoded image bytes"""
     @data.setter
     def data(self, value: Any) -> None: ...
     @property
-    def display_cols(self) -> Any: ...
+    def display_cols(self) -> Any:
+        """Display width in terminal columns"""
     @display_cols.setter
     def display_cols(self, value: Any) -> None: ...
     @property
-    def display_rows(self) -> Any: ...
+    def display_rows(self) -> Any:
+        """Display height in terminal rows"""
     @display_rows.setter
     def display_rows(self, value: Any) -> None: ...
     @property
-    def format(self) -> Any: ...
+    def format(self) -> Any:
+        """Image format: "png", "jpeg", or "gif\""""
     @format.setter
     def format(self, value: Any) -> None: ...
     @property
-    def height(self) -> Any: ...
+    def height(self) -> Any:
+        """Image height in pixels"""
     @height.setter
     def height(self, value: Any) -> None: ...
     @property
-    def id(self) -> Any: ...
+    def id(self) -> Any:
+        """Image identifier (iTerm2 name / Kitty id), when present"""
     @id.setter
     def id(self, value: Any) -> None: ...
     @property
-    def position(self) -> Any: ...
+    def position(self) -> Any:
+        """Anchor position as (col, row)"""
     @position.setter
     def position(self, value: Any) -> None: ...
     @property
-    def protocol(self) -> Any: ...
+    def protocol(self) -> Any:
+        """Source protocol: "iterm2" or "kitty\""""
     @protocol.setter
     def protocol(self, value: Any) -> None: ...
     @property
-    def width(self) -> Any: ...
+    def width(self) -> Any:
+        """Image width in pixels"""
     @width.setter
     def width(self, value: Any) -> None: ...
 
 class JoinedLines:
+    """Joined lines result"""
     @property
-    def end_row(self) -> Any: ...
+    def end_row(self) -> Any:
+        """Last row of the logical line"""
     @end_row.setter
     def end_row(self, value: Any) -> None: ...
     @property
-    def lines_joined(self) -> Any: ...
+    def lines_joined(self) -> Any:
+        """Number of physical rows joined"""
     @lines_joined.setter
     def lines_joined(self, value: Any) -> None: ...
     @property
-    def start_row(self) -> Any: ...
+    def start_row(self) -> Any:
+        """First row of the logical line"""
     @start_row.setter
     def start_row(self, value: Any) -> None: ...
     @property
-    def text(self) -> Any: ...
+    def text(self) -> Any:
+        """The joined text of the wrapped lines"""
     @text.setter
     def text(self, value: Any) -> None: ...
 
 class LineDiff:
+    """Line diff"""
     @property
-    def change_type(self) -> Any: ...
+    def change_type(self) -> Any:
+        """Change kind: "added", "removed", or "modified\""""
     @change_type.setter
     def change_type(self, value: Any) -> None: ...
     @property
-    def new_content(self) -> Any: ...
+    def new_content(self) -> Any:
+        """Current line content (None for removed lines)"""
     @new_content.setter
     def new_content(self, value: Any) -> None: ...
     @property
-    def new_row(self) -> Any: ...
+    def new_row(self) -> Any:
+        """Row the line has in the new snapshot (None for removed lines)"""
     @new_row.setter
     def new_row(self, value: Any) -> None: ...
     @property
-    def old_content(self) -> Any: ...
+    def old_content(self) -> Any:
+        """Previous line content (None for added lines)"""
     @old_content.setter
     def old_content(self, value: Any) -> None: ...
     @property
-    def old_row(self) -> Any: ...
+    def old_row(self) -> Any:
+        """Row the line had in the old snapshot (None for added lines)"""
     @old_row.setter
     def old_row(self, value: Any) -> None: ...
 
 class Macro:
+    """Macro recording"""
     def __init__(self, name: Any) -> None: ...
-    def add_delay(self, duration_ms: Any) -> Any: ...
-    def add_key(self, key: Any) -> Any: ...
-    def add_screenshot(self, label: Any) -> Any: ...
+    def add_delay(self, duration_ms: Any) -> Any:
+        """Add a delay event"""
+    def add_key(self, key: Any) -> Any:
+        """Add a key press event"""
+    def add_screenshot(self, label: Any) -> Any:
+        """Add a screenshot trigger"""
     @property
-    def description(self) -> Any: ...
+    def description(self) -> Any:
+        """Get description"""
     @description.setter
     def description(self, value: Any) -> None: ...
     @property
-    def duration(self) -> Any: ...
+    def duration(self) -> Any:
+        """Get duration in milliseconds"""
     @duration.setter
     def duration(self, value: Any) -> None: ...
     @property
-    def event_count(self) -> Any: ...
+    def event_count(self) -> Any:
+        """Get number of events"""
     @event_count.setter
     def event_count(self, value: Any) -> None: ...
     @property
-    def events(self) -> Any: ...
+    def events(self) -> Any:
+        """Get all events"""
     @events.setter
     def events(self, value: Any) -> None: ...
     @staticmethod
-    def from_yaml(yaml: Any) -> Any: ...
+    def from_yaml(yaml: Any) -> Any:
+        """Parse from YAML string"""
     @staticmethod
-    def load_yaml(path: Any) -> Any: ...
+    def load_yaml(path: Any) -> Any:
+        """Load from YAML file"""
     @property
-    def name(self) -> Any: ...
+    def name(self) -> Any:
+        """Get macro name"""
     @name.setter
     def name(self, value: Any) -> None: ...
-    def save_yaml(self, path: Any) -> Any: ...
-    def set_description(self, description: Any) -> Any: ...
+    def save_yaml(self, path: Any) -> Any:
+        """Save to YAML file"""
+    def set_description(self, description: Any) -> Any:
+        """Set description"""
     @property
-    def terminal_size(self) -> Any: ...
+    def terminal_size(self) -> Any:
+        """Get terminal size (cols, rows)"""
     @terminal_size.setter
     def terminal_size(self, value: Any) -> None: ...
-    def to_yaml(self) -> Any: ...
+    def to_yaml(self) -> Any:
+        """Convert to YAML string"""
 
 class MacroEvent:
+    """Macro event"""
     @property
-    def duration(self) -> Any: ...
+    def duration(self) -> Any:
+        """Delay duration in milliseconds for "delay" events"""
     @duration.setter
     def duration(self, value: Any) -> None: ...
     @property
-    def event_type(self) -> Any: ...
+    def event_type(self) -> Any:
+        """Event kind: "key", "delay", or "screenshot\""""
     @event_type.setter
     def event_type(self, value: Any) -> None: ...
     @property
-    def key(self) -> Any: ...
+    def key(self) -> Any:
+        """Key name for "key" events (e.g. "enter", "ctrl+c")"""
     @key.setter
     def key(self, value: Any) -> None: ...
     @property
-    def label(self) -> Any: ...
+    def label(self) -> Any:
+        """Label for "screenshot" events"""
     @label.setter
     def label(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Milliseconds since macro start"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class MouseEncoding:
+    """Mouse encoding format for mouse event reporting"""
+
     Default: MouseEncoding
     Sgr: MouseEncoding
     Urxvt: MouseEncoding
     Utf8: MouseEncoding
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class MouseEvent:
+    """Mouse event"""
     @property
-    def button(self) -> Any: ...
+    def button(self) -> Any:
+        """Button name (e.g. "left", "right", "middle", "wheel_up", "none")"""
     @button.setter
     def button(self, value: Any) -> None: ...
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column (0-indexed)"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def event_type(self) -> Any: ...
+    def event_type(self) -> Any:
+        """Event kind: "press", "release", or "motion\""""
     @event_type.setter
     def event_type(self, value: Any) -> None: ...
     @property
-    def modifiers(self) -> Any: ...
+    def modifiers(self) -> Any:
+        """Modifier bitflags (shift=1, alt=2, ctrl=4, etc.)"""
     @modifiers.setter
     def modifiers(self, value: Any) -> None: ...
     @property
-    def pixel_x(self) -> Any: ...
+    def pixel_x(self) -> Any:
+        """X pixel coordinate, when the terminal reports one"""
     @pixel_x.setter
     def pixel_x(self, value: Any) -> None: ...
     @property
-    def pixel_y(self) -> Any: ...
+    def pixel_y(self) -> Any:
+        """Y pixel coordinate, when the terminal reports one"""
     @pixel_y.setter
     def pixel_y(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row (0-indexed)"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the event occurred"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class MousePosition:
+    """Mouse position"""
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column (0-indexed)"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row (0-indexed)"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the position was recorded"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class NormalizationForm:
+    """Unicode normalization form for terminal text.
+
+    Controls how Unicode text is normalized before being stored in terminal cells.
+    Normalization ensures consistent representation for search and comparison.
+    """
+
     Disabled: NormalizationForm
     NFC: NormalizationForm
     NFD: NormalizationForm
     NFKC: NormalizationForm
     NFKD: NormalizationForm
-    def __int__(self, /) -> Any: ...
-    def is_none(self) -> Any: ...
-    def name(self) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
+    def is_none(self) -> Any:
+        """Check if normalization is disabled"""
+    def name(self) -> Any:
+        """Get a human-readable name for the normalization form"""
 
 class Notification:
+    """Desktop notification from an OSC 9, OSC 777, or Kitty OSC 99 sequence.
+
+    The `id`, `urgency`, and `actions` fields carry Kitty OSC 99 metadata; for
+    OSC 9/777 notifications `id` is None, `urgency` is "normal", and `actions`
+    is empty.
+    """
     @property
-    def actions(self) -> Any: ...
+    def actions(self) -> Any:
+        """Requested Kitty OSC 99 actions (e.g. "focus", "report", "close")"""
     @actions.setter
     def actions(self, value: Any) -> None: ...
     @property
-    def id(self) -> Any: ...
+    def id(self) -> Any:
+        """Kitty OSC 99 identifier used to group/update notifications; None otherwise"""
     @id.setter
     def id(self, value: Any) -> None: ...
     @property
-    def message(self) -> Any: ...
+    def message(self) -> Any:
+        """Notification message/body"""
     @message.setter
     def message(self, value: Any) -> None: ...
     @property
-    def title(self) -> Any: ...
+    def title(self) -> Any:
+        """Notification title (empty for OSC 9)"""
     @title.setter
     def title(self, value: Any) -> None: ...
     @property
-    def urgency(self) -> Any: ...
+    def urgency(self) -> Any:
+        """Urgency: one of "low", "normal", "critical\""""
     @urgency.setter
     def urgency(self, value: Any) -> None: ...
 
 class NotificationConfig:
+    """Notification configuration"""
     def __init__() -> None: ...
     @property
-    def activity_enabled(self) -> Any: ...
+    def activity_enabled(self) -> Any:
+        """Whether activity notifications are enabled"""
     @activity_enabled.setter
     def activity_enabled(self, value: Any) -> None: ...
     @property
-    def activity_threshold(self) -> Any: ...
+    def activity_threshold(self) -> Any:
+        """Seconds of inactivity before an activity notification fires"""
     @activity_threshold.setter
     def activity_threshold(self, value: Any) -> None: ...
     @property
-    def bell_desktop(self) -> Any: ...
+    def bell_desktop(self) -> Any:
+        """Whether BEL triggers a desktop notification"""
     @bell_desktop.setter
     def bell_desktop(self, value: Any) -> None: ...
     @property
-    def bell_sound(self) -> Any: ...
+    def bell_sound(self) -> Any:
+        """BEL sound (0 = disabled, 1-100 = volume)"""
     @bell_sound.setter
     def bell_sound(self, value: Any) -> None: ...
     @property
-    def bell_visual(self) -> Any: ...
+    def bell_visual(self) -> Any:
+        """Whether BEL triggers a visual bell flash"""
     @bell_visual.setter
     def bell_visual(self, value: Any) -> None: ...
     @property
-    def silence_enabled(self) -> Any: ...
+    def silence_enabled(self) -> Any:
+        """Whether silence notifications are enabled"""
     @silence_enabled.setter
     def silence_enabled(self, value: Any) -> None: ...
     @property
-    def silence_threshold(self) -> Any: ...
+    def silence_threshold(self) -> Any:
+        """Seconds of silence before a silence notification fires"""
     @silence_threshold.setter
     def silence_threshold(self, value: Any) -> None: ...
 
 class NotificationEvent:
+    """Notification event"""
     @property
-    def alert(self) -> Any: ...
+    def alert(self) -> Any:
+        """Alert kind (e.g. "desktop", "sound", "visual")"""
     @alert.setter
     def alert(self, value: Any) -> None: ...
     @property
-    def delivered(self) -> Any: ...
+    def delivered(self) -> Any:
+        """Whether the notification was delivered to the host"""
     @delivered.setter
     def delivered(self, value: Any) -> None: ...
     @property
-    def message(self) -> Any: ...
+    def message(self) -> Any:
+        """Human-readable notification text, when present"""
     @message.setter
     def message(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the event occurred"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
     @property
-    def trigger(self) -> Any: ...
+    def trigger(self) -> Any:
+        """What triggered the notification (e.g. "bell", "activity", "silence")"""
     @trigger.setter
     def trigger(self, value: Any) -> None: ...
 
 class PerformanceMetrics:
+    """Performance metrics"""
     @property
-    def bytes_processed(self) -> Any: ...
+    def bytes_processed(self) -> Any:
+        """Total input bytes processed"""
     @bytes_processed.setter
     def bytes_processed(self, value: Any) -> None: ...
     @property
-    def cells_updated(self) -> Any: ...
+    def cells_updated(self) -> Any:
+        """Total number of cells updated"""
     @cells_updated.setter
     def cells_updated(self, value: Any) -> None: ...
     @property
-    def escape_sequences(self) -> Any: ...
+    def escape_sequences(self) -> Any:
+        """Number of escape sequences processed"""
     @escape_sequences.setter
     def escape_sequences(self, value: Any) -> None: ...
     @property
-    def frames_rendered(self) -> Any: ...
+    def frames_rendered(self) -> Any:
+        """Number of frames (process() batches) rendered"""
     @frames_rendered.setter
     def frames_rendered(self, value: Any) -> None: ...
     @property
-    def peak_frame_us(self) -> Any: ...
+    def peak_frame_us(self) -> Any:
+        """Slowest single frame, in microseconds"""
     @peak_frame_us.setter
     def peak_frame_us(self, value: Any) -> None: ...
     @property
-    def scroll_count(self) -> Any: ...
+    def scroll_count(self) -> Any:
+        """Number of scroll operations performed"""
     @scroll_count.setter
     def scroll_count(self, value: Any) -> None: ...
     @property
-    def total_processing_us(self) -> Any: ...
+    def total_processing_us(self) -> Any:
+        """Total time spent processing, in microseconds"""
     @total_processing_us.setter
     def total_processing_us(self, value: Any) -> None: ...
     @property
-    def wrap_count(self) -> Any: ...
+    def wrap_count(self) -> Any:
+        """Number of line wraps performed"""
     @wrap_count.setter
     def wrap_count(self, value: Any) -> None: ...
 
 class ProfilingData:
+    """Profiling data"""
     @property
-    def allocations(self) -> Any: ...
+    def allocations(self) -> Any:
+        """Total number of allocations"""
     @allocations.setter
     def allocations(self, value: Any) -> None: ...
     @property
-    def bytes_allocated(self) -> Any: ...
+    def bytes_allocated(self) -> Any:
+        """Total bytes allocated"""
     @bytes_allocated.setter
     def bytes_allocated(self, value: Any) -> None: ...
     @property
-    def categories(self) -> Any: ...
+    def categories(self) -> Any:
+        """Per-category escape sequence profiles"""
     @categories.setter
     def categories(self, value: Any) -> None: ...
     @property
-    def peak_memory(self) -> Any: ...
+    def peak_memory(self) -> Any:
+        """Peak memory usage in bytes"""
     @peak_memory.setter
     def peak_memory(self, value: Any) -> None: ...
 
 class ProgressBar:
+    """Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+
+    This struct represents the current progress bar state as set via OSC 9;4 sequences.
+    Terminal emulators like ConEmu and Windows Terminal use this to display progress
+    in the tab bar, taskbar, or window title.
+
+    ## States
+    - Hidden: No progress bar displayed
+    - Normal: Standard progress (0-100%)
+    - Indeterminate: Busy/loading indicator
+    - Warning: Progress with warning (yellow)
+    - Error: Progress with error (red)
+
+    ## Examples
+    ```python
+    term = Terminal(80, 24)
+    term.process(b"\\\\x1b]9;4;1;50\\\\x1b\\\\\\\\")  # Set progress to 50%
+    pb = term.progress_bar()
+    print(f"Progress: {pb.progress}%")  # Output: Progress: 50%
+    print(f"State: {pb.state}")  # Output: State: ProgressState.NORMAL
+    ```
+    """
     def __init__(self, state: Any = ..., progress: Any = 0) -> None: ...
-    def is_active(self) -> Any: ...
+    def is_active(self) -> Any:
+        """Check if the progress bar is currently active (visible)"""
     @property
-    def progress(self) -> Any: ...
+    def progress(self) -> Any:
+        """Progress percentage (0-100)"""
     @progress.setter
     def progress(self, value: Any) -> None: ...
     @property
-    def state(self) -> Any: ...
+    def state(self) -> Any:
+        """Current progress state"""
     @state.setter
     def state(self, value: Any) -> None: ...
-    def to_escape_sequence(self) -> Any: ...
+    def to_escape_sequence(self) -> Any:
+        """Generate the OSC 9;4 escape sequence for this progress bar"""
 
 class ProgressState:
+    """Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+
+    This enum represents the different visual states of a progress bar:
+    - Hidden: Progress bar is not displayed
+    - Normal: Standard progress indicator (0-100%)
+    - Error: Progress with error status (e.g., red)
+    - Indeterminate: Busy/loading indicator (no specific percentage)
+    - Warning: Progress with warning/paused status (e.g., yellow)
+    """
+
     Error: ProgressState
     Hidden: ProgressState
     Indeterminate: ProgressState
     Normal: ProgressState
     Warning: ProgressState
-    def __int__(self, /) -> Any: ...
-    def description(self) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
+    def description(self) -> Any:
+        """Get a human-readable description of the state"""
 
 class PtyTerminal:
+    """Python wrapper for PtySession - a terminal with PTY support"""
     def __enter__(self) -> Any: ...
     def __exit__(
         self,
@@ -956,143 +1285,1001 @@ class PtyTerminal:
         traceback: TracebackType | None,
     ) -> Any: ...
     def __init__(self, cols: Any, rows: Any, scrollback: Any = 10000) -> None: ...
-    def __str__(self, /) -> Any: ...
-    def accept_osc7(self) -> Any: ...
-    def allow_clipboard_read(self) -> Any: ...
-    def answerback_string(self) -> Any: ...
-    def badge_format(self) -> Any: ...
-    def bell_count(self) -> Any: ...
-    def bracketed_paste(self) -> Any: ...
-    def cancel_file_transfer(self, transfer_id: Any) -> Any: ...
-    def cancel_upload(self) -> Any: ...
-    def char_width(self, c: Any) -> Any: ...
-    def child_pid(self) -> Any: ...
-    def clear_badge_format(self) -> Any: ...
-    def clear_graphics(self) -> Any: ...
-    def clear_progress(self) -> Any: ...
-    def clipboard(self) -> Any: ...
-    def content(self) -> Any: ...
-    def coprocess_status(self, coprocess_id: Any) -> Any: ...
-    def count_non_whitespace_lines(self) -> Any: ...
-    def create_snapshot(self) -> Any: ...
-    def current_directory(self) -> Any: ...
-    def cursor_color(self) -> Any: ...
-    def cursor_position(self) -> Any: ...
-    def cursor_style(self) -> Any: ...
-    def cursor_visible(self) -> Any: ...
-    def debug_info(self) -> Any: ...
-    def debug_log_snapshot(self, label: Any) -> Any: ...
-    def debug_snapshot_alt(self) -> Any: ...
-    def debug_snapshot_buffer(self) -> Any: ...
-    def debug_snapshot_grid(self) -> Any: ...
-    def debug_snapshot_primary(self) -> Any: ...
-    def default_bg(self) -> Any: ...
-    def default_fg(self) -> Any: ...
-    def disable_insecure_sequences(self) -> Any: ...
-    def drain_notifications(self) -> Any: ...
-    def drain_responses(self) -> Any: ...
-    def evaluate_badge(self) -> Any: ...
-    def export_asciicast(self, session: Any = None) -> Any: ...
-    def export_asciicast_v3(self, session: Any = None) -> Any: ...
-    def export_html(self, include_styles: Any = True) -> Any: ...
-    def export_json(self, session: Any = None) -> Any: ...
-    def export_styled(self) -> Any: ...
-    def export_text(self) -> Any: ...
-    def faint_text_alpha(self) -> Any: ...
-    def find_matching_bracket(self, col: Any, row: Any) -> Any: ...
+    def __str__(self, /) -> Any:
+        """Return str(self)."""
+    def accept_osc7(self) -> bool:
+        """Whether OSC 7 directory-tracking sequences are accepted
+
+        Returns:
+            bool: True if OSC 7 updates the tracked working directory
+        """
+    def allow_clipboard_read(self) -> bool:
+        """Whether OSC 52 clipboard reads are allowed
+
+        Returns:
+            bool: True if applications may read the clipboard via OSC 52
+        """
+    def answerback_string(self) -> Any:
+        """Get the configured answerback string (ENQ response)
+
+        Returns:
+            The current answerback string or None if disabled (default)
+        """
+    def badge_format(self) -> Any:
+        """Get the current badge format template
+
+        Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
+        The format may contain `\\(variable)` placeholders for session variables.
+
+        Returns:
+            Optional string containing the badge format template, or None if not set
+        """
+    def bell_count(self) -> Any:
+        """Get the current bell event count
+
+        This counter increments each time the terminal receives a bell character (BEL/\\\\x07).
+        Applications can poll this to detect bell events for visual bell implementations.
+
+        Returns:
+            The total number of bell events received since terminal creation
+        """
+    def bracketed_paste(self) -> bool:
+        """Whether bracketed-paste mode is active
+
+        Returns:
+            bool: True if pastes are wrapped in bracketed-paste markers
+        """
+    def cancel_file_transfer(self, transfer_id: Any) -> Any:
+        """Cancel an active file transfer
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            True if the transfer was found and cancelled, False otherwise
+        """
+    def cancel_upload(self) -> Any:
+        """Cancel an upload request"""
+    def char_width(self, c: Any) -> int:
+        """Get the display width of a single character
+
+        Args:
+            c: A single character to measure
+
+        Returns:
+            int: The display width in cells (0, 1, or 2)
+        """
+    def child_pid(self) -> Any:
+        """Return the PID of the spawned child process.
+
+        Returns:
+            PID as an integer. None before spawn, and after try_wait(),
+            wait() or kill() has observed the exit: the PID is released and
+            may belong to another process.
+
+        Example:
+            >>> session = PtySession(80, 24)
+            >>> session.spawn_shell()
+            >>> pid = session.child_pid()
+            >>> print(pid)  # e.g. 12345
+        """
+    def clear_badge_format(self) -> Any:
+        """Clear the badge format
+
+        Removes any previously set badge format template.
+        """
+    def clear_graphics(self) -> Any:
+        """Clear all graphics"""
+    def clear_progress(self) -> Any:
+        """Clear/hide the progress bar
+
+        Equivalent to receiving OSC 9;4;0 (hidden state).
+        """
+    def clipboard(self) -> Any:
+        """Get the current clipboard content
+
+        Returns:
+            Clipboard content as string, or None if empty
+        """
+    def content(self) -> Any:
+        """Get the terminal content as a string
+
+        Returns:
+            String representation of the terminal buffer
+        """
+    def coprocess_status(self, coprocess_id: Any) -> bool | None:
+        """Check if a coprocess is still running
+
+        Args:
+            coprocess_id: ID of the coprocess
+
+        Returns:
+            bool | None: True if running, False if exited, None if not found
+        """
+    def count_non_whitespace_lines(self) -> Any:
+        """Count non-whitespace lines in visible screen
+
+        Returns:
+            Number of lines containing non-whitespace characters
+        """
+    def create_snapshot(self) -> Any:
+        """Create atomic snapshot of current screen state
+
+        Captures all lines, cursor state, and screen identity atomically.
+        The snapshot is immutable and will not change even if the terminal
+        state changes (e.g., alternate screen switches).
+
+        Returns:
+            ScreenSnapshot with all terminal state
+        """
+    def current_directory(self) -> Any:
+        """Get the current working directory reported via OSC 7,
+        or None if no directory has been reported yet.
+
+        Returns:
+            Optional string with current directory path
+        """
+    def cursor_color(self) -> tuple[int, int, int]:
+        """Get the cursor color (OSC 12)
+
+        Returns:
+            tuple[int, int, int]: Cursor color as (r, g, b), 0-255 each
+        """
+    def cursor_position(self) -> Any:
+        """Get the cursor position
+
+        Returns:
+            Tuple of (col, row)
+        """
+    def cursor_style(self) -> Any:
+        """Get the current cursor style
+
+        Returns:
+            CursorStyle enum value
+        """
+    def cursor_visible(self) -> bool:
+        """Whether the cursor is visible (DECTCE)
+
+        Returns:
+            bool: True if the cursor is visible
+        """
+    def debug_info(self) -> Any:
+        """Get current debug information as a dictionary
+
+        Returns:
+            Dictionary containing terminal state for debugging
+        """
+    def debug_log_snapshot(self, label: Any) -> Any:
+        """Log a debug snapshot with a label
+
+        Args:
+            label: Description of this snapshot
+        """
+    def debug_snapshot_alt(self) -> Any:
+        """Get a debug snapshot of the alternate screen buffer
+
+        Returns:
+            String containing a formatted view of the alternate buffer
+        """
+    def debug_snapshot_buffer(self) -> Any:
+        """Get a debug snapshot of the current buffer state
+
+        Returns:
+            String containing a formatted view of the buffer
+        """
+    def debug_snapshot_grid(self) -> Any:
+        """Get a debug snapshot of the grid
+
+        Returns:
+            String containing a formatted view of the grid
+        """
+    def debug_snapshot_primary(self) -> Any:
+        """Get a debug snapshot of the primary screen buffer
+
+        Returns:
+            String containing a formatted view of the primary buffer
+        """
+    def default_bg(self) -> Any:
+        """Get default background color (OSC 11)
+
+        Returns RGB tuple (r, g, b) where each component is 0-255.
+
+        Returns:
+            Tuple of (r, g, b) integers
+        """
+    def default_fg(self) -> Any:
+        """Get default foreground color (OSC 10)
+
+        Returns RGB tuple (r, g, b) where each component is 0-255.
+
+        Returns:
+            Tuple of (r, g, b) integers
+        """
+    def disable_insecure_sequences(self) -> Any:
+        """Check if insecure sequences are disabled
+
+        Returns:
+            True if insecure sequences are blocked, False otherwise
+        """
+    def drain_notifications(self) -> Any:
+        """Get all pending notifications (alias for take_notifications)
+
+        Returns a list of tuples: [(title, message), ...]
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of (title, message) tuples
+        """
+    def drain_responses(self) -> Any:
+        """Drain and return pending device query responses
+
+        Device queries like DA (Device Attributes) and DSR (Device Status Report)
+        generate responses that are buffered. This method retrieves and clears them.
+
+        Returns:
+            Bytes containing all pending responses
+        """
+    def evaluate_badge(self) -> Any:
+        """Evaluate the current badge format with session variables
+
+        Returns the evaluated badge string with all variables substituted,
+        or None if no badge format is set.
+
+        Returns:
+            Evaluated badge string with variables replaced, or None
+        """
+    def export_asciicast(self, session: Any = None) -> Any:
+        """Export recording to asciicast v2 format
+
+        Args:
+            session: RecordingSession from stop_recording()
+
+        Returns:
+            Asciicast format string
+        """
+    def export_asciicast_v3(self, session: Any = None) -> Any:
+        """Export recording to asciicast v3 format
+
+        v3 uses a nested `term` header object, relative per-event intervals,
+        and `"COLSxROWS"` resize data. A `g` graphics event is emitted per
+        graphic in the store (live placements and scrollback promotions)
+        carrying protocol, geometry, position and base64 RGBA pixels.
+
+        Args:
+            session: RecordingSession from stop_recording()
+
+        Returns:
+            Asciicast v3 format string
+        """
+    def export_html(self, include_styles: Any = True) -> Any:
+        """Export terminal content as HTML
+
+        Args:
+            include_styles: Whether to include full HTML document with CSS (default: True)
+
+        Returns:
+            HTML string with terminal content and styling
+
+        When include_styles is True, returns a complete HTML document.
+        When False, returns just the styled content (useful for embedding).
+        """
+    def export_json(self, session: Any = None) -> Any:
+        """Export recording to JSON format
+
+        Returns:
+            JSON format string
+        """
+    def export_styled(self) -> Any:
+        """Export entire buffer (scrollback + current screen) with ANSI styling
+
+        Returns:
+            String containing text content with ANSI escape codes
+        """
+    def export_text(self) -> Any:
+        """Export entire buffer (scrollback + current screen) as plain text
+
+        Returns:
+            String containing all text content
+        """
+    def faint_text_alpha(self) -> Any:
+        """Get faint/dim text alpha multiplier
+
+        This value is applied to SGR 2 (dim/faint) text during rendering.
+        A value of 0.5 means 50% opacity (the default).
+
+        Returns:
+            Alpha multiplier between 0.0 and 1.0
+        """
+    def find_matching_bracket(self, col: Any, row: Any) -> Any:
+        """Find matching bracket/parenthesis at cursor position
+
+        Supports: (), [], {}, <>
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+
+        Returns:
+            (col, row) position of matching bracket, or None
+        """
     def find_next(
         self, pattern: Any, from_col: Any, from_row: Any, case_sensitive: Any = True
-    ) -> Any: ...
-    def find_text(self, pattern: Any, case_sensitive: Any = True) -> Any: ...
-    def flush_synchronized_updates(self) -> Any: ...
-    def focus_tracking(self) -> Any: ...
-    def force_set_keyboard_flags(self, flags: Any) -> Any: ...
-    def get_active_transfers(self) -> Any: ...
-    def get_allow_file_media(self) -> Any: ...
-    def get_attributes(self, col: Any, row: Any) -> Any: ...
-    def get_badge_session_variable(self, name: Any) -> Any: ...
-    def get_badge_session_variables(self) -> Any: ...
-    def get_bg_color(self, col: Any, row: Any) -> Any: ...
-    def get_char(self, col: Any, row: Any) -> Any: ...
-    def get_completed_transfers(self) -> Any: ...
-    def get_current_macro_name(self) -> Any: ...
+    ) -> Any:
+        """Find next occurrence of text from given position
+
+        Args:
+            pattern: Text to search for
+            from_col: Starting column position
+            from_row: Starting row position
+            case_sensitive: Whether search is case-sensitive (default: True)
+
+        Returns:
+            (col, row) of next match, or None if not found
+        """
+    def find_text(self, pattern: Any, case_sensitive: Any = True) -> Any:
+        """Find all occurrences of text in the visible screen
+
+        Args:
+            pattern: Text to search for
+            case_sensitive: Whether search is case-sensitive (default: True)
+
+        Returns:
+            List of (col, row) positions where pattern was found
+        """
+    def flush_synchronized_updates(self) -> Any:
+        """Manually flush the synchronized update buffer
+
+        This is useful for flushing buffered updates without disabling synchronized mode.
+        Note: The buffer is automatically flushed when synchronized mode is disabled via CSI ? 2026 l
+        """
+    def focus_tracking(self) -> Any:
+        """Check if focus tracking is enabled
+
+        Returns:
+            True if focus tracking is enabled
+        """
+    def force_set_keyboard_flags(self, flags: Any) -> Any:
+        """Force set keyboard protocol flags directly (bypasses protocol sequences)
+
+        Unlike set_keyboard_flags() which sends CSI sequences to the application,
+        this method directly modifies the terminal's internal keyboard_flags state.
+        Useful for resetting stuck keyboard protocol when applications fail to
+        properly disable it on exit.
+
+        Args:
+            flags: Keyboard protocol flags to set (0 = normal mode)
+
+        Example:
+            >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
+        """
+    def get_active_transfers(self) -> Any:
+        """Get all active (in-progress) file transfers
+
+        Returns a list of dictionaries, each describing an active transfer.
+
+        Returns:
+            List of transfer dictionaries
+        """
+    def get_allow_file_media(self) -> str:
+        """Get the current Kitty file-media mode.
+
+        Returns:
+            str: ``"off"``, ``"temp_only"``, or ``"all"`` — see
+            :meth:`set_allow_file_media`
+
+        Example:
+            >>> terminal.get_allow_file_media()
+            'temp_only'
+        """
+    def get_attributes(self, col: Any, row: Any) -> Any:
+        """Get cell attributes at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
+        """
+    def get_badge_session_variable(self, name: Any) -> Any:
+        """Get a session variable value by name
+
+        Session variables are used for badge format evaluation.
+        Supports both `session.variable` and just `variable` syntax.
+
+        Args:
+            name: Variable name (e.g., "username", "hostname", "session.path")
+
+        Returns:
+            Variable value as string, or None if not set
+        """
+    def get_badge_session_variables(self) -> Any:
+        """Get all session variables as a dictionary
+
+        Returns all session variables that can be used in badge evaluation,
+        including built-in variables like columns, rows, bell_count, etc.
+
+        Returns:
+            Dictionary mapping variable names to their string values
+        """
+    def get_bg_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's background color at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if out of bounds
+        """
+    def get_char(self, col: Any, row: Any) -> Any:
+        """Get a cell's character at the specified position (includes combining characters/modifiers)
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Character (grapheme cluster) at the position, or None if out of bounds
+        """
+    def get_completed_transfers(self) -> Any:
+        """Get all completed file transfers (includes failed and cancelled)
+
+        Returns:
+            List of transfer dictionaries
+        """
+    def get_current_macro_name(self) -> Any:
+        """Get the name of the currently playing macro
+
+        Returns:
+            Macro name if playing, None otherwise
+        """
     @staticmethod
-    def get_default_shell() -> Any: ...
-    def get_dropped_sixel_graphics(self) -> Any: ...
-    def get_fg_color(self, col: Any, row: Any) -> Any: ...
-    def get_focus_in_event(self) -> Any: ...
-    def get_focus_out_event(self) -> Any: ...
-    def get_hyperlink(self, col: Any, row: Any) -> Any: ...
-    def get_line(self, row: Any) -> Any: ...
-    def get_line_cells(self, row: Any) -> Any: ...
-    def get_line_unwrapped(self, row: Any) -> Any: ...
-    def get_macro(self, name: Any) -> Any: ...
-    def get_macro_progress(self) -> Any: ...
-    def get_macro_screenshot_triggers(self) -> Any: ...
-    def get_max_transfer_size(self) -> Any: ...
-    def get_paste_end(self) -> Any: ...
-    def get_paste_start(self) -> Any: ...
-    def get_recording_session(self) -> Any: ...
-    def get_scrollback_usage(self) -> Any: ...
-    def get_sixel_graphics_limit(self) -> Any: ...
-    def get_sixel_limits(self) -> Any: ...
-    def get_sixel_stats(self) -> Any: ...
-    def get_stats(self) -> Any: ...
-    def get_transfer(self, transfer_id: Any) -> Any: ...
-    def get_underline_color(self, col: Any, row: Any) -> Any: ...
-    def get_url_at(self, col: Any, row: Any) -> Any: ...
-    def get_word_at(self, col: Any, row: Any, word_chars: Any = None) -> Any: ...
-    def graphics(self) -> Any: ...
-    def graphics_at_row(self, row: Any) -> Any: ...
-    def graphics_count(self) -> Any: ...
-    def has_notifications(self) -> Any: ...
-    def has_pending_responses(self) -> Any: ...
-    def has_progress(self) -> Any: ...
-    def has_updates_since(self, last_generation: Any) -> Any: ...
-    def insert_mode(self) -> Any: ...
-    def is_alt_screen_active(self) -> Any: ...
-    def is_line_wrapped(self, row: Any) -> Any: ...
-    def is_macro_paused(self) -> Any: ...
-    def is_macro_playing(self) -> Any: ...
-    def is_recording(self) -> Any: ...
-    def is_running(self) -> Any: ...
-    def keyboard_flags(self) -> Any: ...
-    def kill(self) -> Any: ...
-    def line_feed_new_line_mode(self) -> Any: ...
-    def list_coprocesses(self) -> Any: ...
-    def list_macros(self) -> Any: ...
-    def load_macro(self, name: Any, macro_obj: Any) -> Any: ...
-    def max_osc_data_length(self) -> Any: ...
+    def get_default_shell() -> Any:
+        """Get the default shell for the current platform
+
+        Returns:
+            Path to the default shell
+        """
+    def get_dropped_sixel_graphics(self) -> Any:
+        """Get count of Sixel graphics dropped due to limits
+
+        Returns:
+            Number of Sixel graphics that have been dropped because of size or count limits
+        """
+    def get_fg_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's foreground color at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if out of bounds
+        """
+    def get_focus_in_event(self) -> Any:
+        """Get focus in event sequence
+
+        Returns:
+            Bytes for focus in event (if focus tracking is enabled)
+        """
+    def get_focus_out_event(self) -> Any:
+        """Get focus out event sequence
+
+        Returns:
+            Bytes for focus out event (if focus tracking is enabled)
+        """
+    def get_hyperlink(self, col: Any, row: Any) -> Any:
+        """Get hyperlink URL at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            URL string if the cell has a hyperlink, or None if no hyperlink or out of bounds
+        """
+    def get_line(self, row: Any) -> Any:
+        """Get a specific line from the terminal buffer
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            String content of the specified row, or None if row is out of bounds
+        """
+    def get_line_cells(self, row: Any) -> Any:
+        """Get all cell data for a row in a single atomic operation
+
+        This method retrieves all cell information for an entire row atomically,
+        preventing race conditions in multi-threaded scenarios.
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes) for each column,
+            or empty list if row is out of bounds
+        """
+    def get_line_unwrapped(self, row: Any) -> Any:
+        """Get full logical line following wrapping
+
+        Args:
+            row: Row position (0-indexed)
+
+        Returns:
+            Complete unwrapped line or None if row is invalid
+        """
+    def get_macro(self, name: Any) -> Any:
+        """Get a macro from the library
+
+        Args:
+            name: Name of the macro to retrieve
+
+        Returns:
+            Macro object if found, None otherwise
+        """
+    def get_macro_progress(self) -> Any:
+        """Get macro playback progress
+
+        Returns:
+            Tuple of (current_event, total_events) if playing, None otherwise
+        """
+    def get_macro_screenshot_triggers(self) -> Any:
+        """Get and clear screenshot triggers from macro playback
+
+        Returns:
+            List of screenshot labels
+        """
+    def get_max_transfer_size(self) -> Any:
+        """Get the current maximum allowed file transfer size in bytes
+
+        Returns:
+            Maximum transfer size in bytes (default: 50 MB)
+        """
+    def get_paste_end(self) -> Any:
+        """Get bracketed paste end sequence
+
+        Returns:
+            Bytes for paste end (if bracketed paste is enabled)
+        """
+    def get_paste_start(self) -> Any:
+        """Get bracketed paste start sequence
+
+        Returns:
+            Bytes for paste start (if bracketed paste is enabled)
+        """
+    def get_recording_session(self) -> Any:
+        """Get current recording session
+
+        Returns:
+            RecordingSession object if recording is active, None otherwise
+        """
+    def get_scrollback_usage(self) -> Any:
+        """Get scrollback usage
+
+        Returns:
+            Tuple of (used_lines, max_capacity)
+        """
+    def get_sixel_graphics_limit(self) -> Any:
+        """Get maximum number of Sixel graphics retained
+
+        Returns:
+            Maximum number of in-memory Sixel graphics for this terminal
+        """
+    def get_sixel_limits(self) -> Any:
+        """Get Sixel resource limits (max width, height, repeat)
+
+        Returns:
+            Tuple of (max_width_px, max_height_px, max_repeat)
+        """
+    def get_sixel_stats(self) -> Any:
+        """Get Sixel statistics as a dictionary
+
+        Returns:
+            {
+              "max_width_px": int,
+              "max_height_px": int,
+              "max_repeat": int,
+              "max_graphics": int,
+              "current_graphics": int,
+              "dropped_graphics": int,
+            }
+        """
+    def get_stats(self) -> Any:
+        """Get terminal statistics
+
+        Returns:
+            Dictionary with statistics: cols, rows, scrollback_lines, total_cells,
+            non_whitespace_lines, graphics_count, estimated_memory_bytes
+        """
+    def get_transfer(self, transfer_id: Any) -> Any:
+        """Get a specific active transfer by ID
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            Transfer dictionary if found, None otherwise
+        """
+    def get_underline_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's underline color at the specified position (SGR 58)
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if no underline color set or out of bounds
+        """
+    def get_url_at(self, col: Any, row: Any) -> Any:
+        """Get URL at cursor position
+
+        Detects URLs with schemes: http://, https://, ftp://, file://, mailto:, ssh://
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+
+        Returns:
+            URL at position or None if not on a URL
+        """
+    def get_word_at(self, col: Any, row: Any, word_chars: Any = None) -> Any:
+        """Get word at cursor position
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            word_chars: Optional custom word characters (default: "/-+\\\\~_." iTerm2-compatible)
+
+        Returns:
+            Word at position or None if not on a word
+        """
+    def graphics(self) -> Any:
+        """Get all graphics
+
+        Returns:
+            List of all Sixel graphics
+        """
+    def graphics_at_row(self, row: Any) -> Any:
+        """Get graphics that overlap the specified row
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            List of graphics that overlap the given row
+        """
+    def graphics_count(self) -> Any:
+        """Get total number of graphics
+
+        Returns:
+            Total count of Sixel graphics
+        """
+    def has_notifications(self) -> Any:
+        """Check if there are pending notifications
+
+        Returns:
+            True if there are notifications waiting to be retrieved
+        """
+    def has_pending_responses(self) -> Any:
+        """Check if there are pending device query responses
+
+        Returns:
+            True if there are responses waiting to be retrieved
+        """
+    def has_progress(self) -> Any:
+        """Check if the progress bar is currently active (visible)
+
+        Returns:
+            True if the progress bar is in any state other than Hidden
+        """
+    def has_updates_since(self, last_generation: Any) -> Any:
+        """Check if the terminal has been updated since a given generation
+
+        Args:
+            last_generation: The generation number from a previous call to update_generation()
+
+        Returns:
+            True if updates have occurred since the given generation
+        """
+    def insert_mode(self) -> Any:
+        """Get insert mode (IRM - Mode 4) state
+
+        Returns:
+            True if insert mode is enabled (characters are inserted), False if replace mode (default)
+        """
+    def is_alt_screen_active(self) -> Any:
+        """Check if alternate screen is active
+
+        Returns:
+            True if alternate screen is active
+        """
+    def is_line_wrapped(self, row: Any) -> Any:
+        """Check if a line wraps to the next row
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            True if the line wraps to the next row, False otherwise
+        """
+    def is_macro_paused(self) -> Any:
+        """Check if macro playback is paused
+
+        Returns:
+            True if paused, False otherwise
+        """
+    def is_macro_playing(self) -> Any:
+        """Check if a macro is currently playing
+
+        Returns:
+            True if a macro is playing, False otherwise
+        """
+    def is_recording(self) -> Any:
+        """Check if currently recording
+
+        Returns:
+            True if recording is active
+        """
+    def is_running(self) -> Any:
+        """Check if the process is still running
+
+        Returns:
+            True if the process is running
+        """
+    def keyboard_flags(self) -> Any:
+        """Get current Kitty Keyboard Protocol flags
+
+        Returns:
+            Current keyboard protocol flags (u16)
+            Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
+        """
+    def kill(self) -> Any:
+        """Kill the process
+
+        A no-op once the exit has been observed (try_wait(), wait() or an
+        earlier kill()): the reaped PID may belong to another process.
+        """
+    def line_feed_new_line_mode(self) -> Any:
+        """Get line feed/new line mode (LNM - Mode 20) state
+
+        Returns:
+            True if LNM is enabled (LF does CR+LF), False if LF only (default)
+        """
+    def list_coprocesses(self) -> list[int]:
+        """List all coprocess IDs
+
+        Returns:
+            list[int]: List of active coprocess IDs
+        """
+    def list_macros(self) -> Any:
+        """List all macro names
+
+        Returns:
+            List of macro names
+        """
+    def load_macro(self, name: Any, macro_obj: Any) -> Any:
+        """Load a macro into the library
+
+        Args:
+            name: Name to store the macro under
+            macro: Macro object to load
+        """
+    def max_osc_data_length(self) -> int:
+        """Get the maximum total OSC data length in bytes (QA-012/SEC-003)
+
+        Sequences exceeding this cap are rejected as a memory-exhaustion
+        guard. Defaults to 1 MiB; raise it for larger inline images.
+
+        Returns:
+            int: Current cap in bytes
+        """
     @staticmethod
-    def measure_text_width(text: Any) -> Any: ...
-    def mouse_mode(self) -> Any: ...
+    def measure_text_width(text: Any) -> Any:
+        """Measure text width without ANSI codes
+
+        Accounts for wide characters (CJK, emoji) and strips ANSI sequences.
+
+        Args:
+            text: Text to measure
+
+        Returns:
+            Display width in columns
+        """
+    def mouse_mode(self) -> Any:
+        """Get mouse tracking mode
+
+        Returns:
+            String representing the mouse mode: "off", "normal", "button", "any"
+        """
     @staticmethod
-    def parse_color(color_string: Any) -> Any: ...
-    def paste(self, content: Any) -> Any: ...
-    def pause_macro(self) -> Any: ...
-    def play_macro(self, name: Any, speed: Any = None) -> Any: ...
-    def pop_keyboard_flags(self, count: Any = 1) -> Any: ...
-    def progress_bar(self) -> Any: ...
-    def progress_state(self) -> Any: ...
-    def progress_value(self) -> Any: ...
-    def push_keyboard_flags(self, flags: Any) -> Any: ...
-    def query_cursor_color(self) -> Any: ...
-    def query_default_bg(self) -> Any: ...
-    def query_default_fg(self) -> Any: ...
-    def query_keyboard_flags(self) -> Any: ...
-    def read_coprocess_errors(self, coprocess_id: Any) -> Any: ...
-    def read_from_coprocess(self, coprocess_id: Any) -> Any: ...
-    def record_input(self, data: Any) -> Any: ...
-    def record_marker(self, label: Any) -> Any: ...
-    def record_output(self, data: Any) -> Any: ...
-    def record_resize(self, cols: Any, rows: Any) -> Any: ...
-    def recording_to_macro(self, session: Any, name: Any) -> Any: ...
-    def remove_macro(self, name: Any) -> Any: ...
-    def resize(self, cols: Any, rows: Any) -> Any: ...
+    def parse_color(color_string: Any) -> Any:
+        """Parse color from string (hex, rgb, or name)
+
+        Supported formats:
+        - Hex: "#RRGGBB" or "#RGB"
+        - RGB: "rgb(r, g, b)"
+        - Names: "red", "blue", "green", etc.
+
+        Args:
+            color_string: Color specification
+
+        Returns:
+            RGB tuple (r, g, b) or None if invalid
+        """
+    def paste(self, content: Any) -> Any:
+        """Paste text content into terminal with bracketed paste support
+
+        If bracketed paste mode is enabled, wraps the content with ESC[200~ and ESC[201~
+        Otherwise, writes the content directly to the PTY
+
+        Args:
+            content: String content to paste
+        """
+    def pause_macro(self) -> Any:
+        """Pause macro playback"""
+    def play_macro(self, name: Any, speed: Any = None) -> Any:
+        """Start playing a macro
+
+        Args:
+            name: Name of the macro to play
+            speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
+        """
+    def pop_keyboard_flags(self, count: Any = 1) -> Any:
+        """Pop keyboard flags from stack
+
+        Args:
+            count: Number of flags to pop from stack (default: 1)
+
+        Sends: CSI < count u
+        """
+    def progress_bar(self) -> Any:
+        """Get the current progress bar state
+
+        Returns the progress bar state set via OSC 9;4 sequences.
+        The progress bar has a state (hidden, normal, indeterminate, warning, error)
+        and a percentage (0-100) for states that support it.
+
+        Returns:
+            ProgressBar object with state and progress fields
+        """
+    def progress_state(self) -> Any:
+        """Get the current progress bar state enum
+
+        Returns:
+            ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
+        """
+    def progress_value(self) -> Any:
+        """Get the current progress percentage (0-100)
+
+        Returns the progress percentage. Only meaningful when the progress bar
+        state is Normal, Warning, or Error.
+
+        Returns:
+            Progress percentage (0-100)
+        """
+    def push_keyboard_flags(self, flags: Any) -> Any:
+        """Push current keyboard flags to stack and set new flags
+
+        Args:
+            flags: New flags to set
+
+        Sends: CSI > flags u
+        """
+    def query_cursor_color(self) -> Any:
+        """Query cursor color (OSC 12)
+
+        Sends OSC 12 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 12 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_default_bg(self) -> Any:
+        """Query default background color (OSC 11)
+
+        Sends OSC 11 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 11 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_default_fg(self) -> Any:
+        """Query default foreground color (OSC 10)
+
+        Sends OSC 10 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 10 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_keyboard_flags(self) -> Any:
+        """Query current keyboard flags (Kitty keyboard protocol)
+
+        Returns:
+            Query sequence sent to terminal (response will be in drain_responses())
+        """
+    def read_coprocess_errors(self, coprocess_id: Any) -> list[str]:
+        """Read buffered stderr output from a coprocess (drains the buffer)
+
+        Args:
+            coprocess_id: ID of the coprocess
+
+        Returns:
+            list[str]: Lines of stderr output from the coprocess
+
+        Example:
+            >>> errors = pty.read_coprocess_errors(coproc_id)
+            >>> for line in errors:
+            ...     print(f"ERROR: {line}")
+        """
+    def read_from_coprocess(self, coprocess_id: Any) -> list[str]:
+        """Read buffered output from a coprocess (drains the buffer)
+
+        Args:
+            coprocess_id: ID of the coprocess
+
+        Returns:
+            list[str]: Lines of output from the coprocess
+        """
+    def record_input(self, data: Any) -> Any:
+        """Record input data
+
+        Args:
+            data: Input data bytes
+        """
+    def record_marker(self, label: Any) -> Any:
+        """Add a marker/bookmark to the recording
+
+        Args:
+            label: Marker label
+        """
+    def record_output(self, data: Any) -> Any:
+        """Record output data
+
+        Args:
+            data: Output data bytes
+        """
+    def record_resize(self, cols: Any, rows: Any) -> Any:
+        """Record terminal resize
+
+        Args:
+            cols: Number of columns
+            rows: Number of rows
+        """
+    def recording_to_macro(self, session: Any, name: Any) -> Any:
+        """Convert a recording session to a macro
+
+        Args:
+            session: RecordingSession to convert
+            name: Name for the new macro
+
+        Returns:
+            Macro object
+        """
+    def remove_macro(self, name: Any) -> Any:
+        """Remove a macro from the library
+
+        Args:
+            name: Name of the macro to remove
+
+        Returns:
+            Removed Macro object if found, None otherwise
+        """
+    def resize(self, cols: Any, rows: Any) -> Any:
+        """Resize the PTY and terminal
+
+        Sends SIGWINCH to the child process
+
+        Args:
+            cols: New number of columns
+            rows: New number of rows
+        """
     def resize_pixels(
         self, cols: Any, rows: Any, pixel_width: Any, pixel_height: Any
-    ) -> Any: ...
-    def resume_macro(self) -> Any: ...
+    ) -> Any:
+        """Resize the PTY, including pixel dimensions
+
+        Args:
+            cols: New columns
+            rows: New rows
+            pixel_width: Text area width in pixels
+            pixel_height: Text area height in pixels
+        """
+    def resume_macro(self) -> Any:
+        """Resume macro playback"""
     def screenshot(
         self,
         format: Any = "png",
@@ -1112,8 +2299,49 @@ class PtyTerminal:
         background_color: Any = None,
         faint_text_alpha: Any = 0.5,
         minimum_contrast: Any = 0.5,
-    ) -> Any: ...
-    def screenshot_config(self, config: Any, scrollback_offset: Any = 0) -> Any: ...
+    ) -> Any:
+        """Take a screenshot of the current visible buffer
+
+        Args:
+            format: Image format ("png", "jpeg", "svg", "bmp"). Default: "png"
+            font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
+            font_size: Font size in pixels. Default: 14.0
+            include_scrollback: Include scrollback buffer. Default: False
+            padding: Padding around content in pixels. Default: 10
+            quality: JPEG quality (1-100). Default: 90
+            render_cursor: Render cursor in screenshot. Default: False
+            cursor_color: RGB tuple for cursor color. Default: None (white)
+            sixel_mode: Sixel rendering mode ('disabled', 'pixels', 'halfblocks'). Default: 'halfblocks'
+            scrollback_offset: Number of lines to scroll back from current position. Default: 0
+            link_color: RGB tuple for link color. Default: None (use theme color)
+            bold_color: RGB tuple for bold text. Default: None (use theme color)
+            use_bold_color: Use custom bold color. Default: None (use theme setting)
+            bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+            background_color: Background color RGB tuple. Default: None (use terminal's default background)
+            faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+            minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
+
+        Returns:
+            Bytes of the image in the specified format
+
+        Note:
+            Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+            System emoji/CJK fonts are automatically used as fallback when available.
+        """
+    def screenshot_config(self, config: Any, scrollback_offset: Any = 0) -> Any:
+        """Take a screenshot using a reusable `ScreenshotConfig` (QA-005).
+
+        Avoids repeating 16+ keyword args on every call. Build a config once
+        and pass it here:
+        ```python
+        cfg = ScreenshotConfig(format="png", font_size=16.0, render_cursor=True)
+        term.screenshot_config(cfg, scrollback_offset=0)
+        ```
+
+        Args:
+            config: A `ScreenshotConfig` (keyword-arg constructor).
+            scrollback_offset: Lines to scroll back from current position.
+        """
     def screenshot_to_file(
         self,
         path: Any,
@@ -1134,220 +2362,887 @@ class PtyTerminal:
         background_color: Any = None,
         faint_text_alpha: Any = 0.5,
         minimum_contrast: Any = 0.5,
-    ) -> Any: ...
+    ) -> Any:
+        """Take a screenshot and save to file
+
+        The image format is auto-detected from the file extension if not specified.
+
+        Args:
+            path: Output file path
+            format: Image format (optional, auto-detected from extension)
+            font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
+            font_size: Font size in pixels. Default: 14.0
+            include_scrollback: Include scrollback buffer. Default: False
+            padding: Padding around content in pixels. Default: 10
+            quality: JPEG quality (1-100). Default: 90
+            render_cursor: Render cursor in screenshot. Default: False
+            cursor_color: RGB tuple for cursor color. Default: None (white)
+            sixel_mode: Sixel rendering mode ('disabled', 'pixels', 'halfblocks'). Default: 'halfblocks'
+            scrollback_offset: Number of lines to scroll back from current position. Default: 0
+            link_color: RGB tuple for link color. Default: None (use theme color)
+            bold_color: RGB tuple for bold text. Default: None (use theme color)
+            use_bold_color: Use custom bold color. Default: None (use theme setting)
+            bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+            background_color: Background color RGB tuple. Default: None (use terminal's default background)
+            faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+            minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
+
+        Returns:
+            None
+
+        Note:
+            Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+            System emoji/CJK fonts are automatically used as fallback when available.
+        """
     def screenshot_to_file_config(
         self, path: Any, config: Any, scrollback_offset: Any = 0
-    ) -> Any: ...
-    def scrollback(self) -> Any: ...
-    def scrollback_len(self) -> Any: ...
-    def scrollback_line(self, index: Any) -> Any: ...
-    def select_semantic_region(self, col: Any, row: Any, delimiters: Any) -> Any: ...
-    def select_word(self, col: Any, row: Any, word_chars: Any = None) -> Any: ...
-    def send_resize_pulse(self) -> Any: ...
-    def send_upload_data(self, data: Any) -> Any: ...
-    def set_accept_osc7(self, accept: Any) -> Any: ...
-    def set_allow_clipboard_read(self, allow: Any) -> Any: ...
-    def set_allow_file_media(self, mode: Any) -> Any: ...
-    def set_ambiguous_width(self, width: Any) -> Any: ...
-    def set_ansi_palette_color(self, index: Any, r: Any, g: Any, b: Any) -> Any: ...
-    def set_answerback_string(self, answerback: Any) -> Any: ...
-    def set_badge_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_badge_format(self, format: Any) -> Any: ...
-    def set_badge_session_variable(self, name: Any, value: Any) -> Any: ...
-    def set_bold_brightening(self, enabled: Any) -> Any: ...
-    def set_bold_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_clipboard(self, content: Any) -> Any: ...
-    def set_cursor_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_cursor_guide_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_cursor_style(self, style: Any) -> Any: ...
-    def set_default_bg(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_default_fg(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_disable_insecure_sequences(self, disable: Any) -> Any: ...
-    def set_faint_text_alpha(self, alpha: Any) -> Any: ...
-    def set_keyboard_flags(self, flags: Any, mode: Any = 1) -> Any: ...
-    def set_link_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_macro_speed(self, speed: Any) -> Any: ...
-    def set_match_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_max_osc_data_length(self, max: Any) -> Any: ...
-    def set_max_transfer_size(self, max_bytes: Any) -> Any: ...
-    def set_progress(self, state: Any, progress: Any) -> Any: ...
-    def set_selection_bg_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_selection_fg_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_sixel_graphics_limit(self, max_graphics: Any) -> Any: ...
-    def set_sixel_limits(
-        self, max_width: Any, max_height: Any, max_repeat: Any
-    ) -> Any: ...
-    def set_unicode_version(self, version: Any) -> Any: ...
-    def set_use_bold_color(self, use_bold: Any) -> Any: ...
-    def set_use_underline_color(self, use_underline: Any) -> Any: ...
-    def set_width_config(self, config: Any) -> Any: ...
-    def set_window_iconified(self, iconified: Any) -> Any: ...
-    def set_window_position(self, x: Any, y: Any) -> Any: ...
-    def shell_integration_state(self) -> Any: ...
-    def size(self) -> Any: ...
+    ) -> Any:
+        """Take a screenshot to a file using a reusable `ScreenshotConfig` (QA-005)."""
+    def scrollback(self) -> Any:
+        """Get scrollback content as a list of strings
+
+        Returns:
+            List of scrollback lines
+        """
+    def scrollback_len(self) -> Any:
+        """Get the number of scrollback lines
+
+        Returns:
+            Number of lines in scrollback buffer
+        """
+    def scrollback_line(self, index: Any) -> Any:
+        """Get a specific line from the scrollback buffer with full cell data
+
+        Args:
+            index: Scrollback line index (0 = oldest, scrollback_len()-1 = most recent)
+
+        Returns:
+            List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
+            or None if index is out of bounds
+        """
+    def select_semantic_region(self, col: Any, row: Any, delimiters: Any) -> Any:
+        """Select text within semantic delimiters
+
+        Extracts content between matching delimiters around cursor.
+        Supports: (), [], {}, <>, "", '', ``
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            delimiters: String of delimiters to check (e.g., "()[]{}\\"'")
+
+        Returns:
+            Content between delimiters, or None if not inside delimiters
+        """
+    def select_word(self, col: Any, row: Any, word_chars: Any = None) -> Any:
+        """Get word boundaries at cursor position for smart selection
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            word_chars: Optional custom word characters
+
+        Returns:
+            ((start_col, start_row), (end_col, end_row)) or None if not on a word
+        """
+    def send_resize_pulse(self) -> Any:
+        """Send a resize pulse (SIGWINCH) with the current size
+
+        This re-sends SIGWINCH to the child process with the same dimensions.
+        Useful for forcing applications like tmux to recalculate their layout.
+        """
+    def send_upload_data(self, data: Any) -> Any:
+        """Send upload data in response to an UploadRequested event
+
+        Args:
+            data: Raw file data bytes to upload
+        """
+    def set_accept_osc7(self, accept: Any) -> Any:
+        """Set whether OSC 7 directory tracking sequences are accepted
+
+        When disabled, OSC 7 sequences are silently ignored.
+        When enabled (default), allows shell to report current working directory.
+
+        Args:
+            accept: True to accept OSC 7 (default), False to ignore
+        """
+    def set_allow_clipboard_read(self, allow: Any) -> Any:
+        """Set whether clipboard read operations are allowed
+
+        When disabled (default), OSC 52 queries are silently ignored for security.
+        When enabled, terminal applications can query clipboard contents.
+
+        Args:
+            allow: True to allow clipboard read, False to block (default)
+        """
+    def set_allow_file_media(self, mode: Any) -> Any:
+        """Control whether Kitty graphics may load image payloads from
+        filesystem paths (the `t=f` file and `t=t` temp-file media).
+
+        Terminal output is untrusted input: before this gate a single
+        `t=t` escape naming a path could delete that file. The default
+        ``"temp_only"`` allows only the spec's gated form — a
+        ``*tty-graphics-protocol*`` file inside an allowed temp root,
+        deleted only after it decodes as an image. ``"all"`` re-enables
+        unrestricted ``t=f`` reads; ``"off"`` refuses both media.
+
+        Args:
+            mode: One of ``"off"``, ``"temp_only"`` (default), ``"all"``
+
+        Raises:
+            ValueError: If mode is not one of the accepted names
+
+        Example:
+            >>> terminal.set_allow_file_media("all")
+            >>> terminal.set_allow_file_media("off")
+        """
+    def set_ambiguous_width(self, width: Any) -> Any:
+        """Set the treatment of East Asian Ambiguous width characters
+
+        This is a convenience method to just change the ambiguous width setting
+        without modifying the Unicode version.
+
+        Args:
+            width: AmbiguousWidth.Narrow (1 cell) or AmbiguousWidth.Wide (2 cells)
+        """
+    def set_ansi_palette_color(self, index: Any, r: Any, g: Any, b: Any) -> Any:
+        """Set ANSI palette color (0-15)
+
+        Args:
+            index: Palette index (0-15)
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+
+        Raises:
+            ValueError: If index is not in range 0-15
+        """
+    def set_answerback_string(self, answerback: Any) -> Any:
+        """Set the answerback string sent in response to ENQ (0x05)
+
+        The answerback payload is sent whenever the terminal receives the ENQ
+        control character. Default is None (disabled) for security. Use with
+        caution in untrusted sessions.
+
+        Args:
+            answerback: Custom string to return, or None to disable
+        """
+    def set_badge_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set badge color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_badge_format(self, format: Any) -> Any:
+        """Set the badge format template
+
+        This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
+        The format string should contain `\\(variable)` placeholders.
+
+        Args:
+            format: The badge format template string, or None to clear
+        """
+    def set_badge_session_variable(self, name: Any, value: Any) -> Any:
+        """Set a session variable for badge format evaluation
+
+        Sets a custom session variable that can be referenced in badge formats.
+
+        Args:
+            name: Variable name
+            value: Variable value
+        """
+    def set_bold_brightening(self, enabled: Any) -> Any:
+        """Set bold brightening mode
+
+        When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+        This is a legacy terminal behavior that some applications rely on.
+
+        Args:
+            enabled: True to enable bold brightening, False to disable
+        """
+    def set_bold_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set bold text color (when use_bold_color is enabled)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_clipboard(self, content: Any) -> Any:
+        """Set clipboard content programmatically
+
+        This bypasses OSC 52 sequences and directly sets the clipboard.
+        Useful for integration with system clipboard or testing.
+
+        Args:
+            content: Content to set (None to clear)
+        """
+    def set_cursor_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set cursor color (OSC 12)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_cursor_guide_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set cursor guide color (vertical line following cursor)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_cursor_style(self, style: Any) -> Any:
+        """Set cursor style (DECSCUSR)
+
+        This is equivalent to sending CSI <n> SP q escape sequence.
+
+        Args:
+            style: CursorStyle enum value (e.g., CursorStyle.BlinkingBlock)
+        """
+    def set_default_bg(self, r: Any, g: Any, b: Any) -> Any:
+        """Set default background color (OSC 11)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_default_fg(self, r: Any, g: Any, b: Any) -> Any:
+        """Set default foreground color (OSC 10)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_disable_insecure_sequences(self, disable: Any) -> Any:
+        """Set whether to filter potentially insecure escape sequences
+
+        When enabled, certain sequences that could pose security risks are blocked:
+        - OSC 52 (clipboard operations - can leak data)
+        - OSC 8 (hyperlinks - can be used for phishing)
+        - OSC 9/777 (notifications - can be annoying/misleading)
+        - Sixel graphics (can consume excessive memory)
+
+        When disabled (default), all standard sequences are processed normally.
+
+        Args:
+            disable: True to block insecure sequences, False to allow (default)
+        """
+    def set_faint_text_alpha(self, alpha: Any) -> Any:
+        """Set faint/dim text alpha multiplier
+
+        This value is applied to SGR 2 (dim/faint) text during rendering.
+        Values are clamped to the range 0.0-1.0.
+
+        Args:
+            alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
+
+        Example:
+            >>> term.set_faint_text_alpha(0.3)  # 30% opacity for dim text
+        """
+    def set_keyboard_flags(self, flags: Any, mode: Any = 1) -> Any:
+        """Set keyboard protocol flags (Kitty keyboard protocol)
+
+        Args:
+            flags: Flags to set (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
+            mode: 0=disable all, 1=set flags, 2=lock flags (default: 1)
+
+        Sends: CSI = flags ; mode u
+        """
+    def set_link_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set link/hyperlink color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_macro_speed(self, speed: Any) -> Any:
+        """Set macro playback speed
+
+        Args:
+            speed: Speed multiplier (0.1 to 10.0)
+        """
+    def set_match_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set match/search highlight color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_max_osc_data_length(self, max: Any) -> Any:
+        """Set the maximum total OSC data length in bytes (QA-012)
+
+        Sequences exceeding this are rejected as a memory-exhaustion guard.
+        Must stay large enough for inline images (iTerm2/Kitty base64) if used.
+
+        Args:
+            max: New cap in bytes (e.g. 16 * 1024 * 1024 for 16 MiB)
+        """
+    def set_max_transfer_size(self, max_bytes: Any) -> Any:
+        """Set the maximum allowed file transfer size in bytes
+
+        Args:
+            max_bytes: Maximum transfer size in bytes
+        """
+    def set_progress(self, state: Any, progress: Any) -> Any:
+        """Manually set the progress bar state
+
+        This can be used to programmatically control the progress bar
+        without receiving OSC 9;4 sequences.
+
+        Args:
+            state: ProgressState enum value
+            progress: Progress percentage (0-100, clamped if out of range)
+        """
+    def set_selection_bg_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set selection background color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_selection_fg_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set selection foreground/text color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_sixel_graphics_limit(self, max_graphics: Any) -> Any:
+        """Set maximum number of Sixel graphics retained
+
+        Args:
+            max_graphics: Maximum number of in-memory Sixel graphics
+
+        Oldest graphics are dropped if the new limit is lower than the
+        current number of graphics. The value is clamped to a safe range.
+        """
+    def set_sixel_limits(self, max_width: Any, max_height: Any, max_repeat: Any) -> Any:
+        """Set Sixel resource limits (max width, height, repeat)
+
+        Args:
+            max_width: Maximum Sixel bitmap width in pixels
+            max_height: Maximum Sixel bitmap height in pixels
+            max_repeat: Maximum repeat count for !Pn sequences
+
+        Limits are clamped to safe hard maxima at the Rust layer.
+        """
+    def set_unicode_version(self, version: Any) -> Any:
+        """Set the Unicode version for width calculation tables
+
+        This is a convenience method to just change the Unicode version setting
+        without modifying the ambiguous width treatment.
+
+        Args:
+            version: UnicodeVersion enum value (e.g., UnicodeVersion.Auto)
+        """
+    def set_use_bold_color(self, use_bold: Any) -> Any:
+        """Enable/disable custom bold color
+
+        When enabled, bold text uses set_bold_color() instead of bright ANSI variant.
+
+        Args:
+            use_bold: Whether to use custom bold color
+        """
+    def set_use_underline_color(self, use_underline: Any) -> Any:
+        """Enable/disable custom underline color
+
+        When enabled, underlined text uses a custom underline color.
+
+        Args:
+            use_underline: Whether to use custom underline color
+        """
+    def set_width_config(self, config: Any) -> Any:
+        """Set the Unicode width configuration
+
+        This controls how character widths are calculated, particularly for:
+        - East Asian Ambiguous characters (Greek, Cyrillic, symbols)
+        - Unicode version-specific width tables
+
+        Args:
+            config: WidthConfig with unicode_version and ambiguous_width settings
+        """
+    def set_window_iconified(self, iconified: Any) -> Any:
+        """Set the host-supplied iconified/minimized state for XTWINOPS reports (`CSI 11 t`)
+
+        GUI hosts should call this whenever the real OS window is
+        minimized/restored so that `CSI 11 t` queries report the correct
+        state instead of always reporting non-iconified.
+
+        Args:
+            iconified: True if the window is iconified/minimized
+
+        Example:
+            >>> term.set_window_iconified(True)
+        """
+    def set_window_position(self, x: Any, y: Any) -> Any:
+        """Set the host-supplied window position for XTWINOPS reports (`CSI 13 t`)
+
+        The terminal core is headless and has no window of its own; GUI
+        hosts should call this whenever the real OS window moves so that
+        `CSI 13 t` queries report the terminal's actual on-screen position
+        instead of the origin default.
+
+        Args:
+            x: Window X position in pixels (may be negative on multi-monitor setups)
+            y: Window Y position in pixels (may be negative on multi-monitor setups)
+
+        Example:
+            >>> term.set_window_position(100, 50)
+        """
+    def shell_integration_state(self) -> Any:
+        """Get shell integration state
+
+        Returns:
+            Dictionary with shell integration info
+        """
+    def size(self) -> Any:
+        """Get the current terminal dimensions
+
+        Returns:
+            Tuple of (cols, rows)
+        """
     def spawn(
         self, command: Any, args: Any = None, env: Any = None, cwd: Any = None
-    ) -> Any: ...
-    def spawn_shell(self, env: Any = None, cwd: Any = None) -> Any: ...
-    def start_coprocess(self, config: Any) -> Any: ...
-    def start_recording(self, title: Any) -> Any: ...
-    def stop_coprocess(self, coprocess_id: Any) -> Any: ...
-    def stop_macro(self) -> Any: ...
-    def stop_recording(self) -> Any: ...
+    ) -> Any:
+        """Spawn a process with the specified command and arguments
+
+        Args:
+            command: The command to execute
+            args: Optional list of command-line arguments
+            env: Optional dictionary of environment variables
+            cwd: Optional working directory path
+        """
+    def spawn_shell(self, env: Any = None, cwd: Any = None) -> Any:
+        """Spawn a shell process (auto-detected from environment)
+
+        On Unix: Uses $SHELL or defaults to /bin/bash
+        On Windows: Uses %COMSPEC% or defaults to cmd.exe
+
+        Args:
+            env: Optional dictionary of environment variables to set for the shell.
+                 These are passed directly to the child process without modifying
+                 the parent process environment (safe for multi-threaded apps).
+            cwd: Optional working directory path for the shell.
+        """
+    def start_coprocess(self, config: Any) -> int:
+        """Start a new coprocess
+
+        The coprocess receives terminal output on its stdin (if copy_terminal_output
+        is True) and its stdout is buffered for reading via read_from_coprocess().
+
+        Args:
+            config: CoprocessConfig with command and options
+
+        Returns:
+            int: Coprocess ID for future reference
+
+        Example:
+            >>> config = CoprocessConfig("grep", args=["ERROR"])
+            >>> coproc_id = pty.start_coprocess(config)
+        """
+    def start_recording(self, title: Any) -> Any:
+        """Start recording a terminal session
+
+        Args:
+            title: Optional session title
+        """
+    def stop_coprocess(self, coprocess_id: Any) -> Any:
+        """Stop a coprocess by ID
+
+        Args:
+            coprocess_id: ID of the coprocess to stop
+        """
+    def stop_macro(self) -> Any:
+        """Stop macro playback"""
+    def stop_recording(self) -> Any:
+        """Stop recording and return the session
+
+        Returns:
+            RecordingSession object if recording was active, None otherwise
+        """
     @staticmethod
-    def strip_ansi(text: Any) -> Any: ...
-    def synchronized_updates(self) -> Any: ...
-    def take_completed_transfer(self, transfer_id: Any) -> Any: ...
-    def take_notifications(self) -> Any: ...
-    def take_notifications_detailed(self) -> Any: ...
-    def tick_macro(self) -> Any: ...
-    def title(self) -> Any: ...
-    def try_wait(self) -> Any: ...
-    def update_animations(self) -> Any: ...
-    def update_generation(self) -> Any: ...
-    def wait(self) -> Any: ...
+    def strip_ansi(text: Any) -> Any:
+        """Strip ANSI escape sequences from text
+
+        Args:
+            text: Text containing ANSI codes
+
+        Returns:
+            Text with all ANSI sequences removed
+        """
+    def synchronized_updates(self) -> Any:
+        """Check if synchronized updates mode is enabled (DEC 2026)
+
+        Returns:
+            True if synchronized updates mode is enabled
+        """
+    def take_completed_transfer(self, transfer_id: Any) -> Any:
+        """Take a completed transfer by ID, removing it from the completed buffer
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            Transfer dictionary with "data" key (bytes) if found, None otherwise
+        """
+    def take_notifications(self) -> Any:
+        """Get all pending notifications
+
+        Returns a list of tuples: [(title, message), ...]
+        For OSC 9 notifications, title will be empty string.
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of (title, message) tuples
+        """
+    def take_notifications_detailed(self) -> Any:
+        """Get all pending notifications with full Kitty OSC 99 metadata.
+
+        Unlike `take_notifications` (which returns only (title, message)
+        tuples), this returns `Notification` objects exposing the `id`,
+        `urgency`, and `actions` fields carried by OSC 99 sequences.
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of Notification objects
+
+        Example:
+            >>> for n in term.take_notifications_detailed():
+            ...     print(n.title, n.urgency, n.actions)
+        """
+    def tick_macro(self) -> Any:
+        """Tick macro playback and send events to PTY
+
+        Call this regularly (e.g., every 10ms) to advance macro playback
+
+        Returns:
+            True if an event was processed, False otherwise
+        """
+    def title(self) -> Any:
+        """Get the terminal title
+
+        Returns:
+            Current terminal title string
+        """
+    def try_wait(self) -> Any:
+        """Try to get the exit status without blocking
+
+        Returns:
+            Exit code if the process has exited, None otherwise
+        """
+    def update_animations(self) -> Any:
+        """Update all Kitty graphics animations and trigger refresh if frames changed
+
+        This method should be called regularly (e.g., 60Hz) to advance animation frames.
+        It returns a list of image IDs whose frames changed, allowing frontends to
+        selectively refresh only graphics that were updated.
+
+        Returns:
+            List of image IDs that changed frames
+        """
+    def update_generation(self) -> Any:
+        """Get the current update generation number
+
+        This number is incremented every time the terminal content changes.
+        Useful for detecting when to redraw in event loops.
+
+        Returns:
+            The current generation number
+        """
+    def wait(self) -> Any:
+        """Wait for the process to exit and return its exit code
+
+        This blocks until the process exits
+
+        Returns:
+            Exit code of the process
+        """
     def wait_for_text(
         self, needle: Any, timeout: Any = 5.0, scrollback: Any = False
-    ) -> Any: ...
-    def wait_for_update(self, since: Any, timeout: Any = 5.0) -> Any: ...
-    def width_config(self) -> Any: ...
-    def window_iconified(self) -> Any: ...
-    def window_position(self) -> Any: ...
-    def write(self, data: Any) -> Any: ...
-    def write_str(self, s: Any) -> Any: ...
-    def write_to_coprocess(self, coprocess_id: Any, data: Any) -> Any: ...
+    ) -> Any:
+        """Block until a string appears in the terminal content
+
+        Re-checks after every applied update (same signal as
+        :meth:`wait_for_update`), so it wakes the moment the text lands
+        rather than on a sleep cadence. The GIL is released while blocking.
+
+        Args:
+            needle: The text to wait for
+            timeout: Maximum seconds to block (default 5.0)
+            scrollback: Also search scrollback history (default ``False`` —
+                only the visible screen is searched)
+
+        Returns:
+            ``True`` if the text appeared within the timeout.
+
+        Example:
+            term.spawn("/bin/sh", ["-i"])
+            assert term.wait_for_text("$ ", timeout=3.0)
+        """
+    def wait_for_update(self, since: Any, timeout: Any = 5.0) -> Any:
+        """Block until the terminal updates past a given generation
+
+        A condition-variable wait signalled by the reader thread the moment
+        applied content is visible — sub-millisecond wakeups where a
+        ``time.sleep`` poll would miss or wait long. The GIL is released
+        while blocking, so other Python threads (observers included) keep
+        running.
+
+        Args:
+            since: Generation number from a previous call to
+                :meth:`update_generation`
+            timeout: Maximum seconds to block (default 5.0)
+
+        Returns:
+            The new generation number, or ``None`` on timeout or when the
+            child has exited with no new output (nothing further can arrive).
+
+        Example:
+            gen = term.update_generation()
+            term.write_to_pty(b"ls\\\\r")
+            assert term.wait_for_update(gen, timeout=2.0) is not None
+        """
+    def width_config(self) -> WidthConfig:
+        """Get the Unicode width configuration
+
+        Returns:
+            WidthConfig: The current width configuration
+        """
+    def window_iconified(self) -> Any:
+        """Get the host-supplied window iconified/minimized state
+
+        Returns:
+            True if the window is iconified/minimized; defaults to
+            False if never set via `set_window_iconified()`
+        """
+    def window_position(self) -> Any:
+        """Get the host-supplied window position in pixels
+
+        Returns:
+            Tuple of (x, y) in pixels; defaults to (0, 0) if never set
+            via `set_window_position()`
+        """
+    def write(self, data: Any) -> Any:
+        """Write data to the PTY (send to the child process)
+
+        Args:
+            data: Bytes to write
+        """
+    def write_str(self, s: Any) -> Any:
+        """Write a string to the PTY (convenience method)
+
+        Args:
+            s: String to write
+        """
+    def write_to_coprocess(self, coprocess_id: Any, data: Any) -> Any:
+        """Write data to a coprocess's stdin
+
+        Args:
+            coprocess_id: ID of the coprocess
+            data: Bytes to write
+        """
 
 class RecordingEvent:
+    """Recording event"""
     @property
-    def data(self) -> Any: ...
+    def data(self) -> Any:
+        """Raw event payload bytes"""
     @data.setter
     def data(self, value: Any) -> None: ...
     @property
-    def event_type(self) -> Any: ...
+    def event_type(self) -> Any:
+        """Event kind: "Input", "Output", "Resize", "Metadata", or "Marker\""""
     @event_type.setter
     def event_type(self, value: Any) -> None: ...
-    def get_data_str(self) -> Any: ...
+    def get_data_str(self) -> Any:
+        """Get event data as string"""
     @property
-    def metadata(self) -> Any: ...
+    def metadata(self) -> Any:
+        """Event-specific metadata, e.g. (cols, rows) for resize events"""
     @metadata.setter
     def metadata(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Milliseconds since recording start"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
 
 class RecordingSession:
+    """Recording session"""
     @property
-    def created_at(self) -> Any: ...
+    def created_at(self) -> Any:
+        """Unix epoch milliseconds when recording started"""
     @created_at.setter
     def created_at(self, value: Any) -> None: ...
     @property
-    def duration(self) -> Any: ...
+    def duration(self) -> Any:
+        """Recording duration in milliseconds"""
     @duration.setter
     def duration(self, value: Any) -> None: ...
     @property
-    def env(self) -> Any: ...
+    def env(self) -> Any:
+        """Get captured environment variables"""
     @env.setter
     def env(self, value: Any) -> None: ...
     @property
-    def event_count(self) -> Any: ...
+    def event_count(self) -> Any:
+        """Number of events in the recording"""
     @event_count.setter
     def event_count(self, value: Any) -> None: ...
     @property
-    def events(self) -> Any: ...
+    def events(self) -> Any:
+        """Get all recorded events"""
     @events.setter
     def events(self, value: Any) -> None: ...
-    def get_duration_seconds(self) -> Any: ...
-    def get_size(self) -> Any: ...
+    def get_duration_seconds(self) -> Any:
+        """Get duration in seconds"""
+    def get_size(self) -> Any:
+        """Get recording size (cols, rows)"""
     @property
-    def initial_size(self) -> Any: ...
+    def initial_size(self) -> Any:
+        """Terminal size when recording started, as (cols, rows)"""
     @initial_size.setter
     def initial_size(self, value: Any) -> None: ...
     @property
-    def title(self) -> Any: ...
+    def title(self) -> Any:
+        """Recording title"""
     @title.setter
     def title(self, value: Any) -> None: ...
 
 class RegexMatch:
+    """Regex match"""
     @property
-    def captures(self) -> Any: ...
+    def captures(self) -> Any:
+        """Regex capture groups"""
     @captures.setter
     def captures(self, value: Any) -> None: ...
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column where the match starts (0-indexed)"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def end_col(self) -> Any: ...
+    def end_col(self) -> Any:
+        """Column just past the end of the match"""
     @end_col.setter
     def end_col(self, value: Any) -> None: ...
     @property
-    def end_row(self) -> Any: ...
+    def end_row(self) -> Any:
+        """Row where the match ends (0-indexed)"""
     @end_row.setter
     def end_row(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row where the match starts (0-indexed)"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def text(self) -> Any: ...
+    def text(self) -> Any:
+        """The matched text"""
     @text.setter
     def text(self, value: Any) -> None: ...
 
 class RenderingHint:
+    """Rendering hint"""
     @property
-    def animation(self) -> Any: ...
+    def animation(self) -> Any:
+        """Animation hint for the renderer (e.g. "none", "blink")"""
     @animation.setter
     def animation(self, value: Any) -> None: ...
     @property
-    def damage(self) -> Any: ...
+    def damage(self) -> Any:
+        """The dirty region that needs redrawing"""
     @damage.setter
     def damage(self, value: Any) -> None: ...
     @property
-    def layer(self) -> Any: ...
+    def layer(self) -> Any:
+        """Z-layer the content should be drawn on (e.g. "base", "overlay")"""
     @layer.setter
     def layer(self, value: Any) -> None: ...
     @property
-    def priority(self) -> Any: ...
+    def priority(self) -> Any:
+        """Update priority (0-255, higher redraws sooner)"""
     @priority.setter
     def priority(self, value: Any) -> None: ...
 
 class ScreenSnapshot:
+    """Captures all lines, cursor state, and screen identity at a single point in time.
+    This immutable snapshot prevents race conditions where alternate screen switches
+    happen between individual line render calls.
+    """
     @property
-    def cursor_pos(self) -> Any: ...
+    def cursor_pos(self) -> Any:
+        """Cursor position at snapshot time (col, row)"""
     @cursor_pos.setter
     def cursor_pos(self, value: Any) -> None: ...
     @property
-    def cursor_style(self) -> Any: ...
+    def cursor_style(self) -> Any:
+        """Cursor style at snapshot time"""
     @cursor_style.setter
     def cursor_style(self, value: Any) -> None: ...
     @property
-    def cursor_visible(self) -> Any: ...
+    def cursor_visible(self) -> Any:
+        """Cursor visibility at snapshot time"""
     @cursor_visible.setter
     def cursor_visible(self, value: Any) -> None: ...
     @property
-    def generation(self) -> Any: ...
+    def generation(self) -> Any:
+        """Generation counter at snapshot time"""
     @generation.setter
     def generation(self, value: Any) -> None: ...
-    def get_line(self, row: Any) -> Any: ...
+    def get_line(self, row: Any) -> Any:
+        """Get line cells for a specific row from snapshot
+
+        Filters control characters (< 32, except space and tab) and replaces them with space.
+        This optimization moves control character filtering from Python to compiled Rust code.
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
+            or empty list if row is out of bounds
+        """
     @property
-    def is_alt_screen(self) -> Any: ...
+    def is_alt_screen(self) -> Any:
+        """Which screen buffer was active (true = alternate)"""
     @is_alt_screen.setter
     def is_alt_screen(self, value: Any) -> None: ...
     @property
-    def lines(self) -> Any: ...
+    def lines(self) -> Any:
+        """All screen lines captured atomically
+        Format: Vec<Vec<(String, fg_rgb, bg_rgb, attributes)>>
+        """
     @lines.setter
     def lines(self, value: Any) -> None: ...
     @property
-    def size(self) -> Any: ...
+    def size(self) -> Any:
+        """Terminal dimensions at snapshot time (cols, rows)"""
     @size.setter
     def size(self, value: Any) -> None: ...
     @property
-    def wrapped_lines(self) -> Any: ...
+    def wrapped_lines(self) -> Any:
+        """Wrapped state for each line (true = line continues to next row)"""
     @wrapped_lines.setter
     def wrapped_lines(self, value: Any) -> None: ...
 
 class ScreenshotConfig:
+    """Reusable screenshot rendering options (QA-005).
+
+    Pass to ``screenshot_config(config, scrollback_offset=0)`` /
+    ``screenshot_to_file_config(path, config, scrollback_offset=0)`` instead of
+    repeating the keyword arguments on every call.
+    """
     def __init__(
         self,
         format: Any = "png",
@@ -1368,201 +3263,255 @@ class ScreenshotConfig:
         minimum_contrast: Any = 0.5,
     ) -> None: ...
     @property
-    def background_color(self) -> Any: ...
+    def background_color(self) -> Any:
+        """Background color override (None = terminal background)."""
     @background_color.setter
     def background_color(self, value: Any) -> None: ...
     @property
-    def bold_brightening(self) -> Any: ...
+    def bold_brightening(self) -> Any:
+        """Bold brightening (ANSI 0-7 → bright 8-15 when bold)."""
     @bold_brightening.setter
     def bold_brightening(self, value: Any) -> None: ...
     @property
-    def bold_color(self) -> Any: ...
+    def bold_color(self) -> Any:
+        """Bold text color (None = foreground)."""
     @bold_color.setter
     def bold_color(self, value: Any) -> None: ...
     @property
-    def cursor_color(self) -> Any: ...
+    def cursor_color(self) -> Any:
+        """Cursor color (None = white)."""
     @cursor_color.setter
     def cursor_color(self, value: Any) -> None: ...
     @property
-    def faint_text_alpha(self) -> Any: ...
+    def faint_text_alpha(self) -> Any:
+        """Faint/dim text alpha (0.0-1.0)."""
     @faint_text_alpha.setter
     def faint_text_alpha(self, value: Any) -> None: ...
     @property
-    def font_path(self) -> Any: ...
+    def font_path(self) -> Any:
+        """Path to a .ttf/.otf font; None uses the embedded JetBrains Mono."""
     @font_path.setter
     def font_path(self, value: Any) -> None: ...
     @property
-    def font_size(self) -> Any: ...
+    def font_size(self) -> Any:
+        """Font size in pixels."""
     @font_size.setter
     def font_size(self, value: Any) -> None: ...
     @property
-    def format(self) -> Any: ...
+    def format(self) -> Any:
+        """Output image format: "png" | "jpeg" | "svg" | "bmp"."""
     @format.setter
     def format(self, value: Any) -> None: ...
     @property
-    def include_scrollback(self) -> Any: ...
+    def include_scrollback(self) -> Any:
+        """Include the scrollback buffer."""
     @include_scrollback.setter
     def include_scrollback(self, value: Any) -> None: ...
     @property
-    def link_color(self) -> Any: ...
+    def link_color(self) -> Any:
+        """Hyperlink color (None = foreground)."""
     @link_color.setter
     def link_color(self, value: Any) -> None: ...
     @property
-    def minimum_contrast(self) -> Any: ...
+    def minimum_contrast(self) -> Any:
+        """Minimum contrast adjustment (0.0-1.0)."""
     @minimum_contrast.setter
     def minimum_contrast(self, value: Any) -> None: ...
     @property
-    def padding(self) -> Any: ...
+    def padding(self) -> Any:
+        """Padding around the content in pixels."""
     @padding.setter
     def padding(self, value: Any) -> None: ...
     @property
-    def quality(self) -> Any: ...
+    def quality(self) -> Any:
+        """JPEG quality (1-100)."""
     @quality.setter
     def quality(self, value: Any) -> None: ...
     @property
-    def render_cursor(self) -> Any: ...
+    def render_cursor(self) -> Any:
+        """Render the cursor."""
     @render_cursor.setter
     def render_cursor(self, value: Any) -> None: ...
     @property
-    def sixel_mode(self) -> Any: ...
+    def sixel_mode(self) -> Any:
+        """Sixel graphics mode: "disabled" | "pixels" | "halfblocks"."""
     @sixel_mode.setter
     def sixel_mode(self, value: Any) -> None: ...
     @property
-    def use_bold_color(self) -> Any: ...
+    def use_bold_color(self) -> Any:
+        """Whether `bold_color` overrides the cell color."""
     @use_bold_color.setter
     def use_bold_color(self, value: Any) -> None: ...
 
 class ScrollbackStats:
+    """Scrollback statistics"""
     @property
-    def has_wrapped(self) -> Any: ...
+    def has_wrapped(self) -> Any:
+        """Whether the scrollback buffer has wrapped (cycled)"""
     @has_wrapped.setter
     def has_wrapped(self, value: Any) -> None: ...
     @property
-    def memory_bytes(self) -> Any: ...
+    def memory_bytes(self) -> Any:
+        """Estimated memory usage in bytes"""
     @memory_bytes.setter
     def memory_bytes(self, value: Any) -> None: ...
     @property
-    def total_lines(self) -> Any: ...
+    def total_lines(self) -> Any:
+        """Total number of scrollback lines"""
     @total_lines.setter
     def total_lines(self, value: Any) -> None: ...
 
 class SearchMatch:
+    """Search match result"""
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column index"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def length(self) -> Any: ...
+    def length(self) -> Any:
+        """Length of the match"""
     @length.setter
     def length(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row index (negative for scrollback, 0+ for visible screen)"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def text(self) -> Any: ...
+    def text(self) -> Any:
+        """Matched text"""
     @text.setter
     def text(self, value: Any) -> None: ...
 
 class Selection:
+    """Selection state"""
     @property
-    def end(self) -> Any: ...
+    def end(self) -> Any:
+        """End position (col, row)"""
     @end.setter
     def end(self, value: Any) -> None: ...
     @property
-    def mode(self) -> Any: ...
+    def mode(self) -> Any:
+        """Selection mode"""
     @mode.setter
     def mode(self, value: Any) -> None: ...
     @property
-    def start(self) -> Any: ...
+    def start(self) -> Any:
+        """Start position (col, row)"""
     @start.setter
     def start(self, value: Any) -> None: ...
 
 class SelectionMode:
+    """Selection mode"""
+
     Block: SelectionMode
     Character: SelectionMode
     Line: SelectionMode
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class ShellIntegration:
+    """Shell integration state"""
     @property
-    def current_command(self) -> Any: ...
+    def current_command(self) -> Any:
+        """The command being executed or most recently finished"""
     @current_command.setter
     def current_command(self, value: Any) -> None: ...
     @property
-    def cwd(self) -> Any: ...
+    def cwd(self) -> Any:
+        """Working directory reported by OSC 7 / OSC 1337;CurrentDir"""
     @cwd.setter
     def cwd(self, value: Any) -> None: ...
     @property
-    def hostname(self) -> Any: ...
+    def hostname(self) -> Any:
+        """Remote hostname when tracking a remote session"""
     @hostname.setter
     def hostname(self, value: Any) -> None: ...
     @property
-    def in_command_input(self) -> Any: ...
+    def in_command_input(self) -> Any:
+        """Whether the cursor is in the command-input line (OSC 133;B)"""
     @in_command_input.setter
     def in_command_input(self, value: Any) -> None: ...
     @property
-    def in_command_output(self) -> Any: ...
+    def in_command_output(self) -> Any:
+        """Whether the cursor is in command output (OSC 133;C)"""
     @in_command_output.setter
     def in_command_output(self, value: Any) -> None: ...
     @property
-    def in_prompt(self) -> Any: ...
+    def in_prompt(self) -> Any:
+        """Whether the cursor is currently in a shell prompt (OSC 133;A)"""
     @in_prompt.setter
     def in_prompt(self, value: Any) -> None: ...
     @property
-    def last_exit_code(self) -> Any: ...
+    def last_exit_code(self) -> Any:
+        """Exit code of the last finished command"""
     @last_exit_code.setter
     def last_exit_code(self, value: Any) -> None: ...
     @property
-    def username(self) -> Any: ...
+    def username(self) -> Any:
+        """Username on the host"""
     @username.setter
     def username(self, value: Any) -> None: ...
 
 class ShellIntegrationStats:
+    """Shell integration statistics"""
     @property
-    def avg_duration_ms(self) -> Any: ...
+    def avg_duration_ms(self) -> Any:
+        """Average command duration in milliseconds"""
     @avg_duration_ms.setter
     def avg_duration_ms(self, value: Any) -> None: ...
     @property
-    def failed_commands(self) -> Any: ...
+    def failed_commands(self) -> Any:
+        """Number of commands that exited non-zero"""
     @failed_commands.setter
     def failed_commands(self, value: Any) -> None: ...
     @property
-    def successful_commands(self) -> Any: ...
+    def successful_commands(self) -> Any:
+        """Number of commands that exited 0"""
     @successful_commands.setter
     def successful_commands(self, value: Any) -> None: ...
     @property
-    def total_commands(self) -> Any: ...
+    def total_commands(self) -> Any:
+        """Total number of tracked commands"""
     @total_commands.setter
     def total_commands(self, value: Any) -> None: ...
     @property
-    def total_duration_ms(self) -> Any: ...
+    def total_duration_ms(self) -> Any:
+        """Total command time in milliseconds"""
     @total_duration_ms.setter
     def total_duration_ms(self, value: Any) -> None: ...
 
 class SnapshotDiff:
+    """Snapshot diff"""
     @property
-    def added(self) -> Any: ...
+    def added(self) -> Any:
+        """Number of added lines"""
     @added.setter
     def added(self, value: Any) -> None: ...
     @property
-    def diffs(self) -> Any: ...
+    def diffs(self) -> Any:
+        """Per-line differences"""
     @diffs.setter
     def diffs(self, value: Any) -> None: ...
     @property
-    def modified(self) -> Any: ...
+    def modified(self) -> Any:
+        """Number of modified lines"""
     @modified.setter
     def modified(self, value: Any) -> None: ...
     @property
-    def removed(self) -> Any: ...
+    def removed(self) -> Any:
+        """Number of removed lines"""
     @removed.setter
     def removed(self, value: Any) -> None: ...
     @property
-    def unchanged(self) -> Any: ...
+    def unchanged(self) -> Any:
+        """Number of unchanged lines"""
     @unchanged.setter
     def unchanged(self, value: Any) -> None: ...
 
 class StreamingConfig:
+    """Python wrapper for StreamingConfig"""
     def __init__(
         self,
         max_clients: Any = 1000,
@@ -1583,105 +3532,289 @@ class StreamingConfig:
         kitty_file_media: Any = "temp_only",
     ) -> None: ...
     @property
-    def allow_api_key_in_query(self) -> Any: ...
+    def allow_api_key_in_query(self) -> Any:
+        """Get whether API key authentication via query parameter is allowed
+
+        Returns:
+            bool: True if the API key may be passed as a query parameter
+        """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
     @property
-    def allowed_origins(self) -> Any: ...
+    def allowed_origins(self) -> Any:
+        """Get the allowed browser origins allowlist (None = local/non-browser only).
+
+        Returns:
+            list[str] | None: Allowed origins, or None for local/non-browser only
+        """
     @allowed_origins.setter
     def allowed_origins(self, value: Any) -> None: ...
     @property
-    def api_key(self) -> Any: ...
+    def api_key(self) -> Any:
+        """Get the API key for authentication (None if not set)
+
+        Returns:
+            str | None: Current API key, or None if authentication is off
+        """
     @api_key.setter
     def api_key(self, value: Any) -> None: ...
     @property
-    def default_read_only(self) -> Any: ...
+    def default_read_only(self) -> Any:
+        """Get default read-only mode
+
+        Returns:
+            bool: True if clients start in read-only mode by default
+        """
     @default_read_only.setter
     def default_read_only(self, value: Any) -> None: ...
-    def disable_tls(self) -> Any: ...
+    def disable_tls(self) -> Any:
+        """Disable TLS (clear TLS configuration)"""
     @property
-    def enable_http(self) -> Any: ...
+    def enable_http(self) -> Any:
+        """Get whether HTTP static file serving is enabled
+
+        Returns:
+            bool: True if the HTTP server serves the web frontend
+        """
     @enable_http.setter
     def enable_http(self, value: Any) -> None: ...
     @property
-    def enable_system_stats(self) -> Any: ...
+    def enable_system_stats(self) -> Any:
+        """Get whether system stats collection is enabled
+
+        Returns:
+            bool: True if CPU/memory stats are streamed to clients
+        """
     @enable_system_stats.setter
     def enable_system_stats(self, value: Any) -> None: ...
     @property
-    def initial_cols(self) -> Any: ...
+    def initial_cols(self) -> Any:
+        """Get initial terminal columns (0 = use terminal's current size)
+
+        Returns:
+            int: Initial column count, or 0 to adopt the terminal's size
+        """
     @initial_cols.setter
     def initial_cols(self, value: Any) -> None: ...
     @property
-    def initial_rows(self) -> Any: ...
+    def initial_rows(self) -> Any:
+        """Get initial terminal rows (0 = use terminal's current size)
+
+        Returns:
+            int: Initial row count, or 0 to adopt the terminal's size
+        """
     @initial_rows.setter
     def initial_rows(self, value: Any) -> None: ...
     @property
-    def input_rate_limit_bytes_per_sec(self) -> Any: ...
+    def input_rate_limit_bytes_per_sec(self) -> Any:
+        """Get the input rate limit in bytes per second (0 = unlimited)
+
+        Returns:
+            int: Per-client input limit in bytes/second, or 0 for unlimited
+        """
     @input_rate_limit_bytes_per_sec.setter
     def input_rate_limit_bytes_per_sec(self, value: Any) -> None: ...
     @property
-    def keepalive_interval(self) -> Any: ...
+    def keepalive_interval(self) -> Any:
+        """Get keepalive interval in seconds
+
+        Returns:
+            int: Seconds between WebSocket keepalive pings
+        """
     @keepalive_interval.setter
     def keepalive_interval(self, value: Any) -> None: ...
     @property
-    def kitty_file_media(self) -> Any: ...
+    def kitty_file_media(self) -> Any:
+        """Get the Kitty graphics file-media mode applied to session terminals.
+
+        Returns:
+            str: "off", "temp_only", or "all"
+        """
     @kitty_file_media.setter
     def kitty_file_media(self, value: Any) -> None: ...
     @property
-    def max_clients(self) -> Any: ...
+    def max_clients(self) -> Any:
+        """Get the maximum number of clients
+
+        Returns:
+            int: Maximum number of simultaneous clients allowed
+        """
     @max_clients.setter
     def max_clients(self, value: Any) -> None: ...
     @property
-    def max_clients_per_session(self) -> Any: ...
+    def max_clients_per_session(self) -> Any:
+        """Get the maximum clients per session (0 = unlimited)
+
+        Returns:
+            int: Maximum clients attached to one session, or 0 for unlimited
+        """
     @max_clients_per_session.setter
     def max_clients_per_session(self, value: Any) -> None: ...
     @property
-    def max_sessions(self) -> Any: ...
+    def max_sessions(self) -> Any:
+        """Get the maximum number of concurrent sessions
+
+        Returns:
+            int: Maximum number of concurrent terminal sessions
+        """
     @max_sessions.setter
     def max_sessions(self, value: Any) -> None: ...
     @property
-    def send_initial_screen(self) -> Any: ...
+    def send_initial_screen(self) -> Any:
+        """Get whether to send initial screen
+
+        Returns:
+            bool: True if new clients receive the current screen contents
+        """
     @send_initial_screen.setter
     def send_initial_screen(self, value: Any) -> None: ...
     @property
-    def session_idle_timeout(self) -> Any: ...
+    def session_idle_timeout(self) -> Any:
+        """Get the idle session timeout in seconds (0 = never timeout)
+
+        Returns:
+            int: Seconds before an idle session is reaped, or 0 for never
+        """
     @session_idle_timeout.setter
     def session_idle_timeout(self, value: Any) -> None: ...
-    def set_tls_from_files(self, cert_path: Any, key_path: Any) -> Any: ...
-    def set_tls_from_pem(self, pem_path: Any) -> Any: ...
+    def set_tls_from_files(self, cert_path: Any, key_path: Any) -> Any:
+        """Configure TLS from separate certificate and key files
+
+        Args:
+            cert_path: Path to PEM certificate file (may contain certificate chain)
+            key_path: Path to PEM private key file
+
+        Raises:
+            RuntimeError: If files cannot be read or parsed
+        """
+    def set_tls_from_pem(self, pem_path: Any) -> Any:
+        """Configure TLS from a combined PEM file
+
+        Args:
+            pem_path: Path to PEM file containing both certificate chain and private key
+
+        Raises:
+            RuntimeError: If file cannot be read or parsed
+        """
     @property
-    def system_stats_interval_secs(self) -> Any: ...
+    def system_stats_interval_secs(self) -> Any:
+        """Get the system stats collection interval in seconds
+
+        Returns:
+            int: Seconds between system stats updates
+        """
     @system_stats_interval_secs.setter
     def system_stats_interval_secs(self, value: Any) -> None: ...
     @property
-    def tls_enabled(self) -> Any: ...
+    def tls_enabled(self) -> Any:
+        """Check if TLS is configured
+
+        Returns:
+            bool: True if TLS is configured, False otherwise
+        """
     @tls_enabled.setter
     def tls_enabled(self, value: Any) -> None: ...
     @property
-    def web_root(self) -> Any: ...
+    def web_root(self) -> Any:
+        """Get the web root directory for static files
+
+        Returns:
+            str: Directory the HTTP server serves static files from
+        """
     @web_root.setter
     def web_root(self, value: Any) -> None: ...
 
 class StreamingServer:
+    """Python wrapper for StreamingServer"""
     def __init__(self, pty_terminal: Any, addr: Any, config: Any = None) -> None: ...
     @property
-    def addr(self) -> Any: ...
+    def addr(self) -> Any:
+        """Get the server address
+
+        Returns:
+            str: The address the server is bound to
+        """
     @addr.setter
     def addr(self, value: Any) -> None: ...
-    def client_count(self) -> Any: ...
+    def client_count(self) -> int:
+        """Get the number of connected clients
+
+        Returns:
+            int: Number of currently connected clients (0 when stopped)
+        """
     @staticmethod
     def create_theme_info(
         name: Any, background: Any, foreground: Any, normal: Any, bright: Any
-    ) -> Any: ...
-    def max_clients(self) -> Any: ...
-    def poll_resize(self) -> Any: ...
+    ) -> dict:
+        """Set the theme to be sent to clients on connection
+
+        Note: This method is not available after the server is wrapped in Arc.
+        Set the theme before starting the server by creating a new server instance
+        or use the CLI --theme flag instead.
+
+        Args:
+            name: Theme name (e.g., "iterm2-dark")
+            background: RGB tuple for background color (r, g, b)
+            foreground: RGB tuple for foreground color (r, g, b)
+            normal: List of 8 RGB tuples for normal ANSI colors 0-7
+            bright: List of 8 RGB tuples for bright ANSI colors 8-15
+
+        Returns:
+            dict: Theme info dict accepted by set_theme()
+
+        Raises:
+            RuntimeError: If normal or bright does not contain exactly 8 tuples
+        """
+    def max_clients(self) -> int:
+        """Get the maximum number of clients allowed
+
+        Returns:
+            int: Configured client limit (0 when stopped)
+        """
+    def poll_resize(self) -> Any:
+        """Poll for resize requests from clients (non-blocking)
+
+        Returns:
+            Optional tuple of (cols, rows) if a resize request is pending, None otherwise
+
+        This should be called periodically from the main event loop.
+        When a resize is received, call pty_terminal.resize(cols, rows) to apply it.
+        """
     def send_action_mark_line(
         self, trigger_id: Any, row: Any, label: Any = None, color: Any = None
-    ) -> Any: ...
-    def send_action_notify(self, trigger_id: Any, title: Any, message: Any) -> Any: ...
-    def send_badge_changed(self, badge: Any = None) -> Any: ...
-    def send_bell(self) -> Any: ...
-    def send_cursor_position(self, col: Any, row: Any, visible: Any) -> Any: ...
+    ) -> Any:
+        """Send a trigger action mark line event to all clients
+
+        Args:
+            trigger_id: ID of the trigger that produced this action
+            row: Row to mark
+            label: Optional label for the mark
+            color: Optional RGB color tuple (r, g, b)
+        """
+    def send_action_notify(self, trigger_id: Any, title: Any, message: Any) -> Any:
+        """Send a trigger action notify event to all clients
+
+        Args:
+            trigger_id: ID of the trigger that produced this action
+            title: Notification title
+            message: Notification message
+        """
+    def send_badge_changed(self, badge: Any = None) -> Any:
+        """Send a badge changed event to all clients
+
+        Args:
+            badge: New badge text, or None to clear the badge
+        """
+    def send_bell(self) -> Any:
+        """Send a bell event to all clients"""
+    def send_cursor_position(self, col: Any, row: Any, visible: Any) -> Any:
+        """Send a cursor position event to all clients
+
+        Args:
+            col: Cursor column (0-indexed)
+            row: Cursor row (0-indexed)
+            visible: Whether the cursor is visible
+        """
     def send_cwd_changed(
         self,
         new_cwd: Any,
@@ -1689,13 +3822,62 @@ class StreamingServer:
         hostname: Any = None,
         username: Any = None,
         timestamp: Any = 0,
-    ) -> Any: ...
-    def send_graphics_added(self, row: Any) -> Any: ...
-    def send_hyperlink_added(
-        self, url: Any, row: Any, col: Any, id: Any = None
-    ) -> Any: ...
-    def send_mode_changed(self, mode: Any, enabled: Any) -> Any: ...
-    def send_output(self, data: Any) -> Any: ...
+    ) -> Any:
+        """Send a CWD changed event to all clients
+
+        Args:
+            new_cwd: The new working directory path
+            old_cwd: The previous working directory path (optional)
+            hostname: Hostname associated with the CWD (optional)
+            username: Username associated with the CWD (optional)
+            timestamp: Unix timestamp of the change
+        """
+    def send_graphics_added(self, row: Any) -> Any:
+        """Send a graphics added event to all clients
+
+        Args:
+            row: Grid row the new graphic was placed on
+        """
+    def send_hyperlink_added(self, url: Any, row: Any, col: Any, id: Any = None) -> Any:
+        """Send a hyperlink added event to all clients
+
+        Args:
+            url: Hyperlink target URL
+            row: Grid row the link starts on (0-indexed)
+            col: Grid column the link starts at (0-indexed)
+            id: Optional link id for grouping multi-cell links
+        """
+    def send_input(self, data: Any) -> Any:
+        """Queue bytes for the PTY on the same input path client input takes
+
+        The bytes join the session's serialized input queue, so they reach
+        the PTY in order with keystrokes from connected clients and under
+        the same queue bounds (input past them is dropped and counted). The
+        call never blocks on the PTY. `PtyTerminal.write()` bypasses this
+        queue: mixing it with client input has no cross-producer ordering.
+
+        Args:
+            data: Raw bytes to send to the PTY
+
+        Raises:
+            RuntimeError: If the server has been stopped
+
+        Example:
+            >>> server.send_input(b"ls -la\\n")
+        """
+    def send_mode_changed(self, mode: Any, enabled: Any) -> Any:
+        """Send a mode changed event to all clients
+
+        Args:
+            mode: Mode name (e.g. "alt_screen", "cursor_visible")
+            enabled: Whether the mode is now enabled
+        """
+    def send_output(self, data: Any) -> Any:
+        """Send output data to all connected clients
+
+        Args:
+            data: The output data to send (ANSI escape sequences)
+        """
     def send_progress_bar_changed(
         self,
         action: Any,
@@ -1703,9 +3885,29 @@ class StreamingServer:
         state: Any = None,
         percent: Any = None,
         label: Any = None,
-    ) -> Any: ...
-    def send_resize(self, cols: Any, rows: Any) -> Any: ...
-    def send_title(self, title: Any) -> Any: ...
+    ) -> Any:
+        """Send a progress bar changed event to all clients
+
+        Args:
+            action: Action string ("set", "remove", or "remove_all")
+            id: Progress bar identifier
+            state: Optional ProgressState enum value
+            percent: Optional progress percentage (0-100)
+            label: Optional label text
+        """
+    def send_resize(self, cols: Any, rows: Any) -> Any:
+        """Send a resize event to all clients
+
+        Args:
+            cols: Number of columns
+            rows: Number of rows
+        """
+    def send_title(self, title: Any) -> Any:
+        """Send a title change event to all clients
+
+        Args:
+            title: The new terminal title
+        """
     def send_trigger_matched(
         self,
         trigger_id: Any,
@@ -1715,24 +3917,120 @@ class StreamingServer:
         text: Any,
         captures: Any = ...,
         timestamp: Any = 0,
-    ) -> Any: ...
+    ) -> Any:
+        """Send a trigger matched event to all clients
+
+        Args:
+            trigger_id: ID of the trigger that matched
+            row: Row where the match occurred
+            col: Starting column of the match
+            end_col: Ending column of the match
+            text: The matched text
+            captures: List of capture group strings
+            timestamp: Unix timestamp of the match
+        """
     def send_user_var_changed(
         self, name: Any, value: Any, old_value: Any = None
-    ) -> Any: ...
-    def shutdown(self, reason: Any) -> Any: ...
-    def start(self) -> Any: ...
+    ) -> Any:
+        """Send a user variable changed event to all clients
+
+        Args:
+            name: Variable name
+            value: New variable value
+            old_value: Previous value, if known
+        """
+    def shutdown(self, reason: Any) -> Any:
+        """Shutdown the server and disconnect all clients
+
+        Args:
+            reason: Reason for shutdown
+        """
+    def start(self) -> Any:
+        """Start the streaming server (non-blocking)
+
+        This spawns the server in a background thread
+        """
 
 class Terminal:
+    """Python wrapper for the Terminal"""
     def __init__(self, cols: Any, rows: Any, scrollback: Any = 10000) -> None: ...
-    def __str__(self, /) -> Any: ...
-    def accept_osc7(self) -> Any: ...
-    def add_async_observer(self, kinds: Any = None) -> Any: ...
-    def add_bookmark(self, row: Any, label: Any = None) -> Any: ...
-    def add_damage_region(
-        self, left: Any, top: Any, right: Any, bottom: Any
-    ) -> Any: ...
-    def add_inline_image(self, image: Any) -> Any: ...
-    def add_observer(self, callback: Any, kinds: Any = None) -> Any: ...
+    def __str__(self, /) -> Any:
+        """Return str(self)."""
+    def accept_osc7(self) -> Any:
+        """Check if OSC 7 directory tracking is enabled
+
+        Returns:
+            True if OSC 7 sequences are accepted, False otherwise
+        """
+    def add_async_observer(self, kinds: Any = None) -> Any:
+        """Register an async observer using an asyncio.Queue
+
+        Creates an asyncio.Queue and registers an observer that pushes event dicts
+        into it via `put_nowait()`. Returns both the observer ID and the queue.
+
+        Args:
+            kinds: Optional list of event kind strings to filter on.
+
+        Returns:
+            tuple[int, asyncio.Queue]: (observer_id, queue)
+
+        Example:
+            >>> observer_id, queue = term.add_async_observer(kinds=["title_changed"])
+            >>> term.process(b"\\x1b]0;Hello\\x07")
+            >>> event = queue.get_nowait()
+        """
+    def add_bookmark(self, row: Any, label: Any = None) -> Any:
+        """Add a bookmark at the given scrollback row
+
+        Args:
+            row: Row index (negative for scrollback, 0+ for visible screen)
+            label: Optional label for the bookmark
+
+        Returns:
+            Bookmark ID
+        """
+    def add_damage_region(self, left: Any, top: Any, right: Any, bottom: Any) -> Any:
+        """Add a damage region marking a rectangular area of the grid as dirty
+
+        Accumulated damage regions can be retrieved via `get_damage_regions()`
+        and are intended for frontends that want to redraw only changed areas.
+
+        Args:
+            left: Left column of the damaged rectangle (0-indexed, inclusive)
+            top: Top row of the damaged rectangle (0-indexed, inclusive)
+            right: Right column of the damaged rectangle (exclusive)
+            bottom: Bottom row of the damaged rectangle (exclusive)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_damage_region(0, 0, 80, 1)
+            ```
+        """
+    def add_inline_image(self, image: Any) -> Any:
+        """Add an inline image
+
+        Args:
+            image: PyInlineImage to add
+        """
+    def add_observer(self, callback: Any, kinds: Any = None) -> int:
+        """Register a synchronous observer callback
+
+        The callback receives a dict for each terminal event.
+        Returns an observer ID for later removal.
+
+        Args:
+            callback: A Python callable that accepts a single dict argument.
+            kinds: Optional list of event kind strings to filter on.
+
+        Returns:
+            int: A unique observer ID.
+
+        Example:
+            >>> def on_event(event):
+            ...     print(event["type"])
+            >>> observer_id = term.add_observer(on_event, kinds=["bell", "title_changed"])
+        """
     def add_rendering_hint(
         self,
         left: Any,
@@ -1742,88 +4040,546 @@ class Terminal:
         layer: Any,
         animation: Any,
         priority: Any,
-    ) -> Any: ...
+    ) -> Any:
+        """Add a rendering hint describing how a damaged region should be redrawn
+
+        Rendering hints let a frontend apply frame-level optimizations (e.g.
+        z-ordering, animation, and update priority) instead of blindly
+        redrawing every damaged cell. Hints accumulate until drained via
+        `get_rendering_hints()` / `clear_rendering_hints()`.
+
+        Args:
+            left: Left column of the damaged rectangle (0-indexed, inclusive)
+            top: Top row of the damaged rectangle (0-indexed, inclusive)
+            right: Right column of the damaged rectangle (exclusive)
+            bottom: Bottom row of the damaged rectangle (exclusive)
+            layer: Z-order layer, one of "background", "normal", "overlay", "cursor"
+                (case-insensitive)
+            animation: Animation hint, one of "none", "smoothscroll", "fade",
+                "cursorblink" (case-insensitive)
+            priority: Update priority, one of "low", "normal", "high", "critical"
+                (case-insensitive)
+
+        Raises:
+            ValueError: If `layer`, `animation`, or `priority` is not one of the
+                supported values above
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+            ```
+        """
     def add_to_clipboard_history(
         self, slot: Any, content: Any, label: Any = None
-    ) -> Any: ...
-    def add_trigger(self, name: Any, pattern: Any, actions: Any) -> Any: ...
-    def allow_clipboard_read(self) -> Any: ...
-    def answerback_string(self) -> Any: ...
-    def application_cursor(self) -> Any: ...
-    def application_keypad(self) -> Any: ...
-    def auto_wrap_mode(self) -> Any: ...
-    def badge_color(self) -> Any: ...
-    def badge_format(self) -> Any: ...
-    def benchmark_grid_ops(self, iterations: Any) -> Any: ...
-    def benchmark_parsing(self, text: Any, iterations: Any) -> Any: ...
-    def benchmark_rendering(self, iterations: Any) -> Any: ...
-    def bold_brightening(self) -> Any: ...
-    def bold_color(self) -> Any: ...
-    def bracketed_paste(self) -> Any: ...
-    def cancel_file_transfer(self, transfer_id: Any) -> Any: ...
-    def cancel_upload(self) -> Any: ...
-    def capture_replay_snapshot(self) -> Any: ...
-    def char_width(self, c: Any) -> Any: ...
-    def check_activity(self) -> Any: ...
-    def check_silence(self) -> Any: ...
-    def clear_all_clipboard_history(self) -> Any: ...
-    def clear_all_tab_stops(self) -> Any: ...
-    def clear_badge_format(self) -> Any: ...
-    def clear_bookmarks(self) -> Any: ...
-    def clear_clipboard_history(self, slot: Any) -> Any: ...
-    def clear_clipboard_sync_events(self) -> Any: ...
-    def clear_command_history(self) -> Any: ...
-    def clear_cwd_history(self) -> Any: ...
-    def clear_damage_regions(self) -> Any: ...
-    def clear_event_subscription(self) -> Any: ...
-    def clear_graphics(self) -> Any: ...
-    def clear_images(self) -> Any: ...
-    def clear_mouse_history(self) -> Any: ...
-    def clear_notification_events(self) -> Any: ...
-    def clear_progress(self) -> Any: ...
-    def clear_regex_matches(self) -> Any: ...
-    def clear_rendering_hints(self) -> Any: ...
-    def clear_selection(self) -> Any: ...
-    def clear_tab_stop(self, col: Any) -> Any: ...
-    def clear_tmux_notifications(self) -> Any: ...
-    def clear_trigger_highlights(self) -> Any: ...
-    def clipboard(self) -> Any: ...
+    ) -> Any:
+        """Add content to the clipboard history for a slot
+
+        Content larger than 10 MB is truncated to prevent excessive memory
+        usage. History for each slot is capped; the oldest entry is dropped
+        once the cap is exceeded.
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive)
+            content: Text content to store
+            label: Optional description for this entry (default: None)
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello", label="greeting")
+            ```
+        """
+    def add_trigger(self, name: Any, pattern: Any, actions: Any) -> int:
+        """Add a new trigger with a regex pattern and actions
+
+        Args:
+            name: Human-readable trigger name
+            pattern: Regex pattern to match against terminal output lines
+            actions: List of TriggerAction objects defining what happens on match
+
+        Returns:
+            int: Trigger ID for future reference
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> trigger_id = term.add_trigger("errors", r"ERROR:\\s+(.+)", [action])
+        """
+    def allow_clipboard_read(self) -> Any:
+        """Check if clipboard read operations are allowed
+
+        Returns:
+            True if OSC 52 queries (ESC ] 52 ; c ; ? ST) are allowed
+        """
+    def answerback_string(self) -> Any:
+        """Get the configured answerback string (ENQ response)
+
+        Returns:
+            The current answerback string or None if disabled (default)
+        """
+    def application_cursor(self) -> bool:
+        """Get application cursor mode
+
+        Returns:
+            bool: True if the cursor keys send application-mode sequences
+        """
+    def application_keypad(self) -> bool:
+        """Get application keypad mode (DECPAM/DECPNM)
+
+        Returns:
+            bool: True if the keypad sends application-mode sequences
+        """
+    def auto_wrap_mode(self) -> bool:
+        """Get auto-wrap mode (DECAWM)
+
+        Returns:
+            bool: True if characters wrap to the next line at the right margin
+        """
+    def badge_color(self) -> Any:
+        """Get badge color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def badge_format(self) -> Any:
+        """Get the current badge format template
+
+        Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
+        The format may contain `\\(variable)` placeholders for session variables.
+
+        Returns:
+            Optional string containing the badge format template, or None if not set
+        """
+    def benchmark_grid_ops(self, iterations: Any) -> Any:
+        """Run grid operations benchmark
+
+        Args:
+            iterations: Number of iterations to run
+
+        Returns:
+            PyBenchmarkResult with timing statistics
+        """
+    def benchmark_parsing(self, text: Any, iterations: Any) -> Any:
+        """Run escape sequence parsing benchmark
+
+        Args:
+            text: Text to parse
+            iterations: Number of iterations to run
+
+        Returns:
+            PyBenchmarkResult with timing statistics
+        """
+    def benchmark_rendering(self, iterations: Any) -> Any:
+        """Run rendering benchmark
+
+        Args:
+            iterations: Number of iterations to run
+
+        Returns:
+            PyBenchmarkResult with timing statistics
+        """
+    def bold_brightening(self) -> Any:
+        """Check if bold brightening is enabled
+
+        When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+
+        Returns:
+            True if bold brightening is enabled
+        """
+    def bold_color(self) -> Any:
+        """Get bold text color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def bracketed_paste(self) -> Any:
+        """Check if bracketed paste mode is enabled
+
+        Returns:
+            True if bracketed paste mode is enabled
+        """
+    def cancel_file_transfer(self, transfer_id: Any) -> Any:
+        """Cancel an active file transfer
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            True if the transfer was found and cancelled, False otherwise
+        """
+    def cancel_upload(self) -> Any:
+        """Cancel an upload request"""
+    def capture_replay_snapshot(self) -> dict:
+        """Capture a cell-level snapshot of the terminal state for Instant Replay.
+
+        Unlike `get_semantic_snapshot()` which captures text only, this captures
+        raw Cell data including colors and attributes for pixel-perfect reconstruction.
+
+        Returns:
+            dict: Snapshot metadata with keys:
+                - timestamp (int): Unix timestamp in milliseconds
+                - cols (int): Terminal width in columns
+                - rows (int): Terminal height in rows
+                - estimated_size_bytes (int): Approximate memory footprint in bytes
+
+        Example:
+            >>> term = Terminal(80, 24)
+            >>> info = term.capture_replay_snapshot()
+            >>> print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
+        """
+    def char_width(self, c: Any) -> int:
+        """Get the display width of a single character
+
+        Args:
+            c: A single character to measure
+
+        Returns:
+            int: The display width in cells (0, 1, or 2)
+        """
+    def check_activity(self) -> Any:
+        """Check for activity and trigger notification if needed"""
+    def check_silence(self) -> Any:
+        """Check for silence and trigger notification if needed"""
+    def clear_all_clipboard_history(self) -> Any:
+        """Clear all clipboard history"""
+    def clear_all_tab_stops(self) -> Any:
+        """Clear all tab stops"""
+    def clear_badge_format(self) -> Any:
+        """Clear the badge format
+
+        Removes any previously set badge format template.
+        """
+    def clear_bookmarks(self) -> Any:
+        """Clear all bookmarks"""
+    def clear_clipboard_history(self, slot: Any) -> Any:
+        """Clear clipboard history for a slot
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive)
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+        """
+    def clear_clipboard_sync_events(self) -> Any:
+        """Clear clipboard sync events"""
+    def clear_command_history(self) -> Any:
+        """Clear command execution history"""
+    def clear_cwd_history(self) -> Any:
+        """Clear CWD change history"""
+    def clear_damage_regions(self) -> Any:
+        """Clear damage regions"""
+    def clear_event_subscription(self) -> Any:
+        """Clear event subscription filter (equivalent to receiving all events)"""
+    def clear_graphics(self) -> Any:
+        """Clear all graphics"""
+    def clear_images(self) -> Any:
+        """Clear all inline images"""
+    def clear_mouse_history(self) -> Any:
+        """Clear mouse history"""
+    def clear_notification_events(self) -> Any:
+        """Clear notification events"""
+    def clear_progress(self) -> Any:
+        """Clear/hide the progress bar
+
+        Equivalent to receiving OSC 9;4;0 (hidden state).
+        """
+    def clear_regex_matches(self) -> Any:
+        """Clear regex search cache"""
+    def clear_rendering_hints(self) -> Any:
+        """Clear rendering hints"""
+    def clear_selection(self) -> Any:
+        """Clear the current selection"""
+    def clear_tab_stop(self, col: Any) -> Any:
+        """Clear a tab stop at the specified column
+
+        Args:
+            col: 0-indexed column whose tab stop is removed
+        """
+    def clear_tmux_notifications(self) -> Any:
+        """Clear the tmux control protocol notifications buffer"""
+    def clear_trigger_highlights(self) -> Any:
+        """Clear all trigger highlights"""
+    def clipboard(self) -> Any:
+        """Get the current clipboard content
+
+        Returns:
+            Clipboard content as string, or None if empty
+        """
     def color_distance(
         self, r1: Any, g1: Any, b1: Any, r2: Any, g2: Any, b2: Any
-    ) -> Any: ...
-    def conformance_level(self) -> Any: ...
-    def conformance_level_name(self) -> Any: ...
-    def content(self) -> Any: ...
-    def count_non_whitespace_lines(self) -> Any: ...
-    def create_snapshot(self) -> Any: ...
-    def current_directory(self) -> Any: ...
-    def cursor_color(self) -> Any: ...
-    def cursor_guide_color(self) -> Any: ...
-    def cursor_position(self) -> Any: ...
-    def cursor_style(self) -> Any: ...
-    def cursor_visible(self) -> Any: ...
-    def damage_generation(self) -> Any: ...
-    def debug_info(self) -> Any: ...
-    def debug_log_snapshot(self, label: Any) -> Any: ...
-    def debug_snapshot_alt(self) -> Any: ...
-    def debug_snapshot_buffer(self) -> Any: ...
-    def debug_snapshot_grid(self) -> Any: ...
-    def debug_snapshot_primary(self) -> Any: ...
-    def default_bg(self) -> Any: ...
-    def default_fg(self) -> Any: ...
-    def delete_image(self, id: Any) -> Any: ...
-    def detect_file_paths(self) -> Any: ...
-    def detect_semantic_items(self) -> Any: ...
-    def detect_urls(self) -> Any: ...
-    def diff_snapshots(self, old_snapshot: Any, new_snapshot: Any) -> Any: ...
-    def dirty_rows_since(self, gen: Any) -> Any: ...
-    def disable_insecure_sequences(self) -> Any: ...
-    def disable_profiling(self) -> Any: ...
-    def drain_bell_events(self) -> Any: ...
-    def drain_notifications(self) -> Any: ...
-    def drain_responses(self) -> Any: ...
-    def drain_tmux_notifications(self) -> Any: ...
-    def enable_profiling(self) -> Any: ...
+    ) -> float:
+        """Calculate the Euclidean distance between two RGB colors
+
+        Args:
+            r1: First color red channel (0-255)
+            g1: First color green channel (0-255)
+            b1: First color blue channel (0-255)
+            r2: Second color red channel (0-255)
+            g2: Second color green channel (0-255)
+            b2: Second color blue channel (0-255)
+
+        Returns:
+            float: Euclidean distance in RGB space (0.0 = identical colors,
+            larger values = more different); the maximum possible value is
+            approximately 441.7 (black vs. white)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            dist = term.color_distance(255, 0, 0, 0, 255, 0)
+            ```
+        """
+    def conformance_level(self) -> Any:
+        """Get current terminal conformance level
+
+        Returns:
+            Conformance level as integer (1=VT100, 2=VT220, 3=VT320, 4=VT420, 5=VT520)
+        """
+    def conformance_level_name(self) -> Any:
+        """Get conformance level name
+
+        Returns:
+            String name of conformance level ("VT100", "VT220", "VT320", "VT420", "VT520")
+        """
+    def content(self) -> Any:
+        """Get the terminal content as a string
+
+        Returns:
+            String representation of the terminal buffer
+        """
+    def count_non_whitespace_lines(self) -> Any:
+        """Count non-whitespace lines in visible screen
+
+        Returns:
+            Number of lines containing non-whitespace characters
+        """
+    def create_snapshot(self) -> Any:
+        """Create atomic snapshot of current screen state
+
+        Captures all lines, cursor state, and screen identity atomically.
+        The snapshot is immutable and will not change even if the terminal
+        state changes (e.g., alternate screen switches).
+
+        Returns:
+            ScreenSnapshot with all terminal state
+        """
+    def current_directory(self) -> Any:
+        """Get the current working directory reported via OSC 7,
+        or None if no directory has been reported yet.
+
+        Returns:
+            Optional string with current directory path
+        """
+    def cursor_color(self) -> Any:
+        """Get cursor color (OSC 12)
+
+        Returns RGB tuple (r, g, b) where each component is 0-255.
+
+        Returns:
+            Tuple of (r, g, b) integers
+        """
+    def cursor_guide_color(self) -> Any:
+        """Get cursor guide color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def cursor_position(self) -> Any:
+        """Get the cursor position
+
+        Returns:
+            Tuple of (col, row)
+        """
+    def cursor_style(self) -> Any:
+        """Get the current cursor style
+
+        Returns:
+            CursorStyle enum value
+        """
+    def cursor_visible(self) -> Any:
+        """Check if cursor is visible
+
+        Returns:
+            True if cursor is visible
+        """
+    def damage_generation(self) -> int:
+        """Get the current damage generation
+
+        Independent damage consumers (more than one renderer watching the
+        same terminal) remember this value between frames and pass it to
+        `dirty_rows_since()`. Unlike `mark_clean()` — which advances the
+        default consumer used by `get_dirty_rows()` — a remembered
+        generation cannot hide damage from other consumers.
+
+        Returns:
+            int: Monotonic damage generation counter
+
+        Example:
+            gen = term.damage_generation()
+            term.process(b"more output")
+            rows = term.dirty_rows_since(gen)  # only the new edit
+        """
+    def debug_info(self) -> Any:
+        """Get current debug information as a dictionary
+
+        Returns:
+            Dictionary containing terminal state for debugging
+        """
+    def debug_log_snapshot(self, label: Any) -> Any:
+        """Log a debug snapshot with a label
+
+        Args:
+            label: Description of this snapshot
+        """
+    def debug_snapshot_alt(self) -> Any:
+        """Get a debug snapshot of the alternate screen buffer
+
+        Returns:
+            String containing a formatted view of the alternate buffer
+        """
+    def debug_snapshot_buffer(self) -> Any:
+        """Get a debug snapshot of the current buffer state
+
+        Returns:
+            String containing a formatted view of the buffer
+        """
+    def debug_snapshot_grid(self) -> Any:
+        """Get a debug snapshot of the grid
+
+        Returns:
+            String containing a formatted view of the grid
+        """
+    def debug_snapshot_primary(self) -> Any:
+        """Get a debug snapshot of the primary screen buffer
+
+        Returns:
+            String containing a formatted view of the primary buffer
+        """
+    def default_bg(self) -> Any:
+        """Get default background color (OSC 11)
+
+        Returns RGB tuple (r, g, b) where each component is 0-255.
+
+        Returns:
+            Tuple of (r, g, b) integers
+        """
+    def default_fg(self) -> Any:
+        """Get default foreground color (OSC 10)
+
+        Returns RGB tuple (r, g, b) where each component is 0-255.
+
+        Returns:
+            Tuple of (r, g, b) integers
+        """
+    def delete_image(self, id: Any) -> Any:
+        """Delete image by ID
+
+        Args:
+            id: Image ID to delete
+
+        Returns:
+            True if image was found and deleted
+        """
+    def detect_file_paths(self) -> Any:
+        """Detect file paths in the visible screen
+
+        Returns:
+            List of DetectedItem objects for file paths
+        """
+    def detect_semantic_items(self) -> Any:
+        """Detect semantic items (URLs, file paths, git hashes, IPs, emails)
+
+        Returns:
+            List of all detected semantic items
+        """
+    def detect_urls(self) -> Any:
+        """Detect URLs in the visible screen
+
+        Returns:
+            List of DetectedItem objects for URLs
+        """
+    def diff_snapshots(self, old_snapshot: Any, new_snapshot: Any) -> Any:
+        """Compare two semantic snapshots and return their differences.
+
+        Args:
+            old_snapshot: dict from get_semantic_snapshot() captured first
+            new_snapshot: dict from get_semantic_snapshot() captured second
+
+        Returns:
+            SnapshotDiff with per-line differences (`diffs`, a list of
+            LineDiff) and `added` / `removed` / `modified` / `unchanged`
+            line counts
+
+        Example:
+            >>> term = Terminal(80, 24)
+            >>> term.process(b"one\\r\\ntwo")
+            >>> old = term.get_semantic_snapshot()
+            >>> term.process(b"\\x1b[2;1HTWO")
+            >>> new = term.get_semantic_snapshot()
+            >>> diff = term.diff_snapshots(old, new)
+            >>> diff.modified
+            1
+        """
+    def dirty_rows_since(self, gen: Any) -> list[int]:
+        """Get rows changed since the given damage generation
+
+        Args:
+            gen: A generation captured from an earlier `damage_generation()` call
+
+        Returns:
+            list[int]: Sorted 0-indexed row numbers changed since `gen`.
+                A screen switch reports every row of the newly visible grid.
+        """
+    def disable_insecure_sequences(self) -> Any:
+        """Check if insecure sequences are disabled
+
+        Returns:
+            True if insecure sequences are blocked, False otherwise
+        """
+    def disable_profiling(self) -> Any:
+        """Disable performance profiling"""
+    def drain_bell_events(self) -> list[str]:
+        """Drain all pending bell events
+
+        Returns and clears the buffer of bell events.
+        Each event is a string: 'visual', 'warning:<volume>', or 'margin:<volume>'
+
+        Returns:
+            list[str]: Bell events received since the last drain
+        """
+    def drain_notifications(self) -> Any:
+        """Get all pending notifications (alias for take_notifications)
+
+        Returns a list of tuples: [(title, message), ...]
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of (title, message) tuples
+        """
+    def drain_responses(self) -> Any:
+        """Drain and return pending device query responses
+
+        Device queries like DA (Device Attributes) and DSR (Device Status Report)
+        generate responses that are buffered. This method retrieves and clears them.
+
+        Returns:
+            Bytes containing all pending responses
+        """
+    def drain_tmux_notifications(self) -> Any:
+        """Drain and return tmux control protocol notifications
+
+        Returns all pending notifications and clears the notification buffer.
+
+        Returns:
+            List of TmuxNotification objects
+        """
+    def enable_profiling(self) -> Any:
+        """Enable performance profiling"""
     def encode_key(
         self,
         key: Any,
@@ -1831,206 +4587,1699 @@ class Terminal:
         codepoint: Any = 0,
         left_option: Any = 0,
         right_option: Any = 0,
-    ) -> Any: ...
-    def end_command_execution(self, exit_code: Any) -> Any: ...
-    def erase_rectangle(self, top: Any, left: Any, bottom: Any, right: Any) -> Any: ...
-    def evaluate_badge(self) -> Any: ...
-    def export_asciicast(self, session: Any = None) -> Any: ...
-    def export_asciicast_v3(self, session: Any = None) -> Any: ...
-    def export_graphics_json(self) -> Any: ...
-    def export_html(self, include_styles: Any = True) -> Any: ...
-    def export_json(self, session: Any = None) -> Any: ...
-    def export_scrollback(
-        self, format: Any = "plain", max_lines: Any = None
-    ) -> Any: ...
-    def export_styled(self) -> Any: ...
-    def export_text(self) -> Any: ...
-    def faint_text_alpha(self) -> Any: ...
+    ) -> bytes:
+        """Encode a key event into the bytes a terminal application expects.
+
+        The encoding honors the terminal's negotiated input state —
+        application cursor keys, kitty keyboard flags, and the
+        modifyOtherKeys mode the running program requested.
+
+        Args:
+            key: Key code — a ``TERM_KEY_*``-style value: 1 for a character
+                key, or a functional-key code (9 Tab, 13 Enter, 27 Escape,
+                127 Backspace, 57428 Left … 57437 End, 57376..57387 F1..F12).
+            modifiers: Bitfield — shift=1, alt=2, ctrl=4, super=8, hyper=16,
+                meta=32, plus the side-info bit alt_right=64 (the held Alt
+                key is the right one, selecting ``right_option``).
+            codepoint: Unicode scalar for character keys (``key=1``): the
+                typed form for plain text, the base form when ctrl/alt drive
+                the encoding, the OS-composed glyph in normal option mode.
+                Ignored for functional keys.
+            left_option: Option-key mode for the left Alt key —
+                0 normal (pass the character through), 1 meta (8th bit on
+                ASCII bases), 2 esc (ESC-prefix). Default 0.
+            right_option: Option-key mode for the right Alt key. Default 0.
+
+        Returns:
+            bytes: The bytes to write to the PTY. Empty bytes mean the key
+            has no encoding (unknown key code).
+
+        Example:
+            ```python
+            from par_term_emu_core_rust import Terminal
+            term = Terminal(80, 24)
+            term.encode_key(1, 4, ord("c"))   # b'\\\\x03'  (Ctrl+C)
+            term.encode_key(57430, 0, 0)      # b'\\\\x1b[A' (Up arrow)
+            term.encode_key(1, 2, ord("f"), left_option=2)  # b'\\\\x1bf'
+            ```
+        """
+    def end_command_execution(self, exit_code: Any) -> Any:
+        """End tracking the current command execution
+
+        Args:
+            exit_code: Exit code of the command
+        """
+    def erase_rectangle(self, top: Any, left: Any, bottom: Any, right: Any) -> Any:
+        """Erase a rectangle
+
+        Args:
+            top: First row (0-indexed, inclusive)
+            left: First column (0-indexed, inclusive)
+            bottom: Last row (0-indexed, inclusive)
+            right: Last column (0-indexed, inclusive)
+        """
+    def evaluate_badge(self) -> Any:
+        """Evaluate the current badge format with session variables
+
+        Returns the evaluated badge string with all variables substituted,
+        or None if no badge format is set.
+
+        Returns:
+            Evaluated badge string with variables replaced, or None
+        """
+    def export_asciicast(self, session: Any = None) -> Any:
+        """Export recording to asciicast v2 format
+
+        Args:
+            session: RecordingSession from stop_recording()
+
+        Returns:
+            Asciicast format string
+        """
+    def export_asciicast_v3(self, session: Any = None) -> Any:
+        """Export recording to asciicast v3 format
+
+        v3 uses a nested `term` header object, relative per-event intervals,
+        and `"COLSxROWS"` resize data. A `g` graphics event is emitted per
+        graphic in the store (live placements and scrollback promotions)
+        carrying protocol, geometry, position and base64 RGBA pixels.
+
+        Args:
+            session: RecordingSession from stop_recording()
+
+        Returns:
+            Asciicast v3 format string
+        """
+    def export_graphics_json(self) -> Any:
+        """Export all graphics metadata as a JSON string for session persistence
+
+        Serializes all active placements, scrollback graphics, and animation state
+        into a JSON string. Image pixel data is base64-encoded inline.
+
+        Returns:
+            JSON string containing the serialized graphics snapshot
+
+        Example:
+            >>> json_str = terminal.export_graphics_json()
+            >>> with open("session_graphics.json", "w") as f:
+            ...     f.write(json_str)
+        """
+    def export_html(self, include_styles: Any = True) -> Any:
+        """Export terminal content as HTML
+
+        Args:
+            include_styles: Whether to include full HTML document with CSS (default: True)
+
+        Returns:
+            HTML string with terminal content and styling
+
+        When include_styles is True, returns a complete HTML document.
+        When False, returns just the styled content (useful for embedding).
+        """
+    def export_json(self, session: Any = None) -> Any:
+        """Export recording to JSON format
+
+        Returns:
+            JSON format string
+        """
+    def export_scrollback(self, format: Any = "plain", max_lines: Any = None) -> Any:
+        """Export scrollback to various formats
+
+        Args:
+            format: Export format: "plain", "html", or "ansi"
+            max_lines: Maximum number of scrollback lines to export (None = all)
+
+        Returns:
+            Exported content as string
+        """
+    def export_styled(self) -> Any:
+        """Export entire buffer (scrollback + current screen) with ANSI styling
+
+        Returns:
+            String containing text content with ANSI escape codes
+        """
+    def export_text(self) -> Any:
+        """Export entire buffer (scrollback + current screen) as plain text
+
+        Returns:
+            String containing all text content
+        """
+    def faint_text_alpha(self) -> Any:
+        """Get faint/dim text alpha multiplier
+
+        This value is applied to SGR 2 (dim/faint) text during rendering.
+        A value of 0.5 means 50% opacity (the default).
+
+        Returns:
+            Alpha multiplier between 0.0 and 1.0
+        """
     def fill_rectangle(
         self, top: Any, left: Any, bottom: Any, right: Any, ch: Any
-    ) -> Any: ...
-    def find_matching_bracket(self, col: Any, row: Any) -> Any: ...
+    ) -> Any:
+        """Fill a rectangle with a character
+
+        Args:
+            top: First row (0-indexed, inclusive)
+            left: First column (0-indexed, inclusive)
+            bottom: Last row (0-indexed, inclusive)
+            right: Last column (0-indexed, inclusive)
+            ch: Character to fill with
+        """
+    def find_matching_bracket(self, col: Any, row: Any) -> Any:
+        """Find matching bracket/parenthesis at cursor position
+
+        Supports: (), [], {}, <>
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+
+        Returns:
+            (col, row) position of matching bracket, or None
+        """
     def find_next(
         self, pattern: Any, from_col: Any, from_row: Any, case_sensitive: Any = True
-    ) -> Any: ...
-    def find_text(self, pattern: Any, case_sensitive: Any = True) -> Any: ...
-    def flush_synchronized_updates(self) -> Any: ...
-    def focus_tracking(self) -> Any: ...
+    ) -> Any:
+        """Find next occurrence of text from given position
+
+        Args:
+            pattern: Text to search for
+            from_col: Starting column position
+            from_row: Starting row position
+            case_sensitive: Whether search is case-sensitive (default: True)
+
+        Returns:
+            (col, row) of next match, or None if not found
+        """
+    def find_text(self, pattern: Any, case_sensitive: Any = True) -> Any:
+        """Find all occurrences of text in the visible screen
+
+        Args:
+            pattern: Text to search for
+            case_sensitive: Whether search is case-sensitive (default: True)
+
+        Returns:
+            List of (col, row) positions where pattern was found
+        """
+    def flush_synchronized_updates(self) -> Any:
+        """Manually flush the synchronized update buffer
+
+        This is useful for flushing buffered updates without disabling synchronized mode.
+        Note: The buffer is automatically flushed when synchronized mode is disabled via CSI ? 2026 l
+        """
+    def focus_tracking(self) -> Any:
+        """Check if focus tracking is enabled
+
+        Returns:
+            True if focus tracking is enabled
+        """
     @staticmethod
-    def format_compliance_report(report: Any) -> Any: ...
-    def generate_color_palette(self, r: Any, g: Any, b: Any, mode: Any) -> Any: ...
-    def get_active_transfers(self) -> Any: ...
-    def get_all_hyperlinks(self) -> Any: ...
-    def get_all_images(self) -> Any: ...
-    def get_allow_file_media(self) -> Any: ...
-    def get_ansi_color(self, index: Any) -> Any: ...
-    def get_ansi_palette(self) -> Any: ...
-    def get_attributes(self, col: Any, row: Any) -> Any: ...
-    def get_average_frame_time(self) -> Any: ...
-    def get_badge_session_variable(self, name: Any) -> Any: ...
-    def get_badge_session_variables(self) -> Any: ...
-    def get_bg_color(self, col: Any, row: Any) -> Any: ...
-    def get_bookmarks(self) -> Any: ...
-    def get_char(self, col: Any, row: Any) -> Any: ...
-    def get_clipboard_from_slot(self, slot: Any = None) -> Any: ...
-    def get_clipboard_history(self, slot: Any) -> Any: ...
-    def get_clipboard_sync_events(self) -> Any: ...
-    def get_clipboard_sync_history(self, target: Any) -> Any: ...
-    def get_command_history(self) -> Any: ...
-    def get_command_output(self, index: Any) -> Any: ...
-    def get_command_outputs(self) -> Any: ...
-    def get_completed_transfers(self) -> Any: ...
-    def get_current_command(self) -> Any: ...
-    def get_current_regex_pattern(self) -> Any: ...
-    def get_cwd_changes(self) -> Any: ...
-    def get_damage_regions(self) -> Any: ...
-    def get_dirty_region(self) -> Any: ...
-    def get_dirty_rows(self) -> Any: ...
-    def get_dropped_sixel_graphics(self) -> Any: ...
-    def get_fg_color(self, col: Any, row: Any) -> Any: ...
-    def get_focus_in_event(self) -> Any: ...
-    def get_focus_out_event(self) -> Any: ...
-    def get_fps(self) -> Any: ...
-    def get_frame_timings(self, count: Any = None) -> Any: ...
-    def get_hyperlink(self, col: Any, row: Any) -> Any: ...
-    def get_image_by_id(self, id: Any) -> Any: ...
-    def get_images_at(self, col: Any, row: Any) -> Any: ...
-    def get_last_mouse_position(self) -> Any: ...
-    def get_latest_clipboard(self, slot: Any) -> Any: ...
-    def get_line(self, row: Any) -> Any: ...
-    def get_line_cells(self, row: Any) -> Any: ...
+    def format_compliance_report(report: Any) -> Any:
+        """Generate compliance report as formatted string
+
+        Args:
+            report: PyComplianceReport to format
+
+        Returns:
+            Formatted compliance report string
+        """
+    def generate_color_palette(self, r: Any, g: Any, b: Any, mode: Any) -> ColorPalette:
+        """Generate a themed color palette from a base RGB color
+
+        Args:
+            r: Base color red channel (0-255)
+            g: Base color green channel (0-255)
+            b: Base color blue channel (0-255)
+            mode: Theme mode, one of "complementary", "analogous", "triadic",
+                "tetradic", "split_complementary", "monochromatic"
+
+        Returns:
+            ColorPalette: object with `base` (r, g, b), `colors` (list of
+            (r, g, b) tuples generated from the theme), and `mode` (echoed back)
+
+        Raises:
+            ValueError: If `mode` is not one of the supported theme modes
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            palette = term.generate_color_palette(255, 0, 0, "complementary")
+            print(palette.colors)
+            ```
+        """
+    def get_active_transfers(self) -> Any:
+        """Get all active (in-progress) file transfers
+
+        Returns a list of dictionaries, each describing an active transfer.
+
+        Returns:
+            List of transfer dictionaries
+        """
+    def get_all_hyperlinks(self) -> Any:
+        """Get all hyperlinks with their positions
+
+        Returns:
+            List of dictionaries with 'url' (string), 'positions' (list of (col, row) tuples), and optional 'id' (string)
+        """
+    def get_all_images(self) -> Any:
+        """Get all inline images
+
+        Returns:
+            List of all PyInlineImage
+        """
+    def get_allow_file_media(self) -> str:
+        """Get the current Kitty file-media mode.
+
+        Returns:
+            str: ``"off"``, ``"temp_only"``, or ``"all"`` — see
+            :meth:`set_allow_file_media`
+
+        Example:
+            >>> terminal.get_allow_file_media()
+            'temp_only'
+        """
+    def get_ansi_color(self, index: Any) -> tuple[int, int, int] | None:
+        """Get an ANSI palette color by index (0-15)
+
+        Args:
+            index: Palette index, 0-15
+
+        Returns:
+            tuple[int, int, int] | None: (r, g, b) if the color is RGB, None otherwise
+        """
+    def get_ansi_palette(self) -> Any:
+        """Get the entire ANSI color palette (colors 0-15)
+
+        Returns:
+            List of 16 RGB tuples (r, g, b)
+        """
+    def get_attributes(self, col: Any, row: Any) -> Any:
+        """Get cell attributes at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
+        """
+    def get_average_frame_time(self) -> int:
+        """Get average frame time in microseconds
+
+        Returns:
+            int: Mean frame processing time in microseconds
+        """
+    def get_badge_session_variable(self, name: Any) -> Any:
+        """Get a session variable value by name
+
+        Session variables are used for badge format evaluation.
+        Supports both `session.variable` and just `variable` syntax.
+
+        Args:
+            name: Variable name (e.g., "username", "hostname", "session.path")
+
+        Returns:
+            Variable value as string, or None if not set
+        """
+    def get_badge_session_variables(self) -> Any:
+        """Get all session variables as a dictionary
+
+        Returns all session variables that can be used in badge evaluation,
+        including built-in variables like columns, rows, bell_count, etc.
+
+        Returns:
+            Dictionary mapping variable names to their string values
+        """
+    def get_bg_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's background color at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if out of bounds
+        """
+    def get_bookmarks(self) -> Any:
+        """Get all bookmarks
+
+        Returns:
+            List of Bookmark objects
+        """
+    def get_char(self, col: Any, row: Any) -> Any:
+        """Get a cell's character at the specified position (includes combining characters/modifiers)
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Character (grapheme cluster) at the position, or None if out of bounds
+        """
+    def get_clipboard_from_slot(self, slot: Any = None) -> str | None:
+        """Get the most recent clipboard content for a slot
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive);
+                defaults to "clipboard" if not given (default: None)
+
+        Returns:
+            str | None: The latest content stored in the slot, or None if the
+            slot has no history
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_clipboard_with_slot("hello", slot="primary")
+            content = term.get_clipboard_from_slot(slot="primary")
+            ```
+        """
+    def get_clipboard_history(self, slot: Any) -> list[ClipboardEntry]:
+        """Get clipboard history for a slot
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive)
+
+        Returns:
+            list[ClipboardEntry]: Entries oldest-first, each with `content`,
+            `timestamp` (microseconds), and `label`. Empty list if the slot
+            has never had content added.
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello")
+            history = term.get_clipboard_history("clipboard")
+            ```
+        """
+    def get_clipboard_sync_events(self) -> list[ClipboardSyncEvent]:
+        """Get all recorded OSC 52 clipboard sync events
+
+        Returns:
+            list[ClipboardSyncEvent]: Events oldest-first (capped at
+            `get_max_clipboard_sync_events()`), each with `target`,
+            `operation`, `content`, `is_write`, `timestamp` (milliseconds),
+            and `is_remote`
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_clipboard_sync("clipboard", "set", "hello", False)
+            events = term.get_clipboard_sync_events()
+            ```
+        """
+    def get_clipboard_sync_history(self, target: Any) -> list[ClipboardHistoryEntry]:
+        """Get clipboard sync history (content set via OSC 52) for a target
+
+        Args:
+            target: Clipboard target — one of "clipboard", "primary",
+                "secondary", "cutbuffer0" (case-insensitive)
+
+        Returns:
+            list[ClipboardHistoryEntry]: Entries oldest-first (capped at
+            `set_max_clipboard_sync_history()`), each with `target`, `content`,
+            `timestamp` (milliseconds), and `source` (remote session ID, if
+            any). Always wrapped in an `Optional` for API compatibility, but
+            currently never returns None — an empty list is returned if the
+            target has no history.
+
+        Raises:
+            ValueError: If `target` is not one of the supported values above
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_clipboard_sync("clipboard", "set", "hello", False)
+            history = term.get_clipboard_sync_history("clipboard")
+            ```
+        """
+    def get_command_history(self) -> Any:
+        """Get command execution history
+
+        Returns:
+            List of PyCommandExecution
+        """
+    def get_command_output(self, index: Any) -> Any:
+        """Get command output text by index (0 = most recent completed command).
+
+        Args:
+            index: Command index (0 = most recent)
+
+        Returns:
+            Output text if available, None if index out of bounds or output evicted
+
+        Example:
+            ```python
+            output = term.get_command_output(0)
+            if output:
+                print(f"Last command output: {output}")
+            ```
+        """
+    def get_command_outputs(self) -> Any:
+        """Get all commands with extractable output text.
+        Commands whose output has been evicted from scrollback are excluded.
+
+        Returns:
+            List of dicts with keys: command, cwd, exit_code, output
+
+        Example:
+            ```python
+            outputs = term.get_command_outputs()
+            for out in outputs:
+                print(f"{out['command']}: {out['output']}")
+            ```
+        """
+    def get_completed_transfers(self) -> Any:
+        """Get all completed file transfers (includes failed and cancelled)
+
+        Returns:
+            List of transfer dictionaries
+        """
+    def get_current_command(self) -> Any:
+        """Get current executing command
+
+        Returns:
+            Optional PyCommandExecution
+        """
+    def get_current_regex_pattern(self) -> str | None:
+        """Get current regex search pattern
+
+        Returns:
+            str | None: The active regex pattern, or None if no search ran
+        """
+    def get_cwd_changes(self) -> Any:
+        """Get CWD change history
+
+        Returns:
+            List of PyCwdChange
+        """
+    def get_damage_regions(self) -> list[DamageRegion]:
+        """Get all accumulated damage regions without clearing them
+
+        Returns:
+            list[DamageRegion]: Regions added since the last `clear_damage_regions()`
+            call, each with `left`, `top`, `right`, `bottom` attributes
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_damage_region(0, 0, 80, 1)
+            for region in term.get_damage_regions():
+                print(region.left, region.top, region.right, region.bottom)
+            ```
+        """
+    def get_dirty_region(self) -> Any:
+        """Get the dirty region bounds
+
+        Returns:
+            Tuple of (first_row, last_row) inclusive, or None if no rows are dirty
+        """
+    def get_dirty_rows(self) -> list[int]:
+        """Get all dirty row numbers
+
+        Returns a sorted list of 0-indexed row numbers that have been modified
+        since the last mark_clean() call.
+
+        Returns:
+            list[int]: Sorted 0-indexed dirty row numbers
+        """
+    def get_dropped_sixel_graphics(self) -> Any:
+        """Get count of Sixel graphics dropped due to limits
+
+        Returns:
+            Number of Sixel graphics that have been dropped because of size or count limits
+        """
+    def get_fg_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's foreground color at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if out of bounds
+        """
+    def get_focus_in_event(self) -> Any:
+        """Get focus in event sequence
+
+        Returns:
+            Bytes for focus in event (if focus tracking is enabled)
+        """
+    def get_focus_out_event(self) -> Any:
+        """Get focus out event sequence
+
+        Returns:
+            Bytes for focus out event (if focus tracking is enabled)
+        """
+    def get_fps(self) -> float:
+        """Get frames per second
+
+        Returns:
+            float: Recent frame rate in frames per second
+        """
+    def get_frame_timings(self, count: Any = None) -> list[FrameTiming]:
+        """Get recent frame timings
+
+        Args:
+            count: Maximum timings to return (None for all buffered)
+
+        Returns:
+            list[FrameTiming]: Most recent frame timings, oldest first
+        """
+    def get_hyperlink(self, col: Any, row: Any) -> Any:
+        """Get hyperlink URL at the specified position
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            URL string if the cell has a hyperlink, or None if no hyperlink or out of bounds
+        """
+    def get_image_by_id(self, id: Any) -> Any:
+        """Get image by ID
+
+        Args:
+            id: Image ID to find
+
+        Returns:
+            PyInlineImage if found, None otherwise
+        """
+    def get_images_at(self, col: Any, row: Any) -> Any:
+        """Get inline images at a specific position
+
+        Args:
+            col: Column index
+            row: Row index
+
+        Returns:
+            List of PyInlineImage at the position
+        """
+    def get_last_mouse_position(self) -> MousePosition | None:
+        """Get the most recently recorded mouse position
+
+        Returns:
+            MousePosition | None: The last position recorded via
+            `record_mouse_event()`, or None if no events have been recorded
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_mouse_event("move", "none", 10, 5, None, None, 0, 0)
+            pos = term.get_last_mouse_position()
+            if pos:
+                print(pos.col, pos.row)
+            ```
+        """
+    def get_latest_clipboard(self, slot: Any) -> ClipboardEntry | None:
+        """Get the most recent clipboard entry for a slot
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive)
+
+        Returns:
+            ClipboardEntry | None: The newest entry for the slot, or None if
+            the slot has no history
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello")
+            entry = term.get_latest_clipboard("clipboard")
+            ```
+        """
+    def get_line(self, row: Any) -> Any:
+        """Get a specific line from the terminal buffer
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            String content of the specified row, or None if row is out of bounds
+        """
+    def get_line_cells(self, row: Any) -> Any:
+        """Get all cell data for a row in a single atomic operation
+
+        This method retrieves all cell information for an entire row atomically,
+        preventing race conditions in multi-threaded scenarios.
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes) for each column,
+            or empty list if row is out of bounds
+        """
     def get_line_context(
         self, row: Any, context_before: Any, context_after: Any
-    ) -> Any: ...
-    def get_line_unwrapped(self, row: Any) -> Any: ...
-    def get_logical_lines(self) -> Any: ...
-    def get_max_clipboard_event_bytes(self) -> Any: ...
-    def get_max_clipboard_sync_events(self) -> Any: ...
-    def get_max_mouse_history(self) -> Any: ...
-    def get_max_notifications(self) -> Any: ...
-    def get_max_transfer_size(self) -> Any: ...
-    def get_mouse_events(self, count: Any = None) -> Any: ...
-    def get_mouse_positions(self, count: Any = None) -> Any: ...
-    def get_named_progress_bar(self, id: Any) -> Any: ...
-    def get_notification_config(self) -> Any: ...
-    def get_notification_events(self) -> Any: ...
-    def get_paragraph_at(self, row: Any) -> Any: ...
-    def get_paste_end(self) -> Any: ...
-    def get_paste_start(self) -> Any: ...
-    def get_performance_metrics(self) -> Any: ...
-    def get_profiling_data(self) -> Any: ...
-    def get_recording_session(self) -> Any: ...
-    def get_rectangle(self, top: Any, left: Any, bottom: Any, right: Any) -> Any: ...
-    def get_regex_matches(self) -> Any: ...
-    def get_rendering_hints(self, sort_by_priority: Any = False) -> Any: ...
-    def get_scrollback_usage(self) -> Any: ...
-    def get_selected_text(self) -> Any: ...
-    def get_selection(self) -> Any: ...
+    ) -> Any:
+        """Get text lines around a specific row (with context)
+
+        Args:
+            row: Center row (0-based)
+            context_before: Number of lines before the row
+            context_after: Number of lines after the row
+
+        Returns:
+            List of text lines
+        """
+    def get_line_unwrapped(self, row: Any) -> Any:
+        """Get full logical line following wrapping
+
+        Args:
+            row: Row position (0-indexed)
+
+        Returns:
+            Complete unwrapped line or None if row is invalid
+        """
+    def get_logical_lines(self) -> list[str]:
+        """Get all logical lines (unwrapped)
+
+        Returns:
+            list[str]: Logical lines with wrapped segments joined
+        """
+    def get_max_clipboard_event_bytes(self) -> int:
+        """Get maximum bytes cached per clipboard sync event
+
+        Returns:
+            int: Maximum bytes cached per clipboard event
+        """
+    def get_max_clipboard_sync_events(self) -> int:
+        """Get maximum clipboard sync events retained
+
+        Returns:
+            int: Maximum clipboard sync events buffered
+        """
+    def get_max_mouse_history(self) -> Any:
+        """Get maximum mouse history size"""
+    def get_max_notifications(self) -> int:
+        """Get maximum retained OSC 9/777 notifications
+
+        Returns:
+            int: Maximum notifications buffered (0 means buffering is disabled)
+        """
+    def get_max_transfer_size(self) -> Any:
+        """Get the current maximum allowed file transfer size in bytes
+
+        Returns:
+            Maximum transfer size in bytes (default: 50 MB)
+        """
+    def get_mouse_events(self, count: Any = None) -> list[MouseEvent]:
+        """Get recorded mouse events, most recent last
+
+        Args:
+            count: If given, return only the last `count` events; if None,
+                return the full history (default: None)
+
+        Returns:
+            list[MouseEvent]: Each event has `event_type`, `button`, `col`,
+            `row`, `pixel_x`, `pixel_y`, `modifiers`, `timestamp` (microseconds)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+            events = term.get_mouse_events(count=10)
+            ```
+        """
+    def get_mouse_positions(self, count: Any = None) -> list[MousePosition]:
+        """Get recorded mouse cursor positions, most recent last
+
+        Args:
+            count: If given, return only the last `count` positions; if None,
+                return the full history (default: None)
+
+        Returns:
+            list[MousePosition]: Each position has `col`, `row`, and
+            `timestamp` (microseconds since epoch)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_mouse_event("move", "none", 10, 5, None, None, 0, 0)
+            positions = term.get_mouse_positions(count=5)
+            ```
+        """
+    def get_named_progress_bar(self, id: Any) -> Any:
+        """Get a specific named progress bar by ID
+
+        Args:
+            id: The progress bar identifier
+
+        Returns:
+            Dict with keys: id, state, percent, label (optional), or None if not found
+        """
+    def get_notification_config(self) -> NotificationConfig:
+        """Get notification configuration
+
+        Returns:
+            NotificationConfig: Current notification settings
+        """
+    def get_notification_events(self) -> Any:
+        """Get notification events
+
+        Returns:
+            List of NotificationEvent objects
+        """
+    def get_paragraph_at(self, row: Any) -> Any:
+        """Get the paragraph at the given position
+
+        A paragraph is defined as consecutive non-empty lines.
+
+        Args:
+            row: Row index
+
+        Returns:
+            Paragraph text as string
+        """
+    def get_paste_end(self) -> Any:
+        """Get bracketed paste end sequence
+
+        Returns:
+            Bytes for paste end (if bracketed paste is enabled)
+        """
+    def get_paste_start(self) -> Any:
+        """Get bracketed paste start sequence
+
+        Returns:
+            Bytes for paste start (if bracketed paste is enabled)
+        """
+    def get_performance_metrics(self) -> PerformanceMetrics:
+        """Get current performance metrics
+
+        Returns:
+            PerformanceMetrics: Aggregate counters since the last reset
+        """
+    def get_profiling_data(self) -> ProfilingData | None:
+        """Get profiling data
+
+        Returns:
+            ProfilingData | None: Collected profiling data, or None if empty
+        """
+    def get_recording_session(self) -> Any:
+        """Get current recording session
+
+        Returns:
+            RecordingSession object if recording is active, None otherwise
+        """
+    def get_rectangle(
+        self, top: Any, left: Any, bottom: Any, right: Any
+    ) -> list[list[dict]]:
+        """Get a rectangular region of the screen
+
+        Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive.
+
+        Args:
+            top: First row (0-indexed, inclusive)
+            left: First column (0-indexed, inclusive)
+            bottom: Last row (0-indexed, inclusive)
+            right: Last column (0-indexed, inclusive)
+
+        Returns:
+            list[list[dict]]: Rows of Cell dicts with 'char' and 'width' keys
+        """
+    def get_regex_matches(self) -> list[RegexMatch]:
+        """Get cached regex matches
+
+        Returns:
+            list[RegexMatch]: Matches from the most recent regex search
+        """
+    def get_rendering_hints(self, sort_by_priority: Any = False) -> list[RenderingHint]:
+        """Get all pending rendering hints without clearing them
+
+        Args:
+            sort_by_priority: If True, sort hints highest priority first
+                (default: False, insertion order)
+
+        Returns:
+            list[RenderingHint]: Each hint has `damage` (DamageRegion), `layer`
+            (str: "background"/"normal"/"overlay"/"cursor"), `animation` (str:
+            "none"/"smoothscroll"/"fade"/"cursorblink"), and `priority` (int:
+            0=low, 1=normal, 2=high, 3=critical)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+            for hint in term.get_rendering_hints(sort_by_priority=True):
+                print(hint.layer, hint.priority)
+            ```
+        """
+    def get_scrollback_usage(self) -> Any:
+        """Get scrollback usage
+
+        Returns:
+            Tuple of (used_lines, max_capacity)
+        """
+    def get_selected_text(self) -> Any:
+        """Get the text content of the current selection
+
+        Returns:
+            Selected text as string, or None if no selection
+        """
+    def get_selection(self) -> Any:
+        """Get the current selection
+
+        Returns:
+            Selection object or None if no selection
+        """
     def get_semantic_snapshot(
         self, scope: Any = "visible", max_commands: Any = 10
-    ) -> Any: ...
+    ) -> Any:
+        """Get a semantic snapshot of the terminal state as a Python dict.
+
+        Returns a structured representation of terminal state including
+        content, zones, commands, and environment metadata, suitable
+        for AI/LLM consumption.
+
+        Args:
+            scope: Snapshot scope - "visible", "recent", or "full" (default: "visible")
+            max_commands: For "recent" scope, max number of commands to include (default: 10)
+
+        Returns:
+            dict with keys: timestamp, cols, rows, title, cursor_col, cursor_row,
+            alt_screen_active, visible_text, scrollback_text, zones, commands,
+            cwd, hostname, username, cwd_history, scrollback_lines, total_zones,
+            total_commands
+
+        Example:
+            >>> term = Terminal(80, 24)
+            >>> term.process(b"Hello")
+            >>> snap = term.get_semantic_snapshot(scope="visible")
+            >>> snap["cols"]
+            80
+        """
     def get_semantic_snapshot_json(
         self, scope: Any = "visible", max_commands: Any = 10
-    ) -> Any: ...
-    def get_shell_integration_stats(self) -> Any: ...
-    def get_sixel_graphics_limit(self) -> Any: ...
-    def get_sixel_limits(self) -> Any: ...
-    def get_sixel_stats(self) -> Any: ...
-    def get_stats(self) -> Any: ...
-    def get_tab_stops(self) -> Any: ...
-    def get_tmux_notifications(self) -> Any: ...
-    def get_transfer(self, transfer_id: Any) -> Any: ...
-    def get_trigger(self, trigger_id: Any) -> Any: ...
-    def get_trigger_highlights(self) -> Any: ...
-    def get_underline_color(self, col: Any, row: Any) -> Any: ...
-    def get_url_at(self, col: Any, row: Any) -> Any: ...
-    def get_user_var(self, name: Any) -> Any: ...
-    def get_user_vars(self) -> Any: ...
-    def get_word_at(self, col: Any, row: Any, word_chars: Any = None) -> Any: ...
-    def get_zone_at(self, abs_row: Any) -> Any: ...
-    def get_zone_text(self, abs_row: Any) -> Any: ...
-    def get_zones(self) -> Any: ...
-    def graphics(self) -> Any: ...
-    def graphics_at_row(self, row: Any) -> Any: ...
-    def graphics_count(self) -> Any: ...
-    def handle_bell_notification(self) -> Any: ...
-    def has_notifications(self) -> Any: ...
-    def has_pending_responses(self) -> Any: ...
-    def has_progress(self) -> Any: ...
-    def has_tmux_notifications(self) -> Any: ...
-    def hsl_to_rgb_color(self, h: Any, s: Any, l: Any) -> Any: ...
-    def hsv_to_rgb_color(self, h: Any, s: Any, v: Any) -> Any: ...
-    def import_graphics_json(self, json: Any) -> Any: ...
-    def insert_mode(self) -> Any: ...
-    def is_alt_screen_active(self) -> Any: ...
-    def is_line_start(self, row: Any) -> Any: ...
-    def is_line_wrapped(self, row: Any) -> Any: ...
-    def is_profiling_enabled(self) -> Any: ...
-    def is_recording(self) -> Any: ...
-    def is_tmux_auto_detect(self) -> Any: ...
-    def is_tmux_control_mode(self) -> Any: ...
-    def join_wrapped_lines(self, start_row: Any) -> Any: ...
-    def keyboard_flags(self) -> Any: ...
-    def left_right_margins(self) -> Any: ...
-    def line_feed_new_line_mode(self) -> Any: ...
-    def link_color(self) -> Any: ...
-    def list_triggers(self) -> Any: ...
-    def margin_bell_volume(self) -> Any: ...
-    def mark_clean(self) -> Any: ...
-    def mark_notification_delivered(self, index: Any) -> Any: ...
-    def mark_row_dirty(self, row: Any) -> Any: ...
-    def match_color(self) -> Any: ...
-    def max_osc_data_length(self) -> Any: ...
+    ) -> Any:
+        """Get a semantic snapshot of the terminal state as a JSON string.
+
+        This is more efficient than get_semantic_snapshot() when you need
+        the data as a string (e.g., for sending to an LLM API).
+
+        Args:
+            scope: Snapshot scope - "visible", "recent", or "full" (default: "visible")
+            max_commands: For "recent" scope, max number of commands to include (default: 10)
+
+        Returns:
+            JSON string containing the semantic snapshot
+
+        Example:
+            >>> term = Terminal(80, 24)
+            >>> json_str = term.get_semantic_snapshot_json(scope="full")
+        """
+    def get_shell_integration_stats(self) -> Any:
+        """Get shell integration statistics
+
+        Returns:
+            PyShellIntegrationStats
+        """
+    def get_sixel_graphics_limit(self) -> Any:
+        """Get maximum number of Sixel graphics retained
+
+        Returns:
+            Maximum number of in-memory Sixel graphics for this terminal
+        """
+    def get_sixel_limits(self) -> Any:
+        """Get Sixel resource limits (max width, height, repeat)
+
+        Returns:
+            Tuple of (max_width_px, max_height_px, max_repeat)
+        """
+    def get_sixel_stats(self) -> Any:
+        """Get Sixel statistics as a dictionary
+
+        Returns:
+            {
+              "max_width_px": int,
+              "max_height_px": int,
+              "max_repeat": int,
+              "max_graphics": int,
+              "current_graphics": int,
+              "dropped_graphics": int,
+            }
+        """
+    def get_stats(self) -> Any:
+        """Get terminal statistics
+
+        Returns:
+            Dictionary with statistics: cols, rows, scrollback_lines, total_cells,
+            non_whitespace_lines, graphics_count, estimated_memory_bytes
+        """
+    def get_tab_stops(self) -> list[int]:
+        """Get all tab stop positions
+
+        Returns:
+            list[int]: Sorted 0-indexed columns with a tab stop set
+        """
+    def get_tmux_notifications(self) -> Any:
+        """Get tmux control protocol notifications
+
+        Returns a list of all pending tmux control protocol notifications.
+        This does not consume the notifications. Use drain_tmux_notifications()
+        to consume them.
+
+        Returns:
+            List of TmuxNotification objects
+        """
+    def get_transfer(self, transfer_id: Any) -> Any:
+        """Get a specific active transfer by ID
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            Transfer dictionary if found, None otherwise
+        """
+    def get_trigger(self, trigger_id: Any) -> Trigger | None:
+        """Get a trigger by ID
+
+        Args:
+            trigger_id: ID of the trigger
+
+        Returns:
+            Trigger | None: Trigger if found, None otherwise
+        """
+    def get_trigger_highlights(self) -> list[tuple]:
+        """Get active trigger highlights (filters expired ones)
+
+        Returns:
+            list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
+                where fg and bg are optional (r, g, b) tuples
+        """
+    def get_underline_color(self, col: Any, row: Any) -> Any:
+        """Get a cell's underline color at the specified position (SGR 58)
+
+        Args:
+            col: Column index (0-based)
+            row: Row index (0-based)
+
+        Returns:
+            Tuple of (r, g, b) values, or None if no underline color set or out of bounds
+        """
+    def get_url_at(self, col: Any, row: Any) -> Any:
+        """Get URL at cursor position
+
+        Detects URLs with schemes: http://, https://, ftp://, file://, mailto:, ssh://
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+
+        Returns:
+            URL at position or None if not on a URL
+        """
+    def get_user_var(self, name: Any) -> Any:
+        """Get a user variable value by name
+
+        User variables are set via OSC 1337 SetUserVar sequences from
+        shell integration scripts. They report session information like
+        hostname and other custom key-value pairs.
+
+        Args:
+            name: Variable name (e.g., "hostname", "currentDir")
+
+        Returns:
+            Variable value as string, or None if not set
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            # After shell sends: OSC 1337 ; SetUserVar=hostname=<base64> ST
+            host = term.get_user_var("hostname")
+            ```
+        """
+    def get_user_vars(self) -> Any:
+        """Get all user variables as a dictionary
+
+        Returns all user variables set via OSC 1337 SetUserVar sequences.
+
+        Returns:
+            Dictionary mapping variable names to their string values
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            user_vars = term.get_user_vars()  # e.g., {"hostname": "server1"}
+            ```
+        """
+    def get_word_at(self, col: Any, row: Any, word_chars: Any = None) -> Any:
+        """Get word at cursor position
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            word_chars: Optional custom word characters (default: "/-+\\\\~_." iTerm2-compatible)
+
+        Returns:
+            Word at position or None if not on a word
+        """
+    def get_zone_at(self, abs_row: Any) -> Any:
+        """Get the semantic zone containing the given absolute row
+
+        Args:
+            abs_row: Absolute row number (scrollback_len + visible_row)
+
+        Returns:
+            Zone dictionary or None if no zone contains this row
+
+        Example:
+            ```python
+            zone = term.get_zone_at(term.scrollback_len() + 0)
+            if zone:
+                print(f"Row 0 is in a {zone['zone_type']} zone")
+            ```
+        """
+    def get_zone_text(self, abs_row: Any) -> Any:
+        """Get the text content of the zone containing the given absolute row
+
+        Extracts all text from the zone's rows, handling line wrapping and
+        trimming trailing whitespace. Returns None if no zone contains this row.
+
+        Args:
+            abs_row: Absolute row number (scrollback_len + visible_row)
+
+        Returns:
+            Zone text content as a string, or None
+
+        Example:
+            ```python
+            text = term.get_zone_text(some_row)
+            if text:
+                print(f"Zone content: {text}")
+            ```
+        """
+    def get_zones(self) -> Any:
+        """Get all semantic zones in the terminal buffer
+
+        Returns a list of zone dictionaries, each containing:
+        - zone_type: str - "prompt", "command", or "output"
+        - abs_row_start: int - Absolute row where zone starts
+        - abs_row_end: int - Absolute row where zone ends (inclusive)
+        - command: str | None - Command text (for command/output zones)
+        - exit_code: int | None - Exit code (for output zones after command finishes)
+        - timestamp: int | None - Unix milliseconds when zone was created
+
+        Returns:
+            List of zone dictionaries sorted by row position
+
+        Example:
+            ```python
+            zones = term.get_zones()
+            for z in zones:
+                print(f"{z['zone_type']}: rows {z['abs_row_start']}-{z['abs_row_end']}")
+            ```
+        """
+    def graphics(self) -> Any:
+        """Get all graphics
+
+        Returns:
+            List of all Sixel graphics
+        """
+    def graphics_at_row(self, row: Any) -> Any:
+        """Get graphics that overlap the specified row
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            List of graphics that overlap the given row
+        """
+    def graphics_count(self) -> Any:
+        """Get total number of graphics
+
+        Returns:
+            Total count of Sixel graphics
+        """
+    def handle_bell_notification(self) -> Any:
+        """Handle bell event with notification"""
+    def has_notifications(self) -> Any:
+        """Check if there are pending notifications
+
+        Returns:
+            True if there are notifications waiting to be retrieved
+        """
+    def has_pending_responses(self) -> Any:
+        """Check if there are pending device query responses
+
+        Returns:
+            True if there are responses waiting to be retrieved
+        """
+    def has_progress(self) -> Any:
+        """Check if the progress bar is currently active (visible)
+
+        Returns:
+            True if the progress bar is in any state other than Hidden
+        """
+    def has_tmux_notifications(self) -> Any:
+        """Check if there are pending tmux control protocol notifications
+
+        Returns:
+            True if there are pending notifications, False otherwise
+        """
+    def hsl_to_rgb_color(self, h: Any, s: Any, l: Any) -> tuple[int, int, int]:
+        """Convert an HSL color to RGB
+
+        Args:
+            h: Hue in degrees (0.0-360.0)
+            s: Saturation (0.0-1.0)
+            l: Lightness (0.0-1.0)
+
+        Returns:
+            tuple[int, int, int]: (r, g, b) with each channel in 0-255
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            r, g, b = term.hsl_to_rgb_color(0.0, 1.0, 0.5)
+            ```
+        """
+    def hsv_to_rgb_color(self, h: Any, s: Any, v: Any) -> tuple[int, int, int]:
+        """Convert an HSV color to RGB
+
+        Args:
+            h: Hue in degrees (0.0-360.0)
+            s: Saturation (0.0-1.0)
+            v: Value/brightness (0.0-1.0)
+
+        Returns:
+            tuple[int, int, int]: (r, g, b) with each channel in 0-255
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            r, g, b = term.hsv_to_rgb_color(0.0, 1.0, 1.0)
+            ```
+        """
+    def import_graphics_json(self, json: Any) -> Any:
+        """Import graphics metadata from a JSON string to restore session state
+
+        Deserializes graphics from JSON and restores active placements, scrollback
+        graphics, and animation state. Existing graphics are cleared first.
+
+        Args:
+            json: JSON string from a previous export_graphics_json() call
+
+        Returns:
+            Number of graphics restored
+
+        Example:
+            >>> with open("session_graphics.json") as f:
+            ...     json_str = f.read()
+            >>> count = terminal.import_graphics_json(json_str)
+            >>> print(f"Restored {count} graphics")
+        """
+    def insert_mode(self) -> Any:
+        """Get insert mode (IRM - Mode 4) state
+
+        Returns:
+            True if insert mode is enabled (characters are inserted), False if replace mode (default)
+        """
+    def is_alt_screen_active(self) -> Any:
+        """Check if alternate screen is active
+
+        Returns:
+            True if alternate screen is active
+        """
+    def is_line_start(self, row: Any) -> bool:
+        """Check if a row starts a new logical line
+
+        Args:
+            row: 0-indexed row number
+
+        Returns:
+            bool: True if the row begins a new logical line
+        """
+    def is_line_wrapped(self, row: Any) -> Any:
+        """Check if a line wraps to the next row
+
+        Args:
+            row: Row index (0-based)
+
+        Returns:
+            True if the line wraps to the next row, False otherwise
+        """
+    def is_profiling_enabled(self) -> bool:
+        """Check if profiling is enabled
+
+        Returns:
+            bool: True if performance profiling is collecting data
+        """
+    def is_recording(self) -> Any:
+        """Check if currently recording
+
+        Returns:
+            True if recording is active
+        """
+    def is_tmux_auto_detect(self) -> Any:
+        """Check if tmux control mode auto-detection is enabled
+
+        Returns:
+            True if auto-detection is enabled, False otherwise
+        """
+    def is_tmux_control_mode(self) -> Any:
+        """Check if tmux control mode is enabled
+
+        Returns:
+            True if control mode is enabled, False otherwise
+        """
+    def join_wrapped_lines(self, start_row: Any) -> JoinedLines | None:
+        """Join wrapped lines starting from a given row
+
+        Args:
+            start_row: Row (0-indexed) whose logical line to rejoin
+
+        Returns:
+            JoinedLines | None: The rejoined line, or None if the row is empty
+        """
+    def keyboard_flags(self) -> Any:
+        """Get current Kitty Keyboard Protocol flags
+
+        Returns:
+            Current keyboard protocol flags (u16)
+            Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
+        """
+    def left_right_margins(self) -> Any:
+        """Get left/right margins if enabled
+
+        Returns:
+            Tuple of (left, right) if DECLRMM is enabled, None otherwise
+        """
+    def line_feed_new_line_mode(self) -> Any:
+        """Get line feed/new line mode (LNM - Mode 20) state
+
+        Returns:
+            True if LNM is enabled (LF does CR+LF), False if LF only (default)
+        """
+    def link_color(self) -> Any:
+        """Get link/hyperlink color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def list_triggers(self) -> list[Trigger]:
+        """List all registered triggers
+
+        Returns:
+            list[Trigger]: List of all triggers
+        """
+    def margin_bell_volume(self) -> Any:
+        """Get margin bell volume
+
+        Returns:
+            Volume level (0=off, 1-8=volume levels)
+        """
+    def mark_clean(self) -> Any:
+        """Mark all rows as clean (clear dirty tracking)"""
+    def mark_notification_delivered(self, index: Any) -> Any:
+        """Mark a notification as delivered
+
+        Args:
+            index: Index of the notification event
+        """
+    def mark_row_dirty(self, row: Any) -> Any:
+        """Mark a specific row as dirty
+
+        Args:
+            row: 0-indexed row number to mark dirty
+        """
+    def match_color(self) -> Any:
+        """Get match/search highlight color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def max_osc_data_length(self) -> int:
+        """Get the maximum total OSC data length in bytes (QA-012/SEC-003)
+
+        Sequences exceeding this cap are rejected as a memory-exhaustion
+        guard. Defaults to 1 MiB; raise it for larger inline images.
+
+        Returns:
+            int: Current cap in bytes
+        """
     @staticmethod
-    def measure_text_width(text: Any) -> Any: ...
-    def merge_damage_regions(self) -> Any: ...
-    def modify_other_keys_mode(self) -> Any: ...
-    def mouse_encoding(self) -> Any: ...
-    def mouse_mode(self) -> Any: ...
-    def named_progress_bars(self) -> Any: ...
-    def next_regex_match(self, from_row: Any, from_col: Any) -> Any: ...
-    def normalization_form(self) -> Any: ...
-    def observer_count(self) -> Any: ...
-    def origin_mode(self) -> Any: ...
+    def measure_text_width(text: Any) -> Any:
+        """Measure text width without ANSI codes
+
+        Accounts for wide characters (CJK, emoji) and strips ANSI sequences.
+
+        Args:
+            text: Text to measure
+
+        Returns:
+            Display width in columns
+        """
+    def merge_damage_regions(self) -> Any:
+        """Merge overlapping damage regions"""
+    def modify_other_keys_mode(self) -> Any:
+        """Get modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+
+        Returns:
+            Current mode: 0=disabled, 1=report modifiers for special keys, 2=report all keys
+
+        Example:
+            >>> term.modify_other_keys_mode()
+            0
+        """
+    def mouse_encoding(self) -> Any:
+        """Get mouse encoding format
+
+        Returns:
+            MouseEncoding enum value (Default, Utf8, Sgr, Urxvt)
+        """
+    def mouse_mode(self) -> Any:
+        """Get mouse tracking mode
+
+        Returns:
+            String representing the mouse mode: "off", "normal", "button", "any"
+        """
+    def named_progress_bars(self) -> Any:
+        """Get all named progress bars as a dictionary
+
+        Returns a dictionary mapping progress bar IDs to their state.
+        Each value is a dict with keys: id, state, percent, label.
+
+        Returns:
+            Dictionary of {id: {id, state, percent, label}} for all active bars
+
+        Example:
+            ```python
+            bars = term.named_progress_bars()
+            for bar_id, bar in bars.items():
+                print(f"{bar_id}: {bar['percent']}% - {bar.get('label', '')}")
+            ```
+        """
+    def next_regex_match(self, from_row: Any, from_col: Any) -> RegexMatch | None:
+        """Find next regex match from a position
+
+        Args:
+            from_row: Row to search from (0-indexed)
+            from_col: Column to search from (0-indexed)
+
+        Returns:
+            RegexMatch | None: Next match at or after the position, if any
+        """
+    def normalization_form(self) -> NormalizationForm:
+        """Get the current Unicode normalization form
+
+        Returns:
+            NormalizationForm: The current normalization form (default: NFC)
+        """
+    def observer_count(self) -> int:
+        """Get the number of currently registered observers
+
+        Returns:
+            int: Number of observers.
+        """
+    def origin_mode(self) -> bool:
+        """Get origin mode (DECOM)
+
+        Returns:
+            bool: True if cursor addressing is relative to the scroll region
+        """
     @staticmethod
-    def parse_color(color_string: Any) -> Any: ...
-    def paste(self, content: Any) -> Any: ...
-    def poll_action_results(self) -> Any: ...
-    def poll_cwd_events(self) -> Any: ...
-    def poll_events(self) -> Any: ...
-    def poll_events_legacy(self) -> Any: ...
-    def poll_screen_cleared_events(self) -> Any: ...
-    def poll_shell_integration_events(self) -> Any: ...
-    def poll_subscribed_events(self) -> Any: ...
-    def poll_subscribed_events_legacy(self) -> Any: ...
-    def poll_trigger_matches(self) -> Any: ...
-    def poll_upload_requests(self) -> Any: ...
-    def pop_keyboard_flags(self, count: Any = 1) -> Any: ...
-    def prev_regex_match(self, from_row: Any, from_col: Any) -> Any: ...
-    def process(self, data: Any) -> Any: ...
-    def process_str(self, text: Any) -> Any: ...
-    def process_trigger_scans(self) -> Any: ...
-    def progress_bar(self) -> Any: ...
-    def progress_state(self) -> Any: ...
-    def progress_value(self) -> Any: ...
-    def push_keyboard_flags(self, flags: Any) -> Any: ...
-    def query_cursor_color(self) -> Any: ...
-    def query_default_bg(self) -> Any: ...
-    def query_default_fg(self) -> Any: ...
-    def query_keyboard_flags(self) -> Any: ...
-    def record_allocation(self, bytes: Any) -> Any: ...
+    def parse_color(color_string: Any) -> Any:
+        """Parse color from string (hex, rgb, or name)
+
+        Supported formats:
+        - Hex: "#RRGGBB" or "#RGB"
+        - RGB: "rgb(r, g, b)"
+        - Names: "red", "blue", "green", etc.
+
+        Args:
+            color_string: Color specification
+
+        Returns:
+            RGB tuple (r, g, b) or None if invalid
+        """
+    def paste(self, content: Any) -> Any:
+        """Paste text content into terminal with bracketed paste support
+
+        If bracketed paste mode is enabled, wraps the content with ESC[200~ and ESC[201~
+        Otherwise, processes the content directly
+
+        Args:
+            content: String content to paste
+        """
+    def poll_action_results(self) -> list[dict]:
+        """Drain pending action results for frontend consumption
+
+        Returns:
+            list[dict]: List of action result dicts with 'type' and action-specific fields
+        """
+    def poll_cwd_events(self) -> Any:
+        """Drain only CWD change events
+
+        Returns:
+            List of dicts: new_cwd, old_cwd (optional), hostname (optional),
+            username (optional), timestamp
+        """
+    def poll_events(self) -> list[dict]:
+        """Drain all pending terminal events
+
+        Returns and clears the buffer of terminal events.
+        Events are returned as dictionaries with 'type' and additional fields,
+        with native value types: `int` for numeric fields, `bool` for flags,
+        `None` for unset optional fields, `str` for text.
+
+        Returns:
+            list[dict]: Event dicts with a 'type' key plus event-specific fields
+        """
+    def poll_screen_cleared_events(self) -> list[bool]:
+        """Drain pending screen cleared events
+
+        Returns a list of booleans indicating whether each clear event also
+        cleared the scrollback buffer (True for ESC[3J, False for ESC[2J).
+
+        This is useful for frontends to invalidate scrollback zone/mark metadata
+        so the scrollbar is consistent with the visible terminal state.
+
+        Returns:
+            list[bool]: List of include_scrollback flags for each ScreenCleared event.
+
+        Example:
+            >>> cleared = term.poll_screen_cleared_events()
+            >>> for include_scrollback in cleared:
+            ...     if include_scrollback:
+            ...         print("Screen and scrollback cleared (ESC[3J)")
+            ...     else:
+            ...         print("Screen cleared (ESC[2J)")
+        """
+    def poll_shell_integration_events(self) -> Any:
+        """Drain only shell integration events, keeping other events queued
+
+        Returns events with their captured cursor_line so callers can process
+        each marker at the correct absolute line (scrollback_len + cursor_row
+        at the time the OSC 133 sequence was parsed).
+
+        Returns:
+            List of dicts with keys: event_type, command, exit_code, timestamp, cursor_line
+        """
+    def poll_subscribed_events(self) -> Any:
+        """Drain events matching the current subscription
+
+        Returns:
+            List of event dictionaries (same native-typed shape as poll_events)
+        """
+    def poll_trigger_matches(self) -> list[TriggerMatch]:
+        """Drain all pending trigger match events
+
+        Returns:
+            list[TriggerMatch]: List of matches since last poll
+
+        Example:
+            >>> matches = term.poll_trigger_matches()
+            >>> for m in matches:
+            ...     print(f"Trigger {m.trigger_id} matched '{m.text}' at row {m.row}")
+        """
+    def poll_upload_requests(self) -> Any:
+        """Drain only upload request events, keeping other events queued
+
+        Returns:
+            List of format strings from pending UploadRequested events
+        """
+    def pop_keyboard_flags(self, count: Any = 1) -> Any:
+        """Pop keyboard flags from stack
+
+        Args:
+            count: Number of flags to pop from stack (default: 1)
+
+        Sends: CSI < count u
+        """
+    def prev_regex_match(self, from_row: Any, from_col: Any) -> RegexMatch | None:
+        """Find previous regex match from a position
+
+        Args:
+            from_row: Row to search from (0-indexed)
+            from_col: Column to search from (0-indexed)
+
+        Returns:
+            RegexMatch | None: Previous match at or before the position, if any
+        """
+    def process(self, data: Any) -> Any:
+        """Process input bytes (can contain ANSI escape sequences)
+
+        Args:
+            data: Bytes or string to process
+        """
+    def process_str(self, text: Any) -> Any:
+        """Process a string (convenience method)
+
+        Args:
+            text: String to process
+        """
+    def process_trigger_scans(self) -> Any:
+        """Process trigger scans on dirty rows
+
+        Called automatically in PTY mode. Use manually for non-PTY terminals.
+        """
+    def progress_bar(self) -> Any:
+        """Get the current progress bar state
+
+        Returns the progress bar state set via OSC 9;4 sequences.
+        The progress bar has a state (hidden, normal, indeterminate, warning, error)
+        and a percentage (0-100) for states that support it.
+
+        Returns:
+            ProgressBar object with state and progress fields
+        """
+    def progress_state(self) -> Any:
+        """Get the current progress bar state enum
+
+        Returns:
+            ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
+        """
+    def progress_value(self) -> Any:
+        """Get the current progress percentage (0-100)
+
+        Returns the progress percentage. Only meaningful when the progress bar
+        state is Normal, Warning, or Error.
+
+        Returns:
+            Progress percentage (0-100)
+        """
+    def push_keyboard_flags(self, flags: Any) -> Any:
+        """Push current keyboard flags to stack and set new flags
+
+        Args:
+            flags: New flags to set
+
+        Sends: CSI > flags u
+        """
+    def query_cursor_color(self) -> Any:
+        """Query cursor color (OSC 12)
+
+        Sends OSC 12 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 12 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_default_bg(self) -> Any:
+        """Query default background color (OSC 11)
+
+        Sends OSC 11 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 11 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_default_fg(self) -> Any:
+        """Query default foreground color (OSC 10)
+
+        Sends OSC 10 ; ? ST query and returns response in drain_responses().
+        Response format: ESC ] 10 ; rgb:rrrr/gggg/bbbb ESC \\
+        """
+    def query_keyboard_flags(self) -> Any:
+        """Query current keyboard flags (Kitty keyboard protocol)
+
+        Returns:
+            Query sequence sent to terminal (response will be in drain_responses())
+        """
+    def record_allocation(self, bytes: Any) -> Any:
+        """Record memory allocation
+
+        Args:
+            bytes: Number of bytes allocated
+        """
     def record_clipboard_sync(
         self, target: Any, operation: Any, content: Any, is_remote: Any
-    ) -> Any: ...
+    ) -> Any:
+        """Record an OSC 52 clipboard sync event for diagnostics/history
+
+        The event is content-sanitized and truncated to
+        `get_max_clipboard_event_bytes()` before storage, appended to the
+        event log (`get_clipboard_sync_events()`), and — for "set" operations
+        with content — also appended to that target's history
+        (`get_clipboard_sync_history()`).
+
+        Args:
+            target: Clipboard target — one of "clipboard", "primary",
+                "secondary", "cutbuffer0" (case-insensitive)
+            operation: Operation type — one of "set", "query", "clear"
+                (case-insensitive)
+            content: Content associated with the event (typically only present
+                for "set" operations)
+            is_remote: Whether this event originated from a remote session
+                (e.g. over SSH); when true, `content` is attributed to the
+                session ID set via `set_remote_session_id()`
+
+        Raises:
+            ValueError: If `target` or `operation` is not one of the supported
+                values above
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_clipboard_sync("clipboard", "set", "hello", False)
+            ```
+        """
     def record_cwd_change(
         self, new_cwd: Any, hostname: Any = None, username: Any = None
-    ) -> Any: ...
-    def record_escape_sequence(self, category: Any, time_us: Any) -> Any: ...
+    ) -> Any:
+        """Record a CWD change
+
+        Args:
+            new_cwd: New working directory
+            hostname: Optional hostname (None for localhost)
+            username: Optional username (user@host form)
+        """
+    def record_escape_sequence(self, category: Any, time_us: Any) -> Any:
+        """Record an escape sequence execution
+
+        Args:
+            category: One of "csi", "osc", "esc", "dcs", "print", "control"
+            time_us: Execution time in microseconds
+        """
     def record_frame_timing(
         self, processing_us: Any, cells_updated: Any, bytes_processed: Any
-    ) -> Any: ...
-    def record_input(self, data: Any) -> Any: ...
-    def record_marker(self, label: Any) -> Any: ...
+    ) -> Any:
+        """Record a frame timing
+
+        Args:
+            processing_us: Frame processing time in microseconds
+            cells_updated: Number of cells updated in the frame
+            bytes_processed: Number of input bytes processed in the frame
+        """
+    def record_input(self, data: Any) -> Any:
+        """Record input data
+
+        Args:
+            data: Input data bytes
+        """
+    def record_marker(self, label: Any) -> Any:
+        """Add a marker/bookmark to the recording
+
+        Args:
+            label: Marker label
+        """
     def record_mouse_event(
         self,
         event_type: Any,
@@ -2041,9 +6290,52 @@ class Terminal:
         pixel_y: Any,
         modifiers: Any,
         timestamp: Any,
-    ) -> Any: ...
-    def record_output(self, data: Any) -> Any: ...
-    def record_resize(self, cols: Any, rows: Any) -> Any: ...
+    ) -> Any:
+        """Record a mouse event in the terminal's mouse history
+
+        The event is appended to both the event history (`get_mouse_events()`)
+        and the position history (`get_mouse_positions()`), each trimmed to
+        `get_max_mouse_history()` entries. The event's stored timestamp is
+        generated internally (microseconds since epoch) rather than taken from
+        the `timestamp` argument.
+
+        Args:
+            event_type: One of "press", "release", "move", "drag", "scrollup",
+                "scrolldown" (case-insensitive)
+            button: One of "left", "middle", "right", "none" (case-insensitive)
+            col: Column position, 0-indexed
+            row: Row position, 0-indexed
+            pixel_x: Optional pixel X position; accepted for API compatibility
+                but currently not stored (reserved for future SGR 1016 support)
+            pixel_y: Optional pixel Y position; accepted for API compatibility
+                but currently not stored (reserved for future SGR 1016 support)
+            modifiers: Modifier key bitmask (shift/alt/ctrl)
+            timestamp: Accepted for API compatibility but currently ignored;
+                the recorded event always uses the current time
+
+        Raises:
+            ValueError: If `event_type` or `button` is not one of the supported
+                values above
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+            ```
+        """
+    def record_output(self, data: Any) -> Any:
+        """Record output data
+
+        Args:
+            data: Output data bytes
+        """
+    def record_resize(self, cols: Any, rows: Any) -> Any:
+        """Record terminal resize
+
+        Args:
+            cols: Number of columns
+            rows: Number of rows
+        """
     def regex_search(
         self,
         pattern: Any,
@@ -2052,24 +6344,159 @@ class Terminal:
         include_scrollback: Any = True,
         max_matches: Any = 0,
         reverse: Any = False,
-    ) -> Any: ...
-    def register_custom_trigger(self, id: Any, message: Any) -> Any: ...
-    def remote_session_id(self) -> Any: ...
-    def remove_all_named_progress_bars(self) -> Any: ...
-    def remove_bookmark(self, id: Any) -> Any: ...
-    def remove_named_progress_bar(self, id: Any) -> Any: ...
-    def remove_observer(self, observer_id: Any) -> Any: ...
-    def remove_trigger(self, trigger_id: Any) -> Any: ...
-    def reset(self) -> Any: ...
-    def reset_performance_metrics(self) -> Any: ...
-    def reset_profiling_data(self) -> Any: ...
-    def resize(self, cols: Any, rows: Any) -> Any: ...
+    ) -> list[RegexMatch]:
+        """Perform regex search on terminal content
+
+        Args:
+            pattern: Regex pattern to search for
+            case_insensitive: Match without regard to case (default False)
+            multiline: Let ^ and $ match line boundaries (default True)
+            include_scrollback: Search scrollback as well as the screen (default True)
+            max_matches: Stop after this many matches, 0 for unlimited
+            reverse: Search from the end backwards (default False)
+
+        Returns:
+            list[RegexMatch]: Matches found, in search order
+
+        Raises:
+            ValueError: If the pattern is not a valid regex
+        """
+    def register_custom_trigger(self, id: Any, message: Any) -> Any:
+        """Register a custom notification trigger
+
+        Args:
+            id: Trigger ID
+            message: Message for the trigger
+        """
+    def remote_session_id(self) -> Any:
+        """Get remote session ID
+
+        Returns:
+            Optional session identifier
+        """
+    def remove_all_named_progress_bars(self) -> Any:
+        """Remove all named progress bars"""
+    def remove_bookmark(self, id: Any) -> Any:
+        """Remove a bookmark by ID
+
+        Args:
+            id: Bookmark ID
+
+        Returns:
+            True if bookmark was removed, False if not found
+        """
+    def remove_named_progress_bar(self, id: Any) -> Any:
+        """Remove a named progress bar by ID
+
+        Args:
+            id: The progress bar identifier to remove
+
+        Returns:
+            True if the bar existed and was removed, False otherwise
+        """
+    def remove_observer(self, observer_id: Any) -> bool:
+        """Remove a previously registered observer
+
+        Args:
+            observer_id: The ID returned by add_observer or add_async_observer.
+
+        Returns:
+            bool: True if the observer was found and removed.
+        """
+    def remove_trigger(self, trigger_id: Any) -> bool:
+        """Remove a trigger by ID
+
+        Args:
+            trigger_id: ID of the trigger to remove
+
+        Returns:
+            bool: True if trigger was found and removed
+        """
+    def reset(self) -> Any:
+        """Reset the terminal to default state (RIS).
+
+        Clears the screen, scrollback, cursor, SGR, modes, margins,
+        charsets, keyboard protocol, hyperlinks, graphics, and title, and
+        marks every row dirty. Embedder configuration survives: security
+        policy (accept_osc7, disable_insecure_sequences,
+        max_osc_data_length), file-media and clipboard policy, graphics and
+        clipboard limits, answerback string, theme colors, unicode config,
+        observers, event subscriptions, triggers, macros, notification
+        config, badge format, active recordings, tmux control flags, pixel
+        dimensions, and profiling (ARC-058), plus the file-transfer cap,
+        bold brightening, window position/iconified state and the mouse,
+        inline-image, command and cwd history caps (ARC-100). The
+        conformance level and bell volumes return to the values last set
+        through their setters, undoing any DECSCL/DECSWBV/DECSMBV a program
+        sent.
+        """
+    def reset_performance_metrics(self) -> Any:
+        """Reset performance metrics"""
+    def reset_profiling_data(self) -> Any:
+        """Reset profiling data"""
+    def resize(self, cols: Any, rows: Any) -> Any:
+        """Resize the terminal
+
+        Args:
+            cols: New number of columns
+            rows: New number of rows
+        """
     def resize_pixels(
         self, cols: Any, rows: Any, pixel_width: Any, pixel_height: Any
-    ) -> Any: ...
-    def rgb_to_hsl_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def rgb_to_hsv_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def run_benchmark_suite(self, suite_name: Any) -> Any: ...
+    ) -> Any:
+        """Resize and set pixel dimensions for XTWINOPS reporting
+
+        Args:
+            cols: New columns
+            rows: New rows
+            pixel_width: Text area width in pixels
+            pixel_height: Text area height in pixels
+        """
+    def rgb_to_hsl_color(self, r: Any, g: Any, b: Any) -> ColorHSL:
+        """Convert an RGB color to HSL (hue/saturation/lightness)
+
+        Args:
+            r: Red channel (0-255)
+            g: Green channel (0-255)
+            b: Blue channel (0-255)
+
+        Returns:
+            ColorHSL: hue in degrees (0.0-360.0), saturation and lightness in 0.0-1.0
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            hsl = term.rgb_to_hsl_color(255, 0, 0)
+            print(hsl.h, hsl.s, hsl.l)
+            ```
+        """
+    def rgb_to_hsv_color(self, r: Any, g: Any, b: Any) -> ColorHSV:
+        """Convert an RGB color to HSV (hue/saturation/value)
+
+        Args:
+            r: Red channel (0-255)
+            g: Green channel (0-255)
+            b: Blue channel (0-255)
+
+        Returns:
+            ColorHSV: hue in degrees (0.0-360.0), saturation and value in 0.0-1.0
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            hsv = term.rgb_to_hsv_color(255, 0, 0)
+            print(hsv.h, hsv.s, hsv.v)
+            ```
+        """
+    def run_benchmark_suite(self, suite_name: Any) -> Any:
+        """Run full benchmark suite
+
+        Args:
+            suite_name: Name for the benchmark suite
+
+        Returns:
+            PyBenchmarkSuite with all benchmark results
+        """
     def screenshot(
         self,
         format: Any = "png",
@@ -2089,8 +6516,49 @@ class Terminal:
         background_color: Any = None,
         faint_text_alpha: Any = 0.5,
         minimum_contrast: Any = 0.5,
-    ) -> Any: ...
-    def screenshot_config(self, config: Any, scrollback_offset: Any = 0) -> Any: ...
+    ) -> Any:
+        """Take a screenshot of the current visible buffer
+
+        Args:
+            format: Image format ("png", "jpeg", "svg", "bmp"). Default: "png"
+            font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
+            font_size: Font size in pixels. Default: 14.0
+            include_scrollback: Include scrollback buffer. Default: False
+            padding: Padding around content in pixels. Default: 10
+            quality: JPEG quality (1-100). Default: 90
+            render_cursor: Render cursor in screenshot. Default: False
+            cursor_color: RGB tuple for cursor color. Default: None (white)
+            sixel_mode: Sixel rendering mode ('disabled', 'pixels', 'halfblocks'). Default: 'halfblocks'
+            scrollback_offset: Number of lines to scroll back from current position. Default: 0
+            link_color: RGB tuple for link color. Default: None (use theme color)
+            bold_color: RGB tuple for bold text. Default: None (use theme color)
+            use_bold_color: Use custom bold color. Default: None (use theme setting)
+            bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+            background_color: Background color RGB tuple. Default: None (use terminal's default background)
+            faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+            minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
+
+        Returns:
+            Bytes of the image in the specified format
+
+        Note:
+            Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+            System emoji/CJK fonts are automatically used as fallback when available.
+        """
+    def screenshot_config(self, config: Any, scrollback_offset: Any = 0) -> Any:
+        """Take a screenshot using a reusable `ScreenshotConfig` (QA-005).
+
+        Avoids repeating 16+ keyword args on every call. Build a config once
+        and pass it here:
+        ```python
+        cfg = ScreenshotConfig(format="png", font_size=16.0, render_cursor=True)
+        term.screenshot_config(cfg, scrollback_offset=0)
+        ```
+
+        Args:
+            config: A `ScreenshotConfig` (keyword-arg constructor).
+            scrollback_offset: Lines to scroll back from current position.
+        """
     def screenshot_to_file(
         self,
         path: Any,
@@ -2111,273 +6579,1196 @@ class Terminal:
         background_color: Any = None,
         faint_text_alpha: Any = 0.5,
         minimum_contrast: Any = 0.5,
-    ) -> Any: ...
+    ) -> Any:
+        """Take a screenshot and save to file
+
+        The image format is auto-detected from the file extension if not specified.
+
+        Args:
+            path: Output file path
+            format: Image format (optional, auto-detected from extension)
+            font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
+            font_size: Font size in pixels. Default: 14.0
+            include_scrollback: Include scrollback buffer. Default: False
+            padding: Padding around content in pixels. Default: 10
+            quality: JPEG quality (1-100). Default: 90
+            render_cursor: Render cursor in screenshot. Default: False
+            cursor_color: RGB tuple for cursor color. Default: None (white)
+            sixel_mode: Sixel rendering mode ('disabled', 'pixels', 'halfblocks'). Default: 'halfblocks'
+            scrollback_offset: Number of lines to scroll back from current position. Default: 0
+            link_color: RGB tuple for link color. Default: None (use theme color)
+            bold_color: RGB tuple for bold text. Default: None (use theme color)
+            use_bold_color: Use custom bold color. Default: None (use theme setting)
+            bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+            background_color: Background color RGB tuple. Default: None (use terminal's default background)
+            faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+            minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
+
+        Returns:
+            None
+
+        Note:
+            Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+            System emoji/CJK fonts are automatically used as fallback when available.
+        """
     def screenshot_to_file_config(
         self, path: Any, config: Any, scrollback_offset: Any = 0
-    ) -> Any: ...
-    def scroll_region(self) -> Any: ...
-    def scrollback(self) -> Any: ...
-    def scrollback_len(self) -> Any: ...
-    def scrollback_line(self, index: Any) -> Any: ...
-    def scrollback_stats(self) -> Any: ...
-    def search(self, query: Any, case_sensitive: Any = False) -> Any: ...
-    def search_clipboard_history(self, query: Any, slot: Any = None) -> Any: ...
+    ) -> Any:
+        """Take a screenshot to a file using a reusable `ScreenshotConfig` (QA-005)."""
+    def scroll_region(self) -> Any:
+        """Get current scroll region
+
+        Returns:
+            Tuple of (top, bottom) - 0-indexed, inclusive
+        """
+    def scrollback(self) -> Any:
+        """Get scrollback content as a list of strings
+
+        Returns:
+            List of scrollback lines
+        """
+    def scrollback_len(self) -> Any:
+        """Get the number of scrollback lines
+
+        Returns:
+            Number of lines in scrollback buffer
+        """
+    def scrollback_line(self, index: Any) -> Any:
+        """Get a specific line from the scrollback buffer with full cell data
+
+        Args:
+            index: Scrollback line index (0 = oldest, scrollback_len()-1 = most recent)
+
+        Returns:
+            List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
+            or None if index is out of bounds
+        """
+    def scrollback_stats(self) -> Any:
+        """Get scrollback statistics
+
+        Returns:
+            ScrollbackStats object with total lines, memory usage, and wrap status
+        """
+    def search(self, query: Any, case_sensitive: Any = False) -> Any:
+        """Search for text in the visible screen
+
+        Args:
+            query: Text to search for
+            case_sensitive: Whether the search should be case-sensitive
+
+        Returns:
+            List of SearchMatch objects with position and matched text
+        """
+    def search_clipboard_history(
+        self, query: Any, slot: Any = None
+    ) -> list[ClipboardEntry]:
+        """Search clipboard history for entries containing a substring
+
+        Args:
+            query: Substring to search for (case-sensitive, plain substring match)
+            slot: Clipboard slot name to restrict the search to — one of
+                "primary", "clipboard", "selection", or "custom0".."custom9"
+                (case-insensitive); if None, searches all slots (default: None)
+
+        Returns:
+            list[ClipboardEntry]: Matching entries across the searched slot(s),
+            each with `content`, `timestamp` (microseconds), and `label`
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello world")
+            matches = term.search_clipboard_history("world")
+            ```
+        """
     def search_scrollback(
         self, query: Any, case_sensitive: Any = False, max_lines: Any = None
-    ) -> Any: ...
-    def select_line(self, row: Any) -> Any: ...
-    def select_semantic_region(self, col: Any, row: Any, delimiters: Any) -> Any: ...
-    def select_word(self, col: Any, row: Any, word_chars: Any = None) -> Any: ...
-    def select_word_at(self, col: Any, row: Any) -> Any: ...
-    def selection_bg_color(self) -> Any: ...
-    def selection_fg_color(self) -> Any: ...
-    def send_upload_data(self, data: Any) -> Any: ...
-    def set_accept_osc7(self, accept: Any) -> Any: ...
-    def set_allow_clipboard_read(self, allow: Any) -> Any: ...
-    def set_allow_file_media(self, mode: Any) -> Any: ...
-    def set_ambiguous_width(self, width: Any) -> Any: ...
-    def set_ansi_palette_color(self, index: Any, r: Any, g: Any, b: Any) -> Any: ...
-    def set_answerback_string(self, answerback: Any) -> Any: ...
-    def set_badge_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_badge_format(self, format: Any) -> Any: ...
-    def set_badge_session_variable(self, name: Any, value: Any) -> Any: ...
-    def set_bold_brightening(self, enabled: Any) -> Any: ...
-    def set_bold_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_bracketed_paste(self, enabled: Any) -> Any: ...
-    def set_clipboard(self, content: Any) -> Any: ...
-    def set_clipboard_with_slot(self, content: Any, slot: Any = None) -> Any: ...
-    def set_conformance_level(self, level: Any, c1_mode: Any = 2) -> Any: ...
-    def set_cursor_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_cursor_guide_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_cursor_style(self, style: Any) -> Any: ...
-    def set_default_bg(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_default_fg(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_disable_insecure_sequences(self, disable: Any) -> Any: ...
-    def set_event_subscription(self, kinds: Any = None) -> Any: ...
-    def set_faint_text_alpha(self, alpha: Any) -> Any: ...
-    def set_focus_tracking(self, enabled: Any) -> Any: ...
-    def set_keyboard_flags(self, flags: Any, mode: Any = 1) -> Any: ...
-    def set_link_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_margin_bell_volume(self, volume: Any) -> Any: ...
-    def set_match_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_max_clipboard_event_bytes(self, max_bytes: Any) -> Any: ...
-    def set_max_clipboard_sync_events(self, max: Any) -> Any: ...
-    def set_max_clipboard_sync_history(self, max: Any) -> Any: ...
-    def set_max_command_history(self, max: Any) -> Any: ...
-    def set_max_cwd_history(self, max: Any) -> Any: ...
-    def set_max_inline_images(self, max: Any) -> Any: ...
-    def set_max_mouse_history(self, max: Any) -> Any: ...
-    def set_max_notifications(self, max: Any) -> Any: ...
-    def set_max_osc_data_length(self, max: Any) -> Any: ...
-    def set_max_transfer_size(self, max_bytes: Any) -> Any: ...
-    def set_modify_other_keys_mode(self, mode: Any) -> Any: ...
-    def set_mouse_encoding(self, encoding: Any) -> Any: ...
+    ) -> Any:
+        """Search for text in the scrollback buffer
+
+        Args:
+            query: Text to search for
+            case_sensitive: Whether the search should be case-sensitive
+            max_lines: Maximum number of scrollback lines to search (None = all)
+
+        Returns:
+            List of SearchMatch objects with negative row indices for scrollback
+        """
+    def select_line(self, row: Any) -> Any:
+        """Select the entire line at the given row
+
+        Args:
+            row: Row index
+        """
+    def select_semantic_region(self, col: Any, row: Any, delimiters: Any) -> Any:
+        """Select text within semantic delimiters
+
+        Extracts content between matching delimiters around cursor.
+        Supports: (), [], {}, <>, "", '', ``
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            delimiters: String of delimiters to check (e.g., "()[]{}\\"'")
+
+        Returns:
+            Content between delimiters, or None if not inside delimiters
+        """
+    def select_word(self, col: Any, row: Any, word_chars: Any = None) -> Any:
+        """Get word boundaries at cursor position for smart selection
+
+        Args:
+            col: Column position (0-indexed)
+            row: Row position (0-indexed)
+            word_chars: Optional custom word characters
+
+        Returns:
+            ((start_col, start_row), (end_col, end_row)) or None if not on a word
+        """
+    def select_word_at(self, col: Any, row: Any) -> Any:
+        """Select the word at the given position
+
+        Args:
+            col: Column index
+            row: Row index
+        """
+    def selection_bg_color(self) -> Any:
+        """Get selection background color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def selection_fg_color(self) -> Any:
+        """Get selection foreground/text color
+
+        Returns:
+            Tuple of (r, g, b) integers (0-255)
+        """
+    def send_upload_data(self, data: Any) -> Any:
+        """Send upload data in response to an UploadRequested event
+
+        Args:
+            data: Raw file data bytes to upload
+        """
+    def set_accept_osc7(self, accept: Any) -> Any:
+        """Set whether OSC 7 directory tracking sequences are accepted
+
+        When disabled, OSC 7 sequences are silently ignored.
+        When enabled (default), allows shell to report current working directory.
+
+        Args:
+            accept: True to accept OSC 7 (default), False to ignore
+        """
+    def set_allow_clipboard_read(self, allow: Any) -> Any:
+        """Set whether clipboard read operations are allowed
+
+        When disabled (default), OSC 52 queries are silently ignored for security.
+        When enabled, terminal applications can query clipboard contents.
+
+        Args:
+            allow: True to allow clipboard read, False to block (default)
+        """
+    def set_allow_file_media(self, mode: Any) -> Any:
+        """Control whether Kitty graphics may load image payloads from
+        filesystem paths (the `t=f` file and `t=t` temp-file media).
+
+        Terminal output is untrusted input: before this gate a single
+        `t=t` escape naming a path could delete that file. The default
+        ``"temp_only"`` allows only the spec's gated form — a
+        ``*tty-graphics-protocol*`` file inside an allowed temp root,
+        deleted only after it decodes as an image. ``"all"`` re-enables
+        unrestricted ``t=f`` reads; ``"off"`` refuses both media.
+
+        Args:
+            mode: One of ``"off"``, ``"temp_only"`` (default), ``"all"``
+
+        Raises:
+            ValueError: If mode is not one of the accepted names
+
+        Example:
+            >>> terminal.set_allow_file_media("all")
+            >>> terminal.set_allow_file_media("off")
+        """
+    def set_ambiguous_width(self, width: Any) -> Any:
+        """Set the treatment of East Asian Ambiguous width characters
+
+        This is a convenience method to just change the ambiguous width setting
+        without modifying the Unicode version.
+
+        Args:
+            width: AmbiguousWidth.Narrow (1 cell) or AmbiguousWidth.Wide (2 cells)
+        """
+    def set_ansi_palette_color(self, index: Any, r: Any, g: Any, b: Any) -> Any:
+        """Set ANSI palette color (0-15)
+
+        Args:
+            index: Palette index (0-15)
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+
+        Raises:
+            ValueError: If index is not in range 0-15
+        """
+    def set_answerback_string(self, answerback: Any) -> Any:
+        """Set the answerback string sent in response to ENQ (0x05)
+
+        The answerback payload is sent whenever the terminal receives the ENQ
+        control character. Default is None (disabled) for security. Use with
+        caution in untrusted sessions.
+
+        Args:
+            answerback: Custom string to return, or None to disable
+        """
+    def set_badge_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set badge color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_badge_format(self, format: Any) -> Any:
+        """Set the badge format template
+
+        This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
+        The format string should contain `\\(variable)` placeholders.
+
+        Args:
+            format: The badge format template string, or None to clear
+        """
+    def set_badge_session_variable(self, name: Any, value: Any) -> Any:
+        """Set a session variable for badge format evaluation
+
+        Sets a custom session variable that can be referenced in badge formats.
+
+        Args:
+            name: Variable name
+            value: Variable value
+        """
+    def set_bold_brightening(self, enabled: Any) -> Any:
+        """Set bold brightening mode
+
+        When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+        This is a legacy terminal behavior that some applications rely on.
+
+        Args:
+            enabled: True to enable bold brightening, False to disable
+        """
+    def set_bold_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set bold text color (when use_bold_color is enabled)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_bracketed_paste(self, enabled: Any) -> Any:
+        """Set bracketed paste mode
+
+        When enabled, pasted content is wrapped with ESC[200~ and ESC[201~
+        sequences, allowing applications to distinguish pasted text from typed text.
+
+        Args:
+            enabled: True to enable bracketed paste, False to disable
+        """
+    def set_clipboard(self, content: Any) -> Any:
+        """Set clipboard content programmatically
+
+        This bypasses OSC 52 sequences and directly sets the clipboard.
+        Useful for integration with system clipboard or testing.
+
+        Args:
+            content: Content to set (None to clear)
+        """
+    def set_clipboard_with_slot(self, content: Any, slot: Any = None) -> Any:
+        """Set clipboard content for a slot, recording it in that slot's history
+
+        Args:
+            content: Text content to store
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive);
+                defaults to "clipboard" if not given (default: None)
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_clipboard_with_slot("hello", slot="primary")
+            ```
+        """
+    def set_conformance_level(self, level: Any, c1_mode: Any = 2) -> Any:
+        """Set the configured terminal conformance level
+
+        Sets the configured level. A program's DECSCL changes the live level
+        until the next RIS (``ESC c``), which restores this value.
+
+        Args:
+            level: Conformance level (1 or 61=VT100, 2 or 62=VT220, 3 or 63=VT320, 4 or 64=VT420, 5 or 65=VT520)
+            c1_mode: Accepted for compatibility and ignored; the terminal
+                does not track 7-bit/8-bit C1 mode (default: 2)
+
+        Raises:
+            ValueError: If ``level`` is not 1-5 or 61-65
+
+        Example:
+            >>> term.set_conformance_level(2)
+            >>> term.conformance_level()
+            2
+        """
+    def set_cursor_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set cursor color (OSC 12)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_cursor_guide_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set cursor guide color (vertical line following cursor)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_cursor_style(self, style: Any) -> Any:
+        """Set cursor style (DECSCUSR)
+
+        This is equivalent to sending CSI <n> SP q escape sequence.
+
+        Args:
+            style: CursorStyle enum value (e.g., CursorStyle.BlinkingBlock)
+        """
+    def set_default_bg(self, r: Any, g: Any, b: Any) -> Any:
+        """Set default background color (OSC 11)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_default_fg(self, r: Any, g: Any, b: Any) -> Any:
+        """Set default foreground color (OSC 10)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_disable_insecure_sequences(self, disable: Any) -> Any:
+        """Set whether to filter potentially insecure escape sequences
+
+        When enabled, certain sequences that could pose security risks are blocked:
+        - OSC 52 (clipboard operations - can leak data)
+        - OSC 8 (hyperlinks - can be used for phishing)
+        - OSC 9/777 (notifications - can be annoying/misleading)
+        - Sixel graphics (can consume excessive memory)
+
+        When disabled (default), all standard sequences are processed normally.
+
+        Args:
+            disable: True to block insecure sequences, False to allow (default)
+        """
+    def set_event_subscription(self, kinds: Any = None) -> Any:
+        """Set event subscription filter
+
+        Args:
+            kinds: Optional list of event kinds to receive (strings).
+                   Valid kinds: bell, title_changed, size_changed, mode_changed,
+                   graphics_added, hyperlink_added, dirty_region, cwd_changed,
+                   trigger_matched, user_var_changed, progress_bar_changed,
+                   badge_changed, shell_integration, zone_opened, zone_closed,
+                   zone_scrolled_out, environment_changed, remote_host_transition,
+                   sub_shell_detected, file_transfer_started,
+                   file_transfer_progress, file_transfer_completed,
+                   file_transfer_failed, upload_requested, screen_cleared,
+                   inline_image_dropped.
+        """
+    def set_faint_text_alpha(self, alpha: Any) -> Any:
+        """Set faint/dim text alpha multiplier
+
+        This value is applied to SGR 2 (dim/faint) text during rendering.
+        Values are clamped to the range 0.0-1.0.
+
+        Args:
+            alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
+
+        Example:
+            >>> term.set_faint_text_alpha(0.3)  # 30% opacity for dim text
+        """
+    def set_focus_tracking(self, enabled: Any) -> Any:
+        """Set focus tracking mode
+
+        When enabled, the terminal reports focus in/out events to applications.
+        Focus events are reported as ESC[I (focus in) and ESC[O (focus out).
+
+        Args:
+            enabled: True to enable focus tracking, False to disable
+        """
+    def set_keyboard_flags(self, flags: Any, mode: Any = 1) -> Any:
+        """Set keyboard protocol flags (Kitty keyboard protocol)
+
+        Args:
+            flags: Flags to set (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
+            mode: 0=disable all, 1=set flags, 2=lock flags (default: 1)
+
+        Sends: CSI = flags ; mode u
+        """
+    def set_link_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set link/hyperlink color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_margin_bell_volume(self, volume: Any) -> Any:
+        """Set the configured margin bell volume (VT520)
+
+        Sets the configured volume. A program's DECSMBV changes the live
+        volume until the next RIS (``ESC c``), which restores this value.
+
+        Args:
+            volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
+
+        Raises:
+            ValueError: If ``volume`` is greater than 8
+
+        Example:
+            >>> term.set_margin_bell_volume(2)
+            >>> term.margin_bell_volume()
+            2
+        """
+    def set_match_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set match/search highlight color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_max_clipboard_event_bytes(self, max_bytes: Any) -> Any:
+        """Set maximum bytes cached per clipboard sync event (0 clears content)
+
+        Args:
+            max_bytes: Maximum bytes cached per event (0 clears cached content)
+        """
+    def set_max_clipboard_sync_events(self, max: Any) -> Any:
+        """Set maximum clipboard sync events retained (0 disables buffering)
+
+        Args:
+            max: Maximum clipboard sync events to buffer (0 disables buffering)
+        """
+    def set_max_clipboard_sync_history(self, max: Any) -> Any:
+        """Set maximum clipboard sync history
+
+        Args:
+            max: Maximum number of entries per target
+        """
+    def set_max_command_history(self, max: Any) -> Any:
+        """Set maximum command history size
+
+        Args:
+            max: Maximum number of command entries
+        """
+    def set_max_cwd_history(self, max: Any) -> Any:
+        """Set maximum CWD history size
+
+        Args:
+            max: Maximum number of CWD change entries
+        """
+    def set_max_inline_images(self, max: Any) -> Any:
+        """Set maximum inline images
+
+        Args:
+            max: Maximum number of images to keep
+        """
+    def set_max_mouse_history(self, max: Any) -> Any:
+        """Set maximum mouse history size"""
+    def set_max_notifications(self, max: Any) -> Any:
+        """Set maximum number of OSC 9/777 notifications to retain (0 disables buffering)
+
+        Args:
+            max: Maximum notifications to buffer (0 disables buffering)
+        """
+    def set_max_osc_data_length(self, max: Any) -> Any:
+        """Set the maximum total OSC data length in bytes (QA-012)
+
+        Sequences exceeding this are rejected as a memory-exhaustion guard.
+        Must stay large enough for inline images (iTerm2/Kitty base64) if used.
+
+        Args:
+            max: New cap in bytes (e.g. 16 * 1024 * 1024 for 16 MiB)
+        """
+    def set_max_transfer_size(self, max_bytes: Any) -> Any:
+        """Set the maximum allowed file transfer size in bytes
+
+        Args:
+            max_bytes: Maximum transfer size in bytes
+        """
+    def set_modify_other_keys_mode(self, mode: Any) -> Any:
+        """Set modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+
+        Args:
+            mode: 0=disabled, 1=report modifiers for special keys, 2=report all keys
+
+        Note:
+            Values > 2 are clamped to 2. This directly sets the mode without
+            sending escape sequences. Use process(b"\\\\x1b[>4;Nm") to set via sequence.
+
+        Example:
+            >>> term.set_modify_other_keys_mode(2)
+            >>> term.modify_other_keys_mode()
+            2
+        """
+    def set_mouse_encoding(self, encoding: Any) -> Any:
+        """Set mouse encoding format
+
+        Controls how mouse events are encoded when reported to applications.
+
+        Args:
+            encoding: MouseEncoding enum value
+                - Default: X11 encoding (values 32-255, limited coordinate range)
+                - Utf8: UTF-8 encoding (supports larger coordinates)
+                - Sgr: SGR encoding (1006) - recommended for modern terminals
+                - Urxvt: URXVT encoding (1015)
+        """
     def set_named_progress_bar(
         self, id: Any, state: Any = "normal", percent: Any = 0, label: Any = None
-    ) -> Any: ...
-    def set_normalization_form(self, form: Any) -> Any: ...
-    def set_notification_config(self, config: Any) -> Any: ...
-    def set_progress(self, state: Any, progress: Any) -> Any: ...
-    def set_remote_session_id(self, session_id: Any) -> Any: ...
-    def set_selection(self, start: Any, end: Any, mode: Any) -> Any: ...
-    def set_selection_bg_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_selection_fg_color(self, r: Any, g: Any, b: Any) -> Any: ...
-    def set_sixel_graphics_limit(self, max_graphics: Any) -> Any: ...
-    def set_sixel_limits(
-        self, max_width: Any, max_height: Any, max_repeat: Any
-    ) -> Any: ...
-    def set_tab_stop(self, col: Any) -> Any: ...
-    def set_title(self, title: Any) -> Any: ...
-    def set_tmux_auto_detect(self, enabled: Any) -> Any: ...
-    def set_tmux_control_mode(self, enabled: Any) -> Any: ...
-    def set_trigger_enabled(self, trigger_id: Any, enabled: Any) -> Any: ...
-    def set_unicode_version(self, version: Any) -> Any: ...
-    def set_use_bold_color(self, use_bold: Any) -> Any: ...
-    def set_use_underline_color(self, use_underline: Any) -> Any: ...
-    def set_warning_bell_volume(self, volume: Any) -> Any: ...
-    def set_width_config(self, config: Any) -> Any: ...
-    def set_window_iconified(self, iconified: Any) -> Any: ...
-    def set_window_position(self, x: Any, y: Any) -> Any: ...
-    def shell_integration_state(self) -> Any: ...
+    ) -> Any:
+        """Manually set or update a named progress bar
+
+        Args:
+            id: Unique identifier for the progress bar
+            state: State string (normal, indeterminate, warning, error)
+            percent: Progress percentage (0-100, clamped if out of range)
+            label: Optional descriptive label
+        """
+    def set_normalization_form(self, form: Any) -> Any:
+        """Set the Unicode normalization form
+
+        Controls how Unicode text is normalized before being stored in cells.
+        Default is NFC (Canonical Decomposition, followed by Canonical Composition).
+
+        Args:
+            form: NormalizationForm enum value (e.g., NormalizationForm.NFC)
+
+        Example:
+            >>> term.set_normalization_form(NormalizationForm.NFC)  # Compose characters
+            >>> term.set_normalization_form(NormalizationForm.NFD)  # Decompose characters
+            >>> term.set_normalization_form(NormalizationForm.None) # No normalization
+        """
+    def set_notification_config(self, config: Any) -> Any:
+        """Set notification configuration
+
+        Args:
+            config: NotificationConfig object with settings
+        """
+    def set_progress(self, state: Any, progress: Any) -> Any:
+        """Manually set the progress bar state
+
+        This can be used to programmatically control the progress bar
+        without receiving OSC 9;4 sequences.
+
+        Args:
+            state: ProgressState enum value
+            progress: Progress percentage (0-100, clamped if out of range)
+        """
+    def set_remote_session_id(self, session_id: Any) -> Any:
+        """Set remote session ID
+
+        Args:
+            session_id: Optional session identifier
+        """
+    def set_selection(self, start: Any, end: Any, mode: Any) -> Any:
+        """Set the current selection
+
+        Args:
+            start: Start position (col, row) tuple
+            end: End position (col, row) tuple
+            mode: Selection mode: "character", "line", or "block"
+        """
+    def set_selection_bg_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set selection background color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_selection_fg_color(self, r: Any, g: Any, b: Any) -> Any:
+        """Set selection foreground/text color
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+        """
+    def set_sixel_graphics_limit(self, max_graphics: Any) -> Any:
+        """Set maximum number of Sixel graphics retained
+
+        Args:
+            max_graphics: Maximum number of in-memory Sixel graphics
+
+        Oldest graphics are dropped if the new limit is lower than the
+        current number of graphics. The value is clamped to a safe range.
+        """
+    def set_sixel_limits(self, max_width: Any, max_height: Any, max_repeat: Any) -> Any:
+        """Set Sixel resource limits (max width, height, repeat)
+
+        Args:
+            max_width: Maximum Sixel bitmap width in pixels
+            max_height: Maximum Sixel bitmap height in pixels
+            max_repeat: Maximum repeat count for !Pn sequences
+
+        Limits are clamped to safe hard maxima at the Rust layer.
+        """
+    def set_tab_stop(self, col: Any) -> Any:
+        """Set a tab stop at the specified column
+
+        Args:
+            col: 0-indexed column for the new tab stop
+        """
+    def set_title(self, title: Any) -> Any:
+        """Set the terminal title directly
+
+        This sets the title without using OSC sequences.
+        Useful for programmatic control.
+
+        Args:
+            title: The new title string
+        """
+    def set_tmux_auto_detect(self, enabled: Any) -> Any:
+        """Enable or disable tmux control mode auto-detection
+
+        When enabled, the parser will automatically switch to control mode
+        when it sees a `%begin` notification from tmux. This helps handle
+        race conditions where `set_tmux_control_mode(True)` is called after
+        tmux has already started outputting control protocol.
+
+        Note: Auto-detection is automatically enabled when
+        `set_tmux_control_mode(True)` is called.
+
+        Args:
+            enabled: True to enable auto-detection, False to disable
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            # Enable auto-detection before starting tmux
+            term.set_tmux_auto_detect(True)
+            # Terminal will automatically switch to control mode when %begin is seen
+            ```
+        """
+    def set_tmux_control_mode(self, enabled: Any) -> Any:
+        """Enable or disable tmux control mode
+
+        When enabled, incoming data is parsed for tmux control protocol messages
+        instead of being processed as raw terminal output. This allows the terminal
+        to act as a tmux control mode client.
+
+        Args:
+            enabled: True to enable control mode, False to disable
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_tmux_control_mode(True)
+            # Now the terminal will parse tmux control protocol messages
+            ```
+        """
+    def set_trigger_enabled(self, trigger_id: Any, enabled: Any) -> bool:
+        """Enable or disable a trigger
+
+        Args:
+            trigger_id: ID of the trigger
+            enabled: Whether to enable (True) or disable (False)
+
+        Returns:
+            bool: True if trigger was found and updated
+        """
+    def set_unicode_version(self, version: Any) -> Any:
+        """Set the Unicode version for width calculation tables
+
+        This is a convenience method to just change the Unicode version setting
+        without modifying the ambiguous width treatment.
+
+        Args:
+            version: UnicodeVersion enum value (e.g., UnicodeVersion.Auto)
+        """
+    def set_use_bold_color(self, use_bold: Any) -> Any:
+        """Enable/disable custom bold color
+
+        When enabled, bold text uses set_bold_color() instead of bright ANSI variant.
+
+        Args:
+            use_bold: Whether to use custom bold color
+        """
+    def set_use_underline_color(self, use_underline: Any) -> Any:
+        """Enable/disable custom underline color
+
+        When enabled, underlined text uses a custom underline color.
+
+        Args:
+            use_underline: Whether to use custom underline color
+        """
+    def set_warning_bell_volume(self, volume: Any) -> Any:
+        """Set the configured warning bell volume (VT520)
+
+        Sets the configured volume. A program's DECSWBV changes the live
+        volume until the next RIS (``ESC c``), which restores this value.
+
+        Args:
+            volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
+
+        Raises:
+            ValueError: If ``volume`` is greater than 8
+
+        Example:
+            >>> term.set_warning_bell_volume(2)
+            >>> term.warning_bell_volume()
+            2
+        """
+    def set_width_config(self, config: Any) -> Any:
+        """Set the Unicode width configuration
+
+        This controls how character widths are calculated, particularly for:
+        - East Asian Ambiguous characters (Greek, Cyrillic, symbols)
+        - Unicode version-specific width tables
+
+        Args:
+            config: WidthConfig with unicode_version and ambiguous_width settings
+        """
+    def set_window_iconified(self, iconified: Any) -> Any:
+        """Set the host-supplied iconified/minimized state for XTWINOPS reports (`CSI 11 t`)
+
+        GUI hosts should call this whenever the real OS window is
+        minimized/restored so that `CSI 11 t` queries report the correct
+        state instead of always reporting non-iconified.
+
+        Args:
+            iconified: True if the window is iconified/minimized
+
+        Example:
+            >>> term.set_window_iconified(True)
+        """
+    def set_window_position(self, x: Any, y: Any) -> Any:
+        """Set the host-supplied window position for XTWINOPS reports (`CSI 13 t`)
+
+        The terminal core is headless and has no window of its own; GUI
+        hosts should call this whenever the real OS window moves so that
+        `CSI 13 t` queries report the terminal's actual on-screen position
+        instead of the origin default.
+
+        Args:
+            x: Window X position in pixels (may be negative on multi-monitor setups)
+            y: Window Y position in pixels (may be negative on multi-monitor setups)
+
+        Example:
+            >>> term.set_window_position(100, 50)
+        """
+    def shell_integration_state(self) -> Any:
+        """Get shell integration state
+
+        Returns:
+            Dictionary with shell integration info
+        """
     def simulate_mouse_event(
         self, button: Any, col: Any, row: Any, pressed: Any
-    ) -> Any: ...
-    def size(self) -> Any: ...
-    def start_command_execution(self, command: Any) -> Any: ...
-    def start_recording(self, title: Any) -> Any: ...
-    def stop_recording(self) -> Any: ...
+    ) -> Any:
+        """Simulate a mouse event and get the escape sequence
+
+        Args:
+            button: Mouse button (0=left, 1=middle, 2=right)
+            col: Column position (0-based)
+            row: Row position (0-based)
+            pressed: True for press, False for release
+
+        Returns:
+            Bytes representing the mouse event sequence
+        """
+    def size(self) -> Any:
+        """Get the current terminal dimensions
+
+        Returns:
+            Tuple of (cols, rows)
+        """
+    def start_command_execution(self, command: Any) -> Any:
+        """Start tracking a command execution
+
+        Args:
+            command: Command being executed
+        """
+    def start_recording(self, title: Any) -> Any:
+        """Start recording a terminal session
+
+        Args:
+            title: Optional session title
+        """
+    def stop_recording(self) -> Any:
+        """Stop recording and return the session
+
+        Returns:
+            RecordingSession object if recording was active, None otherwise
+        """
     @staticmethod
-    def strip_ansi(text: Any) -> Any: ...
-    def synchronized_updates(self) -> Any: ...
-    def take_completed_transfer(self, transfer_id: Any) -> Any: ...
-    def take_notifications(self) -> Any: ...
-    def take_notifications_detailed(self) -> Any: ...
-    def test_compliance(self, level: Any) -> Any: ...
-    def title(self) -> Any: ...
-    def trigger_custom_notification(self, id: Any, alert: Any) -> Any: ...
-    def trigger_notification(self, trigger: Any, alert: Any, message: Any) -> Any: ...
-    def update_activity(self) -> Any: ...
-    def update_animations(self) -> Any: ...
-    def update_peak_memory(self, current_bytes: Any) -> Any: ...
-    def use_alt_screen(self) -> Any: ...
-    def use_bold_color(self) -> Any: ...
-    def use_primary_screen(self) -> Any: ...
-    def use_underline_color(self) -> Any: ...
-    def warning_bell_volume(self) -> Any: ...
-    def width_config(self) -> Any: ...
-    def window_iconified(self) -> Any: ...
-    def window_position(self) -> Any: ...
+    def strip_ansi(text: Any) -> Any:
+        """Strip ANSI escape sequences from text
+
+        Args:
+            text: Text containing ANSI codes
+
+        Returns:
+            Text with all ANSI sequences removed
+        """
+    def synchronized_updates(self) -> Any:
+        """Check if synchronized updates mode is enabled (DEC 2026)
+
+        Returns:
+            True if synchronized updates mode is enabled
+        """
+    def take_completed_transfer(self, transfer_id: Any) -> Any:
+        """Take a completed transfer by ID, removing it from the completed buffer
+
+        Args:
+            transfer_id: The unique transfer identifier
+
+        Returns:
+            Transfer dictionary with "data" key (bytes) if found, None otherwise
+        """
+    def take_notifications(self) -> Any:
+        """Get all pending notifications
+
+        Returns a list of tuples: [(title, message), ...]
+        For OSC 9 notifications, title will be empty string.
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of (title, message) tuples
+        """
+    def take_notifications_detailed(self) -> Any:
+        """Get all pending notifications with full Kitty OSC 99 metadata.
+
+        Unlike `take_notifications` (which returns only (title, message)
+        tuples), this returns `Notification` objects exposing the `id`,
+        `urgency`, and `actions` fields carried by OSC 99 sequences.
+        Clears the notification queue after retrieval.
+
+        Returns:
+            List of Notification objects
+
+        Example:
+            >>> for n in term.take_notifications_detailed():
+            ...     print(n.title, n.urgency, n.actions)
+        """
+    def test_compliance(self, level: Any) -> Any:
+        """Run compliance tests for a specific level
+
+        Args:
+            level: Compliance level to test ("vt52", "vt100", "vt220", "vt320", "vt420", "vt520", "xterm")
+
+        Returns:
+            PyComplianceReport with test results
+        """
+    def title(self) -> Any:
+        """Get the terminal title
+
+        Returns:
+            Current terminal title string
+        """
+    def trigger_custom_notification(self, id: Any, alert: Any) -> Any:
+        """Trigger a custom notification
+
+        Args:
+            id: Trigger ID
+            alert: Alert type ("Desktop", "Sound(volume)", "Visual")
+        """
+    def trigger_notification(self, trigger: Any, alert: Any, message: Any) -> Any:
+        """Trigger a notification
+
+        Args:
+            trigger: Trigger type ("Bell", "Activity", "Silence", "Custom(id)")
+            alert: Alert type ("Desktop", "Sound(volume)", "Visual")
+            message: Optional message string
+        """
+    def update_activity(self) -> Any:
+        """Update activity timestamp"""
+    def update_animations(self) -> Any:
+        """Update all Kitty graphics animations and trigger refresh if frames changed
+
+        This method should be called regularly (e.g., 60Hz) to advance animation frames.
+        It returns a list of image IDs whose frames changed, allowing frontends to
+        selectively refresh only graphics that were updated.
+
+        Returns:
+            List of image IDs that changed frames
+        """
+    def update_peak_memory(self, current_bytes: Any) -> Any:
+        """Update peak memory usage
+
+        Args:
+            current_bytes: Current total memory usage in bytes
+        """
+    def use_alt_screen(self) -> Any:
+        """Switch to alternate screen buffer
+
+        This directly switches to the alternate screen without using escape sequences.
+        The primary screen content is preserved and can be restored with use_primary_screen().
+        Clears the alternate screen buffer.
+        """
+    def use_bold_color(self) -> Any:
+        """Check if custom bold color is enabled
+
+        Returns:
+            True if using custom bold color instead of bright ANSI variant
+        """
+    def use_primary_screen(self) -> Any:
+        """Switch to primary screen buffer
+
+        This directly switches to the primary screen without using escape sequences.
+        Restores the content that was visible before switching to alternate screen.
+        Also resets keyboard protocol flags (for TUI apps that fail to clean up).
+        """
+    def use_underline_color(self) -> Any:
+        """Check if custom underline color is enabled
+
+        Returns:
+            True if using custom underline color
+        """
+    def warning_bell_volume(self) -> Any:
+        """Get warning bell volume
+
+        Returns:
+            Volume level (0=off, 1-8=volume levels)
+        """
+    def width_config(self) -> WidthConfig:
+        """Get the Unicode width configuration
+
+        Returns:
+            WidthConfig: The current width configuration
+        """
+    def window_iconified(self) -> Any:
+        """Get the host-supplied window iconified/minimized state
+
+        Returns:
+            True if the window is iconified/minimized; defaults to
+            False if never set via `set_window_iconified()`
+        """
+    def window_position(self) -> Any:
+        """Get the host-supplied window position in pixels
+
+        Returns:
+            Tuple of (x, y) in pixels; defaults to (0, 0) if never set
+            via `set_window_position()`
+        """
 
 class TmuxNotification:
+    """Tmux control protocol notification"""
     @property
-    def client(self) -> Any: ...
+    def client(self) -> Any:
+        """Client name (for client-related notifications)"""
     @client.setter
     def client(self, value: Any) -> None: ...
     @property
-    def command_number(self) -> Any: ...
+    def command_number(self) -> Any:
+        """Command number (for begin/end/error notifications)"""
     @command_number.setter
     def command_number(self, value: Any) -> None: ...
     @property
-    def data(self) -> Any: ...
+    def data(self) -> Any:
+        """Output data (for output notifications, as bytes)"""
     @data.setter
     def data(self, value: Any) -> None: ...
     @property
-    def delay_ms(self) -> Any: ...
+    def delay_ms(self) -> Any:
+        """Delay in milliseconds (for extended-output notifications)"""
     @delay_ms.setter
     def delay_ms(self, value: Any) -> None: ...
     @property
-    def flags(self) -> Any: ...
+    def flags(self) -> Any:
+        """Flags (for begin/end/error notifications)"""
     @flags.setter
     def flags(self, value: Any) -> None: ...
     @property
-    def name(self) -> Any: ...
+    def name(self) -> Any:
+        """Name (for window/session rename notifications)"""
     @name.setter
     def name(self, value: Any) -> None: ...
     @property
-    def notification_type(self) -> Any: ...
+    def notification_type(self) -> Any:
+        """Notification type (e.g., "output", "window-add", "session-changed")"""
     @notification_type.setter
     def notification_type(self, value: Any) -> None: ...
     @property
-    def pane_id(self) -> Any: ...
+    def pane_id(self) -> Any:
+        """Pane ID (for notifications that involve a pane)"""
     @pane_id.setter
     def pane_id(self, value: Any) -> None: ...
     @property
-    def raw_line(self) -> Any: ...
+    def raw_line(self) -> Any:
+        """Raw line (for unknown notifications)"""
     @raw_line.setter
     def raw_line(self, value: Any) -> None: ...
     @property
-    def session_id(self) -> Any: ...
+    def session_id(self) -> Any:
+        """Session ID (for notifications that involve a session)"""
     @session_id.setter
     def session_id(self, value: Any) -> None: ...
     @property
-    def source(self) -> Any: ...
+    def source(self) -> Any:
+        """Provenance of an agent-state-changed state: "hook" (the agent claimed
+        it) or "scrape" (a pattern matched pane content). None for every
+        other notification type and for lines with no `source=` token.
+        """
     @source.setter
     def source(self, value: Any) -> None: ...
     @property
-    def subscription_name(self) -> Any: ...
+    def subscription_name(self) -> Any:
+        """Subscription name (for subscription-changed notifications)"""
     @subscription_name.setter
     def subscription_name(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Timestamp (for begin/end/error notifications)"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
     @property
-    def value(self) -> Any: ...
+    def value(self) -> Any:
+        """Subscription value (for subscription-changed notifications)"""
     @value.setter
     def value(self, value: Any) -> None: ...
     @property
-    def window_id(self) -> Any: ...
+    def window_id(self) -> Any:
+        """Window ID (for notifications that involve a window)"""
     @window_id.setter
     def window_id(self, value: Any) -> None: ...
     @property
-    def window_layout(self) -> Any: ...
+    def window_layout(self) -> Any:
+        """Window layout (for layout-change notifications)"""
     @window_layout.setter
     def window_layout(self, value: Any) -> None: ...
     @property
-    def window_raw_flags(self) -> Any: ...
+    def window_raw_flags(self) -> Any:
+        """Window raw flags (for layout-change notifications)"""
     @window_raw_flags.setter
     def window_raw_flags(self, value: Any) -> None: ...
     @property
-    def window_visible_layout(self) -> Any: ...
+    def window_visible_layout(self) -> Any:
+        """Window visible layout (for layout-change notifications)"""
     @window_visible_layout.setter
     def window_visible_layout(self, value: Any) -> None: ...
 
 class Trigger:
+    """Trigger information (read-only view)"""
     @property
-    def enabled(self) -> Any: ...
+    def enabled(self) -> Any:
+        """Whether the trigger is currently active"""
     @enabled.setter
     def enabled(self, value: Any) -> None: ...
     @property
-    def fire_once_per_line(self) -> Any: ...
+    def fire_once_per_line(self) -> Any:
+        """Whether the trigger fires at most once per line"""
     @fire_once_per_line.setter
     def fire_once_per_line(self, value: Any) -> None: ...
     @property
-    def id(self) -> Any: ...
+    def id(self) -> Any:
+        """Unique trigger identifier"""
     @id.setter
     def id(self, value: Any) -> None: ...
     @property
-    def match_count(self) -> Any: ...
+    def match_count(self) -> Any:
+        """Number of times this trigger has matched"""
     @match_count.setter
     def match_count(self, value: Any) -> None: ...
     @property
-    def name(self) -> Any: ...
+    def name(self) -> Any:
+        """Human-readable trigger name"""
     @name.setter
     def name(self, value: Any) -> None: ...
     @property
-    def pattern(self) -> Any: ...
+    def pattern(self) -> Any:
+        """Regex pattern the trigger matches against output lines"""
     @pattern.setter
     def pattern(self, value: Any) -> None: ...
 
 class TriggerAction:
+    """Trigger action configuration (constructable from Python)"""
     def __init__(self, action_type: Any, params: Any = None) -> None: ...
     @property
-    def action_type(self) -> Any: ...
+    def action_type(self) -> Any:
+        """Action type: "highlight", "notify", "mark_line", "set_variable",
+        "run_command", "play_sound", "send_text", "split_pane", "stop"
+        """
     @action_type.setter
     def action_type(self, value: Any) -> None: ...
     @property
-    def params(self) -> Any: ...
+    def params(self) -> Any:
+        """Action parameters (key-value pairs, type-specific)"""
     @params.setter
     def params(self, value: Any) -> None: ...
 
 class TriggerMatch:
+    """Trigger match result"""
     @property
-    def captures(self) -> Any: ...
+    def captures(self) -> Any:
+        """Regex capture groups (empty string for non-participating groups)"""
     @captures.setter
     def captures(self, value: Any) -> None: ...
     @property
-    def col(self) -> Any: ...
+    def col(self) -> Any:
+        """Column where the match starts (0-indexed)"""
     @col.setter
     def col(self, value: Any) -> None: ...
     @property
-    def end_col(self) -> Any: ...
+    def end_col(self) -> Any:
+        """Column just past the end of the match"""
     @end_col.setter
     def end_col(self, value: Any) -> None: ...
     @property
-    def row(self) -> Any: ...
+    def row(self) -> Any:
+        """Row where the match starts (0-indexed)"""
     @row.setter
     def row(self, value: Any) -> None: ...
     @property
-    def text(self) -> Any: ...
+    def text(self) -> Any:
+        """The matched text"""
     @text.setter
     def text(self, value: Any) -> None: ...
     @property
-    def timestamp(self) -> Any: ...
+    def timestamp(self) -> Any:
+        """Unix epoch milliseconds when the match occurred"""
     @timestamp.setter
     def timestamp(self, value: Any) -> None: ...
     @property
-    def trigger_id(self) -> Any: ...
+    def trigger_id(self) -> Any:
+        """ID of the trigger that matched"""
     @trigger_id.setter
     def trigger_id(self, value: Any) -> None: ...
 
 class UnderlineStyle:
+    """Underline style for text decoration (SGR 4:x)"""
+
     Curly: UnderlineStyle
     Dashed: UnderlineStyle
     Dotted: UnderlineStyle
     Double: UnderlineStyle
     Straight: UnderlineStyle
-    def __int__(self, /) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
 
 class UnicodeVersion:
+    """Unicode version for character width calculation tables.
+
+    Different Unicode versions have different character width assignments,
+    particularly for newly added emoji and other characters.
+    """
+
     Auto: UnicodeVersion
     Unicode10: UnicodeVersion
     Unicode11: UnicodeVersion
@@ -2388,51 +7779,541 @@ class UnicodeVersion:
     Unicode15_1: UnicodeVersion
     Unicode16: UnicodeVersion
     Unicode9: UnicodeVersion
-    def __int__(self, /) -> Any: ...
-    def is_auto(self) -> Any: ...
-    def version_string(self) -> Any: ...
+    def __int__(self, /) -> Any:
+        """int(self)"""
+    def is_auto(self) -> Any:
+        """Check if this is the Auto setting"""
+    def version_string(self) -> Any:
+        """Get a human-readable version string"""
 
 class WidthConfig:
+    """Configuration for Unicode width calculations.
+
+    This class combines Unicode version and ambiguous width settings
+    to control how character widths are calculated in the terminal.
+    """
     def __init__(
         self, unicode_version: Any = None, ambiguous_width: Any = None
     ) -> None: ...
     @property
-    def ambiguous_width(self) -> Any: ...
+    def ambiguous_width(self) -> Any:
+        """Treatment of East Asian Ambiguous width characters"""
     @ambiguous_width.setter
     def ambiguous_width(self, value: Any) -> None: ...
     @staticmethod
-    def cjk() -> Any: ...
+    def cjk() -> Any:
+        """Create a WidthConfig optimized for CJK environments
+
+        Returns:
+            WidthConfig with Auto Unicode version and Wide ambiguous width
+        """
     @property
-    def unicode_version(self) -> Any: ...
+    def unicode_version(self) -> Any:
+        """Unicode version for width tables"""
     @unicode_version.setter
     def unicode_version(self, value: Any) -> None: ...
     @staticmethod
-    def western() -> Any: ...
+    def western() -> Any:
+        """Create a WidthConfig optimized for Western environments
 
-def adjust_contrast_rgb(fg: Any, bg: Any, minimum_contrast: Any) -> Any: ...
-def adjust_hue(rgb: Any, degrees: Any) -> Any: ...
-def adjust_saturation(rgb: Any, amount: Any) -> Any: ...
-def char_width(c: Any, config: Any = None) -> Any: ...
-def char_width_cjk(c: Any) -> Any: ...
-def color_luminance(rgb: Any) -> Any: ...
-def complementary_color(rgb: Any) -> Any: ...
-def contrast_ratio(rgb1: Any, rgb2: Any) -> Any: ...
-def darken_rgb(rgb: Any, amount: Any) -> Any: ...
-def decode_client_message(data: Any) -> Any: ...
-def decode_server_message(data: Any) -> Any: ...
-def encode_client_message(message_type: Any, **kwargs: Any) -> Any: ...
-def encode_server_message(message_type: Any, **kwargs: Any) -> Any: ...
-def hex_to_rgb(hex_str: Any) -> Any: ...
-def hsl_to_rgb(h: Any, s: Any, l: Any) -> Any: ...
-def is_dark_color(rgb: Any) -> Any: ...
-def is_east_asian_ambiguous(c: Any) -> Any: ...
-def lighten_rgb(rgb: Any, amount: Any) -> Any: ...
-def meets_wcag_aa(fg: Any, bg: Any) -> Any: ...
-def meets_wcag_aaa(fg: Any, bg: Any) -> Any: ...
-def mix_colors(rgb1: Any, rgb2: Any, ratio: Any) -> Any: ...
-def perceived_brightness_rgb(r: Any, g: Any, b: Any) -> Any: ...
-def rgb_to_ansi_256(rgb: Any) -> Any: ...
-def rgb_to_hex(rgb: Any) -> Any: ...
-def rgb_to_hsl(rgb: Any) -> Any: ...
-def str_width(s: Any, config: Any = None) -> Any: ...
-def str_width_cjk(s: Any) -> Any: ...
+        Returns:
+            WidthConfig with Auto Unicode version and Narrow ambiguous width
+        """
+
+def adjust_contrast_rgb(fg: tuple, bg: tuple, minimum_contrast: float) -> tuple:
+    """Adjust foreground color to maintain minimum contrast against background.
+
+    Implements iTerm2's minimum contrast algorithm using NTSC perceived brightness.
+    The algorithm preserves the color's hue while adjusting brightness to ensure
+    readability.
+
+    Args:
+        fg (tuple): Foreground color (r, g, b) where each component is 0-255
+        bg (tuple): Background color (r, g, b) where each component is 0-255
+        minimum_contrast (float): Minimum required brightness difference (0.0-1.0)
+
+    Returns:
+        tuple: Adjusted foreground color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import adjust_contrast_rgb
+        >>> # Dark gray text on black background - will be lightened
+        >>> fg = (64, 64, 64)
+        >>> bg = (0, 0, 0)
+        >>> adjusted = adjust_contrast_rgb(fg, bg, 0.5)
+        >>> print(f"Adjusted color: {adjusted}")
+        Adjusted color: (128, 128, 128)
+    """
+
+def adjust_hue(rgb: tuple, degrees: float) -> tuple:
+    """Adjust color hue.
+
+    Args:
+        rgb (tuple): Color as (r, g, b)
+        degrees (float): Degrees to rotate hue (wraps around 360)
+
+    Returns:
+        tuple: Adjusted color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import adjust_hue
+        >>> shifted = adjust_hue((255, 0, 0), 120)  # Red -> Green
+    """
+
+def adjust_saturation(rgb: tuple, amount: float) -> tuple:
+    """Adjust color saturation.
+
+    Args:
+        rgb (tuple): Color as (r, g, b)
+        amount (float): Amount to adjust saturation (-100 to 100)
+
+    Returns:
+        tuple: Adjusted color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import adjust_saturation
+        >>> saturated = adjust_saturation((200, 100, 100), 50)
+        >>> desaturated = adjust_saturation((200, 100, 100), -50)
+    """
+
+def char_width(c: str, config: Any = None) -> int:
+    """Calculate the display width of a character.
+
+    This function calculates how many terminal cells a character occupies,
+    taking into account the width configuration.
+
+    Args:
+        c (str): A single character to measure
+        config (WidthConfig, optional): Width configuration settings. Defaults to western settings.
+
+    Returns:
+        int: The display width in cells (0, 1, or 2)
+
+    Example:
+        >>> from par_term_emu_core_rust import char_width, WidthConfig
+        >>> char_width("A")  # ASCII
+        1
+        >>> char_width("日")  # CJK
+        2
+        >>> char_width("α", WidthConfig.cjk())  # Greek with CJK config
+        2
+    """
+
+def char_width_cjk(c: str) -> int:
+    """Calculate the display width of a character with CJK ambiguous width.
+
+    This is a convenience function that uses AmbiguousWidth.Wide.
+    Ambiguous characters (Greek, Cyrillic, some symbols) will be treated as 2 cells wide.
+
+    Args:
+        c (str): A single character to measure
+
+    Returns:
+        int: The display width in cells (0, 1, or 2)
+
+    Example:
+        >>> from par_term_emu_core_rust import char_width_cjk
+        >>> char_width_cjk("α")  # Greek letter
+        2
+    """
+
+def color_luminance(rgb: tuple) -> float:
+    """Calculate WCAG relative luminance of an RGB color.
+
+    Args:
+        rgb (tuple): Color as (r, g, b) where each component is 0-255
+
+    Returns:
+        float: Relative luminance (0.0-1.0)
+
+    Example:
+        >>> from par_term_emu_core_rust import color_luminance
+        >>> lum = color_luminance((255, 255, 255))
+        >>> print(f"White luminance: {lum:.2f}")
+    """
+
+def complementary_color(rgb: tuple) -> tuple:
+    """Get complementary color (opposite on color wheel).
+
+    Args:
+        rgb (tuple): Color as (r, g, b)
+
+    Returns:
+        tuple: Complementary color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import complementary_color
+        >>> comp = complementary_color((255, 0, 0))  # Red -> Cyan
+        >>> print(f"Complement of red: {comp}")
+    """
+
+def contrast_ratio(rgb1: tuple, rgb2: tuple) -> float:
+    """Calculate WCAG contrast ratio between two colors.
+
+    Args:
+        rgb1 (tuple): First color (r, g, b)
+        rgb2 (tuple): Second color (r, g, b)
+
+    Returns:
+        float: Contrast ratio (1.0 to 21.0)
+
+    Example:
+        >>> from par_term_emu_core_rust import contrast_ratio
+        >>> ratio = contrast_ratio((0, 0, 0), (255, 255, 255))
+        >>> print(f"Black/White ratio: {ratio:.1f}:1")
+        Black/White ratio: 21.0:1
+    """
+
+def darken_rgb(rgb: tuple, amount: float) -> tuple:
+    """Darken an RGB color by a given amount.
+
+    Args:
+        rgb (tuple): Color as (r, g, b) where each component is 0-255
+        amount (float): Amount to darken (0.0 to 1.0)
+
+    Returns:
+        tuple: Darkened color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import darken_rgb
+        >>> darkened = darken_rgb((200, 150, 100), 0.3)
+        >>> print(f"Darkened: {darkened}")
+    """
+
+def decode_client_message(data: Any) -> dict:
+    """Decode a binary protobuf client message
+
+    Args:
+        data: Binary protobuf encoded message
+
+    Returns:
+        dict: Decoded message with 'type' key and message-specific fields
+
+    Raises:
+        RuntimeError: If decoding fails or streaming feature not enabled
+
+    Example:
+        ```python
+        msg = decode_client_message(data)
+        if msg["type"] == "input":
+            pty.write(msg["data"])
+        ```
+    """
+
+def decode_server_message(data: Any) -> dict:
+    """Decode a binary protobuf server message
+
+    Args:
+        data: Binary protobuf encoded message
+
+    Returns:
+        dict: Decoded message with 'type' key and message-specific fields
+
+    Raises:
+        RuntimeError: If decoding fails or streaming feature not enabled
+
+    Example:
+        ```python
+        msg = decode_server_message(data)
+        if msg["type"] == "output":
+            print(msg["data"])
+        ```
+    """
+
+def encode_client_message(message_type: Any, **kwargs: Any) -> bytes:
+    """Encode a client message to binary protobuf format
+
+    Args:
+        message_type: Type of message (the `type` tag of the decoded dict,
+            e.g. "input", "resize", "subscribe")
+        **kwargs: Message-specific fields (one per decoded dict key; missing
+            or wrong-typed values fall back to per-field defaults)
+
+    Returns:
+        bytes: Binary protobuf encoded message
+
+    Raises:
+        RuntimeError: If the type is unknown, encoding fails, or the
+            streaming feature is not enabled
+
+    Example:
+        ```python
+        data = encode_client_message("input", data="ls\\r")
+        ws.send(data)
+        ```
+    """
+
+def encode_server_message(message_type: Any, **kwargs: Any) -> bytes:
+    """Encode a server message to binary protobuf format
+
+    Args:
+        message_type: Type of message (the `type` tag of the decoded dict,
+            e.g. "output", "connected", "cursor")
+        **kwargs: Message-specific fields (one per decoded dict key; missing
+            or wrong-typed values fall back to per-field defaults)
+
+    Returns:
+        bytes: Binary protobuf encoded message
+
+    Raises:
+        RuntimeError: If the type is unknown, encoding fails, or the
+            streaming feature is not enabled
+
+    Example:
+        ```python
+        data = encode_server_message("output", data="hello", row=0, col=0)
+        ```
+    """
+
+def hex_to_rgb(hex_str: str) -> Any:
+    """Convert hex string to RGB.
+
+    Args:
+        hex_str (str): Hex color string (e.g., "#FF0000" or "FF0000")
+
+    Returns:
+        tuple or None: RGB color (r, g, b) or None if invalid
+
+    Example:
+        >>> from par_term_emu_core_rust import hex_to_rgb
+        >>> rgb = hex_to_rgb("#FF8040")
+        >>> print(f"RGB: {rgb}")
+        RGB: (255, 128, 64)
+    """
+
+def hsl_to_rgb(h: float, s: float, l: float) -> tuple:
+    """Convert HSL to RGB color space.
+
+    Args:
+        h (float): Hue in degrees (0-360)
+        s (float): Saturation percentage (0-100)
+        l (float): Lightness percentage (0-100)
+
+    Returns:
+        tuple: RGB color (r, g, b) where each component is 0-255
+
+    Example:
+        >>> from par_term_emu_core_rust import hsl_to_rgb
+        >>> rgb = hsl_to_rgb(120, 100, 50)  # Pure green
+        >>> print(f"Green RGB: {rgb}")
+        Green RGB: (0, 255, 0)
+    """
+
+def is_dark_color(rgb: tuple) -> bool:
+    """Check if a color is dark (luminance < 0.5).
+
+    Args:
+        rgb (tuple): Color as (r, g, b) where each component is 0-255
+
+    Returns:
+        bool: True if color is dark
+
+    Example:
+        >>> from par_term_emu_core_rust import is_dark_color
+        >>> print(is_dark_color((50, 50, 50)))
+        True
+    """
+
+def is_east_asian_ambiguous(c: str) -> bool:
+    """Check if a character is East Asian Ambiguous.
+
+    East Asian Ambiguous characters are those that have uncertain width,
+    displaying as either 1 or 2 cells depending on context.
+
+    This includes characters like:
+    - Greek and Cyrillic letters
+    - Some mathematical symbols
+    - Some line-drawing characters
+    - Various punctuation marks
+
+    Args:
+        c (str): A single character to check
+
+    Returns:
+        bool: True if the character is East Asian Ambiguous
+
+    Example:
+        >>> from par_term_emu_core_rust import is_east_asian_ambiguous
+        >>> is_east_asian_ambiguous("α")  # Greek letter
+        True
+        >>> is_east_asian_ambiguous("A")  # ASCII
+        False
+        >>> is_east_asian_ambiguous("日")  # CJK - wide, not ambiguous
+        False
+    """
+
+def lighten_rgb(rgb: tuple, amount: float) -> tuple:
+    """Lighten an RGB color by a given amount.
+
+    Args:
+        rgb (tuple): Color as (r, g, b) where each component is 0-255
+        amount (float): Amount to lighten (0.0 to 1.0)
+
+    Returns:
+        tuple: Lightened color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import lighten_rgb
+        >>> lightened = lighten_rgb((128, 64, 32), 0.5)
+        >>> print(f"Lightened: {lightened}")
+    """
+
+def meets_wcag_aa(fg: tuple, bg: tuple) -> bool:
+    """Check if two colors meet WCAG AA standard (4.5:1 for normal text).
+
+    Args:
+        fg (tuple): Foreground color (r, g, b)
+        bg (tuple): Background color (r, g, b)
+
+    Returns:
+        bool: True if colors meet WCAG AA standard
+
+    Example:
+        >>> from par_term_emu_core_rust import meets_wcag_aa
+        >>> print(meets_wcag_aa((0, 0, 0), (255, 255, 255)))
+        True
+    """
+
+def meets_wcag_aaa(fg: tuple, bg: tuple) -> bool:
+    """Check if two colors meet WCAG AAA standard (7:1 for normal text).
+
+    Args:
+        fg (tuple): Foreground color (r, g, b)
+        bg (tuple): Background color (r, g, b)
+
+    Returns:
+        bool: True if colors meet WCAG AAA standard
+
+    Example:
+        >>> from par_term_emu_core_rust import meets_wcag_aaa
+        >>> print(meets_wcag_aaa((0, 0, 0), (255, 255, 255)))
+        True
+    """
+
+def mix_colors(rgb1: tuple, rgb2: tuple, ratio: float) -> tuple:
+    """Mix two colors with a given ratio.
+
+    Args:
+        rgb1 (tuple): First color (r, g, b)
+        rgb2 (tuple): Second color (r, g, b)
+        ratio (float): Mix ratio (0.0 = all rgb1, 1.0 = all rgb2)
+
+    Returns:
+        tuple: Mixed color (r, g, b)
+
+    Example:
+        >>> from par_term_emu_core_rust import mix_colors
+        >>> mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)
+        >>> print(f"Purple: {mixed}")
+    """
+
+def perceived_brightness_rgb(r: int, g: int, b: int) -> float:
+    """Calculate perceived brightness of an RGB color using NTSC formula.
+
+    The NTSC formula weights color components based on human perception:
+    - Red: 30%
+    - Green: 59%
+    - Blue: 11%
+
+    Args:
+        r (int): Red component (0-255)
+        g (int): Green component (0-255)
+        b (int): Blue component (0-255)
+
+    Returns:
+        float: Perceived brightness value (0.0-1.0)
+
+    Example:
+        >>> from par_term_emu_core_rust import perceived_brightness_rgb
+        >>> brightness = perceived_brightness_rgb(128, 128, 128)
+        >>> print(f"Gray brightness: {brightness:.2f}")
+        Gray brightness: 0.50
+    """
+
+def rgb_to_ansi_256(rgb: tuple) -> int:
+    """Convert RGB to nearest 256-color ANSI palette index.
+
+    Args:
+        rgb (tuple): Color as (r, g, b)
+
+    Returns:
+        int: ANSI 256-color index (16-255)
+
+    Example:
+        >>> from par_term_emu_core_rust import rgb_to_ansi_256
+        >>> idx = rgb_to_ansi_256((255, 0, 0))
+        >>> print(f"Red is closest to ANSI color {idx}")
+    """
+
+def rgb_to_hex(rgb: tuple) -> str:
+    """Convert RGB to hex string.
+
+    Args:
+        rgb (tuple): Color as (r, g, b)
+
+    Returns:
+        str: Hex color string (e.g., "#FF0000")
+
+    Example:
+        >>> from par_term_emu_core_rust import rgb_to_hex
+        >>> hex_str = rgb_to_hex((255, 128, 64))
+        >>> print(hex_str)
+        #FF8040
+    """
+
+def rgb_to_hsl(rgb: tuple) -> tuple:
+    """Convert RGB to HSL color space.
+
+    Args:
+        rgb (tuple): Color as (r, g, b) where each component is 0-255
+
+    Returns:
+        tuple: (hue, saturation, lightness) where:
+            - hue is in degrees (0-360)
+            - saturation is percentage (0-100)
+            - lightness is percentage (0-100)
+
+    Example:
+        >>> from par_term_emu_core_rust import rgb_to_hsl
+        >>> h, s, l = rgb_to_hsl((255, 0, 0))
+        >>> print(f"Red in HSL: H={h:.0f}° S={s:.0f}% L={l:.0f}%")
+        Red in HSL: H=0° S=100% L=50%
+    """
+
+def str_width(s: str, config: Any = None) -> int:
+    """Calculate the display width of a string.
+
+    This sums the widths of all characters in the string.
+
+    Args:
+        s (str): The string to measure
+        config (WidthConfig, optional): Width configuration settings. Defaults to western settings.
+
+    Returns:
+        int: The total display width in cells
+
+    Example:
+        >>> from par_term_emu_core_rust import str_width
+        >>> str_width("Hello")
+        5
+        >>> str_width("Hello日本")
+        9
+    """
+
+def str_width_cjk(s: str) -> int:
+    """Calculate the display width of a string with CJK ambiguous width.
+
+    This is a convenience function that uses AmbiguousWidth.Wide.
+    Ambiguous characters (Greek, Cyrillic, some symbols) will be treated as 2 cells wide.
+
+    Args:
+        s (str): The string to measure
+
+    Returns:
+        int: The total display width in cells
+
+    Example:
+        >>> from par_term_emu_core_rust import str_width_cjk
+        >>> str_width_cjk("αβγ")  # Greek letters
+        6
+    """

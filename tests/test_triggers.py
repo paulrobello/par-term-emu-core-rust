@@ -136,10 +136,12 @@ def test_trigger_enable_disable():
 
     assert term.set_trigger_enabled(trigger_id, False) is True
     t = term.get_trigger(trigger_id)
+    assert t is not None
     assert t.enabled is False
 
     assert term.set_trigger_enabled(trigger_id, True) is True
     t = term.get_trigger(trigger_id)
+    assert t is not None
     assert t.enabled is True
 
 
