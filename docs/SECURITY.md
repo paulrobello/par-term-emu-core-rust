@@ -20,7 +20,7 @@ term.spawn(
 - `args` must be a list of strings or None (e.g., `args=["arg1", "arg2"]` or `args=None`)
 - All path arguments (`cwd`, values in `args`) should be validated to prevent directory traversal
 - Command must be absolute path (e.g., `/bin/bash`) or findable in `PATH`
-- The system automatically drops `COLUMNS` and `LINES` from inherited environment to prevent resize issues
+- The system automatically drops size, multiplexer, par-mux, and agent-session variables from the inherited environment — see [Inherited Environment](#inherited-environment)
 - Set `PAR_TERM_REPLY_XTWINOPS=0` **before creating `PtyTerminal`** to suppress XTWINOPS (CSI t) query responses (this setting is cached at terminal creation time)
 
 **Convenience Methods:**
@@ -92,7 +92,7 @@ graph TB
 
     User -->|spawn command, args, env, cwd| Validate
     Validate -->|Validated inputs| EnvFilter
-    EnvFilter -->|Filtered env COLUMNS/LINES dropped| PTY
+    EnvFilter -->|Filtered env: DROP_VARS and PAR_MUX_* removed| PTY
     PTY -->|Creates| PtyPair
     PtyPair -->|Spawns| ChildProc
     PTY -->|Starts| ReaderThread
@@ -121,7 +121,7 @@ graph TB
 - Terminal size bounds checking
 
 **Environment Isolation**:
-- Automatic filtering of `COLUMNS` and `LINES` to prevent resize bugs
+- Automatic filtering of inherited size, multiplexer, par-mux, and agent-session variables ([full list](#inherited-environment))
 - Selective environment variable inheritance
 - Sensitive variable removal (credentials, API keys)
 
@@ -224,11 +224,12 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 - Database connection strings
 
 **Automatic Environment Filtering**:
-- The system automatically drops `COLUMNS` and `LINES` environment variables (if present in parent) to prevent terminal size conflicts
-- These variables are static and don't update on resize, causing issues with terminal-aware applications
-- Many libraries (e.g., Python's `shutil.get_terminal_size()`) and some TUIs prioritize these env vars over `ioctl(TIOCGWINSZ)`, leaving them stuck at the parent terminal's size
-- Applications should query terminal size via `ioctl(TIOCGWINSZ)` instead
-- Strips tmux (`TMUX`, `TMUX_PANE`) and GNU Screen (`STY`, `WINDOW`) environment variables from child processes to prevent tools like fzf from rendering in the parent multiplexer pane instead of the embedded PTY
+- Every spawn drops these inherited variables (`DROP_VARS` in `src/pty_session.rs`, plus a prefix match):
+  - **Size hints** — `COLUMNS`, `LINES`. They are static and do not update on resize. Many libraries (Python's `shutil.get_terminal_size()`, some TUIs) prefer them over `ioctl(TIOCGWINSZ)` and would stay stuck at the parent terminal's size.
+  - **Parent multiplexer** — `TMUX`, `TMUX_PANE`, `STY`, `WINDOW`. The child runs in a new PTY, not the parent's tmux or screen pane; tools like fzf would otherwise render in the parent pane.
+  - **par-mux pane identity** — every `PAR_MUX_*` variable. A PTY spawned inside a mux pane must not report agents to the outer daemon; mux panes re-add their own values.
+  - **Outer agent-session identity** — `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_MESSAGING_TOKEN`, `OMPCODE`, `CODEX_THREAD_ID`. A spawned shell is not a child agent of whatever started this process.
+- The `env` argument to `spawn()`/`spawn_shell()` (Python) or `PtySession::set_env()` (Rust) re-adds any of them for an intentional child session.
 - Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS query responses (this setting is cached at terminal creation time; changing it after will have no effect)
 
 ### Secure Environment Practices
@@ -259,8 +260,8 @@ term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
 # Environment merge order (see spawn() in src/pty_session.rs):
-# 1. Inherit all parent env vars (except COLUMNS/LINES/TMUX/TMUX_PANE/STY/WINDOW
-#    - the DROP_VARS set, automatically filtered)
+# 1. Inherit all parent env vars except the dropped set (see Inherited Environment:
+#    COLUMNS/LINES, TMUX/TMUX_PANE/STY/WINDOW, PAR_MUX_*, agent-session vars)
 # 2. Set terminal-specific environment variables:
 #    - TERM=xterm-256color
 #    - COLORTERM=truecolor
@@ -273,7 +274,7 @@ term.spawn("/bin/sh", env=safe_overrides)
 
 ```python
 # CAUTION: This inherits everything from parent
-term.spawn_shell()  # Includes all parent env vars (except COLUMNS/LINES)!
+term.spawn_shell()  # Includes all parent env vars (except the dropped set)!
 
 # BETTER: Explicitly control environment even with spawn_shell
 term.spawn(
@@ -318,7 +319,7 @@ term.spawn(
 ```
 
 **Important**: The `env` parameter in `spawn()` **merges with and overrides specific keys** in the inherited environment. The process is:
-1. All parent environment variables are inherited (except `COLUMNS`, `LINES`, `TMUX`, `TMUX_PANE`, `STY`, and `WINDOW` which are automatically filtered out as the `DROP_VARS` set)
+1. All parent environment variables are inherited, except the ones listed under [Inherited Environment](#inherited-environment), which are filtered out automatically
 2. `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1`, and `KITTY_PID=<process_id>` are set automatically for Kitty graphics protocol support
 3. Variables specified in `env` override all previous values (including TERM/COLORTERM/TERM_PROGRAM if specified)
 4. The merged environment is passed to the spawned process

@@ -79,8 +79,7 @@ pub fn get_default_shell() -> String {
 
 **Environment Variables:**
 - Inherits parent environment variables properly on all platforms
-- Automatically drops `COLUMNS` and `LINES` to prevent resize issues (apps should query PTY size via ioctl)
-- Strips tmux (`TMUX`, `TMUX_PANE`) and GNU Screen (`STY`, `WINDOW`) env vars to prevent child process interference with the parent multiplexer
+- Drops inherited size, multiplexer, par-mux, and agent-session variables (`COLUMNS`/`LINES`, `TMUX`/`STY`, `PAR_MUX_*`, …) — full list in [SECURITY.md](SECURITY.md#inherited-environment)
 - Sets `TERM=xterm-256color` and `COLORTERM=truecolor` consistently
 - Sets Kitty-specific variables (`TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID`, `KITTY_PID`) for protocol detection
 
