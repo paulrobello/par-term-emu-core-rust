@@ -888,7 +888,10 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 
 ### Input Safety
 
-- Client input is rate-limited (`--input-rate-limit`, default 0 = unlimited).
+- Client input is rate-limited per connection. `par-term-streamer --input-rate-limit`
+  defaults to 1048576 bytes/s (1 MiB/s; `0` = unlimited). The library
+  `StreamingConfig.input_rate_limit_bytes_per_sec` defaults to `0`
+  (unlimited), so embedders set it explicitly.
 - Read-only clients are enforced before PTY writes.
 - Terminal-size updates are validated server-side.
 - File transfers are capped in memory (`DEFAULT_MAX_TRANSFER_SIZE`; no
@@ -904,11 +907,11 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - The current values of every size cap live in the
   [Resource Limits Reference](#resource-limits-reference) table, generated
   from the code — prose numbers here would drift.
-- Inbound WebSocket frames/messages are capped at 16 MiB each
-  (`max_message_size` / `max_frame_size` on the `WebSocketConfig`,
-  `src/streaming/server.rs`, 0.43.1). This bounds worst-case per-connection
-  memory from a single oversized frame independently of the protobuf-level
-  caps above.
+- Inbound WebSocket frames and messages are capped at 16 MiB each
+  (`WS_MAX_MESSAGE_SIZE` / `WS_MAX_FRAME_SIZE` in `src/streaming/server.rs`,
+  applied as `max_message_size` / `max_frame_size` on the `WebSocketConfig`).
+  This bounds per-connection memory from one oversized frame independently
+  of the protobuf-level caps above.
 
 ### See Also
 
@@ -920,13 +923,13 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 
 The `par-mux` daemon owns PTYs running as the invoking user and serves the
 tmux control-mode protocol over a local socket. This section describes the
-daemon's security posture as of 0.52.0, after the 2026-09-26 security pass
-landed (socket ownership hardening, the 1 MiB control-line budget, and the
-4 KiB hook-value caps — those budgets' current values live in the
-[Resource Limits Reference](#resource-limits-reference) table); every
+daemon's security posture: socket ownership hardening, a per-line control
+budget, per-value hook caps, the host probe, and pane respawn. The
+budgets' current values live in the
+[Resource Limits Reference](#resource-limits-reference) table. Every
 statement is verified against
 `src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks.rs`,
-`src/mux/persist.rs`, and `src/mux/win_resume.rs`.
+`src/mux/host_probe.rs`, `src/mux/persist.rs`, and `src/mux/win_resume.rs`.
 
 ### Threat Model
 
@@ -992,13 +995,15 @@ Both bounds below exist on a connection whose peer is already verified to
 be the same user — they bound accidental and runaway growth, not an
 adversary:
 
-- **Per-line byte budget (1 MiB):** the client read loop accumulates a
-  line until its newline; without a budget a client streaming an
-  unterminated line grows the daemon's memory until the socket closes. A
-  line — complete or unterminated — exceeding 1 MiB is answered with one
-  `%error` block ("line exceeds 1 MiB budget, closing connection") and
-  the connection is closed.
-- **Per-client broadcast queue (4096 lines):** a `%output` line carries
+- **Per-line byte budget (`MAX_CONTROL_LINE_BYTES`, 1 MiB):** the client
+  read loop accumulates a line until its newline; without a budget a
+  client streaming an unterminated line grows the daemon's memory until
+  the socket closes. The budget is checked on every chunk read, so a line
+  — complete or unterminated — exceeding it is answered with one `%error`
+  block ("line exceeds 1 MiB budget, closing connection") and the
+  connection is closed without waiting for a newline.
+- **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` in
+  `src/mux/server.rs`, 4096 lines):** a `%output` line carries
   one PTY read (up to 16 KiB raw, roughly doubled by escape encoding), so
   a client that stops draining pins at most ~128 MiB before it is
   evicted and disconnected, and the disconnect frees the queue.
@@ -1085,6 +1090,78 @@ one JSON reply). Validation is bounded and ordered:
 A hook can claim **any** pane id, not just its own; that is same-user
 trust (the socket accepted the connection and verified the peer's euid),
 a recorded design decision, not an oversight.
+
+### Agent Telemetry and Host Probe
+
+`pane.report_agent_telemetry` lets a pane's hook attach display-only
+telemetry (model, effort, context and rate-limit percents) to its agent
+claim. Validation is bounded like the other hook reports: strings are
+length-capped (`model` 128 characters, `effort` 32) and free of control
+characters, and percents must be 0-100. A sample dated in the future is
+rejected with an error. A sample older than 55 minutes, older than the
+stored sample, at or below the last accepted `seq`, or reported for an
+agent that is not the pane's current label is dropped silently.
+Telemetry is never persisted and clears with the claim.
+
+The host probe is a daemon thread that measures each rostered pane's
+working directory every 30 s: disk-free percent and git branch and dirty
+state. That directory can be one a cloned repository or pane output
+controls, so the probe:
+
+- probes only the pane child's kernel-reported cwd, never an OSC 7 value,
+  and skips a pane whose cwd cannot be read
+- runs every git command with `core.fsmonitor=false`,
+  `core.hooksPath=/dev/null`, `safe.bareRepository=explicit`,
+  `protocol.ext.allow=never`, `--no-optional-locks`,
+  `GIT_OPTIONAL_LOCKS=0` and `GIT_TERMINAL_PROMPT=0`, with
+  `GIT_DIR`/`GIT_WORK_TREE` cleared, so no repo-configured hook, filter or
+  transport executes
+- checks dirty state with `diff-index --cached` (index against HEAD),
+  which runs no clean filter; unstaged-only edits to tracked files
+  therefore do not read as dirty
+- serves a branch name only when it is at most `MAX_GIT_BRANCH_LEN` (128)
+  bytes and free of control characters
+- bounds every step, so a wedged filesystem or a hanging repository cannot
+  stall the daemon (`src/mux/host_probe.rs`):
+  - Each pane's probe runs on a detached worker that the sweep waits for
+    at most 6 s. Its git runs must finish 500 ms before that wait ends,
+    and each git run is also capped at 5 s. A git child still running at
+    its deadline is killed and reaped on a detached thread.
+  - git stdout is read on its own thread as it arrives and capped per
+    command: 0 bytes for `diff-index` (only the exit status matters),
+    1 byte for `ls-files` (only emptiness matters), and 130 bytes for
+    `symbolic-ref` (just past the branch cap). The read end closes at the
+    cap, so a chatty child fails its next write instead of blocking on a
+    full pipe.
+  - A pane whose probe outruns its budget is skipped until its cwd
+    changes. A whole sweep stops after 10 s, and stops starting probes
+    while 4 probe threads are still outstanding, so a wedged mount leaks a
+    bounded number of threads.
+  - The shutdown flag is checked before each pane and during every git
+    wait, and daemon shutdown waits at most 1 s for the probe thread
+    before detaching it.
+
+### Pane Respawn
+
+`respawn-pane -t %N [-k] [-c dir] [command]` runs a new process in an
+existing pane, so any client of the control socket can replace a pane's
+program. That is the same same-user power `split-window` and `send-keys`
+already grant: the command runs through the default shell like every
+other spawn (`$SHELL -c`, or `%COMSPEC% /C` on Windows), behind the
+socket's peer-UID check. A running pane refuses to respawn without `-k`.
+
+- Only leading flags are parsed (`-t`, `-c`, `-k`, up to the first
+  non-flag token or `--`), and the command is taken verbatim from there,
+  so a `-k` or `-c` inside the command (`sh -c '…'`, `sort -k 1`) is never
+  read as a flag.
+- After a pane's child is reaped, the pane no longer holds its PID
+  (`child_pid()` returns `None`), so a later `kill-pane`,
+  `respawn-pane -k`, or resize cannot signal a recycled PID.
+- The default start directory uses the pane's OSC 7 directory only when
+  its host is this machine and it names an existing local directory, then
+  the live child's kernel-reported cwd, then the pane factory's default,
+  then `$HOME`. A remote host's OSC 7 (an SSH session) never picks the
+  directory, and the daemon's own working directory is never used.
 
 ### Spawn Quoting on Restore
 
