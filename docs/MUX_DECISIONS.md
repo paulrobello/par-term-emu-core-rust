@@ -7,7 +7,7 @@ One-line summaries of the design decisions that par-mux code comments cite by nu
 | Id | Decision | Cited in |
 |----|----------|----------|
 | D1 | `mux` is a cargo feature of this crate, not a separate crate; it is absent from the `default` and `sim` builds | `src/mux/scrape.rs`, `Cargo.toml`, `tests/mux_feature_isolation.rs` |
-| D2 | The mux runtime types are its own (`MuxSession`, `MuxWindow`, `MuxPane`), separate from the `terminal::multiplexing` serialization schema; a pane has one terminal, owned by the daemon | `src/streaming/mux_factory.rs` |
+| D2 | The mux runtime types are its own (`MuxSession`, `MuxWindow`, `MuxPane`), separate from the `terminal::multiplexing` serialization schema; `src/streaming/mux_factory.rs` cites it for keeping the daemon's pane the only owner of its terminal | `src/streaming/mux_factory.rs` |
 | D3 | Parity tier: implement what par-term's tmux client drives, not all of tmux (no copy-mode, buffer stack, or `#{…}` format strings) | `src/mux/dispatch.rs`, `src/mux/tree.rs` |
 | D3.1 | Persistence serializes the replay-snapshot types through feature-gated serde derives (`serde` feature), not a DTO layer | `Cargo.toml` |
 | D3.2 | The state file is a versioned envelope; an unreadable or unknown-version file is quarantined and the daemon starts fresh | `src/mux/persist.rs`, `src/bin/par_mux/main.rs` |
@@ -22,6 +22,6 @@ One-line summaries of the design decisions that par-mux code comments cite by nu
 | T4.B | `send-keys` contract: key names, `-l` literal, `-H` hex, and no implicit trailing newline | `src/mux/command.rs` |
 | T4.C | Sizing: pane terminals re-fit to layout geometry after every change; `resize-pane -x/-y`; `refresh-client -C` resizes with latest report wins | `src/mux/command.rs`, `src/mux/dispatch.rs`, `src/mux/tree.rs` |
 | T4.E | Queries have fixed reply shapes and no `-F` format strings; push notifications cover what `-F` polling was for | `src/mux/dispatch.rs` |
-| R7 | par-mux is the single owner of agent state for its panes; other surfaces (par-term, streaming mirrors) consume it and never become a second owner. Recorded in `REPORT.md` in the same repository | `src/streaming/mux_factory.rs` |
+| R7 | par-mux owns agent state for the panes in its sessions and never reconciles another tool's roster; par-term consumes that state rather than becoming a second owner. Recorded in `REPORT.md` in the same repository; `src/streaming/mux_factory.rs` applies the same no-second-owner rule to pane terminals | `src/streaming/mux_factory.rs` |
 
 Test files under `tests/mux_*.rs` also cite D3, D3.3, and D3.5 for the behavior they pin.
