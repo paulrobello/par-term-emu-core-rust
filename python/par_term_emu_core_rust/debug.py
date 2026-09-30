@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Optional
 
 DEBUG_FILE = (
     Path(tempfile.gettempdir()) / f"par_term_emu_debug_python_{os.getpid()}.log"
@@ -198,42 +198,6 @@ def log_widget_lifecycle(widget_id: str, event: str):
     """Log widget lifecycle events (mount, unmount, resize, etc.)"""
     if is_enabled(DebugLevel.INFO):
         log(DebugLevel.INFO, "LIFECYCLE", f"widget={widget_id} event={event}")
-
-
-def log_snapshot(label: str, content: str):
-    """Log a full content snapshot"""
-    if is_enabled(DebugLevel.TRACE) and _logger.file_handle:
-        separator = "-" * 80
-        _logger.file_handle.write(
-            f"\n{separator}\nSNAPSHOT: {label}\n{separator}\n{content}\n{separator}\n"
-        )
-        _logger.file_handle.flush()
-
-
-def log_terminal_state(widget_id: str, state: dict[str, Any]):
-    """Log terminal state information"""
-    if is_enabled(DebugLevel.DEBUG):
-        state_str = ", ".join(f"{k}={v}" for k, v in state.items())
-        log(DebugLevel.DEBUG, "TERM_STATE", f"widget={widget_id} {state_str}")
-
-
-def log_textual_event(widget_id: str, event_type: str, details: str = ""):
-    """Log Textual event processing"""
-    if is_enabled(DebugLevel.DEBUG):
-        msg = f"widget={widget_id} event={event_type}"
-        if details:
-            msg += f" {details}"
-        log(DebugLevel.DEBUG, "TEXTUAL_EVENT", msg)
-
-
-def log_get_line_cells_call(widget_id: str, line: int, generation: int):
-    """Log get_line_cells() API call"""
-    if is_enabled(DebugLevel.TRACE):
-        log(
-            DebugLevel.TRACE,
-            "GET_LINE_CELLS",
-            f"widget={widget_id} line={line} gen={generation}",
-        )
 
 
 def log_screen_corruption(widget_id: str, line: int, content: str):

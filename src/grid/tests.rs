@@ -670,30 +670,6 @@ fn test_copy_rectangle_to_different_location() {
 }
 
 #[test]
-fn test_erase_rectangle() {
-    let mut grid = Grid::new(80, 24, 1000);
-
-    // Fill area with chars
-    for row in 5..10 {
-        for col in 5..10 {
-            grid.set(col, row, Cell::new('T'));
-        }
-    }
-
-    // Erase rectangle
-    grid.erase_rectangle(6, 6, 8, 8);
-
-    // Check erased area
-    assert_eq!(grid.get(6, 6).unwrap().c, ' ');
-    assert_eq!(grid.get(7, 7).unwrap().c, ' ');
-    assert_eq!(grid.get(8, 8).unwrap().c, ' ');
-
-    // Check boundary cells not erased
-    assert_eq!(grid.get(5, 5).unwrap().c, 'T');
-    assert_eq!(grid.get(9, 9).unwrap().c, 'T');
-}
-
-#[test]
 fn test_erase_rectangle_unconditional() {
     let mut grid = Grid::new(80, 24, 1000);
 

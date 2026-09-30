@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **par-mux `refresh-client` sizes are capped, and pane pixel extents no longer overflow** (audit QA-182; `src/mux/command.rs`, `src/mux/pane.rs`, `src/pty_session.rs`, `src/python_bindings/pty.rs`). `-C` is capped at 1000×500 (the streaming server's viewer bounds, so a mux-backed streamer's forwarded resize is never refused) and `-p` at 512×512 per cell; a larger report is an error. Before, any size up to 65535×65535 was accepted, and a grid that size could abort the daemon on allocation. Separately, `cols * cell_w` was computed in `u16`, so 2000 columns of 40 px cells panicked; PTY pixel extents now saturate at `u16::MAX`. Python `PtyTerminal.resize`/`resize_pixels` raise `ValueError` for a value past 65535 instead of silently truncating it.
 - **`PtyTerminal` methods that mutate the terminal from Python, and par-mux restores and client-color reports, now republish the geometry mirror** (audit QA-195; `src/pty_session.rs`, `src/python_bindings/pty.rs`, `src/mux/pane.rs`, `src/mux/tree.rs`, `src/mux/persist.rs`). They wrote through the raw terminal lock, which skipped the wait-free `(cols, rows, cursor)` mirror, so `cursor_position()`/`size()` stayed stale until the next PTY output. They now go through `PtySession::terminal_write()` or `MuxPane::with_terminal_mut`, which publish on release.
 
+### Removed
+- **`Grid::erase_rectangle`** (audit QA-218; **breaking for Rust embedders**, none known). It was reachable only from a `CSI … $ {` arm in the window handler that the CSI router never calls: DECSERA goes to the terminal-level `handle_decsera`. Use `Terminal::erase_rectangle` (selective, what DECSERA and the Python binding use) or `Grid::erase_rectangle_unconditional`. The dead arm is removed too; DECSERA behavior is unchanged.
+- **Four unused Python debug helpers** (audit QA-218; `par_term_emu_core_rust.debug`): `log_snapshot`, `log_terminal_state`, `log_textual_event`, `log_get_line_cells_call`. No caller in this repo, par-term-emu-tui-rust or par-term. The five helpers par-term-emu-tui-rust imports stay.
+
 ## [0.57.0] - 2026-09-29
 
 ### Added

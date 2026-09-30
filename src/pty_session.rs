@@ -339,7 +339,9 @@ impl PtySession {
     /// reader thread (e.g. tmux/mux mirror output fed by the frontend).
     ///
     /// Mirrors the reader thread's invocation so streaming/logging
-    /// consumers see daemon-fed output identically.
+    /// consumers see daemon-fed output identically. No in-crate caller:
+    /// embedders that feed daemon-sourced bytes into a mirror session call
+    /// it (par-term's mux mirror, `process_mux_output`), so it is not dead.
     pub fn fire_output_callback(&self, data: &[u8]) {
         let guard = self.output_callback.lock();
         if let Some(ref callback) = *guard {

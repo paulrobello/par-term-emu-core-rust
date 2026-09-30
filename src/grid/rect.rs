@@ -81,28 +81,6 @@ impl Grid {
         }
     }
 
-    /// Erase a rectangular area selectively
-    pub fn erase_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize) {
-        if top >= self.rows || left >= self.cols {
-            return;
-        }
-        let bottom = bottom.min(self.rows - 1);
-        let right = right.min(self.cols - 1);
-        if top > bottom || left > right {
-            return;
-        }
-
-        for row in top..=bottom {
-            for col in left..=right {
-                if let Some(cell) = self.get_mut(col, row) {
-                    if !cell.flags.guarded() {
-                        cell.reset();
-                    }
-                }
-            }
-        }
-    }
-
     /// Erase a rectangular area unconditionally
     pub fn erase_rectangle_unconditional(
         &mut self,
