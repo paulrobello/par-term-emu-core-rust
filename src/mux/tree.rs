@@ -15,6 +15,10 @@ use std::sync::Arc;
 /// duration. The thread always exits — SIGKILL cannot be trapped — and the
 /// pane it owns is dropped reaped.
 fn kill_detached(mut pane: MuxPane) {
+    // Stop forwarding before the SIGHUP, on this thread: the pane's id may
+    // already belong to a replacement (respawn), and the reader can deliver
+    // bytes before the kill thread first runs (ARC-089).
+    pane.detach_output();
     std::thread::spawn(move || {
         let _ = pane.kill();
     });
@@ -43,8 +47,9 @@ pub struct MuxWindow {
     /// `resize-pane -Z`: the pane currently zoomed to the full window
     /// grid, hiding the others. The layout tree is never touched while
     /// zoomed, so unzooming restores the exact prior geometry — zoom lives
-    /// only in pane sizes. Not persisted: a restored window starts
-    /// unzoomed (tmux's behavior).
+    /// only in pane sizes. Every layout mutation goes through
+    /// `MuxTree::mutate_layout`, which ends the zoom. Not persisted: a
+    /// restored window starts unzoomed (tmux's behavior).
     pub zoomed: Option<PaneId>,
 }
 
@@ -679,13 +684,13 @@ impl MuxTree {
             return Err(MuxError::NoSuchPane(target));
         }
         self.panes.insert(pane_id, pane);
-        if let Some(window) = self.windows.get_mut(&window_id) {
+        // The layout split above is the mutation; routing the active-pane
+        // update through the choke point ends the zoom that would hide the
+        // new pane, and re-fits every terminal to the new geometry.
+        self.mutate_layout(window_id, |window| {
             window.active = pane_id;
-            // The new pane must be visible to be useful — a zoom hiding
-            // it would defeat the split.
-            window.zoomed = None;
-        }
-        self.sync_pane_sizes(window_id);
+            Ok(())
+        })?;
         Ok((pane_id, window_id))
     }
 
@@ -764,11 +769,7 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
-        {
-            let window = self
-                .windows
-                .get_mut(&window_id)
-                .expect("window_of_pane only returns live windows");
+        self.mutate_layout(window_id, |window| {
             if !window.layout.pane_ids().contains(&source) {
                 return Err(MuxError::PanesInDifferentWindows(target, source));
             }
@@ -776,12 +777,8 @@ impl MuxTree {
                 .layout
                 .swap_pane(target, source)
                 .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
-            // The traded geometry no longer matches what the zoom shows —
-            // a zoom survives only until the layout moves.
-            window.zoomed = None;
-        }
-        self.sync_pane_sizes(window_id);
-        Ok(window_id)
+            Ok(window_id)
+        })
     }
 
     /// Toggle `pane`'s zoom (`resize-pane -Z`): zooming resizes its
@@ -877,16 +874,12 @@ impl MuxTree {
                 .expect("window_of_pane only returns live windows");
             (window.cols, window.rows)
         };
-        let only_pane = {
-            let window = self
-                .windows
-                .get_mut(&source_window)
-                .expect("window_of_pane only returns live windows");
-            // A layout mutation ends the zoom the same way every other
-            // one does.
-            window.zoomed = None;
-            window.layout == LayoutTree::leaf(pane)
-        };
+        let only_pane = self
+            .windows
+            .get(&source_window)
+            .expect("window_of_pane only returns live windows")
+            .layout
+            == LayoutTree::leaf(pane);
 
         // The new window exists before the pane leaves the source, so an
         // only-pane break never leaves the session windowless.
@@ -916,17 +909,16 @@ impl MuxTree {
             self.drop_empty_window(source_window);
             true
         } else {
-            let window = self
-                .windows
-                .get_mut(&source_window)
-                .expect("only_pane was false, so the window still lives");
-            window.layout.remove_pane(pane).expect("not the only pane");
-            if window.active == pane {
-                window.active = window.layout.pane_ids()[0];
-            }
-            self.sync_pane_sizes(source_window);
+            self.mutate_layout(source_window, |window| {
+                window.layout.remove_pane(pane).expect("not the only pane");
+                if window.active == pane {
+                    window.active = window.layout.pane_ids()[0];
+                }
+                Ok(())
+            })?;
             false
         };
+        // A fresh, unzoomed window around the pane — a fit, not a mutation.
         self.sync_pane_sizes(window_id);
         Ok((window_id, source_window, source_closed))
     }
@@ -958,29 +950,13 @@ impl MuxTree {
         let target_window = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
-        let only_pane = {
-            let window = self
-                .windows
-                .get_mut(&source_window)
-                .expect("window_of_pane only returns live windows");
-            window.zoomed = None;
-            window.layout == LayoutTree::leaf(source)
-        };
-
-        let mut removed_session = None;
-        let source_closed = if only_pane {
-            if source_window == target_window {
-                // The target lives in the same single-pane window, so it
-                // is the source itself — rejected above. Unreachable.
-                return Err(MuxError::SamePane(source));
-            }
-            removed_session = self.drop_empty_window(source_window);
-            true
-        } else {
-            let window = self
-                .windows
-                .get_mut(&source_window)
-                .expect("only_pane was false, so the window still lives");
+        let only_pane = self
+            .windows
+            .get(&source_window)
+            .expect("window_of_pane only returns live windows")
+            .layout
+            == LayoutTree::leaf(source);
+        let remove_source = |window: &mut MuxWindow| {
             window
                 .layout
                 .remove_pane(source)
@@ -988,26 +964,45 @@ impl MuxTree {
             if window.active == source {
                 window.active = window.layout.pane_ids()[0];
             }
-            false
         };
-
-        {
-            let window = self
-                .windows
-                .get_mut(&target_window)
-                .expect("window_of_pane only returns live windows");
+        let place_source = |window: &mut MuxWindow| {
             window
                 .layout
                 .split_pane(target, source, direction, new_share)
                 .expect("target pane exists in its own window");
-            window.zoomed = None;
             window.active = source;
+        };
+
+        if source_window == target_window {
+            if only_pane {
+                // The target lives in the same single-pane window, so it
+                // is the source itself — rejected above. Unreachable.
+                return Err(MuxError::SamePane(source));
+            }
+            // One mutation, so no pane re-fits to the transient layout
+            // between the removal and the re-split.
+            self.mutate_layout(target_window, |window| {
+                remove_source(window);
+                place_source(window);
+                Ok(())
+            })?;
+            return Ok((target_window, source_window, false, None));
         }
-        if !source_closed {
-            self.sync_pane_sizes(source_window);
+
+        let mut removed_session = None;
+        if only_pane {
+            removed_session = self.drop_empty_window(source_window);
+        } else {
+            self.mutate_layout(source_window, |window| {
+                remove_source(window);
+                Ok(())
+            })?;
         }
-        self.sync_pane_sizes(target_window);
-        Ok((target_window, source_window, source_closed, removed_session))
+        self.mutate_layout(target_window, |window| {
+            place_source(window);
+            Ok(())
+        })?;
+        Ok((target_window, source_window, only_pane, removed_session))
     }
 
     /// Phase 1 of `respawn-pane`: resolve the pane, refuse a live one
@@ -1179,11 +1174,7 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
-        {
-            let window = self
-                .windows
-                .get_mut(&window_id)
-                .expect("window_of_pane only returns live windows");
+        self.mutate_layout(window_id, |window| {
             let Some((split_direction, ratio, target_is_first)) =
                 window.layout.bordering_split(pane)
             else {
@@ -1219,9 +1210,8 @@ impl MuxTree {
                 .layout
                 .set_bordering_share(pane, new_share)
                 .expect("bordering_split found the split set_bordering_share adjusts");
-        }
-        self.sync_pane_sizes(window_id);
-        Ok(window_id)
+            Ok(window_id)
+        })
     }
 
     /// Set `pane`'s absolute width and/or height (tmux's `resize-pane -x`/
@@ -1231,8 +1221,10 @@ impl MuxTree {
     /// Either bound may be `None` (only the given axis is set). A pane with
     /// no enclosing split along a requested axis — one that already spans
     /// the window there — is an error, not a no-op: there is no divider to
-    /// move. Pane terminals are resized to the new geometry. The Ok payload
-    /// is the pane's window — the dispatcher's `%layout-change` target.
+    /// move. All-or-nothing: when either requested axis fails, neither is
+    /// applied. Pane terminals are resized to the new geometry. The Ok
+    /// payload is the pane's window — the dispatcher's `%layout-change`
+    /// target.
     pub fn resize_pane_absolute(
         &mut self,
         pane: PaneId,
@@ -1242,19 +1234,15 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
-        {
-            let window = self
-                .windows
-                .get_mut(&window_id)
-                .expect("window_of_pane only returns live windows");
+        self.mutate_layout(window_id, |window| {
+            let mut next = window.layout.clone();
             let bounds = [
                 (cols, SplitDirection::Vertical, window.cols as usize),
                 (rows, SplitDirection::Horizontal, window.rows as usize),
             ];
             for (bound, axis, extent) in bounds {
                 let Some(cells) = bound else { continue };
-                match window
-                    .layout
+                match next
                     .set_leaf_extent(pane, axis, cells, extent)
                     .map_err(|_| MuxError::NoSuchPane(pane))?
                 {
@@ -1264,9 +1252,9 @@ impl MuxTree {
                     }
                 }
             }
-        }
-        self.sync_pane_sizes(window_id);
-        Ok(window_id)
+            window.layout = next;
+            Ok(window_id)
+        })
     }
 
     /// Set a window's extent and re-fit every pane terminal to the
@@ -1356,6 +1344,36 @@ impl MuxTree {
                 }
             }
         }
+    }
+
+    /// The single entry for layout-shape mutations (ARC-090): run `f` on
+    /// the window, then end any zoom and re-fit every pane terminal. On
+    /// `Err` the window must be untouched, so the zoom and sizes stay as
+    /// they were — `f` validates before it edits.
+    ///
+    /// `f` holds `&mut MuxWindow` borrowed from the tree, so it cannot call
+    /// other tree methods; resolve lookups such as `window_of_pane` first.
+    fn mutate_layout<R>(
+        &mut self,
+        window_id: WindowId,
+        f: impl FnOnce(&mut MuxWindow) -> Result<R, MuxError>,
+    ) -> Result<R, MuxError> {
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        let out = f(window)?;
+        self.end_layout_mutation(window_id);
+        Ok(out)
+    }
+
+    /// The post-step of [`Self::mutate_layout`] alone, for a mutation
+    /// already applied outside a closure (the kill cascade's removal).
+    fn end_layout_mutation(&mut self, window_id: WindowId) {
+        if let Some(window) = self.windows.get_mut(&window_id) {
+            window.zoomed = None;
+        }
+        self.sync_pane_sizes(window_id);
     }
 
     /// Resize every pane terminal (and PTY) in `window_id` to the window's
@@ -1471,10 +1489,7 @@ impl MuxTree {
         // The killed pane left its window's layout; a surviving pane takes
         // the freed extent and its terminal must grow into it. The layout
         // changed, so any zoom is over — including the killed pane's own.
-        if let Some(window) = self.windows.get_mut(&affected_window) {
-            window.zoomed = None;
-        }
-        self.sync_pane_sizes(affected_window);
+        self.end_layout_mutation(affected_window);
 
         Ok((affected_window, removed_session))
     }
@@ -2455,6 +2470,86 @@ mod tests {
         assert_eq!(tree.window(window_id).unwrap().zoomed, Some(first));
     }
 
+    /// Two 40-wide panes side by side in an 80x24 window, `first` zoomed.
+    fn zoomed_split() -> (MuxTree, WindowId, PaneId, PaneId) {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        tree.zoom_pane(first).unwrap();
+        (tree, window_id, first, second)
+    }
+
+    /// ARC-090 audit probe: `resize-pane -x` while zoomed must unzoom
+    /// first (tmux's `server_unzoom_window`), not silently rewrite the
+    /// hidden layout so the next unzoom lands on 79/1.
+    #[test]
+    fn absolute_resize_while_zoomed_unzooms_first() {
+        let (mut tree, window_id, first, second) = zoomed_split();
+
+        tree.resize_pane_absolute(first, Some(79), None).unwrap();
+
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (79, 24));
+        assert_eq!(tree.pane(second).unwrap().terminal().read().size(), (1, 24));
+    }
+
+    #[test]
+    fn relative_resize_while_zoomed_unzooms_first() {
+        let (mut tree, window_id, first, second) = zoomed_split();
+
+        tree.resize_pane(first, ResizeDirection::Right, 5).unwrap();
+
+        assert_eq!(tree.window(window_id).unwrap().zoomed, None);
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (45, 24));
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (35, 24)
+        );
+    }
+
+    /// A failed command changes nothing: a wrong-axis resize keeps the
+    /// zoom and the zoomed pane's full-grid size.
+    #[test]
+    fn a_rejected_resize_keeps_the_zoom() {
+        let (mut tree, window_id, first, _second) = zoomed_split();
+
+        let relative = tree.resize_pane(first, ResizeDirection::Up, 1);
+        assert!(matches!(relative, Err(MuxError::PaneNotResizable(_))));
+        let absolute = tree.resize_pane_absolute(first, None, Some(10));
+        assert!(matches!(absolute, Err(MuxError::PaneNotResizable(_))));
+
+        assert_eq!(tree.window(window_id).unwrap().zoomed, Some(first));
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (80, 24));
+    }
+
+    /// `-x 60 -y 10` where the pane spans the vertical axis: the y half
+    /// fails, so the x half must not be left applied (all-or-nothing).
+    #[test]
+    fn a_half_failing_absolute_resize_applies_neither_axis() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let before = tree.window(window_id).unwrap().layout.clone();
+
+        let result = tree.resize_pane_absolute(first, Some(60), Some(10));
+
+        assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
+        assert_eq!(tree.window(window_id).unwrap().layout, before);
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (40, 24));
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (40, 24)
+        );
+    }
+
     #[test]
     fn zoom_rejects_an_unknown_pane() {
         let mut tree = tree();
@@ -2633,6 +2728,22 @@ mod tests {
         tree.join_pane(other, first, SplitDirection::Vertical, 0.5)
             .unwrap();
         assert_eq!(tree.window(first_window).unwrap().zoomed, None);
+
+        // A same-window join is one mutation: it ends the zoom and leaves
+        // every pane fitted to the final layout.
+        tree.zoom_pane(first).unwrap();
+        tree.join_pane(first, other, SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        let window = tree.window(first_window).unwrap();
+        assert_eq!(window.zoomed, None);
+        for geometry in window.layout.geometry(0, 0, 80, 24) {
+            assert_eq!(
+                tree.pane(geometry.pane).unwrap().terminal().read().size(),
+                (geometry.width, geometry.height),
+                "{} fits its layout cell",
+                geometry.pane
+            );
+        }
     }
 
     /// `move-window` reorders the session's window list, clamps
@@ -2886,6 +2997,87 @@ mod tests {
         let gone = dir.path().join("gone");
         let cwd = respawn_cwd_after_osc7("localhost", &gone);
         assert_ne!(cwd.as_deref(), Some(gone.as_path()), "missing dir was used");
+    }
+
+    /// ARC-089: `respawn-pane -k` reuses the pane id, so the dying
+    /// process's SIGHUP output must not reach the id's output sink — it
+    /// would land on the replacement's fresh screen in every client.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_does_not_forward_the_old_processes_exit_output() {
+        type Chunks = Arc<parking_lot::Mutex<Vec<(u8, Vec<u8>)>>>;
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        // `sleep & wait` lets the trap run inside portable-pty's SIGHUP
+        // grace; see `a_killed_panes_late_output_is_not_forwarded`.
+        let pane = tree
+            .split_pane(
+                first,
+                SplitDirection::Vertical,
+                0.5,
+                Some("trap 'echo OLD-PANE-BYE; exit 0' HUP; echo READY-MARK; while :; do sleep 5 & wait; done"),
+            )
+            .unwrap();
+        let chunks: Chunks = Arc::default();
+        let tagged = |generation: u8| {
+            let chunks = Arc::clone(&chunks);
+            move |bytes: &[u8]| chunks.lock().push((generation, bytes.to_vec()))
+        };
+        let seen_from = |generation: u8| -> String {
+            chunks
+                .lock()
+                .iter()
+                .filter(|(g, _)| *g == generation)
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                .collect()
+        };
+        tree.pane_mut(pane).unwrap().on_output(tagged(0));
+        // Read the marker off the screen, not the sink: the shell can print
+        // it before `on_output` registers, since `split_pane` spawns first.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !tree
+            .pane(pane)
+            .unwrap()
+            .terminal()
+            .read()
+            .content()
+            .contains("READY-MARK")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trap's ready marker never reached the pane screen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        let factory = tree.factory();
+        let plan = tree
+            .begin_respawn(pane, true, Some("sleep 60".to_string()), None)
+            .unwrap();
+        let replacement = factory
+            .create_pane(
+                plan.pane_id,
+                plan.cols,
+                plan.rows,
+                plan.command.as_deref(),
+                &plan.context(),
+            )
+            .expect("respawn spawns");
+        tree.complete_respawn(plan, replacement).unwrap();
+        tree.pane_mut(pane).unwrap().on_output(tagged(1));
+        // Longer than portable-pty's SIGHUP grace plus the 500 ms reap.
+        std::thread::sleep(std::time::Duration::from_millis(700));
+
+        let old = seen_from(0);
+        assert!(
+            !old.contains("OLD-PANE-BYE"),
+            "the old process's exit output reached the respawned id: {old:?}"
+        );
+        for id in [first, pane] {
+            let _ = tree.pane_mut(id).unwrap().kill();
+        }
     }
 
     #[test]

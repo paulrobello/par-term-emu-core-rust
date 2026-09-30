@@ -863,10 +863,20 @@ fn cmd_respawn_pane(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
         match guard.begin_respawn(pane, kill, command, cwd.as_deref()) {
-            Ok(plan) => (plan, guard.factory()),
+            Ok(plan) => {
+                // `-k` of a live pane: the old process keeps running and
+                // emitting under this id until phase 3 kills it, so stop
+                // forwarding it now — its output must not interleave with
+                // the replacement's (ARC-089). A failed respawn re-attaches.
+                if let Some(old) = guard.pane_mut(plan.pane_id) {
+                    old.detach_output();
+                }
+                (plan, guard.factory())
+            }
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
+    let pane_id = plan.pane_id;
     // Phase 2: spawn the replacement off the tree lock.
     let spawned = factory.create_pane(
         plan.pane_id,
@@ -876,32 +886,23 @@ fn cmd_respawn_pane(
         &plan.context(),
     );
     // Phase 3: swap in, re-wire the output sink the factory does not set.
-    match spawned {
-        Ok(pane) => {
-            let outcome = {
-                let mut guard = ctx.tree.lock();
-                match guard.complete_respawn(plan, pane) {
-                    Ok(pane_id) => {
-                        if let Some(pane) = guard.pane_mut(pane_id) {
-                            pane.on_output(pane_output_sink(ctx.clients, pane_id));
-                            if let Some(note) = &note {
-                                // Same visibility rule as a fresh spawn's
-                                // gone cwd: the note lands on the screen.
-                                pane.terminal().write().process(note.as_bytes());
-                            }
-                        }
-                        Ok(pane_id)
-                    }
-                    Err(err) => Err(err),
-                }
-            };
-            match outcome {
-                Ok(pane_id) => Outcome::ok(ctx, "").notifying(TmuxNotification::PaneRespawned {
-                    pane_id: pane_id.to_string(),
-                }),
-                Err(err) => Outcome::err(ctx, &err.to_string()),
-            }
+    let mut guard = ctx.tree.lock();
+    let outcome = spawned.and_then(|pane| guard.complete_respawn(plan, pane));
+    // On success this wires the replacement; on failure the old pane (if
+    // it still exists) resumes forwarding as before the command.
+    if let Some(pane) = guard.pane_mut(pane_id) {
+        pane.on_output(pane_output_sink(ctx.clients, pane_id));
+        if let (Ok(_), Some(note)) = (&outcome, &note) {
+            // Same visibility rule as a fresh spawn's gone cwd: the note
+            // lands on the screen.
+            pane.terminal().write().process(note.as_bytes());
         }
+    }
+    drop(guard);
+    match outcome {
+        Ok(pane_id) => Outcome::ok(ctx, "").notifying(TmuxNotification::PaneRespawned {
+            pane_id: pane_id.to_string(),
+        }),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
@@ -1280,8 +1281,92 @@ fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_start_dir, roster_row_entry};
+    use super::{dispatch_command, resolve_start_dir, roster_row_entry, Ctx};
+    use crate::mux::command::parse_command;
+    use crate::mux::ids::PaneId;
+    use crate::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
+    use crate::mux::tree::MuxTree;
     use base64::Engine as _;
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Spawns the first pane as a shell; every later spawn fails.
+    struct FirstSpawnOnly(AtomicBool);
+
+    impl PaneFactory for FirstSpawnOnly {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            _command: Option<&str>,
+            context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            if self.0.swap(true, Ordering::SeqCst) {
+                return Err(MuxError::NoSuchPane(id));
+            }
+            ShellPaneFactory::default().create_pane(id, cols, rows, None, context)
+        }
+    }
+
+    /// ARC-089: `respawn-pane -k` stops forwarding the old process before
+    /// the off-lock spawn; when that spawn fails the old pane is still
+    /// the live pane, so its output must forward again.
+    #[test]
+    fn a_failed_respawn_keeps_the_live_panes_output_forwarding() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(FirstSpawnOnly(
+            AtomicBool::new(false),
+        )))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            crate::mux::ipc::ConnectionAbort::none(),
+        ));
+
+        let reply = run(&format!("respawn-pane -k -t {pane}"));
+        assert!(reply.contains("%error"), "the spawn failed: {reply}");
+
+        tree.lock()
+            .pane_mut(pane)
+            .unwrap()
+            .write(b"echo ARC089-STILL-WIRED\r")
+            .unwrap();
+        let wanted = format!("%output {pane} ");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut seen = String::new();
+        while !seen.contains("ARC089-STILL-WIRED") {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                // Payload only, so a marker split across two PTY reads
+                // still joins up.
+                Ok(line) => {
+                    if let Some(data) = line.strip_prefix(&wanted) {
+                        seen.push_str(data.trim_end_matches('\n'));
+                    }
+                }
+                Err(_) => panic!("the live pane's output stopped forwarding: {seen:?}"),
+            }
+        }
+        let _ = tree.lock().pane_mut(pane).unwrap().kill();
+    }
 
     /// The `-c` degrade rule (card 01a0d9b2fb02): an existing directory
     /// passes through untouched; a missing one falls back to home with a
