@@ -26,6 +26,12 @@ jobs:
         with:
           toolchain: stable
 
+      # ARC-107: bench_gate.sh builds with plain `cargo bench`; a locked fetch
+      # fails first if HEAD's Cargo.lock is stale against Cargo.toml. The
+      # baseline build checks out an older commit and is not covered.
+      - name: Assert Cargo.lock is current
+        run: cargo fetch --locked
+
       - name: Run bench gate
         env:
           # Only the default branch may move the baseline tag; dispatch runs
