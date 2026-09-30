@@ -525,42 +525,15 @@ enum ControlLine {
 /// chunk, so an unterminated stream trips it without a newline; UTF-8 is
 /// decoded once, after the line is complete. An unterminated final line is
 /// returned before EOF, matching `Lines`' last-item behavior.
-fn read_control_line<R: BufRead>(
-    reader: &mut R,
-    evicted: &AtomicBool,
-    client_id: u64,
-) -> ControlLine {
+fn read_control_line<R: BufRead>(reader: &mut R, evicted: &AtomicBool) -> ControlLine {
     let mut buf: Vec<u8> = Vec::new();
-    let pickup_started = std::time::Instant::now();
-    let mut wakes = 0u32;
     loop {
         match fill_line_bounded(reader, &mut buf, MAX_CONTROL_LINE_BYTES) {
             Ok(LineFill::Eof) if buf.is_empty() => return ControlLine::Closed,
             Ok(LineFill::Eof) => break,
             Ok(LineFill::Oversize) => return ControlLine::Oversize,
-            Ok(LineFill::Complete) => {
-                // Wake-cadence evidence (card 01a0e80db3e870e282af0cf84405043b):
-                // a line that took poll wakes or >1 poll interval to arrive
-                // is the signature of a parked read loop — log it so a
-                // stall's cadence is readable in the debug file.
-                let waited = pickup_started.elapsed();
-                if wakes > 0 || waited > EVICTION_POLL {
-                    crate::debug_log!(
-                        "MUX",
-                        "client {client_id} picked up a {} B line after {:?} and {wakes} poll wakes",
-                        buf.len(),
-                        waited
-                    );
-                }
-                break;
-            }
+            Ok(LineFill::Complete) => break,
             Err(err) if is_poll_wake(&err) => {
-                wakes += 1;
-                crate::debug_log!(
-                    "MUX",
-                    "client {client_id} read poll wake #{wakes} ({:?} since line start)",
-                    pickup_started.elapsed()
-                );
                 if evicted.load(Ordering::Relaxed) {
                     return ControlLine::Closed;
                 }
@@ -671,7 +644,7 @@ fn handle_client(
     let mut reader = BufReader::new(stream);
     let mut command_number = 0u32;
     loop {
-        let mut line = match read_control_line(&mut reader, &evicted, client_id) {
+        let mut line = match read_control_line(&mut reader, &evicted) {
             ControlLine::Line(line) => line,
             ControlLine::Closed => break,
             // SEC-104: over-budget accumulation is answered like a
@@ -1447,15 +1420,15 @@ mod tests {
         let evicted = AtomicBool::new(false);
         let mut reader = std::io::Cursor::new(b"a\nb".to_vec());
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Line("a\n".to_string())
         );
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Line("b".to_string())
         );
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Closed
         );
     }
@@ -1466,7 +1439,7 @@ mod tests {
         let evicted = AtomicBool::new(false);
         let mut reader = std::io::Cursor::new(vec![b'x'; MAX_CONTROL_LINE_BYTES + 10]);
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Oversize
         );
     }
@@ -1478,11 +1451,11 @@ mod tests {
         let evicted = AtomicBool::new(false);
         let mut reader = std::io::Cursor::new(b"\xff\nok\n".to_vec());
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Undecodable(2)
         );
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Line("ok\n".to_string())
         );
     }
@@ -1496,13 +1469,13 @@ mod tests {
         let mut reader =
             ScriptedReader::new(vec![Ok(b"vers".to_vec()), wake(), Ok(b"ion\n".to_vec())]);
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Line("version\n".to_string())
         );
         evicted.store(true, Ordering::Relaxed);
         let mut reader = ScriptedReader::new(vec![Ok(b"vers".to_vec()), wake()]);
         assert_eq!(
-            read_control_line(&mut reader, &evicted, 0),
+            read_control_line(&mut reader, &evicted),
             ControlLine::Closed
         );
     }

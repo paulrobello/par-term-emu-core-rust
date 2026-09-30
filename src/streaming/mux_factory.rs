@@ -932,12 +932,9 @@ mod tests {
         wait_mirror(&b, "DELTA-AFTER");
     }
 
-    /// Every typed frame, alternating the queued path (queue -> drain ->
-    /// writer) and the direct writer across resizes and a second viewer's
-    /// daemon connection, lands exactly once in the pane-side file. The
-    /// standing repro for the input drain (card
-    /// 01a0e80db3e870e282af0cf84405043b). Run with DEBUG_LEVEL=3 for the MUX
-    /// receipt log and the PTY_WRITE ledger.
+    /// Every typed frame, alternating the queued path and the direct writer
+    /// across resizes and a second viewer, lands exactly once in the
+    /// pane-side file.
     #[test]
     fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
         let rt = runtime();
