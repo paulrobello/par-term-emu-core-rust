@@ -1833,12 +1833,12 @@ Difference between two screen snapshots. Obtain one from `diff_snapshots(old_sna
 Tmux control mode notification.
 
 **Properties:**
-- `notification_type: str`: Notification type — one of the exact runtime strings: `begin`, `end`, `error`, `output`, `pane-mode-changed`, `window-pane-changed`, `window-close`, `unlinked-window-close`, `window-add`, `unlinked-window-add`, `window-renamed`, `unlinked-window-renamed`, `session-changed`, `client-session-changed`, `session-renamed`, `sessions-changed`, `session-window-changed`, `client-detached`, `exit`, `pause`, `extended-output`, `continue`, `subscription-changed`, `layout-change`, `paste-buffer-changed`, `paste-buffer-deleted`, `agent-state-changed`, `agent-released`, `agent-telemetry-changed`, `pane-title-changed`, `unknown`, `terminal-output`. The agent and pane-title types are par-mux-fed; compare against the hyphenated string exactly.
+- `notification_type: str`: Notification type — one of the exact runtime strings: `begin`, `end`, `error`, `output`, `pane-mode-changed`, `window-pane-changed`, `window-close`, `unlinked-window-close`, `window-add`, `unlinked-window-add`, `window-renamed`, `unlinked-window-renamed`, `session-changed`, `client-session-changed`, `session-renamed`, `sessions-changed`, `session-window-changed`, `client-detached`, `exit`, `pause`, `extended-output`, `continue`, `subscription-changed`, `layout-change`, `paste-buffer-changed`, `paste-buffer-deleted`, `agent-state-changed`, `agent-released`, `agent-telemetry-changed`, `pane-title-changed`, `pane-exited`, `pane-respawned`, `unknown`, `terminal-output`. The agent, pane-title, pane-exited and pane-respawned types are par-mux-fed; compare against the hyphenated string exactly.
 - `source: str | None`: For `agent-state-changed`, who asserted the state: `"hook"` (the agent's own report) or `"scrape"` (a pattern matched pane content). `None` for every other notification type and for lines without a `source=` token
-- `pane_id: str | None`: Pane identifier
+- `pane_id: str | None`: Pane identifier (`%N`); set for every pane-scoped notification, including `pane-exited` (the held pane) and `pane-respawned` (the restarted pane)
 - `window_id: str | None`: Window identifier
 - `session_id: str | None`: Session identifier
-- `name: str | None`: Session/window name; for `agent-state-changed`, `agent-released` and `agent-telemetry-changed`, the agent label
+- `name: str | None`: Session/window name; for `agent-state-changed`, `agent-released` and `agent-telemetry-changed`, the agent label; for `pane-exited`, the exit code as a decimal string (deprecated — read `exit_code`; kept for one release)
 - `exit_code: int | None`: For `pane-exited`, the held pane's exit code; `None` when it was unreadable (signal death, or reaped before the daemon read it) and for every other notification type
 - `client: str | None`: Client name
 - `data: bytes | None`: Raw notification data
