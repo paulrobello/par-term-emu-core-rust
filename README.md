@@ -201,12 +201,12 @@ pip install target/wheels/par_term_emu_core_rust-*.whl
 
 The library can be used in pure Rust projects without Python. Choose your feature combination:
 
-| Use Case | Cargo.toml | What's Included |
+| Use Case | Command | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["pty_session"] }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.50"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.50", features = ["full"] }` | All features |
+| **Rust Only** | `cargo add par-term-emu-core-rust --no-default-features --features pty_session` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `cargo add par-term-emu-core-rust --no-default-features --features streaming,pty_session` | + WebSocket/HTTP server |
+| **Python Only** | `cargo add par-term-emu-core-rust` | + Python bindings |
+| **Everything** | `cargo add par-term-emu-core-rust --features full` | All features |
 
 > **Note:** Since v0.46.0 the `pty_session` module (real PTY backend) is a separate feature. Omit it only for headless use without `PtySession`. See [docs/RUST_USAGE.md](docs/RUST_USAGE.md) for details.
 
