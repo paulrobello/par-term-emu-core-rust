@@ -21,7 +21,7 @@ path = ".."
 default-features = false
 features = ["rust-only", "mux"]
 
-# rust-only: no Python toolchain in the fuzzer — see docs/fable/ENH-014-parser-fuzz-targets.md.
+# rust-only: no Python toolchain in the fuzzer (see CONTRIBUTING.md "Fuzzing").
 # The targets mirror the untrusted-byte entry points: the whole VTE pipeline,
 # the Sixel state machine, the Kitty APC parser, the tmux control parser, and
 # (ENH-018, +mux) the par-mux control-protocol command and hook-report grammars.

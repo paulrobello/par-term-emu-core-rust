@@ -929,8 +929,7 @@ grind-clean-logs: ## Delete all but the newest 2 grind run dirs (latest symlink,
 	echo "grind-clean-logs: $$(ls -d .grind-logs/2*/ 2>/dev/null | wc -l | tr -d ' ') run dir(s) remain"
 
 # --- Fuzzing (ENH-014) ---------------------------------------------------------
-# cargo-fuzz targets over the untrusted-byte parsers; see
-# docs/fable/ENH-014-parser-fuzz-targets.md and CONTRIBUTING.md "Fuzzing".
+# cargo-fuzz targets over the untrusted-byte parsers; see CONTRIBUTING.md "Fuzzing".
 # Needs nightly + cargo-fuzz (cargo install cargo-fuzz --locked).
 # Not part of checkall: fuzzing is open-ended, the gate is bounded.
 # -rss_limit_mb=512 (ENH-020): a memory blowup is a finding, not a laggier
