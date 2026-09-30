@@ -203,7 +203,7 @@ fn handle_state_report(
         // herdr's out-of-order rule: a report at or below the last accepted
         // sequence number from the same source is dropped — no metadata
         // write, no broadcast.
-        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+        if is_stale(pane, header.source.as_deref(), header.seq) {
             return (ok_reply(id), None);
         }
 
@@ -314,7 +314,7 @@ fn handle_session_report(
                 None,
             );
         };
-        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+        if is_stale(pane, header.source.as_deref(), header.seq) {
             return (ok_reply(id), None);
         }
 
@@ -395,11 +395,11 @@ fn handle_session_report(
     (ok_reply(id), notification)
 }
 
-/// Every metadata key that constitutes an agent claim, cleared as one unit
-/// by `pane.release_agent` and by the scrape tick's liveness sweep
-/// (`scrape.rs`) alike — roster label, state, hook authority, sequence
-/// stamps, session identity, the ephemeral telemetry blobs (hook- and
-/// host-probed), and the liveness miss counter the sweep keeps.
+/// Every metadata key that constitutes an agent claim — roster label,
+/// state, hook authority, session identity, and the liveness miss counter
+/// the sweep keeps. The typed parts of the claim (telemetry, host
+/// telemetry, per-source sequence stamps) live on [`MuxPane`] fields;
+/// [`clear_agent_claim`] clears both as one unit.
 pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent",
     "agent_state",
@@ -407,16 +407,23 @@ pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent_message",
     "agent_source",
     "agent_seq",
-    SEQ_STAMPS_KEY,
     "agent_session_id",
     "agent_session_path",
     "agent_session_start_source",
     "agent_resume_argv",
-    "agent_telemetry",
-    "agent_host_telemetry",
     "agent_liveness_misses",
     "agent_liveness_misses_agent",
 ];
+
+/// Clear a pane's whole agent claim — the metadata keys and the typed
+/// telemetry and sequence state — as `pane.release_agent` and the scrape
+/// tick's liveness sweep (`scrape.rs`) both do.
+pub(crate) fn clear_agent_claim(pane: &mut MuxPane) {
+    pane.clear_metadata(AGENT_CLAIM_KEYS);
+    pane.telemetry = None;
+    pane.host_telemetry = None;
+    pane.seq_by_source.clear();
+}
 
 /// `pane.release_agent`: the claiming agent announces it is gone (herdr's
 /// SessionEnd shape). The claim — label, state, hook authority, blocked
@@ -447,13 +454,13 @@ fn handle_release_report(
                 None,
             );
         };
-        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+        if is_stale(pane, header.source.as_deref(), header.seq) {
             return (ok_reply(id), None);
         }
         if pane.metadata().get("agent").map(String::as_str) != Some(header.agent.as_str()) {
             return (ok_reply(id), None);
         }
-        pane.clear_metadata(AGENT_CLAIM_KEYS);
+        clear_agent_claim(pane);
         Some(TmuxNotification::AgentReleased {
             pane_id: header.pane_id.to_string(),
             agent: header.agent.clone(),
@@ -462,10 +469,24 @@ fn handle_release_report(
     (ok_reply(id), notification)
 }
 
-/// The metadata key holding the pane's accepted telemetry as one canonical
-/// JSON object (the validated v1 shape below) — display-only, so the
-/// persistence format's named-key capture never copies it.
-const TELEMETRY_KEY: &str = "agent_telemetry";
+/// A pane's accepted telemetry (ARC-113): the sample time the ordering and
+/// freshness checks read, and the roster token — the canonical JSON (the
+/// validated v1 shape below), base64-encoded once when the report is
+/// accepted. Display-only and never persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredTelemetry {
+    pub(crate) sampled_at_unix_ms: u64,
+    pub(crate) canonical_b64: String,
+}
+
+impl StoredTelemetry {
+    fn new(canonical: &str, sampled_at_unix_ms: u64) -> Self {
+        Self {
+            sampled_at_unix_ms,
+            canonical_b64: base64::engine::general_purpose::STANDARD.encode(canonical),
+        }
+    }
+}
 
 /// How old a telemetry sample may be, in milliseconds of wall clock,
 /// before the endpoint drops it: the hub's `STATUSLINE_FRESHNESS_SECONDS`
@@ -520,7 +541,7 @@ fn handle_telemetry_report(
             None,
         );
     };
-    if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+    if is_stale(pane, header.source.as_deref(), header.seq) {
         return (ok_reply(id), None);
     }
     // A future stamp would saturate the freshness subtraction to 0 and
@@ -535,7 +556,11 @@ fn handle_telemetry_report(
     if now_ms.saturating_sub(sampled_at) > TELEMETRY_FRESHNESS_MS {
         return (ok_reply(id), None);
     }
-    if stored_telemetry_sampled_at(pane.metadata()).is_some_and(|stored| sampled_at < stored) {
+    if pane
+        .telemetry
+        .as_ref()
+        .is_some_and(|stored| sampled_at < stored.sampled_at_unix_ms)
+    {
         return (ok_reply(id), None);
     }
     // Telemetry attaches to a claim; it never takes one over. A pane
@@ -559,7 +584,7 @@ fn handle_telemetry_report(
     if let Some(source) = &header.source {
         pane.set_metadata("agent_source", source);
     }
-    pane.set_metadata(TELEMETRY_KEY, &telemetry);
+    pane.telemetry = Some(StoredTelemetry::new(&telemetry, sampled_at));
     (
         ok_reply(id),
         Some(TmuxNotification::AgentTelemetryChanged {
@@ -783,42 +808,24 @@ fn unix_ms_field(
         .ok_or_else(|| format!("telemetry {field} must be a non-negative integer"))
 }
 
-/// The `sampled_at_unix_ms` inside the pane's stored telemetry blob, for
-/// the backward-step drop. A blob that fails to parse reads as absent, so
-/// a hand-corrupted entry costs one report's ordering, not the endpoint.
-fn stored_telemetry_sampled_at(
-    metadata: &std::collections::HashMap<String, String>,
-) -> Option<u64> {
-    metadata
-        .get(TELEMETRY_KEY)
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|value| {
-            value
-                .get("sampled_at_unix_ms")
-                .and_then(serde_json::Value::as_u64)
-        })
-}
-
 /// The pane's telemetry for the roster row: the stored canonical JSON,
 /// base64-encoded so it rides as ONE whitespace-free token
 /// (`telemetry=<b64>` — string values carry spaces, the row is
-/// space-split). `None` when the pane holds no telemetry or the sample
+/// space-split). Encoded once when the report was accepted; this only
+/// checks freshness. `None` when the pane holds no telemetry or the sample
 /// has aged past [`TELEMETRY_FRESHNESS_MS`] — the reader-side half of
 /// absent-beats-stale, so a pane whose hook stopped pushing serves the
 /// plain four-token row again without any write.
-pub(crate) fn fresh_telemetry_b64(
-    metadata: &std::collections::HashMap<String, String>,
-) -> Option<String> {
-    let raw = metadata.get(TELEMETRY_KEY)?;
-    let sampled_at = stored_telemetry_sampled_at(metadata)?;
+pub(crate) fn fresh_telemetry_b64(stored: Option<&StoredTelemetry>) -> Option<&str> {
+    let stored = stored?;
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(u64::MAX);
-    if now_ms.saturating_sub(sampled_at) > TELEMETRY_FRESHNESS_MS {
+    if now_ms.saturating_sub(stored.sampled_at_unix_ms) > TELEMETRY_FRESHNESS_MS {
         return None;
     }
-    Some(base64::engine::general_purpose::STANDARD.encode(raw))
+    Some(&stored.canonical_b64)
 }
 
 /// `session_resume_argv`: the agent's own resume invocation as argv —
@@ -860,48 +867,24 @@ fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, Strin
 /// extensions stamp `Date.now()*1000`, three orders of magnitude apart —
 /// one per-pane stamp would drop every pi/omp report filed after any
 /// claude/codex/grok report.
-fn is_stale(
-    metadata: &std::collections::HashMap<String, String>,
-    source: Option<&str>,
-    seq: u64,
-) -> bool {
-    match seq_stamps(metadata).get(source.unwrap_or("")) {
+fn is_stale(pane: &MuxPane, source: Option<&str>, seq: u64) -> bool {
+    match pane.seq_by_source.get(source.unwrap_or("")) {
         Some(&stored) => seq <= stored,
-        // No accepted report from this source yet (or a hand-corrupted
-        // stamp) means nothing to be stale against.
+        // No accepted report from this source yet means nothing to be
+        // stale against.
         None => false,
     }
 }
 
-/// Metadata key holding the per-source sequence stamps as a JSON object
-/// (`{"<source>": <seq>}`) — herdr's `hook_report_sequences` map,
-/// flattened into the pane's stringly metadata. Reports without a source
-/// share the empty-string bucket.
-const SEQ_STAMPS_KEY: &str = "agent_seq_by_source";
-
-/// The pane's per-source sequence stamps. A map that fails to parse reads
-/// as empty, so a hand-corrupted entry costs staleness ordering, not
-/// reports.
-fn seq_stamps(
-    metadata: &std::collections::HashMap<String, String>,
-) -> std::collections::HashMap<String, u64> {
-    metadata
-        .get(SEQ_STAMPS_KEY)
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_default()
-}
-
 /// Record `seq` as accepted: the plain `agent_seq` (the most recent
-/// report, whatever its source) and the reporting source's own bucket.
-/// Volatile like everything state-shaped — the save format copies named
-/// identity fields only, so the bucket map never reaches disk.
+/// report, whatever its source) and the reporting source's own bucket in
+/// [`MuxPane::seq_by_source`]. Volatile like everything state-shaped — the
+/// save format copies named identity fields only, so the buckets never
+/// reach disk.
 fn record_seq(pane: &mut MuxPane, source: Option<&str>, seq: u64) {
     pane.set_metadata("agent_seq", &seq.to_string());
-    let mut stamps = seq_stamps(pane.metadata());
-    stamps.insert(source.unwrap_or("").to_string(), seq);
-    if let Ok(encoded) = serde_json::to_string(&stamps) {
-        pane.set_metadata(SEQ_STAMPS_KEY, &encoded);
-    }
+    pane.seq_by_source
+        .insert(source.unwrap_or("").to_string(), seq);
 }
 
 /// `{"id":…,"result":"ok"}` — the reply shape herdr's scripts expect (and
@@ -952,6 +935,16 @@ mod tests {
             .next()
             .expect("a new session has a pane");
         (Arc::new(Mutex::new(tree)), pane_id)
+    }
+
+    /// The pane's stored telemetry decoded back to the canonical JSON
+    /// object the roster token carries.
+    fn stored_telemetry_json(pane: &MuxPane, expect: &str) -> serde_json::Value {
+        let stored = pane.telemetry.as_ref().expect(expect);
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&stored.canonical_b64)
+            .expect("the token is standard base64");
+        serde_json::from_slice(&raw).expect("the token is canonical JSON")
     }
 
     fn state_report(pane: PaneId, agent: &str, state: &str, seq: u64) -> String {
@@ -1167,12 +1160,8 @@ mod tests {
             !pane.metadata().contains_key("agent_state"),
             "telemetry alone never claims roster state"
         );
-        let stored: serde_json::Value = serde_json::from_str(
-            pane.metadata()
-                .get("agent_telemetry")
-                .expect("the canonical object is stored"),
-        )
-        .unwrap();
+        let stored: serde_json::Value =
+            stored_telemetry_json(pane, "the canonical object is stored");
         assert_eq!(stored["version"], 1);
         assert_eq!(stored["source"], "claude_code");
         assert_eq!(stored["sampled_at_unix_ms"], sampled_at);
@@ -1202,12 +1191,7 @@ mod tests {
         );
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
-        let stored: serde_json::Value = serde_json::from_str(
-            pane.metadata()
-                .get("agent_telemetry")
-                .expect("still stored"),
-        )
-        .unwrap();
+        let stored: serde_json::Value = stored_telemetry_json(pane, "still stored");
         assert_eq!(
             stored["sampled_at_unix_ms"], sampled_at,
             "same-seq replay dropped"
@@ -1235,7 +1219,7 @@ mod tests {
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "absent is served instead of stale"
         );
         assert!(
@@ -1266,7 +1250,7 @@ mod tests {
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "future-dated telemetry must not be stored"
         );
         assert!(
@@ -1332,12 +1316,7 @@ mod tests {
         );
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
-        let stored: serde_json::Value = serde_json::from_str(
-            pane.metadata()
-                .get("agent_telemetry")
-                .expect("still stored"),
-        )
-        .unwrap();
+        let stored: serde_json::Value = stored_telemetry_json(pane, "still stored");
         assert_eq!(stored["sampled_at_unix_ms"], newer, "the newer sample wins");
         assert_eq!(
             pane.metadata().get("agent_seq").map(String::as_str),
@@ -1465,7 +1444,7 @@ mod tests {
             !pane.metadata().contains_key("agent"),
             "rejection writes nothing"
         );
-        assert!(!pane.metadata().contains_key("agent_telemetry"));
+        assert!(pane.telemetry.is_none());
         assert!(
             !pane.metadata().contains_key("agent_seq"),
             "not even the sequence stamp — a rejection must not poison ordering (SEC-105)"
@@ -1487,8 +1466,7 @@ mod tests {
         assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
-        let stored: serde_json::Value =
-            serde_json::from_str(pane.metadata().get("agent_telemetry").expect("stored")).unwrap();
+        let stored: serde_json::Value = stored_telemetry_json(pane, "stored");
         assert_eq!(
             stored["context_used_percent"], 64,
             "63.6 rounds away from zero, hub-style"
@@ -1516,7 +1494,7 @@ mod tests {
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "a dead agent's telemetry left with its claim"
         );
     }
@@ -1547,15 +1525,15 @@ mod tests {
             "the live claim keeps its label"
         );
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "a foreign agent's telemetry never attaches"
         );
     }
 
-    /// The roster reader's half of absent-beats-stale: a stored blob whose
-    /// sample aged past the window serves nothing, so the row loses its
-    /// telemetry token without any write (fabricated metadata — the write
-    /// side would never let this blob land).
+    /// The roster reader's half of absent-beats-stale: a stored sample
+    /// aged past the window serves nothing, so the row loses its telemetry
+    /// token without any write (fabricated state — the write side would
+    /// never let this sample land).
     #[test]
     fn fresh_telemetry_serving_drops_aged_samples() {
         let (tree, pane_id) = tree_with_pane();
@@ -1563,20 +1541,49 @@ mod tests {
             let mut guard = tree.lock();
             let pane = guard.pane_mut(pane_id).expect("pane exists");
             pane.set_metadata("agent", "kimi");
-            pane.set_metadata(
-                TELEMETRY_KEY,
-                &format!(
-                    r#"{{"version":1,"source":"claude_code","sampled_at_unix_ms":{}}}"#,
-                    now_unix_ms() - 2 * 3_600_000
-                ),
-            );
+            pane.telemetry = Some(StoredTelemetry::new(
+                r#"{"version":1,"source":"claude_code"}"#,
+                now_unix_ms() - 2 * 3_600_000,
+            ));
         }
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert_eq!(
-            fresh_telemetry_b64(pane.metadata()),
+            fresh_telemetry_b64(pane.telemetry.as_ref()),
             None,
             "an aged sample is served as absent"
+        );
+    }
+
+    /// ARC-113: the roster token is encoded once, when the report is
+    /// accepted. A fresh read serves the stored string itself — no JSON
+    /// parse, no re-encode — and it is the canonical blob's base64.
+    #[test]
+    fn telemetry_token_is_encoded_once() {
+        let (tree, pane_id) = tree_with_pane();
+        let (reply, _) = handle_report(
+            &telemetry_report(pane_id, "claude", 1_000, &sample_telemetry(now_unix_ms())),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        let stored = pane.telemetry.as_ref().expect("stored");
+        let served = fresh_telemetry_b64(Some(stored)).expect("fresh");
+        assert!(
+            std::ptr::eq(served, stored.canonical_b64.as_str()),
+            "the roster serves the stored token, not a fresh encoding"
+        );
+        let params: serde_json::Value = serde_json::from_str(&format!(
+            r#"{{"telemetry":{}}}"#,
+            sample_telemetry(stored.sampled_at_unix_ms)
+        ))
+        .unwrap();
+        let (canonical, _) = parse_telemetry_object(&params).unwrap();
+        assert_eq!(
+            served,
+            base64::engine::general_purpose::STANDARD.encode(canonical),
+            "the token is the canonical blob's base64, byte-identical to before"
         );
     }
 
@@ -2125,7 +2132,6 @@ mod tests {
             "agent_message",
             "agent_source",
             "agent_seq",
-            SEQ_STAMPS_KEY,
             "agent_session_id",
             "agent_session_path",
             "agent_session_start_source",
@@ -2137,6 +2143,10 @@ mod tests {
                 pane.metadata()
             );
         }
+        assert!(
+            pane.seq_by_source.is_empty(),
+            "release cleared the per-source sequence stamps"
+        );
     }
 
     /// A release naming a different agent than the pane's claim is a no-op:

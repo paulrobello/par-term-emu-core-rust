@@ -149,6 +149,17 @@ pub struct MuxPane {
     /// no exit status to report as the death was observed.
     exit_code: Option<i32>,
     metadata: HashMap<String, String>,
+    /// The hook-reported telemetry, parsed and encoded once on write so the
+    /// roster reads it without re-parsing JSON under the tree lock
+    /// (ARC-113). Ephemeral like the rest of the claim: never persisted,
+    /// cleared with it ([`crate::mux::hooks::clear_agent_claim`]).
+    pub(crate) telemetry: Option<crate::mux::hooks::StoredTelemetry>,
+    /// The host probe's typed sample, each field stamped (ARC-113).
+    pub(crate) host_telemetry: Option<crate::mux::host_probe::HostTelemetry>,
+    /// The last accepted report `seq` per reporting source (herdr's
+    /// `hook_report_sequences`; ARC-113). Reports without a source share
+    /// the empty-string bucket.
+    pub(crate) seq_by_source: HashMap<String, u64>,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
     /// handle so a capture started under the tree lock can finish OFF it
@@ -280,9 +291,25 @@ impl MuxPane {
             .unwrap_or_else(|| self.session.terminal().read().title().to_string())
     }
 
-    /// The terminal emulator backing this pane.
+    /// The terminal emulator backing this pane. Mutate through
+    /// [`Self::with_terminal_mut`] instead of this lock, so the session's
+    /// geometry mirror stays current (QA-195).
     pub fn terminal(&self) -> Arc<RwLock<Terminal>> {
         self.session.terminal()
+    }
+
+    /// Run `f` with exclusive access to the pane's terminal, then republish
+    /// the session's wait-free geometry mirror, so `cursor_position()` and
+    /// `size()` reflect what `f` did (QA-195).
+    pub fn with_terminal_mut<R>(&self, f: impl FnOnce(&mut Terminal) -> R) -> R {
+        self.session.with_terminal_mut(f)
+    }
+
+    /// The session's wait-free published cursor — what a mirror-reading
+    /// consumer sees, as opposed to the terminal's own cursor.
+    #[cfg(test)]
+    pub(crate) fn published_cursor(&self) -> (usize, usize) {
+        self.session.cursor_position()
     }
 
     /// The cwd persistence should capture for this pane: the shell's OSC 7
@@ -435,7 +462,7 @@ impl MuxPane {
     /// geometry-publishing write path, so `cursor_position()` is current
     /// afterwards (QA-195).
     pub fn write_note(&self, bytes: &[u8]) {
-        self.session.with_terminal_mut(|term| term.process(bytes));
+        self.with_terminal_mut(|term| term.process(bytes));
     }
 
     /// Stop forwarding this pane's output (ARC-089). On return, no sink
@@ -471,7 +498,12 @@ impl MuxPane {
         cell_h: u16,
     ) -> Result<(), MuxError> {
         self.session
-            .resize_with_pixels(cols, rows, cols * cell_w, rows * cell_h)
+            .resize_with_pixels(
+                cols,
+                rows,
+                crate::pty_session::pixel_extent(cols, cell_w),
+                crate::pty_session::pixel_extent(rows, cell_h),
+            )
             .map_err(MuxError::from)
     }
 
@@ -653,6 +685,9 @@ impl ShellPaneFactory {
             dead: false,
             exit_code: None,
             metadata: HashMap::new(),
+            telemetry: None,
+            host_telemetry: None,
+            seq_by_source: HashMap::new(),
             snapshot_cache: Arc::new(Mutex::new(None)),
         }
     }

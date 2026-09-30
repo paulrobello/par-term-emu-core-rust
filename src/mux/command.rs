@@ -371,6 +371,13 @@ pub fn parse_line(line: &str) -> Result<Line, String> {
     }
 }
 
+/// cap: Columns a par-mux client may report for a window grid (`refresh-client -C`).
+pub(crate) const MAX_CLIENT_COLS: u16 = 1000;
+/// cap: Rows a par-mux client may report for a window grid (`refresh-client -C`).
+pub(crate) const MAX_CLIENT_ROWS: u16 = 500;
+/// cap: Pixels per cell axis a par-mux client may report (`refresh-client -p`).
+pub(crate) const MAX_CELL_PIXELS: u16 = 512;
+
 /// One pre-split command line: the shared cursor every per-command parser
 /// reads flags, targets, and payloads through.
 ///
@@ -517,8 +524,10 @@ impl Args<'_> {
         parse_size_flag(&self.flag(flag_name), flag_name, self.name)
     }
 
-    /// A `WxH` size-pair flag (`-C 120x40`) — the renderer-report form.
-    fn size_pair(&self, flag_name: &str) -> Result<Option<(u16, u16)>, String> {
+    /// A `WxH` size-pair flag (`-C 120x40`) — the renderer-report form —
+    /// with each axis in `1..=max` (QA-182: an unbounded grid report can
+    /// abort the daemon on allocation).
+    fn size_pair(&self, flag_name: &str, max: (u16, u16)) -> Result<Option<(u16, u16)>, String> {
         let Some(raw) = self.flag(flag_name) else {
             return Ok(None);
         };
@@ -537,6 +546,12 @@ impl Args<'_> {
             return Err(format!(
                 "{}: {flag_name} size must be positive: {raw}",
                 self.name
+            ));
+        }
+        if width > max.0 || height > max.1 {
+            return Err(format!(
+                "{}: {flag_name} size exceeds {}x{}: {raw}",
+                self.name, max.0, max.1
             ));
         }
         Ok(Some(dims))
@@ -1003,6 +1018,43 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     parse(&a)
 }
 
+/// tmux's value-taking `new-session` flags, so a tmux-shaped sender's
+/// `-x 80` is not misread as a start command (QA-219).
+const NEW_SESSION_VALUE_FLAGS: &[&str] = &["-s", "-e", "-c", "-n", "-t", "-x", "-y", "-F", "-f"];
+/// tmux's value-taking `new-window` flags (QA-219).
+const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e", "-F"];
+
+/// Reject the first positional word of a command that takes none (QA-219):
+/// `new-window sleep 5` used to succeed and silently drop `sleep 5`.
+/// Words are read with [`next_shell_word`], so a quoted value stays one
+/// word; a word in `value_flags` also consumes the next word (absent is
+/// fine — the flag parsers report that). Any other `-x` word is tolerated
+/// as a bare flag, as before. Everything after `--` is positional.
+fn reject_positionals(a: &Args<'_>, value_flags: &[&str]) -> Result<(), String> {
+    let rest = a.line.trim_start().strip_prefix(a.name).unwrap_or_default();
+    let mut pos = a.line.len() - rest.len();
+    let mut after_dashes = false;
+    while let Some((_, end, word)) = next_shell_word(a.line, pos) {
+        pos = end;
+        if !after_dashes && word == "--" {
+            after_dashes = true;
+            continue;
+        }
+        if after_dashes || !(word.len() > 1 && word.starts_with('-')) {
+            return Err(format!(
+                "{}: unexpected argument {word:?}: a start command is not supported; use respawn-pane",
+                a.name
+            ));
+        }
+        if value_flags.contains(&word.as_str()) {
+            if let Some((_, value_end, _)) = next_shell_word(a.line, pos) {
+                pos = value_end;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     let env = a
         .quoted_values("-e")
@@ -1015,10 +1067,9 @@ fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
             Ok((name.to_string(), value.to_string()))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(MuxCommand::NewSession {
-        name: a.quoted_flag("-s")?,
-        env,
-    })
+    let name = a.quoted_flag("-s")?;
+    reject_positionals(a, NEW_SESSION_VALUE_FLAGS)?;
+    Ok(MuxCommand::NewSession { name, env })
 }
 
 /// Reject a variable name no environment can hold: empty, or containing
@@ -1086,8 +1137,8 @@ fn parse_kill_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::RefreshClient {
         pane: a.pane("-t")?,
-        size: a.size_pair("-C")?,
-        cell_pixels: a.size_pair("-p")?,
+        size: a.size_pair("-C", (MAX_CLIENT_COLS, MAX_CLIENT_ROWS))?,
+        cell_pixels: a.size_pair("-p", (MAX_CELL_PIXELS, MAX_CELL_PIXELS))?,
     })
 }
 
@@ -1113,10 +1164,14 @@ fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a.session("-t")?;
+    let name = a.quoted_flag("-n")?;
+    let start_dir = a.quoted_flag("-c")?;
+    reject_positionals(a, NEW_WINDOW_VALUE_FLAGS)?;
     Ok(MuxCommand::NewWindow {
-        session: a.session("-t")?,
-        name: a.quoted_flag("-n")?,
-        start_dir: a.quoted_flag("-c")?,
+        session,
+        name,
+        start_dir,
     })
 }
 
@@ -1189,11 +1244,11 @@ fn parse_kill_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillSession { session })
 }
 
-fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let pane = a.pane("-t")?;
-    // tmux's flags name the arrangement, not the divider: `-h`
-    // puts the new pane beside the target (our Vertical
-    // orientation), `-v`/default below it (Horizontal).
+/// The split arrangement `split-window` and `join-pane` share: `-h` puts
+/// the pane beside the target (our Vertical orientation), `-v`/default
+/// below it (Horizontal) — tmux's flags name the arrangement, not the
+/// divider — and `-p` is the pane's share, 1-99 (default 50).
+fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32), String> {
     let direction = if a.has_flag("-h") {
         SplitDirection::Vertical
     } else {
@@ -1211,6 +1266,12 @@ fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
         }
         None => 50,
     };
+    Ok((direction, percent))
+}
+
+fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    let (direction, percent) = parse_split_geometry(a)?;
     Ok(MuxCommand::SplitWindow {
         pane,
         direction,
@@ -1314,25 +1375,7 @@ fn parse_break_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 fn parse_join_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     let source = a.pane("-s")?;
     let target = a.pane("-t")?;
-    // The same arrangement rule split-window uses: `-h` beside the
-    // target, `-v`/default below it.
-    let direction = if a.has_flag("-h") {
-        SplitDirection::Vertical
-    } else {
-        SplitDirection::Horizontal
-    };
-    let percent = match a.flag("-p") {
-        Some(raw) => {
-            let percent: u32 = raw
-                .parse()
-                .map_err(|_| format!("invalid percentage: {raw}"))?;
-            if !(1..=99).contains(&percent) {
-                return Err(format!("percentage must be 1-99: {raw}"));
-            }
-            percent
-        }
-        None => 50,
-    };
+    let (direction, percent) = parse_split_geometry(a)?;
     Ok(MuxCommand::JoinPane {
         source,
         target,
@@ -1936,6 +1979,66 @@ mod tests {
         assert!(parse_command("frobnicate").is_err());
     }
 
+    /// QA-219: a trailing command was silently dropped; it is now an error
+    /// pointing at respawn-pane.
+    #[test]
+    fn new_window_rejects_a_trailing_command() {
+        for line in [
+            "new-window sleep 5",
+            "new-window -n w sleep 5",
+            "new-window -t $0 -- top",
+        ] {
+            let err = parse_command(line).expect_err(line);
+            assert!(err.contains("unexpected argument"), "{line}: {err}");
+            assert!(err.contains("respawn-pane"), "{line}: {err}");
+        }
+    }
+
+    #[test]
+    fn new_session_rejects_a_trailing_command() {
+        let err = parse_command("new-session -s a top").expect_err("positional");
+        assert!(err.contains("unexpected argument \"top\""), "{err}");
+    }
+
+    /// QA-219: tmux's value flags consume their value, so a tmux-shaped
+    /// sender is not misread; quoted values stay one word.
+    #[test]
+    fn new_session_accepts_tmux_value_flags() {
+        for line in [
+            "new-session -s a -x 80 -y 24 -d",
+            "new-session -d -s 'a'\\''; kill-server; '\\'''",
+            "new-session -s work -e A=1 -e 'B=two words'",
+            "new-window -t $0 -n 'build and test' -c '/tmp/my dir'",
+            "new-window -a -d -t alpha -n logs",
+        ] {
+            assert!(
+                parse_command(line).is_ok(),
+                "{line}: {:?}",
+                parse_command(line)
+            );
+        }
+    }
+
+    /// ARC-094: every `COMMANDS` row is reachable. A bare name may be a
+    /// usage error, but never "unknown command" (a name `parse_command`
+    /// cannot look up, e.g. one with whitespace), and no name appears twice
+    /// (the later row's parser would be dead). It does not prove a row
+    /// names the right parser; `mutates()` and `dispatch_command` stay
+    /// exhaustive matches for that.
+    #[test]
+    fn every_command_table_name_parses_or_errors_on_its_own_grammar() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in COMMANDS {
+            assert!(seen.insert(*name), "duplicate command table row {name:?}");
+            if let Err(err) = parse_command(name) {
+                assert!(
+                    !err.starts_with("unknown command"),
+                    "table row {name:?} does not reach its parser: {err}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn rejects_a_malformed_target() {
         // A non-sigil value is a NAME now, parsed fine and resolved
@@ -2421,6 +2524,16 @@ mod tests {
             parse_command("join-pane -s %1 -t %0 -p 0").is_err(),
             "the share percentage stays in 1-99"
         );
+        // QA-187: the shared geometry parser keeps split-window's error
+        // text on join-pane too.
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0 -p 100").unwrap_err(),
+            "percentage must be 1-99: 100"
+        );
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0 -p x").unwrap_err(),
+            "invalid percentage: x"
+        );
         assert_eq!(
             parse_command("move-window -s @2 -t 0").unwrap(),
             MuxCommand::MoveWindow {
@@ -2649,6 +2762,30 @@ mod tests {
         assert!(parse_command("refresh-client -t %0 -C ax40").is_err());
         assert!(parse_command("refresh-client -t %0 -p 0x20").is_err());
         assert!(parse_command("refresh-client -t %0 -p 10").is_err());
+    }
+
+    /// QA-182: grid and cell-pixel reports are capped, so a client cannot
+    /// make the daemon allocate an unbounded grid.
+    #[test]
+    fn refresh_client_rejects_sizes_over_the_caps() {
+        for line in [
+            "refresh-client -t %0 -C 1001x40",
+            "refresh-client -t %0 -C 120x501",
+            "refresh-client -t %0 -C 65535x65535",
+            "refresh-client -t %0 -p 513x20",
+            "refresh-client -t %0 -p 10x513",
+        ] {
+            let err = parse_command(line).expect_err(line);
+            assert!(err.contains("exceeds"), "{line}: {err}");
+        }
+        assert_eq!(
+            parse_command("refresh-client -t %0 -C 1000x500 -p 512x512").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: Target::Id(PaneId(0)),
+                size: Some((MAX_CLIENT_COLS, MAX_CLIENT_ROWS)),
+                cell_pixels: Some((MAX_CELL_PIXELS, MAX_CELL_PIXELS)),
+            }
+        );
     }
 
     #[test]

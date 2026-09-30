@@ -418,14 +418,16 @@ impl MuxTree {
         }
 
         let mut panes = HashMap::new();
-        let mut windows = HashMap::new();
-        let mut sessions = HashMap::new();
+        // Each session with its windows in order; linked into the tree
+        // through `MuxTree::insert_window` below, which maintains the
+        // reverse indexes (ARC-096).
+        let mut sessions: Vec<(MuxSession, Vec<MuxWindow>)> = Vec::new();
         // Panes whose persisted cwd was gone at restore — they spawned in
         // home and get a visible note after their content is restored.
         let mut cwd_fallbacks: HashMap<u32, String> = HashMap::new();
 
         for session in &state.sessions {
-            let mut window_ids = Vec::with_capacity(session.windows.len());
+            let mut session_windows = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
                 for pane in &window.panes {
                     // The effective command (D6.3): a resumable agent
@@ -520,52 +522,56 @@ impl MuxTree {
                     panes.insert(PaneId(pane.id), created);
                 }
                 for pane in &window.panes {
-                    let terminal = panes
-                        .get_mut(&PaneId(pane.id))
+                    // Through the geometry-publishing path (QA-195): the
+                    // restored cursor and note are what `cursor_position()`
+                    // serves before the new process prints anything.
+                    panes
+                        .get(&PaneId(pane.id))
                         .expect("just inserted above")
-                        .terminal();
-                    let mut restored = terminal.write();
-                    restored.restore_for_new_process(pane.terminal.clone());
-                    // After the snapshot re-hangs, so the note is the last
-                    // thing on screen rather than scrolled away by it.
-                    if let Some(note) = cwd_fallbacks.get(&pane.id) {
-                        restored.process(note.as_bytes());
-                    }
+                        .with_terminal_mut(|restored| {
+                            restored.restore_for_new_process(pane.terminal.clone());
+                            // After the snapshot re-hangs, so the note is the
+                            // last thing on screen rather than scrolled away.
+                            if let Some(note) = cwd_fallbacks.get(&pane.id) {
+                                restored.process(note.as_bytes());
+                            }
+                        });
                 }
-                window_ids.push(WindowId(window.id));
-                windows.insert(
-                    WindowId(window.id),
-                    MuxWindow {
-                        id: WindowId(window.id),
-                        name: window.name.clone(),
-                        layout: window.layout.clone(),
-                        active: PaneId(window.active_pane),
-                        cols: window.cols,
-                        rows: window.rows,
-                        // Zoom is session state, not layout — restored
-                        // windows start unzoomed (tmux's behavior).
-                        zoomed: None,
-                    },
-                );
+                session_windows.push(MuxWindow {
+                    id: WindowId(window.id),
+                    name: window.name.clone(),
+                    layout: window.layout.clone(),
+                    active: PaneId(window.active_pane),
+                    cols: window.cols,
+                    rows: window.rows,
+                    // Zoom is session state, not layout — restored
+                    // windows start unzoomed (tmux's behavior).
+                    zoomed: None,
+                });
             }
-            sessions.insert(
-                SessionId(session.id),
+            sessions.push((
                 MuxSession {
                     id: SessionId(session.id),
                     name: session.name.clone(),
-                    windows: window_ids,
+                    windows: Vec::new(),
                     active: session.active_window_index,
                     env: session.env.clone(),
                 },
-            );
+                session_windows,
+            ));
         }
 
         let mut tree = MuxTree::new(factory);
         tree.ids = IdAllocator::resume(state.next_ids);
-        tree.sessions = sessions;
-        tree.windows = windows;
         tree.panes = panes;
         tree.buffers = state.buffers.clone();
+        for (session, windows) in sessions {
+            let session_id = session.id;
+            tree.sessions.insert(session_id, session);
+            for window in windows {
+                tree.insert_window(session_id, window);
+            }
+        }
         // Panes were spawned at their window's full extent, but the restored
         // layout divides that extent — re-fit every terminal (and PTY) to
         // its geometry, exactly as a live resize would have, so a restart
@@ -705,11 +711,12 @@ pub enum SaveOrigin {
     /// snapshot; empty leaves it alone, because the emptiness may be the
     /// race above rather than the user's intent.
     Shutdown,
-    /// The final save of an exit-when-empty daemon: zero sessions and zero
-    /// clients, held empty past a grace period, with no shutdown signal
-    /// received — the emptiness is the user's doing (every pane closed), not
-    /// the reboot race. Clears the snapshot so the next start is fresh, not
-    /// a resurrection of panes whose processes were deliberately closed.
+    /// The final save of an exit-when-empty daemon: no clients, and either
+    /// zero sessions or every pane dead, held past the grace period with no
+    /// shutdown signal received. An empty tree clears the snapshot (the
+    /// user closed everything, so the next start is fresh). An all-dead
+    /// tree is pane-bearing and refreshes it, so the next start respawns
+    /// those panes (MUX.md, Pane Reaping).
     ShutdownEmpty,
 }
 
@@ -721,15 +728,31 @@ pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
     write_job(SaveOrigin::Shutdown, &tree.to_persist_state(), target)
 }
 
-/// [`save_to`] with an explicit origin — the exit-when-empty path's final
-/// save, which must be distinguished from a requested shutdown's (see
-/// [`SaveOrigin::ShutdownEmpty`]).
+/// [`save_to`] with an explicit origin. The whole save — capture, cwd
+/// syscalls, serialization, fsync — runs while the caller holds `tree`;
+/// a caller with the tree behind a mutex should prefer [`save_off_lock`].
 pub fn save_to_with_origin(
     tree: &MuxTree,
     target: &Path,
     origin: SaveOrigin,
 ) -> Result<(), PersistError> {
     write_job(origin, &tree.to_persist_state(), target)
+}
+
+/// Save a mutex-held tree with the lock held only for the cheap structure
+/// read (ARC-119): collect the capture handles under the lock, drop it,
+/// then take the snapshots, resolve cwds, serialize and fsync off it — the
+/// discipline every other save already follows. A wedged filesystem during
+/// the final save no longer holds the tree mutex the reap tick and late
+/// client commands share. A command that lands between the capture and the
+/// write is not in this save, as with the periodic path.
+pub fn save_off_lock(
+    tree: &parking_lot::Mutex<MuxTree>,
+    target: &Path,
+    origin: SaveOrigin,
+) -> Result<(), PersistError> {
+    let capture = tree.lock().collect_persist_capture();
+    write_job(origin, &capture.capture(), target)
 }
 
 /// Serialize and atomically land one already-captured state with the
@@ -1380,6 +1403,23 @@ mod tests {
             text.contains("par-mux: /par-mux-test-no-such-dir is gone"),
             "the fallback announced itself in the pane; screen held: {text}"
         );
+        // QA-195 consistency check: the wait-free cursor matches the
+        // terminal's after a restore. Not isolating — the re-fit that ends
+        // `from_persist_state` republishes too. Both are read under the
+        // terminal's read lock, since every publish holds its write lock.
+        let pane = restored.pane(pane_id).unwrap();
+        let (published, cursor) = {
+            let terminal = pane.terminal();
+            let term = terminal.read();
+            (
+                pane.published_cursor(),
+                (term.cursor().col, term.cursor().row),
+            )
+        };
+        assert_eq!(
+            published, cursor,
+            "the geometry mirror follows the restored screen"
+        );
     }
 
     /// serde(default): a save file written before pane cwds existed carries
@@ -1731,6 +1771,69 @@ mod tests {
         }
     }
 
+    /// ARC-097: exit-when-empty also fires when every pane is dead. That
+    /// tree is pane-bearing, so the ShutdownEmpty save refreshes the
+    /// snapshot instead of clearing it — the next start respawns those
+    /// panes (MUX.md, Pane Reaping).
+    #[test]
+    fn shutdown_empty_with_dead_panes_refreshes_lastgood() {
+        let (_dir, target) = temp_target("all-dead-exit");
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        assert!(
+            !lastgood_path(&target).exists(),
+            "precondition: no snapshot"
+        );
+
+        let dead = populated_tree().to_persist_state();
+        assert!(state_has_panes(&dead));
+        write_job(SaveOrigin::ShutdownEmpty, &dead, &target).unwrap();
+        let snapshot: PersistState =
+            serde_json::from_slice(&fs::read(lastgood_path(&target)).unwrap()).unwrap();
+        assert!(
+            state_has_panes(&snapshot),
+            "an all-dead exit keeps its panes for the next start"
+        );
+    }
+
+    /// ARC-119: the off-lock shutdown save lands the tree's structure,
+    /// applies the origin's snapshot rule, and leaves the tree mutex free.
+    /// Content parity with the one-shot capture is
+    /// `two_phase_capture_matches_one_shot` (`to_persist_state` is the
+    /// same two calls); live shells make a byte comparison racy here.
+    #[test]
+    fn save_off_lock_writes_the_tree_and_releases_the_lock() {
+        let (_dir, target) = temp_target("off-lock");
+        let tree = parking_lot::Mutex::new(populated_tree());
+        save_off_lock(&tree, &target, SaveOrigin::Shutdown).unwrap();
+        assert!(
+            tree.try_lock().is_some(),
+            "the tree mutex is free once the save returns"
+        );
+        let written: PersistState = serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+        let expected = tree.lock().to_persist_state();
+        let shape = |state: &PersistState| {
+            state
+                .sessions
+                .iter()
+                .map(|s| {
+                    let windows: Vec<_> = s
+                        .windows
+                        .iter()
+                        .map(|w| (w.id, w.panes.iter().map(|p| p.id).collect::<Vec<_>>()))
+                        .collect();
+                    (s.id, s.name.clone(), windows)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&written), shape(&expected));
+        assert_eq!(written.next_ids, expected.next_ids);
+        assert_eq!(written.buffers, expected.buffers);
+        assert!(
+            lastgood_path(&target).exists(),
+            "a pane-bearing Shutdown save refreshes the snapshot"
+        );
+    }
+
     /// Positive control for the fallback: an empty state with NO snapshot
     /// behind it loads empty — the fallback cannot invent panes.
     #[test]
@@ -1799,7 +1902,7 @@ mod tests {
 
     /// One pane whose metadata carries the full hook-reported identity.
     fn tree_with_agent_pane() -> (MuxTree, PaneId) {
-        tree_with_metadata(&[
+        let (mut tree, pane_id) = tree_with_metadata(&[
             ("agent", "pi"),
             ("agent_session_id", "s-1"),
             ("agent_session_path", "/tmp/pi-session.jsonl"),
@@ -1808,17 +1911,21 @@ mod tests {
                 "agent_resume_argv",
                 r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
             ),
-            // Keys that must NOT travel: state-shaped, provenance-of-start,
-            // and display-only telemetry.
+            // Keys that must NOT travel: state-shaped and
+            // provenance-of-start.
             ("agent_state", "working"),
             ("agent_state_source", "hook"),
             ("agent_seq", "1000"),
             ("agent_session_start_source", "startup"),
-            (
-                "agent_telemetry",
-                r#"{"version":1,"source":"claude_code","sampled_at_unix_ms":1}"#,
-            ),
-        ])
+        ]);
+        // Nor the typed, display-only half of the claim (ARC-113).
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.telemetry = Some(crate::mux::hooks::StoredTelemetry {
+            sampled_at_unix_ms: 1,
+            canonical_b64: "e30=".to_string(),
+        });
+        pane.seq_by_source.insert("par-mux:pi".to_string(), 1000);
+        (tree, pane_id)
     }
 
     /// The resume spawn re-lands in the pane's persisted cwd: the agent's
@@ -1949,8 +2056,12 @@ mod tests {
             "start source describes the PREVIOUS process's start — stale after a restart"
         );
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "telemetry is display-only and ephemeral — a restored pane serves absent, never a stale sample"
+        );
+        assert!(
+            pane.seq_by_source.is_empty(),
+            "sequence stamps are volatile — the restarted agent's first report is never stale"
         );
     }
 

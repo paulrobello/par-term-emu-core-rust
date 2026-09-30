@@ -17,7 +17,7 @@
 //! bundled with a warning, never silently disabling the agent.
 
 use crate::mux::foreground::{Liveness, ProcessTable};
-use crate::mux::hooks::AGENT_CLAIM_KEYS;
+use crate::mux::hooks::clear_agent_claim;
 use crate::mux::ids::PaneId;
 use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
@@ -572,7 +572,7 @@ pub(crate) fn scrape_tick_with(
                         Liveness::Unknown => {}
                         Liveness::Mismatch => {
                             if bump_liveness_misses(pane, &agent) >= LIVENESS_MISSES_TO_CLEAR {
-                                pane.clear_metadata(AGENT_CLAIM_KEYS);
+                                clear_agent_claim(pane);
                                 notifications.push(TmuxNotification::AgentReleased {
                                     pane_id: pane_id.to_string(),
                                     agent: agent.clone(),
@@ -1222,13 +1222,19 @@ contains = ["Override Idle"]
         {
             let guard = tree.lock();
             let pane = guard.pane(pane_id).expect("pane exists");
-            for key in AGENT_CLAIM_KEYS {
+            for key in crate::mux::hooks::AGENT_CLAIM_KEYS {
                 assert!(
                     !pane.metadata().contains_key(*key),
                     "{key} cleared: {:?}",
                     pane.metadata()
                 );
             }
+            assert!(
+                pane.seq_by_source.is_empty()
+                    && pane.telemetry.is_none()
+                    && pane.host_telemetry.is_none(),
+                "the typed half of the claim is cleared too"
+            );
         }
 
         // A cleared claim is nobody's pane: further ticks are quiet.

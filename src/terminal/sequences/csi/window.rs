@@ -101,30 +101,6 @@ impl Terminal {
                     self.active_grid_mut()
                         .erase_rectangle_unconditional(top, left, bottom, right);
                 }
-                '{' => {
-                    // DECSERA - Selective Erase Rectangular Area: CSI Pt ; Pl ; Pb ; Pr $ {
-                    let mut iter = params.iter();
-                    let pt = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
-                    let pl = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
-                    let pb = iter
-                        .next()
-                        .and_then(|p| p.first())
-                        .copied()
-                        .unwrap_or(rows as u16) as usize;
-                    let pr = iter
-                        .next()
-                        .and_then(|p| p.first())
-                        .copied()
-                        .unwrap_or(cols as u16) as usize;
-
-                    let top = pt.saturating_sub(1);
-                    let left = pl.saturating_sub(1);
-                    let bottom = pb.saturating_sub(1);
-                    let right = pr.saturating_sub(1);
-
-                    self.active_grid_mut()
-                        .erase_rectangle(top, left, bottom, right);
-                }
                 'r' | 't' => {
                     // DECCARA - Change Attributes in Rectangular Area: CSI Pt ; Pl ; Pb ; Pr ; Ps1 ; Ps2 ... $ r
                     // DECRARA - Reverse Attributes in Rectangular Area: CSI Pt ; Pl ; Pb ; Pr ; Ps1 ; Ps2 ... $ t

@@ -419,16 +419,10 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             // host probe's sibling token follows the same rule, aged
             // per field — and neither ever triggers a probe: the roster
             // reads only what the cadence thread already wrote.
-            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.metadata());
-            let host = crate::mux::host_probe::fresh_host_telemetry_b64(pane.metadata());
-            let entry = roster_row_entry(
-                agent,
-                state,
-                source,
-                reason,
-                telemetry.as_deref(),
-                host.as_deref(),
-            );
+            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.telemetry.as_ref());
+            let host =
+                crate::mux::host_probe::fresh_host_telemetry_b64(pane.host_telemetry.as_ref());
+            let entry = roster_row_entry(agent, state, source, reason, telemetry, host.as_deref());
             Some((p, entry))
         })
         .collect();
@@ -688,14 +682,18 @@ fn cmd_pane_title(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
 }
 
 fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
-    // Wire contract: one line, `%N @W COLSxROWS cmd=<base64>` — the pane's
-    // window, its terminal's current grid size, and, when knowable, the
-    // pane's foreground command name (deepest descendant of its child
-    // process) for close-confirmation prompts. The cmd token is last and
-    // may be absent (Windows table, unreadable argv, or a name with control
-    // characters or over the cap), so older clients keep parsing the fixed
-    // prefix.
-    let (pane, window, cols, rows, child_pid) = {
+    // Wire contract: one line, `%N @W COLSxROWS [cmd=<base64>]
+    // [exited=<code|?>]` — the pane's window, its terminal's current grid
+    // size, and, when knowable, the pane's foreground command name
+    // (deepest descendant of its child process) for close-confirmation
+    // prompts. The cmd token may be absent (Windows table, unreadable
+    // argv, a name with control characters or over the cap, or a reaped
+    // child). `exited=` rides only for a held-dead pane — `?` when the exit
+    // code was unreadable — so a client that connects after `%pane-exited`
+    // can still render the remain-on-exit state (ARC-095). Both are
+    // whitespace-free `key=value` tail tokens, so older clients keep
+    // parsing the fixed prefix.
+    let (pane, window, cols, rows, child_pid, dead, exit_code) = {
         let guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
@@ -705,7 +703,15 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
         };
         let (cols, rows) = target.terminal().read().size();
-        (pane, window, cols, rows, target.child_pid())
+        (
+            pane,
+            window,
+            cols,
+            rows,
+            target.child_pid(),
+            target.dead(),
+            target.exit_code(),
+        )
     };
     // The process table snapshot reads the whole OS process list; taking
     // it outside the tree lock keeps a slow read from stalling clients.
@@ -715,6 +721,13 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     {
         line.push_str(" cmd=");
         line.push_str(&base64::engine::general_purpose::STANDARD.encode(name));
+    }
+    if dead {
+        line.push_str(" exited=");
+        match exit_code {
+            Some(code) => line.push_str(&code.to_string()),
+            None => line.push('?'),
+        }
     }
     Outcome::ok(ctx, &line)
 }
