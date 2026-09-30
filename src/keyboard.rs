@@ -443,6 +443,20 @@ fn encode_legacy(
 
 /// Kitty keyboard protocol level-1 (disambiguate) encoding.
 fn encode_kitty(ev: &TermKeyEvent, out: &mut Vec<u8>) {
+    // Kitty key codes are Unicode scalar values (up to U+10FFFF), so they
+    // are u32; a u16 truncated astral codepoints (ARC-098). An unknown key
+    // or a Char that is not a scalar value has no encoding, matching the
+    // legacy regime's empty output for Unknown.
+    let codepoint: u32 = match ev.key() {
+        TermKey::Unknown => return,
+        TermKey::Char => match char::from_u32(ev.codepoint) {
+            Some(c) => c as u32,
+            None => return,
+        },
+        // TermKey discriminants ARE the kitty functional codes.
+        functional => functional as u32,
+    };
+
     // Text keys without Ctrl/Alt/Super-class modifiers stay plain text so
     // typing (and IME) is unaffected — that includes Shift, and ALT_RIGHT
     // is side info rather than a modifier.
@@ -450,12 +464,6 @@ fn encode_kitty(ev: &TermKeyEvent, out: &mut Vec<u8>) {
         encode_legacy(ev, false, 0, &KeyEncodeOptions::default(), out);
         return;
     }
-
-    let codepoint: u16 = match ev.key() {
-        TermKey::Char => char::from_u32(ev.codepoint).map(|c| c as u16).unwrap_or(0),
-        // TermKey discriminants ARE the kitty functional codes.
-        functional => functional as u16,
-    };
 
     // Arrows/Home/End keep their unambiguous legacy CSI <final> form under
     // level 1 when unmodified; everything else goes CSI u.
@@ -665,6 +673,57 @@ mod tests {
             ),
             b"\x1b[57433;2u"
         );
+    }
+
+    fn raw_event(key: u16, codepoint: u32, mods: u8) -> TermKeyEvent {
+        TermKeyEvent {
+            key,
+            modifiers: mods,
+            _pad: 0,
+            codepoint,
+        }
+    }
+
+    /// ARC-098: kitty key codes are Unicode scalar values; a u16 cast
+    /// reported U+1D54F as 54607.
+    #[test]
+    fn kitty_encodes_astral_codepoint_untruncated() {
+        let mut t = legacy();
+        t.set_keyboard_flags(0x1);
+        assert_eq!(
+            enc(&TermKeyEvent::char_('\u{1D54F}', modifiers::CTRL), &t),
+            b"\x1b[120143;5u"
+        );
+    }
+
+    /// ARC-098: an unknown key has no encoding in either regime (kitty
+    /// used to emit `CSI 0u`).
+    #[test]
+    fn kitty_unknown_key_encodes_nothing() {
+        let mut kitty = legacy();
+        kitty.set_keyboard_flags(0x1);
+        let plain = legacy();
+        // 0 is Unknown itself; 57437 is not a TermKey discriminant.
+        for raw in [0u16, 57437] {
+            assert_eq!(TermKey::from_raw(raw), TermKey::Unknown);
+            for mods in [0, modifiers::CTRL] {
+                let ev = raw_event(raw, 0, mods);
+                assert!(enc(&ev, &kitty).is_empty(), "kitty raw {raw} mods {mods}");
+                assert!(enc(&ev, &plain).is_empty(), "legacy raw {raw} mods {mods}");
+            }
+        }
+    }
+
+    /// ARC-098: a Char whose codepoint is not a scalar value (a surrogate)
+    /// has no kitty encoding (it used to emit `CSI 0;…u`).
+    #[test]
+    fn kitty_invalid_char_codepoint_encodes_nothing() {
+        let mut t = legacy();
+        t.set_keyboard_flags(0x1);
+        for mods in [0, modifiers::SHIFT, modifiers::CTRL] {
+            let ev = raw_event(TermKey::Char as u16, 0xD800, mods);
+            assert!(enc(&ev, &t).is_empty(), "mods {mods}");
+        }
     }
 
     /// QA-151: from_raw covers every discriminant (the macro list cannot

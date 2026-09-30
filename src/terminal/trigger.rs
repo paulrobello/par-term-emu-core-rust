@@ -95,7 +95,10 @@ pub struct Trigger {
 pub struct TriggerMatch {
     /// ID of the trigger that matched
     pub trigger_id: TriggerId,
-    /// Row where the match occurred
+    /// Visible row the matched text occupied when it was scanned. A row
+    /// scanned as it scrolled off the screen (ARC-091) reports the row it
+    /// occupied just before leaving, so a `MarkLine` bookmark or highlight
+    /// for it points at that pre-scroll index.
     pub row: usize,
     /// Column where match starts
     pub col: usize,
@@ -174,7 +177,9 @@ impl TriggerEngine {
     /// Process trigger scans on pending dirty rows
     ///
     /// Called automatically in the PTY reader thread after `process()`.
-    /// Can also be called manually for non-PTY terminals.
+    /// Can also be called manually for non-PTY terminals. Rows that left
+    /// the screen during `process()` were already scanned as they left
+    /// (ARC-091), so this covers the rows still visible.
     pub fn process_trigger_scans(term: &mut Terminal) {
         if !term.triggers.trigger_registry.has_active_triggers() {
             term.triggers.pending_trigger_rows.clear();
@@ -182,6 +187,13 @@ impl TriggerEngine {
         }
 
         let rows_to_scan: Vec<usize> = term.triggers.pending_trigger_rows.drain().collect();
+        Self::scan_rows(term, rows_to_scan);
+    }
+
+    /// Scan the given visible rows of the active grid and run the actions
+    /// of every match. Callers remove the rows from the pending set first,
+    /// so each written row is scanned exactly once (ARC-064).
+    pub(crate) fn scan_rows(term: &mut Terminal, rows_to_scan: Vec<usize>) {
         let grid = term.active_grid();
         let cols = grid.cols();
 

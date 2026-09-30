@@ -316,20 +316,10 @@ impl Default for ProfilingState {
 }
 
 /// Mouse event/position history.
+#[derive(Default)]
 pub(crate) struct MouseHistoryState {
     pub(crate) mouse_events: Vec<MouseEventRecord>,
     pub(crate) mouse_positions: Vec<MousePosition>,
-    pub(crate) max_mouse_history: usize,
-}
-
-impl Default for MouseHistoryState {
-    fn default() -> Self {
-        Self {
-            mouse_events: Vec::new(),
-            mouse_positions: Vec::new(),
-            max_mouse_history: 100,
-        }
-    }
 }
 
 /// Regex search matches and current pattern.
@@ -340,18 +330,9 @@ pub(crate) struct SearchState {
 }
 
 /// Inline image storage (iTerm2/Kitty protocols).
+#[derive(Default)]
 pub(crate) struct InlineImageState {
     pub(crate) inline_images: Vec<InlineImage>,
-    pub(crate) max_inline_images: usize,
-}
-
-impl Default for InlineImageState {
-    fn default() -> Self {
-        Self {
-            inline_images: Vec::new(),
-            max_inline_images: 100,
-        }
-    }
 }
 
 /// Rendering hints and accumulated damage regions.
@@ -789,8 +770,6 @@ pub(crate) struct TerminalModes {
     pub(crate) char_protected: bool,
     /// Reverse video mode (DECSCNM) - globally inverts fg/bg colors
     pub(crate) reverse_video: bool,
-    /// Bold brightening - when enabled, bold ANSI colors 0-7 brighten to 8-15
-    pub(crate) bold_brightening: bool,
     /// Application cursor keys mode
     pub(crate) application_cursor: bool,
     /// Application keypad mode (DECPAM/DECPNM, ESC = / ESC >)
@@ -820,7 +799,6 @@ impl Default for TerminalModes {
             line_feed_new_line_mode: false,
             char_protected: false,
             reverse_video: false,
-            bold_brightening: true, // iTerm2 default behavior
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: false,
@@ -861,6 +839,7 @@ impl Default for SavedCursorState {
 }
 
 /// Feature 31 command/CWD execution history (ARC-001 sub-struct)
+#[derive(Default)]
 pub(crate) struct CommandHistoryState {
     /// Command execution history
     pub(crate) command_history: Vec<CommandExecution>,
@@ -868,20 +847,57 @@ pub(crate) struct CommandHistoryState {
     pub(crate) current_command: Option<CommandExecution>,
     /// Working directory change history
     pub(crate) cwd_changes: Vec<CwdChange>,
-    /// Maximum command history entries
-    pub(crate) max_command_history: usize,
-    /// Maximum CWD change history
-    pub(crate) max_cwd_history: usize,
 }
 
-impl Default for CommandHistoryState {
+/// Embedder configuration RIS must not touch (ARC-100).
+///
+/// `reset()` carries this struct across with one swap, so a field added
+/// here survives `ESC c` by construction. Settings a program can also
+/// change by escape sequence keep a `configured_*` baseline here while the
+/// live value stays on `Terminal`; RIS restores the live value from the
+/// baseline, never the other way round, so a program's change cannot
+/// outlive a reset.
+pub(crate) struct HostConfig {
+    /// Bold brightening: bold ANSI colors 0-7 render as 8-15.
+    pub(crate) bold_brightening: bool,
+    /// OSC 1337 file-transfer payload cap, mirrored into
+    /// `FileTransferManager` (which enforces it) by `apply_host_config`.
+    pub(crate) max_transfer_size: usize,
+    /// Host-supplied window position in pixels, for XTWINOPS 13 (`CSI 13 t`).
+    pub(crate) window_position: (i32, i32),
+    /// Host-supplied iconified state, for XTWINOPS 11 (`CSI 11 t`).
+    pub(crate) window_iconified: bool,
+    /// Maximum mouse events and positions retained.
+    pub(crate) max_mouse_history: usize,
+    /// Maximum inline images retained.
+    pub(crate) max_inline_images: usize,
+    /// Maximum command history entries.
+    pub(crate) max_command_history: usize,
+    /// Maximum CWD change history entries.
+    pub(crate) max_cwd_history: usize,
+    /// Conformance level RIS restores; DECSCL changes only the live level.
+    pub(crate) configured_conformance_level: crate::conformance_level::ConformanceLevel,
+    /// Warning bell volume RIS restores; DECSWBV changes only the live value.
+    pub(crate) configured_warning_bell_volume: u8,
+    /// Margin bell volume RIS restores; DECSMBV changes only the live value.
+    pub(crate) configured_margin_bell_volume: u8,
+}
+
+impl Default for HostConfig {
     fn default() -> Self {
         Self {
-            command_history: Vec::new(),
-            current_command: None,
-            cwd_changes: Vec::new(),
+            bold_brightening: true, // iTerm2 default behavior
+            max_transfer_size: crate::terminal::file_transfer::DEFAULT_MAX_TRANSFER_SIZE,
+            window_position: (0, 0),
+            window_iconified: false,
+            max_mouse_history: 100,
+            max_inline_images: 100,
             max_command_history: 100,
             max_cwd_history: 50,
+            // VT520 for maximum compatibility
+            configured_conformance_level: crate::conformance_level::ConformanceLevel::default(),
+            configured_warning_bell_volume: 4,
+            configured_margin_bell_volume: 4,
         }
     }
 }
@@ -1182,15 +1198,8 @@ pub struct Terminal {
     pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
     pub(crate) pixel_height: usize,
-    /// Host-supplied window X position in pixels, for XTWINOPS 13 (`CSI 13 t`).
-    /// Defaults to 0 for a headless core with no window of its own.
-    pub(crate) window_position_x: i32,
-    /// Host-supplied window Y position in pixels, for XTWINOPS 13 (`CSI 13 t`).
-    /// Defaults to 0 for a headless core with no window of its own.
-    pub(crate) window_position_y: i32,
-    /// Host-supplied iconified/minimized state, for XTWINOPS 11 (`CSI 11 t`).
-    /// Defaults to `false` (non-iconified) for a headless core.
-    pub(crate) window_iconified: bool,
+    /// Embedder configuration carried whole across RIS (ARC-100)
+    pub(crate) host: HostConfig,
     /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
     pub(crate) security_state: SecurityFlagsState,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
@@ -1323,9 +1332,7 @@ impl Terminal {
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
             pixel_width: cols * 10,
             pixel_height: rows * 20,
-            window_position_x: 0,
-            window_position_y: 0,
-            window_iconified: false,
+            host: HostConfig::default(),
             security_state: SecurityFlagsState::default(),
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
@@ -1437,6 +1444,40 @@ impl Terminal {
         self.margin_bell_volume
     }
 
+    /// Set the host-configured conformance level.
+    ///
+    /// Sets both the live level and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSCL changes only the live level, until the next RIS
+    /// (ARC-100).
+    pub fn set_conformance_level(&mut self, level: crate::conformance_level::ConformanceLevel) {
+        self.host.configured_conformance_level = level;
+        self.conformance_level = level;
+    }
+
+    /// Set the host-configured warning bell volume (0=off, 1-8; larger
+    /// values clamp to 8).
+    ///
+    /// Sets both the live volume and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSWBV changes only the live volume, until the next RIS
+    /// (ARC-100).
+    pub fn set_warning_bell_volume(&mut self, volume: u8) {
+        let volume = volume.min(8);
+        self.host.configured_warning_bell_volume = volume;
+        self.warning_bell_volume = volume;
+    }
+
+    /// Set the host-configured margin bell volume (0=off, 1-8; larger
+    /// values clamp to 8).
+    ///
+    /// Sets both the live volume and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSMBV changes only the live volume, until the next RIS
+    /// (ARC-100).
+    pub fn set_margin_bell_volume(&mut self, volume: u8) {
+        let volume = volume.min(8);
+        self.host.configured_margin_bell_volume = volume;
+        self.margin_bell_volume = volume;
+    }
+
     /// Get terminal dimensions (of the ACTIVE screen)
     ///
     /// Returns (cols, rows) for whichever screen buffer is currently active
@@ -1506,14 +1547,13 @@ impl Terminal {
     /// negative (e.g. a window positioned on a monitor left of/above the
     /// primary display in a multi-monitor setup).
     pub fn set_window_position(&mut self, x: i32, y: i32) {
-        self.window_position_x = x;
-        self.window_position_y = y;
+        self.host.window_position = (x, y);
     }
 
     /// Get the host-supplied window position in pixels as `(x, y)`,
     /// defaulting to `(0, 0)` if never set via [`Terminal::set_window_position`].
     pub fn window_position(&self) -> (i32, i32) {
-        (self.window_position_x, self.window_position_y)
+        self.host.window_position
     }
 
     /// Set the host-supplied iconified/minimized state for XTWINOPS
@@ -1523,13 +1563,13 @@ impl Terminal {
     /// minimized/restored so that `CSI 11 t` queries report the correct
     /// state instead of always reporting non-iconified.
     pub fn set_window_iconified(&mut self, iconified: bool) {
-        self.window_iconified = iconified;
+        self.host.window_iconified = iconified;
     }
 
     /// Get the host-supplied iconified/minimized state, defaulting to
     /// `false` if never set via [`Terminal::set_window_iconified`].
     pub fn window_iconified(&self) -> bool {
-        self.window_iconified
+        self.host.window_iconified
     }
 
     /// Resize the terminal
@@ -1769,10 +1809,7 @@ impl Terminal {
                 // Clear the alternate screen buffer to ensure it starts blank
                 self.alt_grid.clear();
             }
-            // The whole visible screen just changed — every row is dirty.
-            self.sync_damage_generations();
-            let rows = self.grid.rows();
-            self.mark_rows_dirty(0, rows.saturating_sub(1));
+            self.invalidate_visible_screen();
             // Notify about alt screen entry
             self.events
                 .terminal_events
@@ -1802,10 +1839,7 @@ impl Terminal {
             self.cursor = self.alt_cursor;
             // Save alternate cursor for when we switch back
             self.alt_cursor = alt_cursor;
-            // The whole visible screen just changed — every row is dirty.
-            self.sync_damage_generations();
-            let rows = self.grid.rows();
-            self.mark_rows_dirty(0, rows.saturating_sub(1));
+            self.invalidate_visible_screen();
             // Reset keyboard protocol flags when exiting alternate screen
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
             if self.keyboard_state.keyboard_flags != 0 {
@@ -1916,12 +1950,12 @@ impl Terminal {
     /// Check if bold brightening is enabled
     /// When enabled, bold text with ANSI colors 0-7 brightens to 8-15
     pub fn bold_brightening(&self) -> bool {
-        self.modes.bold_brightening
+        self.host.bold_brightening
     }
 
     /// Set bold brightening mode
     pub fn set_bold_brightening(&mut self, enabled: bool) {
-        self.modes.bold_brightening = enabled;
+        self.host.bold_brightening = enabled;
     }
 
     /// Get auto-wrap mode state
@@ -3152,15 +3186,23 @@ impl Terminal {
     /// xterm semantics: RIS clears the *terminal* — grids, scrollback,
     /// cursor, SGR, modes, margins, charsets, keyboard protocol,
     /// hyperlinks, graphics, title, selection — but not the embedder's
-    /// configuration. Security policy ([`set_accept_osc7`],
-    /// [`set_disable_insecure_sequences`], [`set_max_osc_data_length`]),
-    /// file-media and clipboard policy, graphics/clipboard limits, the
-    /// answerback string, theme colors, unicode config, observers, event
-    /// subscriptions, triggers, macros, notification config, the badge
-    /// format, active recordings, tmux control flags, pixel dimensions,
-    /// and profiling all survive (ARC-058). DECSTR (CSI ! p) is the softer
-    /// [`Terminal::soft_reset`], which resets modes without touching the
-    /// screen.
+    /// configuration.
+    ///
+    /// [`HostConfig`] is carried whole with one swap (ARC-100): the OSC
+    /// 1337 transfer cap, bold brightening, window position/iconified
+    /// state, and the mouse/inline-image/command/cwd history caps. The
+    /// conformance level and bell volumes, which programs can also set
+    /// (DECSCL/DECSWBV/DECSMBV), restore to the host-configured baseline,
+    /// not the live value. The fields below the swap are still carried one
+    /// by one (moving them into `HostConfig` is ARC-102): security policy
+    /// ([`set_accept_osc7`], [`set_disable_insecure_sequences`],
+    /// [`set_max_osc_data_length`]), file-media and clipboard policy,
+    /// graphics/clipboard limits, the answerback string, theme colors,
+    /// unicode config, observers, event subscriptions, triggers, macros,
+    /// notification config, the badge format, active recordings, tmux
+    /// control flags, pixel dimensions, and profiling (ARC-058). DECSTR
+    /// (CSI ! p) is the softer [`Terminal::soft_reset`], which resets
+    /// modes without touching the screen.
     pub fn reset(&mut self) {
         let (cols, rows) = self.size();
         let scrollback = self.grid.max_scrollback();
@@ -3169,6 +3211,9 @@ impl Terminal {
         let tab_stops = self.tab_stops.clone();
 
         let mut fresh = Self::with_scrollback(cols, rows, scrollback);
+
+        std::mem::swap(&mut fresh.host, &mut self.host);
+        fresh.apply_host_config();
 
         // Security policy survives; the in-flight OSC-guard fields reset
         // with the parser state they track.
@@ -3258,10 +3303,24 @@ impl Terminal {
         *self = fresh;
         self.tab_stops = tab_stops;
 
-        // The whole screen changed under whoever is watching it.
         self.grid.raise_generation(max_gen);
-        self.alt_grid.raise_generation(max_gen);
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        self.invalidate_visible_screen();
+    }
+
+    /// Push a freshly swapped-in [`HostConfig`] into the state that
+    /// enforces or mirrors it (ARC-100).
+    ///
+    /// Two things only: a cap enforced by a public sub-type that keeps its
+    /// own copy (`FileTransferManager`; any future cap of that kind goes
+    /// here too), and the live values of the program-settable settings,
+    /// which restart from the host-configured baseline.
+    fn apply_host_config(&mut self) {
+        self.graphics
+            .file_transfer_manager
+            .set_max_transfer_size(self.host.max_transfer_size);
+        self.conformance_level = self.host.configured_conformance_level;
+        self.warning_bell_volume = self.host.configured_warning_bell_volume;
+        self.margin_bell_volume = self.host.configured_margin_bell_volume;
     }
 
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.
@@ -3333,14 +3392,9 @@ impl Terminal {
     /// Move pending trigger rows with their content after a region scroll.
     ///
     /// Rows outside the scrolled region are untouched. A row whose content
-    /// left the region is dropped — that text is no longer on screen.
-    pub(crate) fn shift_pending_trigger_rows(
-        &mut self,
-        down: bool,
-        n: usize,
-        top: usize,
-        bottom: usize,
-    ) {
+    /// left the region was already scanned by
+    /// `scan_departing_trigger_rows`; any still listed is dropped here.
+    fn shift_pending_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
         if self.triggers.pending_trigger_rows.is_empty() {
             return;
         }
@@ -3359,6 +3413,84 @@ impl Terminal {
             .collect();
     }
 
+    /// Scan the pending rows a region scroll is about to push off the
+    /// screen, before the grid moves them (ARC-091).
+    ///
+    /// `down`/`n`/`top`/`bottom` mean what they mean to
+    /// `shift_pending_trigger_rows`: content moving up leaves at `top`,
+    /// content moving down leaves at `bottom`. Only rows already pending
+    /// are scanned (the ARC-064 written-text rule), and each is removed
+    /// from the set first, so it is scanned exactly once. A departing
+    /// row's match reports the row it occupied before the scroll.
+    fn scan_departing_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
+        if self.triggers.pending_trigger_rows.is_empty()
+            || !self.triggers.trigger_registry.has_active_triggers()
+        {
+            return;
+        }
+        let bottom = bottom.min(self.active_grid().rows().saturating_sub(1));
+        if n == 0 || top > bottom {
+            return;
+        }
+        let n = n.min(bottom - top + 1);
+        let (first, last) = if down {
+            (bottom + 1 - n, bottom)
+        } else {
+            (top, top + n - 1)
+        };
+        let mut departing: Vec<usize> = self
+            .triggers
+            .pending_trigger_rows
+            .iter()
+            .copied()
+            .filter(|r| (first..=last).contains(r))
+            .collect();
+        if departing.is_empty() {
+            return;
+        }
+        departing.sort_unstable();
+        for r in &departing {
+            self.triggers.pending_trigger_rows.remove(r);
+        }
+        crate::terminal::TriggerEngine::scan_rows(self, departing);
+    }
+
+    /// Scroll `[top, bottom]` of the active grid up by `n`, keeping
+    /// graphics and pending trigger rows with their content. Every
+    /// Terminal-level region scroll goes through here so none can skip
+    /// the trigger bookkeeping (ARC-091).
+    pub(crate) fn scroll_region_up_tracked(&mut self, n: usize, top: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(false, n, top, bottom);
+        self.active_grid_mut().scroll_region_up(n, top, bottom);
+        self.adjust_graphics_for_scroll_up(n, top, bottom);
+        self.shift_pending_trigger_rows(false, n, top, bottom);
+    }
+
+    /// Scroll `[top, bottom]` of the active grid down by `n`; the mirror of
+    /// [`Terminal::scroll_region_up_tracked`].
+    pub(crate) fn scroll_region_down_tracked(&mut self, n: usize, top: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(true, n, top, bottom);
+        self.active_grid_mut().scroll_region_down(n, top, bottom);
+        self.adjust_graphics_for_scroll_down(n, top, bottom);
+        self.shift_pending_trigger_rows(true, n, top, bottom);
+    }
+
+    /// IL: insert `n` blank lines at `row`, pushing `[row, bottom]` down.
+    /// Rows pushed past `bottom` are scanned first (ARC-091).
+    pub(crate) fn insert_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(true, n, row, bottom);
+        self.active_grid_mut().insert_lines(n, row, bottom);
+        self.shift_pending_trigger_rows(true, n, row, bottom);
+    }
+
+    /// DL: delete `n` lines at `row`, pulling `[row, bottom]` up. The
+    /// deleted rows are scanned first (ARC-091).
+    pub(crate) fn delete_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
+        self.scan_departing_trigger_rows(false, n, row, bottom);
+        self.active_grid_mut().delete_lines(n, row, bottom);
+        self.shift_pending_trigger_rows(false, n, row, bottom);
+    }
+
     /// Scan pending rows before content moves somewhere row indices cannot
     /// follow (alt-screen grid swap, reflowing resize).
     pub(crate) fn flush_pending_trigger_rows(&mut self) {
@@ -3374,13 +3506,29 @@ impl Terminal {
     }
 
     /// Carry the maximum damage generation across both grids. Generations
-    /// are per grid, but consumers remember one number; syncing at every
-    /// wholesale invalidation (screen switch, resize, reset) keeps both
-    /// grids' stamps comparable (ENH-025).
+    /// are per grid, but consumers remember one number; syncing before any
+    /// wholesale mark keeps both grids' stamps comparable (ENH-025).
+    ///
+    /// Callers: `invalidate_visible_screen` and `resize` only. `resize` syncs
+    /// before the regrid because `Grid::resize` marks every row itself.
     fn sync_damage_generations(&mut self) {
         let gen = self.grid.generation().max(self.alt_grid.generation());
         self.grid.raise_generation(gen);
         self.alt_grid.raise_generation(gen);
+    }
+
+    /// The only way to report a wholesale change of what the renderer
+    /// sees; call it after the active grid or its content was replaced
+    /// (screen switch, RIS, snapshot restore) (ARC-092).
+    ///
+    /// Generations are per grid but consumers remember one number
+    /// (`damage_generation()`, the max of both), so the newly visible grid
+    /// must stamp above everything either grid has handed out before its
+    /// rows are marked.
+    fn invalidate_visible_screen(&mut self) {
+        self.sync_damage_generations();
+        let rows = self.active_grid().rows();
+        self.mark_rows_dirty(0, rows.saturating_sub(1));
     }
 
     /// Mark the entire screen as clean

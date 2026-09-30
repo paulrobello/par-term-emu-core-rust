@@ -78,7 +78,7 @@ fn apply_terminal_theme(term: &Terminal, config: &mut ScreenshotConfig) {
         config.bold_color = Some(term.theme.bold_color.to_rgb());
     }
     config.use_bold_color = term.theme.use_bold_color;
-    config.bold_brightening = term.modes.bold_brightening;
+    config.bold_brightening = term.host.bold_brightening;
     config.faint_text_alpha = term.theme.faint_text_alpha;
 
     // Use terminal's default background if not specified

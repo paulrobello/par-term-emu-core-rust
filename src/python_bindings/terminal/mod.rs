@@ -189,7 +189,12 @@ impl PyTerminal {
     /// clipboard limits, answerback string, theme colors, unicode config,
     /// observers, event subscriptions, triggers, macros, notification
     /// config, badge format, active recordings, tmux control flags, pixel
-    /// dimensions, and profiling (ARC-058).
+    /// dimensions, and profiling (ARC-058), plus the file-transfer cap,
+    /// bold brightening, window position/iconified state and the mouse,
+    /// inline-image, command and cwd history caps (ARC-100). The
+    /// conformance level and bell volumes return to the values last set
+    /// through their setters, undoing any DECSCL/DECSWBV/DECSMBV a program
+    /// sent.
     fn reset(&mut self) -> PyResult<()> {
         self.inner.reset();
         Ok(())
@@ -239,26 +244,34 @@ impl PyTerminal {
         Ok(self.inner.conformance_level().to_string())
     }
 
-    /// Set terminal conformance level
+    /// Set the configured terminal conformance level
+    ///
+    /// Sets the configured level. A program's DECSCL changes the live level
+    /// until the next RIS (``ESC c``), which restores this value.
     ///
     /// Args:
     ///     level: Conformance level (1 or 61=VT100, 2 or 62=VT220, 3 or 63=VT320, 4 or 64=VT420, 5 or 65=VT520)
-    ///     c1_mode: 8-bit control mode (0=7-bit, 1 or 2=8-bit, default: 2)
+    ///     c1_mode: Accepted for compatibility and ignored; the terminal
+    ///         does not track 7-bit/8-bit C1 mode (default: 2)
     ///
-    /// Sends: CSI level ; c1_mode " p
+    /// Raises:
+    ///     ValueError: If ``level`` is not 1-5 or 61-65
+    ///
+    /// Example:
+    ///     >>> term.set_conformance_level(2)
+    ///     >>> term.conformance_level()
+    ///     2
     #[pyo3(signature = (level, c1_mode=2))]
     fn set_conformance_level(&mut self, level: u16, c1_mode: u8) -> PyResult<()> {
-        // Validate level parameter
-        let valid_levels = [1, 2, 3, 4, 5, 61, 62, 63, 64, 65];
-        if !valid_levels.contains(&level) {
-            return Err(PyValueError::new_err(format!(
-                "Invalid conformance level: {}. Valid values: 1-5 or 61-65",
-                level
-            )));
-        }
-
-        let sequence = format!("\x1b[{};{}\"p", level, c1_mode);
-        self.inner.process(sequence.as_bytes());
+        let _ = c1_mode;
+        let parsed = crate::conformance_level::ConformanceLevel::from_decscl_param(level)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "Invalid conformance level: {}. Valid values: 1-5 or 61-65",
+                    level
+                ))
+            })?;
+        self.inner.set_conformance_level(parsed);
         Ok(())
     }
 
@@ -270,12 +283,21 @@ impl PyTerminal {
         Ok(self.inner.warning_bell_volume())
     }
 
-    /// Set warning bell volume (VT520)
+    /// Set the configured warning bell volume (VT520)
+    ///
+    /// Sets the configured volume. A program's DECSWBV changes the live
+    /// volume until the next RIS (``ESC c``), which restores this value.
     ///
     /// Args:
     ///     volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
     ///
-    /// Sends: CSI volume SP t
+    /// Raises:
+    ///     ValueError: If ``volume`` is greater than 8
+    ///
+    /// Example:
+    ///     >>> term.set_warning_bell_volume(2)
+    ///     >>> term.warning_bell_volume()
+    ///     2
     fn set_warning_bell_volume(&mut self, volume: u8) -> PyResult<()> {
         if volume > 8 {
             return Err(PyValueError::new_err(format!(
@@ -284,8 +306,7 @@ impl PyTerminal {
             )));
         }
 
-        let sequence = format!("\x1b[{} t", volume);
-        self.inner.process(sequence.as_bytes());
+        self.inner.set_warning_bell_volume(volume);
         Ok(())
     }
 
@@ -297,12 +318,21 @@ impl PyTerminal {
         Ok(self.inner.margin_bell_volume())
     }
 
-    /// Set margin bell volume (VT520)
+    /// Set the configured margin bell volume (VT520)
+    ///
+    /// Sets the configured volume. A program's DECSMBV changes the live
+    /// volume until the next RIS (``ESC c``), which restores this value.
     ///
     /// Args:
     ///     volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
     ///
-    /// Sends: CSI volume SP u
+    /// Raises:
+    ///     ValueError: If ``volume`` is greater than 8
+    ///
+    /// Example:
+    ///     >>> term.set_margin_bell_volume(2)
+    ///     >>> term.margin_bell_volume()
+    ///     2
     fn set_margin_bell_volume(&mut self, volume: u8) -> PyResult<()> {
         if volume > 8 {
             return Err(PyValueError::new_err(format!(
@@ -311,8 +341,7 @@ impl PyTerminal {
             )));
         }
 
-        let sequence = format!("\x1b[{} u", volume);
-        self.inner.process(sequence.as_bytes());
+        self.inner.set_margin_bell_volume(volume);
         Ok(())
     }
 

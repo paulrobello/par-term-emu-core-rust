@@ -99,9 +99,7 @@ impl Terminal {
     /// Record a command execution in history
     pub fn record_command(&mut self, execution: CommandExecution) {
         self.command_history_state.command_history.push(execution);
-        if self.command_history_state.command_history.len()
-            > self.command_history_state.max_command_history
-        {
+        if self.command_history_state.command_history.len() > self.host.max_command_history {
             self.command_history_state.command_history.remove(0);
         }
     }
@@ -244,8 +242,7 @@ impl Terminal {
         }
 
         self.command_history_state.cwd_changes.push(change);
-        if self.command_history_state.cwd_changes.len() > self.command_history_state.max_cwd_history
-        {
+        if self.command_history_state.cwd_changes.len() > self.host.max_cwd_history {
             self.command_history_state.cwd_changes.remove(0);
         }
     }
@@ -262,7 +259,7 @@ impl Terminal {
 
     /// Set the maximum number of command history entries to retain
     pub fn set_max_command_history(&mut self, max: usize) {
-        self.command_history_state.max_command_history = max;
+        self.host.max_command_history = max;
         if self.command_history_state.command_history.len() > max {
             self.command_history_state
                 .command_history
@@ -272,7 +269,7 @@ impl Terminal {
 
     /// Set the maximum number of CWD change entries to retain
     pub fn set_max_cwd_history(&mut self, max: usize) {
-        self.command_history_state.max_cwd_history = max;
+        self.host.max_cwd_history = max;
         if self.command_history_state.cwd_changes.len() > max {
             self.command_history_state
                 .cwd_changes

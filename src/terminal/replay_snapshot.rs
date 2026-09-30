@@ -216,7 +216,7 @@ impl Terminal {
             keyboard_flags: self.keyboard_state.keyboard_flags,
             modify_other_keys_mode: self.keyboard_state.modify_other_keys_mode,
             char_protected: self.modes.char_protected,
-            bold_brightening: self.modes.bold_brightening,
+            bold_brightening: self.host.bold_brightening,
             scroll_region_top: self.margins.scroll_region_top,
             scroll_region_bottom: self.margins.scroll_region_bottom,
             tab_stops: self.tab_stops.clone(),
@@ -264,18 +264,16 @@ impl Terminal {
         self.keyboard_state.keyboard_flags = snap.keyboard_flags;
         self.keyboard_state.modify_other_keys_mode = snap.modify_other_keys_mode;
         self.modes.char_protected = snap.char_protected;
-        self.modes.bold_brightening = snap.bold_brightening;
+        self.host.bold_brightening = snap.bold_brightening;
         self.margins.scroll_region_top = snap.scroll_region_top;
         self.margins.scroll_region_bottom = snap.scroll_region_bottom;
         self.tab_stops = snap.tab_stops;
         self.pending_wrap = snap.pending_wrap;
 
         // The whole screen just changed under any damage-driven renderer
-        // (QA-150). Grid::restore_from_snapshot resized and marked its own
-        // bitset; this re-asserts the contract on the grid the renderer now
-        // sees, in case the snapshot's alt-screen flag moved it.
-        let rows = self.active_grid().rows();
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        // (QA-150), and the snapshot's alt-screen flag may have made the
+        // lower-generation grid visible (ARC-092).
+        self.invalidate_visible_screen();
     }
 
     /// Restore a snapshot under a process that did not produce it (a pane
@@ -306,8 +304,7 @@ impl Terminal {
         // Same damage contract as the plain restore (QA-150), re-asserted
         // after the screen switch: the primary screen is what a renderer
         // now sees.
-        let rows = self.active_grid().rows();
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        self.invalidate_visible_screen();
     }
 }
 

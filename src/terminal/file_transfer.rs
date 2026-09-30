@@ -85,7 +85,7 @@ pub struct FileTransferManager {
 
 /// Default maximum transfer size: 50 MB
 /// cap: Bytes accepted for one file-transfer payload.
-const DEFAULT_MAX_TRANSFER_SIZE: usize = 50 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_TRANSFER_SIZE: usize = 50 * 1024 * 1024;
 
 /// Default maximum number of completed transfers to retain
 /// cap: Completed transfers retained from client file-transfer requests.
@@ -360,7 +360,10 @@ impl Terminal {
     }
 
     /// Set the maximum allowed transfer size in bytes
+    ///
+    /// Host configuration: survives RIS (`ESC c`) (ARC-100).
     pub fn set_max_transfer_size(&mut self, size: usize) {
+        self.host.max_transfer_size = size;
         self.graphics
             .file_transfer_manager
             .set_max_transfer_size(size);

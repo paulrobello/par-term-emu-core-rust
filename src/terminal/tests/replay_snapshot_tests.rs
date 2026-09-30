@@ -225,3 +225,45 @@ fn test_snapshot_title() {
     term.restore_from_snapshot(snap.clone());
     assert_eq!(term.title_state.title, "My Title");
 }
+
+// ARC-092: a restore onto a live terminal reports every visible row dirty
+// against a generation captured before it, whichever grid the snapshot
+// leaves visible.
+
+fn alt_screen_snapshot() -> crate::terminal::replay_snapshot::TerminalSnapshot {
+    let mut source = Terminal::new(80, 24);
+    source.process(b"\x1b[?1049hALT");
+    assert!(source.is_alt_screen_active());
+    source.capture_snapshot()
+}
+
+fn live_terminal_with_high_generation() -> (Terminal, u64) {
+    let mut live = Terminal::new(80, 24);
+    for i in 0..300 {
+        live.process(format!("line {i}\r\n").as_bytes());
+    }
+    let gen = live.damage_generation();
+    (live, gen)
+}
+
+#[test]
+fn restore_onto_live_terminal_reports_every_row_dirty() {
+    let snap = alt_screen_snapshot();
+    let (mut live, gen) = live_terminal_with_high_generation();
+
+    live.restore_from_snapshot(snap);
+
+    assert!(live.is_alt_screen_active());
+    assert_eq!(live.dirty_rows_since(gen).count(), 24);
+}
+
+#[test]
+fn restore_for_new_process_reports_every_row_dirty() {
+    let snap = alt_screen_snapshot();
+    let (mut live, gen) = live_terminal_with_high_generation();
+
+    live.restore_for_new_process(snap);
+
+    assert!(!live.is_alt_screen_active());
+    assert_eq!(live.dirty_rows_since(gen).count(), 24);
+}

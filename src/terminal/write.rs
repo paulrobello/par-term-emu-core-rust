@@ -96,12 +96,7 @@ impl Terminal {
                     let top = self.margins.scroll_region_top;
                     let bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("newline-at-scroll-bottom", top, bottom, 1);
-                    self.active_grid_mut().scroll_region_up(1, top, bottom);
-                    // Adjust graphics to scroll with content
-                    self.adjust_graphics_for_scroll_up(1, top, bottom);
-                    // Mark all rows in scroll region as dirty
-                    // Pending trigger rows follow their scrolled content
-                    self.shift_pending_trigger_rows(false, 1, top, bottom);
+                    self.scroll_region_up_tracked(1, top, bottom);
                     // Cursor stays at scroll_region_bottom per VT spec
                 } else {
                     // Not at scroll region bottom, or outside region - just move cursor down
@@ -183,11 +178,7 @@ impl Terminal {
                 let scroll_top = self.margins.scroll_region_top;
                 let scroll_bottom = self.margins.scroll_region_bottom;
                 debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
-                self.active_grid_mut()
-                    .scroll_region_up(1, scroll_top, scroll_bottom);
-                // Adjust graphics to scroll with content
-                self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
+                self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;
@@ -218,10 +209,7 @@ impl Terminal {
             if self.cursor.row == self.margins.scroll_region_bottom && !outside_lr_margin {
                 let scroll_top = self.margins.scroll_region_top;
                 let scroll_bottom = self.margins.scroll_region_bottom;
-                self.active_grid_mut()
-                    .scroll_region_up(1, scroll_top, scroll_bottom);
-                // Adjust graphics to scroll with content
-                self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 // Cursor stays at scroll_region_bottom
             } else {
                 self.cursor.row += 1;
@@ -596,11 +584,7 @@ impl Terminal {
                 let scroll_top = self.margins.scroll_region_top;
                 let scroll_bottom = self.margins.scroll_region_bottom;
                 debug::log_scroll("wrap-pending-regional", scroll_top, scroll_bottom, 1);
-                self.active_grid_mut()
-                    .scroll_region_up(1, scroll_top, scroll_bottom);
-                // Adjust graphics to scroll with content
-                self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
+                self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;
