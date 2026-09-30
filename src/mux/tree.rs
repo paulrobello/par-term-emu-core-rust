@@ -1486,7 +1486,13 @@ impl MuxTree {
     fn apply_cell_pixels(&mut self, pane_id: PaneId, cols: u16, rows: u16) {
         if let Some((cell_w, cell_h)) = self.client_cell_pixels {
             if let Some(pane) = self.panes.get_mut(&pane_id) {
-                let _ = pane.resize_with_cell_pixels(cols, rows, cell_w, cell_h);
+                if let Err(err) = pane.resize_with_cell_pixels(cols, rows, cell_w, cell_h) {
+                    if !pane.dead() {
+                        log::warn!(
+                            "par-mux: resize of pane {pane_id} to {cols}x{rows} failed: {err}"
+                        );
+                    }
+                }
             }
         }
         let (fg, bg) = (self.client_fg, self.client_bg);
@@ -1593,7 +1599,16 @@ impl MuxTree {
                     }
                     None => pane.resize(width as u16, height as u16),
                 };
-                let _ = resized;
+                // Best-effort (see above), but visible. A held-dead pane's
+                // PTY resize outcome is irrelevant, so it stays quiet.
+                if let Err(err) = resized {
+                    if !pane.dead() {
+                        log::warn!(
+                            "par-mux: resize of pane {} to {width}x{height} failed: {err}",
+                            pane_geometry.pane
+                        );
+                    }
+                }
             }
         }
     }
