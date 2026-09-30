@@ -1387,11 +1387,11 @@ Client input can be dropped before it reaches the PTY. Every input drop incremen
 | Input or Paste payload over its size cap (`MAX_INPUT_PAYLOAD_BYTES`, `MAX_PASTE_PAYLOAD_BYTES`) | That message is dropped |
 | Client over its `--input-rate-limit` budget | That message is dropped |
 | Session input queue full (`INPUT_QUEUE_MESSAGES` chunks, in `src/streaming/session.rs`) or over its byte budget (`MAX_QUEUED_INPUT_BYTES`), because the child is not reading stdin | The chunk is dropped |
-| Session has no PTY writer | See below |
+| Session has no PTY writer | That message is dropped; the connection stays open (see below) |
 
 Cap values are in the [SECURITY.md Resource Limits Reference](SECURITY.md#resource-limits-reference).
 
-A session with no PTY writer (macro playback, or a session whose PTY was detached) drops Input, Paste, Mouse and FocusChange from a non-read-only client, counts it, and closes that WebSocket. Read-only viewers stay connected. The bundled frontend reconnects, so a viewer that sends input to a writer-less session reconnects repeatedly. Connect such viewers with `?readonly=true`.
+A session with no PTY writer drops Input, Paste, Mouse and FocusChange from a non-read-only client. A session has no writer when none was attached (the Python `StreamingServer(pty_terminal, ...)` constructor attaches the PTY's writer; a Rust embedder calls `StreamingServer::set_pty_writer`), or when the session was closed, which detaches it. Each dropped message is logged server-side and counted in `dropped_messages`. The client receives no reply or notification, and its WebSocket stays open, so the bundled frontend does not reconnect. Non-input messages (Ping, RequestRefresh, and so on) still get their replies. Macro playback (`par-term-streamer --macro-file`) has no PTY writer and serves every viewer read-only, so its viewers' input is ignored before this check and is not counted.
 
 `dropped_messages` is not input-only: a server message broadcast while the session has no connected client also counts, so the counter grows on an idle session that keeps producing output. To diagnose input loss, compare the counter before and after typing while a client is connected.
 
@@ -1918,11 +1918,12 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - Ensure output callback is set correctly
 - Test with simple output: `server.send_output("test\r\n")`
 
-**Problem:** Keystrokes have no effect, or the WebSocket closes when you type
+**Problem:** Keystrokes have no effect
 
 **Solutions:**
 - Check `dropped_messages` for the session: `curl http://localhost:8099/sessions`
-- A writer-less session (macro playback) does not accept input and closes a writing client's connection; connect viewers with `?readonly=true`
+- Macro playback (`--macro-file`) serves every viewer read-only, so typing does nothing and the counter does not move; this is expected
+- A session with no PTY writer drops input and counts it, and the connection stays open; a Rust embedder must call `StreamingServer::set_pty_writer` before clients can type, and a closed session never regains its writer, so reconnect to a live session
 - A count that rises while you type with a client connected means the rate limit or the input queue is dropping input; raise `--input-rate-limit`, or check that the child process reads stdin. See [Input Drops](#input-drops)
 
 ### Rendering Issues

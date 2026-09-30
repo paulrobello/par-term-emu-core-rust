@@ -313,13 +313,13 @@ term.encode_key(1, 2, ord("f"), left_option=2)  # b'\x1bf'
 #### VT Conformance Level
 - `conformance_level() -> int`: Get current conformance level (1-5 for VT100-VT520)
 - `conformance_level_name() -> str`: Get conformance level name ("VT100", "VT220", etc.)
-- `set_conformance_level(level: int, c1_mode: int = 2)`: Set conformance level (1-5 or 61-65)
+- `set_conformance_level(level: int, c1_mode: int = 2)`: Set conformance level (1-5 or 61-65). Sets the configured baseline that RIS (`ESC c`) restores; a program's DECSCL changes the live level only until the next RIS. `c1_mode` is accepted but ignored
 
 #### Bell Volume Control (VT520)
 - `warning_bell_volume() -> int`: Get warning bell volume (0-8)
-- `set_warning_bell_volume(volume: int)`: Set warning bell volume (0=off, 1-8=volume levels)
+- `set_warning_bell_volume(volume: int)`: Set warning bell volume (0=off, 1-8=volume levels). Sets the configured baseline that RIS (`ESC c`) restores; a program's DECSWBV changes the live volume only until the next RIS
 - `margin_bell_volume() -> int`: Get margin bell volume (0-8)
-- `set_margin_bell_volume(volume: int)`: Set margin bell volume (0=off, 1-8=volume levels)
+- `set_margin_bell_volume(volume: int)`: Set margin bell volume (0=off, 1-8=volume levels). Sets the configured baseline that RIS (`ESC c`) restores; a program's DECSMBV changes the live volume only until the next RIS
 
 #### Scrolling and Margins
 - `scroll_region() -> tuple[int, int]`: Get vertical scroll region (top, bottom)
@@ -528,7 +528,7 @@ Register regex patterns to automatically match terminal output and execute actio
 
 #### Trigger Scanning & Matches
 
-- `process_trigger_scans()`: Scan dirty rows for trigger matches. Called automatically in PTY mode; call manually for non-PTY terminals.
+- `process_trigger_scans()`: Scan dirty rows for trigger matches. Called automatically in PTY mode; call manually for non-PTY terminals. It covers the rows still on screen: rows that scrolled off during `process()` were already scanned as they left, with their actions run and their matches queued for `poll_trigger_matches()`, even if this is never called.
 - `poll_trigger_matches() -> list[TriggerMatch]`: Get and clear pending trigger matches.
 - `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (Notify, MarkLine, RunCommand, PlaySound, SendText, SplitPane). Each dict always contains a `"type"` key; `"split_pane"` dicts include `trigger_id`, `direction` (`"horizontal"`/`"vertical"`), `focus_new_pane`, `target` (`"active"`/`"source"`), and optionally `source_pane_id`.
 
@@ -1879,7 +1879,7 @@ A trigger match result from scanning terminal output.
 
 **Properties:**
 - `trigger_id: int`: ID of the trigger that matched
-- `row: int`: Row where the match occurred
+- `row: int`: Visible row the matched text occupied when it was scanned. A row scanned as it scrolled off the screen reports the row it occupied just before leaving, and a `mark_line` bookmark or `highlight` for that match points at that pre-scroll row
 - `col: int`: Grid column start of the match (accounts for wide and combining characters)
 - `end_col: int`: Grid column end of the match (exclusive; accounts for wide and combining characters)
 - `text: str`: Matched text
