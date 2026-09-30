@@ -1355,8 +1355,13 @@ mod tests {
         while !seen.contains("ARC089-STILL-WIRED") {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match rx.recv_timeout(left) {
-                Ok(line) if line.starts_with(&wanted) => seen.push_str(&line),
-                Ok(_) => {}
+                // Payload only, so a marker split across two PTY reads
+                // still joins up.
+                Ok(line) => {
+                    if let Some(data) = line.strip_prefix(&wanted) {
+                        seen.push_str(data.trim_end_matches('\n'));
+                    }
+                }
                 Err(_) => panic!("the live pane's output stopped forwarding: {seen:?}"),
             }
         }
