@@ -304,15 +304,6 @@ impl ConnectionParams {
 // Guards
 // =============================================================================
 
-/// Result of dispatching one client message: the direct replies to send
-/// back, and whether the connection should be closed after they are sent
-/// (input against a session whose PTY writer is detached — the client is
-/// typing into a void and should reconnect).
-struct ClientMessageOutcome {
-    replies: Vec<ServerMessage>,
-    close: bool,
-}
-
 /// Guard that decrements session client count when dropped
 struct SessionClientGuard {
     session: Arc<StreamSessionState>,
@@ -1291,9 +1282,8 @@ impl StreamingServer {
     ///
     /// `subscriptions` and `rate_limiter` are the caller's per-connection
     /// state, mutated in place. Returns the direct replies to send back to
-    /// this client plus whether the connection should be closed afterwards;
-    /// messages that only write to the PTY or broadcast to the session
-    /// produce no direct reply.
+    /// this client; messages that only write to the PTY or broadcast to the
+    /// session produce no direct reply.
     #[allow(clippy::too_many_arguments)]
     fn handle_client_message(
         self: &Arc<Self>,
@@ -1306,12 +1296,12 @@ impl StreamingServer {
         >,
         rate_limiter: &mut Option<InputRateLimiter>,
         msg: crate::streaming::protocol::ClientMessage,
-    ) -> ClientMessageOutcome {
+    ) -> Vec<ServerMessage> {
         // Input on a session whose PTY writer is detached (never attached,
-        // or detached by shutdown) has nowhere to go. Drop loudly — logged,
-        // counted in dropped_messages — and close the connection so the
-        // client reconnects instead of typing into a void. Read-only
-        // viewers never carry input and stay connected.
+        // or detached by shutdown) has nowhere to go: it is dropped, logged
+        // and counted in dropped_messages, and the connection stays open.
+        // Closing it would not help: the session is still writer-less when
+        // the client reconnects, so a reconnecting client loops.
         if !read_only
             && !Self::session_has_writer(session)
             && matches!(
@@ -1333,10 +1323,7 @@ impl StreamingServer {
                 .metrics
                 .dropped_messages
                 .fetch_add(1, Ordering::Relaxed);
-            return ClientMessageOutcome {
-                replies: Vec::new(),
-                close: true,
-            };
+            return Vec::new();
         }
         let mut replies = Vec::new();
         match msg {
@@ -1432,10 +1419,7 @@ impl StreamingServer {
                 replies.push(msg);
             }
         }
-        ClientMessageOutcome {
-            replies,
-            close: false,
-        }
+        replies
     }
 
     /// True when a PTY writer is attached to the session. Input-bearing
@@ -1507,11 +1491,10 @@ impl StreamingServer {
                 .fetch_add(data.len(), Ordering::Relaxed);
             Self::enqueue_input(session, data.into_bytes());
         } else {
-            // The no-writer guard in `handle_client_message` closes the
-            // connection before dispatch; reaching here means the writer
-            // detached between that check and this one. Count it so the
-            // metric never reports a drop-free session the logs disagree
-            // with.
+            // The no-writer guard in `handle_client_message` drops input
+            // before dispatch; reaching here means the writer detached
+            // between that check and this one. Count it so the metric never
+            // reports a drop-free session the logs disagree with.
             crate::debug_error!(
                 "STREAMING",
                 "Input from {} {} dropped: session {} lost its PTY writer mid-dispatch",
@@ -1965,7 +1948,7 @@ impl StreamingServer {
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
-                            let outcome = self.handle_client_message(
+                            let replies = self.handle_client_message(
                                 &session,
                                 transport_label,
                                 client_id,
@@ -1974,7 +1957,7 @@ impl StreamingServer {
                                 &mut rate_limiter,
                                 client_msg,
                             );
-                            for reply in outcome.replies {
+                            for reply in replies {
                                 if let Err(e) = client.send(reply).await {
                                     crate::debug_error!(
                                         "STREAMING",
@@ -1984,16 +1967,6 @@ impl StreamingServer {
                                         e
                                     );
                                 }
-                            }
-                            if outcome.close {
-                                crate::debug_info!(
-                                    "STREAMING",
-                                    "{} {} input dropped: session {} has no PTY writer, closing",
-                                    transport_label,
-                                    client_id,
-                                    session.id
-                                );
-                                break;
                             }
                         }
                         None => {
@@ -2284,7 +2257,7 @@ impl StreamingServer {
                         Some(Ok(AxumMessage::Binary(data))) => {
                             match decode_client_message(&data) {
                                 Ok(client_msg) => {
-                                    let outcome = self.handle_client_message(
+                                    let replies = self.handle_client_message(
                                         &session,
                                         "Axum WebSocket",
                                         client_id,
@@ -2293,7 +2266,7 @@ impl StreamingServer {
                                         &mut rate_limiter,
                                         client_msg,
                                     );
-                                    for reply in outcome.replies {
+                                    for reply in replies {
                                         match encode_server_message(&reply) {
                                             Ok(bytes) => {
                                                 if ws_tx
@@ -2317,15 +2290,6 @@ impl StreamingServer {
                                                 );
                                             }
                                         }
-                                    }
-                                    if outcome.close {
-                                        crate::debug_info!(
-                                            "STREAMING",
-                                            "Axum Client {} input dropped: session {} has no PTY writer, closing",
-                                            client_id,
-                                            session.id
-                                        );
-                                        break;
                                     }
                                 }
                                 Err(e) => {
@@ -3413,12 +3377,13 @@ mod tests {
     }
 
     /// Input against a session whose PTY writer is detached (never
-    /// attached, or detached by [`StreamSessionState::shutdown`]) must be
-    /// dropped loudly — counted in `dropped_messages` — and close the
-    /// connection so the client reconnects instead of typing into a void.
-    /// Non-input messages and read-only viewers stay connected.
+    /// attached, or detached by [`StreamSessionState::shutdown`]) is dropped
+    /// and counted in `dropped_messages`, and the connection stays open: a
+    /// reconnect would find the same writer-less session. Non-input
+    /// messages still get their replies, and read-only viewers' input is
+    /// ignored before the writer check.
     #[tokio::test]
-    async fn input_without_pty_writer_is_counted_and_closes_the_connection() {
+    async fn input_without_pty_writer_is_counted_and_dropped() {
         use crate::streaming::protocol::ClientMessage;
 
         let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
@@ -3427,58 +3392,65 @@ mod tests {
         let session = server.get_session("default").expect("default session");
         assert!(!StreamingServer::session_has_writer(&session));
 
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
-            false,
-            &mut None,
-            &mut None,
+        let dispatch = |read_only: bool, msg: ClientMessage| {
+            server.handle_client_message(
+                &session,
+                "ws-test",
+                uuid::Uuid::new_v4(),
+                read_only,
+                &mut None,
+                &mut None,
+                msg,
+            )
+        };
+
+        let inputs = [
             ClientMessage::Input {
                 data: "q".to_string(),
             },
-        );
-        assert!(
-            outcome.close,
-            "writer-detached input must close the connection"
-        );
-        assert!(outcome.replies.is_empty());
-        assert_eq!(session.metrics.dropped_messages.load(Ordering::Relaxed), 1);
+            ClientMessage::Paste {
+                content: "pasted".to_string(),
+            },
+            ClientMessage::Mouse {
+                col: 1,
+                row: 1,
+                button: 0,
+                shift: false,
+                ctrl: false,
+                alt: false,
+                event_type: "press".to_string(),
+            },
+            ClientMessage::FocusChange { focused: true },
+        ];
+        for (i, msg) in inputs.into_iter().enumerate() {
+            assert!(dispatch(false, msg).is_empty(), "input produces no reply");
+            assert_eq!(
+                session.metrics.dropped_messages.load(Ordering::Relaxed),
+                i + 1
+            );
+        }
 
-        // Non-input messages on the same writer-less session stay open.
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
-            false,
-            &mut None,
-            &mut None,
-            ClientMessage::Ping,
-        );
-        assert!(!outcome.close);
+        // Non-input messages on the same writer-less session still reply.
+        let replies = dispatch(false, ClientMessage::Ping);
+        assert!(matches!(replies.as_slice(), [ServerMessage::Pong]));
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
-            1,
+            4,
             "ping is not input and must not count as a drop"
         );
 
-        // Read-only viewers are exempt: their input is dropped by the
-        // handler, not by the detached-writer guard.
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
+        // Read-only viewers are exempt: their input is ignored by the
+        // handler, not counted by the detached-writer guard.
+        let replies = dispatch(
             true,
-            &mut None,
-            &mut None,
             ClientMessage::Input {
                 data: "q".to_string(),
             },
         );
-        assert!(!outcome.close);
+        assert!(replies.is_empty());
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
-            1,
+            4,
             "read-only input is not a writer-detached drop"
         );
     }

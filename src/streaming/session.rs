@@ -638,8 +638,8 @@ impl StreamSessionState {
         let msg = ServerMessage::shutdown(reason);
         self.broadcast(msg);
         // Detach the PTY writer so input arriving after shutdown hits the
-        // server's writer-detached guard (logged, counted, connection
-        // closed) instead of queueing bytes for a process that is gone.
+        // server's writer-detached guard (dropped, logged, counted) instead
+        // of queueing bytes for a process that is gone.
         self.pty_writer.write().take();
         self.shutdown.notify_waiters();
     }
@@ -1220,8 +1220,8 @@ mod tests {
         session.shutdown("pane closed".to_string());
 
         // Input arriving after shutdown must hit the server's
-        // writer-detached guard (logged, counted, connection closed),
-        // not queue bytes for a process that is gone.
+        // writer-detached guard (dropped, logged, counted), not queue
+        // bytes for a process that is gone.
         assert!(session.pty_writer.read().is_none());
     }
 }

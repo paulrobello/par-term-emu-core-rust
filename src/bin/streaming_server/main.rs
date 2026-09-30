@@ -262,7 +262,8 @@ async fn main() -> Result<()> {
         max_clients: args.max_clients,
         send_initial_screen: true,
         keepalive_interval: args.keepalive,
-        default_read_only: false,
+        // Macro playback has no PTY writer: its viewers watch, they cannot type.
+        default_read_only: matches!(run_mode, RunMode::Macro { .. }),
         enable_http: args.enable_http,
         web_root: args.web_root.clone(),
         initial_cols: cols,
