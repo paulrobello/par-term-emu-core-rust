@@ -621,6 +621,34 @@ mod streaming_tests {
 
     mod binary_protocol_tests {
         use super::*;
+        use par_term_emu_core_rust::streaming::protocol::MouseEventType;
+
+        #[test]
+        fn test_encode_decode_mouse_event_types() {
+            for event_type in [
+                MouseEventType::Press,
+                MouseEventType::Release,
+                MouseEventType::Move,
+                MouseEventType::Scroll,
+            ] {
+                let msg = ClientMessage::mouse(5, 6, 1, false, true, false, event_type);
+                let encoded = encode_client_message(&msg).unwrap();
+                let decoded = decode_client_message(&encoded).unwrap();
+                match decoded {
+                    ClientMessage::Mouse {
+                        col,
+                        row,
+                        ctrl,
+                        event_type: got,
+                        ..
+                    } => {
+                        assert_eq!((col, row, ctrl), (5, 6, true));
+                        assert_eq!(got, event_type);
+                    }
+                    _ => panic!("Expected Mouse"),
+                }
+            }
+        }
 
         #[test]
         fn test_encode_decode_all_server_message_types() {
