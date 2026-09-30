@@ -227,6 +227,7 @@ pub trait SessionFactory: Send + Sync {
 // =============================================================================
 
 /// Parsed connection parameters from URL query string
+#[derive(Debug, Clone)]
 pub struct ConnectionParams {
     /// Session ID (defaults to "default")
     pub session_id: String,
@@ -650,6 +651,29 @@ impl StreamingServer {
         }
 
         Err(StreamingError::SessionNotFound(session_id.clone()))
+    }
+
+    /// [`Self::resolve_session`] for async callers.
+    ///
+    /// Creating a session runs the factory, which blocks on process spawns
+    /// or daemon round trips (`MuxSessionFactory`); that work runs on the
+    /// blocking pool so a slow or wedged backend cannot park runtime
+    /// workers. Resolving an existing session, or the default session of a
+    /// factory-less server, does no I/O and stays inline.
+    async fn resolve_session_off_runtime(
+        self: &Arc<Self>,
+        params: &ConnectionParams,
+    ) -> Result<Arc<StreamSessionState>> {
+        if self.session_factory.is_none() || self.sessions.get(&params.session_id).is_some() {
+            return self.resolve_session(params);
+        }
+        let this = Arc::clone(self);
+        let params = params.clone();
+        tokio::task::spawn_blocking(move || this.resolve_session(&params))
+            .await
+            .map_err(|e| {
+                StreamingError::ServerError(format!("session creation task failed: {e}"))
+            })?
     }
 
     /// Start the streaming server
@@ -1201,7 +1225,7 @@ impl StreamingServer {
         global_guard: GlobalClientGuard<'_>,
     ) -> Result<()> {
         let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params, global_guard)?;
+            self.prepare_ws_session(params, global_guard).await?;
         let client = Client::new(ws_stream, read_only);
         self.run_ws_session(client, session, read_only, "Client")
             .await
@@ -1215,7 +1239,7 @@ impl StreamingServer {
         global_guard: GlobalClientGuard<'_>,
     ) -> Result<()> {
         let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params, global_guard)?;
+            self.prepare_ws_session(params, global_guard).await?;
         let client = Client::new(ws_stream, read_only);
         self.run_ws_session(client, session, read_only, "TLS Client")
             .await
@@ -1226,11 +1250,11 @@ impl StreamingServer {
     /// The global client slot must already be reserved by the caller
     /// (`try_add_client` before the handshake, SEC-004) — the guard is
     /// passed in and held for the connection's lifetime. This resolves the
-    /// session, reserves the per-session slot (returning an RAII guard whose
-    /// `Drop` releases it), and computes the read-only flag. The caller
-    /// wraps the accepted stream in a `Client<S>` and hands it to
-    /// `run_ws_session`.
-    fn prepare_ws_session<'s>(
+    /// session (off the runtime when it must be created), reserves the
+    /// per-session slot (returning an RAII guard whose `Drop` releases it),
+    /// and computes the read-only flag. The caller wraps the accepted stream
+    /// in a `Client<S>` and hands it to `run_ws_session`.
+    async fn prepare_ws_session<'s>(
         self: &'s Arc<Self>,
         params: &ConnectionParams,
         global_guard: GlobalClientGuard<'s>,
@@ -1240,7 +1264,7 @@ impl StreamingServer {
         SessionClientGuard,
         bool,
     )> {
-        let session = self.resolve_session(params)?;
+        let session = self.resolve_session_off_runtime(params).await?;
         if !session.try_add_client(self.config.max_clients_per_session) {
             return Err(StreamingError::MaxClientsReached);
         }
@@ -2199,8 +2223,9 @@ impl StreamingServer {
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
-        let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(&params, GlobalClientGuard { server: self })?;
+        let (session, _global_guard, _session_guard, read_only) = self
+            .prepare_ws_session(&params, GlobalClientGuard { server: self })
+            .await?;
 
         let client_id = uuid::Uuid::new_v4();
 
@@ -3357,6 +3382,7 @@ mod tests {
         };
         let (_session, _g, _s, _ro) = server
             .prepare_ws_session(&params, GlobalClientGuard { server: &server })
+            .await
             .expect("fresh session resolves once a slot is free");
         assert_eq!(spawns.load(Ordering::Relaxed), 1);
     }

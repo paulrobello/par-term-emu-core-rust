@@ -7,12 +7,16 @@
 //! is never a second owner (par-mux.md D2/R7). Several streaming sessions may
 //! mirror the same pane; each has its own daemon connection.
 //!
-//! One connection per session, read in order by a drain thread. The seed
-//! (`refresh-client -t %N`) is read synchronously in `create_session`, and
-//! `%output` pushed before its reply block is discarded (the replay already
-//! reflects it); everything after is applied. Ordering is the reason this does
-//! not use [`crate::mux::MuxClient`], which splits replies and notifications
-//! into separate channels.
+//! One connection per session, read in order by one reader thread whose
+//! lines feed first the handshake in `create_session`, then the drain thread.
+//! The seed (`refresh-client -t %N`) is read in `create_session` against a
+//! reply deadline, and `%output` pushed before its reply block is discarded
+//! (the replay already reflects it); everything after is applied. Ordering is
+//! the reason this does not use [`crate::mux::MuxClient`], which splits
+//! replies and notifications into separate channels.
+//!
+//! `create_session` blocks on daemon I/O, so the streaming server calls it
+//! off the async runtime (`spawn_blocking`).
 //!
 //! Size policy (owner decision 2026-09-24): latest-resize-wins. The mirror is
 //! seeded at the pane's current size (`pane-info`), never the viewer's, and
@@ -32,11 +36,22 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Bytes of input per `send-keys -H` command. Hex triples the size on the
 /// wire, so a 256 KiB paste becomes many bounded lines instead of one.
 const INPUT_CHUNK: usize = 1024;
+
+/// How long `create_session` waits for each handshake reply block. Same
+/// value as [`crate::mux::MuxClient`]'s reply timeout.
+const MUX_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Daemon lines buffered between the reader thread and their consumer. When
+/// full, the reader stops reading and the socket pushes back on the daemon,
+/// as it did when the drain read the socket directly.
+const MUX_LINE_BACKLOG: usize = 256;
 
 /// Which daemon pane a streaming session mirrors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +68,7 @@ pub struct MuxSessionFactory {
     socket: PathBuf,
     selector: MuxPaneSelector,
     scrollback: usize,
+    reply_timeout: Duration,
     sessions: RwLock<HashMap<String, Arc<MirrorLink>>>,
     // Weak on purpose: the server holds this factory strongly
     // (`with_factory`), so a strong back-reference is a reference cycle
@@ -93,6 +109,7 @@ impl MuxSessionFactory {
             socket: socket.into(),
             selector,
             scrollback: 10_000,
+            reply_timeout: MUX_REPLY_TIMEOUT,
             sessions: RwLock::new(HashMap::new()),
             streaming_server: RwLock::new(None),
         }
@@ -101,6 +118,14 @@ impl MuxSessionFactory {
     /// Scrollback lines kept by each mirror terminal (default 10 000).
     pub fn with_scrollback(mut self, lines: usize) -> Self {
         self.scrollback = lines;
+        self
+    }
+
+    /// A shorter handshake reply deadline, so a timeout test runs in
+    /// milliseconds instead of [`MUX_REPLY_TIMEOUT`].
+    #[cfg(test)]
+    fn with_reply_timeout(mut self, timeout: Duration) -> Self {
+        self.reply_timeout = timeout;
         self
     }
 
@@ -114,7 +139,7 @@ impl MuxSessionFactory {
         &self,
         session_id: &str,
         writer: &mut LocalStream,
-        reader: &mut MuxLines,
+        reader: &MuxLines,
     ) -> io::Result<u32> {
         match self.selector {
             MuxPaneSelector::Pane(n) => Ok(n),
@@ -125,7 +150,7 @@ impl MuxSessionFactory {
                 {
                     return Ok(n);
                 }
-                let body = command(writer, reader, "list-panes")?;
+                let body = command(writer, reader, "list-panes", self.reply_timeout)?;
                 body.iter()
                     .find_map(|l| l.trim().strip_prefix('%').and_then(|n| n.parse().ok()))
                     .ok_or_else(|| io::Error::other("the daemon has no panes"))
@@ -134,23 +159,67 @@ impl MuxSessionFactory {
     }
 }
 
-/// The daemon connection's reader, line by line.
-type MuxLines = std::io::Lines<BufReader<LocalStream>>;
+/// The daemon connection's lines, read in order by one thread.
+///
+/// Named pipes reject I/O timeouts, so a reply deadline cannot be a socket
+/// read timeout; it is a `recv_timeout` on this channel instead. The same
+/// receiver moves to the drain thread after the handshake, so no line is
+/// lost at the hand-off. The reader thread exits at EOF, on a read error,
+/// or at its first send after the receiver drops.
+struct MuxLines {
+    rx: Receiver<io::Result<String>>,
+}
+
+impl MuxLines {
+    /// Start the reader thread over `stream` (the connection's read half).
+    fn spawn(stream: LocalStream) -> io::Result<Self> {
+        let (tx, rx): (SyncSender<io::Result<String>>, _) =
+            std::sync::mpsc::sync_channel(MUX_LINE_BACKLOG);
+        std::thread::Builder::new()
+            .name("mux-mirror-reader".to_string())
+            .spawn(move || {
+                for line in BufReader::new(stream).lines() {
+                    let failed = line.is_err();
+                    if tx.send(line).is_err() || failed {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { rx })
+    }
+}
 
 /// Send one command and read its reply block, skipping pushed lines read
-/// along the way. `%error` becomes an `Err`.
-fn command(writer: &mut LocalStream, reader: &mut MuxLines, line: &str) -> io::Result<Vec<String>> {
+/// along the way. `%error` becomes an `Err`, and so does a reply block that
+/// has not closed within `timeout` of the send: pushed `%output` interleaved
+/// with the reply cannot extend that deadline.
+fn command(
+    writer: &mut LocalStream,
+    reader: &MuxLines,
+    line: &str,
+    timeout: Duration,
+) -> io::Result<Vec<String>> {
     writeln!(writer, "{line}")?;
     writer.flush()?;
+    let deadline = Instant::now() + timeout;
     let mut body: Option<Vec<String>> = None;
     loop {
-        let Some(next) = reader.next() else {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "the daemon closed the connection",
-            ));
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let next = match reader.rx.recv_timeout(remaining) {
+            Ok(next) => next?,
+            Err(RecvTimeoutError::Timeout) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("no reply to {line:?} within {timeout:?}"),
+                ));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "the daemon closed the connection",
+                ));
+            }
         };
-        let next = next?;
         if next.starts_with("%begin") {
             body = Some(Vec::new());
         } else if body.is_some() && next.starts_with("%end") {
@@ -271,14 +340,20 @@ impl SessionFactory for MuxSessionFactory {
         let mut writer = stream
             .try_clone()
             .map_err(|e| fail("cannot clone stream", e))?;
-        let mut reader = BufReader::new(stream).lines();
+        let reader = MuxLines::spawn(stream).map_err(|e| fail("cannot start reader", e))?;
+        let timeout = self.reply_timeout;
 
         // Any %output these queries race is superseded by the seed below.
         let pane = self
-            .pane_for(session_id, &mut writer, &mut reader)
+            .pane_for(session_id, &mut writer, &reader)
             .map_err(|e| fail("cannot select a pane", e))?;
-        let info = command(&mut writer, &mut reader, &format!("pane-info -t %{pane}"))
-            .map_err(|e| fail("pane-info", e))?;
+        let info = command(
+            &mut writer,
+            &reader,
+            &format!("pane-info -t %{pane}"),
+            timeout,
+        )
+        .map_err(|e| fail("pane-info", e))?;
         let (window, cols, rows) = info
             .first()
             .and_then(|l| parse_pane_info(l))
@@ -287,8 +362,9 @@ impl SessionFactory for MuxSessionFactory {
         let mut terminal = Terminal::with_scrollback(cols, rows, self.scrollback);
         let seed = command(
             &mut writer,
-            &mut reader,
+            &reader,
             &format!("refresh-client -t %{pane}"),
+            timeout,
         )
         .map_err(|e| fail("refresh-client -t", e))?;
         terminal.process(seed.join("\n").as_bytes());
@@ -400,7 +476,7 @@ fn spawn_drain(
         let mut parser = TmuxControlParser::new(true);
         let mut in_reply = false;
         let mut reply_body = Vec::new();
-        for line in reader {
+        for line in reader.rx.iter() {
             let Ok(line) = line else { break };
             if link.closed.load(Ordering::Relaxed) {
                 break;
@@ -626,6 +702,17 @@ mod tests {
         (dir, socket, control, pane)
     }
 
+    /// The session machinery spawns tasks (`resolve_session` starts the
+    /// broadcaster, `setup_session` the resize forwarder), so tests enter a
+    /// multi-thread runtime. The test body stays on the plain test thread:
+    /// its blocking waits and writes never occupy a runtime worker.
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    }
+
     /// A streaming server whose sessions mirror panes of the daemon.
     fn streaming(socket: &std::path::Path) -> Arc<StreamingServer> {
         let factory = Arc::new(MuxSessionFactory::new(
@@ -700,8 +787,10 @@ mod tests {
         (cols, rows)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_mirror_is_seeded_from_the_pane_then_follows_its_output() {
+    #[test]
+    fn a_mirror_is_seeded_from_the_pane_then_follows_its_output() {
+        let rt = runtime();
+        let _entered = rt.enter();
         let (_dir, socket, mut control, pane) = daemon();
 
         // Output that exists BEFORE the viewer attaches arrives via the seed.
@@ -730,8 +819,10 @@ mod tests {
         wait_mirror(&session, "DELTA-AFTER");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_mirror_starts_at_the_pane_size_and_a_viewer_resize_refits_the_pane() {
+    #[test]
+    fn the_mirror_starts_at_the_pane_size_and_a_viewer_resize_refits_the_pane() {
+        let rt = runtime();
+        let _entered = rt.enter();
         let (_dir, socket, mut control, pane) = daemon();
         control
             .send(&format!("refresh-client -t {pane} -C 100x30"))
@@ -775,8 +866,10 @@ mod tests {
     /// mirror that only works if the pane's mouse mode reached it as a delta.
     /// Unix-only: the pane runs `cat -v` to make the received report visible.
     #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_mouse_report_encoded_by_the_mirror_reaches_the_pane() {
+    #[test]
+    fn a_mouse_report_encoded_by_the_mirror_reaches_the_pane() {
+        let rt = runtime();
+        let _entered = rt.enter();
         let (_dir, socket, mut control, pane) = daemon();
         let server = streaming(&socket);
         let session = mirror(&server, &pane);
@@ -814,8 +907,10 @@ mod tests {
         });
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn two_viewers_of_one_pane_both_stay_live() {
+    #[test]
+    fn two_viewers_of_one_pane_both_stay_live() {
+        let rt = runtime();
+        let _entered = rt.enter();
         let (_dir, socket, _control, pane) = daemon();
 
         // Two streaming servers stand for two independent mobile viewers:
@@ -847,8 +942,10 @@ mod tests {
     /// exited before the queued frames arrived. EOF now takes the queue.
     /// Run with DEBUG_LEVEL=3 for the MUX receipt log, PTY_WRITE ledger,
     /// and the enqueue/drain pickup logs.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
+    #[test]
+    fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
+        let rt = runtime();
+        let _entered = rt.enter();
         let (dir, socket, _control, pane) = daemon();
         let viewer_a = streaming(&socket);
         // A second viewer doubles the pane's %output fanout and the daemon
@@ -999,8 +1096,8 @@ mod tests {
         *a.pty_input_tx.write() = None;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_killed_pane_marks_its_mirror_dead() {
+    #[test]
+    fn a_killed_pane_marks_its_mirror_dead() {
         let (_dir, socket, mut control, pane) = daemon();
         let second = control
             .send(&format!("split-window -h -t {pane}"))
@@ -1026,6 +1123,45 @@ mod tests {
                 .is_session_alive(&session_id)
                 .then(|| "still alive".to_string())
         });
+    }
+
+    /// A daemon that accepts and never replies must fail `create_session`
+    /// by its reply deadline instead of blocking the caller forever.
+    #[test]
+    fn create_session_times_out_against_a_silent_daemon() {
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-silent-")
+            .tempdir()
+            .expect("temp dir");
+        let socket = dir.path().join("s");
+        let listener = crate::mux::ipc::bind_local_listener(&socket).expect("bind");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let silent = std::thread::spawn(move || {
+            let (stream, _abort) = crate::mux::ipc::accept_connection(&listener).expect("accept");
+            // Hold the connection open, unanswered, until the test is done.
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
+            drop(stream);
+        });
+
+        let timeout = Duration::from_millis(300);
+        let factory = MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId)
+            .with_reply_timeout(timeout);
+        let started = Instant::now();
+        // "main" is not `pane-N`, so the factory must ask with list-panes.
+        let result = factory.create_session("main", 80, 24, None);
+        let elapsed = started.elapsed();
+        let _ = release_tx.send(());
+        silent.join().expect("silent daemon thread");
+
+        let err = match result {
+            Ok(_) => panic!("a silent daemon cannot produce a session"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("no reply"), "unexpected error: {err}");
+        assert!(
+            elapsed >= timeout && elapsed < timeout + Duration::from_secs(5),
+            "create_session returned after {elapsed:?}, deadline {timeout:?}"
+        );
     }
 
     #[test]
