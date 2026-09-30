@@ -4,7 +4,7 @@
 
 The daemon is feature-gated (Rust `mux` feature), optional, and independent of the Python bindings and the streaming server. The wire format's conformance oracle is the `TmuxControlParser` in `src/tmux_control.rs` — the daemon emits what that parser decodes.
 
-> **Design decisions:** code comments cite D-numbered decisions (`D3.3`, `D5`, …) from the design document [`docs/par-mux.md`](par-mux.md), which points at the authoritative plan in the `par-agent-os` repository.
+> **Design decisions:** code comments cite D-numbered decisions (`D3.3`, `D5`, …) summarized one line each in [MUX_DECISIONS.md](MUX_DECISIONS.md); the full plan lives in the `par-agent-os` repository (see [par-mux.md](par-mux.md)).
 
 ## Table of Contents
 
@@ -371,7 +371,7 @@ A structurally killed pane is reaped at kill time instead: `PtySession::kill` fo
 - **`kill-server`**: the client-initiated equivalent of SIGTERM — raises the same shutdown flag, so it takes the identical path (reply out, accept loop exits, final save, `%exit` to clients). `par-mux --stop`/`--restart` (see [Command Line](#command-line)) send this and wait for the socket to stop accepting.
 - **Ignored signals** (Unix): SIGHUP, SIGINT, SIGQUIT, SIGTSTP, and SIGPIPE are installed as ignored while serving, so a terminal hangup or stray Ctrl-C/Ctrl-Z cannot stop a daemon whose panes outlive any one terminal (tmux's server does the same). The auto-spawned daemon additionally starts in its own session with no controlling tty (`setsid` in `spawn_daemon`), so terminal-generated signals never reach it in the first place.
 - **Accept faults**: EMFILE, ENFILE, and ECONNABORTED on accept back off for a second and keep serving (tmux's server pauses on ENFILE/EMFILE the same way), so a burst of connections cannot end the daemon. Any other listener fault is logged and takes the same final-save path as SIGTERM before exiting — an accept error never silently discards unsaved work. The fault raises the shutdown flag just as SIGTERM does, so the exit waits only for the in-flight save to drain (bounded by the persist worker's poll) — never on connected clients, whose handler threads each hold a persist-sender clone a silent client would never drop. Both the fault exit and the SIGTERM exit drain in-flight saves before the process ends.
-- **SIGKILL**: skips all of this and loses the last window's worth of unsaved content — an accepted trade (the design's D3.3), not a bug.
+- **SIGKILL**: skips all of this and loses the last window's worth of unsaved content — an accepted trade (the design's [D3.3](MUX_DECISIONS.md)), not a bug.
 - **Socket removal**: every exit path — SIGTERM, `kill-server`, exit-when-empty, accept fault — removes the socket file after the final save (the marker file on Windows), so `ls par-mux-*.sock` lists only live daemons. SIGKILL and a crash skip it, leaving a stale remnant the next bind reclaims.
 - Each `MuxServer` instance has its own shutdown flag; stopping one does not affect another server in the same process.
 

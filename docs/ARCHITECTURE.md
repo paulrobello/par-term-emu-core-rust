@@ -234,7 +234,7 @@ The main terminal emulator that ties everything together, organized into submodu
 **Multiplexer Daemon** (`src/mux/`, binary `src/bin/par_mux/`; Rust `mux` feature)
 - A tmux-control-mode multiplexer: owns PTY-backed panes in a session/window/pane tree and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
 - Key submodules: `server.rs` (accept loop, client threads), `dispatch.rs` (per-command handlers), `command.rs` (parsing + the persistence rule), `emit.rs` (wire lines), `tree.rs`/`layout.rs` (tree + split geometry), `pane.rs` (PTY panes + env contract), `ipc.rs` (Unix socket / Windows named pipe transport), `persist.rs` (save format, quarantine, restore), `hooks.rs`/`scrape.rs`/`agent_resume.rs` (agent layer), `client.rs` (`MuxClient`)
-- Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments live in [par-mux.md](par-mux.md) (the `par-agent-os` repository's design document)
+- Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments are summarized in [MUX_DECISIONS.md](MUX_DECISIONS.md) (full plan: [par-mux.md](par-mux.md))
 - `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching
 - Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
 - Capture group substitution (`$1`, `$2`, etc.) in action parameters
