@@ -1002,6 +1002,28 @@ adversary:
   a client that stops draining pins at most ~128 MiB before it is
   evicted and disconnected, and the disconnect frees the queue.
 
+### Debug Logging
+
+The daemon writes a debug log only when `DEBUG_LEVEL` is set. It records
+control commands at two levels:
+
+- **`DEBUG_LEVEL>=1`:** a summary of every rejected or unparseable control
+  line.
+- **`DEBUG_LEVEL>=3`:** a summary of every control command.
+
+`send-keys` and `set-buffer` carry typed input and clipboard content, so
+they are logged as the command name, a leading `-t` target, and the byte
+count, never their payload. This applies whether or not the line parses.
+Every other command is logged as its first 120 bytes plus its total size.
+**`set-environment` values and `new-session -e` values are still logged
+verbatim**, so an API token attached to a session this way appears in the
+log.
+
+The log is `<temp>/par_term_emu_core_rust_debug_rust_<pid>.log`, created
+with mode `0600` and `O_NOFOLLOW` (`src/debug.rs`). It still records
+command names, targets, and environment values, so review it before
+attaching it to a bug report.
+
 ### On-Disk State
 
 The state file (`<state_dir>/par-mux/<socket-stem>.state.json`) contains

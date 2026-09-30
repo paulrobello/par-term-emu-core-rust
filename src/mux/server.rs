@@ -761,10 +761,26 @@ fn reply_is_error(reply: &str) -> bool {
         .is_some_and(|l| l.starts_with("%error"))
 }
 
-/// A command line reduced for logging: send-keys hex payloads run ~1 KiB,
-/// so keep the head and the size, cutting on a char boundary.
+/// Commands whose arguments carry user data (typed input, clipboard):
+/// logged as name, target and size only (SEC-132).
+const PAYLOAD_COMMANDS: &[&str] = &["send-keys", "set-buffer"];
+
+/// A command line reduced for logging. A [`PAYLOAD_COMMANDS`] line keeps
+/// only its name, a leading `-t` target and its size, so it is safe to log
+/// whether or not it parses; any other line keeps its head and size, cut on
+/// a char boundary.
 fn summarize_line(line: &str) -> String {
     const HEAD: usize = 120;
+    let mut tokens = line.split_whitespace();
+    if let Some(name) = tokens.next().filter(|name| PAYLOAD_COMMANDS.contains(name)) {
+        // The target is read only from the leading flag, so a `-t` quoted
+        // inside a payload can never pull a payload token into the log.
+        let target = match (tokens.next(), tokens.next()) {
+            (Some("-t"), Some(value)) => format!(" -t {value}"),
+            _ => String::new(),
+        };
+        return format!("{name}{target} [payload redacted, {} bytes]", line.len());
+    }
     if line.len() <= HEAD {
         return line.to_string();
     }
@@ -1213,12 +1229,12 @@ mod tests {
     #[test]
     fn summarize_line_keeps_short_lines_and_cut_points_whole() {
         assert_eq!(
-            summarize_line("send-keys -t %1 -H 61"),
-            "send-keys -t %1 -H 61"
+            summarize_line("capture-pane -t %1 -S -"),
+            "capture-pane -t %1 -S -"
         );
-        let long = "send-keys -t %1 -H ".to_string() + &"61 ".repeat(200);
+        let long = "capture-pane -t %1 -S - ".to_string() + &"-e ".repeat(200);
         let summary = summarize_line(&long);
-        assert!(summary.starts_with("send-keys -t %1 -H 61 "));
+        assert!(summary.starts_with("capture-pane -t %1 -S - -e "));
         assert!(summary.contains(&format!("{} bytes total", long.len())));
         // The cut must not split a multi-byte char.
         let multibyte = "é".repeat(200);
@@ -1226,6 +1242,38 @@ mod tests {
         assert!(cut.contains(&format!("{} bytes total", multibyte.len())));
         assert!(cut.ends_with("bytes total)"));
         assert!(cut.is_char_boundary(cut.find("...").expect("ellipsis marker")));
+    }
+
+    /// SEC-132: typed input and clipboard content never reach the debug log.
+    #[test]
+    fn summarize_line_redacts_payload_commands() {
+        let literal = summarize_line("send-keys -t %1 -l hunter2");
+        assert!(!literal.contains("hunter2"), "payload leaked: {literal}");
+        assert!(
+            literal.contains("send-keys") && literal.contains("-t %1") && literal.contains("bytes"),
+            "name, target and size survive: {literal}"
+        );
+
+        let hex = summarize_line("send-keys -t %1 -H 68 75 6e");
+        assert!(!hex.contains("68 75"), "hex payload leaked: {hex}");
+
+        let buffer = summarize_line("set-buffer topsecret");
+        assert!(!buffer.contains("topsecret"), "buffer leaked: {buffer}");
+        assert!(buffer.contains("set-buffer"), "name survives: {buffer}");
+
+        // The target comes only from a leading -t: a -t inside the payload
+        // must not smuggle a payload token into the log.
+        let smuggled = summarize_line("send-keys -l 'x -t secret' -t %1");
+        assert!(!smuggled.contains("secret"), "payload leaked: {smuggled}");
+
+        // Unparseable shapes are redacted too (they are logged at level 1).
+        let no_target = summarize_line("  send-keys hunter2");
+        assert!(
+            !no_target.contains("hunter2"),
+            "payload leaked: {no_target}"
+        );
+
+        assert_eq!(summarize_line("list-panes"), "list-panes");
     }
 
     /// A reader that serves a fixed script of chunks and errors, one per
