@@ -166,6 +166,13 @@ pub struct PtySession {
     signals_sent: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Pixel extent of `cells` cells at `cell_px` pixels each, saturated to the
+/// `u16` a `winsize`/`PtySize` field can hold (QA-182: `cols * cell_w` in
+/// `u16` overflowed at 2000 columns of 40 px cells).
+pub(crate) fn pixel_extent(cells: u16, cell_px: u16) -> u16 {
+    u16::try_from(u32::from(cells) * u32::from(cell_px)).unwrap_or(u16::MAX)
+}
+
 /// Deliver SIGWINCH to the child's process group, falling back to the PID.
 ///
 /// The single delivery path for every resize trigger — the reader thread's
@@ -585,8 +592,8 @@ impl PtySession {
         let pty_size = PtySize {
             rows: self.rows,
             cols: self.cols,
-            pixel_width: self.cols * self.cell_pixel_width,
-            pixel_height: self.rows * self.cell_pixel_height,
+            pixel_width: pixel_extent(self.cols, self.cell_pixel_width),
+            pixel_height: pixel_extent(self.rows, self.cell_pixel_height),
         };
 
         debug::log(
@@ -1169,8 +1176,8 @@ impl PtySession {
             let pty_size = PtySize {
                 rows,
                 cols,
-                pixel_width: cols * self.cell_pixel_width,
-                pixel_height: rows * self.cell_pixel_height,
+                pixel_width: pixel_extent(cols, self.cell_pixel_width),
+                pixel_height: pixel_extent(rows, self.cell_pixel_height),
             };
             debug::log(
                 debug::DebugLevel::Debug,
@@ -1927,6 +1934,14 @@ mod tests {
         let session = PtySession::new(80, 24, 1000);
         assert_eq!(session.size(), (80, 24));
         assert!(!session.is_running());
+    }
+
+    /// QA-182: a pixel extent past `u16` saturates instead of overflowing.
+    #[test]
+    fn pixel_extent_saturates_instead_of_overflowing() {
+        assert_eq!(pixel_extent(80, 10), 800);
+        assert_eq!(pixel_extent(2000, 40), u16::MAX);
+        assert_eq!(pixel_extent(u16::MAX, u16::MAX), u16::MAX);
     }
 
     /// A session with no child (par-mux panes) advances its generation only

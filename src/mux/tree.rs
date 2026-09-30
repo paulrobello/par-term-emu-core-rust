@@ -3387,6 +3387,24 @@ mod tests {
         );
     }
 
+    /// QA-182: the audit probe, below the parser cap — 2000 columns of
+    /// 40 px cells overflowed `cols * cell_w` in u16 and panicked in
+    /// `resize_with_cell_pixels`. The extent now saturates.
+    #[test]
+    fn oversized_cell_pixels_refit_does_not_panic() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let pane = tree.window(window_id).unwrap().panes()[0];
+        tree.resize_window(window_id, 2000, 50).unwrap();
+        tree.set_client_cell_pixels(40, 40);
+        tree.resize_window(window_id, 2000, 50).unwrap();
+        assert_eq!(
+            tree.pane(pane).unwrap().terminal().read().size(),
+            (2000, 50)
+        );
+    }
+
     #[test]
     fn resize_window_rejects_an_unknown_window() {
         let mut tree = tree();

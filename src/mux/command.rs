@@ -371,6 +371,13 @@ pub fn parse_line(line: &str) -> Result<Line, String> {
     }
 }
 
+/// cap: Columns a par-mux client may report for a window grid (`refresh-client -C`).
+pub(crate) const MAX_CLIENT_COLS: u16 = 1000;
+/// cap: Rows a par-mux client may report for a window grid (`refresh-client -C`).
+pub(crate) const MAX_CLIENT_ROWS: u16 = 500;
+/// cap: Pixels per cell axis a par-mux client may report (`refresh-client -p`).
+pub(crate) const MAX_CELL_PIXELS: u16 = 512;
+
 /// One pre-split command line: the shared cursor every per-command parser
 /// reads flags, targets, and payloads through.
 ///
@@ -517,8 +524,10 @@ impl Args<'_> {
         parse_size_flag(&self.flag(flag_name), flag_name, self.name)
     }
 
-    /// A `WxH` size-pair flag (`-C 120x40`) — the renderer-report form.
-    fn size_pair(&self, flag_name: &str) -> Result<Option<(u16, u16)>, String> {
+    /// A `WxH` size-pair flag (`-C 120x40`) — the renderer-report form —
+    /// with each axis in `1..=max` (QA-182: an unbounded grid report can
+    /// abort the daemon on allocation).
+    fn size_pair(&self, flag_name: &str, max: (u16, u16)) -> Result<Option<(u16, u16)>, String> {
         let Some(raw) = self.flag(flag_name) else {
             return Ok(None);
         };
@@ -537,6 +546,12 @@ impl Args<'_> {
             return Err(format!(
                 "{}: {flag_name} size must be positive: {raw}",
                 self.name
+            ));
+        }
+        if width > max.0 || height > max.1 {
+            return Err(format!(
+                "{}: {flag_name} size exceeds {}x{}: {raw}",
+                self.name, max.0, max.1
             ));
         }
         Ok(Some(dims))
@@ -1086,8 +1101,8 @@ fn parse_kill_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::RefreshClient {
         pane: a.pane("-t")?,
-        size: a.size_pair("-C")?,
-        cell_pixels: a.size_pair("-p")?,
+        size: a.size_pair("-C", (MAX_CLIENT_COLS, MAX_CLIENT_ROWS))?,
+        cell_pixels: a.size_pair("-p", (MAX_CELL_PIXELS, MAX_CELL_PIXELS))?,
     })
 }
 
@@ -2667,6 +2682,30 @@ mod tests {
         assert!(parse_command("refresh-client -t %0 -C ax40").is_err());
         assert!(parse_command("refresh-client -t %0 -p 0x20").is_err());
         assert!(parse_command("refresh-client -t %0 -p 10").is_err());
+    }
+
+    /// QA-182: grid and cell-pixel reports are capped, so a client cannot
+    /// make the daemon allocate an unbounded grid.
+    #[test]
+    fn refresh_client_rejects_sizes_over_the_caps() {
+        for line in [
+            "refresh-client -t %0 -C 1001x40",
+            "refresh-client -t %0 -C 120x501",
+            "refresh-client -t %0 -C 65535x65535",
+            "refresh-client -t %0 -p 513x20",
+            "refresh-client -t %0 -p 10x513",
+        ] {
+            let err = parse_command(line).expect_err(line);
+            assert!(err.contains("exceeds"), "{line}: {err}");
+        }
+        assert_eq!(
+            parse_command("refresh-client -t %0 -C 1000x500 -p 512x512").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: Target::Id(PaneId(0)),
+                size: Some((MAX_CLIENT_COLS, MAX_CLIENT_ROWS)),
+                cell_pixels: Some((MAX_CELL_PIXELS, MAX_CELL_PIXELS)),
+            }
+        );
     }
 
     #[test]

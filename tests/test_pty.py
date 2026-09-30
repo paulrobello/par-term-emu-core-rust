@@ -174,6 +174,19 @@ def test_resize_invalid():
         term.resize(80, 0)
 
 
+def test_resize_rejects_dimensions_over_u16():
+    """QA-182: sizes past u16 raise ValueError instead of truncating."""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+
+    with pytest.raises(ValueError):
+        term.resize(70000, 24)
+
+    with pytest.raises(ValueError):
+        term.resize_pixels(80, 24, 70000, 480)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
 def test_wait_for_process():
     """Test waiting for a process to exit"""

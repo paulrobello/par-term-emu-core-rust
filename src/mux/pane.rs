@@ -482,7 +482,12 @@ impl MuxPane {
         cell_h: u16,
     ) -> Result<(), MuxError> {
         self.session
-            .resize_with_pixels(cols, rows, cols * cell_w, rows * cell_h)
+            .resize_with_pixels(
+                cols,
+                rows,
+                crate::pty_session::pixel_extent(cols, cell_w),
+                crate::pty_session::pixel_extent(rows, cell_h),
+            )
             .map_err(MuxError::from)
     }
 

@@ -23,6 +23,13 @@ use std::collections::HashMap;
 use crate::pty_session;
 use crate::terminal::MacroEngine;
 
+/// A Python size argument as the `u16` a PTY `winsize` field holds — an
+/// out-of-range value is a `ValueError`, not a silent truncation (QA-182).
+fn to_u16(name: &str, value: usize) -> PyResult<u16> {
+    u16::try_from(value)
+        .map_err(|_| PyValueError::new_err(format!("{name} {value} exceeds {}", u16::MAX)))
+}
+
 /// Python wrapper for PtySession - a terminal with PTY support
 #[pyclass(name = "PtyTerminal", unsendable)]
 pub struct PyPtyTerminal {
@@ -197,7 +204,8 @@ impl PyPtyTerminal {
         if cols == 0 || rows == 0 {
             return Err(PyValueError::new_err("Dimensions must be greater than 0"));
         }
-        self.inner.resize(cols as u16, rows as u16)?;
+        self.inner
+            .resize(to_u16("cols", cols)?, to_u16("rows", rows)?)?;
         Ok(())
     }
 
@@ -220,10 +228,10 @@ impl PyPtyTerminal {
             return Err(PyValueError::new_err("Dimensions must be greater than 0"));
         }
         self.inner.resize_with_pixels(
-            cols as u16,
-            rows as u16,
-            pixel_width as u16,
-            pixel_height as u16,
+            to_u16("cols", cols)?,
+            to_u16("rows", rows)?,
+            to_u16("pixel_width", pixel_width)?,
+            to_u16("pixel_height", pixel_height)?,
         )?;
         Ok(())
     }
