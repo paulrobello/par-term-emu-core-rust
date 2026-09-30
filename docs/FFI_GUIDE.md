@@ -72,13 +72,14 @@ The crate's everyday `crate-type` is `cdylib, rlib` (Python extension + Rust lib
 ```bash
 # Static library (.a) for the host target — what a C/C++ app links against
 cargo rustc --lib --crate-type staticlib --release \
-    --no-default-features --features rust-only
+    --no-default-features --features rust-only,ffi
 
 # Output: target/release/libpar_term_emu_core_rust.a
 ```
 
+- The `ffi` feature compiles the C surface (`src/ffi.rs`). It is off by default, so Python wheels and Rust embedders export no `terminal_*` symbols; a build without it links but has none of the functions below.
 - The `rust-only` feature drops the Python bindings (the default `python` feature links the host's libpython, which cannot link into a binary that embeds no interpreter).
-- A dynamic library is available through the default `cdylib` crate type (`make dev` / `cargo build --release`), but embedding is normally done against the static library so the linker can drop unused code.
+- A dynamic library is available through the `cdylib` crate type (`cargo build --release --no-default-features --features rust-only,ffi`), but embedding is normally done against the static library so the linker can drop unused code. The Python extension from `make dev` does not carry the C surface.
 
 ### iOS / Apple platforms
 

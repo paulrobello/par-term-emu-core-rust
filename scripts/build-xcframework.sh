@@ -6,6 +6,8 @@
 # The xcframework builds from the headless profile (rust-only): the default
 # `python` feature links the host's libpython, which cannot link into an iOS
 # binary (ld: "building for 'iOS', but linking in dylib built for 'macOS'").
+# The `ffi` feature compiles the C surface itself; without it the archive
+# exports no terminal_* symbols (ARC-112).
 #
 # Run via `make xcframework`. Requires Xcode (xcodebuild/xcrun/clang) and the
 # Rust targets aarch64-apple-ios + aarch64-apple-ios-sim
@@ -14,7 +16,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FEATURES="${XCFRAMEWORK_FEATURES:-rust-only}"
+FEATURES="${XCFRAMEWORK_FEATURES:-rust-only,ffi}"
 OUT_DIR="${XCFRAMEWORK_OUT_DIR:-target/xcframework}"
 DEVICE_TARGET=aarch64-apple-ios
 SIM_TARGET=aarch64-apple-ios-sim

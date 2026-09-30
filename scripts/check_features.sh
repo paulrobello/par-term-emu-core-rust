@@ -31,6 +31,8 @@ cargo check --no-default-features --features rust-only,mux
 cargo check --no-default-features --features rust-only,mux-bin
 cargo check --no-default-features --features rust-only,streaming
 cargo check --no-default-features --features streaming-bin
+# The C ABI surface the xcframework builds (ARC-112).
+cargo check --no-default-features --features rust-only,ffi
 # pyo3 needs an interpreter at build-script time; the lib alone is enough to
 # prove the bindings' feature surface still compiles.
 cargo check --no-default-features --features python-test --lib

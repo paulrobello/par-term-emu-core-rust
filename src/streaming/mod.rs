@@ -50,6 +50,7 @@ pub mod proto;
 pub mod client;
 
 #[cfg(feature = "streaming")]
+#[allow(deprecated)]
 pub mod broadcaster;
 
 #[cfg(feature = "streaming")]
@@ -79,6 +80,7 @@ pub use error::{Result, StreamingError};
 pub use protocol::{ClientMessage, ConnectedBuilder, EventType, ServerMessage};
 
 #[cfg(feature = "streaming")]
+#[allow(deprecated)]
 pub use broadcaster::Broadcaster;
 
 #[cfg(feature = "streaming")]
