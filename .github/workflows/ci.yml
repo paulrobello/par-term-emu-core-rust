@@ -87,7 +87,7 @@ jobs:
       run: uv pip install maturin
 
     - name: Build Python package
-      run: uv run maturin develop --release
+      run: uv run maturin develop --release --locked
 
     - name: Check Python stub ships and parses (ARC-002)
       run: |
@@ -95,13 +95,13 @@ jobs:
         uv run pyright python/par_term_emu_core_rust/_native.pyi
 
     - name: Run Rust tests
-      run: cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi
+      run: cargo test --locked --lib --no-default-features --features pyo3/auto-initialize,ffi
 
     - name: Run Rust streaming tests
-      run: cargo test --no-default-features --features pyo3/auto-initialize,streaming,ffi
+      run: cargo test --locked --no-default-features --features pyo3/auto-initialize,streaming,ffi
 
     - name: Run python_bindings unit tests (python-test)
-      run: cargo test --lib --no-default-features --features python-test
+      run: cargo test --locked --lib --no-default-features --features python-test
 
     # The --ignore entries are the only CI guard for the PTY test family:
     # since QA-111 removed the module-level skips, these files run in every
@@ -147,13 +147,13 @@ jobs:
       # link.exe here, as the Test job proves. Under shell: bash, git-bash's
       # coreutils link.exe in PATH shadows MSVC's and every build script
       # fails to link.
-      run: cargo build --no-default-features --features sim
+      run: cargo build --locked --no-default-features --features sim
 
     - name: Assert sim pulls no runtime/auth/proto deps (D1)
       shell: bash
       # cargo tree resolves without linking, so the git-bash PATH is harmless.
       run: |
-        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum|swash'; then
+        if cargo tree --locked --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum|swash'; then
           echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"
           exit 1
         fi
@@ -163,12 +163,12 @@ jobs:
       # moving-target openpty failures observed locally (card
       # 01a0c64fc43e7913b474c038db0635d5); the whole suite is seconds, so
       # serialization costs nothing.
-      run: cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
+      run: cargo test --locked --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
 
     - name: Run mux-backed streaming tests (MuxSessionFactory)
       # The only run with streaming and mux together; without it these
       # tests would compile under lint's clippy and never execute.
-      run: cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+      run: cargo test --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 
   lint:
     name: Lint
@@ -199,7 +199,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+      run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .
@@ -235,7 +235,7 @@ jobs:
       run: pip install maturin
 
     - name: Build wheels
-      run: maturin build --release
+      run: maturin build --release --locked
 
     - name: Upload wheels
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -305,6 +305,11 @@ jobs:
     - name: Install cargo-hack
       run: cargo install cargo-hack --locked
 
+    # ARC-107: the make targets below call cargo without --locked; a locked
+    # fetch fails first if Cargo.lock is stale against Cargo.toml.
+    - name: Assert Cargo.lock is current
+      run: cargo fetch --locked
+
     - name: Run feature matrix and dependency assertions
       run: make check-features
 
@@ -329,6 +334,9 @@ jobs:
       # varies by version. 0.29.4 generated the committed header.
       run: cargo install cbindgen --version 0.29.4 --locked
 
+    - name: Assert Cargo.lock is current
+      run: cargo fetch --locked
+
     - name: Check FFI header and surface
       run: make ffi-header-check ffi-surface-check
 
@@ -349,6 +357,9 @@ jobs:
       with:
         toolchain: stable
         targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+    - name: Assert Cargo.lock is current
+      run: cargo fetch --locked
 
     - name: Build TerminalCore.xcframework
       run: make xcframework

@@ -1,6 +1,10 @@
 target
 artifacts
 coverage
+# ARC-107 commits only the root workspace's Cargo.lock. fuzz/ is its own
+# workspace and cargo-fuzz has no --locked, so a committed fuzz lock would
+# drift from every root dependency change with no gate to catch it.
+Cargo.lock
 # The corpus grows at runtime; only the curated seed files are tracked.
 corpus/**
 !corpus/**/

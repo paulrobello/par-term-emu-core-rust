@@ -92,7 +92,7 @@ jobs:
           echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Run Rust tests
-        run: cargo test --lib --no-default-features
+        run: cargo test --locked --lib --no-default-features
 
       - name: Publish derive sub-crate (par-term-emu-derive)
         # Must be published before the main crate: crates.io strips `path`
@@ -183,7 +183,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build streaming server binary
-        run: cargo build --release --bin par-term-streamer --no-default-features --features streaming-bin --target ${{ matrix.target }}
+        run: cargo build --locked --release --bin par-term-streamer --no-default-features --features streaming-bin --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -225,6 +225,11 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      # ARC-107: `make xcframework` calls cargo without --locked; a locked
+      # fetch fails first if Cargo.lock is stale against Cargo.toml.
+      - name: Assert Cargo.lock is current
+        run: cargo fetch --locked
 
       - name: Build TerminalCore.xcframework
         run: make xcframework
@@ -272,7 +277,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
           manylinux: auto
 
@@ -329,13 +334,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: x86_64
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
       - name: Build wheels - universal2
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: universal2-apple-darwin
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
       - name: Create virtual environment
         run: |
@@ -380,7 +385,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: x86_64
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
 
       - name: Create virtual environment

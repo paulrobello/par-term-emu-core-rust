@@ -79,13 +79,13 @@ python3 -m http.server 8931 --bind 0.0.0.0 --directory /tmp &   # host IP from t
 prlctl exec "Windows 11" cmd /c "curl -s -o C:\ptecr-test\src.tgz http://10.211.55.2:8931/ptecr-src.tgz"
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 
-# 4. Compile gate (test code needs --all-targets on Windows; no --locked — Cargo.lock is not tracked, cargo resolves fresh).
+# 4. Compile gate (test code needs --all-targets on Windows; --locked works — Cargo.lock is tracked and git archive ships it).
 #    NOTE: --all-targets alone runs DEFAULT features, which do NOT include mux —
 #    cfg(windows) mux code compiles only under the explicit feature set (SEC-112,
 #    2026-09-27: --all-targets passed while the mux test build failed on it). For
 #    mux/pty changes, run step 4b's feature set as a check too:
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests --no-default-features --features rust-only,mux-bin,serde"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --all-targets"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --lib --tests --no-default-features --features rust-only,mux-bin,serde"
 
 # 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
 #     As of 2026-09-26 the mux:: filter is expected to PASS on Windows.
@@ -105,7 +105,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests -
 #     a `\n`-terminated line but never SUBMITS it — a typed Enter must be
 #     `\r` (26100 submitted `\n`; CI intermittents during the image rollout
 #     were mixed runner builds, card 01a0ee2fcfa67d62bb9b9906a353deea).
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux-bin,serde mux:: -- --test-threads=1"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --locked --lib --no-default-features --features rust-only,mux-bin,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```

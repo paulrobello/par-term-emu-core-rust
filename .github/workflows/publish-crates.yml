@@ -65,7 +65,7 @@ jobs:
 
       - name: Run Rust tests
         if: ${{ !inputs.skip_tests && steps.check_version.outputs.exists == 'false' }}
-        run: cargo test --lib --no-default-features
+        run: cargo test --locked --lib --no-default-features
 
       - name: Publish derive sub-crate if needed (par-term-emu-derive)
         # The main crate's `par-term-emu-derive = { path = "derive", version = "X" }`

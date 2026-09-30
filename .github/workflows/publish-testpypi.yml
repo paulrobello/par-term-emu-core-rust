@@ -58,7 +58,7 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
           manylinux: ${{ startsWith(matrix.platform, 'linux') && 'auto' || '' }}
 
