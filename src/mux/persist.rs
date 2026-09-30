@@ -38,6 +38,28 @@ pub const FORMAT_VERSION: u32 = 2;
 /// cap: Scrollback cells restored per pane from an untrusted on-disk state file.
 const MAX_PERSISTED_SCROLLBACK_CELLS: usize = 100_000;
 
+/// Restore bounds for a state file's window size — the same floor and
+/// ceiling the streaming layer enforces on a client's terminal-size request
+/// (`crate::streaming::server::{MIN_COLS, MAX_COLS, MIN_ROWS, MAX_ROWS}`),
+/// mirrored here because the `mux` feature does not enable `streaming`
+/// (ARC-113b).
+const MIN_RESTORED_COLS: u16 = 2;
+const MIN_RESTORED_ROWS: u16 = 1;
+/// cap: Columns one restored window may claim from an untrusted state file.
+const MAX_RESTORED_COLS: u16 = 1_000;
+/// cap: Rows one restored window may claim from an untrusted state file.
+const MAX_RESTORED_ROWS: u16 = 500;
+
+/// Clamp a state file's window size to the restore bounds: the size feeds
+/// the factory's grid allocation, so a corrupt or hostile `cols`/`rows`
+/// pair must not reach one unchecked.
+fn clamp_restored_window_size(cols: u16, rows: u16) -> (u16, u16) {
+    (
+        cols.clamp(MIN_RESTORED_COLS, MAX_RESTORED_COLS),
+        rows.clamp(MIN_RESTORED_ROWS, MAX_RESTORED_ROWS),
+    )
+}
+
 /// Errors raised while saving or rebuilding persisted mux state.
 #[derive(Debug)]
 pub enum PersistError {
@@ -429,6 +451,11 @@ impl MuxTree {
         for session in &state.sessions {
             let mut session_windows = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
+                // The state file is untrusted input: the window size feeds
+                // the factory's grid allocation, so it is clamped before it
+                // reaches one — the same bounds a live client's size
+                // request is held to.
+                let (cols, rows) = clamp_restored_window_size(window.cols, window.rows);
                 for pane in &window.panes {
                     // The effective command (D6.3): a resumable agent
                     // session rewrites what the pane respawns as — the
@@ -483,15 +510,15 @@ impl MuxTree {
                     let mut created = match resume_argv {
                         Some(argv) => factory.create_argv_pane(
                             PaneId(pane.id),
-                            window.cols,
-                            window.rows,
+                            cols,
+                            rows,
                             &argv,
                             &context,
                         )?,
                         None => factory.create_pane(
                             PaneId(pane.id),
-                            window.cols,
-                            window.rows,
+                            cols,
+                            rows,
                             pane.spawn_command.as_deref(),
                             &context,
                         )?,
@@ -542,8 +569,8 @@ impl MuxTree {
                     name: window.name.clone(),
                     layout: window.layout.clone(),
                     active: PaneId(window.active_pane),
-                    cols: window.cols,
-                    rows: window.rows,
+                    cols,
+                    rows,
                     // Zoom is session state, not layout — restored
                     // windows start unzoomed (tmux's behavior).
                     zoomed: None,
@@ -982,6 +1009,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingFactory {
         received: std::sync::Arc<std::sync::Mutex<RecordedCommands>>,
+        /// The size each pane was created at, in spawn order — the grid
+        /// allocation input (ARC-113b).
+        sizes: std::sync::Arc<std::sync::Mutex<Vec<(PaneId, u16, u16)>>>,
     }
 
     impl RecordingFactory {
@@ -992,6 +1022,18 @@ mod tests {
                 .iter()
                 .find(|(pane, _)| *pane == id)
                 .and_then(|(_, command)| command.clone())
+        }
+
+        /// The size pane `id` was created at — what its grid was allocated
+        /// with.
+        fn size_for(&self, id: PaneId) -> (u16, u16) {
+            self.sizes
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(pane, _, _)| *pane == id)
+                .map(|(_, cols, rows)| (*cols, *rows))
+                .expect("recorded pane")
         }
     }
 
@@ -1008,6 +1050,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((id, command.map(str::to_string)));
+            self.sizes.lock().unwrap().push((id, cols, rows));
             ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
         }
     }
@@ -1494,6 +1537,58 @@ mod tests {
                     if found == FORMAT_VERSION + 1 && supported == FORMAT_VERSION
             ),
             "an unknown envelope version must refuse, not guess"
+        );
+    }
+
+    /// ARC-113b: a corrupt or hostile state file's window size must not
+    /// reach the factory's grid allocation unchecked — zero collapses the
+    /// grid's column math and `u16::MAX` (the persisted field's ceiling)
+    /// asks the allocator for tens of gigabytes. The restore clamps to the
+    /// same bounds a live client's size request is held to, and the
+    /// clamped size is both what the factory spawned the pane at and what
+    /// the restored window reports.
+    #[test]
+    fn restore_clamps_a_hostile_window_size() {
+        let mut state = populated_tree().to_persist_state();
+        let zero_window = state.sessions[0].windows[0].id;
+        let huge_window = state.sessions[0].windows[1].id;
+        let zero_pane = state.sessions[0].windows[0].panes[0].id;
+        let huge_pane = state.sessions[0].windows[1].panes[0].id;
+        state.sessions[0].windows[0].cols = 0;
+        state.sessions[0].windows[0].rows = 0;
+        state.sessions[0].windows[1].cols = u16::MAX;
+        state.sessions[0].windows[1].rows = u16::MAX;
+
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+
+        assert_eq!(
+            restored.window(WindowId(zero_window)).unwrap().cols,
+            MIN_RESTORED_COLS,
+            "a zero-size window restores at the column floor"
+        );
+        assert_eq!(
+            restored.window(WindowId(zero_window)).unwrap().rows,
+            MIN_RESTORED_ROWS,
+            "a zero-size window restores at the row floor"
+        );
+        assert_eq!(
+            factory.size_for(PaneId(zero_pane)),
+            (MIN_RESTORED_COLS, MIN_RESTORED_ROWS)
+        );
+        assert_eq!(
+            restored.window(WindowId(huge_window)).unwrap().cols,
+            MAX_RESTORED_COLS,
+            "a u16::MAX window restores at the column ceiling"
+        );
+        assert_eq!(
+            restored.window(WindowId(huge_window)).unwrap().rows,
+            MAX_RESTORED_ROWS,
+            "a u16::MAX window restores at the row ceiling"
+        );
+        assert_eq!(
+            factory.size_for(PaneId(huge_pane)),
+            (MAX_RESTORED_COLS, MAX_RESTORED_ROWS)
         );
     }
 

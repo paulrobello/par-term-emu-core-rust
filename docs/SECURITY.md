@@ -1260,6 +1260,8 @@ sections; the numbers live here.
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:91` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
+| `MAX_RESTORED_COLS` | 1,000 | `src/mux/persist.rs:48` | Columns one restored window may claim from an untrusted state file. |
+| `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:50` | Rows one restored window may claim from an untrusted state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:76` | Broadcast lines queued per control-socket client before the daemon evicts it. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:85` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
