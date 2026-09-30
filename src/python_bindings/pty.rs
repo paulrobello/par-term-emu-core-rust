@@ -311,9 +311,8 @@ impl PyPtyTerminal {
     // screenshot, screenshot_to_file, screenshot_config,
     // screenshot_to_file_config: provided by impl_terminal_screenshot_methods! (QA-004)
 
-    // size: provided by impl_terminal_query_getters! (ARC-003/QA-001)
-
-    // cursor_position: provided by impl_terminal_query_getters! (ARC-003/QA-001)
+    // size, cursor_position: served from the wait-free geometry mirror
+    // (the `#[pymethods]` block above the struct impl, ENH-023)
 
     // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
@@ -654,7 +653,7 @@ impl PyPtyTerminal {
     fn paste(&mut self, content: &str) -> PyResult<()> {
         let terminal = self.inner.terminal();
         {
-            let term = terminal.write();
+            let term = terminal.read();
             // Get the paste sequences (handles bracketed paste mode)
             let start = term.bracketed_paste_start();
             let end = term.bracketed_paste_end();
@@ -719,7 +718,7 @@ impl PyPtyTerminal {
     ///     Dictionary containing terminal state for debugging
     fn debug_info(&self) -> PyResult<HashMap<String, String>> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
 
         let mut info = HashMap::new();
         let (cols, rows) = term.size();
@@ -850,7 +849,7 @@ impl PyPtyTerminal {
     ///     Macro object if found, None otherwise
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::get_macro(&term, &name)
             .cloned()
             .map(super::types::PyMacro::from))
@@ -874,7 +873,7 @@ impl PyPtyTerminal {
     ///     List of macro names
     fn list_macros(&self) -> PyResult<Vec<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::list_macros(&term))
     }
 
@@ -938,7 +937,7 @@ impl PyPtyTerminal {
     ///     True if a macro is playing, False otherwise
     fn is_macro_playing(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::is_macro_playing(&term))
     }
 
@@ -948,7 +947,7 @@ impl PyPtyTerminal {
     ///     True if paused, False otherwise
     fn is_macro_paused(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::is_macro_paused(&term))
     }
 
@@ -958,7 +957,7 @@ impl PyPtyTerminal {
     ///     Tuple of (current_event, total_events) if playing, None otherwise
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::get_macro_progress(&term))
     }
 
@@ -968,7 +967,7 @@ impl PyPtyTerminal {
     ///     Macro name if playing, None otherwise
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(MacroEngine::get_current_macro_name(&term))
     }
 
@@ -1015,7 +1014,7 @@ impl PyPtyTerminal {
         name: String,
     ) -> PyResult<super::types::PyMacro> {
         let terminal = self.inner.terminal();
-        let term = terminal.write();
+        let term = terminal.read();
         Ok(super::types::PyMacro::from(
             MacroEngine::recording_to_macro(&term, &session.inner, name),
         ))
