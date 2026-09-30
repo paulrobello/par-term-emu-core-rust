@@ -20,15 +20,15 @@ help:
 	@echo ""
 	@echo "Setup & Installation:"
 	@echo "  setup-venv      - Create virtual environment and install tools"
-	@echo "  dev             - Install library in development mode (release)"
+	@echo "  dev             - Install library in development mode (release, streaming included)"
 	@echo "  install         - Build and install the package"
 	@echo "  install-force   - Force uninstall and reinstall the package"
 	@echo ""
 	@echo "Building:"
-	@echo "  build            - Build the library in development mode (debug)"
-	@echo "  build-release    - Build the library in development mode (release)"
-	@echo "  build-streaming  - Build with streaming feature (debug)"
-	@echo "  dev-streaming    - Build with streaming feature (release, for dev)"
+	@echo "  build            - Build the library in development mode (debug, streaming included)"
+	@echo "  build-release    - Build the library in development mode (release, streaming included)"
+	@echo "  build-streaming  - Alias of build (streaming is in pyproject features)"
+	@echo "  dev-streaming    - Alias of dev (streaming is in pyproject features)"
 	@echo "  xcframework      - Build TerminalCore.xcframework (iOS device + simulator) from the C FFI (needs Xcode)"
 	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
@@ -51,7 +51,7 @@ help:
 	@echo "  check           - Check Rust code without building"
 	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
-	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
+	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after make dev)"
 	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
@@ -183,31 +183,17 @@ build-release:
 	fi
 	uv run maturin develop --release
 
-build-streaming:
-	@echo "Building library with streaming feature (debug mode)..."
-	@if [ ! -d ".venv" ]; then \
-		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
-		exit 1; \
-	fi
-	uv run maturin develop --features streaming
+# ARC-105: `streaming` is in pyproject's [tool.maturin] features, so every
+# maturin build already includes it; kept as an alias for muscle memory.
+build-streaming: build
 
 # TerminalCore.xcframework (iOS device + simulator) from the C FFI surface —
 # what ParDeck embeds. Requires Xcode; not part of checkall.
 xcframework:
 	bash scripts/build-xcframework.sh
 
-dev-streaming:
-	@echo "Building library with streaming feature (release mode)..."
-	@if [ ! -d ".venv" ]; then \
-		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
-		exit 1; \
-	fi
-	uv sync
-	uv run maturin develop --release --features streaming
-	@echo ""
-	@echo "======================================================================"
-	@echo "  Streaming feature enabled!"
-	@echo "======================================================================"
+# ARC-105: alias of `dev` (streaming comes from pyproject features).
+dev-streaming: dev
 	@echo ""
 	@echo "You can now run the streaming demo:"
 	@echo "  make examples-streaming"
@@ -314,8 +300,9 @@ clippy:
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
-# Build with streaming first so streaming-only methods are captured:
-#   make dev-streaming && make stubs
+# Needs a streaming build so streaming-only classes are captured; since
+# ARC-105 `make dev` is one:
+#   make dev && make stubs
 stubs:
 	@echo "Regenerating python/par_term_emu_core_rust/_native.pyi..."
 	@if [ ! -d ".venv" ]; then \
