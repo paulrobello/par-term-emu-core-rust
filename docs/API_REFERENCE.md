@@ -2105,7 +2105,7 @@ Create a streaming server bound to `addr` (e.g., `"127.0.0.1:8080"`). Automatica
 
 ### PTY Input
 
-- `send_input(data: bytes)`: Queue raw bytes for the default session's PTY on the same serialized path client input takes, so they reach the PTY in order with client keystrokes and under the same queue bounds (`INPUT_QUEUE_MESSAGES` chunks, `MAX_QUEUED_INPUT_BYTES` in total; input past them is dropped and counted). Never blocks on the PTY. `PtyTerminal.write()` bypasses this queue and has no ordering relative to client input. Raises `RuntimeError` if the server has been stopped or has no default session.
+- `send_input(data: bytes)`: Queue raw bytes for the default session's PTY on the same serialized path client input takes, so they reach the PTY in order with client keystrokes and under the same queue bounds (`INPUT_QUEUE_MESSAGES` chunks, `MAX_QUEUED_INPUT_BYTES` in total; input past them is dropped and counted). Bytes that reach the front of the queue while the session has no PTY writer attached are dropped and counted too. Never blocks on the PTY. `PtyTerminal.write()` bypasses this queue and has no ordering relative to client input. Raises `RuntimeError` if the server has been stopped or has no default session.
 
 ### Broadcasting Methods
 
