@@ -99,3 +99,14 @@ def test_kitty_disambiguate_mode(term):
 def test_unknown_key_encodes_to_nothing(term):
     assert term.encode_key(0, 0) == b""
     assert term.encode_key(57388, 0) == b""
+
+
+def test_kitty_astral_codepoint(term):
+    term.process(b"\x1b[>1u")
+    assert term.encode_key(CHAR, CTRL, 0x1D54F) == b"\x1b[120143;5u"
+
+
+def test_kitty_unknown_key_encodes_to_nothing(term):
+    term.set_keyboard_flags(1)
+    assert term.encode_key(0, 0) == b""
+    assert term.encode_key(57437, CTRL) == b""
