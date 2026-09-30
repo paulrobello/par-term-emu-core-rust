@@ -27,6 +27,17 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Exported content as string
+    ///
+    /// Raises:
+    ///     ValueError: If format is not "plain", "html", or "ansi"
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 2)
+    ///     term.process_str("error: disk full\r\nok\r\n")   # first line scrolls off
+    ///     term.export_scrollback().rstrip()   # 'error: disk full'
+    ///     ```
     #[pyo3(signature = (format="plain", max_lines=None))]
     fn export_scrollback(&self, format: &str, max_lines: Option<usize>) -> PyResult<String> {
         use crate::terminal::ExportFormat;
@@ -43,6 +54,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     ScrollbackStats object with total lines, memory usage, and wrap status
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 2)
+    ///     term.process_str("error: disk full\r\nok\r\n")   # first line scrolls off
+    ///     stats = term.scrollback_stats()
+    ///     (stats.total_lines, stats.has_wrapped)   # (1, False)
+    ///     ```
     fn scrollback_stats(&self) -> PyResult<crate::python_bindings::types::PyScrollbackStats> {
         let stats = self.inner.scrollback_stats();
         Ok(crate::python_bindings::types::PyScrollbackStats {
