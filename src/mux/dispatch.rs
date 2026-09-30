@@ -702,8 +702,9 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // window, its terminal's current grid size, and, when knowable, the
     // pane's foreground command name (deepest descendant of its child
     // process) for close-confirmation prompts. The cmd token is last and
-    // may be absent (Windows table, unreadable argv), so older clients
-    // keep parsing the fixed prefix.
+    // may be absent (Windows table, unreadable argv, or a name with control
+    // characters or over the cap), so older clients keep parsing the fixed
+    // prefix.
     let (pane, window, cols, rows, child_pid) = {
         let guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {

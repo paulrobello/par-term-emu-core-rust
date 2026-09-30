@@ -1113,6 +1113,7 @@ sections; the numbers live here.
 | `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1171` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:84` | Bytes accumulated from one control-socket client line before the daemon closes it. |

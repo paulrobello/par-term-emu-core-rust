@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **FFI `terminal_scrollback_total_scrolled`**: total lines ever pushed into scrollback, so an embedder mirroring the scrollback window (ParDeck's history view) derives head evictions and tail appends from the `total`/`count` pair instead of re-reading the whole buffer — the count alone freezes at the ring cap. Pinned by `ffi_scrollback_total_scrolled_tracks_the_window` (invariant `count == min(total, cap)`, cap freeze, alt-screen active-grid reads, ED 3J reset). Note for ENH-038: this counter is a window cursor, not a scroll-damage source — the four failure modes listed there are exactly why.
 
+### Security
+- **par-mux `pane-info` no longer serves a program-controlled `cmd=` name unfiltered** (audit SEC-129; `src/mux/foreground.rs`). The foreground command name is the basename of argv[0], which any program sets (`exec -a`), so a pane could hand a mirroring client ANSI escapes, a spoofed name, or an ARG_MAX-sized token for its close-confirmation prompt. `ProcessTable::foreground_command` now applies the `git_branch` rule: a name that is empty, over `MAX_FOREGROUND_NAME_LEN` (128 bytes, new caps-table row), or carries a control character is served absent, never truncated or stripped. The name stays a display hint, not an identity. Pinned by `foreground_command_rejects_control_and_oversize_names`.
+
 ## [0.57.0] - 2026-09-29
 
 ### Added

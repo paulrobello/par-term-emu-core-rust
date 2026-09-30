@@ -39,6 +39,9 @@ pub(crate) enum Liveness {
     Unknown,
 }
 
+/// cap: Bytes of a pane's foreground command name served by pane-info.
+const MAX_FOREGROUND_NAME_LEN: usize = 128;
+
 /// One process in the table: identity always known, argv only when stated.
 struct ProcMeta {
     pid: i32,
@@ -140,6 +143,12 @@ impl ProcessTable {
     /// itself while a shell running a job reports the job). `None` when
     /// the root is absent from the table or the chosen argv is unreadable
     /// — callers treat that as "name unknown", never as "idle".
+    ///
+    /// argv[0] is set by the program itself (`exec -a`), so the name is a
+    /// display hint, never an identity. A name that is empty, longer than
+    /// [`MAX_FOREGROUND_NAME_LEN`] bytes, or carries a control character
+    /// is served absent (the `git_branch` rule), not truncated or stripped:
+    /// a partial name is a different name.
     pub(crate) fn foreground_command(&self, root: u32) -> Option<String> {
         let root = root as i32;
         if !self.metas.iter().any(|meta| meta.pid == root) {
@@ -166,13 +175,14 @@ impl ProcessTable {
         }
         let argv = self.argv_of(best?.1)?;
         let argv0 = argv.first()?;
-        Some(
-            argv0
-                .rsplit('/')
-                .next()
-                .unwrap_or(argv0.as_str())
-                .to_string(),
-        )
+        let name = argv0.rsplit('/').next().unwrap_or(argv0.as_str());
+        if name.is_empty()
+            || name.len() > MAX_FOREGROUND_NAME_LEN
+            || name.chars().any(char::is_control)
+        {
+            return None;
+        }
+        Some(name.to_string())
     }
 
     fn argv_of(&self, pid: i32) -> Option<Vec<String>> {
@@ -574,6 +584,22 @@ mod tests {
         // A root missing from the table: same unknown.
         let empty = ProcessTable::with_fixed_argv(&[]);
         assert_eq!(empty.foreground_command(100), None);
+    }
+
+    #[test]
+    fn foreground_command_rejects_control_and_oversize_names() {
+        let name_of = |argv0: &str| {
+            ProcessTable::with_fixed_argv(&[(100, 1, argv(&[argv0]))]).foreground_command(100)
+        };
+        // argv[0] is program-set (`exec -a`): an escape sequence or a bell
+        // in it is served absent, never truncated or stripped.
+        assert_eq!(name_of("\x1b[31mvim"), None);
+        assert_eq!(name_of("/usr/bin/a\x07b"), None);
+        let over = "a".repeat(MAX_FOREGROUND_NAME_LEN + 1);
+        assert_eq!(name_of(&over), None);
+        let at_cap = "a".repeat(MAX_FOREGROUND_NAME_LEN);
+        assert_eq!(name_of(&at_cap).as_deref(), Some(at_cap.as_str()));
+        assert_eq!(name_of("vim").as_deref(), Some("vim"));
     }
 
     #[cfg(target_os = "macos")]
