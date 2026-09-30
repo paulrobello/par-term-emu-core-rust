@@ -48,7 +48,7 @@ Cost of the choice: one more developer tool. `checkall` fails with an install hi
    	lychee --offline --include-fragments --no-progress $(DOC_LINK_FILES)
    ```
    Add `doc-links-check` to the `checkall` prerequisites and a `make help` line (this also advances DOC-128).
-2. **Fix the three links** in the same branch if DOC-124 has not landed:
+2. **Fix the three links** in the same branch if DOC-124 has not landed. **DOC-124 has landed** (fix/audit-remediation): API_REFERENCE now links `../CHANGELOG.md#0500---2026-09-23`, and the two SECURITY.md headings lost their emoji, so the existing non-hyphen TOC slugs resolve. Skip this step; applying the leading-hyphen slugs below would break the TOC again. Just confirm with lychee that all three resolve.
    - `docs/API_REFERENCE.md:872`: point at `../CHANGELOG.md#0500---2026-09-23`.
    - `docs/SECURITY.md:40-41`: use the leading-hyphen slugs `#-do-use-command--args-array-format` and `#-dont-concatenate-user-input-into-commands`.
    - Confirm each target with `lychee` rather than by eye.
