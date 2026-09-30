@@ -356,6 +356,9 @@ pub struct StreamingServer {
     shutdown: Arc<tokio::sync::Notify>,
     /// The default session (for backward-compatible single-session mode)
     default_session: Option<Arc<StreamSessionState>>,
+    /// par-mux roster watcher; when set, every client receives the roster on connect
+    #[cfg(feature = "mux")]
+    roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
 }
 
 impl StreamingServer {
@@ -401,6 +404,8 @@ impl StreamingServer {
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
             default_session: Some(default_session),
+            #[cfg(feature = "mux")]
+            roster: std::sync::OnceLock::new(),
         }
     }
 
@@ -421,6 +426,8 @@ impl StreamingServer {
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
             default_session: None,
+            #[cfg(feature = "mux")]
+            roster: std::sync::OnceLock::new(),
         }
     }
 
@@ -532,6 +539,32 @@ impl StreamingServer {
             let _ = session.broadcast_tx.send(msg);
         } else if let Some(ref session) = self.default_session {
             let _ = session.broadcast_tx.send(msg);
+        }
+    }
+
+    /// Broadcast a message to the clients of every session
+    pub fn broadcast_all(&self, msg: ServerMessage) {
+        for session in self.sessions.all() {
+            session.broadcast(msg.clone());
+        }
+    }
+
+    /// Attach the par-mux roster watcher whose snapshot every connecting
+    /// client receives. First call wins.
+    #[cfg(feature = "mux")]
+    pub fn set_roster_watcher(&self, watcher: Arc<crate::streaming::RosterWatcher>) {
+        let _ = self.roster.set(watcher);
+    }
+
+    /// The roster snapshot to send a freshly connected client, if a watcher is attached.
+    fn roster_snapshot(&self) -> Option<ServerMessage> {
+        #[cfg(feature = "mux")]
+        {
+            self.roster.get().map(|w| w.snapshot())
+        }
+        #[cfg(not(feature = "mux"))]
+        {
+            None
         }
     }
 
@@ -1913,6 +1946,16 @@ impl StreamingServer {
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
 
+        // Roster snapshot. Ordering: the subscription above precedes the
+        // snapshot read. The watcher updates its cache before it broadcasts
+        // a delta, so any delta this snapshot misses is already queued on
+        // `output_rx`, and any delta it includes is at worst replayed from
+        // the queue. Deltas carry a whole entry, so apply-then-replace
+        // converges on the same state.
+        if let Some(roster) = self.roster_snapshot() {
+            client.send(roster).await?;
+        }
+
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -2234,6 +2277,20 @@ impl StreamingServer {
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
 
+        // Roster snapshot. Ordering: the subscription above precedes the
+        // snapshot read. The watcher updates its cache before it broadcasts
+        // a delta, so any delta this snapshot misses is already queued on
+        // `output_rx`, and any delta it includes is at worst replayed from
+        // the queue. Deltas carry a whole entry, so apply-then-replace
+        // converges on the same state.
+        if let Some(roster) = self.roster_snapshot() {
+            let bytes = encode_server_message(&roster)?;
+            ws_tx
+                .send(AxumMessage::Binary(bytes.into()))
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
+
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -2430,6 +2487,8 @@ fn should_send(
         | ServerMessage::Refresh { .. }
         | ServerMessage::Error { .. }
         | ServerMessage::Shutdown { .. }
+        | ServerMessage::AgentRoster { .. }
+        | ServerMessage::AgentStateChanged { .. }
         | ServerMessage::Pong => true,
     }
 }

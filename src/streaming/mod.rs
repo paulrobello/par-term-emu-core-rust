@@ -70,6 +70,9 @@ pub mod mux_factory;
 #[cfg(feature = "streaming")]
 mod roster;
 
+#[cfg(all(feature = "streaming", feature = "mux"))]
+mod roster_watcher;
+
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 
@@ -98,6 +101,9 @@ pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, Streami
 
 #[cfg(all(feature = "streaming", feature = "mux"))]
 pub use mux_factory::{MuxPaneSelector, MuxSessionFactory};
+
+#[cfg(all(feature = "streaming", feature = "mux"))]
+pub use roster_watcher::{OnMessage, RosterWatcher};
 
 #[cfg(feature = "streaming")]
 pub use roster::{parse_agents_output, translate_notification, RosterDelta};

@@ -232,3 +232,59 @@ pub fn cwd_changed_from(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMe
         None => ServerMessage::cwd_changed(new_cwd),
     })
 }
+
+fn agent_entry_to_py_dict<'py>(
+    py: Python<'py>,
+    entry: &super::protocol::AgentEntry,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("pane_id", entry.pane_id)?;
+    dict.set_item("agent", &entry.agent)?;
+    dict.set_item("state", &entry.state)?;
+    dict.set_item("source", &entry.source)?;
+    dict.set_item("reason", &entry.reason)?;
+    Ok(dict)
+}
+
+/// Whole-variant decode for `ServerMessage::AgentRoster` (`#[pydict(to)]`).
+pub fn agent_roster_to_py_dict<'py>(
+    py: Python<'py>,
+    agents: &Vec<super::protocol::AgentEntry>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("type", "agent_roster")?;
+    let list = PyList::empty(py);
+    for entry in agents {
+        list.append(agent_entry_to_py_dict(py, entry)?)?;
+    }
+    dict.set_item("agents", list)?;
+    Ok(dict)
+}
+
+/// Whole-variant encode for `ServerMessage::AgentRoster`: roster messages are
+/// server-generated, so the Python encode API emits the empty variant.
+pub fn agent_roster_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMessage> {
+    Ok(ServerMessage::AgentRoster { agents: vec![] })
+}
+
+/// Whole-variant decode for `ServerMessage::AgentStateChanged`.
+pub fn agent_state_changed_to_py_dict<'py>(
+    py: Python<'py>,
+    agent: &super::protocol::AgentEntry,
+    released: &bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("type", "agent_state_changed")?;
+    dict.set_item("agent", agent_entry_to_py_dict(py, agent)?)?;
+    dict.set_item("released", *released)?;
+    Ok(dict)
+}
+
+/// Whole-variant encode for `ServerMessage::AgentStateChanged`: server-generated,
+/// so the Python encode API emits an empty upsert.
+pub fn agent_state_changed_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMessage> {
+    Ok(ServerMessage::AgentStateChanged {
+        agent: Default::default(),
+        released: false,
+    })
+}

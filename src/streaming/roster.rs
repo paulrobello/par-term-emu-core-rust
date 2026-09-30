@@ -1,6 +1,6 @@
 //! Parser for the par-mux `list-agents` roster output.
 
-use super::proto::pb::AgentEntry;
+use super::protocol::AgentEntry;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 /// Parses `list-agents` output into roster entries sorted by pane id.

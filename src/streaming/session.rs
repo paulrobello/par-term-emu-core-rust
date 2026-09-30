@@ -782,6 +782,11 @@ impl SessionRegistry {
         self.sessions.write().remove(id)
     }
 
+    /// Snapshot of every registered session
+    pub fn all(&self) -> Vec<Arc<StreamSessionState>> {
+        self.sessions.read().values().cloned().collect()
+    }
+
     /// Get the number of active sessions
     pub fn session_count(&self) -> usize {
         self.sessions.read().len()
