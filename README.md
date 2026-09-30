@@ -272,9 +272,9 @@ The C surface is a full embedding API, not just snapshots (contracts and example
 - **Version check**: `ptec_terminal_abi_version` — compare against the header's `TERM_CORE_ABI_VERSION` at startup
 - **Lifecycle/input**: `ptec_terminal_create` / `ptec_terminal_free` / `ptec_terminal_feed` (VT bytes) / `ptec_terminal_resize`
 - **Damage**: `ptec_terminal_dirty_ranges` returns coalesced inclusive dirty-row ranges and `ptec_terminal_mark_clean` consumes them; independent renderers use `ptec_terminal_damage_generation` + `ptec_terminal_dirty_ranges_since`, so one consumer never hides damage from another
-- **Pinned readback**: `ptec_terminal_read_row` / `ptec_terminal_read_scrollback_row` / `ptec_terminal_scrollback_count` copy cells into caller-owned buffers — no allocation, no full-grid copy per frame; `ptec_terminal_scrollback_total_scrolled` pairs with the count to sync a mirrored scrollback window; `ptec_terminal_get_cursor` / `ptec_terminal_get_modes` carry per-frame state
+- **Pinned readback**: `ptec_terminal_read_row` / `ptec_terminal_read_scrollback_row` / `ptec_terminal_scrollback_count` copy cells into caller-owned buffers — no allocation, no full-grid copy per frame — with palette-resolved colors and default-color bits (ABI v4); `ptec_terminal_read_cell_grapheme` returns a cell's full grapheme cluster; `ptec_terminal_scrollback_total_scrolled` pairs with the count to sync a mirrored scrollback window; `ptec_terminal_get_cursor` / `ptec_terminal_get_modes` carry per-frame state
 - **Key encoding**: `ptec_terminal_encode_key` turns key events into PTY bytes (xterm legacy, kitty level-1 disambiguate, and modifyOtherKeys, honoring application cursor keys and the negotiated kitty flags); `ptec_terminal_encode_key_ex` adds per-side macOS Option-key modes through `TermKeyOptions`
-- **Snapshots and observers**: `ptec_terminal_get_state` / `ptec_terminal_free_state`, `ptec_terminal_add_observer` / `ptec_terminal_remove_observer`
+- **Snapshots and observers**: `ptec_terminal_get_state` / `ptec_terminal_free_state`, `ptec_terminal_add_observer` / `ptec_terminal_remove_observer`; the `on_event_v2` slot delivers structured `TermEvent`s (a `TERM_EVENT_*` kind plus a JSON payload)
 
 ### Optional Components
 
