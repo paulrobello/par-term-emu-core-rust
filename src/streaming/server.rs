@@ -4,7 +4,7 @@ use crate::streaming::client::Client;
 use crate::streaming::config::{ApiAuthConfig, HttpBasicAuthConfig, StreamingConfig};
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
-use crate::streaming::protocol::{ServerMessage, ThemeInfo};
+use crate::streaming::protocol::{ClientMessage, ServerMessage, ThemeInfo};
 use crate::streaming::rate_limit::InputRateLimiter;
 use crate::streaming::session::{now_millis, SessionRegistry, StreamSessionState};
 use crate::terminal::{SelectionMode, Terminal};
@@ -323,6 +323,126 @@ struct GlobalClientGuard<'a> {
 impl<'a> Drop for GlobalClientGuard<'a> {
     fn drop(&mut self) {
         self.server.remove_client();
+    }
+}
+
+// =============================================================================
+// WebSocket transports
+// =============================================================================
+
+/// One client connection as [`StreamingServer::run_ws_session`] sees it:
+/// decoded client messages in, server messages out. Each transport keeps
+/// its own frame policy (ping/pong, text frames, undecodable frames) inside
+/// `recv`, so the shared session loop does not change either path's
+/// behavior.
+trait WsTransport: Send {
+    /// This connection's client id.
+    fn id(&self) -> uuid::Uuid;
+    /// The next client message; `Ok(None)` once the peer has closed. An
+    /// `Err` ends the session.
+    fn recv(&mut self) -> impl std::future::Future<Output = Result<Option<ClientMessage>>> + Send;
+    /// Send one server message.
+    fn send(&mut self, msg: ServerMessage) -> impl std::future::Future<Output = Result<()>> + Send;
+    /// Send a keepalive ping.
+    fn ping(&mut self) -> impl std::future::Future<Output = Result<()>> + Send;
+    /// Complete the closing handshake (best effort).
+    fn close(self) -> impl std::future::Future<Output = Result<()>> + Send;
+}
+
+/// tungstenite transport (plain TCP or TLS): protobuf and ping/pong live in
+/// [`Client`]. A text or undecodable frame ends the session.
+impl<S> WsTransport for Client<S>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    fn id(&self) -> uuid::Uuid {
+        Client::id(self)
+    }
+
+    fn recv(&mut self) -> impl std::future::Future<Output = Result<Option<ClientMessage>>> + Send {
+        Client::recv(self)
+    }
+
+    fn send(&mut self, msg: ServerMessage) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::send(self, msg)
+    }
+
+    fn ping(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::ping(self)
+    }
+
+    fn close(self) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::close(self)
+    }
+}
+
+/// axum transport (the HTTP-served `/ws` route). Text and undecodable
+/// frames are logged and skipped; the session continues.
+struct AxumTransport {
+    id: uuid::Uuid,
+    socket: axum::extract::ws::WebSocket,
+}
+
+impl WsTransport for AxumTransport {
+    fn id(&self) -> uuid::Uuid {
+        self.id
+    }
+
+    async fn recv(&mut self) -> Result<Option<ClientMessage>> {
+        use axum::extract::ws::Message as AxumMessage;
+        loop {
+            match self.socket.recv().await {
+                Some(Ok(AxumMessage::Binary(data))) => match decode_client_message(&data) {
+                    Ok(msg) => return Ok(Some(msg)),
+                    Err(e) => {
+                        crate::debug_error!("STREAMING", "Failed to parse client message: {}", e);
+                    }
+                },
+                Some(Ok(AxumMessage::Text(_))) => {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Text messages not supported, use binary protocol"
+                    );
+                }
+                Some(Ok(AxumMessage::Ping(_) | AxumMessage::Pong(_))) => {}
+                Some(Ok(AxumMessage::Close(_))) | None => return Ok(None),
+                Some(Err(e)) => return Err(StreamingError::WebSocketError(e.to_string())),
+            }
+        }
+    }
+
+    async fn send(&mut self, msg: ServerMessage) -> Result<()> {
+        let bytes = encode_server_message(&msg)?;
+        self.socket
+            .send(axum::extract::ws::Message::Binary(bytes.into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))
+    }
+
+    async fn ping(&mut self) -> Result<()> {
+        self.socket
+            .send(axum::extract::ws::Message::Ping(vec![].into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))
+    }
+
+    /// When the client initiated the close, tungstenite already queued our
+    /// reply when it read their Close frame and a further send is
+    /// rejected; `flush()` writes the queued reply instead.
+    async fn close(mut self) -> Result<()> {
+        use futures_util::SinkExt;
+        if self
+            .socket
+            .send(axum::extract::ws::Message::Close(None))
+            .await
+            .is_err()
+        {
+            self.socket
+                .flush()
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -1802,24 +1922,21 @@ impl StreamingServer {
         replies
     }
 
-    /// Shared dispatch loop for both tungstenite WebSocket transports
-    /// (plain TCP and TLS). The transport stream type is captured by the
-    /// `Client<S>` generic; all protobuf encode/decode and ping/pong handling
-    /// lives in `Client`. `transport_label` is used only in debug logs so the
-    /// two transports remain distinguishable.
+    /// The one session loop for every WebSocket transport (tungstenite
+    /// plain and TLS, and the axum HTTP-served route): connect and mode-sync
+    /// messages, then client messages, session broadcasts and keepalive
+    /// until the client leaves, then the closing handshake. Frame encoding
+    /// and policy live in the [`WsTransport`]. `transport_label` is used
+    /// only in debug logs so the transports remain distinguishable.
     ///
-    /// Client messages are dispatched via [`Self::handle_client_message`],
-    /// the single arm-set shared with the axum HTTP-served path.
-    async fn run_ws_session<S>(
+    /// Client messages are dispatched via [`Self::handle_client_message`].
+    async fn run_ws_session<T: WsTransport>(
         self: &Arc<Self>,
-        mut client: Client<S>,
+        mut client: T,
         session: Arc<StreamSessionState>,
         read_only: bool,
         transport_label: &'static str,
-    ) -> Result<()>
-    where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
-    {
+    ) -> Result<()> {
         let client_id = client.id();
 
         // Send initial connection message
@@ -2103,15 +2220,11 @@ impl StreamingServer {
     }
 
     /// Handle Axum WebSocket connection
-    #[cfg(feature = "streaming")]
     async fn handle_axum_websocket(
         self: &Arc<Self>,
         socket: axum::extract::ws::WebSocket,
         params: ConnectionParams,
     ) -> Result<()> {
-        use axum::extract::ws::Message as AxumMessage;
-        use futures_util::{SinkExt, StreamExt};
-
         // Reserve the global client slot BEFORE resolving or creating a
         // session, so max_clients bounds session spawns too (SEC-011). The
         // guard releases on any early return below (guard → resolve →
@@ -2122,173 +2235,12 @@ impl StreamingServer {
         let (session, _global_guard, _session_guard, read_only) = self
             .prepare_ws_session(&params, GlobalClientGuard { server: self })
             .await?;
-
-        let client_id = uuid::Uuid::new_v4();
-
-        let (mut ws_tx, mut ws_rx) = socket.split();
-
-        // Send initial connection message
-        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
-        let msg_bytes = encode_server_message(&connect_msg)?;
-        ws_tx
-            .send(AxumMessage::Binary(msg_bytes.into()))
+        let transport = AxumTransport {
+            id: uuid::Uuid::new_v4(),
+            socket,
+        };
+        self.run_ws_session(transport, session, read_only, "Axum WebSocket")
             .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-
-        // Sync terminal mode state for existing sessions
-        for mode_msg in session.build_mode_sync_messages() {
-            let mode_bytes = encode_server_message(&mode_msg)?;
-            ws_tx
-                .send(AxumMessage::Binary(mode_bytes.into()))
-                .await
-                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "Axum WebSocket client {} connected to session {} (total: {})",
-            client_id,
-            session.id,
-            self.client_count()
-        );
-
-        // Subscribe to session broadcasts
-        let mut output_rx = session.broadcast_tx.subscribe();
-
-        // Setup keepalive timer
-        let keepalive_interval = if self.config.keepalive_interval > 0 {
-            Some(Duration::from_secs(self.config.keepalive_interval))
-        } else {
-            None
-        };
-        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
-        let mut subscriptions: Option<
-            std::collections::HashSet<crate::streaming::protocol::EventType>,
-        > = None;
-        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
-            Some(InputRateLimiter::new(
-                self.config.input_rate_limit_bytes_per_sec,
-            ))
-        } else {
-            None
-        };
-
-        loop {
-            tokio::select! {
-                msg = ws_rx.next() => {
-                    match msg {
-                        Some(Ok(AxumMessage::Binary(data))) => {
-                            match decode_client_message(&data) {
-                                Ok(client_msg) => {
-                                    let replies = self.handle_client_message(
-                                        &session,
-                                        "Axum WebSocket",
-                                        client_id,
-                                        read_only,
-                                        &mut subscriptions,
-                                        &mut rate_limiter,
-                                        client_msg,
-                                    );
-                                    for reply in replies {
-                                        match encode_server_message(&reply) {
-                                            Ok(bytes) => {
-                                                if ws_tx
-                                                    .send(AxumMessage::Binary(bytes.into()))
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    crate::debug_error!(
-                                                        "STREAMING",
-                                                        "Failed to send reply to Axum WebSocket {}",
-                                                        client_id
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
-                                                crate::debug_error!(
-                                                    "STREAMING",
-                                                    "Failed to encode reply for Axum WebSocket {}: {}",
-                                                    client_id,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    crate::debug_error!("STREAMING", "Failed to parse client message: {}", e);
-                                }
-                            }
-                        }
-                        Some(Ok(AxumMessage::Text(_))) => {
-                            crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
-                        }
-                        Some(Ok(AxumMessage::Ping(_))) => {}
-                        Some(Ok(AxumMessage::Pong(_))) => {}
-                        Some(Ok(AxumMessage::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "Axum Client {} disconnected from session {}", client_id, session.id);
-                            break;
-                        }
-                        Some(Err(e)) => {
-                            crate::debug_error!("STREAMING", "WebSocket error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                output_msg = output_rx.recv() => {
-                    if let Ok(msg) = output_msg {
-                        if should_send(&msg, &subscriptions) {
-                            if let Ok(bytes) = encode_server_message(&msg) {
-                                if ws_tx.send(AxumMessage::Binary(bytes.into())).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                _ = async {
-                    if let Some(ref mut timer) = keepalive_timer {
-                        timer.tick().await
-                    } else {
-                        std::future::pending::<tokio::time::Instant>().await
-                    }
-                } => {
-                    if ws_tx.send(AxumMessage::Ping(vec![].into())).await.is_err() {
-                        crate::debug_error!("STREAMING", "Failed to ping Axum client {}", client_id);
-                        break;
-                    }
-                }
-            }
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "Axum Client {} cleanup (remaining: {})",
-            client_id,
-            self.client_count() - 1
-        );
-
-        // Complete the closing handshake: reply with a Close frame before the
-        // sink drops, or the TCP connection ends with a bare FIN and clients
-        // observe abnormal closure (1006). When the client initiated the close,
-        // tungstenite already queued our reply when ws_rx read their Close
-        // frame and a further send is rejected — flush() writes the queued
-        // reply instead. Best-effort: the connection may already be dead on
-        // the error break paths.
-        if ws_tx.send(AxumMessage::Close(None)).await.is_err() {
-            if let Err(e) = ws_tx.flush().await {
-                crate::debug_error!(
-                    "STREAMING",
-                    "Failed to send close reply to Axum client {}: {}",
-                    client_id,
-                    e
-                );
-            }
-        }
-
-        Ok(())
     }
 }
 
