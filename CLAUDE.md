@@ -164,7 +164,7 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 - `src/terminal/sequences/` - VTE escape sequence handlers, split into `csi/`, `osc/`, `dcs/` directories (each with `mod.rs` + per-topic files) plus a single `esc.rs`
 - `src/terminal/write.rs` - Character writing logic
 - `src/terminal/trigger.rs` - Regex-based output pattern matching
-- `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `zone.rs`
+- `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `snapshot.rs` (`GridSnapshot`, re-exported by `terminal::replay_snapshot`), `zone.rs`
 - `src/pty_session.rs` - PTY session with background reader thread
 - `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
