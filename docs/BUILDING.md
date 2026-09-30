@@ -2,7 +2,7 @@
 
 This guide explains how to build and install the par-term-emu-core-rust library.
 
-> ⚠️ **Never use `cargo build` directly for this PyO3 module.** Bare `cargo build` fails at the link stage because the `extension-module` feature produces a Python extension that cannot be linked as a normal Rust binary. Always build with **`make dev`** (which drives `maturin`) for Python bindings, or the streaming-server-specific targets (`make dev-streaming`, `make streamer-run`) for the server binary. The only time you invoke `cargo` directly is for tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround (see [Running Tests](#running-tests) below). See `CLAUDE.md` and `docs/ARCHITECTURE.md` for background.
+> ⚠️ **Never use `cargo build` directly for this PyO3 module.** Bare `cargo build` fails at the link stage because the `extension-module` feature produces a Python extension that cannot be linked as a normal Rust binary. Always build with **`make dev`** (which drives `maturin`) for Python bindings, or `make streamer-run` for the streaming server binary. The only time you invoke `cargo` directly is for tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround (see [Running Tests](#running-tests) below). See `CLAUDE.md` and `docs/ARCHITECTURE.md` for background.
 
 ## Table of Contents
 
@@ -82,12 +82,14 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 The library supports several optional features that can be enabled during the build:
 
-- **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`); also enables `pty_session`
+- **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`); also enables `pty_session`, `screenshot`, and `macro-yaml`
 - **`screenshot`** - Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts via `swash`). Enabled by `python`; opt-in for `sim` (`features = ["sim", "screenshot"]`)
 - **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
-- **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar)
-- **`mux`** - The par-mux multiplexer daemon (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`. Build the binary with `cargo build --bin par-mux --no-default-features --features mux`
+- **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar); also enables `macro-yaml` for `--macro-file`
+- **`mux`** - The par-mux multiplexer library (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`; does not pull `clap`
+- **`mux-bin`** - The `par-mux` daemon binary: `mux` plus its `clap` CLI parser. Build the binary with `cargo build --bin par-mux --no-default-features --features mux-bin`
+- **`macro-yaml`** - `Macro` YAML save/load (`serde_yaml_ng`). Enabled by `python`, `python-test`, and `streaming-bin`; slim `rust-only`/`sim`/`mux` builds must add it to use `Macro::save_yaml`/`load_yaml`/`to_yaml`/`from_yaml`
 - **`serde`** - Serde derives on the replay-snapshot types, which are the par-mux persistence format. Enabled by `mux`
 - **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
 - **`regenerate-proto`** - Regenerate Protocol Buffers code from `proto/terminal.proto` (requires `protoc` installed)
@@ -183,17 +185,19 @@ make watch
 
 ### Building with Streaming Feature
 
-The streaming feature enables WebSocket-based terminal streaming:
+`streaming` is listed in `pyproject.toml` `[tool.maturin] features`, so every maturin build (`make dev`, `make build`, CI, and the PyPI wheels) includes it. No extra flag is needed:
 
 ```bash
-# Debug build with streaming
-make build-streaming
+# Release build (recommended); includes streaming
+make dev
 
-# Release build with streaming (recommended)
-make dev-streaming
+# Debug build; includes streaming
+make build
 ```
 
-This enables:
+`make dev-streaming` and `make build-streaming` remain as aliases of `make dev` and `make build`.
+
+The streaming feature provides:
 - WebSocket server functionality
 - Protocol Buffers message encoding/decoding
 - TLS/SSL support for secure connections
@@ -207,22 +211,22 @@ See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
 
 ### Building the Multiplexer Daemon
 
-The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate binary built with the Rust `mux` feature:
+The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate binary built with the Rust `mux-bin` feature (`mux` plus the `clap` CLI parser):
 
 ```bash
 # Build the daemon binary
-cargo build --bin par-mux --no-default-features --features mux
+cargo build --bin par-mux --no-default-features --features mux-bin
 
 # Run it (prints its socket path and serves until killed)
-cargo run --bin par-mux --no-default-features --features mux
+cargo run --bin par-mux --no-default-features --features mux-bin
 ```
 
 The daemon is independent of the Python bindings — it is not part of the default `make dev` build or the PyPI wheel.
 
-Its test suites must run serialized (the integration tests spawn daemons on colliding socket paths):
+Its test suites must run serialized (the integration tests spawn daemons on colliding socket paths). The tests that exec the daemon fail to compile without `mux-bin`:
 
 ```bash
-cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
+cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
 ```
 
 See [MUX.md](MUX.md) for the complete daemon reference (CLI, socket/state paths, protocol, persistence).

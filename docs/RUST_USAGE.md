@@ -127,8 +127,9 @@ cargo build --no-default-features --features sim,screenshot
 cargo build --no-default-features --features streaming,pty_session
 ```
 
-**Python only:**
+**Python (wheel feature set):**
 ```bash
+# streaming is included: pyproject.toml [tool.maturin] features apply to every maturin build
 uv run maturin develop --release
 ```
 
@@ -238,6 +239,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Macro Recording and Playback
 
 The macro system allows recording and playback of keyboard events with YAML serialization.
+
+> **Note:** YAML save/load (`save_yaml`, `load_yaml`, `to_yaml`, `from_yaml`) requires the `macro-yaml` feature. `python`, `python-test`, and `streaming-bin` enable it; `rust-only`, `sim`, and `mux` builds must add it explicitly.
 
 ```rust
 use par_term_emu_core_rust::macros::{Macro, MacroEvent, KeyParser};
@@ -429,7 +432,7 @@ let config = StreamingConfig {
 
 ## Terminal Multiplexer (par-mux)
 
-> **Note:** Requires the `mux` feature flag (Rust only; not part of the default build).
+> **Note:** The library API requires the `mux` feature flag (Rust only; not part of the default build). The `par-mux` daemon binary requires `mux-bin`.
 
 The crate ships a tmux-control-mode multiplexer: sessions, windows, and split panes of real PTYs served over a local socket, with an agent layer on top (state hook reports, a scrape fallback for agents without hooks, and session resume across daemon restarts).
 
@@ -454,13 +457,15 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 
 | Feature | Description | Includes |
 |---------|-------------|----------|
-| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session`, `screenshot` |
-| `python-test` | The `python` feature's deps with `pyo3/auto-initialize` instead of `extension-module`, so the bindings link a real interpreter under `cargo test` | `pyo3`, `pyo3/auto-initialize`, `par-term-emu-derive`, `pty_session`, `screenshot` |
+| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session`, `screenshot`, `macro-yaml` |
+| `python-test` | The `python` feature's deps with `pyo3/auto-initialize` instead of `extension-module`, so the bindings link a real interpreter under `cargo test` | `pyo3`, `pyo3/auto-initialize`, `par-term-emu-derive`, `pty_session`, `screenshot`, `macro-yaml` |
 | `screenshot` | Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts). Enabled by `python` and `python-test`; opt-in for `sim` (`features = ["sim", "screenshot"]`) | `swash` |
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signal deps. Auto-enabled by `python`, `streaming-bin`, and `mux` | `portable-pty`, `nix` |
 | `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo`, `subtle`, `zeroize` |
-| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `pty_session` |
-| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` and `windows-sys` (Windows only), `serde`, `dirs`, `toml`, `clap` |
+| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `pty_session`, `macro-yaml` |
+| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` and `windows-sys` (Windows only), `serde`, `dirs`, `toml` |
+| `mux-bin` | The `par-mux` daemon binary (the CLI parser on top of `mux`, mirroring `streaming`/`streaming-bin`) | `mux`, `clap` |
+| `macro-yaml` | `Macro` YAML save/load (`save_yaml`, `load_yaml`, `to_yaml`, `from_yaml`). Enabled by `python`, `python-test`, and `streaming-bin` | `serde_yaml_ng` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence | `smallvec/serde`, `bitflags/serde` |
 | `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |
 | `sim` | Headless profile: grid + terminal only — no PTY, Python, streaming, or screenshot (screenshot is opt-in since 0.54.0, ENH-024). Cannot be combined with `python` | (none — names the profile only) |
