@@ -708,11 +708,12 @@ pub enum SaveOrigin {
     /// snapshot; empty leaves it alone, because the emptiness may be the
     /// race above rather than the user's intent.
     Shutdown,
-    /// The final save of an exit-when-empty daemon: zero sessions and zero
-    /// clients, held empty past a grace period, with no shutdown signal
-    /// received — the emptiness is the user's doing (every pane closed), not
-    /// the reboot race. Clears the snapshot so the next start is fresh, not
-    /// a resurrection of panes whose processes were deliberately closed.
+    /// The final save of an exit-when-empty daemon: no clients, and either
+    /// zero sessions or every pane dead, held past the grace period with no
+    /// shutdown signal received. An empty tree clears the snapshot (the
+    /// user closed everything, so the next start is fresh). An all-dead
+    /// tree is pane-bearing and refreshes it, so the next start respawns
+    /// those panes (MUX.md, Pane Reaping).
     ShutdownEmpty,
 }
 
@@ -1732,6 +1733,30 @@ mod tests {
             ),
             other => panic!("a readable state file loaded as {other:?}"),
         }
+    }
+
+    /// ARC-097: exit-when-empty also fires when every pane is dead. That
+    /// tree is pane-bearing, so the ShutdownEmpty save refreshes the
+    /// snapshot instead of clearing it — the next start respawns those
+    /// panes (MUX.md, Pane Reaping).
+    #[test]
+    fn shutdown_empty_with_dead_panes_refreshes_lastgood() {
+        let (_dir, target) = temp_target("all-dead-exit");
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        assert!(
+            !lastgood_path(&target).exists(),
+            "precondition: no snapshot"
+        );
+
+        let dead = populated_tree().to_persist_state();
+        assert!(state_has_panes(&dead));
+        write_job(SaveOrigin::ShutdownEmpty, &dead, &target).unwrap();
+        let snapshot: PersistState =
+            serde_json::from_slice(&fs::read(lastgood_path(&target)).unwrap()).unwrap();
+        assert!(
+            state_has_panes(&snapshot),
+            "an all-dead exit keeps its panes for the next start"
+        );
     }
 
     /// Positive control for the fallback: an empty state with NO snapshot

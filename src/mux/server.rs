@@ -192,8 +192,10 @@ impl MuxServer {
     /// that arrived since the last structural one, so a clean SIGTERM never
     /// loses the last window; a listener fault that ends the loop takes the
     /// same save on its way out, so an accept error never silently discards
-    /// unsaved work. An exit-when-empty (below) saves with
-    /// [`SaveOrigin::ShutdownEmpty`] so the emptiness reads as deliberate.
+    /// unsaved work. An exit-when-empty (below: no clients, and no
+    /// sessions or only dead panes) saves with [`SaveOrigin::ShutdownEmpty`]:
+    /// an empty tree clears the last-good snapshot, while an all-dead tree
+    /// refreshes it so the next start respawns those panes.
     /// Callers resolve the path with
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
