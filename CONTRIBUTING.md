@@ -50,6 +50,8 @@ make lint         # Rust clippy + fmt (auto-fix)
 make lint-python  # Python ruff format + check + pyright
 ```
 
+- `make mux-docs-check` fails until a new mux command, notification or notification type is listed in MUX.md and API_REFERENCE.
+
 Do not push until `make checkall` passes cleanly. When fixing a failing test, confirm you are fixing the actual bug and not papering over a real issue in the code.
 
 ### Feature matrix

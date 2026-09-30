@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -58,6 +58,7 @@ help:
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
+	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
@@ -387,7 +388,14 @@ ffi-header-check:
 ffi-surface-check:
 	python3 scripts/check_ffi_surface.py
 
-checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+# ENH-033: gate MUX.md and the API_REFERENCE notification_type list against
+# the mux code (COMMANDS, mutates(), emit(), notification_type). Pure
+# python3, no build needed — same as the FFI gates.
+mux-docs-check:
+	python3 scripts/check_mux_docs.py
+	python3 scripts/check_mux_docs.py --self-test
+
+checkall: ffi-header-check ffi-surface-check mux-docs-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
