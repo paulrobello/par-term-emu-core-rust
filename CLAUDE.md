@@ -172,7 +172,7 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 - `src/pty_session/` - PTY session (`mod.rs`) with its background reader thread (`reader.rs`)
 - `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
-- `src/mux/` - par-mux multiplexer daemon (tmux control mode over a local socket; `server.rs` accept loop + `dispatch.rs` per-command handlers + `command.rs` parsing + `persist.rs` save/restore) — operational reference in `docs/MUX.md`
+- `src/mux/` - par-mux multiplexer daemon (tmux control mode over a local socket; `server.rs` accept loop + `dispatch.rs` per-command handlers + `command.rs` parsing + `persist.rs` save/restore + `tree/` session tree (`mod.rs` types and lookups, `lifecycle.rs`, `layout_ops.rs`) + `hooks/` hook-report grammar (`mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`)) — operational reference in `docs/MUX.md`
 - `src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
 - `src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
 - `src/lib.rs` - Module declarations, re-exports, and `_native` PyO3 module registration

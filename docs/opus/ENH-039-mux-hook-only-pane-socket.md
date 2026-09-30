@@ -44,7 +44,7 @@ Most in-pane consumers need only the four hook methods (`pane.report_agent`, `pa
   - Documented at `docs/MUX.md:249-261`.
 - **The CLI depends on it.** A `par-mux --cmd …` typed inside a pane with no `--socket` falls back to `$PAR_MUX_SOCKET` (`src/bin/par_mux/main.rs:163-171`, `resolve_socket_path` at `ipc.rs:536`; MUX.md:92,254). That is how the user's `par-mux` skill drives the daemon from an agent pane ("spawn a dev-server pane", "send keys", "capture output"). This is why the default flip is gated.
 - **Hook traffic shares the control socket.**
-  - `handle_client` classifies each line: a `{…}` line is a hook report answered in place, never registered for broadcasts; anything else is a control command (`match parse_line(&line)` at `src/mux/server.rs:621-630`, `hooks::handle_report` at `src/mux/hooks.rs:44-64`).
+  - `handle_client` classifies each line: a `{…}` line is a hook report answered in place, never registered for broadcasts; anything else is a control command (`match parse_line(&line)` at `src/mux/server.rs:621-630`, `hooks::handle_report` at `src/mux/hooks/mod.rs:53-74`).
   - A hook report names its pane in `params.pane_id`, and nothing checks that the sender *is* that pane. Any process can report or release on behalf of any pane.
 - **Where sockets live.**
   - `default_socket_path` puts the control socket in `$XDG_RUNTIME_DIR`, else a per-UID directory under the temp dir (`uid_socket_dir`), as `par-mux-<name>.sock`.
@@ -83,12 +83,12 @@ Most in-pane consumers need only the four hook methods (`pane.report_agent`, `pa
      - answer any non-JSON line with a JSON error `{"error":"hook-only endpoint"}` and close.
    - `Drop` removes the socket file.
    - **Stale cleanup.** At daemon start, after the control socket binds, remove any `par-mux-<name>.pane-*.sock` remnants in that directory. Drop does not run on a crash or SIGKILL, and they would accumulate otherwise. Only remove files that are sockets and that fail a connect, using `prepare_socket_path`'s stale test.
-2. **Pane binding in hooks** (`src/mux/hooks.rs`). Add `handle_report_for(bound: PaneId, …)`, which:
+2. **Pane binding in hooks** (`src/mux/hooks/mod.rs`). Add `handle_report_for(bound: PaneId, …)`, which:
    - rejects a report whose `params.pane_id` names a different pane, with the error "pane_id does not match this endpoint";
    - accepts a report that omits `pane_id` and fills in `bound`.
 
    `handle_report` (full socket) is unchanged, so embedders and par-term's own control connection still report for any pane.
-3. **Lifecycle** (`src/mux/pane.rs`, `src/mux/tree.rs`).
+3. **Lifecycle** (`src/mux/pane.rs`, `src/mux/tree/lifecycle.rs`).
    - When `pane_endpoints` is on, `MuxPane` owns an `Option<PaneEndpoint>`, created in the factory before spawn so the env var can point at it.
    - Dropped on kill, and on respawn (then recreated).
    - Created again on restore, because endpoints are per daemon run and never persisted.
@@ -123,8 +123,8 @@ Flip the default to `pane_endpoints = true` (daemon and `ShellPaneFactory`), plu
 ## Files to touch
 
 - `src/mux/pane_endpoint.rs` (new), `src/mux/mod.rs`
-- `src/mux/hooks.rs` (`handle_report_for`)
-- `src/mux/pane.rs` (endpoint ownership, env contract), `src/mux/tree.rs` (kill, respawn and restore lifecycle)
+- `src/mux/hooks/mod.rs` (`handle_report_for`)
+- `src/mux/pane.rs` (endpoint ownership, env contract), `src/mux/tree/lifecycle.rs` (kill, respawn and restore lifecycle)
 - `src/mux/ipc.rs` (pane socket path helper, `sun_path` length check, stale sweep, Windows pipe name)
 - `src/mux/server.rs` (startup stale sweep)
 - `src/bin/par_mux/main.rs` (`--pane-endpoints`, `--expose-control-socket`, fallback order, refusal message)

@@ -32,7 +32,7 @@ Add a `list-commands` query that advertises commands and feature tokens, and rep
   - `MuxPane::dead()` (`src/mux/pane.rs:348`) and `exit_code()` (`:363`) exist.
   - `reap_dead_panes` (`server.rs:960-1000`) marks a pane dead under the tree lock and broadcasts `%pane-exited` *after* releasing it.
 - **Zoom.**
-  - `MuxWindow::zoomed: Option<PaneId>` (`src/mux/tree.rs:48`).
+  - `MuxWindow::zoomed: Option<PaneId>` (`src/mux/tree/mod.rs:58`).
   - `broadcast_layout_change` (`server.rs:1057-1085`) renders zoom as a visible layout with the single pane plus raw flags `Z`. A per-client render is needed; today only the broadcast form exists.
 - **Tests available.** `tests/mux_daemon.rs:391` already asserts `TmuxNotification::PaneRespawned` on the wire. The MEMORY note on broadcast registration applies: a client joins broadcasts on its first command, so a two-client test must register the observer first.
 
