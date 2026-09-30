@@ -8,8 +8,10 @@ Controlled by DEBUG_LEVEL environment variable:
 - 3: Debug level (detailed render info, generation tracking)
 - 4: Trace level (every operation, full state dumps)
 
-All output goes to par_term_emu_debug_python.log in the system temp directory
-to avoid breaking TUI apps (Unix/macOS: /tmp, Windows: %TEMP%)
+All output goes to par_term_emu_debug_python_<pid>.log in the system temp
+directory to avoid breaking TUI apps (Unix/macOS: /tmp, Windows: %TEMP%).
+The file is created owner-only (0600) and never opened through a symlink;
+if the path is a planted symlink, logging is disabled (fail closed).
 """
 
 import os
@@ -22,7 +24,9 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
 
-DEBUG_FILE = Path(tempfile.gettempdir()) / "par_term_emu_debug_python.log"
+DEBUG_FILE = (
+    Path(tempfile.gettempdir()) / f"par_term_emu_debug_python_{os.getpid()}.log"
+)
 
 
 class DebugLevel(IntEnum):
@@ -56,8 +60,19 @@ class DebugLogger:
 
         if self.level != DebugLevel.OFF:
             try:
-                # Open in write mode to truncate (separate log from Rust)
-                self.file_handle = open(DEBUG_FILE, "w", buffering=1)  # noqa: SIM115
+                # Truncate (separate log from Rust). The temp dir is shared and
+                # world-writable: create owner-only and refuse a planted symlink,
+                # matching src/debug.rs. O_BINARY (Windows only) keeps the fd from
+                # translating newlines a second time under the text wrapper.
+                flags = (
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_TRUNC
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_BINARY", 0)
+                )
+                fd = os.open(DEBUG_FILE, flags, 0o600)
+                self.file_handle = os.fdopen(fd, "w", buffering=1)
                 self._write_header()
             except OSError as e:
                 print(f"Failed to open debug log file: {e}", file=sys.stderr)
