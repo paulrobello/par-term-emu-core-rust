@@ -110,8 +110,8 @@ pub struct RespawnSpawn {
     /// The command to run: the explicit override, else the pane's stored
     /// spawn command.
     pub command: Option<String>,
-    /// The restart's working directory: the explicit override, else the
-    /// pane's last known cwd.
+    /// The restart's working directory: the explicit override, else
+    /// [`MuxPane::respawn_cwd`]; `None` defers to the factory's cwd.
     pub cwd: Option<std::path::PathBuf>,
     /// The old pane's user title, carried to the replacement.
     user_title: Option<String>,
@@ -1042,7 +1042,7 @@ impl MuxTree {
                 cols as u16,
                 rows as u16,
                 pane.spawn_command().map(str::to_string),
-                pane.persistence_cwd(),
+                pane.respawn_cwd(),
                 pane.user_title().map(str::to_string),
                 pane.poll_running(),
             )
@@ -1059,10 +1059,9 @@ impl MuxTree {
             cols,
             rows,
             command: command.or(stored_command),
-            cwd: cwd
-                .map(Path::to_owned)
-                .or(stored_cwd)
-                .or_else(|| std::env::current_dir().ok()),
+            // `None` lets the factory's cwd apply, then the spawn's `$HOME`
+            // fallback — where a fresh pane lands (SEC-128).
+            cwd: cwd.map(Path::to_owned).or(stored_cwd),
             user_title,
         })
     }
@@ -2792,6 +2791,101 @@ mod tests {
         assert_eq!(tree.pane(pane).unwrap().user_title(), Some("kept"));
         assert!(tree.pane(pane).unwrap().is_running());
         assert!(!tree.all_panes_dead());
+    }
+
+    /// A live `sleep 60` pane, fed `OSC 7 file://{host}{dir}`, and the
+    /// cwd `begin_respawn(-k)` plans for it (SEC-128).
+    #[cfg(unix)]
+    fn respawn_cwd_after_osc7(host: &str, dir: &std::path::Path) -> Option<PathBuf> {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let pane = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("sleep 60"))
+            .unwrap();
+        tree.pane(pane)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(format!("\x1b]7;file://{host}{}\x1b\\", dir.display()).as_bytes());
+        assert_eq!(
+            tree.pane(pane)
+                .unwrap()
+                .terminal()
+                .read()
+                .current_directory(),
+            Some(dir.to_str().unwrap()),
+            "the OSC 7 report was recorded"
+        );
+        let plan = tree.begin_respawn(pane, true, None, None).unwrap();
+        for id in [first, pane] {
+            let _ = tree.pane_mut(id).unwrap().kill();
+        }
+        plan.cwd
+    }
+
+    /// SEC-128: an OSC 7 cwd naming another host is program output about a
+    /// remote machine, never a local directory respawn may run in.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_ignores_a_remote_osc7_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = respawn_cwd_after_osc7("remote.invalid", dir.path());
+        assert_ne!(cwd.as_deref(), Some(dir.path()), "remote OSC 7 was trusted");
+    }
+
+    /// SEC-128: a local OSC 7 report (implicit, `localhost`, or this
+    /// machine's own name) naming an existing directory is still used.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_uses_a_local_osc7_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = crate::mux::pane::local_hostname().expect("gethostname");
+        for h in ["", "localhost", host.as_str()] {
+            let cwd = respawn_cwd_after_osc7(h, dir.path());
+            assert_eq!(cwd.as_deref(), Some(dir.path()), "host {h:?}");
+        }
+    }
+
+    /// SEC-128: a held dead pane with no OSC 7 has no cwd to offer (its
+    /// reaped PID is not read, SEC-125), so the plan defers to the
+    /// factory's cwd rather than the daemon's own working directory.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_of_a_dead_pane_without_osc7_defers_the_cwd() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let pane = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("exit 3"))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let p = tree.pane_mut(pane).unwrap();
+            if !p.poll_running() {
+                p.mark_dead();
+                if p.exit_code().is_some() {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "never reaped");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let plan = tree.begin_respawn(pane, false, None, None).unwrap();
+        let _ = tree.pane_mut(first).unwrap().kill();
+        assert_eq!(plan.cwd, None);
+    }
+
+    /// SEC-128: a local OSC 7 path that no longer exists is not used.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_ignores_an_osc7_dir_that_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let cwd = respawn_cwd_after_osc7("localhost", &gone);
+        assert_ne!(cwd.as_deref(), Some(gone.as_path()), "missing dir was used");
     }
 
     #[test]

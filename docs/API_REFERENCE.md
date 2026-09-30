@@ -1136,11 +1136,11 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 #### Process Management
 - `spawn(command: str, args: list[str] | None = None, env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
 - `spawn_shell(env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a shell (auto-detected from environment; defaults to /bin/bash on Unix, cmd.exe on Windows)
-- `child_pid() -> int | None`: Return the PID of the spawned child process, or `None` if not yet spawned
+- `child_pid() -> int | None`: Return the PID of the spawned child process. `None` before spawn, and after `try_wait()`/`wait()`/`kill()` has observed the exit: the PID is released and may belong to another process
 - `is_running() -> bool`: Check if the child process is still running
 - `wait() -> int | None`: Wait for child process to exit and return exit code
 - `try_wait() -> int | None`: Non-blocking check if child has exited
-- `kill()`: Forcefully terminate the child process
+- `kill()`: Forcefully terminate the child process. A no-op once the exit has been observed
 - `get_default_shell() -> str`: Get the default shell path
 
 #### Keyboard Protocol (PTY-Specific)

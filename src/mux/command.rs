@@ -587,6 +587,164 @@ fn split_after_flag<'a>(rest: &'a str, flag: &str) -> Option<(&'a str, &'a str)>
     None
 }
 
+/// One flag a command accepts ahead of its free-text tail (SEC-126).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeadingFlag {
+    /// Presence only (`-k`).
+    Bare(&'static str),
+    /// Exactly one value word (`-t v`); a second occurrence is an error.
+    Valued(&'static str),
+    /// A value word that may repeat (`-e NAME=V`).
+    #[allow(dead_code)] // reserved for QA-219's new-session -e
+    Repeated(&'static str),
+}
+
+impl LeadingFlag {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Bare(n) | Self::Valued(n) | Self::Repeated(n) => n,
+        }
+    }
+}
+
+/// The flags that lead a line, and the raw text after them.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LeadingFlags<'a> {
+    /// Flags in line order; values unquoted by the [`shell_split`] grammar.
+    flags: Vec<(&'static str, Option<String>)>,
+    /// Raw slice after the last flag (or after `--`), leading whitespace
+    /// dropped and trailing whitespace trimmed; empty when nothing follows.
+    tail: &'a str,
+}
+
+impl LeadingFlags<'_> {
+    /// The last value given for `flag`.
+    fn value(&self, flag: &str) -> Option<&str> {
+        self.flags
+            .iter()
+            .rev()
+            .find(|(f, _)| *f == flag)
+            .and_then(|(_, v)| v.as_deref())
+    }
+
+    /// Every value given for `flag`, in line order.
+    #[allow(dead_code)] // reserved for QA-219's new-session -e
+    fn values(&self, flag: &str) -> Vec<&str> {
+        self.flags
+            .iter()
+            .filter(|(f, _)| *f == flag)
+            .filter_map(|(_, v)| v.as_deref())
+            .collect()
+    }
+
+    /// Whether `flag` appeared.
+    fn has(&self, flag: &str) -> bool {
+        self.flags.iter().any(|(f, _)| *f == flag)
+    }
+}
+
+/// The next shell word of `s` at or after byte `from`: its raw byte range
+/// and its unquoted text, under exactly [`shell_split`]'s rules (`'…'` and
+/// `"…"` literal, `\` escapes the next char, unquoted Unicode whitespace
+/// separates). `None` when only whitespace remains. Every index comes from
+/// `char_indices`, so the range always lies on char boundaries.
+fn next_shell_word(s: &str, from: usize) -> Option<(usize, usize, String)> {
+    let mut chars = s[from..]
+        .char_indices()
+        .map(|(i, c)| (from + i, c))
+        .peekable();
+    while chars.next_if(|(_, c)| c.is_whitespace()).is_some() {}
+    let (start, _) = *chars.peek()?;
+    let mut end = s.len();
+    let mut word = String::new();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\'' | '"' => {
+                for (_, inner) in chars.by_ref() {
+                    if inner == c {
+                        break;
+                    }
+                    word.push(inner);
+                }
+            }
+            '\\' => {
+                if let Some((_, escaped)) = chars.next() {
+                    word.push(escaped);
+                }
+            }
+            c if c.is_whitespace() => {
+                end = i;
+                break;
+            }
+            c => word.push(c),
+        }
+    }
+    Some((start, end, word))
+}
+
+/// Split `line` into the flags that lead it and the raw text after them
+/// (SEC-126), with getopt semantics: flags are read only until the first
+/// non-flag word or `--`, so a `-k`/`-c` inside a command belongs to the
+/// command. The tail is a raw slice, not a rejoined token list, so its
+/// quoting and whitespace reach the pane's shell unchanged.
+///
+/// An unknown `-x` word before the tail is an error (a command starting
+/// with `-` must follow `--`), as is a missing value or a repeated
+/// [`LeadingFlag::Valued`] flag. Combined flags (`-kt`) are not supported.
+fn split_leading_flags<'a>(
+    line: &'a str,
+    name: &str,
+    spec: &[LeadingFlag],
+) -> Result<LeadingFlags<'a>, String> {
+    // trim_start first: the name may sit behind leading whitespace (the
+    // fuzz-found `parse_send_keys` panic).
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix(name)
+        .ok_or_else(|| format!("{name}: malformed command line"))?;
+    let base = line.len() - rest.len();
+    let mut lead = LeadingFlags::default();
+    let mut pos = base;
+    while let Some((start, end, word)) = next_shell_word(line, pos) {
+        if word == "--" {
+            lead.tail = line[end..].trim();
+            return Ok(lead);
+        }
+        match spec.iter().copied().find(|f| f.name() == word) {
+            Some(LeadingFlag::Bare(flag)) => {
+                lead.flags.push((flag, None));
+                pos = end;
+            }
+            Some(kind @ (LeadingFlag::Valued(flag) | LeadingFlag::Repeated(flag))) => {
+                if matches!(kind, LeadingFlag::Valued(_)) && lead.has(flag) {
+                    return Err(format!("{name}: duplicate {flag}"));
+                }
+                let (value_start, value_end, unquoted) = next_shell_word(line, end)
+                    .ok_or_else(|| format!("{name}: {flag} requires a value"))?;
+                // Same rule as `Args::quoted_flag`: only a value that opens
+                // a quote is unquoted, so a bare `C:\Users\me` or `a\b`
+                // stays byte-for-byte.
+                let raw = &line[value_start..value_end];
+                let value = if raw.starts_with(['\'', '"']) {
+                    unquoted
+                } else {
+                    raw.to_string()
+                };
+                lead.flags.push((flag, Some(value)));
+                pos = value_end;
+            }
+            None if word.len() > 1 && word.starts_with('-') => {
+                return Err(format!("{name}: unknown flag {word}"));
+            }
+            None => {
+                lead.tail = line[start..].trim_end();
+                return Ok(lead);
+            }
+        }
+    }
+    Ok(lead)
+}
+
 /// Split a payload into shell-style words: single- or double-quoted regions
 /// contribute their literal content, a backslash outside quotes escapes the
 /// next character, and unquoted whitespace separates words.
@@ -825,9 +983,13 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 /// daemon-side against the tree, and a name may contain spaces, so it is
 /// read through [`Args::quoted_flag`]. `send-keys` alone keeps a
 /// single-token target (see [`parse_send_keys`]), quoted alongside the
-/// payload it would collide with. The one trailing-text command left
-/// needs no quoting either, taking the rest of the line verbatim —
-/// `rename-window` (via [`Args::trailing_after`]).
+/// payload it would collide with.
+///
+/// Two commands take trailing free text. `respawn-pane` reads its flags
+/// only up to the first command word or `--` and passes the raw rest of
+/// the line to the pane's shell, quoting and whitespace intact (see
+/// [`split_leading_flags`]). `rename-window` is the one remaining
+/// [`Args::trailing_after`] user, joining the words after `-t`.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
@@ -1197,30 +1359,27 @@ fn parse_swap_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+/// `respawn-pane [-k] [-c dir] -t target [--] [command]`: flags lead, in
+/// any order, and stop at the first command word; the command is the raw
+/// rest of the line (SEC-126). Never reads flags through the [`Args`]
+/// helpers, which scan the whole line and so see into the command.
 fn parse_respawn_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let pane = a.pane("-t")?;
-    let kill = a.has_flag("-k");
-    let start_dir = a.quoted_flag("-c")?;
-    // The command, when given, is the trailing text after the flags;
-    // anchor on whichever value flag sits LAST on the line so a command
-    // argument is never eaten as a flag value. A bare `-k` between the
-    // anchor and the command is the kill flag, already parsed — strip
-    // that one leading token.
-    let mut command = if start_dir.is_some() {
-        a.trailing_after("-c")
-    } else {
-        a.trailing_after("-t")
+    use LeadingFlag::{Bare, Valued};
+    let lead = split_leading_flags(a.line, a.name, &[Valued("-t"), Valued("-c"), Bare("-k")])?;
+    let raw = match lead.value("-t") {
+        None => return Err(format!("{} requires -t", a.name)),
+        Some("") => return Err(format!("{}: -t requires a non-empty name", a.name)),
+        Some(raw) => raw,
     };
-    if kill {
-        let mut tokens = command.split(' ');
-        if tokens.next() == Some("-k") {
-            command = tokens.collect::<Vec<_>>().join(" ");
-        }
-    }
-    let command = (!command.trim().is_empty()).then_some(command);
+    let pane = Target::parse(raw).map_err(|_| format!("invalid pane target: {raw}"))?;
+    let start_dir = match lead.value("-c") {
+        Some("") => return Err(format!("{}: -c requires a non-empty directory", a.name)),
+        other => other.map(str::to_string),
+    };
+    let command = (!lead.tail.is_empty()).then(|| lead.tail.to_string());
     Ok(MuxCommand::RespawnPane {
         pane,
-        kill,
+        kill: lead.has("-k"),
         start_dir,
         command,
     })
@@ -2308,6 +2467,140 @@ mod tests {
                 command: Some("top".to_string())
             }
         );
+    }
+
+    /// SEC-126: `respawn-pane` reads flags only up to the first non-flag
+    /// word (or `--`), and passes the rest of the line through verbatim —
+    /// a `-k`/`-c` inside the command belongs to the command.
+    #[test]
+    fn respawn_pane_parses_only_leading_flags() {
+        type Expect = Result<
+            (
+                Target<PaneId>,
+                bool,
+                Option<&'static str>,
+                Option<&'static str>,
+            ),
+            (),
+        >;
+        let id = |n: u32| Target::Id(PaneId(n));
+        let cases: Vec<(&str, Expect)> = vec![
+            (r"respawn-pane -t %0", Ok((id(0), false, None, None))),
+            (
+                r"respawn-pane -t %0 -k -c /tmp sleep 60",
+                Ok((id(0), true, Some("/tmp"), Some("sleep 60"))),
+            ),
+            (
+                r"respawn-pane -t %0 -k top",
+                Ok((id(0), true, None, Some("top"))),
+            ),
+            (
+                r"respawn-pane -t %0 sh -c 'echo X; sort -k 1 /dev/null; sleep 600'",
+                Ok((
+                    id(0),
+                    false,
+                    None,
+                    Some(r"sh -c 'echo X; sort -k 1 /dev/null; sleep 600'"),
+                )),
+            ),
+            (
+                r"respawn-pane -t %0 sh -c 'echo hi'",
+                Ok((id(0), false, None, Some(r"sh -c 'echo hi'"))),
+            ),
+            (
+                r"respawn-pane -c /tmp -t %0 top",
+                Ok((id(0), false, Some("/tmp"), Some("top"))),
+            ),
+            (
+                r"respawn-pane -t %0 -c '/a b' sleep 5",
+                Ok((id(0), false, Some("/a b"), Some("sleep 5"))),
+            ),
+            (
+                r#"respawn-pane -t %0 -c "/a b" sleep 5"#,
+                Ok((id(0), false, Some("/a b"), Some("sleep 5"))),
+            ),
+            (
+                r"respawn-pane -t %0 printf '%s\n'   'a    b'",
+                Ok((id(0), false, None, Some(r"printf '%s\n'   'a    b'"))),
+            ),
+            (
+                r"respawn-pane -t %0 -- -weird --flag",
+                Ok((id(0), false, None, Some("-weird --flag"))),
+            ),
+            (
+                r"respawn-pane -t %0 -k -- top -k",
+                Ok((id(0), true, None, Some("top -k"))),
+            ),
+            (r"respawn-pane -k -t %0", Ok((id(0), true, None, None))),
+            (r"respawn-pane -t %0 --", Ok((id(0), false, None, None))),
+            (
+                "respawn-pane   -t   %0    -k    top  ",
+                Ok((id(0), true, None, Some("top"))),
+            ),
+            (
+                r"respawn-pane -t 'my pane' top",
+                Ok((
+                    Target::Name("my pane".to_string()),
+                    false,
+                    None,
+                    Some("top"),
+                )),
+            ),
+            (
+                r"respawn-pane -t %0 echo -k",
+                Ok((id(0), false, None, Some("echo -k"))),
+            ),
+            (
+                r"respawn-pane -t %0 echo -c /etc",
+                Ok((id(0), false, None, Some("echo -c /etc"))),
+            ),
+            (r"respawn-pane -t %0 -x foo", Err(())),
+            (r"respawn-pane -t %0 -t %1", Err(())),
+            (r"respawn-pane -t", Err(())),
+            (r"respawn-pane -c /tmp top", Err(())),
+            (r"respawn-pane -t %0 -c ''", Err(())),
+            (r"respawn-pane -t %0 -kt %1", Err(())),
+            (r"respawn-pane -t '' top", Err(())),
+            // An unquoted value keeps its backslashes (a Windows path, a
+            // name), as `Args::quoted_flag` does for every other command.
+            (
+                r"respawn-pane -t %0 -c C:\Users\me top",
+                Ok((id(0), false, Some(r"C:\Users\me"), Some("top"))),
+            ),
+            (
+                r"respawn-pane -t a\b top",
+                Ok((Target::Name(r"a\b".to_string()), false, None, Some("top"))),
+            ),
+            // Not in the plan's table: a leading-whitespace line and a
+            // non-ASCII command must slice on char boundaries.
+            (
+                "  respawn-pane -t %0 echo héllo  wörld",
+                Ok((id(0), false, None, Some("echo héllo  wörld"))),
+            ),
+        ];
+        for (line, expect) in cases {
+            let got = parse_command(line).map(|cmd| match cmd {
+                MuxCommand::RespawnPane {
+                    pane,
+                    kill,
+                    start_dir,
+                    command,
+                } => (pane, kill, start_dir, command),
+                other => panic!("{line}: parsed as {other:?}"),
+            });
+            match expect {
+                Ok((pane, kill, dir, command)) => {
+                    let want = (
+                        pane,
+                        kill,
+                        dir.map(str::to_string),
+                        command.map(str::to_string),
+                    );
+                    assert_eq!(got, Ok(want), "{line}");
+                }
+                Err(()) => assert!(got.is_err(), "{line}: expected an error, got {got:?}"),
+            }
+        }
     }
 
     #[test]

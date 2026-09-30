@@ -145,8 +145,8 @@ pub struct MuxPane {
     /// HELD in this state (remain-on-exit): its frozen screen stays for
     /// `respawn-pane` to restart in place.
     dead: bool,
-    /// The recorded exit code, valid once `dead` — `None` when the child
-    /// died by signal or was reaped before the code could be read.
+    /// The recorded exit code, valid once `dead` — `None` when the OS had
+    /// no exit status to report as the death was observed.
     exit_code: Option<i32>,
     metadata: HashMap<String, String>,
     /// Last persistence snapshot, valid while the terminal has not changed
@@ -296,6 +296,26 @@ impl MuxPane {
         self.session.child_pid().and_then(process_cwd)
     }
 
+    /// The default cwd `respawn-pane` restarts this pane in (SEC-128).
+    /// OSC 7 is program output, including a remote host's over SSH, so it
+    /// is used only when it names this machine and the directory exists
+    /// here. Otherwise the live child's kernel-reported cwd (the `-k` case),
+    /// which is `None` once the child is reaped (SEC-125). Unlike
+    /// [`Self::persistence_cwd`], which keeps OSC 7 first for restore.
+    pub fn respawn_cwd(&self) -> Option<std::path::PathBuf> {
+        let reported = {
+            let term = self.terminal();
+            let term = term.read();
+            term.current_directory()
+                .filter(|_| osc7_host_is_local(term.shell_integration().hostname()))
+                .map(std::path::PathBuf::from)
+        };
+        if let Some(dir) = reported.filter(|dir| dir.is_dir()) {
+            return Some(dir);
+        }
+        self.session.child_pid().and_then(process_cwd)
+    }
+
     /// The pane's persistence snapshot, reusing the cached capture while the
     /// terminal has not changed since it was taken.
     ///
@@ -351,8 +371,9 @@ impl MuxPane {
 
     /// Record the death this pane's process has already been observed to
     /// reach ([`Self::poll_running`] returned false), capturing the exit
-    /// code while the child handle can still be asked. Best-effort: a
-    /// child that died by signal or was reaped earlier records `None`.
+    /// code while the child handle can still be asked. An earlier reap
+    /// serves its recorded code (SEC-125). Best-effort: a code the OS
+    /// could not report records `None`.
     pub fn mark_dead(&mut self) {
         self.dead = true;
         self.exit_code = self.session.try_wait().ok().flatten();
@@ -750,6 +771,51 @@ fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
+}
+
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(unix)]
+pub(crate) fn local_hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is a live, writable 256-byte buffer and the length
+    // passed is its exact size, so gethostname(3) writes only inside it.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return None;
+    }
+    // POSIX leaves a truncated name unterminated; treat that as unknown.
+    let end = buf.iter().position(|&b| b == 0)?;
+    let name = std::str::from_utf8(&buf[..end]).ok()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(windows)]
+pub(crate) fn local_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
+}
+
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn local_hostname() -> Option<String> {
+    None
+}
+
+/// Whether an OSC 7 hostname names this machine (SEC-128). `None` is local:
+/// the parser already folds an empty host and `localhost` into it. Any
+/// other name must match the local hostname, full or short form, case
+/// insensitively. Shells commonly emit `file://$HOSTNAME/path`, so `None`
+/// alone would reject every local zsh/bash integration. An unknown local
+/// name trusts nothing.
+fn osc7_host_is_local(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return true;
+    };
+    let Some(local) = local_hostname() else {
+        return false;
+    };
+    let short = |name: &str| name.split('.').next().unwrap_or(name).to_string();
+    host.eq_ignore_ascii_case(&local) || short(host).eq_ignore_ascii_case(&short(&local))
 }
 
 /// A factory recording the [`SpawnContext`] of every spawn, for tests that
@@ -1225,5 +1291,56 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
+    }
+
+    /// SEC-128: an OSC 7 host is local only when it is absent (the parser's
+    /// fold of empty/`localhost`) or matches this machine's name, full or
+    /// short form, in any case.
+    #[test]
+    fn osc7_host_is_local_matches_only_this_machine() {
+        assert!(osc7_host_is_local(None));
+        let local = local_hostname().expect("hostname");
+        let short = local.split('.').next().unwrap().to_string();
+        assert!(osc7_host_is_local(Some(&local)));
+        assert!(osc7_host_is_local(Some(&local.to_uppercase())));
+        assert!(osc7_host_is_local(Some(&short)));
+        assert!(osc7_host_is_local(Some(&format!(
+            "{short}.example.invalid"
+        ))));
+        assert!(!osc7_host_is_local(Some("remote.invalid")));
+        assert!(!osc7_host_is_local(Some(&format!("{short}x"))));
+    }
+
+    /// SEC-125: a held (remain-on-exit) pane keeps its frozen screen but
+    /// not its reaped child's PID, so `pane-info cmd=`, the host probe,
+    /// scrape liveness and respawn's cwd fallback cannot reach a PID the OS
+    /// may have handed to another process.
+    #[test]
+    fn a_held_dead_pane_serves_no_child_pid() {
+        let mut pane = ShellPaneFactory::default()
+            .create_pane(PaneId(20), 80, 24, Some("exit 3"), &SpawnContext::default())
+            .expect("pane should spawn");
+        // The reader's EOF can flip `poll_running` before the child is a
+        // reapable zombie, so re-run the reaper's step until the code lands.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if !pane.poll_running() {
+                pane.mark_dead();
+                if pane.exit_code().is_some() {
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pane's child was never reaped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(pane.dead());
+        assert_eq!(pane.exit_code(), Some(3));
+        assert!(pane.child_pid().is_none(), "a reaped PID is not served");
+        assert!(pane.persistence_cwd().is_none(), "no OSC 7, no live child");
+        assert!(pane.snapshot_capture_parts().probe_cwd().is_none());
+        assert!(pane.kill().is_ok(), "killing a held pane signals nothing");
     }
 }

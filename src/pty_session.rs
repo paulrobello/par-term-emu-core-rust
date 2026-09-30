@@ -149,10 +149,21 @@ pub struct PtySession {
     coprocess_manager: Arc<Mutex<CoprocessManager>>,
     /// PID of the spawned child process (shell or command), set after spawn
     child_pid: Option<u32>,
+    /// Exit code once `try_wait`/`wait`/`kill` (or a respawn's cleanup) has
+    /// reaped the child (SEC-125). `Some` means the PID is released to the
+    /// OS and may be recycled, so nothing may signal it again. Every reap
+    /// records under this lock and every signal is sent while holding it,
+    /// so an "unreaped" check cannot go stale before the kill(2). Shared
+    /// with the reader thread for its alt-screen pulse; each spawn installs
+    /// a fresh record so a still-draining old reader keeps its own child's.
+    reaped: Arc<Mutex<Option<i32>>>,
     /// Test seam: the reader thread sleeps this long before its first read,
     /// so a test can make the child exit before any output is read.
     #[cfg(test)]
     first_read_delay: Option<std::time::Duration>,
+    /// Test seam: SIGWINCH deliveries this session attempted.
+    #[cfg(all(test, unix))]
+    signals_sent: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Deliver SIGWINCH to the child's process group, falling back to the PID.
@@ -163,13 +174,17 @@ pub struct PtySession {
 /// same way regardless of which API the caller used. The group is signalled
 /// first so grandchildren (apps launched from the shell) also recalculate;
 /// the direct PID is the fallback for a child that left its group.
+///
+/// Callers hold the session's reap-record lock and have seen it empty
+/// (SEC-125); see [`PtySession::signal_winch`].
 #[cfg(unix)]
 fn send_sigwinch(pid: u32, tag: &str, context: &str) -> std::io::Result<()> {
-    // SAFETY: both `kill` calls address a PID taken from a live child handle
-    // of this session; the negative form addresses only that child's process
-    // group. If the child exits and its PID is recycled between the handle
-    // check and the delivery, SIGWINCH's default disposition is ignore, so a
-    // stray delivery cannot terminate an unrelated process.
+    // SAFETY: `kill(2)` has no memory-safety preconditions. The caller holds
+    // the session's reap-record lock and has seen the child unreaped, and
+    // only this session reaps its child (always recording under that lock),
+    // so `pid` is still our child — live or a zombie — and cannot have been
+    // recycled for an unrelated process. The negative form addresses only
+    // that child's process group.
     unsafe {
         if libc::kill(-(pid as libc::pid_t), libc::SIGWINCH) == 0 {
             debug::log(
@@ -237,8 +252,11 @@ impl PtySession {
             output_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
             child_pid: None,
+            reaped: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             first_read_delay: None,
+            #[cfg(all(test, unix))]
+            signals_sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         session.geometry.publish(&session.terminal.read());
         session
@@ -466,11 +484,17 @@ impl PtySession {
             }
         }
 
-        // Clean up child process handle (should already be exited)
+        // Clean up child process handle (should already be exited). Every
+        // reap here is recorded under the old child's reap record, which a
+        // detached old reader still holds, and the PID is dropped, so a
+        // spawn that fails after this point leaves nothing to signal
+        // (SEC-125).
         if let Some(mut child) = self.child.take() {
+            let mut record = self.reaped.lock();
             // Try to reap the child if it hasn't been reaped yet
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    *record = Some(status.exit_code() as i32);
                     debug::log(
                         debug::DebugLevel::Debug,
                         "PTY_CLEANUP",
@@ -481,14 +505,18 @@ impl PtySession {
                     );
                 }
                 Ok(None) => {
-                    // Child still running - kill it
+                    // Child still running - kill it. `try_wait` just saw it
+                    // unreaped on this thread (std caches a prior reap), so
+                    // portable-pty's raw SIGHUP cannot reach a released PID.
                     debug::log(
                         debug::DebugLevel::Info,
                         "PTY_CLEANUP",
                         "Previous child still running, killing",
                     );
                     let _ = child.kill();
-                    let _ = child.wait();
+                    if let Ok(status) = child.wait() {
+                        *record = Some(status.exit_code() as i32);
+                    }
                 }
                 Err(e) => {
                     debug::log(
@@ -499,6 +527,7 @@ impl PtySession {
                 }
             }
         }
+        self.child_pid = None;
 
         debug::log(
             debug::DebugLevel::Debug,
@@ -751,6 +780,9 @@ impl PtySession {
         self.writer = Some(Arc::clone(&writer));
         self.running.store(true, Ordering::SeqCst);
         self.child_pid = child_pid;
+        // A fresh record, not a cleared one: a previous reader still
+        // draining keeps the old child's record (SEC-125).
+        self.reaped = Arc::new(Mutex::new(None));
 
         // Spawn the reader thread (shares writer for device query responses)
         self.start_reader_thread(reader, writer, child_pid);
@@ -823,9 +855,12 @@ impl PtySession {
         let geometry = Arc::clone(&self.geometry);
         let output_callback = Arc::clone(&self.output_callback);
         let coprocess_manager = Arc::clone(&self.coprocess_manager);
+        let reaped = Arc::clone(&self.reaped);
         // Only the unix SIGWINCH pulse on alt-screen entry signals the child.
         #[cfg(not(unix))]
-        let _ = child_pid;
+        let _ = (child_pid, reaped);
+        #[cfg(all(test, unix))]
+        let signals_sent = Arc::clone(&self.signals_sent);
         #[cfg(test)]
         let first_read_delay = self.first_read_delay;
 
@@ -966,13 +1001,24 @@ impl PtySession {
                                 );
                                 // Current dimensions, not stale captured values
                                 let (current_cols, current_rows) = term.size();
+                                // Best-effort pulse: skipped when the reap
+                                // record is contended or says reaped, so a
+                                // released PID is never signalled (SEC-125).
+                                // try_lock keeps the terminal-then-record
+                                // lock order deadlock-free.
                                 #[cfg(unix)]
-                                if let Some(pid) = child_pid {
-                                    let _ = send_sigwinch(
-                                        pid,
-                                        "ALT_SCREEN",
-                                        &format!("alt-screen entry {current_cols}x{current_rows}"),
-                                    );
+                                if let (Some(pid), Some(record)) = (child_pid, reaped.try_lock()) {
+                                    if record.is_none() {
+                                        #[cfg(test)]
+                                        signals_sent.fetch_add(1, Ordering::SeqCst);
+                                        let _ = send_sigwinch(
+                                            pid,
+                                            "ALT_SCREEN",
+                                            &format!(
+                                                "alt-screen entry {current_cols}x{current_rows}"
+                                            ),
+                                        );
+                                    }
                                 }
                             }
 
@@ -1167,11 +1213,7 @@ impl PtySession {
         // the signal in all scenarios. Group-then-PID delivery lives in
         // [`send_sigwinch`].
         #[cfg(unix)]
-        if let Some(ref child) = self.child {
-            if let Some(pid) = child.process_id() {
-                let _ = send_sigwinch(pid, "PTY_RESIZE", &format!("resize {cols}x{rows}"));
-            }
-        }
+        self.signal_winch("PTY_RESIZE", &format!("resize {cols}x{rows}"));
 
         Ok(())
     }
@@ -1246,15 +1288,10 @@ impl PtySession {
         // Manually deliver SIGWINCH after the pty resize (as in resize());
         // delivery and failure logging live in [`send_sigwinch`].
         #[cfg(unix)]
-        if let Some(ref child) = self.child {
-            if let Some(pid) = child.process_id() {
-                let _ = send_sigwinch(
-                    pid,
-                    "PTY_RESIZE",
-                    &format!("resize {cols}x{rows} ({pixel_width}x{pixel_height} px)"),
-                );
-            }
-        }
+        self.signal_winch(
+            "PTY_RESIZE",
+            &format!("resize {cols}x{rows} ({pixel_width}x{pixel_height} px)"),
+        );
 
         Ok(())
     }
@@ -1271,7 +1308,7 @@ impl PtySession {
     /// flag stays true for 15+ s. A reaper that only trusts the flag never
     /// reaps on Windows; this poll asks the OS when the flag claims alive.
     pub fn poll_running(&mut self) -> bool {
-        if !self.running.load(Ordering::SeqCst) {
+        if self.reaped.lock().is_some() || !self.running.load(Ordering::SeqCst) {
             return false;
         }
         match self.try_wait() {
@@ -1284,21 +1321,53 @@ impl PtySession {
 
     /// Return the PID of the spawned child process (shell or command).
     ///
-    /// Returns `None` if no process has been spawned yet or if the platform
-    /// does not expose the PID (unusual).
+    /// Returns `None` if no process has been spawned yet, if the platform
+    /// does not expose the PID (unusual), or once [`Self::try_wait`],
+    /// [`Self::wait`] or [`Self::kill`] has observed the exit: the reaped
+    /// PID is released to the OS and may belong to another process
+    /// (SEC-125).
     pub fn child_pid(&self) -> Option<u32> {
-        self.child_pid
+        if self.reaped.lock().is_some() {
+            None
+        } else {
+            self.child_pid
+        }
+    }
+
+    /// Deliver SIGWINCH to the child unless it has been reaped (SEC-125):
+    /// the reap record stays locked across the delivery, so no reap can
+    /// release the PID between the check and the `kill(2)`.
+    #[cfg(unix)]
+    fn signal_winch(&self, tag: &str, context: &str) {
+        let record = self.reaped.lock();
+        if record.is_some() {
+            return;
+        }
+        if let Some(pid) = self.child_pid {
+            #[cfg(test)]
+            self.signals_sent.fetch_add(1, Ordering::SeqCst);
+            let _ = send_sigwinch(pid, tag, context);
+        }
+        drop(record);
     }
 
     /// Try to get the exit status without blocking
     ///
-    /// Returns None if the process hasn't exited yet
+    /// Returns None if the process hasn't exited yet. Once the exit has
+    /// been observed, every later call returns the recorded code.
     pub fn try_wait(&mut self) -> Result<Option<i32>, PtyError> {
         if let Some(ref mut child) = self.child {
+            let mut record = self.reaped.lock();
+            if let Some(code) = *record {
+                self.running.store(false, Ordering::SeqCst);
+                return Ok(Some(code));
+            }
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    let code = status.exit_code() as i32;
+                    *record = Some(code);
                     self.running.store(false, Ordering::SeqCst);
-                    Ok(Some(status.exit_code() as i32))
+                    Ok(Some(code))
                 }
                 Ok(None) => Ok(None),
                 Err(e) => Err(PtyError::IoError(e)),
@@ -1310,32 +1379,55 @@ impl PtySession {
 
     /// Wait for the process to exit and return its exit code
     ///
-    /// This blocks until the process exits
+    /// This blocks until the process exits. The reap record stays locked
+    /// through the wait; the reader thread only `try_lock`s it, so a child
+    /// blocked on PTY output cannot deadlock against this call.
     pub fn wait(&mut self) -> Result<i32, PtyError> {
         if let Some(ref mut child) = self.child {
-            let status = child.wait().map_err(PtyError::IoError)?;
+            let mut record = self.reaped.lock();
+            let code = match *record {
+                Some(code) => code,
+                None => {
+                    let code = child.wait().map_err(PtyError::IoError)?.exit_code() as i32;
+                    *record = Some(code);
+                    code
+                }
+            };
             self.running.store(false, Ordering::SeqCst);
-            Ok(status.exit_code() as i32)
+            Ok(code)
         } else {
             Err(PtyError::NotStartedError)
         }
     }
 
     /// Kill the process
+    ///
+    /// A no-op once the exit has been observed: the reaped PID is released
+    /// and may belong to another process (SEC-125).
     pub fn kill(&mut self) -> Result<(), PtyError> {
         if let Some(ref mut child) = self.child {
-            child.kill().map_err(PtyError::IoError)?;
-            // portable-pty's kill escalates SIGHUP → SIGKILL but never
-            // waits, so a child that ignores SIGHUP (a shell that trapped
-            // it) would stay a zombie until this process exits. SIGKILL
-            // cannot be trapped, so a bounded poll reaps it here. An
-            // already-reaped child (ECHILD) is success by another hand.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-            while std::time::Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                    Err(_) => break,
+            let mut record = self.reaped.lock();
+            // portable-pty's kill opens with a raw `kill(pid, SIGHUP)` that,
+            // unlike std's `Child::kill`, does not check for a prior reap, so
+            // it may only run while the record says unreaped.
+            if record.is_none() {
+                child.kill().map_err(PtyError::IoError)?;
+                // portable-pty's kill escalates SIGHUP → SIGKILL but never
+                // waits, so a child that ignores SIGHUP (a shell that trapped
+                // it) would stay a zombie until this process exits. SIGKILL
+                // cannot be trapped, so a bounded poll reaps it here. When
+                // portable-pty's own grace loop already reaped it, std's
+                // cached status still answers the first poll.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                while std::time::Instant::now() < deadline {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            *record = Some(status.exit_code() as i32);
+                            break;
+                        }
+                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                        Err(_) => break,
+                    }
                 }
             }
             self.running.store(false, Ordering::SeqCst);
@@ -1934,6 +2026,102 @@ mod tests {
             !session.poll_running(),
             "the OS exit must outweigh a stale reader flag"
         );
+        assert!(
+            session.child_pid().is_none(),
+            "a reaped child's PID is released and must not be served"
+        );
+    }
+
+    /// Spawn `/bin/sh -c "exit 3"` and poll `try_wait` until it reports the
+    /// reap (10 s deadline) — the shared setup for the SEC-125 tests.
+    #[cfg(unix)]
+    fn spawn_and_reap_exit_3() -> PtySession {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.spawn("/bin/sh", &["-c", "exit 3"]).expect("spawn");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match session.try_wait() {
+                Ok(Some(code)) => {
+                    assert_eq!(code, 3, "exit code");
+                    break;
+                }
+                _ => {
+                    assert!(std::time::Instant::now() < deadline, "child never exited");
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+        session
+    }
+
+    /// SEC-125: once `try_wait` has reaped the child, its PID belongs to
+    /// the OS again and may be recycled, so it is no longer served.
+    #[cfg(unix)]
+    #[test]
+    fn reaped_child_reports_no_pid() {
+        let mut session = spawn_and_reap_exit_3();
+        assert!(session.child_pid().is_none());
+        assert_eq!(session.try_wait().ok().flatten(), Some(3), "code is kept");
+        assert_eq!(session.wait().ok(), Some(3), "wait serves the record");
+    }
+
+    /// SEC-125: `kill` after the reap must not signal the released PID.
+    /// portable-pty's `kill` sends a raw SIGHUP first, which fails with
+    /// ESRCH on a reaped PID (or, once recycled, hits another process).
+    #[cfg(unix)]
+    #[test]
+    fn kill_after_reap_is_a_silent_noop() {
+        let mut session = spawn_and_reap_exit_3();
+        assert!(session.kill().is_ok(), "kill after reap is a no-op");
+        assert!(!session.is_running());
+    }
+
+    /// SEC-125: a resize after the reap updates the grid but sends no
+    /// SIGWINCH to the released PID.
+    #[cfg(unix)]
+    #[test]
+    fn resize_after_reap_sends_no_signal() {
+        let mut session = spawn_and_reap_exit_3();
+        let before = session.signals_sent.load(Ordering::SeqCst);
+        session.resize(100, 30).expect("resize");
+        session
+            .resize_with_pixels(100, 30, 1000, 600)
+            .expect("resize_with_pixels");
+        assert_eq!(session.size(), (100, 30));
+        assert_eq!(
+            session.signals_sent.load(Ordering::SeqCst),
+            before,
+            "no SIGWINCH may reach a reaped PID"
+        );
+    }
+
+    /// SEC-125: the resize path still signals a live child, so the guard
+    /// is not simply suppressing every delivery.
+    #[cfg(unix)]
+    #[test]
+    fn resize_of_a_live_child_still_signals() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session
+            .spawn("/bin/sh", &["-c", "sleep 30"])
+            .expect("spawn");
+        let before = session.signals_sent.load(Ordering::SeqCst);
+        session.resize(100, 30).expect("resize");
+        assert!(session.signals_sent.load(Ordering::SeqCst) > before);
+        session.kill().expect("kill");
+    }
+
+    /// SEC-125: a respawn resets the record, so the new child's PID is
+    /// served even though the previous child was reaped.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_after_reap_serves_the_new_pid() {
+        let mut session = spawn_and_reap_exit_3();
+        session
+            .spawn("/bin/sh", &["-c", "sleep 30"])
+            .expect("respawn");
+        assert!(session.child_pid().is_some(), "the new child has a pid");
+        assert_eq!(session.try_wait().ok().flatten(), None, "and is running");
+        session.kill().expect("kill");
     }
 
     #[test]

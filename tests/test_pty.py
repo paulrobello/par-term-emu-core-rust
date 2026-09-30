@@ -202,6 +202,29 @@ def test_kill_process():
     assert wait_for(lambda: not term.is_running())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_child_pid_none_after_exit():
+    """A reaped child's PID is released to the OS, so it is not served (SEC-125)."""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/sh", args=["-c", "exit 0"])
+    assert wait_for(lambda: term.try_wait() is not None)
+    assert term.child_pid() is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_kill_after_exit_is_noop():
+    """kill() after the exit was observed signals nothing and does not raise (SEC-125)."""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/sh", args=["-c", "exit 0"])
+    assert wait_for(lambda: term.try_wait() is not None)
+    term.kill()
+    assert not term.is_running()
+
+
 def test_terminal_query_methods():
     """Test terminal query methods"""
     from par_term_emu_core_rust import PtyTerminal

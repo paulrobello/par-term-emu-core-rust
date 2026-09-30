@@ -181,8 +181,9 @@ pub enum TmuxNotification {
 
     /// A pane's process exited and the pane is held (remain-on-exit):
     /// the pane, its window, and its frozen screen stay in the tree for
-    /// `respawn-pane`. The exit code is `None` when the child died by
-    /// signal or was reaped before the code was read.
+    /// `respawn-pane`. The exit code is `None` only when the daemon had
+    /// no exit status to read as it observed the death; a death by signal
+    /// reports `1`.
     /// Arguments: pane_id, exit_code (empty = none)
     PaneExited {
         pane_id: String,
@@ -643,8 +644,8 @@ impl TmuxControlParser {
     }
 
     fn parse_pane_exited(args: &str) -> Option<TmuxNotification> {
-        // pane_id [exit_code] — a missing code token means the code was
-        // unreadable (signal death, or reaped before the pass saw it).
+        // pane_id [exit_code] — a missing code token means the daemon had
+        // no exit status to read as it observed the death.
         let (pane_id, code) = match args.split_once(' ') {
             Some((id, rest)) => (id, rest.trim().parse::<i32>().ok()),
             None => (args, None),
