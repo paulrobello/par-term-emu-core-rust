@@ -907,11 +907,31 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - The current values of every size cap live in the
   [Resource Limits Reference](#resource-limits-reference) table, generated
   from the code — prose numbers here would drift.
-- Inbound WebSocket frames and messages are capped at 16 MiB each
-  (`WS_MAX_MESSAGE_SIZE` / `WS_MAX_FRAME_SIZE` in `src/streaming/server.rs`,
-  applied as `max_message_size` / `max_frame_size` on the `WebSocketConfig`).
-  This bounds per-connection memory from one oversized frame independently
-  of the protobuf-level caps above.
+- Inbound WebSocket frames and messages are capped (`WS_MAX_MESSAGE_SIZE` /
+  `WS_MAX_FRAME_SIZE` on the `WebSocketConfig`, values in the
+  [Resource Limits Reference](#resource-limits-reference)). This bounds
+  per-connection memory from one oversized frame independently of the
+  protobuf-level caps above.
+
+### Diagnostic Logging
+
+`par-term-streamer` prints core diagnostics to stdout whether or not
+`DEBUG_LEVEL` is set: its `tracing` subscriber bridges the core's `log`
+records (target `par_term_emu_core_rust`, `src/debug.rs`).
+
+- **Default:** Info and above, including `PTY_SPAWN` command lines and the
+  hex of the terminal's replies to device queries.
+- **`--verbose`:** every Debug record as well, including per-sequence
+  `CSI`/`OSC`/`ESC` dispatch. `OSC` records carry the sequence's full
+  parameters, so OSC 52 clipboard payloads and OSC 1337 user variables
+  written by programs in the session appear in the output.
+
+Client keystrokes are not logged as `PTY_WRITE`: client input reaches the
+PTY through the session's input queue and the raw PTY writer, not
+`PtySession::write`. Only `--macro-file` playback writes through it. Treat
+captured `--verbose` output as private as the terminal session itself.
+The `DEBUG_LEVEL` file sink behaves as described under
+[Debug Logging](#debug-logging).
 
 ### See Also
 
@@ -995,35 +1015,49 @@ Both bounds below exist on a connection whose peer is already verified to
 be the same user — they bound accidental and runaway growth, not an
 adversary:
 
-- **Per-line byte budget (`MAX_CONTROL_LINE_BYTES`, 1 MiB):** the client
+- **Per-line byte budget (`MAX_CONTROL_LINE_BYTES`):** the client
   read loop accumulates a line until its newline; without a budget a
   client streaming an unterminated line grows the daemon's memory until
   the socket closes. The budget is checked on every chunk read, so a line
   — complete or unterminated — exceeding it is answered with one `%error`
   block ("line exceeds 1 MiB budget, closing connection") and the
   connection is closed without waiting for a newline.
-- **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` in
-  `src/mux/server.rs`, 4096 lines):** a `%output` line carries
-  one PTY read (up to 16 KiB raw, roughly doubled by escape encoding), so
-  a client that stops draining pins at most ~128 MiB before it is
-  evicted and disconnected, and the disconnect frees the queue.
+- **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` lines):** a `%output`
+  line carries one PTY read (up to 16 KiB raw, roughly doubled by escape
+  encoding), so a client that stops draining pins at most
+  `CLIENT_QUEUE_DEPTH` such lines (about 128 MiB at the current depth)
+  before it is evicted and disconnected, and the disconnect frees the
+  queue.
 
 ### Debug Logging
 
-The daemon writes a debug log only when `DEBUG_LEVEL` is set. It records
-control commands at two levels:
+The daemon logs to two independent sinks (`src/debug.rs`):
 
-- **`DEBUG_LEVEL>=1`:** a summary of every rejected or unparseable control
-  line.
-- **`DEBUG_LEVEL>=3`:** a summary of every control command.
+- **stderr, always.** `par-mux` installs a stderr logger for the core's
+  `log` records at Info and above, whether or not `DEBUG_LEVEL` is set.
+  It prints an Error record for every rejected or unparseable control
+  line (the summary described below), one for every non-UTF-8 line (its
+  length only), and Info records such as `PTY_SPAWN`, which carries a
+  pane's full command line (`$SHELL -c <command>`). Debug records,
+  including the per-command summary and `PTY_WRITE`, are below its
+  threshold. The output goes wherever the daemon's stderr goes: a
+  foreground `par-mux` prints it, `par-mux --restart` on Unix detaches
+  with stdio on `/dev/null`, and a client that auto-spawns the daemon
+  discards its stderr.
+- **The debug file, only when `DEBUG_LEVEL` is set.** It records control
+  commands at two levels:
+  - **`DEBUG_LEVEL>=1`:** a summary of every rejected or unparseable
+    control line.
+  - **`DEBUG_LEVEL>=3`:** a summary of every control command.
 
 `send-keys` and `set-buffer` carry typed input and clipboard content, so
 the control-command summary logs them as the command name, a leading `-t`
 target, and the byte count, never their payload. This applies whether or
 not the line parses. Every other command is logged as its first 120 bytes
 plus its total size. **`set-environment` values and `new-session -e`
-values are still logged verbatim**, so an API token attached to a session
-this way appears in the log.
+values are still logged verbatim**: in the level-3 file for every such
+command, and on stderr whenever one is rejected. An API token attached to
+a session this way can appear in either.
 
 The command summary is not the only record of input. **At
 `DEBUG_LEVEL>=3`, every byte written to a pane's PTY is logged as hex**
@@ -1224,8 +1258,10 @@ sections; the numbers live here.
 | `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:378` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:82` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:84` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:76` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:85` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |
@@ -1235,11 +1271,14 @@ sections; the numbers live here.
 | `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
 | `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
 | `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:46` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
-| `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:51` | Bytes accepted in one Input message payload from a streaming client. |
-| `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server.rs:55` | Bytes accepted in one Paste message payload from a streaming client. |
-| `MAX_COLS` | 1,000 | `src/streaming/server.rs:160` | Columns a streaming client may request for its terminal. |
-| `MAX_ROWS` | 500 | `src/streaming/server.rs:163` | Rows a streaming client may request for its terminal. |
-| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:34` | Client input bytes queued per session pending write to the PTY. |
+| `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
+| `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
+| `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
+| `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
+| `MAX_COLS` | 1,000 | `src/streaming/server.rs:162` | Columns a streaming client may request for its terminal. |
+| `MAX_ROWS` | 500 | `src/streaming/server.rs:165` | Rows a streaming client may request for its terminal. |
+| `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:26` | Client input chunks queued per session pending write to the PTY. |
+| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:35` | Client input bytes queued per session pending write to the PTY. |
 | `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
