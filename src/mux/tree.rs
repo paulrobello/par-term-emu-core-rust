@@ -1042,7 +1042,7 @@ impl MuxTree {
                 cols as u16,
                 rows as u16,
                 pane.spawn_command().map(str::to_string),
-                pane.persistence_cwd(),
+                pane.respawn_cwd(),
                 pane.user_title().map(str::to_string),
                 pane.poll_running(),
             )
@@ -2792,6 +2792,71 @@ mod tests {
         assert_eq!(tree.pane(pane).unwrap().user_title(), Some("kept"));
         assert!(tree.pane(pane).unwrap().is_running());
         assert!(!tree.all_panes_dead());
+    }
+
+    /// A live `sleep 60` pane, fed `OSC 7 file://{host}{dir}`, and the
+    /// cwd `begin_respawn(-k)` plans for it (SEC-128).
+    #[cfg(unix)]
+    fn respawn_cwd_after_osc7(host: &str, dir: &std::path::Path) -> Option<PathBuf> {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let pane = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("sleep 60"))
+            .unwrap();
+        tree.pane(pane)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(format!("\x1b]7;file://{host}{}\x1b\\", dir.display()).as_bytes());
+        assert_eq!(
+            tree.pane(pane)
+                .unwrap()
+                .terminal()
+                .read()
+                .current_directory(),
+            Some(dir.to_str().unwrap()),
+            "the OSC 7 report was recorded"
+        );
+        let plan = tree.begin_respawn(pane, true, None, None).unwrap();
+        for id in [first, pane] {
+            let _ = tree.pane_mut(id).unwrap().kill();
+        }
+        plan.cwd
+    }
+
+    /// SEC-128: an OSC 7 cwd naming another host is program output about a
+    /// remote machine, never a local directory respawn may run in.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_ignores_a_remote_osc7_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = respawn_cwd_after_osc7("remote.invalid", dir.path());
+        assert_ne!(cwd.as_deref(), Some(dir.path()), "remote OSC 7 was trusted");
+    }
+
+    /// SEC-128: a local OSC 7 report (implicit, `localhost`, or this
+    /// machine's own name) naming an existing directory is still used.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_uses_a_local_osc7_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = crate::mux::pane::local_hostname().expect("gethostname");
+        for h in ["", "localhost", host.as_str()] {
+            let cwd = respawn_cwd_after_osc7(h, dir.path());
+            assert_eq!(cwd.as_deref(), Some(dir.path()), "host {h:?}");
+        }
+    }
+
+    /// SEC-128: a local OSC 7 path that no longer exists is not used.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_ignores_an_osc7_dir_that_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let cwd = respawn_cwd_after_osc7("localhost", &gone);
+        assert_ne!(cwd.as_deref(), Some(gone.as_path()), "missing dir was used");
     }
 
     #[test]
