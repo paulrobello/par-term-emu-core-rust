@@ -68,6 +68,9 @@ pub mod rate_limit;
 pub mod mux_factory;
 
 #[cfg(feature = "streaming")]
+mod roster;
+
+#[cfg(feature = "streaming")]
 pub mod auth_hash;
 
 // Hand-written escape hatches for the PyDictConvert derive (ARC-003).
@@ -95,6 +98,9 @@ pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, Streami
 
 #[cfg(all(feature = "streaming", feature = "mux"))]
 pub use mux_factory::{MuxPaneSelector, MuxSessionFactory};
+
+#[cfg(feature = "streaming")]
+pub use roster::parse_agents_output;
 
 #[cfg(feature = "streaming")]
 pub use proto::{
