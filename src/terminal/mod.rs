@@ -316,20 +316,10 @@ impl Default for ProfilingState {
 }
 
 /// Mouse event/position history.
+#[derive(Default)]
 pub(crate) struct MouseHistoryState {
     pub(crate) mouse_events: Vec<MouseEventRecord>,
     pub(crate) mouse_positions: Vec<MousePosition>,
-    pub(crate) max_mouse_history: usize,
-}
-
-impl Default for MouseHistoryState {
-    fn default() -> Self {
-        Self {
-            mouse_events: Vec::new(),
-            mouse_positions: Vec::new(),
-            max_mouse_history: 100,
-        }
-    }
 }
 
 /// Regex search matches and current pattern.
@@ -340,18 +330,9 @@ pub(crate) struct SearchState {
 }
 
 /// Inline image storage (iTerm2/Kitty protocols).
+#[derive(Default)]
 pub(crate) struct InlineImageState {
     pub(crate) inline_images: Vec<InlineImage>,
-    pub(crate) max_inline_images: usize,
-}
-
-impl Default for InlineImageState {
-    fn default() -> Self {
-        Self {
-            inline_images: Vec::new(),
-            max_inline_images: 100,
-        }
-    }
 }
 
 /// Rendering hints and accumulated damage regions.
@@ -789,8 +770,6 @@ pub(crate) struct TerminalModes {
     pub(crate) char_protected: bool,
     /// Reverse video mode (DECSCNM) - globally inverts fg/bg colors
     pub(crate) reverse_video: bool,
-    /// Bold brightening - when enabled, bold ANSI colors 0-7 brighten to 8-15
-    pub(crate) bold_brightening: bool,
     /// Application cursor keys mode
     pub(crate) application_cursor: bool,
     /// Application keypad mode (DECPAM/DECPNM, ESC = / ESC >)
@@ -820,7 +799,6 @@ impl Default for TerminalModes {
             line_feed_new_line_mode: false,
             char_protected: false,
             reverse_video: false,
-            bold_brightening: true, // iTerm2 default behavior
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: false,
@@ -861,6 +839,7 @@ impl Default for SavedCursorState {
 }
 
 /// Feature 31 command/CWD execution history (ARC-001 sub-struct)
+#[derive(Default)]
 pub(crate) struct CommandHistoryState {
     /// Command execution history
     pub(crate) command_history: Vec<CommandExecution>,
@@ -868,20 +847,57 @@ pub(crate) struct CommandHistoryState {
     pub(crate) current_command: Option<CommandExecution>,
     /// Working directory change history
     pub(crate) cwd_changes: Vec<CwdChange>,
-    /// Maximum command history entries
-    pub(crate) max_command_history: usize,
-    /// Maximum CWD change history
-    pub(crate) max_cwd_history: usize,
 }
 
-impl Default for CommandHistoryState {
+/// Embedder configuration RIS must not touch (ARC-100).
+///
+/// `reset()` carries this struct across with one swap, so a field added
+/// here survives `ESC c` by construction. Settings a program can also
+/// change by escape sequence keep a `configured_*` baseline here while the
+/// live value stays on `Terminal`; RIS restores the live value from the
+/// baseline, never the other way round, so a program's change cannot
+/// outlive a reset.
+pub(crate) struct HostConfig {
+    /// Bold brightening: bold ANSI colors 0-7 render as 8-15.
+    pub(crate) bold_brightening: bool,
+    /// OSC 1337 file-transfer payload cap, mirrored into
+    /// `FileTransferManager` (which enforces it) by `apply_host_config`.
+    pub(crate) max_transfer_size: usize,
+    /// Host-supplied window position in pixels, for XTWINOPS 13 (`CSI 13 t`).
+    pub(crate) window_position: (i32, i32),
+    /// Host-supplied iconified state, for XTWINOPS 11 (`CSI 11 t`).
+    pub(crate) window_iconified: bool,
+    /// Maximum mouse events and positions retained.
+    pub(crate) max_mouse_history: usize,
+    /// Maximum inline images retained.
+    pub(crate) max_inline_images: usize,
+    /// Maximum command history entries.
+    pub(crate) max_command_history: usize,
+    /// Maximum CWD change history entries.
+    pub(crate) max_cwd_history: usize,
+    /// Conformance level RIS restores; DECSCL changes only the live level.
+    pub(crate) configured_conformance_level: crate::conformance_level::ConformanceLevel,
+    /// Warning bell volume RIS restores; DECSWBV changes only the live value.
+    pub(crate) configured_warning_bell_volume: u8,
+    /// Margin bell volume RIS restores; DECSMBV changes only the live value.
+    pub(crate) configured_margin_bell_volume: u8,
+}
+
+impl Default for HostConfig {
     fn default() -> Self {
         Self {
-            command_history: Vec::new(),
-            current_command: None,
-            cwd_changes: Vec::new(),
+            bold_brightening: true, // iTerm2 default behavior
+            max_transfer_size: crate::terminal::file_transfer::DEFAULT_MAX_TRANSFER_SIZE,
+            window_position: (0, 0),
+            window_iconified: false,
+            max_mouse_history: 100,
+            max_inline_images: 100,
             max_command_history: 100,
             max_cwd_history: 50,
+            // VT520 for maximum compatibility
+            configured_conformance_level: crate::conformance_level::ConformanceLevel::default(),
+            configured_warning_bell_volume: 4,
+            configured_margin_bell_volume: 4,
         }
     }
 }
@@ -1182,15 +1198,8 @@ pub struct Terminal {
     pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
     pub(crate) pixel_height: usize,
-    /// Host-supplied window X position in pixels, for XTWINOPS 13 (`CSI 13 t`).
-    /// Defaults to 0 for a headless core with no window of its own.
-    pub(crate) window_position_x: i32,
-    /// Host-supplied window Y position in pixels, for XTWINOPS 13 (`CSI 13 t`).
-    /// Defaults to 0 for a headless core with no window of its own.
-    pub(crate) window_position_y: i32,
-    /// Host-supplied iconified/minimized state, for XTWINOPS 11 (`CSI 11 t`).
-    /// Defaults to `false` (non-iconified) for a headless core.
-    pub(crate) window_iconified: bool,
+    /// Embedder configuration carried whole across RIS (ARC-100)
+    pub(crate) host: HostConfig,
     /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
     pub(crate) security_state: SecurityFlagsState,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
@@ -1323,9 +1332,7 @@ impl Terminal {
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
             pixel_width: cols * 10,
             pixel_height: rows * 20,
-            window_position_x: 0,
-            window_position_y: 0,
-            window_iconified: false,
+            host: HostConfig::default(),
             security_state: SecurityFlagsState::default(),
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
@@ -1437,6 +1444,40 @@ impl Terminal {
         self.margin_bell_volume
     }
 
+    /// Set the host-configured conformance level.
+    ///
+    /// Sets both the live level and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSCL changes only the live level, until the next RIS
+    /// (ARC-100).
+    pub fn set_conformance_level(&mut self, level: crate::conformance_level::ConformanceLevel) {
+        self.host.configured_conformance_level = level;
+        self.conformance_level = level;
+    }
+
+    /// Set the host-configured warning bell volume (0=off, 1-8; larger
+    /// values clamp to 8).
+    ///
+    /// Sets both the live volume and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSWBV changes only the live volume, until the next RIS
+    /// (ARC-100).
+    pub fn set_warning_bell_volume(&mut self, volume: u8) {
+        let volume = volume.min(8);
+        self.host.configured_warning_bell_volume = volume;
+        self.warning_bell_volume = volume;
+    }
+
+    /// Set the host-configured margin bell volume (0=off, 1-8; larger
+    /// values clamp to 8).
+    ///
+    /// Sets both the live volume and the baseline RIS (`ESC c`) restores. A
+    /// program's DECSMBV changes only the live volume, until the next RIS
+    /// (ARC-100).
+    pub fn set_margin_bell_volume(&mut self, volume: u8) {
+        let volume = volume.min(8);
+        self.host.configured_margin_bell_volume = volume;
+        self.margin_bell_volume = volume;
+    }
+
     /// Get terminal dimensions (of the ACTIVE screen)
     ///
     /// Returns (cols, rows) for whichever screen buffer is currently active
@@ -1506,14 +1547,13 @@ impl Terminal {
     /// negative (e.g. a window positioned on a monitor left of/above the
     /// primary display in a multi-monitor setup).
     pub fn set_window_position(&mut self, x: i32, y: i32) {
-        self.window_position_x = x;
-        self.window_position_y = y;
+        self.host.window_position = (x, y);
     }
 
     /// Get the host-supplied window position in pixels as `(x, y)`,
     /// defaulting to `(0, 0)` if never set via [`Terminal::set_window_position`].
     pub fn window_position(&self) -> (i32, i32) {
-        (self.window_position_x, self.window_position_y)
+        self.host.window_position
     }
 
     /// Set the host-supplied iconified/minimized state for XTWINOPS
@@ -1523,13 +1563,13 @@ impl Terminal {
     /// minimized/restored so that `CSI 11 t` queries report the correct
     /// state instead of always reporting non-iconified.
     pub fn set_window_iconified(&mut self, iconified: bool) {
-        self.window_iconified = iconified;
+        self.host.window_iconified = iconified;
     }
 
     /// Get the host-supplied iconified/minimized state, defaulting to
     /// `false` if never set via [`Terminal::set_window_iconified`].
     pub fn window_iconified(&self) -> bool {
-        self.window_iconified
+        self.host.window_iconified
     }
 
     /// Resize the terminal
@@ -1916,12 +1956,12 @@ impl Terminal {
     /// Check if bold brightening is enabled
     /// When enabled, bold text with ANSI colors 0-7 brightens to 8-15
     pub fn bold_brightening(&self) -> bool {
-        self.modes.bold_brightening
+        self.host.bold_brightening
     }
 
     /// Set bold brightening mode
     pub fn set_bold_brightening(&mut self, enabled: bool) {
-        self.modes.bold_brightening = enabled;
+        self.host.bold_brightening = enabled;
     }
 
     /// Get auto-wrap mode state
@@ -3152,15 +3192,23 @@ impl Terminal {
     /// xterm semantics: RIS clears the *terminal* — grids, scrollback,
     /// cursor, SGR, modes, margins, charsets, keyboard protocol,
     /// hyperlinks, graphics, title, selection — but not the embedder's
-    /// configuration. Security policy ([`set_accept_osc7`],
-    /// [`set_disable_insecure_sequences`], [`set_max_osc_data_length`]),
-    /// file-media and clipboard policy, graphics/clipboard limits, the
-    /// answerback string, theme colors, unicode config, observers, event
-    /// subscriptions, triggers, macros, notification config, the badge
-    /// format, active recordings, tmux control flags, pixel dimensions,
-    /// and profiling all survive (ARC-058). DECSTR (CSI ! p) is the softer
-    /// [`Terminal::soft_reset`], which resets modes without touching the
-    /// screen.
+    /// configuration.
+    ///
+    /// [`HostConfig`] is carried whole with one swap (ARC-100): the OSC
+    /// 1337 transfer cap, bold brightening, window position/iconified
+    /// state, and the mouse/inline-image/command/cwd history caps. The
+    /// conformance level and bell volumes, which programs can also set
+    /// (DECSCL/DECSWBV/DECSMBV), restore to the host-configured baseline,
+    /// not the live value. The fields below the swap are still carried one
+    /// by one (moving them into `HostConfig` is ARC-102): security policy
+    /// ([`set_accept_osc7`], [`set_disable_insecure_sequences`],
+    /// [`set_max_osc_data_length`]), file-media and clipboard policy,
+    /// graphics/clipboard limits, the answerback string, theme colors,
+    /// unicode config, observers, event subscriptions, triggers, macros,
+    /// notification config, the badge format, active recordings, tmux
+    /// control flags, pixel dimensions, and profiling (ARC-058). DECSTR
+    /// (CSI ! p) is the softer [`Terminal::soft_reset`], which resets
+    /// modes without touching the screen.
     pub fn reset(&mut self) {
         let (cols, rows) = self.size();
         let scrollback = self.grid.max_scrollback();
@@ -3169,6 +3217,9 @@ impl Terminal {
         let tab_stops = self.tab_stops.clone();
 
         let mut fresh = Self::with_scrollback(cols, rows, scrollback);
+
+        std::mem::swap(&mut fresh.host, &mut self.host);
+        fresh.apply_host_config();
 
         // Security policy survives; the in-flight OSC-guard fields reset
         // with the parser state they track.
@@ -3262,6 +3313,22 @@ impl Terminal {
         self.grid.raise_generation(max_gen);
         self.alt_grid.raise_generation(max_gen);
         self.mark_rows_dirty(0, rows.saturating_sub(1));
+    }
+
+    /// Push a freshly swapped-in [`HostConfig`] into the state that
+    /// enforces or mirrors it (ARC-100).
+    ///
+    /// Two things only: a cap enforced by a public sub-type that keeps its
+    /// own copy (`FileTransferManager`; any future cap of that kind goes
+    /// here too), and the live values of the program-settable settings,
+    /// which restart from the host-configured baseline.
+    fn apply_host_config(&mut self) {
+        self.graphics
+            .file_transfer_manager
+            .set_max_transfer_size(self.host.max_transfer_size);
+        self.conformance_level = self.host.configured_conformance_level;
+        self.warning_bell_volume = self.host.configured_warning_bell_volume;
+        self.margin_bell_volume = self.host.configured_margin_bell_volume;
     }
 
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.

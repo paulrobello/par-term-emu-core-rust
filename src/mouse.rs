@@ -118,7 +118,7 @@ impl Terminal {
         };
 
         self.mouse_history.mouse_events.push(record);
-        if self.mouse_history.mouse_events.len() > self.mouse_history.max_mouse_history {
+        if self.mouse_history.mouse_events.len() > self.host.max_mouse_history {
             self.mouse_history.mouse_events.remove(0);
         }
 
@@ -128,7 +128,7 @@ impl Terminal {
             row,
             timestamp: crate::terminal::get_timestamp_us(),
         });
-        if self.mouse_history.mouse_positions.len() > self.mouse_history.max_mouse_history {
+        if self.mouse_history.mouse_positions.len() > self.host.max_mouse_history {
             self.mouse_history.mouse_positions.remove(0);
         }
     }
@@ -151,7 +151,7 @@ impl Terminal {
 
     /// Set the maximum number of mouse events to retain
     pub fn set_max_mouse_history(&mut self, max: usize) {
-        self.mouse_history.max_mouse_history = max;
+        self.host.max_mouse_history = max;
         if self.mouse_history.mouse_events.len() > max {
             self.mouse_history
                 .mouse_events
@@ -166,7 +166,7 @@ impl Terminal {
 
     /// Get the maximum number of mouse events to retain
     pub fn get_max_mouse_history(&self) -> usize {
-        self.mouse_history.max_mouse_history
+        self.host.max_mouse_history
     }
 }
 

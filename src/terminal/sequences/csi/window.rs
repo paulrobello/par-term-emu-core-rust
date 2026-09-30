@@ -230,7 +230,7 @@ impl Terminal {
                         // core is headless, so this reflects whatever the
                         // host last supplied via `Terminal::set_window_iconified`
                         // (defaults to non-iconified when never set).
-                        if self.window_iconified {
+                        if self.host.window_iconified {
                             self.push_response(b"\x1b[2t");
                         } else {
                             self.push_response(b"\x1b[1t");
@@ -249,8 +249,8 @@ impl Terminal {
                         // is clamped to 0 for the reply -- xterm's own reply
                         // grammar has no way to encode a negative parameter
                         // either.
-                        let x = self.window_position_x.max(0);
-                        let y = self.window_position_y.max(0);
+                        let x = self.host.window_position.0.max(0);
+                        let y = self.host.window_position.1.max(0);
                         let response = format!("\x1b[3;{};{}t", x, y);
                         self.push_response(response.as_bytes());
                     }

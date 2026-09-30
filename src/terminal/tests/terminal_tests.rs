@@ -4163,6 +4163,16 @@ fn ris_preserves_host_config() {
     term.set_allow_clipboard_read(true);
     term.set_ansi_palette_color(1, Color::Rgb(1, 2, 3)).unwrap();
     term.set_faint_text_alpha(0.25);
+    // HostConfig (ARC-100): these reverted before the carried struct.
+    term.set_max_transfer_size(1234);
+    term.set_bold_brightening(false);
+    term.set_window_position(5, 6);
+    term.set_window_iconified(true);
+    term.set_max_mouse_history(3);
+    term.set_max_inline_images(2);
+    term.set_max_command_history(2);
+    term.set_max_cwd_history(1);
+    term.set_max_clipboard_sync_history(1);
 
     #[derive(Default)]
     struct CountingObserver {
@@ -4198,6 +4208,21 @@ fn ris_preserves_host_config() {
     assert_eq!(term.get_ansi_color(1), Some(Color::Rgb(1, 2, 3)));
     assert_eq!(term.faint_text_alpha(), 0.25);
 
+    assert_eq!(term.get_max_transfer_size(), 1234);
+    assert!(!term.bold_brightening());
+    assert_eq!(term.window_position(), (5, 6));
+    assert!(term.window_iconified());
+    assert_eq!(term.get_max_mouse_history(), 3);
+    assert_eq!(term.host.max_inline_images, 2);
+    assert_eq!(term.clipboard_sync.max_history, 1);
+    assert_eq!(
+        term.event_subscription,
+        Some(std::collections::HashSet::from([
+            TerminalEventKind::BellRang,
+            TerminalEventKind::TitleChanged,
+        ]))
+    );
+
     assert_eq!(term.observer_count(), 1, "observers must survive RIS");
     assert_eq!(
         TriggerEngine::list_triggers(&term).len(),
@@ -4218,6 +4243,24 @@ fn ris_preserves_host_config() {
         1,
         "observer must receive the post-reset bell"
     );
+
+    // History caps are probed by what they retain; this emits events, so
+    // it runs after the observer count above.
+    for i in 0..6 {
+        term.start_command_execution(format!("c{i}"));
+        term.end_command_execution(Some(0));
+    }
+    assert_eq!(term.get_command_history().len(), 2);
+    for i in 0..4 {
+        term.record_cwd_change(crate::terminal::CwdChange {
+            old_cwd: None,
+            new_cwd: format!("/tmp/d{i}"),
+            hostname: None,
+            username: None,
+            timestamp: 0,
+        });
+    }
+    assert_eq!(term.get_cwd_changes().len(), 1);
 }
 
 #[test]
@@ -4233,6 +4276,59 @@ fn ris_resets_osc4_palette_drift_to_configured() {
 
     // RIS restores the configured palette, not the factory default.
     assert_eq!(term.get_ansi_color(2), Some(Color::Rgb(10, 20, 30)));
+}
+
+#[test]
+fn ris_restores_configured_conformance_level() {
+    use crate::conformance_level::ConformanceLevel;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_conformance_level(ConformanceLevel::VT220);
+    assert_eq!(term.conformance_level(), ConformanceLevel::VT220);
+
+    // A program's DECSCL changes the live level...
+    term.process(b"\x1b[61\"p");
+    assert_eq!(term.conformance_level(), ConformanceLevel::VT100);
+
+    // ...until RIS, which restores the host's configured baseline.
+    term.process(b"\x1bc");
+    assert_eq!(term.conformance_level(), ConformanceLevel::VT220);
+}
+
+#[test]
+fn ris_restores_configured_bell_volumes() {
+    let mut term = Terminal::new(80, 24);
+    term.set_warning_bell_volume(1);
+    term.set_margin_bell_volume(2);
+    assert_eq!(
+        (term.warning_bell_volume(), term.margin_bell_volume()),
+        (1, 2)
+    );
+
+    // DECSWBV / DECSMBV from a program change the live volumes...
+    term.process(b"\x1b[7 t\x1b[6 u");
+    assert_eq!(
+        (term.warning_bell_volume(), term.margin_bell_volume()),
+        (7, 6)
+    );
+
+    // ...until RIS, which restores the host's configured baselines.
+    term.process(b"\x1bc");
+    assert_eq!(
+        (term.warning_bell_volume(), term.margin_bell_volume()),
+        (1, 2)
+    );
+}
+
+#[test]
+fn bell_volume_setters_clamp_to_eight() {
+    let mut term = Terminal::new(80, 24);
+    term.set_warning_bell_volume(200);
+    term.set_margin_bell_volume(9);
+    assert_eq!(
+        (term.warning_bell_volume(), term.margin_bell_volume()),
+        (8, 8)
+    );
 }
 
 #[test]

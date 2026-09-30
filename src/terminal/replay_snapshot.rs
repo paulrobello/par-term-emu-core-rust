@@ -216,7 +216,7 @@ impl Terminal {
             keyboard_flags: self.keyboard_state.keyboard_flags,
             modify_other_keys_mode: self.keyboard_state.modify_other_keys_mode,
             char_protected: self.modes.char_protected,
-            bold_brightening: self.modes.bold_brightening,
+            bold_brightening: self.host.bold_brightening,
             scroll_region_top: self.margins.scroll_region_top,
             scroll_region_bottom: self.margins.scroll_region_bottom,
             tab_stops: self.tab_stops.clone(),
@@ -264,7 +264,7 @@ impl Terminal {
         self.keyboard_state.keyboard_flags = snap.keyboard_flags;
         self.keyboard_state.modify_other_keys_mode = snap.modify_other_keys_mode;
         self.modes.char_protected = snap.char_protected;
-        self.modes.bold_brightening = snap.bold_brightening;
+        self.host.bold_brightening = snap.bold_brightening;
         self.margins.scroll_region_top = snap.scroll_region_top;
         self.margins.scroll_region_bottom = snap.scroll_region_bottom;
         self.tab_stops = snap.tab_stops;

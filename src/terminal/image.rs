@@ -87,10 +87,9 @@ impl Terminal {
         self.inline_image_state.inline_images.push(image);
 
         // Limit number of stored images
-        if self.inline_image_state.inline_images.len() > self.inline_image_state.max_inline_images {
+        if self.inline_image_state.inline_images.len() > self.host.max_inline_images {
             self.inline_image_state.inline_images.drain(
-                0..self.inline_image_state.inline_images.len()
-                    - self.inline_image_state.max_inline_images,
+                0..self.inline_image_state.inline_images.len() - self.host.max_inline_images,
             );
         }
     }
@@ -135,7 +134,7 @@ impl Terminal {
 
     /// Set maximum inline images
     pub fn set_max_inline_images(&mut self, max: usize) {
-        self.inline_image_state.max_inline_images = max;
+        self.host.max_inline_images = max;
         if self.inline_image_state.inline_images.len() > max {
             self.inline_image_state
                 .inline_images
