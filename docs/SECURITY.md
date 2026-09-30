@@ -1216,7 +1216,7 @@ sections; the numbers live here.
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1171` | Bytes read from one kitty file medium named by an escape payload. |
+| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1280` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
