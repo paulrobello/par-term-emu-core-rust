@@ -15,8 +15,8 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
     ClientMessage as AppClientMessage, CpuStats as AppCpuStats, DiskStats as AppDiskStats,
     EventType as AppEventType, LoadAverage as AppLoadAverage, MemoryStats as AppMemoryStats,
-    NetworkInterfaceStats as AppNetworkInterfaceStats, ServerMessage as AppServerMessage,
-    ThemeInfo as AppThemeInfo,
+    MouseEventType, NetworkInterfaceStats as AppNetworkInterfaceStats,
+    ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -601,7 +601,7 @@ impl From<&AppClientMessage> for pb::ClientMessage {
                 shift: *shift,
                 ctrl: *ctrl,
                 alt: *alt,
-                event_type: event_type.clone(),
+                event_type: event_type.as_str().to_string(),
             })),
             AppClientMessage::FocusChange { focused } => {
                 Some(Message::Focus(pb::FocusChange { focused: *focused }))
@@ -1013,7 +1013,7 @@ impl TryFrom<pb::ClientMessage> for AppClientMessage {
                 shift: mouse.shift,
                 ctrl: mouse.ctrl,
                 alt: mouse.alt,
-                event_type: mouse.event_type,
+                event_type: mouse_event_type_from_wire(&mouse.event_type),
             }),
             Some(Message::Focus(focus)) => Ok(AppClientMessage::FocusChange {
                 focused: focus.focused,
@@ -1078,9 +1078,68 @@ impl From<pb::EventType> for AppEventType {
     }
 }
 
+/// `MouseInput.event_type` (a wire string) -> [`MouseEventType`].
+///
+/// An unknown name decodes as `Press`, keeping the pre-enum behavior where
+/// every name but `"release"` counted as a press. The name is client
+/// controlled, so only its length is logged.
+fn mouse_event_type_from_wire(name: &str) -> MouseEventType {
+    MouseEventType::parse(name).unwrap_or_else(|| {
+        crate::debug_log!(
+            "STREAMING",
+            "unknown mouse event_type ({} bytes), treated as press",
+            name.len()
+        );
+        MouseEventType::Press
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_event_type_round_trips_every_variant_over_the_wire() {
+        for event_type in [
+            MouseEventType::Press,
+            MouseEventType::Release,
+            MouseEventType::Move,
+            MouseEventType::Scroll,
+        ] {
+            let msg = AppClientMessage::mouse(3, 4, 0, true, false, true, event_type);
+            let decoded = decode_client_message(&encode_client_message(&msg).unwrap()).unwrap();
+            let AppClientMessage::Mouse {
+                col,
+                row,
+                shift,
+                alt,
+                event_type: got,
+                ..
+            } = decoded
+            else {
+                panic!("Wrong message type");
+            };
+            assert_eq!((col, row, shift, alt), (3, 4, true, true));
+            assert_eq!(got, event_type);
+        }
+    }
+
+    #[test]
+    fn unknown_mouse_event_type_on_the_wire_decodes_as_press() {
+        for name in ["bogus", "", "Release"] {
+            let wire = pb::ClientMessage {
+                message: Some(pb::client_message::Message::Mouse(pb::MouseInput {
+                    event_type: name.to_string(),
+                    ..Default::default()
+                })),
+            };
+            let decoded = AppClientMessage::try_from(wire).unwrap();
+            let AppClientMessage::Mouse { event_type, .. } = decoded else {
+                panic!("Wrong message type");
+            };
+            assert_eq!(event_type, MouseEventType::Press, "{name:?}");
+        }
+    }
 
     #[test]
     fn test_encode_decode_output() {

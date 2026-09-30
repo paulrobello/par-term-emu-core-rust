@@ -807,9 +807,15 @@ pub enum ClientMessage {
         ctrl: bool,
         /// Alt key held
         alt: bool,
-        /// Event type: "press", "release", "move", "scroll"
-        #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(default = "press".to_string()))]
-        event_type: String,
+        /// Press, release, move or scroll
+        #[cfg_attr(
+            all(feature = "python", feature = "streaming"),
+            pydict(
+                to_with = "crate::streaming::py_convert::mouse_event_type_to_py",
+                from_with = "crate::streaming::py_convert::mouse_event_type_from_py"
+            )
+        )]
+        event_type: MouseEventType,
     },
 
     /// Focus change from client
@@ -862,6 +868,46 @@ pub enum ClientMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_commands: Option<u32>,
     },
+}
+
+/// The kind of a [`ClientMessage::Mouse`] event.
+///
+/// On the protobuf wire and in the Python dict API it is the lowercase
+/// name (`"press"`, `"release"`, `"move"`, `"scroll"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseEventType {
+    /// Button pressed
+    Press,
+    /// Button released
+    Release,
+    /// Pointer moved
+    Move,
+    /// Wheel scrolled
+    Scroll,
+}
+
+impl MouseEventType {
+    /// The wire name of this event type.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Press => "press",
+            Self::Release => "release",
+            Self::Move => "move",
+            Self::Scroll => "scroll",
+        }
+    }
+
+    /// Parse a wire name; `None` for anything but the four exact names.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "press" => Some(Self::Press),
+            "release" => Some(Self::Release),
+            "move" => Some(Self::Move),
+            "scroll" => Some(Self::Scroll),
+            _ => None,
+        }
+    }
 }
 
 /// Event types that clients can subscribe to
@@ -1606,7 +1652,7 @@ impl ClientMessage {
         shift: bool,
         ctrl: bool,
         alt: bool,
-        event_type: String,
+        event_type: MouseEventType,
     ) -> Self {
         Self::Mouse {
             col,
@@ -1714,6 +1760,32 @@ mod tests {
             }
             _ => panic!("Wrong message type"),
         }
+    }
+
+    #[test]
+    fn mouse_event_type_serializes_as_its_wire_name() {
+        for event_type in [
+            MouseEventType::Press,
+            MouseEventType::Release,
+            MouseEventType::Move,
+            MouseEventType::Scroll,
+        ] {
+            let msg = ClientMessage::mouse(1, 2, 0, false, false, false, event_type);
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(
+                json.contains(&format!(r#""event_type":"{}""#, event_type.as_str())),
+                "{json}"
+            );
+            let ClientMessage::Mouse {
+                event_type: got, ..
+            } = serde_json::from_str::<ClientMessage>(&json).unwrap()
+            else {
+                panic!("Wrong message type");
+            };
+            assert_eq!(got, event_type);
+            assert_eq!(MouseEventType::parse(event_type.as_str()), Some(event_type));
+        }
+        assert_eq!(MouseEventType::parse("bogus"), None);
     }
 
     #[test]

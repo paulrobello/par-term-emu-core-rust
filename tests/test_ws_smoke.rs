@@ -23,7 +23,7 @@
 use futures_util::{SinkExt, StreamExt};
 use par_term_emu_core_rust::mouse::{MouseEncoding, MouseMode};
 use par_term_emu_core_rust::streaming::proto::{decode_server_message, encode_client_message};
-use par_term_emu_core_rust::streaming::protocol::{ClientMessage, ServerMessage};
+use par_term_emu_core_rust::streaming::protocol::{ClientMessage, MouseEventType, ServerMessage};
 use par_term_emu_core_rust::streaming::{StreamingConfig, StreamingServer};
 use par_term_emu_core_rust::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
@@ -377,7 +377,7 @@ async fn axum_http_path_forwards_mouse_to_pty_writer() {
         shift: false,
         ctrl: false,
         alt: false,
-        event_type: "press".to_string(),
+        event_type: MouseEventType::Press,
     };
     ws.send(Message::Binary(
         encode_client_message(&mouse).unwrap().into(),

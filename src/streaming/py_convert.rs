@@ -13,7 +13,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use super::protocol::{EventType, ServerMessage, ThemeInfo};
+use super::protocol::{EventType, MouseEventType, ServerMessage, ThemeInfo};
 
 /// `Connected.theme` field -> `theme` dict value.
 ///
@@ -96,6 +96,26 @@ pub fn events_from_py(value: Option<&Bound<'_, pyo3::types::PyAny>>) -> Vec<Even
     strs.iter()
         .filter_map(|s| EventType::from_py_kwargs(s, None).ok().flatten())
         .collect()
+}
+
+/// `Mouse.event_type` field -> `event_type` dict value (the wire name).
+pub fn mouse_event_type_to_py<'py>(
+    py: Python<'py>,
+    event_type: &MouseEventType,
+) -> PyResult<Bound<'py, pyo3::types::PyAny>> {
+    Ok(pyo3::types::PyString::new(py, event_type.as_str()).into_any())
+}
+
+/// `event_type` kwarg -> `Mouse.event_type` field.
+///
+/// An absent key, a non-string value, or an unknown name is `Press` — the
+/// previous `"press"` default; the server already treated every name but
+/// `"release"` as a press.
+pub fn mouse_event_type_from_py(value: Option<&Bound<'_, pyo3::types::PyAny>>) -> MouseEventType {
+    value
+        .and_then(|v| v.extract::<String>().ok())
+        .and_then(|s| MouseEventType::parse(&s))
+        .unwrap_or(MouseEventType::Press)
 }
 
 /// Whole-variant decode for `ServerMessage::SystemStats` (`#[pydict(to)]`).

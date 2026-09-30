@@ -1605,7 +1605,7 @@ impl StreamingServer {
         shift: bool,
         ctrl: bool,
         alt: bool,
-        event_type: String,
+        event_type: crate::streaming::protocol::MouseEventType,
     ) {
         if read_only {
             return;
@@ -1617,7 +1617,7 @@ impl StreamingServer {
                 let mods = if shift { 1u8 } else { 0 }
                     | if alt { 2 } else { 0 }
                     | if ctrl { 4 } else { 0 };
-                let pressed = event_type != "release";
+                let pressed = event_type != crate::streaming::protocol::MouseEventType::Release;
                 let mouse_event = crate::mouse::MouseEvent::new(
                     button,
                     col as usize,
@@ -3293,7 +3293,7 @@ mod tests {
                 shift: false,
                 ctrl: false,
                 alt: false,
-                event_type: "press".to_string(),
+                event_type: crate::streaming::protocol::MouseEventType::Press,
             },
             ClientMessage::FocusChange { focused: true },
         ];
