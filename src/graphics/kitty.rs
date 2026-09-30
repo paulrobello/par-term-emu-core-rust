@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use flate2::read::ZlibDecoder;
 
@@ -293,6 +293,109 @@ fn is_under_allowed_temp_root(canonical: &Path) -> bool {
         Ok(canon_root) => canonical.starts_with(canon_root),
         Err(_) => false, // root absent on this platform (e.g. /dev/shm on macOS)
     })
+}
+
+/// The `t=t` path gate (SEC-101): a resolved path must sit under an allowed
+/// temp root and carry the spec's `tty-graphics-protocol` filename marker.
+fn check_temp_file_gate(resolved: &Path) -> Result<(), GraphicsError> {
+    if !is_under_allowed_temp_root(resolved) {
+        return Err(GraphicsError::KittyError(
+            "Temp file is outside the allowed temp directories".to_string(),
+        ));
+    }
+    let name_has_marker = resolved
+        .file_name()
+        .map(|n| n.to_string_lossy().contains("tty-graphics-protocol"))
+        .unwrap_or(false);
+    if !name_has_marker {
+        return Err(GraphicsError::KittyError(
+            "Temp file name must contain \"tty-graphics-protocol\"".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The path the kernel reports for an open handle (SEC-130). `None` means
+/// the platform has no lookup, so the caller relies on the dev/ino delete
+/// check alone.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn opened_path(file: &fs::File) -> Option<std::io::Result<PathBuf>> {
+    use std::os::unix::io::AsRawFd;
+    Some(fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())))
+}
+
+/// The path the kernel reports for an open handle (SEC-130), via
+/// `fcntl(F_GETPATH)`.
+#[cfg(target_vendor = "apple")]
+fn opened_path(file: &fs::File) -> Option<std::io::Result<PathBuf>> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let mut buf = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes a NUL-terminated path of at most PATH_MAX
+    // bytes into its third argument, and `buf` is exactly PATH_MAX bytes.
+    // The fd is borrowed from `file`, which stays open for the whole call.
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+    if rc == -1 {
+        return Some(Err(std::io::Error::last_os_error()));
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Some(Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len]))))
+}
+
+/// Other Unix and Windows expose no portable fd-to-path lookup; the dev/ino
+/// delete check (Unix) still pins the delete to the file that was read.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+fn opened_path(_file: &fs::File) -> Option<std::io::Result<PathBuf>> {
+    None
+}
+
+/// A `t=t` file to unlink after decode, pinned to the inode that was read
+/// (SEC-130).
+#[derive(Debug)]
+struct PendingDelete {
+    /// The canonical path that passed the temp gate and was opened.
+    path: PathBuf,
+    /// `(st_dev, st_ino)` of the handle that was read.
+    #[cfg(unix)]
+    dev_ino: (u64, u64),
+}
+
+/// Unlink a `t=t` file only if its path still names the file that was read
+/// (SEC-130), so a file swapped in after the read survives. Returns whether
+/// the file was removed.
+fn delete_if_same_file(pending: &PendingDelete) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match fs::symlink_metadata(&pending.path) {
+            Ok(m) if m.file_type().is_file() && (m.dev(), m.ino()) == pending.dev_ino => {
+                fs::remove_file(&pending.path).is_ok()
+            }
+            Ok(_) => {
+                crate::debug_error!(
+                    "KITTY",
+                    "t=t file {:?} changed after it was read; not deleting",
+                    pending.path
+                );
+                false
+            }
+            Err(e) => {
+                crate::debug_error!(
+                    "KITTY",
+                    "t=t file {:?} vanished before delete: {}",
+                    pending.path,
+                    e
+                );
+                false
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows std exposes no stable file identity to compare here, so
+        // the delete trusts the canonical path that passed the gate.
+        fs::remove_file(&pending.path).is_ok()
+    }
 }
 
 /// Open for reading without following a final symlink component (SEC-103),
@@ -1063,8 +1166,8 @@ impl KittyParser {
         // client mirrors re-read the same file from forwarded bytes — the
         // rendering client deletes it.
         if decoded.is_ok() {
-            if let Some(path) = delete_after_decode {
-                let _ = fs::remove_file(path); // Ignore errors on cleanup
+            if let Some(pending) = delete_after_decode {
+                delete_if_same_file(&pending);
             }
         }
 
@@ -1075,11 +1178,11 @@ impl KittyParser {
     /// gating (SEC-101/SEC-102/SEC-103).
     ///
     /// Returns the file bytes plus, for a non-retained `t=t` read, the
-    /// path the caller must delete **after** the payload decodes.
+    /// file the caller must delete **after** the payload decodes.
     fn load_file_data(
         &self,
         path_data: &[u8],
-    ) -> Result<(Vec<u8>, Option<std::path::PathBuf>), GraphicsError> {
+    ) -> Result<(Vec<u8>, Option<PendingDelete>), GraphicsError> {
         // Decode path from UTF-8 bytes (NOT base64-encoded for file transmission)
         let path_str = String::from_utf8(path_data.to_vec())
             .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
@@ -1120,29 +1223,22 @@ impl KittyParser {
         //    an allowed temp root AND carry the spec's marker in its
         //    filename — kitty's own rule for the temp-file medium. Refuse
         //    without touching the file otherwise.
-        if self.medium == KittyMedium::TempFile {
+        let canonical = if self.medium == KittyMedium::TempFile {
             let canonical = path.canonicalize().map_err(|e| {
                 GraphicsError::KittyError(format!("Cannot resolve temp file path: {}", e))
             })?;
-            if !is_under_allowed_temp_root(&canonical) {
-                return Err(GraphicsError::KittyError(
-                    "Temp file is outside the allowed temp directories".to_string(),
-                ));
-            }
-            let name_has_marker = canonical
-                .file_name()
-                .map(|n| n.to_string_lossy().contains("tty-graphics-protocol"))
-                .unwrap_or(false);
-            if !name_has_marker {
-                return Err(GraphicsError::KittyError(
-                    "Temp file name must contain \"tty-graphics-protocol\"".to_string(),
-                ));
-            }
-        }
+            check_temp_file_gate(&canonical)?;
+            Some(canonical)
+        } else {
+            None
+        };
 
         // 4. Open without following a final symlink (SEC-103) and validate
         //    the handle itself, so the file we read is the file we checked.
-        let mut file = open_no_follow(path).map_err(|e| {
+        //    `t=t` opens the canonical path that passed the gate (SEC-130);
+        //    `t=f` has no containment check, so it opens the path as given.
+        let open_path = canonical.as_deref().unwrap_or(path);
+        let mut file = open_no_follow(open_path).map_err(|e| {
             // The directory check comes first: Windows fails opening a
             // directory with ERROR_PATH_NOT_FOUND (io kind NotFound), so a
             // kind-ordered check would report an existing directory as
@@ -1167,6 +1263,19 @@ impl KittyParser {
             )));
         }
 
+        // 4b. t=t: re-run the gate on the path the kernel reports for the
+        //     open handle (SEC-130). A parent directory swapped for a
+        //     symlink between canonicalize and open escapes O_NOFOLLOW,
+        //     which guards only the final component; this catches it.
+        if canonical.is_some() {
+            if let Some(resolved) = opened_path(&file) {
+                let resolved = resolved.map_err(|e| {
+                    GraphicsError::KittyError(format!("Cannot resolve opened temp file: {}", e))
+                })?;
+                check_temp_file_gate(&resolved)?;
+            }
+        }
+
         // 5. Check file size (limit to 100MB for safety)
         /// cap: Bytes read from one kitty file medium named by an escape payload.
         const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
@@ -1184,11 +1293,22 @@ impl KittyParser {
             .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
 
         // Pending delete: only a non-retained t=t read deletes, and only
-        // after decode succeeds (the caller's job).
-        let pending_delete = if self.medium == KittyMedium::TempFile && !self.retain_temp_files {
-            Some(path.to_path_buf())
-        } else {
-            None
+        // after decode succeeds (the caller's job). It is pinned to the
+        // inode read here, so a file swapped in afterwards survives.
+        let pending_delete = match canonical {
+            Some(canonical) if !self.retain_temp_files => {
+                #[cfg(unix)]
+                let dev_ino = {
+                    use std::os::unix::fs::MetadataExt;
+                    (metadata.dev(), metadata.ino())
+                };
+                Some(PendingDelete {
+                    path: canonical,
+                    #[cfg(unix)]
+                    dev_ino,
+                })
+            }
+            _ => None,
         };
 
         Ok((file_data, pending_delete))
@@ -3328,7 +3448,7 @@ mod tests {
         assert!(path.exists(), "bare read must not delete the t=t file");
         let pending = pending.expect("t=t read returns a pending delete path");
         parser
-            .decode_payload(pending.to_string_lossy().as_bytes().to_vec(), "shm")
+            .decode_payload(pending.path.to_string_lossy().as_bytes().to_vec(), "shm")
             .expect("valid PNG decodes");
         assert!(!path.exists(), "temp file should be deleted after decode");
     }
@@ -3526,6 +3646,112 @@ mod tests {
         assert!(path.exists(), "refused APC must leave the file alone");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- SEC-130 regression suite: t=t check-to-use identity ---
+
+    /// Read a gated `t=t` file named `name` inside a fresh temp-root dir
+    /// and return the dir guard, the file's path and its pending delete.
+    #[cfg(unix)]
+    fn read_gated_file_in_dir(
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, PendingDelete) {
+        let dir = tempfile::Builder::new()
+            .prefix("sec130-")
+            .tempdir()
+            .expect("create temp dir");
+        let path = dir.path().join(name);
+        std::fs::write(&path, tiny_png()).expect("write gated file");
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let (_, pending) = parser
+            .load_file_data(path.to_string_lossy().as_bytes())
+            .expect("gated temp file loads");
+        let pending = pending.expect("non-retained t=t read returns a pending delete");
+        (dir, path, pending)
+    }
+
+    /// A file swapped in at the same path after the read is not the file
+    /// that was read, so the delete leaves it alone.
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_delete_skips_a_swapped_file() {
+        let (dir, path, pending) = read_gated_file_in_dir("tty-graphics-protocol-swap.png");
+        std::fs::rename(&path, dir.path().join("moved-away.png")).expect("move original");
+        std::fs::write(&path, b"a different file").expect("write replacement");
+
+        assert!(
+            !delete_if_same_file(&pending),
+            "swapped file must not be deleted"
+        );
+        assert!(path.exists(), "the replacement survives");
+        assert_eq!(std::fs::read(&path).unwrap(), b"a different file");
+    }
+
+    /// The pending delete removes the file that was read, addressed by
+    /// its canonical path (macOS `/var` → `/private/var` included).
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_delete_removes_the_file_that_was_read() {
+        let (_dir, path, pending) = read_gated_file_in_dir("tty-graphics-protocol-same.png");
+        assert_eq!(
+            pending.path,
+            path.canonicalize().unwrap(),
+            "delete targets the canonical path"
+        );
+
+        assert!(
+            delete_if_same_file(&pending),
+            "the file that was read is deleted"
+        );
+        assert!(!pending.path.exists());
+        assert!(!path.exists());
+    }
+
+    /// A symlinked parent directory escapes `O_NOFOLLOW`, which guards
+    /// only the final component. The handle's kernel path exposes where
+    /// the open really landed, and the gate refuses it: this is the check
+    /// that catches a parent swapped between canonicalize and open.
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    #[test]
+    fn opened_path_exposes_a_symlinked_parent_outside_temp_roots() {
+        let outside = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join("sec130-fixtures");
+        std::fs::create_dir_all(&outside).expect("create fixture dir");
+        let target = outside.join("tty-graphics-protocol-outside.png");
+        std::fs::write(&target, tiny_png()).expect("write fixture");
+        let canonical_target = target.canonicalize().unwrap();
+        assert!(
+            !super::is_under_allowed_temp_root(&canonical_target),
+            "test setup broken: fixture {:?} is inside a temp root",
+            canonical_target
+        );
+
+        let dir = tempfile::Builder::new()
+            .prefix("sec130-link-")
+            .tempdir()
+            .expect("create temp dir");
+        let link = dir.path().join("swapped-parent");
+        std::os::unix::fs::symlink(&outside, &link).expect("symlink parent dir");
+        let via_link = link.join("tty-graphics-protocol-outside.png");
+
+        let file = open_no_follow(&via_link).expect("O_NOFOLLOW follows a parent symlink");
+        let resolved = opened_path(&file)
+            .expect("platform has an fd path lookup")
+            .expect("fd path lookup succeeds");
+        assert_eq!(resolved, canonical_target, "kernel reports the real file");
+        let err = check_temp_file_gate(&resolved).expect_err("gate refuses the real path");
+        assert!(
+            err.to_string().contains("outside the allowed temp"),
+            "{}",
+            err
+        );
+
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_dir(&outside);
     }
 
     // --- KittyGraphicResult Debug round-trip (cheap enum coverage) ---
