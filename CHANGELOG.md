@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **FFI `terminal_scrollback_total_scrolled`**: total lines ever pushed into scrollback, so an embedder mirroring the scrollback window (ParDeck's history view) derives head evictions and tail appends from the `total`/`count` pair instead of re-reading the whole buffer — the count alone freezes at the ring cap. Pinned by `ffi_scrollback_total_scrolled_tracks_the_window` (invariant `count == min(total, cap)`, cap freeze, alt-screen active-grid reads, ED 3J reset). Note for ENH-038: this counter is a window cursor, not a scroll-damage source — the four failure modes listed there are exactly why.
+
 ## [0.57.0] - 2026-09-29
 
 ### Added

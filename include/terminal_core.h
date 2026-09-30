@@ -478,6 +478,24 @@ uint32_t terminal_read_scrollback_row(const Terminal *term,
 uint32_t terminal_scrollback_count(const Terminal *term);
 
 /**
+ * Total lines ever pushed into scrollback.
+ *
+ * Monotone within a buffer's lifetime; `clear_scrollback` resets it to 0
+ * together with the count. An embedder mirroring the scrollback window
+ * pairs this with `terminal_scrollback_count`: the window holds lines
+ * `[total - count, total)`, so head evictions and tail appends are both
+ * derivable per frame, including when the ring is full and the count
+ * alone stops moving. This counts buffer entries only — alt-screen and
+ * in-region scrolls that never reach scrollback do not move it, which is
+ * why it is a window-sync cursor and not a scroll-damage source (ENH-038
+ * rejects that use).
+ *
+ * # Safety
+ * `term` must be a valid pointer to a `Terminal`.
+ */
+uint64_t terminal_scrollback_total_scrolled(const Terminal *term);
+
+/**
  * Read cursor position/style.
  *
  * # Safety

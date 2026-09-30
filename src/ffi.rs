@@ -709,6 +709,28 @@ pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32
     unsafe { &*term }.active_grid().scrollback_len() as u32
 }
 
+/// Total lines ever pushed into scrollback.
+///
+/// Monotone within a buffer's lifetime; `clear_scrollback` resets it to 0
+/// together with the count. An embedder mirroring the scrollback window
+/// pairs this with `terminal_scrollback_count`: the window holds lines
+/// `[total - count, total)`, so head evictions and tail appends are both
+/// derivable per frame, including when the ring is full and the count
+/// alone stops moving. This counts buffer entries only — alt-screen and
+/// in-region scrolls that never reach scrollback do not move it, which is
+/// why it is a window-sync cursor and not a scroll-damage source (ENH-038
+/// rejects that use).
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_scrollback_total_scrolled(term: *const Terminal) -> u64 {
+    if term.is_null() {
+        return 0;
+    }
+    unsafe { &*term }.active_grid().total_lines_scrolled() as u64
+}
+
 /// Read cursor position/style.
 ///
 /// # Safety
@@ -1268,6 +1290,66 @@ mod tests {
         assert_eq!(total, written);
         assert_eq!(&buf[..written as usize], b"\x1b[A");
 
+        unsafe { terminal_free(term) };
+    }
+
+    /// The scrollback window cursor: `terminal_scrollback_total_scrolled`
+    /// paired with `terminal_scrollback_count` gives an embedder the window
+    /// `[total - count, total)`, so head evictions and tail appends are
+    /// derivable even when the ring is full and the count freezes at the
+    /// cap. Pinned here: the `count == min(total, cap)` invariant (a
+    /// violation is the consumer's full-replace signal), the cap freeze,
+    /// the alt-screen active-grid reads, and the ED 3J reset.
+    #[test]
+    fn ffi_scrollback_total_scrolled_tracks_the_window() {
+        let cols = 20;
+        let rows = 5;
+        let cap = 4;
+        let term = unsafe { terminal_create(cols, rows, cap) };
+        assert!(!term.is_null());
+
+        let total = |t: *const Terminal| unsafe { terminal_scrollback_total_scrolled(t) };
+        let count = |t: *const Terminal| unsafe { terminal_scrollback_count(t) };
+
+        assert_eq!(total(term), 0);
+        assert_eq!(count(term), 0);
+
+        // Fill past the screen and past the ring: every scrolled-off line
+        // raises the total; the count tracks it only until the cap.
+        for i in 0..(rows + cap + 3) {
+            let line = format!("line{i}\r\n");
+            unsafe { terminal_feed(term, line.as_ptr(), line.len() as u32) };
+            let (t, c) = (total(term), count(term));
+            assert_eq!(
+                c as u64,
+                t.min(cap as u64),
+                "window invariant count == min(total, cap) broke after line {i}"
+            );
+        }
+        assert_eq!(count(term), cap, "count freezes at the cap");
+        assert_eq!(total(term), (rows + cap + 3 - (rows - 1)) as u64);
+        assert!(total(term) > cap as u64, "total keeps counting evictions");
+
+        // The alternate screen is a separate scrollback-less grid: reads
+        // target it while active, and the primary window survives the
+        // round trip (a switch is a replace, not a slide, for consumers).
+        unsafe { terminal_feed(term, b"\x1b[?1049h".as_ptr(), 8) };
+        assert_eq!(count(term), 0);
+        assert_eq!(total(term), 0, "the alt grid has its own (empty) counters");
+        unsafe { terminal_feed(term, b"\x1b[?1049l".as_ptr(), 8) };
+        assert_eq!(count(term), cap);
+        assert_eq!(total(term), (rows + cap + 3 - (rows - 1)) as u64);
+
+        // ED 3J clears the buffer: both counters reset together, so a
+        // delta consumer sees an empty window, never a negative one.
+        unsafe { terminal_feed(term, b"\x1b[3J".as_ptr(), 4) };
+        assert_eq!(count(term), 0);
+        assert_eq!(total(term), 0);
+
+        assert_eq!(
+            unsafe { terminal_scrollback_total_scrolled(std::ptr::null()) },
+            0
+        );
         unsafe { terminal_free(term) };
     }
 
