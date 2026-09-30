@@ -151,7 +151,6 @@ impl SharedState {
         };
 
         // Cells
-        let cell_count = (cols * rows) as u32;
         let mut cells_vec: Vec<SharedCell> = Vec::with_capacity(cols * rows);
 
         for row_idx in 0..rows {
@@ -171,10 +170,11 @@ impl SharedState {
             }
         }
 
-        // Convert Vec to raw pointer — we now own the allocation
-        let mut cells_boxed = cells_vec.into_boxed_slice();
-        let cells = cells_boxed.as_mut_ptr();
-        std::mem::forget(cells_boxed);
+        // The count comes from the allocation itself, so `Drop` rebuilds
+        // exactly the slice `Box::into_raw` released (QA-215).
+        let cells: Box<[SharedCell]> = cells_vec.into_boxed_slice();
+        let cell_count = u32::try_from(cells.len()).expect("grid cell count fits in u32");
+        let cells = Box::into_raw(cells).cast::<SharedCell>();
 
         // Scrollback stats
         let sb = term.scrollback_stats();
@@ -217,12 +217,15 @@ impl Drop for SharedState {
             self.cwd = std::ptr::null_mut();
         }
 
-        // Free the cells array
-        if !self.cells.is_null() && self.cell_count > 0 {
-            unsafe {
-                let slice = std::slice::from_raw_parts_mut(self.cells, self.cell_count as usize);
-                let _ = Box::from_raw(slice as *mut [SharedCell]);
-            }
+        // Free the cells array. A zero-length box round-trips through
+        // into_raw/from_raw as a dangling non-null pointer, so no length
+        // guard is needed.
+        if !self.cells.is_null() {
+            let slice = std::ptr::slice_from_raw_parts_mut(self.cells, self.cell_count as usize);
+            // SAFETY: `cells` and `cell_count` came from one
+            // `Box::<[SharedCell]>::into_raw` in `from_terminal`; nulling the
+            // pointer below makes this the only reconstruction.
+            drop(unsafe { Box::from_raw(slice) });
             self.cells = std::ptr::null_mut();
         }
     }
@@ -1632,6 +1635,25 @@ mod tests {
         assert_eq!(title.to_bytes().len() as u32, state.title_len);
         assert_eq!(title.to_bytes(), b"hello");
         drop(state); // Drop frees title/cwd/cells
+    }
+
+    /// QA-215: `cell_count` is the length of the allocation `cells` points
+    /// to, so the last cell is readable and `terminal_free_state` rebuilds
+    /// exactly that slice.
+    #[test]
+    fn shared_state_cell_count_matches_grid() {
+        let term = unsafe { terminal_create(7, 3, 10) };
+        assert!(!term.is_null());
+        unsafe { terminal_feed(term, b"\x1b[3;7HZ".as_ptr(), 7) };
+        let state = unsafe { terminal_get_state(term) };
+        assert!(!state.is_null());
+        let s = unsafe { &*state };
+        assert_eq!(s.cell_count, 21);
+        let cells = unsafe { std::slice::from_raw_parts(s.cells, s.cell_count as usize) };
+        let last = &cells[20];
+        assert_eq!(&last.text[..last.text_len as usize], b"Z");
+        unsafe { terminal_free_state(state) };
+        unsafe { terminal_free(term) };
     }
 
     /// QA-151: an arbitrary uint16_t in `TermKeyEvent.key` — a value C or
