@@ -138,7 +138,7 @@ graph TB
 
 ## Command Injection Prevention
 
-### ✅ DO: Use Command + Args Array Format
+### DO: Use Command + Args Array Format
 
 **SECURE** - Always pass commands and arguments separately:
 
@@ -161,7 +161,7 @@ term.spawn(
 
 This prevents shell injection because arguments are not interpreted as shell commands.
 
-### ❌ DON'T: Concatenate User Input into Commands
+### DON'T: Concatenate User Input into Commands
 
 **INSECURE** - Don't build command strings with user input:
 

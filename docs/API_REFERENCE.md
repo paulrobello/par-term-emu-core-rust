@@ -869,7 +869,7 @@ Save and restore terminal state:
 - `set_remote_session_id(session_id: str | None)`: Set remote session identifier
 - `remote_session_id() -> str | None`: Get remote session identifier
 
-> The pane/window session-state API (`PaneState`, `SessionState`, `WindowLayout` and the `*_pane_state` / `serialize_session` / `deserialize_session` / `create_session_state` / `create_window_layout` methods) was removed in 0.50.0 — see the [0.50.0 changelog entry](CHANGELOG.md#0500---2026-09-21) for the rationale and the `replay_snapshot` replacement.
+> The pane/window session-state API (`PaneState`, `SessionState`, `WindowLayout` and the `*_pane_state` / `serialize_session` / `deserialize_session` / `create_session_state` / `create_window_layout` methods) was removed in 0.50.0 — see the [0.50.0 changelog entry](../CHANGELOG.md#0500---2026-09-23) for the rationale and the `replay_snapshot` replacement.
 
 ### Advanced Text Operations
 
