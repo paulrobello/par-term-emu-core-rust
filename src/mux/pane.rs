@@ -829,6 +829,12 @@ fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
 fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     // proc_pidinfo writes a vnode path — the kernel-side equivalent of
     // Linux's /proc/<pid>/cwd symlink.
+    // SAFETY: `proc_vnodepathinfo` is a plain C struct, so all-zero is a valid
+    // value. proc_pidinfo gets a pointer to that live local plus its exact
+    // size, so the kernel writes only inside it. The final slice reinterprets
+    // `c_char` as `u8` (same size and alignment) over `bytes[..end]`, where
+    // `end` is a NUL index found inside `bytes`, which borrows `info` for the
+    // slice's whole lifetime.
     unsafe {
         let mut info: libc::proc_vnodepathinfo = std::mem::zeroed();
         let size = libc::proc_pidinfo(

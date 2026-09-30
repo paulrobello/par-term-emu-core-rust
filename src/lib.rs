@@ -72,10 +72,7 @@ pub mod html_export;
 pub mod keyboard;
 pub mod macros;
 pub mod mouse;
-// Remove this allow once src/mux/{pane,host_probe,client}.rs carry SAFETY
-// comments on their remaining unsafe blocks (QA-201 remainder).
 #[cfg(feature = "mux")]
-#[cfg_attr(not(test), allow(clippy::undocumented_unsafe_blocks))]
 pub mod mux;
 pub mod observer;
 pub mod pty_error;

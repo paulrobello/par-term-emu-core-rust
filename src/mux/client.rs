@@ -412,6 +412,10 @@ fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
     // session with no controlling tty, so terminal-generated signals can
     // never reach it. Between fork and exec the child's pid cannot equal any
     // existing pgid, so the setsid cannot fail with EPERM.
+    // SAFETY: the pre_exec hook runs in the forked child before exec, where
+    // only async-signal-safe work is sound. It calls setsid(2) (listed as
+    // async-signal-safe) and, on failure, builds an OS-error io::Error, which
+    // only reads errno and allocates nothing; it touches no lock or heap.
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;

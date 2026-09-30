@@ -222,6 +222,8 @@ fn probe_cwd(cwd: &Path, bounds: &ProbeBounds) -> HostProbe {
 #[cfg(unix)]
 fn disk_free_percent(cwd: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt as _;
+    // SAFETY: `statvfs` is a plain C struct of integer fields, for which the
+    // all-zero bit pattern is a valid value.
     let mut stats = unsafe { std::mem::zeroed::<libc::statvfs>() };
     let path = std::ffi::CString::new(cwd.as_os_str().as_bytes()).ok()?;
     // SAFETY: `stats` is a valid out-pointer for the lifetime of the call
