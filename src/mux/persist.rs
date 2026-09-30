@@ -522,17 +522,20 @@ impl MuxTree {
                     panes.insert(PaneId(pane.id), created);
                 }
                 for pane in &window.panes {
-                    let terminal = panes
-                        .get_mut(&PaneId(pane.id))
+                    // Through the geometry-publishing path (QA-195): the
+                    // restored cursor and note are what `cursor_position()`
+                    // serves before the new process prints anything.
+                    panes
+                        .get(&PaneId(pane.id))
                         .expect("just inserted above")
-                        .terminal();
-                    let mut restored = terminal.write();
-                    restored.restore_for_new_process(pane.terminal.clone());
-                    // After the snapshot re-hangs, so the note is the last
-                    // thing on screen rather than scrolled away by it.
-                    if let Some(note) = cwd_fallbacks.get(&pane.id) {
-                        restored.process(note.as_bytes());
-                    }
+                        .with_terminal_mut(|restored| {
+                            restored.restore_for_new_process(pane.terminal.clone());
+                            // After the snapshot re-hangs, so the note is the
+                            // last thing on screen rather than scrolled away.
+                            if let Some(note) = cwd_fallbacks.get(&pane.id) {
+                                restored.process(note.as_bytes());
+                            }
+                        });
                 }
                 session_windows.push(MuxWindow {
                     id: WindowId(window.id),
@@ -1399,6 +1402,23 @@ mod tests {
         assert!(
             text.contains("par-mux: /par-mux-test-no-such-dir is gone"),
             "the fallback announced itself in the pane; screen held: {text}"
+        );
+        // QA-195 consistency check: the wait-free cursor matches the
+        // terminal's after a restore. Not isolating — the re-fit that ends
+        // `from_persist_state` republishes too. Both are read under the
+        // terminal's read lock, since every publish holds its write lock.
+        let pane = restored.pane(pane_id).unwrap();
+        let (published, cursor) = {
+            let terminal = pane.terminal();
+            let term = terminal.read();
+            (
+                pane.published_cursor(),
+                (term.cursor().col, term.cursor().row),
+            )
+        };
+        assert_eq!(
+            published, cursor,
+            "the geometry mirror follows the restored screen"
         );
     }
 

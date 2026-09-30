@@ -1468,14 +1468,14 @@ impl MuxTree {
         let fg = self.client_fg;
         let bg = self.client_bg;
         for pane in self.panes.values_mut() {
-            let terminal = pane.terminal();
-            let mut term = terminal.write();
-            if let Some(fg) = fg {
-                term.set_default_fg(fg);
-            }
-            if let Some(bg) = bg {
-                term.set_default_bg(bg);
-            }
+            pane.with_terminal_mut(|term| {
+                if let Some(fg) = fg {
+                    term.set_default_fg(fg);
+                }
+                if let Some(bg) = bg {
+                    term.set_default_bg(bg);
+                }
+            });
         }
     }
 
@@ -1498,14 +1498,14 @@ impl MuxTree {
         let (fg, bg) = (self.client_fg, self.client_bg);
         if fg.is_some() || bg.is_some() {
             if let Some(pane) = self.panes.get(&pane_id) {
-                let terminal = pane.terminal();
-                let mut term = terminal.write();
-                if let Some(fg) = fg {
-                    term.set_default_fg(fg);
-                }
-                if let Some(bg) = bg {
-                    term.set_default_bg(bg);
-                }
+                pane.with_terminal_mut(|term| {
+                    if let Some(fg) = fg {
+                        term.set_default_fg(fg);
+                    }
+                    if let Some(bg) = bg {
+                        term.set_default_bg(bg);
+                    }
+                });
             }
         }
     }

@@ -46,7 +46,9 @@ impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
         self.inner.terminal_ref().read()
     }
     fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = crate::terminal::Terminal> {
-        self.inner.terminal_ref().write()
+        // Publishes the geometry mirror on drop (QA-195), so every
+        // macro-generated mutator keeps size()/cursor_position() current.
+        self.inner.terminal_write()
     }
 }
 
@@ -571,8 +573,7 @@ impl PyPtyTerminal {
     /// Example:
     ///     >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
     fn force_set_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.write();
+        let mut term = self.inner.terminal_write();
         term.set_keyboard_flags(flags);
         Ok(())
     }
@@ -834,8 +835,7 @@ impl PyPtyTerminal {
     ///     macro: Macro object to load
     fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
         {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::load_macro(&mut term, name, macro_obj.inner.clone());
         }
         Ok(())
@@ -864,8 +864,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Removed Macro object if found, None otherwise
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.write();
+        let mut term = self.inner.terminal_write();
         Ok(MacroEngine::remove_macro(&mut term, &name).map(super::types::PyMacro::from))
     }
 
@@ -886,8 +885,7 @@ impl PyPtyTerminal {
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
     #[pyo3(signature = (name, speed=None))]
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.write();
+        let mut term = self.inner.terminal_write();
         MacroEngine::play_macro(&mut term, &name).map_err(PyValueError::new_err)?;
         if let Some(s) = speed {
             MacroEngine::set_macro_speed(&mut term, s);
@@ -898,8 +896,7 @@ impl PyPtyTerminal {
     /// Stop macro playback
     fn stop_macro(&self) -> PyResult<()> {
         {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::stop_macro(&mut term);
         }
         Ok(())
@@ -908,8 +905,7 @@ impl PyPtyTerminal {
     /// Pause macro playback
     fn pause_macro(&self) -> PyResult<()> {
         {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::pause_macro(&mut term);
         }
         Ok(())
@@ -918,8 +914,7 @@ impl PyPtyTerminal {
     /// Resume macro playback
     fn resume_macro(&self) -> PyResult<()> {
         {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::resume_macro(&mut term);
         }
         Ok(())
@@ -931,8 +926,7 @@ impl PyPtyTerminal {
     ///     speed: Speed multiplier (0.1 to 10.0)
     fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
         {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::set_macro_speed(&mut term, speed);
         }
         Ok(())
@@ -986,8 +980,7 @@ impl PyPtyTerminal {
     ///     True if an event was processed, False otherwise
     fn tick_macro(&mut self) -> PyResult<bool> {
         let bytes = {
-            let terminal = self.inner.terminal();
-            let mut term = terminal.write();
+            let mut term = self.inner.terminal_write();
             MacroEngine::tick_macro(&mut term)
         };
 
@@ -1004,8 +997,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of screenshot labels
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.write();
+        let mut term = self.inner.terminal_write();
         Ok(MacroEngine::get_macro_screenshot_triggers(&mut term))
     }
 
@@ -1079,6 +1071,19 @@ mod tests {
     // Note: These tests test through the inner PtySession since PyO3 types
     // require Python interpreter setup for full testing.
     // =========================================================================
+
+    /// QA-195: the macro layer's mutable accessor republishes the geometry
+    /// mirror, so a macro-generated mutator keeps `cursor_position()`
+    /// current without waiting for PTY output.
+    #[test]
+    fn term_mut_publishes_the_geometry_mirror() {
+        use crate::python_bindings::common::TerminalAccess;
+        let mut term = PyPtyTerminal {
+            inner: pty_session::PtySession::new(80, 24, 100),
+        };
+        term.term_mut().process(b"\x1b[5;10H");
+        assert_eq!(term.inner.cursor_position(), (9, 4));
+    }
 
     // -------------------------------------------------------------------------
     // Creation and initialization tests

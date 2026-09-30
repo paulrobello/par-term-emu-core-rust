@@ -166,6 +166,34 @@ pub struct PtySession {
     signals_sent: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Exclusive terminal access that republishes the session's wait-free
+/// geometry mirror when dropped, so `size()`/`cursor_position()` never go
+/// stale after a mutation (QA-195). Returned by
+/// [`PtySession::terminal_write`].
+pub struct TerminalWriteGuard<'a> {
+    guard: parking_lot::RwLockWriteGuard<'a, Terminal>,
+    geometry: &'a GeometryMirror,
+}
+
+impl std::ops::Deref for TerminalWriteGuard<'_> {
+    type Target = Terminal;
+    fn deref(&self) -> &Terminal {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for TerminalWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Terminal {
+        &mut self.guard
+    }
+}
+
+impl Drop for TerminalWriteGuard<'_> {
+    fn drop(&mut self) {
+        self.geometry.publish(&self.guard);
+    }
+}
+
 /// Pixel extent of `cells` cells at `cell_px` pixels each, saturated to the
 /// `u16` a `winsize`/`PtySize` field can hold (QA-182: `cols * cell_w` in
 /// `u16` overflowed at 2000 columns of 40 px cells).
@@ -1515,6 +1543,21 @@ impl PtySession {
         result
     }
 
+    /// Exclusive terminal access as a guard that republishes the wait-free
+    /// geometry mirror when dropped (QA-195), for callers that cannot use
+    /// the [`with_terminal_mut`](Self::with_terminal_mut) closure form (the
+    /// Python bindings' macro layer). Mutating through the raw
+    /// [`terminal`](Self::terminal) lock instead leaves `size()` and
+    /// `cursor_position()` stale until the next PTY output. The same rules
+    /// apply as for any write guard: keep it short and never hold it
+    /// across a call into Python.
+    pub fn terminal_write(&self) -> TerminalWriteGuard<'_> {
+        TerminalWriteGuard {
+            guard: self.terminal.write(),
+            geometry: &self.geometry,
+        }
+    }
+
     /// Get a borrowed reference to the underlying terminal `Arc`.
     ///
     /// Unlike [`terminal`](Self::terminal), this does not clone the `Arc`, so a
@@ -1934,6 +1977,18 @@ mod tests {
         let session = PtySession::new(80, 24, 1000);
         assert_eq!(session.size(), (80, 24));
         assert!(!session.is_running());
+    }
+
+    /// QA-195: a mutation through the write guard republishes the geometry
+    /// mirror on drop, so `cursor_position()` is current without PTY output.
+    #[test]
+    fn terminal_write_guard_publishes_geometry() {
+        let session = PtySession::new(80, 24, 100);
+        {
+            let mut term = session.terminal_write();
+            term.process(b"\x1b[5;10H");
+        }
+        assert_eq!(session.cursor_position(), (9, 4));
     }
 
     /// QA-182: a pixel extent past `u16` saturates instead of overflowing.

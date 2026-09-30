@@ -291,9 +291,25 @@ impl MuxPane {
             .unwrap_or_else(|| self.session.terminal().read().title().to_string())
     }
 
-    /// The terminal emulator backing this pane.
+    /// The terminal emulator backing this pane. Mutate through
+    /// [`Self::with_terminal_mut`] instead of this lock, so the session's
+    /// geometry mirror stays current (QA-195).
     pub fn terminal(&self) -> Arc<RwLock<Terminal>> {
         self.session.terminal()
+    }
+
+    /// Run `f` with exclusive access to the pane's terminal, then republish
+    /// the session's wait-free geometry mirror, so `cursor_position()` and
+    /// `size()` reflect what `f` did (QA-195).
+    pub fn with_terminal_mut<R>(&self, f: impl FnOnce(&mut Terminal) -> R) -> R {
+        self.session.with_terminal_mut(f)
+    }
+
+    /// The session's wait-free published cursor — what a mirror-reading
+    /// consumer sees, as opposed to the terminal's own cursor.
+    #[cfg(test)]
+    pub(crate) fn published_cursor(&self) -> (usize, usize) {
+        self.session.cursor_position()
     }
 
     /// The cwd persistence should capture for this pane: the shell's OSC 7
@@ -446,7 +462,7 @@ impl MuxPane {
     /// geometry-publishing write path, so `cursor_position()` is current
     /// afterwards (QA-195).
     pub fn write_note(&self, bytes: &[u8]) {
-        self.session.with_terminal_mut(|term| term.process(bytes));
+        self.with_terminal_mut(|term| term.process(bytes));
     }
 
     /// Stop forwarding this pane's output (ARC-089). On return, no sink
