@@ -317,6 +317,19 @@ pub struct MuxTree {
     /// on attach.
     pub(crate) client_fg: Option<Color>,
     pub(crate) client_bg: Option<Color>,
+    /// Reverse index pane → window (ARC-096), so [`Self::window_of_pane`]
+    /// is a map lookup instead of a scan of every window's layout under
+    /// the tree lock. Maintained where a window's pane set changes: in
+    /// [`Self::mutate_layout`] for layout edits, and in
+    /// [`Self::insert_window`] / [`Self::remove_window`] for window
+    /// lifetimes. Nothing else writes it.
+    pane_window: HashMap<PaneId, WindowId>,
+    /// Reverse index window → session (ARC-096), for
+    /// [`Self::session_of_window`]. Maintained only by
+    /// [`Self::link_window`] and [`Self::unlink_window`], the only code
+    /// that changes which session a window belongs to. Reordering a
+    /// session's windows keeps membership and needs no update.
+    window_session: HashMap<WindowId, SessionId>,
 }
 
 impl MuxTree {
@@ -332,7 +345,87 @@ impl MuxTree {
             client_cell_pixels: None,
             client_fg: None,
             client_bg: None,
+            pane_window: HashMap::new(),
+            window_session: HashMap::new(),
         }
+    }
+
+    /// Append `window` to `session_id`'s window list and index it and its
+    /// panes — every window creation (new-session, new-window, break-pane,
+    /// restore) goes through here. The session must exist.
+    pub(crate) fn insert_window(&mut self, session_id: SessionId, window: MuxWindow) {
+        let window_id = window.id;
+        for pane in window.panes() {
+            self.pane_window.insert(pane, window_id);
+        }
+        self.windows.insert(window_id, window);
+        self.link_window(session_id, window_id);
+    }
+
+    /// Remove `window_id` from the tree, its session's window list and the
+    /// indexes, returning it. A pane the window held stays indexed only if
+    /// it already moved to another window (break-pane re-homes before the
+    /// source closes). The caller disposes of the returned window's panes.
+    fn remove_window(&mut self, window_id: WindowId) -> Option<MuxWindow> {
+        let window = self.windows.remove(&window_id);
+        if let Some(window) = &window {
+            for pane in window.panes() {
+                if self.pane_window.get(&pane) == Some(&window_id) {
+                    self.pane_window.remove(&pane);
+                }
+            }
+        }
+        self.unlink_window(window_id);
+        window
+    }
+
+    /// Append `window_id` to `session_id`'s window list.
+    fn link_window(&mut self, session_id: SessionId, window_id: WindowId) {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            session.windows.push(window_id);
+            self.window_session.insert(window_id, session_id);
+        }
+    }
+
+    /// Take `window_id` out of its session's window list, clamping the
+    /// session's active index to the shortened list.
+    fn unlink_window(&mut self, window_id: WindowId) {
+        let Some(session_id) = self.window_session.remove(&window_id) else {
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return;
+        };
+        if let Some(pos) = session.windows.iter().position(|w| *w == window_id) {
+            session.windows.remove(pos);
+        }
+        if session.active >= session.windows.len() && !session.windows.is_empty() {
+            session.active = session.windows.len() - 1;
+        }
+    }
+
+    /// Brute-force the two reverse indexes from the layouts and window
+    /// lists and assert they match the maintained ones (ARC-096). O(n) —
+    /// tests only.
+    #[cfg(test)]
+    pub(crate) fn assert_indexes_consistent(&self) {
+        let mut pane_window = HashMap::new();
+        for (window_id, window) in &self.windows {
+            for pane in window.panes() {
+                pane_window.insert(pane, *window_id);
+            }
+        }
+        let mut window_session = HashMap::new();
+        for (session_id, session) in &self.sessions {
+            for window_id in &session.windows {
+                window_session.insert(*window_id, *session_id);
+            }
+        }
+        assert_eq!(self.pane_window, pane_window, "pane → window index drifted");
+        assert_eq!(
+            self.window_session, window_session,
+            "window → session index drifted"
+        );
     }
 
     /// Store `content` under `name`, overwriting any existing value.
@@ -494,26 +587,26 @@ impl MuxTree {
         } = plan;
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
-        self.windows.insert(
-            window_id,
+        self.sessions.insert(
+            session_id,
+            MuxSession {
+                id: session_id,
+                name: name.clone(),
+                windows: Vec::new(),
+                active: 0,
+                env,
+            },
+        );
+        self.insert_window(
+            session_id,
             MuxWindow {
                 id: window_id,
-                name: name.clone(),
+                name,
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
                 cols,
                 rows,
                 zoomed: None,
-            },
-        );
-        self.sessions.insert(
-            session_id,
-            MuxSession {
-                id: session_id,
-                name,
-                windows: vec![window_id],
-                active: 0,
-                env,
             },
         );
         Ok(session_id)
@@ -618,8 +711,8 @@ impl MuxTree {
         }
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
-        self.windows.insert(
-            window_id,
+        self.insert_window(
+            session_id,
             MuxWindow {
                 id: window_id,
                 name,
@@ -630,11 +723,6 @@ impl MuxTree {
                 zoomed: None,
             },
         );
-        self.sessions
-            .get_mut(&session_id)
-            .expect("checked directly above")
-            .windows
-            .push(window_id);
         Ok(window_id)
     }
 
@@ -746,32 +834,28 @@ impl MuxTree {
         // `-b` instead puts the NEW pane in `first`: split at the new
         // pane's share and swap the two leaves, which lands the new pane
         // left/above with exactly its `-p` share.
-        let split = self.windows.get_mut(&window_id).and_then(|window| {
-            if window.panes().contains(&target) {
-                let placed = if before {
-                    window
-                        .layout
-                        .split_pane(target, pane_id, direction, new_share)
-                        .and_then(|_| window.layout.swap_pane(target, pane_id))
-                } else {
-                    window
-                        .layout
-                        .split_pane(target, pane_id, direction, 1.0 - new_share)
-                };
-                placed.ok()
-            } else {
-                None
-            }
-        });
-        if split.is_none() {
+        // The target (or its window) may be gone: validate before the
+        // insert so a failure leaves the tree untouched.
+        if self.window_of_pane(target) != Some(window_id) {
             kill_detached(pane);
             return Err(MuxError::NoSuchPane(target));
         }
         self.panes.insert(pane_id, pane);
-        // The layout split above is the mutation; routing the active-pane
-        // update through the choke point ends the zoom that would hide the
-        // new pane, and re-fits every terminal to the new geometry.
+        // Through the choke point: it ends the zoom that would hide the
+        // new pane, indexes the new pane (ARC-096), and re-fits every
+        // terminal to the new geometry.
         self.mutate_layout(window_id, |window| {
+            let placed = if before {
+                window
+                    .layout
+                    .split_pane(target, pane_id, direction, new_share)
+                    .and_then(|_| window.layout.swap_pane(target, pane_id))
+            } else {
+                window
+                    .layout
+                    .split_pane(target, pane_id, direction, 1.0 - new_share)
+            };
+            placed.expect("the target is a leaf of this window, checked above");
             window.active = pane_id;
             Ok(())
         })?;
@@ -801,20 +885,16 @@ impl MuxTree {
         Ok(())
     }
 
-    /// The session whose window list holds `window`, if any.
+    /// The session whose window list holds `window`, if any. A map lookup
+    /// (ARC-096).
     pub fn session_of_window(&self, window: WindowId) -> Option<SessionId> {
-        self.sessions
-            .values()
-            .find(|session| session.windows.contains(&window))
-            .map(|session| session.id)
+        self.window_session.get(&window).copied()
     }
 
-    /// The window whose layout holds `pane`, if any.
+    /// The window whose layout holds `pane`, if any. A map lookup
+    /// (ARC-096).
     pub fn window_of_pane(&self, pane: PaneId) -> Option<WindowId> {
-        self.windows
-            .iter()
-            .find(|(_, window)| window.layout.pane_ids().contains(&pane))
-            .map(|(id, _)| *id)
+        self.pane_window.get(&pane).copied()
     }
 
     /// Make `pane` its window's active pane, returning the window — the
@@ -897,21 +977,16 @@ impl MuxTree {
     /// caller guarantees the window exists and every pane it held has
     /// already been re-homed or killed.
     fn drop_empty_window(&mut self, window_id: WindowId) -> Option<SessionId> {
-        self.windows.remove(&window_id);
-        let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
-            if let Some(pos) = session.windows.iter().position(|w| *w == window_id) {
-                session.windows.remove(pos);
-                if session.active >= session.windows.len() && !session.windows.is_empty() {
-                    session.active = session.windows.len() - 1;
-                }
-                if session.windows.is_empty() {
-                    return Some(*id);
-                }
-            }
-            None
-        });
-        empty_session.inspect(|&session_id| {
+        let session_id = self.session_of_window(window_id);
+        self.remove_window(window_id);
+        let session_id = session_id?;
+        let emptied = self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.windows.is_empty());
+        emptied.then(|| {
             self.sessions.remove(&session_id);
+            session_id
         })
     }
 
@@ -946,10 +1021,7 @@ impl MuxTree {
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
         let session_id = self
-            .sessions
-            .values()
-            .find(|s| s.windows.contains(&source_window))
-            .map(|s| s.id)
+            .session_of_window(source_window)
             .ok_or(MuxError::NoSuchWindow(source_window))?;
         let (cols, rows) = {
             let window = self
@@ -966,10 +1038,12 @@ impl MuxTree {
             == LayoutTree::leaf(pane);
 
         // The new window exists before the pane leaves the source, so an
-        // only-pane break never leaves the session windowless.
+        // only-pane break never leaves the session windowless. Inserting
+        // it re-homes the pane's index entry first; the source's removal
+        // below then leaves that entry alone.
         let window_id = self.ids.next_window();
-        self.windows.insert(
-            window_id,
+        self.insert_window(
+            session_id,
             MuxWindow {
                 id: window_id,
                 name: name.to_string(),
@@ -985,7 +1059,6 @@ impl MuxTree {
                 .sessions
                 .get_mut(&session_id)
                 .expect("checked directly above");
-            session.windows.push(window_id);
             session.active = session.windows.len() - 1;
         }
 
@@ -1105,9 +1178,8 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchPane(pane))?;
         let (session_id, session_name, env) = {
             let session = self
-                .sessions
-                .values()
-                .find(|s| s.windows.contains(&window_id))
+                .session_of_window(window_id)
+                .and_then(|id| self.sessions.get(&id))
                 .ok_or(MuxError::NoSuchWindow(window_id))?;
             (session.id, session.name.clone(), session.env.clone())
         };
@@ -1181,16 +1253,15 @@ impl MuxTree {
     /// list moves.
     pub fn move_window(&mut self, window_id: WindowId, index: usize) -> Result<(), MuxError> {
         let session = self
-            .sessions
-            .values_mut()
-            .find(|s| s.windows.contains(&window_id))
+            .session_of_window(window_id)
+            .and_then(|id| self.sessions.get_mut(&id))
             .ok_or(MuxError::NoSuchWindow(window_id))?;
         let active_window = session.windows.get(session.active).copied();
         let pos = session
             .windows
             .iter()
             .position(|w| *w == window_id)
-            .expect("found by contains");
+            .expect("the index names this window's session");
         session.windows.remove(pos);
         let insert_at = index.min(session.windows.len());
         session.windows.insert(insert_at, window_id);
@@ -1212,22 +1283,25 @@ impl MuxTree {
         if a == b {
             return Ok(());
         }
+        let session_id = match (self.session_of_window(a), self.session_of_window(b)) {
+            (Some(sa), Some(sb)) if sa == sb => sa,
+            _ => return Err(MuxError::WindowsInDifferentSessions(a, b)),
+        };
         let session = self
             .sessions
-            .values_mut()
-            .find(|s| s.windows.contains(&a) && s.windows.contains(&b))
+            .get_mut(&session_id)
             .ok_or(MuxError::WindowsInDifferentSessions(a, b))?;
         let active_window = session.windows.get(session.active).copied();
         let pos_a = session
             .windows
             .iter()
             .position(|w| *w == a)
-            .expect("found by contains");
+            .expect("the index names this window's session");
         let pos_b = session
             .windows
             .iter()
             .position(|w| *w == b)
-            .expect("found by contains");
+            .expect("the index names this window's session");
         session.windows.swap(pos_a, pos_b);
         if let Some(active) = active_window {
             session.active = session
@@ -1437,6 +1511,11 @@ impl MuxTree {
     ///
     /// `f` holds `&mut MuxWindow` borrowed from the tree, so it cannot call
     /// other tree methods; resolve lookups such as `window_of_pane` first.
+    ///
+    /// The pane → window index is maintained here (ARC-096): panes the
+    /// edit added map to this window, and panes it removed are dropped
+    /// unless they already map elsewhere (a move re-homes the pane in its
+    /// destination first).
     fn mutate_layout<R>(
         &mut self,
         window_id: WindowId,
@@ -1446,9 +1525,27 @@ impl MuxTree {
             .windows
             .get_mut(&window_id)
             .ok_or(MuxError::NoSuchWindow(window_id))?;
+        let before = window.panes();
         let out = f(window)?;
+        let after = window.panes();
+        self.reindex_window_panes(window_id, &before, &after);
         self.end_layout_mutation(window_id);
+        #[cfg(test)]
+        self.assert_indexes_consistent();
         Ok(out)
+    }
+
+    /// Bring the pane → window index in line with one window's pane set
+    /// changing from `before` to `after`.
+    fn reindex_window_panes(&mut self, window_id: WindowId, before: &[PaneId], after: &[PaneId]) {
+        for pane in before {
+            if !after.contains(pane) && self.pane_window.get(pane) == Some(&window_id) {
+                self.pane_window.remove(pane);
+            }
+        }
+        for pane in after {
+            self.pane_window.insert(*pane, window_id);
+        }
     }
 
     /// The post-step of [`Self::mutate_layout`] alone, for a mutation
@@ -1524,37 +1621,31 @@ impl MuxTree {
             .remove(&pane_id)
             .ok_or(MuxError::NoSuchPane(pane_id))?;
         kill_detached(pane);
-        let empty_window = self.windows.iter_mut().find_map(|(id, window)| {
-            match window.layout.remove_pane(pane_id) {
-                Ok(()) => {
-                    if window.active == pane_id {
-                        // Killed pane was active; the tree always has at
-                        // least one pane left here (remove_pane only errors
-                        // on the last pane, handled by the Err arm below),
-                        // so the first surviving leaf is a reasonable new
-                        // active pane. tmux's own choice of successor is
-                        // more elaborate (last-focused history); matching
-                        // that is Task 2.4's concern, not this constructor's.
-                        window.active = window.layout.pane_ids()[0];
-                    }
-                    None
-                }
-                Err(_)
-                    if window.active == pane_id && window.layout == LayoutTree::leaf(pane_id) =>
-                {
-                    // The window's only pane — the window itself closes.
-                    Some(*id)
-                }
-                Err(_) => None,
-            }
-        });
+        let only_pane = self
+            .windows
+            .get(&affected_window)
+            .is_some_and(|window| window.layout == LayoutTree::leaf(pane_id));
 
-        let removed_session = empty_window.and_then(|window_id| self.drop_empty_window(window_id));
-
-        // The killed pane left its window's layout; a surviving pane takes
-        // the freed extent and its terminal must grow into it. The layout
-        // changed, so any zoom is over — including the killed pane's own.
-        self.end_layout_mutation(affected_window);
+        let removed_session = if only_pane {
+            // The window's only pane — the window itself closes.
+            self.drop_empty_window(affected_window)
+        } else {
+            // A surviving pane takes the freed extent; the choke point
+            // ends any zoom (the killed pane's own included), drops the
+            // pane from the index, and re-fits the terminals. The pane is
+            // already gone from `panes`, so this cannot fail the kill.
+            self.mutate_layout(affected_window, |window| {
+                if window.layout.remove_pane(pane_id).is_ok() && window.active == pane_id {
+                    // The tree always has a pane left here, so the first
+                    // surviving leaf is a reasonable new active pane.
+                    // tmux's own choice of successor is more elaborate
+                    // (last-focused history).
+                    window.active = window.layout.pane_ids()[0];
+                }
+                Ok(())
+            })?;
+            None
+        };
 
         Ok((affected_window, removed_session))
     }
@@ -1568,15 +1659,14 @@ impl MuxTree {
             return Err(MuxError::NoSuchWindow(window_id));
         }
         let session = self
-            .sessions
-            .values_mut()
-            .find(|s| s.windows.contains(&window_id))
+            .session_of_window(window_id)
+            .and_then(|id| self.sessions.get_mut(&id))
             .ok_or(MuxError::NoSuchWindow(window_id))?;
         let index = session
             .windows
             .iter()
             .position(|w| *w == window_id)
-            .expect("just found by contains");
+            .expect("the index names this window's session");
         session.active = index;
         Ok(())
     }
@@ -1632,7 +1722,9 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchSession(session_id))?;
         let mut killed = Vec::new();
         for window_id in session.windows {
-            let Some(window) = self.windows.remove(&window_id) else {
+            // The session is already gone, so this only clears the window
+            // and its indexes; no list to unlink from.
+            let Some(window) = self.remove_window(window_id) else {
                 continue;
             };
             for pane_id in window.panes() {
@@ -2797,6 +2889,90 @@ mod tests {
                 geometry.pane
             );
         }
+    }
+
+    /// ARC-096: the pane → window and window → session indexes match a
+    /// brute-force scan after every structural command.
+    #[test]
+    fn reverse_indexes_track_every_structural_command() {
+        let mut tree = tree();
+        let check = |tree: &MuxTree| tree.assert_indexes_consistent();
+
+        let s0 = tree.new_session("a", 80, 24).unwrap();
+        check(&tree);
+        let w0 = tree.session(s0).unwrap().windows[0];
+        let p0 = tree.window(w0).unwrap().panes()[0];
+        let p1 = tree
+            .split_pane(p0, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        check(&tree);
+        let p2 = tree
+            .split_pane(p1, SplitDirection::Horizontal, 0.5, None)
+            .unwrap();
+        check(&tree);
+        assert_eq!(tree.window_of_pane(p2), Some(w0));
+
+        tree.swap_panes(p0, p2).unwrap();
+        check(&tree);
+
+        let w1 = tree.new_window(s0, "b", 80, 24).unwrap();
+        check(&tree);
+        assert_eq!(tree.session_of_window(w1), Some(s0));
+
+        // break-pane: p2 moves to a fresh window in the same session.
+        let (w2, _, closed) = tree.break_pane(p2, "broken").unwrap();
+        check(&tree);
+        assert!(!closed);
+        assert_eq!(tree.window_of_pane(p2), Some(w2));
+
+        // join-pane across windows; w2 empties and closes.
+        let (dest, _, closed, _) = tree
+            .join_pane(p2, p0, SplitDirection::Vertical, 0.5)
+            .unwrap();
+        check(&tree);
+        assert!(closed);
+        assert_eq!(dest, w0);
+        assert_eq!(tree.window_of_pane(p2), Some(w0));
+        assert_eq!(tree.session_of_window(w2), None);
+
+        tree.move_window(w1, 0).unwrap();
+        check(&tree);
+        tree.swap_windows(w0, w1).unwrap();
+        check(&tree);
+
+        // respawn swaps the pane in place under the same id.
+        let factory = tree.factory();
+        let plan = tree.begin_respawn(p1, true, None, None).unwrap();
+        let respawned = factory
+            .create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context())
+            .unwrap();
+        tree.complete_respawn(plan, respawned).unwrap();
+        check(&tree);
+        assert_eq!(tree.window_of_pane(p1), Some(w0));
+
+        // kill-pane of a non-last pane, then of a window's last pane.
+        tree.kill_pane(p2).unwrap();
+        check(&tree);
+        assert_eq!(tree.window_of_pane(p2), None);
+        let w1_pane = tree.window(w1).unwrap().panes()[0];
+        let (_, removed) = tree.kill_pane(w1_pane).unwrap();
+        check(&tree);
+        assert_eq!(removed, None, "w0 keeps the session alive");
+        assert_eq!(tree.session_of_window(w1), None);
+
+        let s1 = tree.new_session("c", 80, 24).unwrap();
+        let w3 = tree.new_window(s1, "d", 80, 24).unwrap();
+        check(&tree);
+        assert_eq!(tree.kill_window(w3).unwrap(), None);
+        check(&tree);
+        tree.kill_session(s1).unwrap();
+        check(&tree);
+        assert!(tree.session(s1).is_none());
+
+        // Last window of the last session: the cascade clears everything.
+        assert_eq!(tree.kill_window(w0).unwrap(), Some(s0));
+        check(&tree);
+        assert!(tree.pane_window.is_empty() && tree.window_session.is_empty());
     }
 
     /// `move-window` reorders the session's window list, clamps

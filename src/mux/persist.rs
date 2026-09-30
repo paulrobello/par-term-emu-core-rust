@@ -418,14 +418,16 @@ impl MuxTree {
         }
 
         let mut panes = HashMap::new();
-        let mut windows = HashMap::new();
-        let mut sessions = HashMap::new();
+        // Each session with its windows in order; linked into the tree
+        // through `MuxTree::insert_window` below, which maintains the
+        // reverse indexes (ARC-096).
+        let mut sessions: Vec<(MuxSession, Vec<MuxWindow>)> = Vec::new();
         // Panes whose persisted cwd was gone at restore — they spawned in
         // home and get a visible note after their content is restored.
         let mut cwd_fallbacks: HashMap<u32, String> = HashMap::new();
 
         for session in &state.sessions {
-            let mut window_ids = Vec::with_capacity(session.windows.len());
+            let mut session_windows = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
                 for pane in &window.panes {
                     // The effective command (D6.3): a resumable agent
@@ -532,40 +534,41 @@ impl MuxTree {
                         restored.process(note.as_bytes());
                     }
                 }
-                window_ids.push(WindowId(window.id));
-                windows.insert(
-                    WindowId(window.id),
-                    MuxWindow {
-                        id: WindowId(window.id),
-                        name: window.name.clone(),
-                        layout: window.layout.clone(),
-                        active: PaneId(window.active_pane),
-                        cols: window.cols,
-                        rows: window.rows,
-                        // Zoom is session state, not layout — restored
-                        // windows start unzoomed (tmux's behavior).
-                        zoomed: None,
-                    },
-                );
+                session_windows.push(MuxWindow {
+                    id: WindowId(window.id),
+                    name: window.name.clone(),
+                    layout: window.layout.clone(),
+                    active: PaneId(window.active_pane),
+                    cols: window.cols,
+                    rows: window.rows,
+                    // Zoom is session state, not layout — restored
+                    // windows start unzoomed (tmux's behavior).
+                    zoomed: None,
+                });
             }
-            sessions.insert(
-                SessionId(session.id),
+            sessions.push((
                 MuxSession {
                     id: SessionId(session.id),
                     name: session.name.clone(),
-                    windows: window_ids,
+                    windows: Vec::new(),
                     active: session.active_window_index,
                     env: session.env.clone(),
                 },
-            );
+                session_windows,
+            ));
         }
 
         let mut tree = MuxTree::new(factory);
         tree.ids = IdAllocator::resume(state.next_ids);
-        tree.sessions = sessions;
-        tree.windows = windows;
         tree.panes = panes;
         tree.buffers = state.buffers.clone();
+        for (session, windows) in sessions {
+            let session_id = session.id;
+            tree.sessions.insert(session_id, session);
+            for window in windows {
+                tree.insert_window(session_id, window);
+            }
+        }
         // Panes were spawned at their window's full extent, but the restored
         // layout divides that extent — re-fit every terminal (and PTY) to
         // its geometry, exactly as a live resize would have, so a restart
