@@ -314,6 +314,9 @@ impl Grid {
         self.zones = snap.zones.clone();
         self.evicted_zones.clear();
         self.total_lines_scrolled = snap.total_lines_scrolled;
+        // `gen` is kept, never lowered: the fresh stamps land above every
+        // generation this grid handed out before the restore. The other
+        // grid's generations are the owning Terminal's to sync (ARC-092).
         self.row_gen = vec![0u64; self.rows];
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }

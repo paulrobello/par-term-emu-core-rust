@@ -271,11 +271,9 @@ impl Terminal {
         self.pending_wrap = snap.pending_wrap;
 
         // The whole screen just changed under any damage-driven renderer
-        // (QA-150). Grid::restore_from_snapshot resized and marked its own
-        // bitset; this re-asserts the contract on the grid the renderer now
-        // sees, in case the snapshot's alt-screen flag moved it.
-        let rows = self.active_grid().rows();
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        // (QA-150), and the snapshot's alt-screen flag may have made the
+        // lower-generation grid visible (ARC-092).
+        self.invalidate_visible_screen();
     }
 
     /// Restore a snapshot under a process that did not produce it (a pane
@@ -306,8 +304,7 @@ impl Terminal {
         // Same damage contract as the plain restore (QA-150), re-asserted
         // after the screen switch: the primary screen is what a renderer
         // now sees.
-        let rows = self.active_grid().rows();
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        self.invalidate_visible_screen();
     }
 }
 

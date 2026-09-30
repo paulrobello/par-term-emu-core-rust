@@ -1809,10 +1809,7 @@ impl Terminal {
                 // Clear the alternate screen buffer to ensure it starts blank
                 self.alt_grid.clear();
             }
-            // The whole visible screen just changed — every row is dirty.
-            self.sync_damage_generations();
-            let rows = self.grid.rows();
-            self.mark_rows_dirty(0, rows.saturating_sub(1));
+            self.invalidate_visible_screen();
             // Notify about alt screen entry
             self.events
                 .terminal_events
@@ -1842,10 +1839,7 @@ impl Terminal {
             self.cursor = self.alt_cursor;
             // Save alternate cursor for when we switch back
             self.alt_cursor = alt_cursor;
-            // The whole visible screen just changed — every row is dirty.
-            self.sync_damage_generations();
-            let rows = self.grid.rows();
-            self.mark_rows_dirty(0, rows.saturating_sub(1));
+            self.invalidate_visible_screen();
             // Reset keyboard protocol flags when exiting alternate screen
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
             if self.keyboard_state.keyboard_flags != 0 {
@@ -3309,10 +3303,8 @@ impl Terminal {
         *self = fresh;
         self.tab_stops = tab_stops;
 
-        // The whole screen changed under whoever is watching it.
         self.grid.raise_generation(max_gen);
-        self.alt_grid.raise_generation(max_gen);
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        self.invalidate_visible_screen();
     }
 
     /// Push a freshly swapped-in [`HostConfig`] into the state that
@@ -3441,13 +3433,29 @@ impl Terminal {
     }
 
     /// Carry the maximum damage generation across both grids. Generations
-    /// are per grid, but consumers remember one number; syncing at every
-    /// wholesale invalidation (screen switch, resize, reset) keeps both
-    /// grids' stamps comparable (ENH-025).
+    /// are per grid, but consumers remember one number; syncing before any
+    /// wholesale mark keeps both grids' stamps comparable (ENH-025).
+    ///
+    /// Callers: `invalidate_visible_screen` and `resize` only. `resize` syncs
+    /// before the regrid because `Grid::resize` marks every row itself.
     fn sync_damage_generations(&mut self) {
         let gen = self.grid.generation().max(self.alt_grid.generation());
         self.grid.raise_generation(gen);
         self.alt_grid.raise_generation(gen);
+    }
+
+    /// The only way to report a wholesale change of what the renderer
+    /// sees; call it after the active grid or its content was replaced
+    /// (screen switch, RIS, snapshot restore) (ARC-092).
+    ///
+    /// Generations are per grid but consumers remember one number
+    /// (`damage_generation()`, the max of both), so the newly visible grid
+    /// must stamp above everything either grid has handed out before its
+    /// rows are marked.
+    fn invalidate_visible_screen(&mut self) {
+        self.sync_damage_generations();
+        let rows = self.active_grid().rows();
+        self.mark_rows_dirty(0, rows.saturating_sub(1));
     }
 
     /// Mark the entire screen as clean
