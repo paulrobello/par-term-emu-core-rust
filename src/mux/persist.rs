@@ -725,15 +725,31 @@ pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
     write_job(SaveOrigin::Shutdown, &tree.to_persist_state(), target)
 }
 
-/// [`save_to`] with an explicit origin — the exit-when-empty path's final
-/// save, which must be distinguished from a requested shutdown's (see
-/// [`SaveOrigin::ShutdownEmpty`]).
+/// [`save_to`] with an explicit origin. The whole save — capture, cwd
+/// syscalls, serialization, fsync — runs while the caller holds `tree`;
+/// a caller with the tree behind a mutex should prefer [`save_off_lock`].
 pub fn save_to_with_origin(
     tree: &MuxTree,
     target: &Path,
     origin: SaveOrigin,
 ) -> Result<(), PersistError> {
     write_job(origin, &tree.to_persist_state(), target)
+}
+
+/// Save a mutex-held tree with the lock held only for the cheap structure
+/// read (ARC-119): collect the capture handles under the lock, drop it,
+/// then take the snapshots, resolve cwds, serialize and fsync off it — the
+/// discipline every other save already follows. A wedged filesystem during
+/// the final save no longer holds the tree mutex the reap tick and late
+/// client commands share. A command that lands between the capture and the
+/// write is not in this save, as with the periodic path.
+pub fn save_off_lock(
+    tree: &parking_lot::Mutex<MuxTree>,
+    target: &Path,
+    origin: SaveOrigin,
+) -> Result<(), PersistError> {
+    let capture = tree.lock().collect_persist_capture();
+    write_job(origin, &capture.capture(), target)
 }
 
 /// Serialize and atomically land one already-captured state with the
@@ -1756,6 +1772,45 @@ mod tests {
         assert!(
             state_has_panes(&snapshot),
             "an all-dead exit keeps its panes for the next start"
+        );
+    }
+
+    /// ARC-119: the off-lock shutdown save lands the tree's structure,
+    /// applies the origin's snapshot rule, and leaves the tree mutex free.
+    /// Content parity with the one-shot capture is
+    /// `two_phase_capture_matches_one_shot` (`to_persist_state` is the
+    /// same two calls); live shells make a byte comparison racy here.
+    #[test]
+    fn save_off_lock_writes_the_tree_and_releases_the_lock() {
+        let (_dir, target) = temp_target("off-lock");
+        let tree = parking_lot::Mutex::new(populated_tree());
+        save_off_lock(&tree, &target, SaveOrigin::Shutdown).unwrap();
+        assert!(
+            tree.try_lock().is_some(),
+            "the tree mutex is free once the save returns"
+        );
+        let written: PersistState = serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+        let expected = tree.lock().to_persist_state();
+        let shape = |state: &PersistState| {
+            state
+                .sessions
+                .iter()
+                .map(|s| {
+                    let windows: Vec<_> = s
+                        .windows
+                        .iter()
+                        .map(|w| (w.id, w.panes.iter().map(|p| p.id).collect::<Vec<_>>()))
+                        .collect();
+                    (s.id, s.name.clone(), windows)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&written), shape(&expected));
+        assert_eq!(written.next_ids, expected.next_ids);
+        assert_eq!(written.buffers, expected.buffers);
+        assert!(
+            lastgood_path(&target).exists(),
+            "a pane-bearing Shutdown save refreshes the snapshot"
         );
     }
 

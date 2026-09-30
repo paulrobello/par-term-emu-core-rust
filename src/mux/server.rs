@@ -204,9 +204,7 @@ impl MuxServer {
             LoopExit::Empty => SaveOrigin::ShutdownEmpty,
             LoopExit::Fault | LoopExit::Requested => SaveOrigin::Shutdown,
         };
-        if let Err(err) =
-            crate::mux::persist::save_to_with_origin(&self.tree.lock(), &state_path, origin)
-        {
+        if let Err(err) = crate::mux::persist::save_off_lock(&self.tree, &state_path, origin) {
             log::error!("par-mux: final state save failed: {err}");
         }
     }
