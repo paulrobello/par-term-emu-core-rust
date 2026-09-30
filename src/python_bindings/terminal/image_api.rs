@@ -15,6 +15,21 @@ impl PyTerminal {
     ///
     /// Args:
     ///     image: PyInlineImage to add
+    ///
+    /// Raises:
+    ///     ValueError: If the image's protocol or format name is not recognized
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     # InlineImage has no Python constructor, so images come from
+    ///     # another terminal's store (get_all_images/get_images_at/get_image_by_id).
+    ///     source = Terminal(80, 24)
+    ///     term = Terminal(80, 24)
+    ///     for image in source.get_all_images():
+    ///         term.add_inline_image(image)
+    ///     len(term.get_all_images()) == len(source.get_all_images())   # True
+    ///     ```
     fn add_inline_image(
         &mut self,
         image: &crate::python_bindings::types::PyInlineImage,
@@ -62,6 +77,13 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of PyInlineImage at the position
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.get_images_at(0, 0)   # []
+    ///     ```
     fn get_images_at(
         &self,
         col: usize,
@@ -78,6 +100,13 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of all PyInlineImage
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.get_all_images()   # []
+    ///     ```
     fn get_all_images(&self) -> PyResult<Vec<crate::python_bindings::types::PyInlineImage>> {
         let images = self.inner.get_all_images();
         Ok(images
@@ -93,11 +122,26 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     True if image was found and deleted
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.delete_image("logo")   # False (no image with that ID)
+    ///     ```
     fn delete_image(&mut self, id: &str) -> PyResult<bool> {
         Ok(self.inner.delete_image(id))
     }
 
     /// Clear all inline images
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.clear_images()
+    ///     term.get_all_images()   # []
+    ///     ```
     fn clear_images(&mut self) -> PyResult<()> {
         self.inner.clear_images();
         Ok(())
@@ -110,6 +154,13 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     PyInlineImage if found, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.get_image_by_id("logo")   # None
+    ///     ```
     fn get_image_by_id(
         &self,
         id: &str,
@@ -123,7 +174,15 @@ impl PyTerminal {
     /// Set maximum inline images
     ///
     /// Args:
-    ///     max: Maximum number of images to keep
+    ///     max: Maximum number of images to keep; the oldest images are
+    ///         dropped when the store exceeds it
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_inline_images(10)
+    ///     ```
     fn set_max_inline_images(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_inline_images(max);
         Ok(())

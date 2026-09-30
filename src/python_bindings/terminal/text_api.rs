@@ -27,6 +27,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of text lines
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("one\r\ntwo\r\nthree\r\nfour\r\n")
+    ///     [line.rstrip() for line in term.get_line_context(2, 1, 1)]
+    ///     # ['two', 'three', 'four']
+    ///     ```
     fn get_line_context(
         &self,
         row: usize,
@@ -47,6 +56,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Paragraph text as string
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("first line\r\nsecond line\r\n\r\nother\r\n")
+    ///     [line.rstrip() for line in term.get_paragraph_at(0).split("\n")]
+    ///     # ['first line', 'second line']
+    ///     ```
     fn get_paragraph_at(&self, row: usize) -> PyResult<String> {
         Ok(self.inner.get_paragraph_at(row))
     }
@@ -59,7 +77,18 @@ impl PyTerminal {
     ///     start_row: Row (0-indexed) whose logical line to rejoin
     ///
     /// Returns:
-    ///     JoinedLines | None: The rejoined line, or None if the row is empty
+    ///     JoinedLines | None: The rejoined line, or None if the row is out of range
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(10, 5)
+    ///     term.process_str("abcdefghijklmno\r\n")   # wraps onto row 1
+    ///     joined = term.join_wrapped_lines(0)
+    ///     (joined.start_row, joined.end_row, joined.lines_joined)   # (0, 1, 2)
+    ///     joined.text.rstrip()           # 'abcdefghijklmno'
+    ///     term.join_wrapped_lines(99)    # None
+    ///     ```
     fn join_wrapped_lines(
         &self,
         start_row: usize,
@@ -80,6 +109,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     list[str]: Logical lines with wrapped segments joined
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(10, 5)
+    ///     term.process_str("abcdefghijklmno\r\n")   # wraps onto row 1
+    ///     term.get_logical_lines()[0]   # 'abcdefghijklmno'
+    ///     ```
     fn get_logical_lines(&self) -> PyResult<Vec<String>> {
         Ok(self.inner.get_logical_lines())
     }
@@ -91,6 +128,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     bool: True if the row begins a new logical line
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(10, 5)
+    ///     term.process_str("abcdefghijklmno\r\n")   # wraps onto row 1
+    ///     term.is_line_start(0)   # True
+    ///     term.is_line_start(1)   # False (continuation of row 0)
+    ///     ```
     fn is_line_start(&self, row: usize) -> PyResult<bool> {
         Ok(self.inner.is_line_start(row))
     }

@@ -15,11 +15,23 @@ impl PyTerminal {
     /// Search for text in the visible screen
     ///
     /// Args:
-    ///     query: Text to search for
+    ///     query: Regular expression to search for (escape metacharacters
+    ///         such as ``.`` or ``(`` to match them literally)
     ///     case_sensitive: Whether the search should be case-sensitive
     ///
     /// Returns:
     ///     List of SearchMatch objects with position and matched text
+    ///
+    /// Raises:
+    ///     RuntimeError: If the query is not a valid regular expression
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("first\r\nsay hello\r\n")
+    ///     term.search("hello")   # [SearchMatch(row=1, col=4, length=5, text="hello")]
+    ///     ```
     #[pyo3(signature = (query, case_sensitive=false))]
     fn search(
         &mut self,
@@ -55,6 +67,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of SearchMatch objects with negative row indices for scrollback
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 2)
+    ///     term.process_str("error: disk full\r\nok\r\n")   # first line scrolls off
+    ///     term.search_scrollback("disk")   # [SearchMatch(row=-1, col=7, length=4, text="disk")]
+    ///     ```
     #[pyo3(signature = (query, case_sensitive=false, max_lines=None))]
     fn search_scrollback(
         &self,
@@ -82,6 +102,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of DetectedItem objects for URLs
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("docs at https://example.com\r\n")
+    ///     [(i.item_type, i.text) for i in term.detect_urls()]   # [('url', 'https://example.com')]
+    ///     ```
     fn detect_urls(&self) -> PyResult<Vec<crate::python_bindings::types::PyDetectedItem>> {
         use crate::terminal::DetectedItem;
         let items = self.inner.detect_urls();
@@ -106,6 +134,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of DetectedItem objects for file paths
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("error in /usr/src/app/main.py:42\r\n")
+    ///     [(i.text, i.line_number) for i in term.detect_file_paths()]
+    ///     # [('/usr/src/app/main.py', 42)]
+    ///     ```
     fn detect_file_paths(&self) -> PyResult<Vec<crate::python_bindings::types::PyDetectedItem>> {
         use crate::terminal::DetectedItem;
         let items = self.inner.detect_file_paths();
@@ -130,6 +167,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of all detected semantic items
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("mail admin@example.com from 192.168.1.10\r\n")
+    ///     [(i.item_type, i.text) for i in term.detect_semantic_items()]
+    ///     # [('ip', '192.168.1.10'), ('email', 'admin@example.com')]
+    ///     ```
     fn detect_semantic_items(
         &self,
     ) -> PyResult<Vec<crate::python_bindings::types::PyDetectedItem>> {
@@ -204,6 +250,15 @@ impl PyTerminal {
     ///
     /// Raises:
     ///     ValueError: If the pattern is not a valid regex
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("id=42 id=7\r\n")
+    ///     term.regex_search(r"id=(\d+)")
+    ///     # [RegexMatch(row=0, col=0, text="id=42"), RegexMatch(row=0, col=6, text="id=7")]
+    ///     ```
     #[pyo3(signature = (pattern, case_insensitive=false, multiline=true, include_scrollback=true, max_matches=0, reverse=false))]
     fn regex_search(
         &mut self,
@@ -239,6 +294,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     list[RegexMatch]: Matches from the most recent regex search
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("id=42 id=7\r\n")
+    ///     term.regex_search(r"id=(\d+)")
+    ///     [m.text for m in term.get_regex_matches()]   # ['id=42', 'id=7']
+    ///     ```
     fn get_regex_matches(&self) -> PyResult<Vec<crate::python_bindings::types::PyRegexMatch>> {
         Ok(self
             .inner
@@ -252,11 +316,31 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     str | None: The active regex pattern, or None if no search ran
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.get_current_regex_pattern()   # None
+    ///     term.regex_search("id=[0-9]+")
+    ///     term.get_current_regex_pattern()   # 'id=[0-9]+'
+    ///     ```
     fn get_current_regex_pattern(&self) -> PyResult<Option<String>> {
         Ok(self.inner.get_current_regex_pattern())
     }
 
     /// Clear regex search cache
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("id=42 id=7\r\n")
+    ///     term.regex_search(r"id=(\d+)")
+    ///     term.clear_regex_matches()
+    ///     term.get_regex_matches()           # []
+    ///     term.get_current_regex_pattern()   # None
+    ///     ```
     fn clear_regex_matches(&mut self) -> PyResult<()> {
         self.inner.clear_regex_matches();
         Ok(())
@@ -269,7 +353,17 @@ impl PyTerminal {
     ///     from_col: Column to search from (0-indexed)
     ///
     /// Returns:
-    ///     RegexMatch | None: Next match at or after the position, if any
+    ///     RegexMatch | None: Next cached match strictly after the position, if any
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("id=42 id=7\r\n")
+    ///     term.regex_search(r"id=(\d+)")
+    ///     term.next_regex_match(0, 0)   # RegexMatch(row=0, col=6, text="id=7")
+    ///     term.next_regex_match(0, 6)   # None
+    ///     ```
     fn next_regex_match(
         &self,
         from_row: usize,
@@ -288,7 +382,17 @@ impl PyTerminal {
     ///     from_col: Column to search from (0-indexed)
     ///
     /// Returns:
-    ///     RegexMatch | None: Previous match at or before the position, if any
+    ///     RegexMatch | None: Previous cached match strictly before the position, if any
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("id=42 id=7\r\n")
+    ///     term.regex_search(r"id=(\d+)")
+    ///     term.prev_regex_match(0, 6)   # RegexMatch(row=0, col=0, text="id=42")
+    ///     term.prev_regex_match(0, 0)   # None
+    ///     ```
     fn prev_regex_match(
         &self,
         from_row: usize,

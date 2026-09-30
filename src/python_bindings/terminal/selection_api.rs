@@ -18,6 +18,18 @@ impl PyTerminal {
     ///     start: Start position (col, row) tuple
     ///     end: End position (col, row) tuple
     ///     mode: Selection mode: "character", "line", or "block"
+    ///
+    /// Raises:
+    ///     ValueError: If mode is not one of the three names above
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("hello world\r\n")
+    ///     term.set_selection((0, 0), (5, 0), "character")
+    ///     term.get_selected_text()   # 'hello'
+    ///     ```
     fn set_selection(
         &mut self,
         start: (usize, usize),
@@ -39,6 +51,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Selection object or None if no selection
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.get_selection()   # None
+    ///     term.set_selection((0, 0), (4, 0), "character")
+    ///     term.get_selection()   # Selection(start=(0, 0), end=(4, 0), mode=character)
+    ///     ```
     fn get_selection(&self) -> PyResult<Option<crate::python_bindings::types::PySelection>> {
         if let Some(sel) = self.inner.get_selection() {
             let mode_str = match sel.mode {
@@ -60,6 +81,16 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Selected text as string, or None if no selection
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("hello world\r\n")
+    ///     term.get_selected_text()   # None
+    ///     term.set_selection((6, 0), (11, 0), "character")
+    ///     term.get_selected_text()   # 'world'
+    ///     ```
     fn get_selected_text(&self) -> PyResult<Option<String>> {
         Ok(self.inner.get_selected_text())
     }
@@ -69,6 +100,15 @@ impl PyTerminal {
     /// Args:
     ///     col: Column index
     ///     row: Row index
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("hello world\r\n")
+    ///     term.select_word_at(7, 0)
+    ///     term.get_selected_text()   # 'world'
+    ///     ```
     fn select_word_at(&mut self, col: usize, row: usize) -> PyResult<()> {
         self.inner.select_word_at(col, row);
         Ok(())
@@ -78,12 +118,31 @@ impl PyTerminal {
     ///
     /// Args:
     ///     row: Row index
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.process_str("hello world\r\n")
+    ///     term.select_line(0)
+    ///     term.get_selection().mode          # 'line'
+    ///     term.get_selected_text().rstrip()  # 'hello world'
+    ///     ```
     fn select_line(&mut self, row: usize) -> PyResult<()> {
         self.inner.select_line(row);
         Ok(())
     }
 
     /// Clear the current selection
+    ///
+    /// Example:
+    ///     ```python
+    ///     from par_term_emu_core_rust import Terminal
+    ///     term = Terminal(80, 24)
+    ///     term.set_selection((0, 0), (4, 0), "character")
+    ///     term.clear_selection()
+    ///     term.get_selection()   # None
+    ///     ```
     fn clear_selection(&mut self) -> PyResult<()> {
         self.inner.clear_selection();
         Ok(())
