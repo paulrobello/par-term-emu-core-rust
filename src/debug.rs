@@ -1,17 +1,24 @@
+//! Diagnostics for par-term-emu: the `log` facade first; the file logger
+//! is an optional sink enabled by `DEBUG_LEVEL`.
+//!
+//! Every record goes to the [`log`] crate under the target
+//! [`LOG_TARGET`], formatted `[CATEGORY] message`, so an embedder's own
+//! logger (par-mux's stderr sink, the streamer's `tracing` subscriber, a
+//! `pyo3-log` bridge) receives core diagnostics at the level it enables.
+//!
+//! The file sink is controlled by the DEBUG_LEVEL environment variable:
+//! - 0 or unset: no file
+//! - 1: Errors only
+//! - 2: Info level (screen switches, device queries)
+//! - 3: Debug level (VT sequences, buffer changes)
+//! - 4: Trace level (every operation, buffer snapshots)
+//!
+//! File output goes to `par_term_emu_core_rust_debug_rust_{pid}.log` (one
+//! file per process) in the system temp directory (std::env::temp_dir():
+//! /tmp on Linux, per-user temp on macOS, %TEMP% on Windows), which keeps
+//! debug output off a TUI's stdout/stderr.
+
 use parking_lot::Mutex;
-/// Comprehensive debugging infrastructure for par-term-emu
-///
-/// Controlled by DEBUG_LEVEL environment variable:
-/// - 0 or unset: No debugging
-/// - 1: Errors only
-/// - 2: Info level (screen switches, device queries)
-/// - 3: Debug level (VT sequences, buffer changes)
-/// - 4: Trace level (every operation, buffer snapshots)
-///
-/// All output goes to `par_term_emu_core_rust_debug_rust_{pid}.log` (one file per
-/// process) in the system temp
-/// directory (std::env::temp_dir(): /tmp on Linux, per-user temp on macOS, %TEMP% on Windows).
-/// This avoids breaking TUI apps by keeping debug output separate from stdout/stderr.
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -33,6 +40,17 @@ pub enum DebugLevel {
 }
 
 impl DebugLevel {
+    /// The `log` level a record at this level is emitted at.
+    fn to_log_level(self) -> Option<log::Level> {
+        match self {
+            DebugLevel::Off => None,
+            DebugLevel::Error => Some(log::Level::Error),
+            DebugLevel::Info => Some(log::Level::Info),
+            DebugLevel::Debug => Some(log::Level::Debug),
+            DebugLevel::Trace => Some(log::Level::Trace),
+        }
+    }
+
     fn from_env() -> Self {
         match std::env::var("DEBUG_LEVEL") {
             Ok(val) => match val.trim().parse::<u8>() {
@@ -165,20 +183,45 @@ fn get_timestamp() -> String {
     format!("{}.{:06}", now.as_secs(), now.subsec_micros())
 }
 
-/// Check if debugging is enabled at given level
-pub fn is_enabled(level: DebugLevel) -> bool {
+/// The `log` target every core record is emitted under.
+pub const LOG_TARGET: &str = "par_term_emu_core_rust";
+
+/// Whether the `DEBUG_LEVEL` file sink wants records at `level`.
+fn file_enabled(level: DebugLevel) -> bool {
     level <= current_level()
 }
 
-/// Log a message at specified level
+/// Whether the installed `log` logger wants records at `level` for
+/// [`LOG_TARGET`]. `log_enabled!` checks the global max level (an atomic
+/// load) before asking the logger, so an embedder that enables Debug for
+/// its own crate only does not make the parser format records for ours.
+fn facade_enabled(level: DebugLevel) -> bool {
+    level
+        .to_log_level()
+        .is_some_and(|lvl| log::log_enabled!(target: LOG_TARGET, lvl))
+}
+
+/// Check if debugging is enabled at given level, in either sink.
+///
+/// Runs on every escape sequence (QA-112): with no `DEBUG_LEVEL` and no
+/// logger installed it is two atomic loads and false.
+pub fn is_enabled(level: DebugLevel) -> bool {
+    file_enabled(level) || facade_enabled(level)
+}
+
+/// Log a message at specified level to the `log` facade and, when
+/// `DEBUG_LEVEL` enables it, the debug file. Every helper in this module
+/// funnels through here.
 pub fn log(level: DebugLevel, category: &str, msg: &str) {
-    // Atomic level check first: with logging off (the common case) the
-    // LOGGER mutex is never taken on this path.
-    if !is_enabled(level) {
-        return;
+    if facade_enabled(level) {
+        if let Some(lvl) = level.to_log_level() {
+            log::log!(target: LOG_TARGET, lvl, "[{category}] {msg}");
+        }
     }
-    let mut logger = get_logger().lock();
-    logger.log(level, category, msg);
+    // The LOGGER mutex is taken only once the file sink wants the record.
+    if file_enabled(level) {
+        get_logger().lock().log(level, category, msg);
+    }
 }
 
 /// Log formatted message
@@ -251,11 +294,14 @@ pub fn log_device_query(query: &str, response: &[u8]) {
 /// Buffer snapshot logging
 pub fn log_buffer_snapshot(label: &str, rows: usize, cols: usize, content: &str) {
     if is_enabled(DebugLevel::Trace) {
-        let mut logger = get_logger().lock();
-        logger.write_raw(&format!(
-            "\n{:-<80}\nBUFFER SNAPSHOT: {} ({}x{})\n{:-<80}\n{}\n{:-<80}\n",
-            "", label, rows, cols, "", content, ""
-        ));
+        log(
+            DebugLevel::Trace,
+            "BUFFER_SNAPSHOT",
+            &format!(
+                "{} ({}x{})\n{:-<80}\n{}\n{:-<80}",
+                label, rows, cols, "", content, ""
+            ),
+        );
     }
 }
 
