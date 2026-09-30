@@ -2332,6 +2332,8 @@ fn should_send(
         | ServerMessage::Refresh { .. }
         | ServerMessage::Error { .. }
         | ServerMessage::Shutdown { .. }
+        | ServerMessage::AgentRoster { .. }
+        | ServerMessage::AgentStateChanged { .. }
         | ServerMessage::Pong => true,
     }
 }
