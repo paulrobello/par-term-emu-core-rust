@@ -390,12 +390,31 @@ void observer_example(void) {
 | `on_screen_event` | everything else — `TitleChanged`, `BellRang`, `SizeChanged`, `ModeChanged`, `ScreenCleared`, `DirtyRegion`, graphics/hyperlink/transfer events, … |
 | `on_event` | catch-all: every event, in addition to its category callback |
 
-All callbacks are optional (NULL slots are skipped).
+| `on_event_v2` | every event, as a structured `TermEvent` (see [Structured events](#structured-events-on_event_v2)) |
+
+All callbacks are optional (NULL slots are skipped, and a NULL slot's text or JSON is never built).
+
+### Structured events: `on_event_v2`
+
+`on_event_v2(user_data, const TermEvent *ev)` is the event channel to build behavior on (ABI v4, ARC-114):
+
+- `ev->kind` is a `TERM_EVENT_*` constant (`TERM_EVENT_TITLE_CHANGED`, `TERM_EVENT_SHELL_INTEGRATION`, `TERM_EVENT_CWD_CHANGED`, …) — one per event kind, stable, never renumbered.
+- `ev->payload` / `ev->payload_len` is a UTF-8 **JSON object**, length-delimited and **not NUL-terminated**. Its keys are the event's named fields — the same keys as the Python event dicts (`"type"`, `"title"`, `"exit_code"`, …); an unset optional field is present as `null`. Text travels as JSON strings, so a NUL inside a title or command arrives escaped (`\u0000`) instead of cutting the event short.
+- It fires once per event (not once per category).
+
+```c
+static void on_event_v2(void *user_data, const TermEvent *ev) {
+    if (ev->kind == TERM_EVENT_TITLE_CHANGED) {
+        /* e.g. {"type":"title_changed","title":"vim"} */
+        printf("title event: %.*s\n", (int)ev->payload_len, (const char *)ev->payload);
+    }
+}
+```
 
 ### Payload and re-entry contracts
 
-- The `event_text` parameter is the Rust `Debug` formatting of the event (`format!("{:?}", event)`), **not JSON**. It is diagnostic text with **no stable format** — it changes whenever the Rust event enum changes. Parse it only for logging; gate no behavior on its shape.
-- The pointer is valid only for the duration of the callback; do not free it, do not store it.
+- The text slots' `event_text` parameter is the Rust `Debug` formatting of the event (`format!("{:?}", event)`), **not JSON**. It is diagnostic text with **no stable format** — it changes whenever the Rust event enum changes. Parse it only for logging; gate no behavior on its shape (use `on_event_v2` for that). An interior NUL in the text is replaced with U+FFFD; the event is never dropped.
+- Every pointer (`event_text`, the `TermEvent` and its `payload`) is valid only for the duration of the callback; do not free it, do not store it.
 - **No re-entry.** Callbacks fire inline while the terminal is mutably borrowed for the dispatch — a callback must not call any `terminal_*` function on the same handle; re-entry is undefined behavior. Copy what you need out and act after `terminal_feed` returns.
 - The vtable (including its `user_data`) must stay valid for the lifetime of the registration; the library never takes ownership of it. `terminal_add_observer` returns an id for `terminal_remove_observer` (returns `true` if the observer was found).
 

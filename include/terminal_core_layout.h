@@ -11,6 +11,7 @@
  * - TERM_MOUSE_MODE_* == crate::mouse::MouseMode discriminants
  * - TERM_MOD_* == crate::keyboard::modifiers
  * - TERM_KEY_* == crate::keyboard::TermKey discriminants (kitty codes)
+ * - TERM_EVENT_* == the term_event_kinds! table in src/ffi.rs
  * - TERM_CORE_ABI_VERSION == TERM_CORE_ABI_VERSION in src/ffi.rs
  * Renumber either side and that test fails.
  */
@@ -95,6 +96,35 @@
 #define TERM_KEY_F11 57386
 #define TERM_KEY_F12 57387
 
+/* Structured event kinds — TermEvent.kind, delivered to on_event_v2
+ * (ARC-114). Stable codes: never renumbered, new kinds are appended. */
+#define TERM_EVENT_BELL 1
+#define TERM_EVENT_TITLE_CHANGED 2
+#define TERM_EVENT_SIZE_CHANGED 3
+#define TERM_EVENT_MODE_CHANGED 4
+#define TERM_EVENT_GRAPHICS_ADDED 5
+#define TERM_EVENT_HYPERLINK_ADDED 6
+#define TERM_EVENT_DIRTY_REGION 7
+#define TERM_EVENT_CWD_CHANGED 8
+#define TERM_EVENT_TRIGGER_MATCHED 9
+#define TERM_EVENT_USER_VAR_CHANGED 10
+#define TERM_EVENT_PROGRESS_BAR_CHANGED 11
+#define TERM_EVENT_BADGE_CHANGED 12
+#define TERM_EVENT_SHELL_INTEGRATION 13
+#define TERM_EVENT_ZONE_OPENED 14
+#define TERM_EVENT_ZONE_CLOSED 15
+#define TERM_EVENT_ZONE_SCROLLED_OUT 16
+#define TERM_EVENT_ENVIRONMENT_CHANGED 17
+#define TERM_EVENT_REMOTE_HOST_TRANSITION 18
+#define TERM_EVENT_SUB_SHELL_DETECTED 19
+#define TERM_EVENT_FILE_TRANSFER_STARTED 20
+#define TERM_EVENT_FILE_TRANSFER_PROGRESS 21
+#define TERM_EVENT_FILE_TRANSFER_COMPLETED 22
+#define TERM_EVENT_FILE_TRANSFER_FAILED 23
+#define TERM_EVENT_UPLOAD_REQUESTED 24
+#define TERM_EVENT_SCREEN_CLEARED 25
+#define TERM_EVENT_INLINE_IMAGE_DROPPED 26
+
 /*
  * Layout pins. The structs come from terminal_core.h (included before this
  * file via its trailer); these asserts fail the compile of any consumer
@@ -111,8 +141,12 @@ _Static_assert(offsetof(SharedState, title) == 24, "SharedState.title offset mus
 #endif
 
 #ifdef __LP64__
-_Static_assert(sizeof(TerminalObserverVtable) == 48, "vtable must match Rust repr(C) layout (LP64)");
+_Static_assert(sizeof(TerminalObserverVtable) == 56, "vtable must match Rust repr(C) layout (LP64)");
+_Static_assert(offsetof(TerminalObserverVtable, on_event_v2) == 40, "vtable.on_event_v2 offset must match Rust (LP64)");
+_Static_assert(sizeof(TermEvent) == 16, "TermEvent must match Rust repr(C) layout (LP64)");
+_Static_assert(offsetof(TermEvent, payload) == 8, "TermEvent.payload offset must match Rust (LP64)");
 #endif
+_Static_assert(offsetof(TermEvent, payload_len) == 4, "TermEvent.payload_len offset must match Rust");
 
 _Static_assert(sizeof(TermRowRange) == 8, "TermRowRange must match Rust repr(C) layout");
 

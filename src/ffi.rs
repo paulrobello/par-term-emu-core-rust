@@ -232,7 +232,7 @@ impl Drop for SharedState {
 // TerminalObserverVtable — C function-pointer table for observers
 // ---------------------------------------------------------------------------
 
-/// The callback shape shared by every [`TerminalObserverVtable`] slot:
+/// The callback shape shared by the text slots of [`TerminalObserverVtable`]:
 /// receives the vtable's `user_data` and a NUL-terminated, Debug-formatted
 /// event description valid only for the duration of the call. A named alias
 /// (not an inline type) so cbindgen emits the `term_event_cb` typedef the
@@ -242,14 +242,53 @@ impl Drop for SharedState {
 pub type term_event_cb =
     Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>;
 
+/// The structured-event callback of [`TerminalObserverVtable::on_event_v2`]
+/// (ARC-114): receives the vtable's `user_data` and one [`TermEvent`], both
+/// valid only for the duration of the call.
+// snake_case on purpose: the name is the C typedef the header exports.
+#[allow(nonstandard_style)]
+pub type term_event_v2_cb =
+    Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event: *const TermEvent)>;
+
+/// One terminal event in structured form, delivered to `on_event_v2`
+/// (ARC-114).
+///
+/// `kind` is a `TERM_EVENT_*` code (terminal_core_layout.h). `payload` is a
+/// UTF-8 JSON object of `payload_len` bytes, **not** NUL-terminated: text
+/// fields are JSON strings, so an interior NUL arrives escaped (`\u0000`)
+/// instead of truncating the payload. Its keys are the event's named fields
+/// (the same keys as the Python event dicts, including `"type"`); an unset
+/// optional field is present as `null`. The key set is part of the
+/// `TERM_CORE_ABI_VERSION` contract. The struct and the bytes it points to
+/// are owned by the library and valid only during the callback — copy what
+/// you need.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TermEvent {
+    /// `TERM_EVENT_*` kind code
+    pub kind: u16,
+    /// Reserved, always 0
+    pub _pad: u16,
+    /// Length of `payload` in bytes
+    pub payload_len: u32,
+    /// UTF-8 JSON object, `payload_len` bytes, not NUL-terminated
+    pub payload: *const u8,
+}
+
 /// A C-compatible vtable for terminal event observation.
 ///
-/// Each function pointer receives the `user_data` pointer and a
-/// Debug-formatted (`{:?}`) event description as a NUL-terminated C string.
-/// The payload is DIAGNOSTIC TEXT, not a stable format: it changes whenever
-/// the Rust event enum changes — parse it only for logging. The callee must
-/// NOT free the event string — it is owned by the caller and valid only for
-/// the duration of the callback.
+/// The five text slots receive the `user_data` pointer and a Debug-formatted
+/// (`{:?}`) event description as a NUL-terminated C string. That text is
+/// DIAGNOSTIC, not a stable format: it changes whenever the Rust event enum
+/// changes — parse it only for logging. An interior NUL in the text is
+/// replaced with U+FFFD, never dropped. The callee must NOT free the event
+/// string — it is owned by the caller and valid only for the duration of the
+/// callback.
+///
+/// `on_event_v2` is the structured channel (ARC-114): one [`TermEvent`] per
+/// event, carrying a `TERM_EVENT_*` kind and a length-delimited JSON payload.
+/// Any slot may be NULL; a NULL slot costs nothing (its text or JSON is never
+/// built).
 ///
 /// Callbacks fire inline while the terminal is processing input. A callback
 /// must NOT re-enter the FFI on the same `Terminal` handle (any
@@ -259,18 +298,87 @@ pub type term_event_cb =
 /// returns.
 #[repr(C)]
 pub struct TerminalObserverVtable {
-    /// Called for zone lifecycle events
+    /// Called for zone lifecycle events (diagnostic text)
     pub on_zone_event: term_event_cb,
-    /// Called for command/shell integration events
+    /// Called for command/shell integration events (diagnostic text)
     pub on_command_event: term_event_cb,
-    /// Called for environment change events
+    /// Called for environment change events (diagnostic text)
     pub on_environment_event: term_event_cb,
-    /// Called for screen content events
+    /// Called for screen content events (diagnostic text)
     pub on_screen_event: term_event_cb,
-    /// Called for ALL events (catch-all)
+    /// Called for ALL events (catch-all, diagnostic text)
     pub on_event: term_event_cb,
+    /// Called for ALL events with the structured [`TermEvent`] (ARC-114)
+    pub on_event_v2: term_event_v2_cb,
     /// Opaque pointer passed to every callback
     pub user_data: *mut std::ffi::c_void,
+}
+
+/// Declares the `TERM_EVENT_*` code of every [`TerminalEventKind`] once: the
+/// exhaustive match forces a code for a new kind, and the same invocation
+/// feeds the header-define test, so the C constant cannot be forgotten.
+/// Codes are stable ABI — never renumber; append new kinds.
+macro_rules! term_event_kinds {
+    ($($variant:ident = $code:literal => $cname:literal),* $(,)?) => {
+        /// The `TERM_EVENT_*` code for an event kind (ARC-114).
+        fn event_kind_code(kind: &TerminalEventKind) -> u16 {
+            match kind {
+                $(TerminalEventKind::$variant => $code,)*
+            }
+        }
+
+        /// Every (`TERM_EVENT_*` name, code) pair, for the header pin test.
+        #[cfg(test)]
+        const TERM_EVENT_CODES: &[(&str, u16)] = &[$(($cname, $code)),*];
+    };
+}
+
+term_event_kinds! {
+    BellRang = 1 => "TERM_EVENT_BELL",
+    TitleChanged = 2 => "TERM_EVENT_TITLE_CHANGED",
+    SizeChanged = 3 => "TERM_EVENT_SIZE_CHANGED",
+    ModeChanged = 4 => "TERM_EVENT_MODE_CHANGED",
+    GraphicsAdded = 5 => "TERM_EVENT_GRAPHICS_ADDED",
+    HyperlinkAdded = 6 => "TERM_EVENT_HYPERLINK_ADDED",
+    DirtyRegion = 7 => "TERM_EVENT_DIRTY_REGION",
+    CwdChanged = 8 => "TERM_EVENT_CWD_CHANGED",
+    TriggerMatched = 9 => "TERM_EVENT_TRIGGER_MATCHED",
+    UserVarChanged = 10 => "TERM_EVENT_USER_VAR_CHANGED",
+    ProgressBarChanged = 11 => "TERM_EVENT_PROGRESS_BAR_CHANGED",
+    BadgeChanged = 12 => "TERM_EVENT_BADGE_CHANGED",
+    ShellIntegrationEvent = 13 => "TERM_EVENT_SHELL_INTEGRATION",
+    ZoneOpened = 14 => "TERM_EVENT_ZONE_OPENED",
+    ZoneClosed = 15 => "TERM_EVENT_ZONE_CLOSED",
+    ZoneScrolledOut = 16 => "TERM_EVENT_ZONE_SCROLLED_OUT",
+    EnvironmentChanged = 17 => "TERM_EVENT_ENVIRONMENT_CHANGED",
+    RemoteHostTransition = 18 => "TERM_EVENT_REMOTE_HOST_TRANSITION",
+    SubShellDetected = 19 => "TERM_EVENT_SUB_SHELL_DETECTED",
+    FileTransferStarted = 20 => "TERM_EVENT_FILE_TRANSFER_STARTED",
+    FileTransferProgress = 21 => "TERM_EVENT_FILE_TRANSFER_PROGRESS",
+    FileTransferCompleted = 22 => "TERM_EVENT_FILE_TRANSFER_COMPLETED",
+    FileTransferFailed = 23 => "TERM_EVENT_FILE_TRANSFER_FAILED",
+    UploadRequested = 24 => "TERM_EVENT_UPLOAD_REQUESTED",
+    ScreenCleared = 25 => "TERM_EVENT_SCREEN_CLEARED",
+    InlineImageDropped = 26 => "TERM_EVENT_INLINE_IMAGE_DROPPED",
+}
+
+/// The `on_event_v2` JSON payload for an event: an object of the event's
+/// named fields (`event_fields`, shared with the Python dicts), `null` for an
+/// unset optional.
+fn event_payload_json(event: &TerminalEvent) -> Vec<u8> {
+    use crate::terminal::event_fields::{event_fields, EventField};
+    use serde_json::Value;
+    let mut map = serde_json::Map::new();
+    for (key, field) in event_fields(event) {
+        let value = match field {
+            EventField::Str(s) => Value::String(s),
+            EventField::Int(i) => Value::from(i),
+            EventField::Bool(b) => Value::Bool(b),
+            EventField::None => Value::Null,
+        };
+        map.insert(key, value);
+    }
+    serde_json::to_vec(&Value::Object(map)).expect("a JSON object of scalars always serializes")
 }
 
 // SAFETY: The user_data pointer is opaque and the FFI contract requires the
@@ -296,17 +404,38 @@ impl FfiObserver {
     }
 
     /// Format a terminal event as a Debug-formatted (`{:?}`) string and call
-    /// an FFI callback with it.
+    /// an FFI text callback with it. An interior NUL is replaced (U+FFFD)
+    /// rather than dropping the event.
     fn call_callback(&self, cb: term_event_cb, event: &TerminalEvent) {
         if let Some(f) = cb {
-            let desc = format!("{:?}", event);
-            if let Ok(cstr) = CString::new(desc) {
-                // SAFETY: `f` and `user_data` come from the caller's vtable,
-                // which `terminal_add_observer`'s contract keeps valid while
-                // registered; `cstr` outlives the call.
-                unsafe {
-                    f(self.vtable.user_data, cstr.as_ptr());
-                }
+            let (ptr, _len) = to_c_string(&format!("{:?}", event));
+            // SAFETY: `ptr` came from `CString::into_raw` just above and is
+            // reclaimed exactly once, after the call.
+            let cstr = unsafe { CString::from_raw(ptr) };
+            // SAFETY: `f` and `user_data` come from the caller's vtable,
+            // which `terminal_add_observer`'s contract keeps valid while
+            // registered; `cstr` outlives the call.
+            unsafe {
+                f(self.vtable.user_data, cstr.as_ptr());
+            }
+        }
+    }
+
+    /// Deliver the structured [`TermEvent`] to `on_event_v2`, if set.
+    fn call_v2(&self, event: &TerminalEvent) {
+        if let Some(f) = self.vtable.on_event_v2 {
+            let payload = event_payload_json(event);
+            let ev = TermEvent {
+                kind: event_kind_code(&event.kind()),
+                _pad: 0,
+                payload_len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+                payload: payload.as_ptr(),
+            };
+            // SAFETY: `f` and `user_data` come from the caller's vtable,
+            // which `terminal_add_observer`'s contract keeps valid while
+            // registered; `ev` and `payload` outlive the call.
+            unsafe {
+                f(self.vtable.user_data, &ev);
             }
         }
     }
@@ -331,6 +460,7 @@ impl TerminalObserver for FfiObserver {
 
     fn on_event(&self, event: &TerminalEvent) {
         self.call_callback(self.vtable.on_event, event);
+        self.call_v2(event);
     }
 
     fn subscriptions(&self) -> Option<&HashSet<TerminalEventKind>> {
@@ -1025,7 +1155,12 @@ mod tests {
         assert_eq!(align_of::<SharedState>(), 8);
         assert_eq!(offset_of!(SharedState, title), 24);
         assert_eq!(offset_of!(SharedState, cells), 56);
-        assert_eq!(size_of::<TerminalObserverVtable>(), 48);
+        assert_eq!(size_of::<TerminalObserverVtable>(), 56);
+        assert_eq!(offset_of!(TerminalObserverVtable, on_event_v2), 40);
+        assert_eq!(offset_of!(TerminalObserverVtable, user_data), 48);
+        assert_eq!(size_of::<TermEvent>(), 16);
+        assert_eq!(offset_of!(TermEvent, payload_len), 4);
+        assert_eq!(offset_of!(TermEvent, payload), 8);
         assert_eq!(size_of::<TermRowRange>(), 8);
         assert_eq!(size_of::<TermCursorState>(), 12);
         assert_eq!(size_of::<TermModeState>(), 20);
@@ -1539,6 +1674,8 @@ mod tests {
             ("TERM_KEY_F11", tk(TermKey::F11)),
             ("TERM_KEY_F12", tk(TermKey::F12)),
         ];
+        let mut expected = expected;
+        expected.extend(TERM_EVENT_CODES.iter().map(|&(n, c)| (n, c as u32)));
 
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1759,5 +1896,126 @@ mod tests {
         let n = unsafe { terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
         assert_eq!(&out[..n as usize], b"\x1b[A");
         unsafe { terminal_free(term) };
+    }
+
+    /// What an observer test callback recorded: (kind, payload bytes) from
+    /// `on_event_v2`, and the text from `on_event`.
+    #[derive(Default)]
+    struct Recorded {
+        v2: Vec<(u16, Vec<u8>)>,
+        text: Vec<Vec<u8>>,
+    }
+
+    unsafe extern "C" fn record_v2(user_data: *mut std::ffi::c_void, ev: *const TermEvent) {
+        let rec = unsafe { &mut *(user_data as *mut Recorded) };
+        let ev = unsafe { &*ev };
+        let bytes = unsafe { std::slice::from_raw_parts(ev.payload, ev.payload_len as usize) };
+        assert_eq!(ev._pad, 0);
+        rec.v2.push((ev.kind, bytes.to_vec()));
+    }
+
+    unsafe extern "C" fn record_text(user_data: *mut std::ffi::c_void, text: *const c_char) {
+        let rec = unsafe { &mut *(user_data as *mut Recorded) };
+        rec.text
+            .push(unsafe { CStr::from_ptr(text) }.to_bytes().to_vec());
+    }
+
+    fn vtable_for(rec: &mut Recorded, text: bool, v2: bool) -> TerminalObserverVtable {
+        TerminalObserverVtable {
+            on_zone_event: None,
+            on_command_event: None,
+            on_environment_event: None,
+            on_screen_event: None,
+            on_event: if text { Some(record_text) } else { None },
+            on_event_v2: if v2 { Some(record_v2) } else { None },
+            user_data: rec as *mut Recorded as *mut std::ffi::c_void,
+        }
+    }
+
+    /// ARC-114: `on_event_v2` delivers a `TERM_EVENT_*` kind and a JSON
+    /// payload whose keys match the Python event dicts, once per event.
+    #[test]
+    fn event_v2_carries_kind_and_json_payload() {
+        let mut rec = Recorded::default();
+        let term = unsafe { terminal_create(20, 4, 10) };
+        let id = unsafe { terminal_add_observer(term, vtable_for(&mut rec, false, true)) };
+        assert_ne!(id, 0);
+
+        let seq = b"\x1b]0;hello\x07\x07";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let title = rec
+            .v2
+            .iter()
+            .find(|(k, _)| *k == event_kind_code(&TerminalEventKind::TitleChanged))
+            .expect("TitleChanged delivered");
+        let json: serde_json::Value = serde_json::from_slice(&title.1).expect("payload is JSON");
+        assert_eq!(json["type"], "title_changed");
+        assert_eq!(json["title"], "hello");
+
+        let bell = rec
+            .v2
+            .iter()
+            .find(|(k, _)| *k == event_kind_code(&TerminalEventKind::BellRang))
+            .expect("BellRang delivered");
+        let json: serde_json::Value = serde_json::from_slice(&bell.1).expect("payload is JSON");
+        assert_eq!(json["type"], "bell");
+        assert!(json["bell_type"].is_string(), "bell_type rides the payload");
+
+        // Exactly one v2 delivery per dispatched event (not one per slot).
+        let before = rec.v2.len();
+        unsafe { terminal_feed(term, b"\x07".as_ptr(), 1) };
+        assert_eq!(rec.v2.len(), before + 1);
+
+        assert!(unsafe { terminal_remove_observer(term, id) });
+        unsafe { terminal_free(term) };
+    }
+
+    /// ARC-114: text that contains a NUL reaches both channels. The old
+    /// `CString::new` path silently dropped such an event from every text
+    /// slot; v2 carries it length-delimited (JSON-escaped), and the text
+    /// slots carry it with U+FFFD.
+    #[test]
+    fn event_with_nul_is_delivered_on_both_channels() {
+        let mut rec = Recorded::default();
+        let observer = FfiObserver::new(vtable_for(&mut rec, true, true));
+        let event = TerminalEvent::TitleChanged("a\0b".to_string());
+        crate::observer::TerminalObserver::on_event(&observer, &event);
+
+        assert_eq!(rec.text.len(), 1, "text slot no longer drops NUL events");
+        assert!(!rec.text[0].contains(&0), "C string has no interior NUL");
+        assert_eq!(rec.v2.len(), 1);
+        let json: serde_json::Value = serde_json::from_slice(&rec.v2[0].1).expect("JSON");
+        assert_eq!(json["title"], "a\u{0}b", "v2 carries the NUL intact");
+        assert_eq!(
+            rec.v2[0].0,
+            event_kind_code(&TerminalEventKind::TitleChanged)
+        );
+    }
+
+    /// ARC-114: unset optional fields are present as JSON null, and integer
+    /// fields are JSON numbers (the Python dict value types).
+    #[test]
+    fn event_v2_payload_keeps_nulls_and_numbers() {
+        let payload = event_payload_json(&TerminalEvent::HyperlinkAdded {
+            url: "https://example.com".to_string(),
+            row: 1,
+            col: 2,
+            id: None,
+        });
+        let json: serde_json::Value = serde_json::from_slice(&payload).expect("JSON");
+        assert!(json["id"].is_null());
+        assert_eq!(json["row"], 1);
+        assert_eq!(json["col"], 2);
+    }
+
+    /// The `TERM_EVENT_*` codes are exactly 1..=26 with no gaps or
+    /// duplicates, so a new `TerminalEventKind` must take the next code.
+    #[test]
+    fn term_event_codes_are_dense_and_unique() {
+        let mut codes: Vec<u16> = TERM_EVENT_CODES.iter().map(|&(_, c)| c).collect();
+        codes.sort_unstable();
+        let want: Vec<u16> = (1..=TERM_EVENT_CODES.len() as u16).collect();
+        assert_eq!(codes, want);
     }
 }

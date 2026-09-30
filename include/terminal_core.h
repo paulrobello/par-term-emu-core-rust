@@ -282,7 +282,7 @@ typedef struct {
 } SharedState;
 
 /**
- * The callback shape shared by every [`TerminalObserverVtable`] slot:
+ * The callback shape shared by the text slots of [`TerminalObserverVtable`]:
  * receives the vtable's `user_data` and a NUL-terminated, Debug-formatted
  * event description valid only for the duration of the call. A named alias
  * (not an inline type) so cbindgen emits the `term_event_cb` typedef the
@@ -291,14 +291,60 @@ typedef struct {
 typedef void (*term_event_cb)(void *user_data, const char *event_text);
 
 /**
+ * One terminal event in structured form, delivered to `on_event_v2`
+ * (ARC-114).
+ *
+ * `kind` is a `TERM_EVENT_*` code (terminal_core_layout.h). `payload` is a
+ * UTF-8 JSON object of `payload_len` bytes, **not** NUL-terminated: text
+ * fields are JSON strings, so an interior NUL arrives escaped (`\u0000`)
+ * instead of truncating the payload. Its keys are the event's named fields
+ * (the same keys as the Python event dicts, including `"type"`); an unset
+ * optional field is present as `null`. The key set is part of the
+ * `TERM_CORE_ABI_VERSION` contract. The struct and the bytes it points to
+ * are owned by the library and valid only during the callback — copy what
+ * you need.
+ */
+typedef struct {
+  /**
+   * `TERM_EVENT_*` kind code
+   */
+  uint16_t kind;
+  /**
+   * Reserved, always 0
+   */
+  uint16_t _pad;
+  /**
+   * Length of `payload` in bytes
+   */
+  uint32_t payload_len;
+  /**
+   * UTF-8 JSON object, `payload_len` bytes, not NUL-terminated
+   */
+  const uint8_t *payload;
+} TermEvent;
+
+/**
+ * The structured-event callback of [`TerminalObserverVtable::on_event_v2`]
+ * (ARC-114): receives the vtable's `user_data` and one [`TermEvent`], both
+ * valid only for the duration of the call.
+ */
+typedef void (*term_event_v2_cb)(void *user_data, const TermEvent *event);
+
+/**
  * A C-compatible vtable for terminal event observation.
  *
- * Each function pointer receives the `user_data` pointer and a
- * Debug-formatted (`{:?}`) event description as a NUL-terminated C string.
- * The payload is DIAGNOSTIC TEXT, not a stable format: it changes whenever
- * the Rust event enum changes — parse it only for logging. The callee must
- * NOT free the event string — it is owned by the caller and valid only for
- * the duration of the callback.
+ * The five text slots receive the `user_data` pointer and a Debug-formatted
+ * (`{:?}`) event description as a NUL-terminated C string. That text is
+ * DIAGNOSTIC, not a stable format: it changes whenever the Rust event enum
+ * changes — parse it only for logging. An interior NUL in the text is
+ * replaced with U+FFFD, never dropped. The callee must NOT free the event
+ * string — it is owned by the caller and valid only for the duration of the
+ * callback.
+ *
+ * `on_event_v2` is the structured channel (ARC-114): one [`TermEvent`] per
+ * event, carrying a `TERM_EVENT_*` kind and a length-delimited JSON payload.
+ * Any slot may be NULL; a NULL slot costs nothing (its text or JSON is never
+ * built).
  *
  * Callbacks fire inline while the terminal is processing input. A callback
  * must NOT re-enter the FFI on the same `Terminal` handle (any
@@ -309,25 +355,29 @@ typedef void (*term_event_cb)(void *user_data, const char *event_text);
  */
 typedef struct {
   /**
-   * Called for zone lifecycle events
+   * Called for zone lifecycle events (diagnostic text)
    */
   term_event_cb on_zone_event;
   /**
-   * Called for command/shell integration events
+   * Called for command/shell integration events (diagnostic text)
    */
   term_event_cb on_command_event;
   /**
-   * Called for environment change events
+   * Called for environment change events (diagnostic text)
    */
   term_event_cb on_environment_event;
   /**
-   * Called for screen content events
+   * Called for screen content events (diagnostic text)
    */
   term_event_cb on_screen_event;
   /**
-   * Called for ALL events (catch-all)
+   * Called for ALL events (catch-all, diagnostic text)
    */
   term_event_cb on_event;
+  /**
+   * Called for ALL events with the structured [`TermEvent`] (ARC-114)
+   */
+  term_event_v2_cb on_event_v2;
   /**
    * Opaque pointer passed to every callback
    */

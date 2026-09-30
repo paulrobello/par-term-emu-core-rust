@@ -70,7 +70,9 @@ include = [
     "TermModeState",
     "TermKeyEvent",
     "KeyEncodeOptions",
+    "TermEvent",
     "term_event_cb",
+    "term_event_v2_cb",
 ]
 
 [export.rename]
