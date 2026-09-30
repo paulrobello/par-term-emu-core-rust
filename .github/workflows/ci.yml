@@ -307,3 +307,48 @@ jobs:
 
     - name: Run feature matrix and dependency assertions
       run: make check-features
+
+  # ARC-104: the checkall FFI drift gates. include/terminal_core.h must be
+  # exactly what cbindgen generates from src/ffi.rs, and every exported fn
+  # must appear in the header and docs/FFI_GUIDE.md.
+  ffi-drift:
+    name: FFI header + surface drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [version-check]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      with:
+        toolchain: stable
+
+    - name: Install cbindgen
+      # Pinned: the check diffs generated output, and cbindgen's formatting
+      # varies by version. 0.29.4 generated the committed header.
+      run: cargo install cbindgen --version 0.29.4 --locked
+
+    - name: Check FFI header and surface
+      run: make ffi-header-check ffi-surface-check
+
+  # ARC-104: the iOS xcframework (C FFI for on-device embedders). Release
+  # builds also produce it in deployment.yml's ios-xcframework job; this
+  # catches a broken staticlib, header smoke-compile, or link probe before a
+  # release is cut. No upload: the artifact ships only from deployment.yml.
+  xcframework:
+    name: iOS xcframework build
+    runs-on: macos-latest
+    timeout-minutes: 40
+    needs: [version-check]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      with:
+        toolchain: stable
+        targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+    - name: Build TerminalCore.xcframework
+      run: make xcframework

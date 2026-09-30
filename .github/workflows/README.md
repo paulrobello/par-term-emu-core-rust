@@ -84,7 +84,7 @@ gh release view v$VERSION --repo paulrobello/par-term-emu-core-rust
 ## Other workflows
 
 ### `ci.yml` — CI (manual gate)
-Manual-only. Runs the same version-consistency check, then a **test** matrix (ubuntu/macos/windows × Python 3.12/3.13/3.14), a **lint** job (`cargo fmt --check`, `cargo clippy --all-targets --features python,streaming`, `ruff format --check`, `ruff check`, `pyright`), and a **build** job (maturin wheel on each OS). No publishing. Use it for an on-demand full multi-OS gate independent of local pre-commit.
+Manual-only. Runs the same version-consistency check, then a **test** matrix (ubuntu/macos/windows × Python 3.12/3.13/3.14), a **lint** job (`cargo fmt --check`, `cargo clippy --all-targets --features python,streaming`, `ruff format --check`, `ruff check`, `pyright`), and a **build** job (maturin wheel on each OS). It also runs the `make checkall` FFI drift gates (**ffi-drift**: `make ffi-header-check ffi-surface-check` with cbindgen pinned to the version that generated `include/terminal_core.h`) and an **xcframework** job (`make xcframework` on macOS, no upload; release artifacts still come from `deployment.yml`). No publishing. Use it for an on-demand full multi-OS gate independent of local pre-commit.
 
 ### `publish-testpypi.yml` — TestPyPI
 Manual-only. Builds wheels for 5 platforms (Linux x86_64/aarch64, macOS x86_64/universal2, Windows) on **Python 3.14 only**, plus an sdist, publishes to TestPyPI via trusted publishing (environment `testpypi`), then verifies installation by importing `Terminal`/`PtyTerminal` and checking `__version__`.
