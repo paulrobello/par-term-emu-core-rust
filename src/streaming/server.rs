@@ -4,7 +4,7 @@ use crate::streaming::client::Client;
 use crate::streaming::config::{ApiAuthConfig, HttpBasicAuthConfig, StreamingConfig};
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
-use crate::streaming::protocol::{ServerMessage, ThemeInfo};
+use crate::streaming::protocol::{ClientMessage, ServerMessage, ThemeInfo};
 use crate::streaming::rate_limit::InputRateLimiter;
 use crate::streaming::session::{now_millis, SessionRegistry, StreamSessionState};
 use crate::terminal::{SelectionMode, Terminal};
@@ -227,6 +227,7 @@ pub trait SessionFactory: Send + Sync {
 // =============================================================================
 
 /// Parsed connection parameters from URL query string
+#[derive(Debug, Clone)]
 pub struct ConnectionParams {
     /// Session ID (defaults to "default")
     pub session_id: String,
@@ -303,15 +304,6 @@ impl ConnectionParams {
 // Guards
 // =============================================================================
 
-/// Result of dispatching one client message: the direct replies to send
-/// back, and whether the connection should be closed after they are sent
-/// (input against a session whose PTY writer is detached — the client is
-/// typing into a void and should reconnect).
-struct ClientMessageOutcome {
-    replies: Vec<ServerMessage>,
-    close: bool,
-}
-
 /// Guard that decrements session client count when dropped
 struct SessionClientGuard {
     session: Arc<StreamSessionState>,
@@ -331,6 +323,126 @@ struct GlobalClientGuard<'a> {
 impl<'a> Drop for GlobalClientGuard<'a> {
     fn drop(&mut self) {
         self.server.remove_client();
+    }
+}
+
+// =============================================================================
+// WebSocket transports
+// =============================================================================
+
+/// One client connection as [`StreamingServer::run_ws_session`] sees it:
+/// decoded client messages in, server messages out. Each transport keeps
+/// its own frame policy (ping/pong, text frames, undecodable frames) inside
+/// `recv`, so the shared session loop does not change either path's
+/// behavior.
+trait WsTransport: Send {
+    /// This connection's client id.
+    fn id(&self) -> uuid::Uuid;
+    /// The next client message; `Ok(None)` once the peer has closed. An
+    /// `Err` ends the session.
+    fn recv(&mut self) -> impl std::future::Future<Output = Result<Option<ClientMessage>>> + Send;
+    /// Send one server message.
+    fn send(&mut self, msg: ServerMessage) -> impl std::future::Future<Output = Result<()>> + Send;
+    /// Send a keepalive ping.
+    fn ping(&mut self) -> impl std::future::Future<Output = Result<()>> + Send;
+    /// Complete the closing handshake (best effort).
+    fn close(self) -> impl std::future::Future<Output = Result<()>> + Send;
+}
+
+/// tungstenite transport (plain TCP or TLS): protobuf and ping/pong live in
+/// [`Client`]. A text or undecodable frame ends the session.
+impl<S> WsTransport for Client<S>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    fn id(&self) -> uuid::Uuid {
+        Client::id(self)
+    }
+
+    fn recv(&mut self) -> impl std::future::Future<Output = Result<Option<ClientMessage>>> + Send {
+        Client::recv(self)
+    }
+
+    fn send(&mut self, msg: ServerMessage) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::send(self, msg)
+    }
+
+    fn ping(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::ping(self)
+    }
+
+    fn close(self) -> impl std::future::Future<Output = Result<()>> + Send {
+        Client::close(self)
+    }
+}
+
+/// axum transport (the HTTP-served `/ws` route). Text and undecodable
+/// frames are logged and skipped; the session continues.
+struct AxumTransport {
+    id: uuid::Uuid,
+    socket: axum::extract::ws::WebSocket,
+}
+
+impl WsTransport for AxumTransport {
+    fn id(&self) -> uuid::Uuid {
+        self.id
+    }
+
+    async fn recv(&mut self) -> Result<Option<ClientMessage>> {
+        use axum::extract::ws::Message as AxumMessage;
+        loop {
+            match self.socket.recv().await {
+                Some(Ok(AxumMessage::Binary(data))) => match decode_client_message(&data) {
+                    Ok(msg) => return Ok(Some(msg)),
+                    Err(e) => {
+                        crate::debug_error!("STREAMING", "Failed to parse client message: {}", e);
+                    }
+                },
+                Some(Ok(AxumMessage::Text(_))) => {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Text messages not supported, use binary protocol"
+                    );
+                }
+                Some(Ok(AxumMessage::Ping(_) | AxumMessage::Pong(_))) => {}
+                Some(Ok(AxumMessage::Close(_))) | None => return Ok(None),
+                Some(Err(e)) => return Err(StreamingError::WebSocketError(e.to_string())),
+            }
+        }
+    }
+
+    async fn send(&mut self, msg: ServerMessage) -> Result<()> {
+        let bytes = encode_server_message(&msg)?;
+        self.socket
+            .send(axum::extract::ws::Message::Binary(bytes.into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))
+    }
+
+    async fn ping(&mut self) -> Result<()> {
+        self.socket
+            .send(axum::extract::ws::Message::Ping(vec![].into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))
+    }
+
+    /// When the client initiated the close, tungstenite already queued our
+    /// reply when it read their Close frame and a further send is
+    /// rejected; `flush()` writes the queued reply instead.
+    async fn close(mut self) -> Result<()> {
+        use futures_util::SinkExt;
+        if self
+            .socket
+            .send(axum::extract::ws::Message::Close(None))
+            .await
+            .is_err()
+        {
+            self.socket
+                .flush()
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -652,6 +764,29 @@ impl StreamingServer {
         Err(StreamingError::SessionNotFound(session_id.clone()))
     }
 
+    /// [`Self::resolve_session`] for async callers.
+    ///
+    /// Creating a session runs the factory, which blocks on process spawns
+    /// or daemon round trips (`MuxSessionFactory`); that work runs on the
+    /// blocking pool so a slow or wedged backend cannot park runtime
+    /// workers. Resolving an existing session, or the default session of a
+    /// factory-less server, does no I/O and stays inline.
+    async fn resolve_session_off_runtime(
+        self: &Arc<Self>,
+        params: &ConnectionParams,
+    ) -> Result<Arc<StreamSessionState>> {
+        if self.session_factory.is_none() || self.sessions.get(&params.session_id).is_some() {
+            return self.resolve_session(params);
+        }
+        let this = Arc::clone(self);
+        let params = params.clone();
+        tokio::task::spawn_blocking(move || this.resolve_session(&params))
+            .await
+            .map_err(|e| {
+                StreamingError::ServerError(format!("session creation task failed: {e}"))
+            })?
+    }
+
     /// Start the streaming server
     pub async fn start(self: Arc<Self>) -> Result<()> {
         let use_tls = self.config.tls.is_some();
@@ -882,111 +1017,8 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Accept WebSocket connections
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    if !self.can_accept_client() {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "Max clients reached ({}), rejecting connection from {}",
-                            self.config.max_clients,
-                            addr
-                        );
-                        continue;
-                    }
-
-                    if let Err(e) = stream.set_nodelay(true) {
-                        crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
-                    }
-
-                    crate::debug_info!("STREAMING", "New connection from {}", addr);
-                    let server = self.clone();
-                    tokio::spawn(async move {
-                        // Reserve a global client slot for the whole handshake so
-                        // unauthenticated pre-upgrade connections cannot occupy
-                        // tasks indefinitely, uncapped by max_clients (SEC-004).
-                        // The guard releases on drop: handshake failure, timeout,
-                        // or session end.
-                        if !server.try_add_client() {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "Max clients reached ({}), rejecting connection from {}",
-                                server.config.max_clients,
-                                addr
-                            );
-                            return;
-                        }
-                        // Held for the whole connection: handshake, session,
-                        // and teardown. Moved into `handle_connection_ws`
-                        // after the handshake completes.
-                        let global_guard = GlobalClientGuard { server: &server };
-
-                        // Accept WebSocket with header callback to capture URI query and validate auth
-                        let (header_callback, uri_query) = build_ws_header_callback(
-                            server.config.api_key.clone(),
-                            server.config.http_basic_auth.clone(),
-                            server.config.allowed_origins.clone(),
-                            server.config.allow_api_key_in_query,
-                        );
-
-                        // The tungstenite `Callback` trait fixes `ErrorResponse` as
-                        // `HttpResponse<Option<String>>` — we cannot box or shrink it
-                        // without violating the external API contract.
-                        let ws_result = match tokio::time::timeout(
-                            WS_HANDSHAKE_TIMEOUT,
-                            accept_hdr_async_with_config(
-                                stream,
-                                header_callback,
-                                ws_accept_config(),
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "WebSocket handshake timed out from {} after {}s",
-                                    addr,
-                                    WS_HANDSHAKE_TIMEOUT.as_secs()
-                                );
-                                return;
-                            }
-                        };
-
-                        match ws_result {
-                            Ok(ws_stream) => {
-                                let query_str = uri_query.lock().take();
-                                let params = ConnectionParams::from_uri_query(query_str.as_deref());
-                                if let Err(e) = server
-                                    .handle_connection_ws(ws_stream, &params, global_guard)
-                                    .await
-                                {
-                                    crate::debug_error!(
-                                        "STREAMING",
-                                        "Connection error from {}: {}",
-                                        addr,
-                                        e
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "WebSocket handshake failed from {}: {}",
-                                    addr,
-                                    e
-                                );
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
-                }
-            }
-        }
+        self.accept_loop(listener, |stream| async move { Ok(stream) }, "Client")
+            .await
     }
 
     /// Start WebSocket-only server with TLS (WSS)
@@ -1010,134 +1042,171 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Accept TLS connections
+        self.accept_loop(
+            listener,
+            move |stream| {
+                let acceptor = acceptor.clone();
+                async move { acceptor.accept(stream).await }
+            },
+            "TLS Client",
+        )
+        .await
+    }
+
+    /// The accept loop shared by the plain and TLS WebSocket-only
+    /// listeners. `upgrade` is the transport handshake: identity for plain
+    /// TCP, the TLS accept for WSS. `label` names the transport in logs.
+    async fn accept_loop<U, Fut, S>(
+        self: Arc<Self>,
+        listener: TcpListener,
+        upgrade: U,
+        label: &'static str,
+    ) -> Result<()>
+    where
+        U: Fn(TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = std::io::Result<S>> + Send + 'static,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let upgrade = Arc::new(upgrade);
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    if !self.can_accept_client() {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "Max clients reached ({}), rejecting TLS connection from {}",
-                            self.config.max_clients,
-                            addr
-                        );
-                        continue;
-                    }
-
-                    if let Err(e) = stream.set_nodelay(true) {
-                        crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
-                    }
-
-                    crate::debug_info!("STREAMING", "New TLS connection from {}", addr);
-                    let server = self.clone();
-                    let acceptor = acceptor.clone();
-                    tokio::spawn(async move {
-                        // Pre-handshake slot reservation, mirroring the plain
-                        // listener (SEC-004): held across both the TLS and
-                        // WebSocket handshakes, moved into the connection
-                        // handler after the handshake completes.
-                        if !server.try_add_client() {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "Max clients reached ({}), rejecting TLS connection from {}",
-                                server.config.max_clients,
-                                addr
-                            );
-                            return;
-                        }
-                        let global_guard = GlobalClientGuard { server: &server };
-
-                        let tls_result =
-                            tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
-                                .await;
-                        match tls_result {
-                            Err(_) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "TLS handshake timed out from {} after {}s",
-                                    addr,
-                                    WS_HANDSHAKE_TIMEOUT.as_secs()
-                                );
-                            }
-                            Ok(Ok(tls_stream)) => {
-                                // Accept WebSocket with header callback to capture URI query and validate auth
-                                let (header_callback, uri_query) = build_ws_header_callback(
-                                    server.config.api_key.clone(),
-                                    server.config.http_basic_auth.clone(),
-                                    server.config.allowed_origins.clone(),
-                                    server.config.allow_api_key_in_query,
-                                );
-
-                                // Same as above: ErrorResponse type is fixed by the
-                                // tungstenite Callback trait and cannot be reduced.
-                                let ws_result = match tokio::time::timeout(
-                                    WS_HANDSHAKE_TIMEOUT,
-                                    accept_hdr_async_with_config(
-                                        tls_stream,
-                                        header_callback,
-                                        ws_accept_config(),
-                                    ),
-                                )
-                                .await
-                                {
-                                    Ok(result) => result,
-                                    Err(_) => {
-                                        crate::debug_error!(
-                                            "STREAMING",
-                                            "TLS WebSocket handshake timed out from {} after {}s",
-                                            addr,
-                                            WS_HANDSHAKE_TIMEOUT.as_secs()
-                                        );
-                                        return;
-                                    }
-                                };
-
-                                match ws_result {
-                                    Ok(ws_stream) => {
-                                        let query_str = uri_query.lock().take();
-                                        let params =
-                                            ConnectionParams::from_uri_query(query_str.as_deref());
-                                        if let Err(e) = server
-                                            .handle_tls_connection_ws(
-                                                ws_stream,
-                                                &params,
-                                                global_guard,
-                                            )
-                                            .await
-                                        {
-                                            crate::debug_error!(
-                                                "STREAMING",
-                                                "TLS connection error from {}: {}",
-                                                addr,
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        crate::debug_error!(
-                                            "STREAMING",
-                                            "TLS WebSocket handshake failed from {}: {}",
-                                            addr,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "TLS handshake failed from {}: {}",
-                                    addr,
-                                    e
-                                );
-                            }
-                        }
-                    });
-                }
+            let (stream, addr) = match listener.accept().await {
+                Ok(accepted) => accepted,
                 Err(e) => {
                     crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
+                    continue;
                 }
+            };
+            if !self.can_accept_client() {
+                crate::debug_error!(
+                    "STREAMING",
+                    "Max clients reached ({}), rejecting {} connection from {}",
+                    self.config.max_clients,
+                    label,
+                    addr
+                );
+                continue;
             }
+            if let Err(e) = stream.set_nodelay(true) {
+                crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
+            }
+            crate::debug_info!("STREAMING", "New {} connection from {}", label, addr);
+            let server = Arc::clone(&self);
+            let upgrade = Arc::clone(&upgrade);
+            tokio::spawn(async move {
+                server
+                    .serve_connection(stream, addr, upgrade.as_ref(), label)
+                    .await;
+            });
+        }
+    }
+
+    /// One accepted TCP connection, from slot reservation to session end:
+    /// the transport handshake and the WebSocket handshake (with
+    /// header-callback auth), each under `WS_HANDSHAKE_TIMEOUT`, then the
+    /// session.
+    async fn serve_connection<U, Fut, S>(
+        self: &Arc<Self>,
+        stream: TcpStream,
+        addr: std::net::SocketAddr,
+        upgrade: &U,
+        label: &'static str,
+    ) where
+        U: Fn(TcpStream) -> Fut,
+        Fut: std::future::Future<Output = std::io::Result<S>>,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        // Reserve a global client slot for the whole handshake so
+        // unauthenticated pre-upgrade connections cannot occupy tasks
+        // indefinitely, uncapped by max_clients (SEC-004). The guard
+        // releases on drop: handshake failure, timeout, or session end.
+        if !self.try_add_client() {
+            crate::debug_error!(
+                "STREAMING",
+                "Max clients reached ({}), rejecting {} connection from {}",
+                self.config.max_clients,
+                label,
+                addr
+            );
+            return;
+        }
+        let global_guard = GlobalClientGuard { server: self };
+
+        let stream = match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, upgrade(stream)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} transport handshake failed from {}: {}",
+                    label,
+                    addr,
+                    e
+                );
+                return;
+            }
+            Err(_) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} transport handshake timed out from {} after {}s",
+                    label,
+                    addr,
+                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                );
+                return;
+            }
+        };
+
+        // Accept WebSocket with header callback to capture URI query and validate auth
+        let (header_callback, uri_query) = build_ws_header_callback(
+            self.config.api_key.clone(),
+            self.config.http_basic_auth.clone(),
+            self.config.allowed_origins.clone(),
+            self.config.allow_api_key_in_query,
+        );
+        // The tungstenite `Callback` trait fixes `ErrorResponse` as
+        // `HttpResponse<Option<String>>` — we cannot box or shrink it
+        // without violating the external API contract.
+        let ws_stream = match tokio::time::timeout(
+            WS_HANDSHAKE_TIMEOUT,
+            accept_hdr_async_with_config(stream, header_callback, ws_accept_config()),
+        )
+        .await
+        {
+            Ok(Ok(ws_stream)) => ws_stream,
+            Ok(Err(e)) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} WebSocket handshake failed from {}: {}",
+                    label,
+                    addr,
+                    e
+                );
+                return;
+            }
+            Err(_) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} WebSocket handshake timed out from {} after {}s",
+                    label,
+                    addr,
+                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                );
+                return;
+            }
+        };
+
+        let query_str = uri_query.lock().take();
+        let params = ConnectionParams::from_uri_query(query_str.as_deref());
+        if let Err(e) = self
+            .handle_ws_connection(ws_stream, &params, global_guard, label)
+            .await
+        {
+            crate::debug_error!(
+                "STREAMING",
+                "{} connection error from {}: {}",
+                label,
+                addr,
+                e
+            );
         }
     }
 
@@ -1193,32 +1262,21 @@ impl StreamingServer {
         }
     }
 
-    /// Handle a new WebSocket connection (already upgraded)
-    async fn handle_connection_ws(
+    /// Run a session over an upgraded tungstenite WebSocket (plain or TLS).
+    async fn handle_ws_connection<S>(
         self: &Arc<Self>,
-        ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
+        ws_stream: tokio_tungstenite::WebSocketStream<S>,
         params: &ConnectionParams,
         global_guard: GlobalClientGuard<'_>,
-    ) -> Result<()> {
+        label: &'static str,
+    ) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
         let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params, global_guard)?;
+            self.prepare_ws_session(params, global_guard).await?;
         let client = Client::new(ws_stream, read_only);
-        self.run_ws_session(client, session, read_only, "Client")
-            .await
-    }
-
-    /// Handle a new TLS WebSocket connection (already upgraded)
-    async fn handle_tls_connection_ws(
-        self: &Arc<Self>,
-        ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
-        params: &ConnectionParams,
-        global_guard: GlobalClientGuard<'_>,
-    ) -> Result<()> {
-        let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params, global_guard)?;
-        let client = Client::new(ws_stream, read_only);
-        self.run_ws_session(client, session, read_only, "TLS Client")
-            .await
+        self.run_ws_session(client, session, read_only, label).await
     }
 
     /// Common pre-loop setup shared by both tungstenite WebSocket handlers.
@@ -1226,11 +1284,11 @@ impl StreamingServer {
     /// The global client slot must already be reserved by the caller
     /// (`try_add_client` before the handshake, SEC-004) — the guard is
     /// passed in and held for the connection's lifetime. This resolves the
-    /// session, reserves the per-session slot (returning an RAII guard whose
-    /// `Drop` releases it), and computes the read-only flag. The caller
-    /// wraps the accepted stream in a `Client<S>` and hands it to
-    /// `run_ws_session`.
-    fn prepare_ws_session<'s>(
+    /// session (off the runtime when it must be created), reserves the
+    /// per-session slot (returning an RAII guard whose `Drop` releases it),
+    /// and computes the read-only flag. The caller wraps the accepted stream
+    /// in a `Client<S>` and hands it to `run_ws_session`.
+    async fn prepare_ws_session<'s>(
         self: &'s Arc<Self>,
         params: &ConnectionParams,
         global_guard: GlobalClientGuard<'s>,
@@ -1240,7 +1298,7 @@ impl StreamingServer {
         SessionClientGuard,
         bool,
     )> {
-        let session = self.resolve_session(params)?;
+        let session = self.resolve_session_off_runtime(params).await?;
         if !session.try_add_client(self.config.max_clients_per_session) {
             return Err(StreamingError::MaxClientsReached);
         }
@@ -1267,9 +1325,8 @@ impl StreamingServer {
     ///
     /// `subscriptions` and `rate_limiter` are the caller's per-connection
     /// state, mutated in place. Returns the direct replies to send back to
-    /// this client plus whether the connection should be closed afterwards;
-    /// messages that only write to the PTY or broadcast to the session
-    /// produce no direct reply.
+    /// this client; messages that only write to the PTY or broadcast to the
+    /// session produce no direct reply.
     #[allow(clippy::too_many_arguments)]
     fn handle_client_message(
         self: &Arc<Self>,
@@ -1282,12 +1339,12 @@ impl StreamingServer {
         >,
         rate_limiter: &mut Option<InputRateLimiter>,
         msg: crate::streaming::protocol::ClientMessage,
-    ) -> ClientMessageOutcome {
+    ) -> Vec<ServerMessage> {
         // Input on a session whose PTY writer is detached (never attached,
-        // or detached by shutdown) has nowhere to go. Drop loudly — logged,
-        // counted in dropped_messages — and close the connection so the
-        // client reconnects instead of typing into a void. Read-only
-        // viewers never carry input and stay connected.
+        // or detached by shutdown) has nowhere to go: it is dropped, logged
+        // and counted in dropped_messages, and the connection stays open.
+        // Closing it would not help: the session is still writer-less when
+        // the client reconnects, so a reconnecting client loops.
         if !read_only
             && !Self::session_has_writer(session)
             && matches!(
@@ -1309,10 +1366,7 @@ impl StreamingServer {
                 .metrics
                 .dropped_messages
                 .fetch_add(1, Ordering::Relaxed);
-            return ClientMessageOutcome {
-                replies: Vec::new(),
-                close: true,
-            };
+            return Vec::new();
         }
         let mut replies = Vec::new();
         match msg {
@@ -1408,10 +1462,7 @@ impl StreamingServer {
                 replies.push(msg);
             }
         }
-        ClientMessageOutcome {
-            replies,
-            close: false,
-        }
+        replies
     }
 
     /// True when a PTY writer is attached to the session. Input-bearing
@@ -1483,11 +1534,10 @@ impl StreamingServer {
                 .fetch_add(data.len(), Ordering::Relaxed);
             Self::enqueue_input(session, data.into_bytes());
         } else {
-            // The no-writer guard in `handle_client_message` closes the
-            // connection before dispatch; reaching here means the writer
-            // detached between that check and this one. Count it so the
-            // metric never reports a drop-free session the logs disagree
-            // with.
+            // The no-writer guard in `handle_client_message` drops input
+            // before dispatch; reaching here means the writer detached
+            // between that check and this one. Count it so the metric never
+            // reports a drop-free session the logs disagree with.
             crate::debug_error!(
                 "STREAMING",
                 "Input from {} {} dropped: session {} lost its PTY writer mid-dispatch",
@@ -1872,24 +1922,21 @@ impl StreamingServer {
         replies
     }
 
-    /// Shared dispatch loop for both tungstenite WebSocket transports
-    /// (plain TCP and TLS). The transport stream type is captured by the
-    /// `Client<S>` generic; all protobuf encode/decode and ping/pong handling
-    /// lives in `Client`. `transport_label` is used only in debug logs so the
-    /// two transports remain distinguishable.
+    /// The one session loop for every WebSocket transport (tungstenite
+    /// plain and TLS, and the axum HTTP-served route): connect and mode-sync
+    /// messages, then client messages, session broadcasts and keepalive
+    /// until the client leaves, then the closing handshake. Frame encoding
+    /// and policy live in the [`WsTransport`]. `transport_label` is used
+    /// only in debug logs so the transports remain distinguishable.
     ///
-    /// Client messages are dispatched via [`Self::handle_client_message`],
-    /// the single arm-set shared with the axum HTTP-served path.
-    async fn run_ws_session<S>(
+    /// Client messages are dispatched via [`Self::handle_client_message`].
+    async fn run_ws_session<T: WsTransport>(
         self: &Arc<Self>,
-        mut client: Client<S>,
+        mut client: T,
         session: Arc<StreamSessionState>,
         read_only: bool,
         transport_label: &'static str,
-    ) -> Result<()>
-    where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
-    {
+    ) -> Result<()> {
         let client_id = client.id();
 
         // Send initial connection message
@@ -1941,7 +1988,7 @@ impl StreamingServer {
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
-                            let outcome = self.handle_client_message(
+                            let replies = self.handle_client_message(
                                 &session,
                                 transport_label,
                                 client_id,
@@ -1950,7 +1997,7 @@ impl StreamingServer {
                                 &mut rate_limiter,
                                 client_msg,
                             );
-                            for reply in outcome.replies {
+                            for reply in replies {
                                 if let Err(e) = client.send(reply).await {
                                     crate::debug_error!(
                                         "STREAMING",
@@ -1960,16 +2007,6 @@ impl StreamingServer {
                                         e
                                     );
                                 }
-                            }
-                            if outcome.close {
-                                crate::debug_info!(
-                                    "STREAMING",
-                                    "{} {} input dropped: session {} has no PTY writer, closing",
-                                    transport_label,
-                                    client_id,
-                                    session.id
-                                );
-                                break;
                             }
                         }
                         None => {
@@ -2183,15 +2220,11 @@ impl StreamingServer {
     }
 
     /// Handle Axum WebSocket connection
-    #[cfg(feature = "streaming")]
     async fn handle_axum_websocket(
         self: &Arc<Self>,
         socket: axum::extract::ws::WebSocket,
         params: ConnectionParams,
     ) -> Result<()> {
-        use axum::extract::ws::Message as AxumMessage;
-        use futures_util::{SinkExt, StreamExt};
-
         // Reserve the global client slot BEFORE resolving or creating a
         // session, so max_clients bounds session spawns too (SEC-011). The
         // guard releases on any early return below (guard → resolve →
@@ -2199,184 +2232,15 @@ impl StreamingServer {
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
-        let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(&params, GlobalClientGuard { server: self })?;
-
-        let client_id = uuid::Uuid::new_v4();
-
-        let (mut ws_tx, mut ws_rx) = socket.split();
-
-        // Send initial connection message
-        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
-        let msg_bytes = encode_server_message(&connect_msg)?;
-        ws_tx
-            .send(AxumMessage::Binary(msg_bytes.into()))
+        let (session, _global_guard, _session_guard, read_only) = self
+            .prepare_ws_session(&params, GlobalClientGuard { server: self })
+            .await?;
+        let transport = AxumTransport {
+            id: uuid::Uuid::new_v4(),
+            socket,
+        };
+        self.run_ws_session(transport, session, read_only, "Axum WebSocket")
             .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-
-        // Sync terminal mode state for existing sessions
-        for mode_msg in session.build_mode_sync_messages() {
-            let mode_bytes = encode_server_message(&mode_msg)?;
-            ws_tx
-                .send(AxumMessage::Binary(mode_bytes.into()))
-                .await
-                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "Axum WebSocket client {} connected to session {} (total: {})",
-            client_id,
-            session.id,
-            self.client_count()
-        );
-
-        // Subscribe to session broadcasts
-        let mut output_rx = session.broadcast_tx.subscribe();
-
-        // Setup keepalive timer
-        let keepalive_interval = if self.config.keepalive_interval > 0 {
-            Some(Duration::from_secs(self.config.keepalive_interval))
-        } else {
-            None
-        };
-        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
-        let mut subscriptions: Option<
-            std::collections::HashSet<crate::streaming::protocol::EventType>,
-        > = None;
-        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
-            Some(InputRateLimiter::new(
-                self.config.input_rate_limit_bytes_per_sec,
-            ))
-        } else {
-            None
-        };
-
-        loop {
-            tokio::select! {
-                msg = ws_rx.next() => {
-                    match msg {
-                        Some(Ok(AxumMessage::Binary(data))) => {
-                            match decode_client_message(&data) {
-                                Ok(client_msg) => {
-                                    let outcome = self.handle_client_message(
-                                        &session,
-                                        "Axum WebSocket",
-                                        client_id,
-                                        read_only,
-                                        &mut subscriptions,
-                                        &mut rate_limiter,
-                                        client_msg,
-                                    );
-                                    for reply in outcome.replies {
-                                        match encode_server_message(&reply) {
-                                            Ok(bytes) => {
-                                                if ws_tx
-                                                    .send(AxumMessage::Binary(bytes.into()))
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    crate::debug_error!(
-                                                        "STREAMING",
-                                                        "Failed to send reply to Axum WebSocket {}",
-                                                        client_id
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
-                                                crate::debug_error!(
-                                                    "STREAMING",
-                                                    "Failed to encode reply for Axum WebSocket {}: {}",
-                                                    client_id,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                    if outcome.close {
-                                        crate::debug_info!(
-                                            "STREAMING",
-                                            "Axum Client {} input dropped: session {} has no PTY writer, closing",
-                                            client_id,
-                                            session.id
-                                        );
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    crate::debug_error!("STREAMING", "Failed to parse client message: {}", e);
-                                }
-                            }
-                        }
-                        Some(Ok(AxumMessage::Text(_))) => {
-                            crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
-                        }
-                        Some(Ok(AxumMessage::Ping(_))) => {}
-                        Some(Ok(AxumMessage::Pong(_))) => {}
-                        Some(Ok(AxumMessage::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "Axum Client {} disconnected from session {}", client_id, session.id);
-                            break;
-                        }
-                        Some(Err(e)) => {
-                            crate::debug_error!("STREAMING", "WebSocket error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                output_msg = output_rx.recv() => {
-                    if let Ok(msg) = output_msg {
-                        if should_send(&msg, &subscriptions) {
-                            if let Ok(bytes) = encode_server_message(&msg) {
-                                if ws_tx.send(AxumMessage::Binary(bytes.into())).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                _ = async {
-                    if let Some(ref mut timer) = keepalive_timer {
-                        timer.tick().await
-                    } else {
-                        std::future::pending::<tokio::time::Instant>().await
-                    }
-                } => {
-                    if ws_tx.send(AxumMessage::Ping(vec![].into())).await.is_err() {
-                        crate::debug_error!("STREAMING", "Failed to ping Axum client {}", client_id);
-                        break;
-                    }
-                }
-            }
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "Axum Client {} cleanup (remaining: {})",
-            client_id,
-            self.client_count() - 1
-        );
-
-        // Complete the closing handshake: reply with a Close frame before the
-        // sink drops, or the TCP connection ends with a bare FIN and clients
-        // observe abnormal closure (1006). When the client initiated the close,
-        // tungstenite already queued our reply when ws_rx read their Close
-        // frame and a further send is rejected — flush() writes the queued
-        // reply instead. Best-effort: the connection may already be dead on
-        // the error break paths.
-        if ws_tx.send(AxumMessage::Close(None)).await.is_err() {
-            if let Err(e) = ws_tx.flush().await {
-                crate::debug_error!(
-                    "STREAMING",
-                    "Failed to send close reply to Axum client {}: {}",
-                    client_id,
-                    e
-                );
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -3357,6 +3221,7 @@ mod tests {
         };
         let (_session, _g, _s, _ro) = server
             .prepare_ws_session(&params, GlobalClientGuard { server: &server })
+            .await
             .expect("fresh session resolves once a slot is free");
         assert_eq!(spawns.load(Ordering::Relaxed), 1);
     }
@@ -3387,12 +3252,13 @@ mod tests {
     }
 
     /// Input against a session whose PTY writer is detached (never
-    /// attached, or detached by [`StreamSessionState::shutdown`]) must be
-    /// dropped loudly — counted in `dropped_messages` — and close the
-    /// connection so the client reconnects instead of typing into a void.
-    /// Non-input messages and read-only viewers stay connected.
+    /// attached, or detached by [`StreamSessionState::shutdown`]) is dropped
+    /// and counted in `dropped_messages`, and the connection stays open: a
+    /// reconnect would find the same writer-less session. Non-input
+    /// messages still get their replies, and read-only viewers' input is
+    /// ignored before the writer check.
     #[tokio::test]
-    async fn input_without_pty_writer_is_counted_and_closes_the_connection() {
+    async fn input_without_pty_writer_is_counted_and_dropped() {
         use crate::streaming::protocol::ClientMessage;
 
         let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
@@ -3401,58 +3267,65 @@ mod tests {
         let session = server.get_session("default").expect("default session");
         assert!(!StreamingServer::session_has_writer(&session));
 
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
-            false,
-            &mut None,
-            &mut None,
+        let dispatch = |read_only: bool, msg: ClientMessage| {
+            server.handle_client_message(
+                &session,
+                "ws-test",
+                uuid::Uuid::new_v4(),
+                read_only,
+                &mut None,
+                &mut None,
+                msg,
+            )
+        };
+
+        let inputs = [
             ClientMessage::Input {
                 data: "q".to_string(),
             },
-        );
-        assert!(
-            outcome.close,
-            "writer-detached input must close the connection"
-        );
-        assert!(outcome.replies.is_empty());
-        assert_eq!(session.metrics.dropped_messages.load(Ordering::Relaxed), 1);
+            ClientMessage::Paste {
+                content: "pasted".to_string(),
+            },
+            ClientMessage::Mouse {
+                col: 1,
+                row: 1,
+                button: 0,
+                shift: false,
+                ctrl: false,
+                alt: false,
+                event_type: "press".to_string(),
+            },
+            ClientMessage::FocusChange { focused: true },
+        ];
+        for (i, msg) in inputs.into_iter().enumerate() {
+            assert!(dispatch(false, msg).is_empty(), "input produces no reply");
+            assert_eq!(
+                session.metrics.dropped_messages.load(Ordering::Relaxed),
+                i + 1
+            );
+        }
 
-        // Non-input messages on the same writer-less session stay open.
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
-            false,
-            &mut None,
-            &mut None,
-            ClientMessage::Ping,
-        );
-        assert!(!outcome.close);
+        // Non-input messages on the same writer-less session still reply.
+        let replies = dispatch(false, ClientMessage::Ping);
+        assert!(matches!(replies.as_slice(), [ServerMessage::Pong]));
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
-            1,
+            4,
             "ping is not input and must not count as a drop"
         );
 
-        // Read-only viewers are exempt: their input is dropped by the
-        // handler, not by the detached-writer guard.
-        let outcome = server.handle_client_message(
-            &session,
-            "ws-test",
-            uuid::Uuid::new_v4(),
+        // Read-only viewers are exempt: their input is ignored by the
+        // handler, not counted by the detached-writer guard.
+        let replies = dispatch(
             true,
-            &mut None,
-            &mut None,
             ClientMessage::Input {
                 data: "q".to_string(),
             },
         );
-        assert!(!outcome.close);
+        assert!(replies.is_empty());
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
-            1,
+            4,
             "read-only input is not a writer-detached drop"
         );
     }

@@ -34,6 +34,12 @@ const INPUT_QUEUE_MESSAGES: usize = 256;
 /// cap: Client input bytes queued per session pending write to the PTY.
 const MAX_QUEUED_INPUT_BYTES: usize = 4 * 1024 * 1024;
 
+/// How often an idle input drain thread wakes to notice a dropped session.
+const DRAIN_IDLE_WAKE: Duration = Duration::from_millis(250);
+/// How long the input drain waits for the PTY writer mutex before logging
+/// that input is waiting; it keeps waiting after the log.
+const WRITER_LOCK_WAIT: Duration = Duration::from_secs(1);
+
 /// Get current time as epoch milliseconds
 pub(crate) fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -368,111 +374,23 @@ impl StreamSessionState {
         }
 
         // First input after attach: create the channel and start the drain
-        // task. The write lock makes create-once race-safe; the send runs
+        // thread. The write lock makes create-once race-safe; the send runs
         // under it so no input is lost between the empty check and the
         // store.
         //
-        // The channel is std, not tokio: both ends of this handoff are
-        // synchronous (a runtime worker calling try_send, a blocking-pool
-        // thread calling recv), and a parked tokio `blocking_recv` can miss
-        // a `try_send` wakeup for as long as nothing else stirs the
-        // runtime — measured as keystrokes parked in the queue for a full
-        // 60 s (card 01a0e80db3e870e282af0cf84405043b). std's condvar
-        // wakeup has no runtime context to lose.
+        // std channel, not tokio: a parked tokio `blocking_recv` can miss a
+        // `try_send` wakeup for as long as nothing else stirs the runtime;
+        // std's condvar wakeup has no runtime context to lose.
         let mut guard = self.pty_input_tx.write();
         if guard.is_none() {
             let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
             let weak = Arc::downgrade(self);
-            // A plain thread, not `spawn_blocking`: it owns one blocking
-            // job for the session's lifetime with no runtime tasks to
-            // coordinate against. The stall once blamed on the
-            // blocking-pool thread shape (a drain "frozen mid-nanosleep
-            // across four park primitives") was re-diagnosed as the
-            // stress test holding the PTY-writer mutex across its own
-            // deadline poll (card 01a0e99aa9447543a302f2ab5b5cbe01);
-            // thread origin was never the variable. A detached std
-            // thread exits when the channel closes (the sender dies
-            // with the session), so the lifetime story is unchanged.
+            // A detached std thread: it owns one blocking job for the
+            // session's lifetime and exits when the channel closes (the
+            // sender dies with the session) or the session is dropped.
             let spawned = std::thread::Builder::new()
                 .name("pty-input-drain".to_string())
-                .spawn(move || {
-                    use std::io::Write;
-                    // Poll, don't park. The stall this loop was written
-                    // for was re-diagnosed as the drain contending on a
-                    // PTY-writer mutex a stress test held across its own
-                    // 15 s deadline poll (card
-                    // 01a0e99aa9447543a302f2ab5b5cbe01); the earlier
-                    // "lost wakeup" parks (card
-                    // 01a0e80db3e870e282af0cf84405043b) stalled the
-                    // same way, against that guard. `try_recv` + sleep
-                    // keeps any future wait — channel or mutex — bounded
-                    // to one poll interval instead of a park with no
-                    // deadline.
-                    const DRAIN_POLL: Duration = Duration::from_millis(10);
-                    loop {
-                        let bytes = match rx.try_recv() {
-                            Ok(bytes) => bytes,
-                            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                                std::thread::sleep(DRAIN_POLL);
-                                continue;
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-                        };
-                        crate::debug_log!("STREAMING", "drain picked up {} B", bytes.len());
-                        // Off the queue: release the budget whether this chunk
-                        // is written or not.
-                        if let Some(session) = weak.upgrade() {
-                            session
-                                .queued_input_bytes
-                                .fetch_sub(bytes.len(), Ordering::Relaxed);
-                            let writer = session.pty_writer.read().as_ref().cloned();
-                            if let Some(w) = writer {
-                                // try_lock + retry, not a blocking lock:
-                                // whatever holds this mutex (a viewer's
-                                // direct write, a slow daemon flush), a
-                                // blocking `lock` waits on it with no
-                                // deadline and strands every later chunk
-                                // behind the same wait. Polling bounds any
-                                // hold to one interval; the uncontended
-                                // fast path (the only production shape —
-                                // all input flows through this drain)
-                                // never waits at all.
-                                let mut w = loop {
-                                    match w.try_lock() {
-                                        Some(guard) => break guard,
-                                        None => std::thread::sleep(DRAIN_POLL),
-                                    }
-                                };
-                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                                    crate::debug_error!(
-                                        "STREAMING",
-                                        "PTY input write error for session {}: {}",
-                                        session.id,
-                                        e
-                                    );
-                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                }
-                            } else {
-                                // PTY detached between enqueue and drain; the
-                                // bytes have nowhere to go (previously a silent
-                                // skip).
-                                session
-                                    .metrics
-                                    .dropped_messages
-                                    .fetch_add(1, Ordering::Relaxed);
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "PTY input dropped (no PTY writer) for session {}: {} bytes",
-                                    session.id,
-                                    bytes.len()
-                                );
-                            }
-                        } else {
-                            // Session gone; nothing left to write for.
-                            break;
-                        }
-                    }
-                });
+                .spawn(move || Self::drain_pty_input(&weak, &rx));
             match spawned {
                 Ok(_joined) => *guard = Some(tx),
                 Err(spawn_err) => {
@@ -494,6 +412,85 @@ impl StreamSessionState {
         }
     }
 
+    /// Body of the per-session drain thread: write each queued chunk to the
+    /// session's PTY writer, in queue order, until the channel closes or the
+    /// session is dropped.
+    fn drain_pty_input(weak: &std::sync::Weak<Self>, rx: &std::sync::mpsc::Receiver<Vec<u8>>) {
+        use std::io::Write;
+        use std::sync::mpsc::RecvTimeoutError;
+        loop {
+            let bytes = match rx.recv_timeout(DRAIN_IDLE_WAKE) {
+                Ok(bytes) => bytes,
+                // An idle wake only checks for a dropped session; the
+                // strong count avoids keeping the session alive to check.
+                Err(RecvTimeoutError::Timeout) => {
+                    if weak.strong_count() == 0 {
+                        break;
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            let Some(session) = weak.upgrade() else {
+                break;
+            };
+            // Off the queue: release the budget whether this chunk is
+            // written or not.
+            session
+                .queued_input_bytes
+                .fetch_sub(bytes.len(), Ordering::Relaxed);
+            let writer = session.pty_writer.read().as_ref().cloned();
+            let Some(writer) = writer else {
+                session
+                    .metrics
+                    .dropped_messages
+                    .fetch_add(1, Ordering::Relaxed);
+                crate::debug_error!(
+                    "STREAMING",
+                    "PTY input dropped (no PTY writer) for session {}: {} bytes",
+                    session.id,
+                    bytes.len()
+                );
+                continue;
+            };
+            // Bounded lock wait: a writer held elsewhere must not strand
+            // later chunks silently. The chunk is never dropped on a
+            // timeout, which would lose or reorder keystrokes.
+            let mut logged_wait = false;
+            let mut w = loop {
+                if let Some(guard) = writer.try_lock_for(WRITER_LOCK_WAIT) {
+                    break guard;
+                }
+                if !logged_wait {
+                    logged_wait = true;
+                    crate::debug_error!(
+                        "STREAMING",
+                        "PTY writer for session {} held > {:?}; input waiting",
+                        session.id,
+                        WRITER_LOCK_WAIT
+                    );
+                }
+            };
+            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                crate::debug_error!(
+                    "STREAMING",
+                    "PTY input write error for session {}: {}",
+                    session.id,
+                    e
+                );
+                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Queue `bytes` for the PTY through the session's serialized input
+    /// path, the same path client `Input` messages take: they reach the PTY
+    /// in order with client input, under the same queue bounds, and the
+    /// call never blocks on the PTY writer.
+    pub fn send_input(self: &Arc<Self>, bytes: Vec<u8>) {
+        self.enqueue_pty_input(bytes);
+    }
+
     /// Enqueue one chunk under the QA-131 bounds, dropping and counting on
     /// overflow instead of blocking or growing.
     fn try_enqueue_pty_input(&self, tx: &std::sync::mpsc::SyncSender<Vec<u8>>, bytes: Vec<u8>) {
@@ -504,14 +501,7 @@ impl StreamSessionState {
         }
         self.queued_input_bytes.fetch_add(len, Ordering::Relaxed);
         match tx.try_send(bytes) {
-            Ok(()) => {
-                crate::debug_log!(
-                    "STREAMING",
-                    "enqueued {len} B for session {} (queued bytes now {})",
-                    self.id,
-                    self.queued_input_bytes.load(Ordering::Relaxed)
-                );
-            }
+            Ok(()) => {}
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
                 self.note_dropped_input(len, "queue full");
@@ -648,8 +638,8 @@ impl StreamSessionState {
         let msg = ServerMessage::shutdown(reason);
         self.broadcast(msg);
         // Detach the PTY writer so input arriving after shutdown hits the
-        // server's writer-detached guard (logged, counted, connection
-        // closed) instead of queueing bytes for a process that is gone.
+        // server's writer-detached guard (dropped, logged, counted) instead
+        // of queueing bytes for a process that is gone.
         self.pty_writer.write().take();
         self.shutdown.notify_waiters();
     }
@@ -906,6 +896,108 @@ mod tests {
         drop(gate_rx);
         session.enqueue_pty_input(b"tail".to_vec());
     }
+    /// A `Write` whose bytes the test can read back through a shared handle.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Block until the sink holds exactly `want`, or panic after 5 s.
+    fn wait_for_bytes(sink: &SharedSink, want: &[u8]) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while sink.0.lock().as_slice() != want {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "writer holds {:?}, want {:?}",
+                String::from_utf8_lossy(&sink.0.lock()),
+                String::from_utf8_lossy(want)
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn send_input_is_written_through_the_drain() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "send-input".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let sink = SharedSink::default();
+        session.set_pty_writer(Arc::new(Mutex::new(Box::new(sink.clone()))));
+
+        session.send_input(b"echo hi\n".to_vec());
+        wait_for_bytes(&sink, b"echo hi\n");
+        assert_eq!(session.metrics.dropped_messages.load(Ordering::Relaxed), 0);
+    }
+
+    /// An idle drain parks on its channel across several idle wakes, then
+    /// still writes the next chunk promptly: the timeout path loops back to
+    /// the channel instead of exiting or erroring.
+    #[test]
+    fn drain_idles_without_polling() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "idle".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let sink = SharedSink::default();
+        session.set_pty_writer(Arc::new(Mutex::new(Box::new(sink.clone()))));
+
+        // Start the drain, then leave it idle past two DRAIN_IDLE_WAKEs.
+        session.send_input(b"a".to_vec());
+        wait_for_bytes(&sink, b"a");
+        std::thread::sleep(DRAIN_IDLE_WAKE * 2 + Duration::from_millis(100));
+        assert_eq!(session.metrics.errors.load(Ordering::Relaxed), 0);
+
+        let sent = std::time::Instant::now();
+        session.send_input(b"b".to_vec());
+        wait_for_bytes(&sink, b"ab");
+        assert!(
+            sent.elapsed() < Duration::from_secs(1),
+            "an idle drain took {:?} to write",
+            sent.elapsed()
+        );
+    }
+
+    /// A writer held elsewhere delays input but never drops or reorders it:
+    /// the drain keeps waiting past its lock timeout and writes every chunk
+    /// in order once the holder releases.
+    #[test]
+    fn a_held_writer_delays_input_without_dropping_it() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "held".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let sink = SharedSink::default();
+        let writer: PtyWriterHandle = Arc::new(Mutex::new(Box::new(sink.clone())));
+        session.set_pty_writer(Arc::clone(&writer));
+
+        let held = writer.lock();
+        session.send_input(b"1".to_vec());
+        session.send_input(b"2".to_vec());
+        std::thread::sleep(WRITER_LOCK_WAIT + Duration::from_millis(200));
+        assert!(sink.0.lock().is_empty(), "nothing is written while held");
+        drop(held);
+
+        wait_for_bytes(&sink, b"12");
+        assert_eq!(session.metrics.dropped_messages.load(Ordering::Relaxed), 0);
+    }
+
     #[tokio::test]
     async fn test_session_registry_basic() {
         let registry = SessionRegistry::new(10);
@@ -1128,8 +1220,8 @@ mod tests {
         session.shutdown("pane closed".to_string());
 
         // Input arriving after shutdown must hit the server's
-        // writer-detached guard (logged, counted, connection closed),
-        // not queue bytes for a process that is gone.
+        // writer-detached guard (dropped, logged, counted), not queue
+        // bytes for a process that is gone.
         assert!(session.pty_writer.read().is_none());
     }
 }

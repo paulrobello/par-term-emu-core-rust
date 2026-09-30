@@ -80,8 +80,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use par_term_emu_core_rust::{
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
-    streaming::{SessionFactory, StreamingConfig, StreamingServer, TlsConfig},
+    pty_session::PtySession,
+    streaming::{HttpBasicAuthConfig, SessionFactory, StreamingConfig, StreamingServer, TlsConfig},
 };
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
@@ -125,21 +127,36 @@ async fn run_mux_mode(
     println!("  WebSocket: ws://{addr}{path}");
     println!("\nPress Ctrl+C to stop the server\n");
 
-    let handle = {
-        let server = Arc::clone(&server);
-        tokio::spawn(async move {
-            if let Err(e) = server.start().await {
-                error!("Streaming server error: {}", e);
-            }
-        })
-    };
+    let handle = spawn_server_task(Arc::clone(&server));
     signal::ctrl_c()
         .await
         .context("Failed to listen for Ctrl+C")?;
     info!("Received shutdown signal");
-    server.shutdown("Server shutting down".to_string());
-    handle.abort();
+    stop_server(&server, handle, || {}).await;
     Ok(())
+}
+
+/// Run the streaming server on a background task until it is aborted.
+fn spawn_server_task(server: Arc<StreamingServer>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = server.start().await {
+            error!("Streaming server error: {}", e);
+        }
+    })
+}
+
+/// Announce the shutdown to every client, run `teardown`, give clients a
+/// moment to receive the shutdown message, then cancel the server task.
+async fn stop_server(
+    server: &StreamingServer,
+    handle: tokio::task::JoinHandle<()>,
+    teardown: impl FnOnce(),
+) {
+    info!("Shutting down...");
+    server.shutdown("Server shutting down".to_string());
+    teardown();
+    time::sleep(Duration::from_millis(500)).await;
+    handle.abort();
 }
 
 /// Without the `mux` feature there is no pane source to mirror.
@@ -203,22 +220,7 @@ async fn main() -> Result<()> {
     info!("Starting terminal streaming server");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
-    // Determine terminal size
-    // Priority: --use-tty-size > --size > --cols/--rows
-    let (cols, rows) = if args.use_tty_size {
-        match cli::get_tty_size() {
-            Some(size) => {
-                info!("Using TTY size: {}x{}", size.0, size.1);
-                size
-            }
-            None => {
-                eprintln!("Warning: Could not get TTY size, using defaults (80x24)");
-                (80, 24)
-            }
-        }
-    } else {
-        args.size.unwrap_or((args.cols, args.rows))
-    };
+    let (cols, rows) = resolve_size(&args);
 
     // Resolve theme
     let theme = Theme::by_name(&args.theme)
@@ -229,20 +231,7 @@ async fn main() -> Result<()> {
     // before any server wiring starts (replaces downstream `expect` panics)
     let run_mode = bootstrap::resolve_run_mode(&args, cols, rows, &theme);
 
-    // Load TLS configuration if provided
-    let tls_config = if let Some(pem_path) = &args.tls_pem {
-        info!("Loading TLS from PEM file: {}", pem_path);
-        Some(TlsConfig::from_pem(pem_path).context("Failed to load TLS PEM file")?)
-    } else if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
-        info!("Loading TLS from cert: {}, key: {}", cert_path, key_path);
-        Some(
-            TlsConfig::from_files(cert_path, key_path)
-                .context("Failed to load TLS certificate/key")?,
-        )
-    } else {
-        None
-    };
-
+    let tls_config = load_tls(&args)?;
     let use_tls = tls_config.is_some();
 
     // Resolve HTTP Basic Auth configuration
@@ -257,58 +246,20 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Create streaming server configuration
-    let config = StreamingConfig {
-        max_clients: args.max_clients,
-        send_initial_screen: true,
-        keepalive_interval: args.keepalive,
-        default_read_only: false,
-        enable_http: args.enable_http,
-        web_root: args.web_root.clone(),
-        initial_cols: cols,
-        initial_rows: rows,
-        tls: tls_config,
-        http_basic_auth: http_basic_auth.clone(),
-        max_sessions: args.max_sessions,
-        session_idle_timeout: args.session_idle_timeout,
+    let config = build_config(
+        &args,
+        &run_mode,
+        (cols, rows),
+        tls_config,
+        http_basic_auth.clone(),
         presets,
-        max_clients_per_session: args.max_clients_per_session,
-        input_rate_limit_bytes_per_sec: args.input_rate_limit,
-        enable_system_stats: args.enable_system_stats,
-        system_stats_interval_secs: args.system_stats_interval,
-        api_key: args.api_key.clone(),
-        allow_api_key_in_query: args.allow_api_key_in_query,
-        allowed_origins: args.allowed_origins.clone(),
-        kitty_file_media: args.kitty_file_media,
-    };
+    );
 
     // Create streaming server
     let addr = format!("{}:{}", args.host, args.port);
     info!("Creating streaming server on {}", addr);
 
-    // SEC-002: Warn loudly when binding a non-loopback interface without any
-    // authentication configured. A public bind with no auth exposes an
-    // interactive shell (the PTY) to anyone who can reach the port.
-    if !bootstrap::is_loopback_host(&args.host)
-        && args.api_key.is_none()
-        && http_basic_auth.is_none()
-    {
-        eprintln!();
-        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        eprintln!(
-            "!!  SECURITY WARNING: binding {} WITHOUT AUTHENTICATION       !!",
-            addr
-        );
-        eprintln!("!!  The standalone streamer exposes an interactive shell over !!");
-        eprintln!("!!  WebSocket. Anyone who can reach this port gets full shell !!");
-        eprintln!("!!  access with your privileges.                              !!");
-        eprintln!("!!  Fix one of:                                               !!");
-        eprintln!("!!    - bind loopback:  --host 127.0.0.1  (the default)       !!");
-        eprintln!("!!    - add an API key: --api-key <secret>                    !!");
-        eprintln!("!!    - add HTTP Basic: --http-user <user> --http-password ... !!");
-        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        eprintln!();
-    }
+    warn_if_unauthenticated(&args, &addr, http_basic_auth.is_some());
     if args.enable_system_stats {
         info!(
             "System stats enabled (interval: {}s)",
@@ -370,82 +321,7 @@ async fn main() -> Result<()> {
         pty_session: macro_pty,
     } = &run_mode
     {
-        // Get output sender for the callback
-        let output_sender = streaming_server.get_output_sender();
-
-        info!("Loading macro file: {}", macro_file);
-        let macro_data = Macro::load_yaml(macro_file)
-            .context(format!("Failed to load macro file: {}", macro_file))?;
-
-        info!("Macro loaded: {}", macro_data.name);
-        if let Some(desc) = &macro_data.description {
-            info!("Description: {}", desc);
-        }
-        info!("Events: {}", macro_data.events.len());
-        info!("Speed: {}x", args.macro_speed);
-        if args.macro_loop {
-            info!("Loop: enabled");
-        }
-
-        // Spawn macro playback task
-        let pty_session_clone = Arc::clone(macro_pty);
-        let output_sender_clone = output_sender.clone();
-        let macro_speed = args.macro_speed;
-        let macro_loop = args.macro_loop;
-        tokio::spawn(async move {
-            loop {
-                let mut playback = MacroPlayback::with_speed(macro_data.clone(), macro_speed);
-                info!("Starting macro playback: {}", playback.name());
-
-                while !playback.is_finished() {
-                    if let Some(event) = playback.next_event() {
-                        match event {
-                            MacroEvent::KeyPress { key, .. } => {
-                                // Convert key to bytes and send to terminal
-                                let bytes = KeyParser::parse_key(&key);
-                                {
-                                    let mut session = pty_session_clone.lock();
-                                    // Write directly to terminal for macro playback
-                                    session.write(&bytes).ok();
-                                }
-                            }
-                            MacroEvent::Delay { duration, .. } => {
-                                tokio::time::sleep(Duration::from_millis(
-                                    (duration as f64 / macro_speed) as u64,
-                                ))
-                                .await;
-                            }
-                            MacroEvent::Screenshot { label, .. } => {
-                                if let Some(label) = label {
-                                    info!("Screenshot trigger: {}", label);
-                                } else {
-                                    info!("Screenshot trigger");
-                                }
-                            }
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-
-                info!("Macro playback finished");
-                if !macro_loop {
-                    break;
-                }
-                info!("Restarting macro playback (loop enabled)");
-                tokio::time::sleep(Duration::from_millis(1000)).await;
-            }
-        });
-
-        // Set up output callback to send PTY output to streaming server
-        {
-            let mut session = macro_pty.lock();
-            session.set_output_callback(Arc::new(move |data| {
-                let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender_clone.try_send(text);
-            }));
-        }
-
-        // No PTY writer needed for macro playback
+        start_macro_playback(&args, macro_file, macro_pty, &streaming_server)?;
     } else {
         // Shell mode: create the "default" session via factory
         info!("Creating default session via factory");
@@ -469,6 +345,186 @@ async fn main() -> Result<()> {
     );
 
     serve_until_ctrl_c(streaming_server, &run_mode, factory.as_ref(), &args).await
+}
+
+/// Terminal size. Priority: `--use-tty-size` > `--size` > `--cols`/`--rows`.
+fn resolve_size(args: &Args) -> (u16, u16) {
+    if !args.use_tty_size {
+        return args.size.unwrap_or((args.cols, args.rows));
+    }
+    match cli::get_tty_size() {
+        Some(size) => {
+            info!("Using TTY size: {}x{}", size.0, size.1);
+            size
+        }
+        None => {
+            eprintln!("Warning: Could not get TTY size, using defaults (80x24)");
+            (80, 24)
+        }
+    }
+}
+
+/// TLS configuration from `--tls-pem` or `--tls-cert`/`--tls-key`, if given.
+fn load_tls(args: &Args) -> Result<Option<TlsConfig>> {
+    if let Some(pem_path) = &args.tls_pem {
+        info!("Loading TLS from PEM file: {}", pem_path);
+        return Ok(Some(
+            TlsConfig::from_pem(pem_path).context("Failed to load TLS PEM file")?,
+        ));
+    }
+    if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
+        info!("Loading TLS from cert: {}, key: {}", cert_path, key_path);
+        return Ok(Some(
+            TlsConfig::from_files(cert_path, key_path)
+                .context("Failed to load TLS certificate/key")?,
+        ));
+    }
+    Ok(None)
+}
+
+/// The streaming server configuration for these CLI arguments.
+fn build_config(
+    args: &Args,
+    run_mode: &RunMode,
+    (cols, rows): (u16, u16),
+    tls: Option<TlsConfig>,
+    http_basic_auth: Option<HttpBasicAuthConfig>,
+    presets: HashMap<String, String>,
+) -> StreamingConfig {
+    StreamingConfig {
+        max_clients: args.max_clients,
+        send_initial_screen: true,
+        keepalive_interval: args.keepalive,
+        // Macro playback has no PTY writer: its viewers watch, they cannot type.
+        default_read_only: matches!(run_mode, RunMode::Macro { .. }),
+        enable_http: args.enable_http,
+        web_root: args.web_root.clone(),
+        initial_cols: cols,
+        initial_rows: rows,
+        tls,
+        http_basic_auth,
+        max_sessions: args.max_sessions,
+        session_idle_timeout: args.session_idle_timeout,
+        presets,
+        max_clients_per_session: args.max_clients_per_session,
+        input_rate_limit_bytes_per_sec: args.input_rate_limit,
+        enable_system_stats: args.enable_system_stats,
+        system_stats_interval_secs: args.system_stats_interval,
+        api_key: args.api_key.clone(),
+        allow_api_key_in_query: args.allow_api_key_in_query,
+        allowed_origins: args.allowed_origins.clone(),
+        kitty_file_media: args.kitty_file_media,
+    }
+}
+
+/// SEC-002: warn loudly when binding a non-loopback interface without any
+/// authentication configured. A public bind with no auth exposes an
+/// interactive shell (the PTY) to anyone who can reach the port.
+fn warn_if_unauthenticated(args: &Args, addr: &str, http_basic_auth: bool) {
+    if bootstrap::is_loopback_host(&args.host) || args.api_key.is_some() || http_basic_auth {
+        return;
+    }
+    eprintln!();
+    eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    eprintln!(
+        "!!  SECURITY WARNING: binding {} WITHOUT AUTHENTICATION       !!",
+        addr
+    );
+    eprintln!("!!  The standalone streamer exposes an interactive shell over !!");
+    eprintln!("!!  WebSocket. Anyone who can reach this port gets full shell !!");
+    eprintln!("!!  access with your privileges.                              !!");
+    eprintln!("!!  Fix one of:                                               !!");
+    eprintln!("!!    - bind loopback:  --host 127.0.0.1  (the default)       !!");
+    eprintln!("!!    - add an API key: --api-key <secret>                    !!");
+    eprintln!("!!    - add HTTP Basic: --http-user <user> --http-password ... !!");
+    eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    eprintln!();
+}
+
+/// Load the macro file, start its playback task against the macro PTY, and
+/// forward the PTY's output to the streaming server's default session.
+fn start_macro_playback(
+    args: &Args,
+    macro_file: &str,
+    macro_pty: &Arc<Mutex<PtySession>>,
+    streaming_server: &StreamingServer,
+) -> Result<()> {
+    // Get output sender for the callback
+    let output_sender = streaming_server.get_output_sender();
+
+    info!("Loading macro file: {}", macro_file);
+    let macro_data = Macro::load_yaml(macro_file)
+        .context(format!("Failed to load macro file: {}", macro_file))?;
+
+    info!("Macro loaded: {}", macro_data.name);
+    if let Some(desc) = &macro_data.description {
+        info!("Description: {}", desc);
+    }
+    info!("Events: {}", macro_data.events.len());
+    info!("Speed: {}x", args.macro_speed);
+    if args.macro_loop {
+        info!("Loop: enabled");
+    }
+
+    // Spawn macro playback task
+    let pty_session_clone = Arc::clone(macro_pty);
+    let output_sender_clone = output_sender.clone();
+    let macro_speed = args.macro_speed;
+    let macro_loop = args.macro_loop;
+    tokio::spawn(async move {
+        loop {
+            let mut playback = MacroPlayback::with_speed(macro_data.clone(), macro_speed);
+            info!("Starting macro playback: {}", playback.name());
+
+            while !playback.is_finished() {
+                if let Some(event) = playback.next_event() {
+                    match event {
+                        MacroEvent::KeyPress { key, .. } => {
+                            // Convert key to bytes and send to terminal
+                            let bytes = KeyParser::parse_key(&key);
+                            {
+                                let mut session = pty_session_clone.lock();
+                                // Write directly to terminal for macro playback
+                                session.write(&bytes).ok();
+                            }
+                        }
+                        MacroEvent::Delay { duration, .. } => {
+                            tokio::time::sleep(Duration::from_millis(
+                                (duration as f64 / macro_speed) as u64,
+                            ))
+                            .await;
+                        }
+                        MacroEvent::Screenshot { label, .. } => {
+                            if let Some(label) = label {
+                                info!("Screenshot trigger: {}", label);
+                            } else {
+                                info!("Screenshot trigger");
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+
+            info!("Macro playback finished");
+            if !macro_loop {
+                break;
+            }
+            info!("Restarting macro playback (loop enabled)");
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+    });
+
+    // Set up output callback to send PTY output to streaming server
+    {
+        let mut session = macro_pty.lock();
+        session.set_output_callback(Arc::new(move |data| {
+            let text = String::from_utf8_lossy(data).to_string();
+            let _ = output_sender_clone.try_send(text);
+        }));
+    }
+
+    Ok(())
 }
 
 /// Print the startup banner: endpoints, auth state, terminal and theme
@@ -590,15 +646,7 @@ async fn serve_until_ctrl_c(
     factory: Option<&Arc<BinarySessionFactory>>,
     args: &Args,
 ) -> Result<()> {
-    // Start streaming server in background
-    let server_handle = {
-        let streaming_server = Arc::clone(&streaming_server);
-        tokio::spawn(async move {
-            if let Err(e) = streaming_server.start().await {
-                error!("Streaming server error: {}", e);
-            }
-        })
-    };
+    let server_handle = spawn_server_task(Arc::clone(&streaming_server));
 
     if let RunMode::Macro {
         pty_session: macro_pty,
@@ -614,28 +662,19 @@ async fn serve_until_ctrl_c(
         .await?;
     } else {
         // Shell mode: factory handles per-session resize, PTY monitoring, and event polling.
-        // Send initial command to default session if specified
+        // Send initial command to default session if specified. It takes the
+        // session's input queue, so it is ordered with client input and never
+        // blocks a runtime worker on the PTY writer.
         if let Some(command) = &args.command {
-            let factory_ref = factory.cloned();
+            let server = Arc::clone(&streaming_server);
             let command = command.clone();
             tokio::spawn(async move {
                 // Wait 1 second for shell prompt to settle
                 time::sleep(Duration::from_secs(1)).await;
                 info!("Sending initial command: {}", command);
-
-                if let Some(ref factory) = factory_ref {
-                    let sessions = factory.pty_sessions.read();
-                    if let Some(pty_session) = sessions.get("default") {
-                        let session = pty_session.lock();
-                        if let Some(writer) = session.get_writer() {
-                            let mut w = writer.lock();
-                            let cmd_with_newline = format!("{}\n", command);
-                            if let Err(e) = w.write_all(cmd_with_newline.as_bytes()) {
-                                error!("Failed to send initial command: {}", e);
-                            }
-                            let _ = w.flush();
-                        }
-                    }
+                match server.get_session("default") {
+                    Some(session) => session.send_input(format!("{command}\n").into_bytes()),
+                    None => error!("Failed to send initial command: no default session"),
                 }
             });
         }
@@ -647,37 +686,28 @@ async fn serve_until_ctrl_c(
         info!("Received shutdown signal");
     }
 
-    // Cleanup
-    info!("Shutting down...");
-
-    // Shutdown streaming server
-    streaming_server.shutdown("Server shutting down".to_string());
-
-    // Teardown all factory sessions
-    if let Some(factory) = factory {
-        let session_ids: Vec<String> = factory.pty_sessions.read().keys().cloned().collect();
-        for id in session_ids {
-            factory.teardown_session(&id);
-        }
-    }
-
-    // Stop macro mode PTY
-    if let RunMode::Macro { pty_session, .. } = run_mode {
-        let session = pty_session.lock();
-        if session.is_running() {
-            if let Some(writer) = session.get_writer() {
-                let mut w = writer.lock();
-                let _ = w.write_all(b"exit\n");
-                let _ = w.flush();
+    stop_server(&streaming_server, server_handle, || {
+        // Teardown all factory sessions
+        if let Some(factory) = factory {
+            let session_ids: Vec<String> = factory.pty_sessions.read().keys().cloned().collect();
+            for id in session_ids {
+                factory.teardown_session(&id);
             }
         }
-    }
 
-    // Wait a bit for graceful shutdown
-    time::sleep(Duration::from_millis(500)).await;
-
-    // Cancel server task
-    server_handle.abort();
+        // Stop macro mode PTY
+        if let RunMode::Macro { pty_session, .. } = run_mode {
+            let session = pty_session.lock();
+            if session.is_running() {
+                if let Some(writer) = session.get_writer() {
+                    let mut w = writer.lock();
+                    let _ = w.write_all(b"exit\n");
+                    let _ = w.flush();
+                }
+            }
+        }
+    })
+    .await;
 
     info!("Goodbye!");
 
