@@ -265,14 +265,16 @@ make xcframework
 # → target/xcframework/TerminalCore.xcframework
 ```
 
-`TerminalCore.xcframework` (device + simulator slices) is attached to GitHub releases starting with 0.56.0 — until then, build it locally with `make xcframework`. Each slice carries a `Modules/module.modulemap`, so after adding the xcframework to an Xcode project a Swift file just does `import TerminalCore` (the C header is re-exported; no bridging header needed).
+`TerminalCore.xcframework` (device + simulator slices) is attached to GitHub releases from 0.56.0 on; build it locally with `make xcframework` for unreleased commits. Each slice carries a `Modules/module.modulemap`, so after adding the xcframework to an Xcode project a Swift file just does `import TerminalCore` (the C header is re-exported; no bridging header needed).
 
-The C surface is a full embedding API, not just snapshots:
+The C surface is a full embedding API, not just snapshots (contracts and examples in the [FFI Guide](docs/FFI_GUIDE.md)):
 
+- **Version check**: `terminal_abi_version` — compare against the header's `TERM_CORE_ABI_VERSION` at startup
 - **Lifecycle/input**: `terminal_create` / `terminal_free` / `terminal_feed` (VT bytes) / `terminal_resize`
-- **Damage**: `terminal_dirty_ranges` returns coalesced inclusive dirty-row ranges (the emulator knows exactly what changed) and `terminal_mark_clean` consumes them
-- **Pinned readback**: `terminal_read_row` / `terminal_read_scrollback_row` copy cells into caller-owned buffers — no allocation, no full-grid copy per frame; `terminal_get_cursor` / `terminal_get_modes` carry per-frame state
-- **Key encoding**: `terminal_encode_key` turns key events into PTY bytes (xterm legacy + kitty level-1 disambiguate, honoring application cursor keys and the negotiated kitty flags) so the frontend never reimplements key translation
+- **Damage**: `terminal_dirty_ranges` returns coalesced inclusive dirty-row ranges and `terminal_mark_clean` consumes them; independent renderers use `terminal_damage_generation` + `terminal_dirty_ranges_since`, so one consumer never hides damage from another
+- **Pinned readback**: `terminal_read_row` / `terminal_read_scrollback_row` / `terminal_scrollback_count` copy cells into caller-owned buffers — no allocation, no full-grid copy per frame; `terminal_scrollback_total_scrolled` pairs with the count to sync a mirrored scrollback window; `terminal_get_cursor` / `terminal_get_modes` carry per-frame state
+- **Key encoding**: `terminal_encode_key` turns key events into PTY bytes (xterm legacy, kitty level-1 disambiguate, and modifyOtherKeys, honoring application cursor keys and the negotiated kitty flags); `terminal_encode_key_ex` adds per-side macOS Option-key modes through `TermKeyOptions`
+- **Snapshots and observers**: `terminal_get_state` / `terminal_free_state`, `terminal_add_observer` / `terminal_remove_observer`
 
 ### Optional Components
 

@@ -157,8 +157,12 @@ pub struct Grid {
     zones: Vec<Zone>,              // Semantic zones
     evicted_zones: Vec<Zone>,      // Zones evicted from scrollback
     total_lines_scrolled: usize,   // Lifetime scroll count
+    row_gen: Vec<u64>,             // Per-row damage generation (ENH-025)
+    gen: u64,                      // Monotonic damage counter
 }
 ```
+
+**Damage tracking (ENH-025).** The grid owns damage. Every mutator stamps the rows it changes with a fresh value from the grid's monotonic `gen` counter (`row_gen`), so a mutation cannot forget to mark damage. A consumer remembers `damage_generation()` and asks `dirty_rows_since(gen)`, and independent consumers never clear each other's damage. The built-in consumer behind `get_dirty_rows`/`mark_clean` keeps its own generation in `Terminal.default_consumer_gen`. The C equivalents are described in [FFI_GUIDE.md](FFI_GUIDE.md#per-consumer-damage).
 
 ### 5. Terminal
 
@@ -230,16 +234,19 @@ The main terminal emulator that ties everything together, organized into submodu
 
 **Triggers & Automation** (`src/terminal/trigger.rs`)
 - Regex-based pattern matching on terminal output
-
-**Multiplexer Daemon** (`src/mux/`, binary `src/bin/par_mux/`; Rust `mux` feature)
-- A tmux-control-mode multiplexer: owns PTY-backed panes in a session/window/pane tree and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
-- Key submodules: `server.rs` (accept loop, client threads), `dispatch.rs` (per-command handlers), `command.rs` (parsing + the persistence rule), `emit.rs` (wire lines), `tree.rs`/`layout.rs` (tree + split geometry), `pane.rs` (PTY panes + env contract), `ipc.rs` (Unix socket / Windows named pipe transport), `persist.rs` (save format, quarantine, restore), `hooks.rs`/`scrape.rs`/`agent_resume.rs` (agent layer), `client.rs` (`MuxClient`)
-- Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments are summarized in [MUX_DECISIONS.md](MUX_DECISIONS.md) (full plan: [par-mux.md](par-mux.md))
 - `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching
 - Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
 - Capture group substitution (`$1`, `$2`, etc.) in action parameters
 - Highlight overlays with optional expiry
 - Character-to-grid-column mapping for accurate match positions with wide/combining characters
+
+**Terminal Services** (`src/terminal/macros.rs`, `src/terminal/trigger.rs`, `src/terminal/benchmarks.rs`)
+- `MacroEngine`, `TriggerEngine` and `TerminalBenchmarks` are stateless services over a borrowed `Terminal`; they replaced the `Terminal` forwarding methods removed in 0.55.0 and 0.56.0
+
+**Multiplexer Daemon** (`src/mux/`, binary `src/bin/par_mux/`; Rust `mux` feature)
+- A tmux-control-mode multiplexer: owns PTY-backed panes in a session/window/pane tree and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
+- Key submodules: `server.rs` (accept loop, client threads), `dispatch.rs` (per-command handlers), `command.rs` (parsing + the persistence rule), `emit.rs` (wire lines), `tree.rs`/`layout.rs` (tree + split geometry), `pane.rs` (PTY panes + env contract), `ipc.rs` (Unix socket / Windows named pipe transport), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `win_resume.rs` (Windows resume transport), `persist.rs` (save format, quarantine, restore), `hooks.rs`/`scrape.rs`/`agent_resume.rs` (agent layer), `client.rs` (`MuxClient`)
+- Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments are summarized in [MUX_DECISIONS.md](MUX_DECISIONS.md) (full plan: [par-mux.md](par-mux.md))
 
 **Coprocess Management** (`src/coprocess.rs`)
 - `CoprocessManager` for spawning and managing external processes alongside terminal sessions
@@ -261,6 +268,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `config.rs` - `StreamingConfig` and TLS/auth configuration (split out of `server.rs` by ARC-004)
   - `session.rs` - Multi-session lifecycle management and idle-session reaping (ARC-004)
   - `rate_limit.rs` - Per-session input rate limiting (ARC-004)
+  - `mux_factory.rs` - `MuxSessionFactory`: streaming sessions that mirror a par-mux pane (`--mux-socket`; needs `streaming` + `mux`)
   - `client.rs` - Client connection management
   - `protocol.rs` - Streaming protocol definitions (app-level): 37 server message types, 11 client message types, 26 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
@@ -274,8 +282,9 @@ The main terminal emulator that ties everything together, organized into submodu
 - **Standalone server binary** (`src/bin/streaming_server/`, requires `streaming-bin`): `main.rs` (entry point), `cli.rs` (arg parsing/env overrides), `frontend_download.rs` (release-asset download + extraction), `bootstrap.rs` (PTY/terminal wiring and session bootstrap), `theme.rs` (theme file loading)
 
 **Utility Modules**
+- `keyboard.rs` - Shared key-event encoder (xterm legacy, kitty level 1, modifyOtherKeys, macOS Option-key modes) behind the FFI `terminal_encode_key*` functions and Python `Terminal.encode_key`
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
-- `ffi.rs` - C-compatible embedding API: `#[repr(C)]` types and `extern "C"` functions for creating, querying, and observing terminals from Swift, Kotlin/JNI, C/C++ (see [FFI_GUIDE.md](FFI_GUIDE.md))
+- `ffi.rs` - C-compatible embedding API: `#[repr(C)]` types and `extern "C"` functions for creating, querying, and observing terminals from Swift, Kotlin/JNI, C/C++; the header is generated by cbindgen (`make ffi-header`) and drift-gated in `checkall` (see [FFI_GUIDE.md](FFI_GUIDE.md))
 - `observer.rs` - Rust `TerminalObserver` trait for push-based event delivery; callbacks fire after each `process()` call with no internal locks held
 - `unicode_width_config.rs` - Configurable character width: Unicode version selection for width tables and East Asian Ambiguous width treatment
 - `unicode_normalization_config.rs` - Configurable Unicode normalization (NFC/NFD/NFKC/NFKD) applied to PTY text before cell storage, keeping search and cursor movement consistent
@@ -364,7 +373,7 @@ pub struct Terminal {
     conformance_level: ConformanceLevel,
     warning_bell_volume: u8,
     margin_bell_volume: u8,
-    dirty_rows: HashSet<usize>,
+    default_consumer_gen: u64,        // Damage generation seen by the built-in get_dirty_rows/mark_clean consumer
     selection: Option<Selection>,
     event_subscription: Option<HashSet<TerminalEventKind>>,
 
@@ -810,7 +819,7 @@ The implementation automatically:
 
 ```mermaid
 graph TD
-    A[Terminal.screenshot]
+    A["screenshot::render_terminal"]
     B[Create Renderer<br/>FontCache + TextShaper + Config]
     C[For each grid row]
     D{Contains Regional<br/>Indicators?}
