@@ -329,6 +329,33 @@ impl<'a> Drop for GlobalClientGuard<'a> {
 }
 
 // =============================================================================
+// Client-message dispatch inputs
+// =============================================================================
+
+/// The per-connection identity every client-message handler reads: the
+/// transport name and client id for logs, and whether the client may
+/// write.
+#[derive(Debug, Clone, Copy)]
+struct ConnCtx<'a> {
+    transport_label: &'a str,
+    client_id: uuid::Uuid,
+    read_only: bool,
+}
+
+/// The fields of a decoded `ClientMessage::Mouse` that
+/// [`StreamingServer::handle_mouse`] turns into a mouse report.
+#[derive(Debug, Clone, Copy)]
+struct MouseInput {
+    col: u16,
+    row: u16,
+    button: u8,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    event_type: crate::streaming::protocol::MouseEventType,
+}
+
+// =============================================================================
 // WebSocket transports
 // =============================================================================
 
@@ -1325,23 +1352,26 @@ impl StreamingServer {
     /// Mouse/FocusChange/Paste/SelectionRequest/ClipboardRequest via a
     /// `_ => {}` wildcard.)
     ///
+    /// `ctx` is the connection's identity and write permission.
     /// `subscriptions` and `rate_limiter` are the caller's per-connection
     /// state, mutated in place. Returns the direct replies to send back to
     /// this client; messages that only write to the PTY or broadcast to the
     /// session produce no direct reply.
-    #[allow(clippy::too_many_arguments)]
     fn handle_client_message(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
-        transport_label: &str,
-        client_id: uuid::Uuid,
-        read_only: bool,
+        ctx: ConnCtx<'_>,
         subscriptions: &mut Option<
             std::collections::HashSet<crate::streaming::protocol::EventType>,
         >,
         rate_limiter: &mut Option<InputRateLimiter>,
         msg: crate::streaming::protocol::ClientMessage,
     ) -> Vec<ServerMessage> {
+        let ConnCtx {
+            transport_label,
+            client_id,
+            read_only,
+        } = ctx;
         // Input on a session whose PTY writer is detached (never attached,
         // or detached by shutdown) has nowhere to go: it is dropped, logged
         // and counted in dropped_messages, and the connection stays open.
@@ -1406,7 +1436,17 @@ impl StreamingServer {
                 event_type,
             } => {
                 Self::handle_mouse(
-                    session, read_only, col, row, button, shift, ctrl, alt, event_type,
+                    session,
+                    read_only,
+                    MouseInput {
+                        col,
+                        row,
+                        button,
+                        shift,
+                        ctrl,
+                        alt,
+                        event_type,
+                    },
                 );
             }
             crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
@@ -1431,13 +1471,9 @@ impl StreamingServer {
             } => {
                 self.handle_selection_request(
                     session,
-                    transport_label,
-                    client_id,
-                    read_only,
-                    start_col,
-                    start_row,
-                    end_col,
-                    end_row,
+                    ctx,
+                    (start_col, start_row),
+                    (end_col, end_row),
                     mode,
                 );
             }
@@ -1446,15 +1482,9 @@ impl StreamingServer {
                 content,
                 target,
             } => {
-                replies.extend(self.handle_clipboard_request(
-                    session,
-                    transport_label,
-                    client_id,
-                    read_only,
-                    operation,
-                    content,
-                    target,
-                ));
+                replies.extend(
+                    self.handle_clipboard_request(session, ctx, operation, content, target),
+                );
             }
             crate::streaming::protocol::ClientMessage::SnapshotRequest {
                 scope,
@@ -1597,18 +1627,16 @@ impl StreamingServer {
 
     /// `Mouse`: translate the event into a mouse-report escape sequence and
     /// send it through the shared input path.
-    #[allow(clippy::too_many_arguments)]
-    fn handle_mouse(
-        session: &Arc<StreamSessionState>,
-        read_only: bool,
-        col: u16,
-        row: u16,
-        button: u8,
-        shift: bool,
-        ctrl: bool,
-        alt: bool,
-        event_type: crate::streaming::protocol::MouseEventType,
-    ) {
+    fn handle_mouse(session: &Arc<StreamSessionState>, read_only: bool, input: MouseInput) {
+        let MouseInput {
+            col,
+            row,
+            button,
+            shift,
+            ctrl,
+            alt,
+            event_type,
+        } = input;
         if read_only {
             return;
         }
@@ -1764,19 +1792,21 @@ impl StreamingServer {
 
     /// `SelectionRequest`: apply the selection to the terminal and broadcast
     /// the resulting selection change to the session (no direct reply).
-    #[allow(clippy::too_many_arguments)]
+    /// `start` and `end` are `(col, row)` cell positions.
     fn handle_selection_request(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
-        transport_label: &str,
-        client_id: uuid::Uuid,
-        read_only: bool,
-        start_col: u16,
-        start_row: u16,
-        end_col: u16,
-        end_row: u16,
+        ctx: ConnCtx<'_>,
+        start: (u16, u16),
+        end: (u16, u16),
         mode: String,
     ) {
+        let ConnCtx {
+            transport_label,
+            client_id,
+            read_only,
+        } = ctx;
+        let ((start_col, start_row), (end_col, end_row)) = (start, end);
         if read_only {
             return;
         }
@@ -1869,17 +1899,19 @@ impl StreamingServer {
     /// `ClipboardRequest`: "set" stores the text and broadcasts the sync to
     /// the session; "get" replies with the clipboard contents when reads
     /// are allowed.
-    #[allow(clippy::too_many_arguments)]
     fn handle_clipboard_request(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
-        transport_label: &str,
-        client_id: uuid::Uuid,
-        read_only: bool,
+        ctx: ConnCtx<'_>,
         operation: String,
         content: Option<String>,
         target: Option<String>,
     ) -> Vec<ServerMessage> {
+        let ConnCtx {
+            transport_label,
+            client_id,
+            read_only,
+        } = ctx;
         let mut replies = Vec::new();
         if read_only {
             return replies;
@@ -1992,9 +2024,11 @@ impl StreamingServer {
                         Some(client_msg) => {
                             let replies = self.handle_client_message(
                                 &session,
-                                transport_label,
-                                client_id,
-                                read_only,
+                                ConnCtx {
+                                    transport_label,
+                                    client_id,
+                                    read_only,
+                                },
                                 &mut subscriptions,
                                 &mut rate_limiter,
                                 client_msg,
@@ -2126,6 +2160,8 @@ impl StreamingServer {
     }
 
     /// Send a trigger matched event to all clients
+    // Public API mirroring `ServerMessage::trigger_matched`; a parameter
+    // struct would break embedders.
     #[allow(clippy::too_many_arguments)]
     pub fn send_trigger_matched(
         &self,
@@ -3270,9 +3306,11 @@ mod tests {
         let dispatch = |read_only: bool, msg: ClientMessage| {
             server.handle_client_message(
                 &session,
-                "ws-test",
-                uuid::Uuid::new_v4(),
-                read_only,
+                super::ConnCtx {
+                    transport_label: "ws-test",
+                    client_id: uuid::Uuid::new_v4(),
+                    read_only,
+                },
                 &mut None,
                 &mut None,
                 msg,

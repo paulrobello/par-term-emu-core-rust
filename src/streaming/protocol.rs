@@ -1185,6 +1185,8 @@ impl ServerMessage {
     }
 
     /// Create a fully-specified connected message with all terminal state
+    #[deprecated(note = "use connected_builder()")]
+    // Deprecated public API kept for embedders; `ConnectedBuilder` replaces it.
     #[allow(clippy::too_many_arguments)]
     pub fn connected_full(
         cols: u16,
@@ -1391,7 +1393,6 @@ impl ServerMessage {
     }
 
     /// Create a selection changed message
-    #[allow(clippy::too_many_arguments)]
     pub fn selection_changed(
         start_col: Option<u16>,
         start_row: Option<u16>,
@@ -1452,6 +1453,8 @@ impl ServerMessage {
     }
 
     /// Create a system stats message
+    // Public API, one argument per `SystemStats` field; a parameter struct
+    // would break embedders.
     #[allow(clippy::too_many_arguments)]
     pub fn system_stats(
         cpu: Option<CpuStats>,
@@ -1644,7 +1647,6 @@ impl ClientMessage {
     }
 
     /// Create a mouse input message
-    #[allow(clippy::too_many_arguments)]
     pub fn mouse(
         col: u16,
         row: u16,
@@ -1901,6 +1903,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_connected_full_serialization() {
         let msg = ServerMessage::connected_full(
             120,

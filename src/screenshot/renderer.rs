@@ -11,6 +11,16 @@ use super::font_cache::{BitmapFormat, FontCache};
 use super::shaper::{ShapedGlyphWithFont, TextShaper};
 use super::utils::{blend_grayscale_pixel, blend_rgba_pixel};
 
+/// Where and how one glyph is drawn: the cell's top-left pixel, the
+/// foreground color, and whether the faux-bold pass runs.
+#[derive(Debug, Clone, Copy)]
+struct GlyphDraw {
+    x: u32,
+    y: u32,
+    fg: (u8, u8, u8),
+    bold: bool,
+}
+
 /// Screenshot renderer
 pub struct Renderer {
     config: ScreenshotConfig,
@@ -166,11 +176,13 @@ impl Renderer {
             self.render_char(
                 image,
                 cell.c,
-                x,
-                y,
-                fg,
+                GlyphDraw {
+                    x,
+                    y,
+                    fg,
+                    bold: cell.flags.bold(),
+                },
                 bg,
-                cell.flags.bold(),
                 cell.flags.italic(),
             )?;
         }
@@ -400,18 +412,15 @@ impl Renderer {
     }
 
     /// Render a character
-    #[allow(clippy::too_many_arguments)]
     fn render_char(
         &mut self,
         image: &mut RgbaImage,
         c: char,
-        x: u32,
-        y: u32,
-        fg: (u8, u8, u8),
+        draw: GlyphDraw,
         bg: (u8, u8, u8),
-        bold: bool,
         italic: bool,
     ) -> ScreenshotResult<()> {
+        let GlyphDraw { x, y, fg, bold } = draw;
         // Get all needed values from font_cache first to avoid multiple mutable borrows
         // For block-drawing characters, render them as filled rectangles for pixel-perfect rendering
         // Font glyphs often have spacing/bearing that causes gaps
@@ -674,7 +683,17 @@ impl Renderer {
                 let (fg, _) = self.resolve_colors(cell);
 
                 // Render the shaped glyph
-                self.render_shaped_glyph(image, shaped, x, y, fg, cell.flags.bold(), cell.c)?;
+                self.render_shaped_glyph(
+                    image,
+                    shaped,
+                    GlyphDraw {
+                        x,
+                        y,
+                        fg,
+                        bold: cell.flags.bold(),
+                    },
+                    cell.c,
+                )?;
             }
         }
 
@@ -682,17 +701,14 @@ impl Renderer {
     }
 
     /// Render a shaped glyph
-    #[allow(clippy::too_many_arguments)]
     fn render_shaped_glyph(
         &mut self,
         image: &mut RgbaImage,
         shaped: &ShapedGlyphWithFont,
-        x: u32,
-        y: u32,
-        fg: (u8, u8, u8),
-        bold: bool,
+        draw: GlyphDraw,
         c: char,
     ) -> ScreenshotResult<()> {
+        let GlyphDraw { x, y, fg, bold } = draw;
         // Get the glyph bitmap from the font cache by glyph ID
         let glyph =
             match self
@@ -1031,7 +1047,18 @@ impl Renderer {
                 self.render_background(image, x, y, bottom_rgb);
 
                 // Then render the half-block character with foreground (top color)
-                self.render_char(image, '▀', x, y, top_rgb, bottom_rgb, false, false)?;
+                self.render_char(
+                    image,
+                    '▀',
+                    GlyphDraw {
+                        x,
+                        y,
+                        fg: top_rgb,
+                        bold: false,
+                    },
+                    bottom_rgb,
+                    false,
+                )?;
             }
         }
 

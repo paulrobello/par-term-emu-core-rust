@@ -323,19 +323,31 @@ pub(crate) fn pixel_at_in(
 /// `#[allow(clippy::type_complexity)]`).
 pub(crate) type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
 
+/// An RGBA pixel buffer and the terminal cell its top-left corner sits in:
+/// the graphic side of [`sample_half_block_in`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PlacedPixels<'a> {
+    pub(crate) pixels: &'a [u8],
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) position: (usize, usize),
+}
+
 /// Half-block sampling shared by `TerminalGraphic` and the Python
 /// `Graphic` binding (QA-009).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn sample_half_block_in(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    position: (usize, usize),
+    graphic: PlacedPixels<'_>,
     cell_col: usize,
     cell_row: usize,
     cell_width: u32,
     cell_height: u32,
 ) -> Option<HalfBlockColors> {
+    let PlacedPixels {
+        pixels,
+        width,
+        height,
+        position,
+    } = graphic;
     let rel_col = cell_col.checked_sub(position.0)?;
     let rel_row = cell_row.checked_sub(position.1)?;
 
@@ -526,10 +538,12 @@ impl TerminalGraphic {
         cell_height: u32,
     ) -> Option<HalfBlockColors> {
         sample_half_block_in(
-            &self.pixels,
-            self.width,
-            self.height,
-            self.position,
+            PlacedPixels {
+                pixels: &self.pixels,
+                width: self.width,
+                height: self.height,
+                position: self.position,
+            },
             cell_col,
             cell_row,
             cell_width,

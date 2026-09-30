@@ -274,6 +274,7 @@ impl PyTerminal {
     ///     term = Terminal(80, 24)
     ///     term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
     ///     ```
+    // Python positional arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
     fn add_rendering_hint(
         &mut self,
