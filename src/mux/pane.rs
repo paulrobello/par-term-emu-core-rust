@@ -351,8 +351,9 @@ impl MuxPane {
 
     /// Record the death this pane's process has already been observed to
     /// reach ([`Self::poll_running`] returned false), capturing the exit
-    /// code while the child handle can still be asked. Best-effort: a
-    /// child that died by signal or was reaped earlier records `None`.
+    /// code while the child handle can still be asked. An earlier reap
+    /// serves its recorded code (SEC-125). Best-effort: a code the OS
+    /// could not report records `None`.
     pub fn mark_dead(&mut self) {
         self.dead = true;
         self.exit_code = self.session.try_wait().ok().flatten();
@@ -1225,5 +1226,38 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
+    }
+
+    /// SEC-125: a held (remain-on-exit) pane keeps its frozen screen but
+    /// not its reaped child's PID, so `pane-info cmd=`, the host probe,
+    /// scrape liveness and respawn's cwd fallback cannot reach a PID the OS
+    /// may have handed to another process.
+    #[test]
+    fn a_held_dead_pane_serves_no_child_pid() {
+        let mut pane = ShellPaneFactory::default()
+            .create_pane(PaneId(20), 80, 24, Some("exit 3"), &SpawnContext::default())
+            .expect("pane should spawn");
+        // The reader's EOF can flip `poll_running` before the child is a
+        // reapable zombie, so re-run the reaper's step until the code lands.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if !pane.poll_running() {
+                pane.mark_dead();
+                if pane.exit_code().is_some() {
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pane's child was never reaped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(pane.dead());
+        assert_eq!(pane.exit_code(), Some(3));
+        assert!(pane.child_pid().is_none(), "a reaped PID is not served");
+        assert!(pane.persistence_cwd().is_none(), "no OSC 7, no live child");
+        assert!(pane.snapshot_capture_parts().probe_cwd().is_none());
+        assert!(pane.kill().is_ok(), "killing a held pane signals nothing");
     }
 }

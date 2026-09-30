@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **FFI `terminal_scrollback_total_scrolled`**: total lines ever pushed into scrollback, so an embedder mirroring the scrollback window (ParDeck's history view) derives head evictions and tail appends from the `total`/`count` pair instead of re-reading the whole buffer — the count alone freezes at the ring cap. Pinned by `ffi_scrollback_total_scrolled_tracks_the_window` (invariant `count == min(total, cap)`, cap freeze, alt-screen active-grid reads, ED 3J reset). Note for ENH-038: this counter is a window cursor, not a scroll-damage source — the four failure modes listed there are exactly why.
 
+### Security
+- **A reaped child's PID is never signalled again** (audit SEC-125; `src/pty_session.rs`). A held (remain-on-exit) par-mux pane, or a Python `PtyTerminal` after `try_wait()`, kept its reaped child's PID. Later `kill-pane`/`respawn-pane -k` SIGHUPed it through portable-pty's raw `kill(2)`, and every resize sent SIGWINCH to it and its process group. Once the OS recycled the PID, a same-user process could be terminated. `PtySession` now records the exit under a lock the first time `try_wait`/`wait`/`kill` (or a respawn's cleanup) reaps the child. Every signal path, including the reader thread's alt-screen pulse, checks that record while holding it. As a result, `pane-info cmd=`, the host probe, scrape agent liveness and respawn's cwd fallback no longer read a released PID. **Behavior change:** `PtySession::child_pid()` / Python `child_pid()` return `None` once the exit has been observed. `kill()` after the exit returns `Ok`/`None` instead of raising `OSError` (ESRCH).
+
 ## [0.57.0] - 2026-09-29
 
 ### Added

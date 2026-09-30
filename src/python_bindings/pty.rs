@@ -241,7 +241,9 @@ impl PyPtyTerminal {
     /// Return the PID of the spawned child process.
     ///
     /// Returns:
-    ///     PID as an integer, or None if no process has been spawned yet.
+    ///     PID as an integer. None before spawn, and after try_wait(),
+    ///     wait() or kill() has observed the exit: the PID is released and
+    ///     may belong to another process.
     ///
     /// Example:
     ///     >>> session = PtySession(80, 24)
@@ -281,6 +283,9 @@ impl PyPtyTerminal {
     }
 
     /// Kill the process
+    ///
+    /// A no-op once the exit has been observed (try_wait(), wait() or an
+    /// earlier kill()): the reaped PID may belong to another process.
     fn kill(&mut self) -> PyResult<()> {
         self.inner.kill()?;
         Ok(())
