@@ -1018,6 +1018,43 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     parse(&a)
 }
 
+/// tmux's value-taking `new-session` flags, so a tmux-shaped sender's
+/// `-x 80` is not misread as a start command (QA-219).
+const NEW_SESSION_VALUE_FLAGS: &[&str] = &["-s", "-e", "-c", "-n", "-t", "-x", "-y", "-F", "-f"];
+/// tmux's value-taking `new-window` flags (QA-219).
+const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e", "-F"];
+
+/// Reject the first positional word of a command that takes none (QA-219):
+/// `new-window sleep 5` used to succeed and silently drop `sleep 5`.
+/// Words are read with [`next_shell_word`], so a quoted value stays one
+/// word; a word in `value_flags` also consumes the next word (absent is
+/// fine — the flag parsers report that). Any other `-x` word is tolerated
+/// as a bare flag, as before. Everything after `--` is positional.
+fn reject_positionals(a: &Args<'_>, value_flags: &[&str]) -> Result<(), String> {
+    let rest = a.line.trim_start().strip_prefix(a.name).unwrap_or_default();
+    let mut pos = a.line.len() - rest.len();
+    let mut after_dashes = false;
+    while let Some((_, end, word)) = next_shell_word(a.line, pos) {
+        pos = end;
+        if !after_dashes && word == "--" {
+            after_dashes = true;
+            continue;
+        }
+        if after_dashes || !(word.len() > 1 && word.starts_with('-')) {
+            return Err(format!(
+                "{}: unexpected argument {word:?}: a start command is not supported; use respawn-pane",
+                a.name
+            ));
+        }
+        if value_flags.contains(&word.as_str()) {
+            if let Some((_, value_end, _)) = next_shell_word(a.line, pos) {
+                pos = value_end;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     let env = a
         .quoted_values("-e")
@@ -1030,10 +1067,9 @@ fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
             Ok((name.to_string(), value.to_string()))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(MuxCommand::NewSession {
-        name: a.quoted_flag("-s")?,
-        env,
-    })
+    let name = a.quoted_flag("-s")?;
+    reject_positionals(a, NEW_SESSION_VALUE_FLAGS)?;
+    Ok(MuxCommand::NewSession { name, env })
 }
 
 /// Reject a variable name no environment can hold: empty, or containing
@@ -1128,10 +1164,14 @@ fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a.session("-t")?;
+    let name = a.quoted_flag("-n")?;
+    let start_dir = a.quoted_flag("-c")?;
+    reject_positionals(a, NEW_WINDOW_VALUE_FLAGS)?;
     Ok(MuxCommand::NewWindow {
-        session: a.session("-t")?,
-        name: a.quoted_flag("-n")?,
-        start_dir: a.quoted_flag("-c")?,
+        session,
+        name,
+        start_dir,
     })
 }
 
@@ -1937,6 +1977,46 @@ mod tests {
     #[test]
     fn rejects_an_unknown_command() {
         assert!(parse_command("frobnicate").is_err());
+    }
+
+    /// QA-219: a trailing command was silently dropped; it is now an error
+    /// pointing at respawn-pane.
+    #[test]
+    fn new_window_rejects_a_trailing_command() {
+        for line in [
+            "new-window sleep 5",
+            "new-window -n w sleep 5",
+            "new-window -t $0 -- top",
+        ] {
+            let err = parse_command(line).expect_err(line);
+            assert!(err.contains("unexpected argument"), "{line}: {err}");
+            assert!(err.contains("respawn-pane"), "{line}: {err}");
+        }
+    }
+
+    #[test]
+    fn new_session_rejects_a_trailing_command() {
+        let err = parse_command("new-session -s a top").expect_err("positional");
+        assert!(err.contains("unexpected argument \"top\""), "{err}");
+    }
+
+    /// QA-219: tmux's value flags consume their value, so a tmux-shaped
+    /// sender is not misread; quoted values stay one word.
+    #[test]
+    fn new_session_accepts_tmux_value_flags() {
+        for line in [
+            "new-session -s a -x 80 -y 24 -d",
+            "new-session -d -s 'a'\\''; kill-server; '\\'''",
+            "new-session -s work -e A=1 -e 'B=two words'",
+            "new-window -t $0 -n 'build and test' -c '/tmp/my dir'",
+            "new-window -a -d -t alpha -n logs",
+        ] {
+            assert!(
+                parse_command(line).is_ok(),
+                "{line}: {:?}",
+                parse_command(line)
+            );
+        }
     }
 
     /// ARC-094: every `COMMANDS` row is reachable. A bare name may be a

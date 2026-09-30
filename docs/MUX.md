@@ -160,8 +160,8 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|
-| `new-session` | `[-s name] [-e NAME=VALUE]…` | The session id (`$N`) | `%window-add` per window, `%sessions-changed`; `%session-changed` to the issuer |
-| `new-window` | `[-t <session>] [-n name] [-c dir]` | The window id (`@N`) | `%window-add` |
+| `new-session` | `[-s name] [-e NAME=VALUE]…` (no start command) | The session id (`$N`) | `%window-add` per window, `%sessions-changed`; `%session-changed` to the issuer |
+| `new-window` | `[-t <session>] [-n name] [-c dir]` (no start command) | The window id (`@N`) | `%window-add` |
 | `select-window` | `-t <window>` | empty | `%window-pane-changed` |
 | `kill-window` | `-t <window>` | empty | `%window-close`; `%sessions-changed` when it emptied the session |
 | `rename-window` | `-t <window> <name>` | empty | `%window-renamed` |
@@ -197,6 +197,7 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 Details worth knowing:
 
 - **Bare `new-window`** targets the most-recently-created session (ids are monotonic). par-mux has no client-session attachment, so "newest" is the documented stand-in for tmux's attached-session resolution.
+- **`new-session` and `new-window` take no start command**: a trailing word (`new-window sleep 5`) is an error, not silently dropped. Start the pane's program with `respawn-pane -t %N [-k] <command>`. tmux's other value flags (`-x 80`, `-y 24`, `-F fmt`, …) and bare flags (`-d`, `-a`, …) are tolerated and ignored.
 - **`version` exists for stale-daemon detection**: the daemon outlives its clients, so an old daemon silently serves new clients. A client compares the reply against its own linked core's `mux::build_stamp()`; differing stamps mean the daemon predates the client's build. Outside a repository both sides carry a content digest of the crate source, so same-version drift is still comparable; only a build with neither identity (`+unknown`) degrades to version-only comparison — a same-version mismatch is then unprovable and clients stay quiet rather than cry wolf.
 - **`split-window` flags name the arrangement, not the divider**: `-h` puts the new pane beside the target, `-v`/default below it. `-p` is the percent of the split area given to the **new** pane (default 50; the target keeps the remainder). `-b` places the new pane **before** the target — left of it under `-h`, above it in the default direction — keeping exactly its `-p` share.
 - **`split-window -c dir` and `new-window -c dir`** start the new pane in `dir` instead of the daemon-wide default. A `dir` that does not exist degrades to home rather than failing the command — the same rule a restore applies to a gone persisted cwd — and the new pane's screen says so (`par-mux: <dir> is gone; pane started in <home>`).
