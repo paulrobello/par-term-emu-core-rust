@@ -2433,14 +2433,23 @@ term = Terminal(80, 24)
 # 1. Capture a snapshot (typically done periodically or on interesting events)
 snapshot = term.capture_replay_snapshot()
 print(f"Captured state at {snapshot['timestamp']}")
+```
 
-# 2. In Rust (feature available via FFI/Rust API):
-# The Rust API provides a `SnapshotManager` and `ReplaySession` for
-# navigating history and reconstructing the terminal state.
-#
-# let mut replay = term.begin_replay_session();
-# replay.seek_to_timestamp(target_time);
-# let restored_term = replay.current_state();
+Timeline navigation is a Rust API (`SnapshotManager` and `ReplaySession`); see [INSTANT_REPLAY.md](INSTANT_REPLAY.md) for the full reference:
+
+```rust
+use par_term_emu_core_rust::terminal::replay::ReplaySession;
+use par_term_emu_core_rust::terminal::snapshot_manager::SnapshotManager;
+
+let mut manager = SnapshotManager::with_defaults();
+manager.take_snapshot(&term);
+// after each term.process(bytes):
+manager.record_input(bytes);
+
+if let Some(mut replay) = ReplaySession::new(&manager) {
+    replay.seek_to_timestamp(target_unix_ms);
+    let restored = replay.current_frame(); // &Terminal at that point in time
+}
 ```
 
 Instant Replay is primarily designed for integration into the Rust-based streaming server or native applications, allowing users to scroll back in time through the visual history of their session.
