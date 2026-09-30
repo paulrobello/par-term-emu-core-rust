@@ -13,9 +13,16 @@
 
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
-    ClientMessage as AppClientMessage, CpuStats as AppCpuStats, DiskStats as AppDiskStats,
-    EventType as AppEventType, LoadAverage as AppLoadAverage, MemoryStats as AppMemoryStats,
-    MouseEventType, NetworkInterfaceStats as AppNetworkInterfaceStats,
+    AgentEntry as AppAgentEntry,
+    ClientMessage as AppClientMessage,
+    CpuStats as AppCpuStats,
+    DiskStats as AppDiskStats,
+    EventType as AppEventType,
+    LoadAverage as AppLoadAverage,
+    MemoryStats as AppMemoryStats,
+    MouseEventType,
+    NetworkInterfaceStats as AppNetworkInterfaceStats,
+
     ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
 };
 use flate2::read::ZlibDecoder;
@@ -186,6 +193,30 @@ impl From<&AppThemeInfo> for pb::ThemeInfo {
                     b: c.2 as u32,
                 })
                 .collect(),
+        }
+    }
+}
+
+impl From<&AppAgentEntry> for pb::AgentEntry {
+    fn from(e: &AppAgentEntry) -> Self {
+        Self {
+            pane_id: e.pane_id,
+            agent: e.agent.clone(),
+            state: e.state.clone(),
+            source: e.source.clone(),
+            reason: e.reason.clone(),
+        }
+    }
+}
+
+impl From<pb::AgentEntry> for AppAgentEntry {
+    fn from(e: pb::AgentEntry) -> Self {
+        Self {
+            pane_id: e.pane_id,
+            agent: e.agent,
+            state: e.state,
+            source: e.source,
+            reason: e.reason,
         }
     }
 }
@@ -556,6 +587,17 @@ impl From<&AppServerMessage> for pb::ServerMessage {
             AppServerMessage::UploadRequested { format } => {
                 Some(Message::UploadRequested(pb::UploadRequested {
                     format: format.clone(),
+                }))
+            }
+            AppServerMessage::AgentRoster { agents } => {
+                Some(Message::AgentRoster(pb::AgentRoster {
+                    agents: agents.iter().map(Into::into).collect(),
+                }))
+            }
+            AppServerMessage::AgentStateChanged { agent, released } => {
+                Some(Message::AgentStateChanged(pb::AgentStateChanged {
+                    agent: Some(agent.into()),
+                    released: *released,
                 }))
             }
             AppServerMessage::ScreenCleared { include_scrollback } => {
@@ -995,6 +1037,13 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::ScreenCleared(sc)) => Ok(AppServerMessage::ScreenCleared {
                 include_scrollback: sc.include_scrollback,
             }),
+            Some(Message::AgentRoster(roster)) => Ok(AppServerMessage::AgentRoster {
+                agents: roster.agents.into_iter().map(Into::into).collect(),
+            }),
+            Some(Message::AgentStateChanged(change)) => Ok(AppServerMessage::AgentStateChanged {
+                agent: change.agent.map(Into::into).unwrap_or_default(),
+                released: change.released,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -1297,6 +1346,36 @@ mod tests {
             panic!("Wrong message type");
         };
         assert_eq!(reason, "Server maintenance");
+    }
+
+    #[test]
+    fn test_roster_messages_round_trip() {
+        let entry = AppAgentEntry {
+            pane_id: 12,
+            agent: "claude-code".into(),
+            state: "blocked".into(),
+            source: "hook".into(),
+            reason: "needs input".into(),
+        };
+        let roster = AppServerMessage::AgentRoster {
+            agents: vec![entry.clone()],
+        };
+        let decoded = decode_server_message(&encode_server_message(&roster).unwrap()).unwrap();
+        let AppServerMessage::AgentRoster { agents } = decoded else {
+            panic!("expected roster");
+        };
+        assert_eq!(agents, vec![entry.clone()]);
+
+        let delta = AppServerMessage::AgentStateChanged {
+            agent: entry.clone(),
+            released: true,
+        };
+        let decoded = decode_server_message(&encode_server_message(&delta).unwrap()).unwrap();
+        let AppServerMessage::AgentStateChanged { agent, released } = decoded else {
+            panic!("expected delta");
+        };
+        assert_eq!(agent, entry);
+        assert!(released);
     }
 
     #[test]

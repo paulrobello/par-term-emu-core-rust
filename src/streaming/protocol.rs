@@ -743,6 +743,52 @@ pub enum ServerMessage {
         /// Whether scrollback was also cleared (ED 3J vs ED 2J)
         include_scrollback: bool,
     },
+
+    /// Full par-mux agent roster snapshot (pane-id ascending). Sent once per
+    /// client connect and again after the roster watcher reconnects.
+    #[serde(rename = "agent_roster")]
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(
+            to = "crate::streaming::py_convert::agent_roster_to_py_dict",
+            from = "crate::streaming::py_convert::agent_roster_from"
+        )
+    )]
+    AgentRoster {
+        /// Every roster entry
+        agents: Vec<AgentEntry>,
+    },
+
+    /// One roster delta: upsert `agent`, or remove its pane when `released`.
+    #[serde(rename = "agent_state_changed")]
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(
+            to = "crate::streaming::py_convert::agent_state_changed_to_py_dict",
+            from = "crate::streaming::py_convert::agent_state_changed_from"
+        )
+    )]
+    AgentStateChanged {
+        /// The changed entry (only `pane_id` is meaningful when released)
+        agent: AgentEntry,
+        /// True when the pane's agent was released or the pane exited
+        released: bool,
+    },
+}
+
+/// One par-mux agent roster entry, verbatim from `list-agents`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentEntry {
+    /// par-mux pane number (`%N`)
+    pub pane_id: u32,
+    /// Agent name
+    pub agent: String,
+    /// par-mux state string (working, blocked, ...)
+    pub state: String,
+    /// `hook`, `scrape`, or empty when the daemon reported no provenance
+    pub source: String,
+    /// Decoded blocked reason, empty when none
+    pub reason: String,
 }
 
 /// Messages sent from client to server

@@ -105,7 +105,7 @@ async fn run_mux_mode(
     theme: Theme,
     args: &Args,
 ) -> anyhow::Result<()> {
-    use par_term_emu_core_rust::streaming::{MuxPaneSelector, MuxSessionFactory};
+    use par_term_emu_core_rust::streaming::{MuxPaneSelector, MuxSessionFactory, RosterWatcher};
     let factory = Arc::new(
         MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId)
             .with_scrollback(args.scrollback),
@@ -118,6 +118,17 @@ async fn run_mux_mode(
     server.set_theme(theme.to_protocol());
     let server = Arc::new(server);
     factory.set_streaming_server(Arc::clone(&server));
+    {
+        let weak = Arc::downgrade(&server);
+        server.set_roster_watcher(Arc::new(RosterWatcher::spawn(
+            socket.clone(),
+            Arc::new(move |msg| {
+                if let Some(server) = weak.upgrade() {
+                    server.broadcast_all(msg);
+                }
+            }),
+        )));
+    }
 
     let path = if args.enable_http { "/ws" } else { "" };
     println!(
