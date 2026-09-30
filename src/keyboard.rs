@@ -498,17 +498,34 @@ pub fn encode_key(ev: &TermKeyEvent, term: &Terminal) -> Vec<u8> {
 /// protocol reports the true codepoint and modifiers and lets the
 /// application decode Alt itself.
 pub fn encode_key_with(ev: &TermKeyEvent, term: &Terminal, opts: &KeyEncodeOptions) -> Vec<u8> {
+    encode_with_modes(
+        ev,
+        term.keyboard_flags(),
+        term.application_cursor(),
+        term.modify_other_keys_mode(),
+        opts,
+    )
+}
+
+/// [`encode_key`] against a freshly reset terminal's input state (legacy
+/// regime, normal cursor keys, no modifyOtherKeys), for callers with no
+/// terminal to consult — `macros::KeyParser::parse_key`.
+pub(crate) fn encode_key_default(ev: &TermKeyEvent) -> Vec<u8> {
+    encode_with_modes(ev, 0, false, 0, &KeyEncodeOptions::default())
+}
+
+fn encode_with_modes(
+    ev: &TermKeyEvent,
+    keyboard_flags: u16,
+    app_cursor: bool,
+    mok: u8,
+    opts: &KeyEncodeOptions,
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(8);
-    if term.keyboard_flags() & 0x1 != 0 {
+    if keyboard_flags & 0x1 != 0 {
         encode_kitty(ev, &mut out);
     } else {
-        encode_legacy(
-            ev,
-            term.application_cursor(),
-            term.modify_other_keys_mode(),
-            opts,
-            &mut out,
-        );
+        encode_legacy(ev, app_cursor, mok, opts, &mut out);
     }
     out
 }

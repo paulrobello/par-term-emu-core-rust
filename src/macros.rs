@@ -28,6 +28,8 @@
 //! # }
 //! ```
 
+use crate::keyboard::{self, modifiers, TermKey, TermKeyEvent};
+use crate::terminal::Terminal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -200,82 +202,94 @@ impl MacroEvent {
     }
 }
 
-/// Key name parser and converter
+/// Key name parser and converter.
+///
+/// Key names resolve to a [`TermKeyEvent`] and are encoded by the shared
+/// key encoder ([`crate::keyboard`]), so macro playback sends the bytes a
+/// real keypress would. Unknown names are sent as their literal bytes.
 pub struct KeyParser;
 
 impl KeyParser {
-    /// Parse a friendly key name into terminal escape sequences
+    /// Parse a friendly key name into the bytes a freshly reset terminal
+    /// expects (legacy xterm encoding, normal cursor keys).
     ///
-    /// Returns the bytes to send to the terminal
+    /// Playback into a live terminal should use [`Self::encode_key`], which
+    /// honors the application's negotiated modes.
     pub fn parse_key(key: &str) -> Vec<u8> {
+        match Self::key_event(key) {
+            Some(ev) => keyboard::encode_key_default(&ev),
+            None => key.as_bytes().to_vec(),
+        }
+    }
+
+    /// Encode a friendly key name against `term`'s negotiated input state:
+    /// application cursor keys (DECCKM), kitty keyboard flags and
+    /// modifyOtherKeys, exactly as [`keyboard::encode_key`] does for a
+    /// frontend keypress.
+    pub fn encode_key(key: &str, term: &Terminal) -> Vec<u8> {
+        match Self::key_event(key) {
+            Some(ev) => keyboard::encode_key(&ev, term),
+            None => key.as_bytes().to_vec(),
+        }
+    }
+
+    /// Resolve `ctrl+`/`alt+`/`shift+` modifiers (case-insensitive) and the
+    /// final key name. `None` means an unknown name, sent literally.
+    fn key_event(key: &str) -> Option<TermKeyEvent> {
         let key_lower = key.to_lowercase();
         let parts: Vec<&str> = key_lower.split('+').collect();
 
-        // Check for modifiers
-        let has_ctrl = parts.contains(&"ctrl");
-        let has_alt = parts.contains(&"alt");
-        let has_shift = parts.contains(&"shift");
+        let mut mods = 0;
+        for (name, bit) in [
+            ("ctrl", modifiers::CTRL),
+            ("alt", modifiers::ALT),
+            ("shift", modifiers::SHIFT),
+        ] {
+            if parts.contains(&name) {
+                mods |= bit;
+            }
+        }
 
-        // Get the main key (last part)
+        // The main key is the last part.
         let main_key = parts.last().copied().unwrap_or("");
 
-        // Single-byte (ASCII) key. Multi-byte characters take the raw-bytes
-        // arm below.
+        // Single-byte (ASCII) key. A multi-byte character is not a key
+        // name, so it is sent as the original bytes.
         if let [byte] = *main_key.as_bytes() {
-            return if has_ctrl && byte.is_ascii_alphabetic() {
-                // Control character (Ctrl+key); key_lower makes it a-z
-                vec![byte - b'a' + 1]
-            } else if has_alt {
-                vec![0x1b, byte]
-            } else {
-                vec![byte]
-            };
+            return Some(TermKeyEvent::char_(char::from(byte), mods));
         }
 
-        // Handle special keys
-        match main_key {
-            // Function keys
-            "f1" => vec![0x1b, b'O', b'P'],
-            "f2" => vec![0x1b, b'O', b'Q'],
-            "f3" => vec![0x1b, b'O', b'R'],
-            "f4" => vec![0x1b, b'O', b'S'],
-            "f5" => vec![0x1b, b'[', b'1', b'5', b'~'],
-            "f6" => vec![0x1b, b'[', b'1', b'7', b'~'],
-            "f7" => vec![0x1b, b'[', b'1', b'8', b'~'],
-            "f8" => vec![0x1b, b'[', b'1', b'9', b'~'],
-            "f9" => vec![0x1b, b'[', b'2', b'0', b'~'],
-            "f10" => vec![0x1b, b'[', b'2', b'1', b'~'],
-            "f11" => vec![0x1b, b'[', b'2', b'3', b'~'],
-            "f12" => vec![0x1b, b'[', b'2', b'4', b'~'],
-
-            // Arrow keys
-            "up" => vec![0x1b, b'[', b'A'],
-            "down" => vec![0x1b, b'[', b'B'],
-            "right" => vec![0x1b, b'[', b'C'],
-            "left" => vec![0x1b, b'[', b'D'],
-
-            // Special keys
-            "enter" | "return" => vec![b'\r'],
-            "tab" => {
-                if has_shift {
-                    vec![0x1b, b'[', b'Z'] // Shift+Tab
-                } else {
-                    vec![b'\t']
-                }
-            }
-            "backspace" => vec![0x7f],
-            "delete" | "del" => vec![0x1b, b'[', b'3', b'~'],
-            "escape" | "esc" => vec![0x1b],
-            "space" => vec![b' '],
-            "home" => vec![0x1b, b'[', b'H'],
-            "end" => vec![0x1b, b'[', b'F'],
-            "pageup" | "pgup" => vec![0x1b, b'[', b'5', b'~'],
-            "pagedown" | "pgdn" => vec![0x1b, b'[', b'6', b'~'],
-            "insert" | "ins" => vec![0x1b, b'[', b'2', b'~'],
-
-            // Unknown key - return it as-is
-            _ => key.as_bytes().to_vec(),
-        }
+        let key = match main_key {
+            "f1" => TermKey::F1,
+            "f2" => TermKey::F2,
+            "f3" => TermKey::F3,
+            "f4" => TermKey::F4,
+            "f5" => TermKey::F5,
+            "f6" => TermKey::F6,
+            "f7" => TermKey::F7,
+            "f8" => TermKey::F8,
+            "f9" => TermKey::F9,
+            "f10" => TermKey::F10,
+            "f11" => TermKey::F11,
+            "f12" => TermKey::F12,
+            "up" => TermKey::Up,
+            "down" => TermKey::Down,
+            "right" => TermKey::Right,
+            "left" => TermKey::Left,
+            "home" => TermKey::Home,
+            "end" => TermKey::End,
+            "pageup" | "pgup" => TermKey::PageUp,
+            "pagedown" | "pgdn" => TermKey::PageDown,
+            "insert" | "ins" => TermKey::Insert,
+            "delete" | "del" => TermKey::Delete,
+            "enter" | "return" => TermKey::Enter,
+            "tab" => TermKey::Tab,
+            "backspace" => TermKey::Backspace,
+            "escape" | "esc" => TermKey::Escape,
+            "space" => return Some(TermKeyEvent::char_(' ', mods)),
+            _ => return None,
+        };
+        Some(TermKeyEvent::functional(key, mods))
     }
 }
 
@@ -416,8 +430,9 @@ mod tests {
 
     #[test]
     fn test_key_parser_single_char_modifiers() {
-        // Ctrl wins over Alt for an alphabetic key
-        assert_eq!(KeyParser::parse_key("ctrl+alt+a"), vec![1]);
+        // Alt on top of Ctrl ESC-prefixes the control byte, as the shared
+        // encoder does for a real Ctrl+Alt keypress (ARC-093).
+        assert_eq!(KeyParser::parse_key("ctrl+alt+a"), vec![0x1b, 1]);
         assert_eq!(KeyParser::parse_key("Ctrl+Z"), vec![26]);
         assert_eq!(KeyParser::parse_key("alt+x"), vec![0x1b, b'x']);
         // Ctrl on a non-alphabetic key sends the key itself
@@ -425,6 +440,43 @@ mod tests {
         // Multi-byte characters are passed through as the original key bytes
         assert_eq!(KeyParser::parse_key("é"), "é".as_bytes().to_vec());
         assert_eq!(KeyParser::parse_key("alt+é"), "alt+é".as_bytes().to_vec());
+    }
+
+    #[test]
+    fn key_parser_named_keys_carry_modifiers() {
+        // Modifiers on named keys take the xterm parameter form.
+        assert_eq!(KeyParser::parse_key("alt+f4"), b"\x1b[1;3S".to_vec());
+        assert_eq!(KeyParser::parse_key("ctrl+alt+del"), b"\x1b[3;7~".to_vec());
+        assert_eq!(KeyParser::parse_key("shift+enter"), b"\n".to_vec());
+        assert_eq!(KeyParser::parse_key("shift+tab"), b"\x1b[Z".to_vec());
+        assert_eq!(KeyParser::parse_key("up"), b"\x1b[A".to_vec());
+        assert_eq!(KeyParser::parse_key("f12"), b"\x1b[24~".to_vec());
+        assert_eq!(KeyParser::parse_key("ctrl+space"), vec![0x00]);
+        assert_eq!(KeyParser::parse_key("ls"), b"ls".to_vec());
+    }
+
+    #[test]
+    fn macro_arrow_honors_application_cursor_mode() {
+        let mut term = Terminal::new(80, 24);
+        assert_eq!(KeyParser::encode_key("up", &term), b"\x1b[A".to_vec());
+        term.process(b"\x1b[?1h");
+        assert_eq!(KeyParser::encode_key("up", &term), b"\x1bOA".to_vec());
+        assert_eq!(KeyParser::encode_key("home", &term), b"\x1bOH".to_vec());
+        // Unknown names stay literal whatever the modes.
+        assert_eq!(KeyParser::encode_key("é", &term), "é".as_bytes().to_vec());
+    }
+
+    #[test]
+    fn macro_keys_follow_kitty_flags() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[>1u");
+        assert_eq!(
+            KeyParser::encode_key("ctrl+c", &term),
+            b"\x1b[99;5u".to_vec()
+        );
+        assert_eq!(KeyParser::encode_key("enter", &term), b"\x1b[13u".to_vec());
+        // Plain text keys stay text under kitty level 1.
+        assert_eq!(KeyParser::encode_key("a", &term), b"a".to_vec());
     }
 
     #[cfg(feature = "macro-yaml")]

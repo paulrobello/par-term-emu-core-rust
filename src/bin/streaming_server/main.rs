@@ -483,13 +483,15 @@ fn start_macro_playback(
                 if let Some(event) = playback.next_event() {
                     match event {
                         MacroEvent::KeyPress { key, .. } => {
-                            // Convert key to bytes and send to terminal
-                            let bytes = KeyParser::parse_key(&key);
-                            {
-                                let mut session = pty_session_clone.lock();
-                                // Write directly to terminal for macro playback
-                                session.write(&bytes).ok();
-                            }
+                            // Encode against the pane's live modes (DECCKM,
+                            // kitty flags) and write to the PTY.
+                            let mut session = pty_session_clone.lock();
+                            let bytes = {
+                                let terminal = session.terminal();
+                                let term = terminal.read();
+                                KeyParser::encode_key(&key, &term)
+                            };
+                            session.write(&bytes).ok();
                         }
                         MacroEvent::Delay { duration, .. } => {
                             tokio::time::sleep(Duration::from_millis(

@@ -1167,7 +1167,9 @@ mod tests {
             crate::mux::parse_command(&line).expect("the daemon accepts the line"),
             crate::mux::MuxCommand::SendKeys {
                 pane: crate::mux::ids::Target::Id(crate::mux::PaneId(7)),
-                keys: b"a\x1b\"'\n".to_vec(),
+                keys: crate::mux::command::SendKeysPayload(vec![
+                    crate::mux::command::SendKeysPart::Bytes(b"a\x1b\"'\n".to_vec())
+                ]),
             }
         );
     }

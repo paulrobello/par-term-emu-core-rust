@@ -518,13 +518,16 @@ let macro_data = Macro::load_yaml("demo.yaml")?;
 // Create playback session
 let mut playback = MacroPlayback::new(macro_data);
 
+// `terminal` is the Terminal the PTY's output feeds, so key encoding
+// follows the modes the running application negotiated.
+
 // Playback loop
 while !playback.is_finished() {
     if let Some(event) = playback.next_event() {
         match event {
             MacroEvent::KeyPress { key, .. } => {
-                let bytes = KeyParser::parse_key(&key);
-                // Send bytes to terminal/PTY
+                // Encode against the terminal's live modes, then send to the PTY
+                let bytes = KeyParser::encode_key(&key, &terminal);
                 writer.write_all(&bytes)?;
             }
             MacroEvent::Delay { duration, .. } => {
@@ -1074,10 +1077,12 @@ alt+a          # ESC + 'a' (0x1B 0x61)
 **Multiple Modifiers:**
 ```yaml
 ctrl+shift+s   # Ctrl+Shift+S
-ctrl+alt+del   # Ctrl+Alt+Delete (no standard escape)
+ctrl+alt+del   # Ctrl+Alt+Delete (ESC[3;7~)
 ```
 
 ### Escape Sequences
+
+Playback encodes each key with the shared key encoder (the one behind `Terminal.encode_key` and the C FFI) against the terminal's live input modes: `up` is `ESC[A`, or `ESCOA` once the application enables application cursor keys (DECCKM), and keys follow the kitty keyboard flags the application negotiated. Modifiers on named keys use the xterm parameter form (`alt+f4` is `ESC[1;3S`). The table shows the bytes for a freshly reset terminal, which is what `KeyParser::parse_key` returns.
 
 **Key to Bytes Mapping:**
 
@@ -1106,6 +1111,11 @@ assert_eq!(bytes, vec![0x1B, 0x5B, 0x41]);
 
 let bytes = KeyParser::parse_key("a");
 assert_eq!(bytes, vec![0x61]);
+
+// Encode against a live terminal's modes (DECCKM on)
+let mut term = par_term_emu_core_rust::terminal::Terminal::new(80, 24);
+term.process(b"\x1b[?1h");
+assert_eq!(KeyParser::encode_key("up", &term), vec![0x1B, 0x4F, 0x41]);
 ```
 
 ## Best Practices
