@@ -135,7 +135,7 @@ The crate produces three artifacts:
 
 | Feature | Purpose |
 |---------|---------|
-| `python` (default) | PyO3 bindings with `extension-module`; also enables `pty_session` |
+| `python` (default) | PyO3 bindings with `extension-module`; also enables `pty_session`, `screenshot`, and `macro-yaml` |
 | `python-test` | The `python` feature's dependencies with `pyo3/auto-initialize` instead of `extension-module`, so the bindings (and their unit tests) link a real interpreter under `cargo test` |
 | `screenshot` | Terminal-to-image renderer (embedded fonts + swash/image). Enabled by `python`/`python-test`; excluded from `sim` since 0.54.0 — render-capable sim embedders add `features = ["sim", "screenshot"]` (ENH-024). Free functions: `screenshot::render_terminal` / `save_terminal`; the `Terminal::screenshot*` forwarders were removed in 0.55.0 |
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |

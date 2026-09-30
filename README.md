@@ -197,8 +197,8 @@ maturin develop --release
 ### Building a Wheel
 
 ```bash
-# --features streaming matches the PyPI wheels; drop it for a lean local wheel
-maturin build --release --features streaming
+# streaming is included: pyproject.toml [tool.maturin] features apply to every maturin build
+maturin build --release
 uv add --find-links target/wheels par-term-emu-core-rust
 # or
 pip install target/wheels/par_term_emu_core_rust-*.whl
@@ -244,7 +244,7 @@ Available binaries: Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows
 cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer
 
 # Terminal multiplexer daemon + client
-cargo install par-term-emu-core-rust --no-default-features --features mux --bin par-mux
+cargo install par-term-emu-core-rust --no-default-features --features mux-bin --bin par-mux
 ```
 
 **Or build from source:**

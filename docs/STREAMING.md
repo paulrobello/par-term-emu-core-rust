@@ -348,7 +348,7 @@ par-term-streamer --enable-http --web-root ./web_term
 
 ### Python Integration
 
-PyPI wheels are built with the streaming feature enabled, so `pip install par-term-emu-core-rust` provides everything below. Source builds without `--features streaming` omit the streaming classes; detect the capability at runtime:
+PyPI wheels are built with the streaming feature enabled, so `pip install par-term-emu-core-rust` provides everything below. Every maturin build includes it too (`pyproject.toml` `[tool.maturin] features` lists `streaming`); only a build that drops it from that list omits the streaming classes. Detect the capability at runtime:
 
 ```python
 from par_term_emu_core_rust import _native
