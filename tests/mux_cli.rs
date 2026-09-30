@@ -490,10 +490,12 @@ fn par_mux_env(socket: &Path, args: &[&str]) -> Run {
 
 /// A daemon a test holds no `Child` for (the `--restart` successor is a
 /// detached grandchild): shutdown is asked over the socket on drop instead.
+#[cfg(unix)]
 struct EnvDaemonGuard {
     socket: std::path::PathBuf,
 }
 
+#[cfg(unix)]
 impl Drop for EnvDaemonGuard {
     fn drop(&mut self) {
         if let Ok(mut stream) = par_term_emu_core_rust::mux::connect_local_stream(&self.socket) {

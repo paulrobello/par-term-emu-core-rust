@@ -171,8 +171,6 @@ impl PtySession {
                                     "ALT_SCREEN",
                                     "Entered alternate screen - sending SIGWINCH resize pulse",
                                 );
-                                // Current dimensions, not stale captured values
-                                let (current_cols, current_rows) = term.size();
                                 // Best-effort pulse: skipped when the reap
                                 // record is contended or says reaped, so a
                                 // released PID is never signalled (SEC-125).
@@ -183,6 +181,8 @@ impl PtySession {
                                     if record.is_none() {
                                         #[cfg(test)]
                                         signals_sent.fetch_add(1, Ordering::SeqCst);
+                                        // Current dimensions, not stale captured values
+                                        let (current_cols, current_rows) = term.size();
                                         let _ = send_sigwinch(
                                             pid,
                                             "ALT_SCREEN",
