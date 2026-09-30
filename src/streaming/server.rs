@@ -2027,6 +2027,16 @@ impl StreamingServer {
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
 
+        // Roster snapshot. Ordering: the subscription above precedes the
+        // snapshot read. The watcher updates its cache before it broadcasts
+        // a delta, so any delta this snapshot misses is already queued on
+        // `output_rx`, and any delta it includes is at worst replayed from
+        // the queue. Deltas carry a whole entry, so apply-then-replace
+        // converges on the same state.
+        if let Some(roster) = self.roster_snapshot() {
+            client.send(roster).await?;
+        }
+
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -2087,12 +2097,21 @@ impl StreamingServer {
                 }
 
                 output_msg = output_rx.recv() => {
-                    if let Ok(msg) = output_msg {
-                        if should_send(&msg, &subscriptions)
-                            && client.send(msg).await.is_err() {
-                                break;
+                    let msg = match output_msg {
+                        Ok(msg) => msg,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Dropped messages may include roster deltas: resync.
+                            match self.roster_snapshot() {
+                                Some(roster) => roster,
+                                None => continue,
                             }
-                    }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    if should_send(&msg, &subscriptions)
+                        && client.send(msg).await.is_err() {
+                            break;
+                        }
                 }
 
                 _ = async {
