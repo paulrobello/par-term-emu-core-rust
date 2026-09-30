@@ -14,6 +14,33 @@ pub fn parse_agents_output(raw: &str) -> Vec<AgentEntry> {
     entries
 }
 
+/// A roster change derived from a single par-mux control notification.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RosterDelta {
+    Upsert(AgentEntry),
+    Release { pane_id: u32 },
+}
+
+/// Translates one control-mode notification line into a roster delta.
+///
+/// Returns `None` for every notification that does not affect the roster.
+pub fn translate_notification(line: &str) -> Option<RosterDelta> {
+    let (verb, rest) = line.trim_start().split_once(char::is_whitespace)?;
+    match verb {
+        "%agent-state-changed" => parse_line(rest).map(RosterDelta::Upsert),
+        "%agent-released" | "%pane-exited" => {
+            let pane_id = rest
+                .split_whitespace()
+                .next()?
+                .trim_start_matches('%')
+                .parse::<u32>()
+                .ok()?;
+            Some(RosterDelta::Release { pane_id })
+        }
+        _ => None,
+    }
+}
+
 fn parse_line(line: &str) -> Option<AgentEntry> {
     let mut tokens = line.split_whitespace();
     let pane_id = tokens.next()?.trim_start_matches('%').parse::<u32>().ok()?;
@@ -89,5 +116,37 @@ mod tests {
         let raw = "12 claude working hook host_telemetry=e30= telemetry=e30=\n";
         let got = parse_agents_output(raw);
         assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn state_changed_line_upserts() {
+        let line = "%agent-state-changed %12 claude-code blocked hook reason=SGVsbG8=";
+        match translate_notification(line) {
+            Some(RosterDelta::Upsert(e)) => {
+                assert_eq!(e.pane_id, 12);
+                assert_eq!(e.state, "blocked");
+                assert_eq!(e.reason, "Hello");
+            }
+            other => panic!("expected upsert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn released_and_exited_lines_release() {
+        assert!(matches!(
+            translate_notification("%agent-released %12 claude-code"),
+            Some(RosterDelta::Release { pane_id: 12 })
+        ));
+        assert!(matches!(
+            translate_notification("%pane-exited %12 0"),
+            Some(RosterDelta::Release { pane_id: 12 })
+        ));
+    }
+
+    #[test]
+    fn non_agent_notifications_are_none() {
+        assert!(translate_notification("%output %12 AbCd").is_none());
+        assert!(translate_notification("%layout-change ...").is_none());
+        assert!(translate_notification("%begin 1 1 1").is_none());
     }
 }

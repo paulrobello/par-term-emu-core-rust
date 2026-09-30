@@ -100,7 +100,7 @@ pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, Streami
 pub use mux_factory::{MuxPaneSelector, MuxSessionFactory};
 
 #[cfg(feature = "streaming")]
-pub use roster::parse_agents_output;
+pub use roster::{parse_agents_output, translate_notification, RosterDelta};
 
 #[cfg(feature = "streaming")]
 pub use proto::{
