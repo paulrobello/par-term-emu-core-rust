@@ -17,8 +17,7 @@ from par_term_emu_core_rust.observers import (
 class TestNativeEventDicts:
     """QA-119: poll_events dicts carry native int/bool/None values.
 
-    These assertions fail against the pre-0.51 stringly-typed output, which
-    ``poll_events_legacy`` still returns for one release.
+    These assertions fail against the pre-0.51 stringly-typed output.
     """
 
     def test_numeric_and_bool_fields_are_native(self) -> None:
@@ -41,25 +40,7 @@ class TestNativeEventDicts:
         assert var["value"] == "quux"
         assert var["old_value"] is None
 
-    def test_legacy_poll_returns_stringly_shape(self) -> None:
-        term = Terminal(80, 24, scrollback=100)
-        term.process(b"\x1b]133;A\x1b\\")
-        term.process(b"\x1b[4h")
-        events = term.poll_events_legacy()
-        zone = next(e for e in events if e["type"] == "zone_opened")
-        assert isinstance(zone["zone_id"], str)
-        mode = next(e for e in events if e["type"] == "mode_changed")
-        assert mode["enabled"] == "true"
-
-    def test_legacy_poll_omits_unset_optional_fields(self) -> None:
-        term = Terminal(80, 24, scrollback=100)
-        term.process(b"\x1b]1337;SetUserVar=qa119var=cXV1eA==\x07")
-        events = term.poll_events_legacy()
-        var = next(e for e in events if e["type"] == "user_var_changed")
-        assert var["value"] == "quux"
-        assert "old_value" not in var
-
-    def test_poll_subscribed_events_native_and_legacy(self) -> None:
+    def test_poll_subscribed_events_native(self) -> None:
         term = Terminal(80, 24, scrollback=100)
         term.set_event_subscription(["user_var_changed"])
         term.process(b"\x1b]1337;SetUserVar=qa119sub=cXV1eA==\x07")
@@ -67,12 +48,6 @@ class TestNativeEventDicts:
         native = term.poll_subscribed_events()
         assert [e["type"] for e in native] == ["user_var_changed"]
         assert native[0]["old_value"] is None
-
-        term.process(b"\x1b]1337;SetUserVar=qa119sub=YWdhaW4=\x07")  # "again"
-        legacy = term.poll_subscribed_events_legacy()
-        assert [e["type"] for e in legacy] == ["user_var_changed"]
-        assert legacy[0]["old_value"] == "quux"
-        assert isinstance(legacy[0]["old_value"], str)
 
 
 class TestSyncObserver:

@@ -1145,21 +1145,6 @@ impl PyTerminal {
         events.iter().map(|e| event_to_dict(py, e)).collect()
     }
 
-    /// Drain all pending terminal events in the legacy stringly-typed shape
-    ///
-    /// Same events as :meth:`poll_events`, but every value is a `str` and
-    /// unset optional fields are omitted — the exact dictionaries
-    /// ``poll_events()`` returned before 0.51. Kept for one release as the
-    /// migration bridge; will be removed in a future release.
-    ///
-    /// Returns:
-    ///     list[dict]: Event dicts with every value stringified
-    fn poll_events_legacy(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
-        use crate::python_bindings::observer::event_to_dict_legacy;
-        let events = self.inner.poll_events();
-        Ok(events.iter().map(event_to_dict_legacy).collect())
-    }
-
     /// Drain pending screen cleared events
     ///
     /// Returns a list of booleans indicating whether each clear event also
@@ -1311,20 +1296,6 @@ impl PyTerminal {
         use crate::python_bindings::observer::event_to_dict;
         let events = self.inner.poll_subscribed_events();
         events.iter().map(|e| event_to_dict(py, e)).collect()
-    }
-
-    /// Drain subscribed events in the legacy stringly-typed shape
-    ///
-    /// Same events as :meth:`poll_subscribed_events`, but every value is a
-    /// `str` and unset optional fields are omitted — the pre-0.51 shape.
-    /// Kept for one release as the migration bridge.
-    ///
-    /// Returns:
-    ///     list[dict]: Event dicts with every value stringified
-    fn poll_subscribed_events_legacy(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
-        use crate::python_bindings::observer::event_to_dict_legacy;
-        let events = self.inner.poll_subscribed_events();
-        Ok(events.iter().map(event_to_dict_legacy).collect())
     }
 
     /// Drain only CWD change events

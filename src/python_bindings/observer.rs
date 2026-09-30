@@ -4,7 +4,7 @@
 //! that bridge the Rust `TerminalObserver` trait to Python callables.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -17,8 +17,7 @@ use crate::terminal::{TerminalEvent, TerminalEventKind};
 /// `event_fields` is the single source of truth for event-to-dict conversion,
 /// shared by `poll_events()`, `poll_subscribed_events()`, and observer
 /// dispatch. Numeric, boolean, and optional Rust fields map to `Int`/`Bool`/
-/// `None` so the Python-facing dicts carry native types; the legacy renderer
-/// stringifies them back to the pre-0.51 shape.
+/// `None` so the Python-facing dicts carry native types.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum EventField {
     Str(String),
@@ -376,25 +375,6 @@ pub(crate) fn event_to_dict<'py>(py: Python<'py>, event: &TerminalEvent) -> Boun
     dict
 }
 
-/// Convert a `TerminalEvent` to the legacy stringly-typed dictionary — every
-/// value a `str`, optional fields omitted when unset — that `poll_events()`
-/// returned before 0.51. Kept for one release behind `poll_events_legacy()`
-/// and `poll_subscribed_events_legacy()`.
-pub(crate) fn event_to_dict_legacy(event: &TerminalEvent) -> HashMap<String, String> {
-    event_fields(event)
-        .into_iter()
-        .filter_map(|(key, field)| {
-            let value = match field {
-                EventField::Str(s) => s,
-                EventField::Int(i) => i.to_string(),
-                EventField::Bool(b) => b.to_string(),
-                EventField::None => return None,
-            };
-            Some((key, value))
-        })
-        .collect()
-}
-
 thread_local! {
     /// Reentrancy guard for Python observer callbacks (ARC-016).
     ///
@@ -538,26 +518,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_renderer_reproduces_pre_051_stringly_shape() {
-        // Numeric fields stringify, bools render lowercase like Rust's
-        // bool::to_string always did.
-        let legacy = event_to_dict_legacy(&TerminalEvent::ModeChanged("insert".to_string(), false));
-        assert_eq!(legacy.get("enabled").map(String::as_str), Some("false"));
-
-        let legacy = event_to_dict_legacy(&TerminalEvent::SizeChanged(80, 24));
-        assert_eq!(legacy.get("cols").map(String::as_str), Some("80"));
-        assert_eq!(legacy.get("rows").map(String::as_str), Some("24"));
-
-        // Optional fields are omitted when unset (the native renderer keeps
-        // the key with None instead).
-        let legacy = event_to_dict_legacy(&TerminalEvent::HyperlinkAdded {
-            url: "https://example.com".to_string(),
-            row: 1,
-            col: 2,
-            id: None,
-        });
-        assert!(!legacy.contains_key("id"));
-
+    fn native_renderer_keeps_unset_optional_as_none() {
+        // An unset optional field keeps its key with EventField::None, which
+        // event_to_dict renders as Python None rather than omitting it.
         let fields = event_fields(&TerminalEvent::HyperlinkAdded {
             url: "https://example.com".to_string(),
             row: 1,
