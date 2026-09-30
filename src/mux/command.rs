@@ -1936,6 +1936,26 @@ mod tests {
         assert!(parse_command("frobnicate").is_err());
     }
 
+    /// ARC-094: every `COMMANDS` row is reachable. A bare name may be a
+    /// usage error, but never "unknown command" (a name `parse_command`
+    /// cannot look up, e.g. one with whitespace), and no name appears twice
+    /// (the later row's parser would be dead). It does not prove a row
+    /// names the right parser; `mutates()` and `dispatch_command` stay
+    /// exhaustive matches for that.
+    #[test]
+    fn every_command_table_name_parses_or_errors_on_its_own_grammar() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in COMMANDS {
+            assert!(seen.insert(*name), "duplicate command table row {name:?}");
+            if let Err(err) = parse_command(name) {
+                assert!(
+                    !err.starts_with("unknown command"),
+                    "table row {name:?} does not reach its parser: {err}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn rejects_a_malformed_target() {
         // A non-sigil value is a NAME now, parsed fine and resolved

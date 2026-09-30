@@ -146,14 +146,26 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::PaneRespawned { pane_id } => {
             format!("%pane-respawned {pane_id}\n")
         }
-        // Seam S3: `TmuxNotification` carries 29 variants; Phase 1 emits the
-        // 9 the spine needs and the rest fall through here, producing nothing
-        // rather than panicking. Adding a notification is therefore one new
-        // arm, never a change at the call sites. Real tmux clients ignore `%`
-        // lines they do not recognise (this parser maps them to `Unknown`,
-        // which still reaches the client), so a custom variant like
-        // `%agent-state-changed` is backward compatible by construction.
-        _ => String::new(),
+        // Parser-only variants the daemon never constructs. Listed, not
+        // wildcarded: a new `TmuxNotification` variant fails to compile here
+        // until someone decides whether the daemon emits it (ARC-094). Real
+        // tmux clients ignore `%` lines they do not recognise (this parser
+        // maps them to `Unknown`, which still reaches the client), so a
+        // custom variant like `%agent-state-changed` is backward compatible
+        // by construction.
+        TmuxNotification::UnlinkedWindowAdd { .. }
+        | TmuxNotification::UnlinkedWindowRenamed { .. }
+        | TmuxNotification::ClientSessionChanged { .. }
+        | TmuxNotification::SessionWindowChanged { .. }
+        | TmuxNotification::ClientDetached { .. }
+        | TmuxNotification::Pause { .. }
+        | TmuxNotification::ExtendedOutput { .. }
+        | TmuxNotification::Continue
+        | TmuxNotification::SubscriptionChanged { .. }
+        | TmuxNotification::PasteBufferChanged { .. }
+        | TmuxNotification::PasteBufferDeleted { .. }
+        | TmuxNotification::Unknown { .. }
+        | TmuxNotification::TerminalOutput { .. } => String::new(),
     }
 }
 
@@ -407,10 +419,11 @@ mod tests {
 
     #[test]
     fn unemitted_variants_produce_nothing_rather_than_panicking() {
-        // Seam S3: the catch-all arm. Adding a notification later is one new
-        // arm here, never a change at call sites; until then it emits
-        // nothing. SessionRenamed left this set when rename-session
-        // (card 01a0ea74ec2e) made it a wire notification.
+        // Seam S3: the parser-only arm. Adding a notification later is one
+        // new arm here, never a change at call sites; a variant listed in
+        // the parser-only arm emits nothing. SessionRenamed left this set
+        // when rename-session (card 01a0ea74ec2e) made it a wire
+        // notification.
         assert_eq!(
             emit(&TmuxNotification::ClientSessionChanged {
                 client: "c1".to_string(),
