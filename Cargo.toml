@@ -139,7 +139,7 @@ headers = { version = "0.4.1", optional = true }
 sysinfo = { version = "0.39.3", optional = true }
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
-image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant", "rayon"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
 # Decoder exclusions (SEC-007 / ARC-007): AVIF is intentionally excluded — it
 # pulls in `ravif` → `rav1e` → the unmaintained `paste` proc-macro
 # (RUSTSEC-2024-0436). EXR is excluded for the same reason (exr → pulp →
@@ -150,7 +150,9 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "ff"
 # Cargo.lock, and `cargo audit` still reports it, because the `rayon` feature
 # above declares the weak deps `ravif?/threading` and `exr?/rayon`, and cargo
 # records weakly referenced optional deps in the lockfile (SEC-134). This crate
-# calls no `image` rayon API, so dropping `rayon` removes the lockfile edge.
+# calls no `image` rayon API. SEC-134 resolution: the `rayon` feature is now
+# dropped, so `paste`, `pulp`, `rav1e`, `exr` and `ravif` are gone from
+# Cargo.lock entirely and `cargo audit` is clean.
 # Optional (ARC-043): only the `screenshot` feature shapes text; slim
 # profiles (rust-only/mux/streaming-lib) must not compile it.
 swash = { version = "0.2.7", optional = true }
