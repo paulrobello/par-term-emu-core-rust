@@ -7,6 +7,55 @@
 //! operating on a borrowed `Terminal`.
 
 use crate::terminal::Terminal;
+use std::collections::HashMap;
+
+/// Macro library and playback state (Feature 38).
+#[derive(Default)]
+pub(crate) struct MacroState {
+    macro_library: HashMap<String, crate::macros::Macro>,
+    macro_playback: Option<crate::macros::MacroPlayback>,
+    macro_screenshot_triggers: Vec<String>,
+}
+
+impl MacroState {
+    /// Carry the whole macro state across RIS: `self` is the fresh state,
+    /// `old` the state being replaced. The library, an in-flight playback,
+    /// and queued screenshot triggers all survive.
+    pub(crate) fn carry_from(&mut self, old: &mut MacroState) {
+        std::mem::swap(self, old);
+    }
+
+    /// Advance playback by one due event and return the key it presses.
+    ///
+    /// A screenshot event is queued in the screenshot triggers. A finished
+    /// playback is cleared, except after a key press: that tick returns the
+    /// key for the caller to encode, and the next tick clears it.
+    fn next_key_press(&mut self) -> Option<String> {
+        let playback = self.macro_playback.as_mut()?;
+        let event = playback.next_event();
+        match event {
+            Some(crate::macros::MacroEvent::KeyPress { key, .. }) => {
+                return Some(key);
+            }
+            Some(crate::macros::MacroEvent::Screenshot { label, .. }) => {
+                self.macro_screenshot_triggers
+                    .push(label.unwrap_or_else(|| "screenshot".to_string()));
+            }
+            // Delays are handled by timing in the playback state machine
+            Some(crate::macros::MacroEvent::Delay { .. }) | None => {}
+        }
+
+        // Check if playback is finished and clean up
+        if self
+            .macro_playback
+            .as_ref()
+            .is_some_and(|p| p.is_finished())
+        {
+            self.macro_playback = None;
+        }
+        None
+    }
+}
 
 /// Macro library and playback operations on a [`Terminal`].
 ///
@@ -107,33 +156,10 @@ impl MacroEngine {
     /// Returns bytes to send to PTY for KeyPress events, None for others
     /// Screenshot events are stored in macro_screenshot_triggers
     pub fn tick_macro(term: &mut Terminal) -> Option<Vec<u8>> {
-        let playback = term.macros.macro_playback.as_mut()?;
-        let event = playback.next_event();
-        match event {
-            Some(crate::macros::MacroEvent::KeyPress { key, .. }) => {
-                // Encoded against the terminal's live modes (DECCKM, kitty
-                // flags), so replayed keys match a real keypress (ARC-093).
-                return Some(crate::macros::KeyParser::encode_key(&key, term));
-            }
-            Some(crate::macros::MacroEvent::Screenshot { label, .. }) => {
-                term.macros
-                    .macro_screenshot_triggers
-                    .push(label.unwrap_or_else(|| "screenshot".to_string()));
-            }
-            // Delays are handled by timing in the playback state machine
-            Some(crate::macros::MacroEvent::Delay { .. }) | None => {}
-        }
-
-        // Check if playback is finished and clean up
-        if term
-            .macros
-            .macro_playback
-            .as_ref()
-            .is_some_and(|p| p.is_finished())
-        {
-            term.macros.macro_playback = None;
-        }
-        None
+        let key = term.macros.next_key_press()?;
+        // Encoded against the terminal's live modes (DECCKM, kitty
+        // flags), so replayed keys match a real keypress (ARC-093).
+        Some(crate::macros::KeyParser::encode_key(&key, term))
     }
 
     /// Get and clear screenshot triggers
@@ -291,6 +317,26 @@ mod tests {
             MacroEngine::tick_macro(&mut term).as_deref(),
             Some(&b"\x1bOA"[..])
         );
+    }
+
+    #[test]
+    fn a_final_key_leaves_the_finished_playback_until_the_next_tick() {
+        let mut term = Terminal::new(80, 24);
+        let mut m = Macro::new("last-key");
+        m.add_key("a");
+        MacroEngine::load_macro(&mut term, "last-key".to_string(), m);
+        MacroEngine::play_macro(&mut term, "last-key").unwrap();
+
+        assert!(MacroEngine::tick_macro(&mut term).is_some());
+        assert_eq!(
+            MacroEngine::get_current_macro_name(&term).as_deref(),
+            Some("last-key")
+        );
+        assert_eq!(MacroEngine::get_macro_progress(&term), Some((1, 1)));
+
+        assert!(MacroEngine::tick_macro(&mut term).is_none());
+        assert!(MacroEngine::get_current_macro_name(&term).is_none());
+        assert!(MacroEngine::get_macro_progress(&term).is_none());
     }
 
     #[test]

@@ -342,14 +342,6 @@ pub(crate) struct RenderingState {
     pub(crate) damage_regions: Vec<DamageRegion>,
 }
 
-/// Macro library and playback state (Feature 38).
-#[derive(Default)]
-pub(crate) struct MacroState {
-    pub(crate) macro_library: HashMap<String, crate::macros::Macro>,
-    pub(crate) macro_playback: Option<crate::macros::MacroPlayback>,
-    pub(crate) macro_screenshot_triggers: Vec<String>,
-}
-
 /// tmux control-protocol parser and notification buffer.
 pub(crate) struct TmuxState {
     pub(crate) tmux_parser: crate::tmux_control::TmuxControlParser,
@@ -1219,7 +1211,7 @@ pub struct Terminal {
 
     // === Feature 38: Macro Recording and Playback ===
     /// Macro library and playback state (ARC-001 sub-struct)
-    pub(crate) macros: MacroState,
+    pub(crate) macros: macros::MacroState,
 
     // === Answerback String (ENQ response) ===
     /// Answerback handled by `title_state` (ARC-001 sub-struct)
@@ -1330,7 +1322,7 @@ impl Terminal {
             command_history_state: CommandHistoryState::default(),
             notifications_state: NotificationState::default(),
             recording_state: RecordingState::default(),
-            macros: MacroState::default(),
+            macros: macros::MacroState::default(),
             unicode_state: UnicodeConfigState::default(),
             badge_state: BadgeState {
                 badge_format: None,
@@ -3242,7 +3234,7 @@ impl Terminal {
         // pending scan rows reset.
         fresh.triggers.carry_registry_from(&mut self.triggers);
 
-        std::mem::swap(&mut fresh.macros, &mut self.macros);
+        fresh.macros.carry_from(&mut self.macros);
 
         std::mem::swap(
             &mut fresh.notifications_state.notification_config,
