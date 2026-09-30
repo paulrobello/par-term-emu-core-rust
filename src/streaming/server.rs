@@ -897,111 +897,8 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Accept WebSocket connections
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    if !self.can_accept_client() {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "Max clients reached ({}), rejecting connection from {}",
-                            self.config.max_clients,
-                            addr
-                        );
-                        continue;
-                    }
-
-                    if let Err(e) = stream.set_nodelay(true) {
-                        crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
-                    }
-
-                    crate::debug_info!("STREAMING", "New connection from {}", addr);
-                    let server = self.clone();
-                    tokio::spawn(async move {
-                        // Reserve a global client slot for the whole handshake so
-                        // unauthenticated pre-upgrade connections cannot occupy
-                        // tasks indefinitely, uncapped by max_clients (SEC-004).
-                        // The guard releases on drop: handshake failure, timeout,
-                        // or session end.
-                        if !server.try_add_client() {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "Max clients reached ({}), rejecting connection from {}",
-                                server.config.max_clients,
-                                addr
-                            );
-                            return;
-                        }
-                        // Held for the whole connection: handshake, session,
-                        // and teardown. Moved into `handle_connection_ws`
-                        // after the handshake completes.
-                        let global_guard = GlobalClientGuard { server: &server };
-
-                        // Accept WebSocket with header callback to capture URI query and validate auth
-                        let (header_callback, uri_query) = build_ws_header_callback(
-                            server.config.api_key.clone(),
-                            server.config.http_basic_auth.clone(),
-                            server.config.allowed_origins.clone(),
-                            server.config.allow_api_key_in_query,
-                        );
-
-                        // The tungstenite `Callback` trait fixes `ErrorResponse` as
-                        // `HttpResponse<Option<String>>` — we cannot box or shrink it
-                        // without violating the external API contract.
-                        let ws_result = match tokio::time::timeout(
-                            WS_HANDSHAKE_TIMEOUT,
-                            accept_hdr_async_with_config(
-                                stream,
-                                header_callback,
-                                ws_accept_config(),
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "WebSocket handshake timed out from {} after {}s",
-                                    addr,
-                                    WS_HANDSHAKE_TIMEOUT.as_secs()
-                                );
-                                return;
-                            }
-                        };
-
-                        match ws_result {
-                            Ok(ws_stream) => {
-                                let query_str = uri_query.lock().take();
-                                let params = ConnectionParams::from_uri_query(query_str.as_deref());
-                                if let Err(e) = server
-                                    .handle_connection_ws(ws_stream, &params, global_guard)
-                                    .await
-                                {
-                                    crate::debug_error!(
-                                        "STREAMING",
-                                        "Connection error from {}: {}",
-                                        addr,
-                                        e
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "WebSocket handshake failed from {}: {}",
-                                    addr,
-                                    e
-                                );
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
-                }
-            }
-        }
+        self.accept_loop(listener, |stream| async move { Ok(stream) }, "Client")
+            .await
     }
 
     /// Start WebSocket-only server with TLS (WSS)
@@ -1025,134 +922,171 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Accept TLS connections
+        self.accept_loop(
+            listener,
+            move |stream| {
+                let acceptor = acceptor.clone();
+                async move { acceptor.accept(stream).await }
+            },
+            "TLS Client",
+        )
+        .await
+    }
+
+    /// The accept loop shared by the plain and TLS WebSocket-only
+    /// listeners. `upgrade` is the transport handshake: identity for plain
+    /// TCP, the TLS accept for WSS. `label` names the transport in logs.
+    async fn accept_loop<U, Fut, S>(
+        self: Arc<Self>,
+        listener: TcpListener,
+        upgrade: U,
+        label: &'static str,
+    ) -> Result<()>
+    where
+        U: Fn(TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = std::io::Result<S>> + Send + 'static,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let upgrade = Arc::new(upgrade);
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    if !self.can_accept_client() {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "Max clients reached ({}), rejecting TLS connection from {}",
-                            self.config.max_clients,
-                            addr
-                        );
-                        continue;
-                    }
-
-                    if let Err(e) = stream.set_nodelay(true) {
-                        crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
-                    }
-
-                    crate::debug_info!("STREAMING", "New TLS connection from {}", addr);
-                    let server = self.clone();
-                    let acceptor = acceptor.clone();
-                    tokio::spawn(async move {
-                        // Pre-handshake slot reservation, mirroring the plain
-                        // listener (SEC-004): held across both the TLS and
-                        // WebSocket handshakes, moved into the connection
-                        // handler after the handshake completes.
-                        if !server.try_add_client() {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "Max clients reached ({}), rejecting TLS connection from {}",
-                                server.config.max_clients,
-                                addr
-                            );
-                            return;
-                        }
-                        let global_guard = GlobalClientGuard { server: &server };
-
-                        let tls_result =
-                            tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
-                                .await;
-                        match tls_result {
-                            Err(_) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "TLS handshake timed out from {} after {}s",
-                                    addr,
-                                    WS_HANDSHAKE_TIMEOUT.as_secs()
-                                );
-                            }
-                            Ok(Ok(tls_stream)) => {
-                                // Accept WebSocket with header callback to capture URI query and validate auth
-                                let (header_callback, uri_query) = build_ws_header_callback(
-                                    server.config.api_key.clone(),
-                                    server.config.http_basic_auth.clone(),
-                                    server.config.allowed_origins.clone(),
-                                    server.config.allow_api_key_in_query,
-                                );
-
-                                // Same as above: ErrorResponse type is fixed by the
-                                // tungstenite Callback trait and cannot be reduced.
-                                let ws_result = match tokio::time::timeout(
-                                    WS_HANDSHAKE_TIMEOUT,
-                                    accept_hdr_async_with_config(
-                                        tls_stream,
-                                        header_callback,
-                                        ws_accept_config(),
-                                    ),
-                                )
-                                .await
-                                {
-                                    Ok(result) => result,
-                                    Err(_) => {
-                                        crate::debug_error!(
-                                            "STREAMING",
-                                            "TLS WebSocket handshake timed out from {} after {}s",
-                                            addr,
-                                            WS_HANDSHAKE_TIMEOUT.as_secs()
-                                        );
-                                        return;
-                                    }
-                                };
-
-                                match ws_result {
-                                    Ok(ws_stream) => {
-                                        let query_str = uri_query.lock().take();
-                                        let params =
-                                            ConnectionParams::from_uri_query(query_str.as_deref());
-                                        if let Err(e) = server
-                                            .handle_tls_connection_ws(
-                                                ws_stream,
-                                                &params,
-                                                global_guard,
-                                            )
-                                            .await
-                                        {
-                                            crate::debug_error!(
-                                                "STREAMING",
-                                                "TLS connection error from {}: {}",
-                                                addr,
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        crate::debug_error!(
-                                            "STREAMING",
-                                            "TLS WebSocket handshake failed from {}: {}",
-                                            addr,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                crate::debug_error!(
-                                    "STREAMING",
-                                    "TLS handshake failed from {}: {}",
-                                    addr,
-                                    e
-                                );
-                            }
-                        }
-                    });
-                }
+            let (stream, addr) = match listener.accept().await {
+                Ok(accepted) => accepted,
                 Err(e) => {
                     crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
+                    continue;
                 }
+            };
+            if !self.can_accept_client() {
+                crate::debug_error!(
+                    "STREAMING",
+                    "Max clients reached ({}), rejecting {} connection from {}",
+                    self.config.max_clients,
+                    label,
+                    addr
+                );
+                continue;
             }
+            if let Err(e) = stream.set_nodelay(true) {
+                crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
+            }
+            crate::debug_info!("STREAMING", "New {} connection from {}", label, addr);
+            let server = Arc::clone(&self);
+            let upgrade = Arc::clone(&upgrade);
+            tokio::spawn(async move {
+                server
+                    .serve_connection(stream, addr, upgrade.as_ref(), label)
+                    .await;
+            });
+        }
+    }
+
+    /// One accepted TCP connection, from slot reservation to session end:
+    /// the transport handshake and the WebSocket handshake (with
+    /// header-callback auth), each under `WS_HANDSHAKE_TIMEOUT`, then the
+    /// session.
+    async fn serve_connection<U, Fut, S>(
+        self: &Arc<Self>,
+        stream: TcpStream,
+        addr: std::net::SocketAddr,
+        upgrade: &U,
+        label: &'static str,
+    ) where
+        U: Fn(TcpStream) -> Fut,
+        Fut: std::future::Future<Output = std::io::Result<S>>,
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        // Reserve a global client slot for the whole handshake so
+        // unauthenticated pre-upgrade connections cannot occupy tasks
+        // indefinitely, uncapped by max_clients (SEC-004). The guard
+        // releases on drop: handshake failure, timeout, or session end.
+        if !self.try_add_client() {
+            crate::debug_error!(
+                "STREAMING",
+                "Max clients reached ({}), rejecting {} connection from {}",
+                self.config.max_clients,
+                label,
+                addr
+            );
+            return;
+        }
+        let global_guard = GlobalClientGuard { server: self };
+
+        let stream = match tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, upgrade(stream)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} transport handshake failed from {}: {}",
+                    label,
+                    addr,
+                    e
+                );
+                return;
+            }
+            Err(_) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} transport handshake timed out from {} after {}s",
+                    label,
+                    addr,
+                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                );
+                return;
+            }
+        };
+
+        // Accept WebSocket with header callback to capture URI query and validate auth
+        let (header_callback, uri_query) = build_ws_header_callback(
+            self.config.api_key.clone(),
+            self.config.http_basic_auth.clone(),
+            self.config.allowed_origins.clone(),
+            self.config.allow_api_key_in_query,
+        );
+        // The tungstenite `Callback` trait fixes `ErrorResponse` as
+        // `HttpResponse<Option<String>>` — we cannot box or shrink it
+        // without violating the external API contract.
+        let ws_stream = match tokio::time::timeout(
+            WS_HANDSHAKE_TIMEOUT,
+            accept_hdr_async_with_config(stream, header_callback, ws_accept_config()),
+        )
+        .await
+        {
+            Ok(Ok(ws_stream)) => ws_stream,
+            Ok(Err(e)) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} WebSocket handshake failed from {}: {}",
+                    label,
+                    addr,
+                    e
+                );
+                return;
+            }
+            Err(_) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "{} WebSocket handshake timed out from {} after {}s",
+                    label,
+                    addr,
+                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                );
+                return;
+            }
+        };
+
+        let query_str = uri_query.lock().take();
+        let params = ConnectionParams::from_uri_query(query_str.as_deref());
+        if let Err(e) = self
+            .handle_ws_connection(ws_stream, &params, global_guard, label)
+            .await
+        {
+            crate::debug_error!(
+                "STREAMING",
+                "{} connection error from {}: {}",
+                label,
+                addr,
+                e
+            );
         }
     }
 
@@ -1208,32 +1142,21 @@ impl StreamingServer {
         }
     }
 
-    /// Handle a new WebSocket connection (already upgraded)
-    async fn handle_connection_ws(
+    /// Run a session over an upgraded tungstenite WebSocket (plain or TLS).
+    async fn handle_ws_connection<S>(
         self: &Arc<Self>,
-        ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
+        ws_stream: tokio_tungstenite::WebSocketStream<S>,
         params: &ConnectionParams,
         global_guard: GlobalClientGuard<'_>,
-    ) -> Result<()> {
+        label: &'static str,
+    ) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
         let (session, _global_guard, _session_guard, read_only) =
             self.prepare_ws_session(params, global_guard).await?;
         let client = Client::new(ws_stream, read_only);
-        self.run_ws_session(client, session, read_only, "Client")
-            .await
-    }
-
-    /// Handle a new TLS WebSocket connection (already upgraded)
-    async fn handle_tls_connection_ws(
-        self: &Arc<Self>,
-        ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
-        params: &ConnectionParams,
-        global_guard: GlobalClientGuard<'_>,
-    ) -> Result<()> {
-        let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params, global_guard).await?;
-        let client = Client::new(ws_stream, read_only);
-        self.run_ws_session(client, session, read_only, "TLS Client")
-            .await
+        self.run_ws_session(client, session, read_only, label).await
     }
 
     /// Common pre-loop setup shared by both tungstenite WebSocket handlers.
