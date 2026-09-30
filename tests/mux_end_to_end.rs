@@ -319,3 +319,82 @@ fn a_slow_spawn_does_not_stall_other_clients() {
 
     drop(handle);
 }
+
+/// ARC-103: a new pane's first output is pushed to clients even when the
+/// dispatcher is still between the spawn and completing it. The sink rides
+/// the spawn context, so it is live before the reader thread's first read;
+/// before the fix it was installed only after the insert, and bytes the
+/// pane printed in between reached the daemon grid but never a client.
+#[cfg(unix)]
+#[test]
+fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
+    use par_term_emu_core_rust::mux::pane::{
+        MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext,
+    };
+    use par_term_emu_core_rust::mux::{MuxClient, MuxServer, MuxTree, PaneId};
+    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+
+    /// Spawns a pane that prints a marker at once, then holds the
+    /// dispatcher in the factory while the pane's output arrives.
+    struct LaggingFactory {
+        inner: ShellPaneFactory,
+    }
+    impl PaneFactory for LaggingFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            _command: Option<&str>,
+            context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            let pane = self.inner.create_pane(
+                id,
+                cols,
+                rows,
+                Some("printf EARLY-MARK; exec sleep 30"),
+                context,
+            )?;
+            std::thread::sleep(Duration::from_millis(500));
+            Ok(pane)
+        }
+    }
+
+    let (_dir, path) = socket_path("lagwire");
+    let tree = MuxTree::new(Box::new(LaggingFactory {
+        inner: ShellPaneFactory::default(),
+    }));
+    let server = MuxServer::bind_with_tree(&path, tree).expect("server binds");
+    let _handle = std::thread::spawn(move || server.run());
+    wait_for_socket(&path);
+
+    // Clients join broadcasts on their first control command, so the
+    // observer registers before the pane exists.
+    let mut observer = MuxClient::connect(&path).expect("observer connects");
+    observer.send("list-sessions").expect("observer registers");
+    let mut issuer = MuxClient::connect(&path).expect("issuer connects");
+    issuer.send("new-session -s lag").expect("new-session");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seen = String::new();
+    while !seen.contains("EARLY-MARK") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match observer.notifications().recv_timeout(left) {
+            Ok(TmuxNotification::Output { pane_id, data }) if pane_id == "%0" => {
+                seen.push_str(&String::from_utf8_lossy(&data));
+            }
+            Ok(_) => {}
+            Err(_) => panic!("the pane's first output was never pushed: {seen:?}"),
+        }
+    }
+}
+
+/// Wait until the server's socket accepts a connection.
+#[cfg(unix)]
+fn wait_for_socket(path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while connect_local_stream(path).is_err() {
+        assert!(Instant::now() < deadline, "server never listened");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}

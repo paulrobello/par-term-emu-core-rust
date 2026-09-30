@@ -3,7 +3,7 @@
 use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::pty_error::PtyError;
-use crate::pty_session::PtySession;
+use crate::pty_session::{OutputCallback, PtySession};
 use crate::terminal::replay_snapshot::TerminalSnapshot;
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
@@ -423,6 +423,21 @@ impl MuxPane {
         self.session.set_output_callback(Arc::new(callback));
     }
 
+    /// [`Self::on_output`] for a sink already shared as an [`OutputSink`] —
+    /// the dispatcher re-installs the one it handed the spawn, so a factory
+    /// that ignored [`SpawnContext::output`] still forwards (ARC-103).
+    pub fn on_output_sink(&mut self, sink: OutputSink) {
+        self.session.set_output_callback(sink.0);
+    }
+
+    /// Feed `bytes` to the pane's terminal as if the program printed them
+    /// — a daemon note such as a gone start directory. Goes through the
+    /// geometry-publishing write path, so `cursor_position()` is current
+    /// afterwards (QA-195).
+    pub fn write_note(&self, bytes: &[u8]) {
+        self.session.with_terminal_mut(|term| term.process(bytes));
+    }
+
     /// Stop forwarding this pane's output (ARC-089). On return, no sink
     /// call is in flight and none will start: the reader invokes the sink
     /// while holding the same lock this takes. The terminal keeps
@@ -468,12 +483,24 @@ impl MuxPane {
     }
 }
 
+/// A pane output sink carried into the spawn so it is installed before the
+/// reader thread starts (ARC-103). A newtype so [`SpawnContext`] keeps
+/// `Debug`.
+#[derive(Clone)]
+pub struct OutputSink(pub OutputCallback);
+
+impl std::fmt::Debug for OutputSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OutputSink(..)")
+    }
+}
+
 /// Where a new pane lands: the identity and environment its spawn inherits.
 ///
 /// The tree builds one per spawn from the session and window the pane is
 /// created in. [`Default`] is a pane outside any session (tests, embedders
 /// driving a factory directly): no identity vars, no session environment,
-/// no per-spawn cwd.
+/// no per-spawn cwd, no output sink.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SpawnContext<'a> {
     /// The owning session's id and name, exported as `PAR_MUX_SESSION_ID`
@@ -489,6 +516,11 @@ pub struct SpawnContext<'a> {
     /// [`ShellPaneFactory::cwd`] (the daemon-wide default); `None` keeps
     /// the factory's value.
     pub cwd: Option<&'a std::path::Path>,
+    /// The pane's output sink, installed on the PTY before the child
+    /// spawns so the first bytes it prints are forwarded. Factories that
+    /// build their own `PtySession` must do the same, or they lose the
+    /// first output (the dispatcher re-installs it after the spawn).
+    pub output: Option<&'a OutputSink>,
 }
 
 /// Creates panes on demand — extension seam S1.
@@ -594,6 +626,11 @@ impl ShellPaneFactory {
         }
         if let Some(bin) = &self.bin_path {
             session.set_env("PAR_MUX_BIN", bin);
+        }
+        // Before the spawn: the reader thread reads this slot from its
+        // first read(), so no output can precede the sink.
+        if let Some(OutputSink(sink)) = context.output {
+            session.set_output_callback(Arc::clone(sink));
         }
         session
     }
@@ -950,6 +987,40 @@ mod tests {
             seen.load(Ordering::Relaxed) > 0,
             "output callback should have received PTY bytes within 5s"
         );
+    }
+
+    /// ARC-103: a sink carried in the spawn context is live before the
+    /// reader starts, so output printed immediately at spawn is forwarded
+    /// without any `on_output` call.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_context_output_sink_sees_the_first_byte() {
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&collected);
+        let sink = OutputSink(Arc::new(move |bytes: &[u8]| {
+            into.lock().extend_from_slice(bytes)
+        }));
+        let _pane = ShellPaneFactory::default()
+            .create_pane(
+                PaneId(12),
+                80,
+                24,
+                Some("printf FIRST-BYTE-MARK; exec sleep 5"),
+                &SpawnContext {
+                    output: Some(&sink),
+                    ..SpawnContext::default()
+                },
+            )
+            .expect("pane should spawn");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !String::from_utf8_lossy(&collected.lock()).contains("FIRST-BYTE-MARK") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the context sink never saw the first output: {:?}",
+                String::from_utf8_lossy(&collected.lock())
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     /// ARC-089: a killed pane's exit output (a SIGHUP trap, a TUI's
@@ -1321,6 +1392,7 @@ mod tests {
             window: Some(WindowId(7)),
             env: None,
             cwd: None,
+            output: None,
         };
         #[cfg(windows)]
         let echo_env =

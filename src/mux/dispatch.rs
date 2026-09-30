@@ -18,12 +18,12 @@ use crate::mux::emit::{emit, emit_block};
 use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::SplitDirection;
-use crate::mux::pane::MuxError;
+use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
     broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink, Clients,
 };
-use crate::mux::tree::MuxTree;
+use crate::mux::tree::{MuxTree, SpawnPlan};
 use crate::tmux_control::TmuxNotification;
 use base64::Engine as _;
 use parking_lot::Mutex;
@@ -247,6 +247,48 @@ pub(super) fn dispatch_command(
     outcome.reply
 }
 
+/// Phases 2 and 3 of a two-phase spawn (ARC-022/ARC-103): spawn OFF the
+/// tree lock with the output sink already in the context — the pane's
+/// first bytes are forwarded, not lost before a later wire-up — then
+/// re-lock to complete, re-install the same sink (for factories that
+/// ignore [`crate::mux::pane::SpawnContext::output`]), and write any
+/// start-dir note through the geometry-publishing path (QA-195).
+///
+/// With the sink live from the first byte, `%output %N` can reach clients
+/// before the command's reply and before `%window-add`/`%layout-change`;
+/// clients drop output for a pane they have not mapped, which loses at
+/// most what was lost before, and the daemon grid always has the bytes.
+///
+/// The sink takes `clients.lock()` from the PTY reader thread, so this
+/// never holds the clients lock while taking the tree lock.
+fn spawn_and_wire<P: SpawnPlan>(
+    ctx: &Ctx<'_>,
+    factory: &dyn PaneFactory,
+    plan: P,
+    command: Option<&str>,
+    note: Option<&str>,
+) -> Result<P::Done, MuxError> {
+    let pane_id = plan.pane_id();
+    let (cols, rows) = plan.size();
+    let sink = OutputSink(Arc::new(pane_output_sink(ctx.clients, pane_id)));
+    let pane = {
+        let mut context = plan.spawn_context();
+        context.output = Some(&sink);
+        factory.create_pane(pane_id, cols, rows, command, &context)?
+    };
+    let mut guard = ctx.tree.lock();
+    let done = plan.complete(&mut guard, pane)?;
+    if let Some(pane) = guard.pane_mut(pane_id) {
+        pane.on_output_sink(sink);
+        if let Some(note) = note {
+            // Same visibility rule as a restore's gone cwd: the pane says
+            // where it landed instead of silently starting elsewhere.
+            pane.write_note(note.as_bytes());
+        }
+    }
+    Ok(done)
+}
+
 fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String)>) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
@@ -261,34 +303,9 @@ fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String
             guard.factory(),
         )
     };
-    let outcome =
-        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
-            Ok(pane) => {
-                let mut guard = ctx.tree.lock();
-                match guard.complete_session(plan, pane) {
-                    Ok(session_id) => {
-                        // Wire every pane in the new session to push its output.
-                        let window_ids = guard
-                            .session(session_id)
-                            .map(|s| s.windows.clone())
-                            .unwrap_or_default();
-                        let pane_ids: Vec<_> = window_ids
-                            .iter()
-                            .filter_map(|w| guard.window(*w))
-                            .flat_map(|w| w.panes())
-                            .collect();
-                        for pane_id in pane_ids {
-                            if let Some(pane) = guard.pane_mut(pane_id) {
-                                pane.on_output(pane_output_sink(ctx.clients, pane_id));
-                            }
-                        }
-                        Ok((session_id, window_ids))
-                    }
-                    Err(err) => Err(err),
-                }
-            }
-            Err(err) => Err(err),
-        };
+    let window_id = plan.window_id;
+    let outcome = spawn_and_wire(ctx, &*factory, plan, None, None)
+        .map(|session_id| (session_id, vec![window_id]));
     match outcome {
         Ok((session_id, window_ids)) => {
             let mut result = Outcome::ok(ctx, &session_id.to_string());
@@ -601,34 +618,7 @@ fn cmd_split_window(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    let outcome =
-        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
-            Ok(pane) => {
-                let mut guard = ctx.tree.lock();
-                match guard.complete_split(plan, pane) {
-                    Ok((new_pane, window_id)) => {
-                        // Wire the new pane's output to the clients, as new-session
-                        // and new-window do for theirs. Without it the pane's PTY
-                        // still feeds the daemon grid (capture-pane shows it) but
-                        // no %output line ever leaves, so every client renders a
-                        // blank split pane.
-                        if let Some(created) = guard.pane_mut(new_pane) {
-                            created.on_output(pane_output_sink(ctx.clients, new_pane));
-                            if let Some(note) = &note {
-                                // Same visibility rule as a restore's gone cwd: the
-                                // pane says where it landed instead of silently
-                                // starting elsewhere.
-                                created.terminal().write().process(note.as_bytes());
-                            }
-                        }
-                        Ok((new_pane, window_id))
-                    }
-                    Err(err) => Err(err),
-                }
-            }
-            Err(err) => Err(err),
-        };
-    match outcome {
+    match spawn_and_wire(ctx, &*factory, plan, None, note.as_deref()) {
         Ok((new_pane, window_id)) => {
             // split-window focuses the new pane (tmux semantics).
             Outcome::ok(ctx, &new_pane.to_string())
@@ -877,28 +867,18 @@ fn cmd_respawn_pane(
         }
     };
     let pane_id = plan.pane_id;
-    // Phase 2: spawn the replacement off the tree lock.
-    let spawned = factory.create_pane(
-        plan.pane_id,
-        plan.cols,
-        plan.rows,
-        plan.command.as_deref(),
-        &plan.context(),
-    );
-    // Phase 3: swap in, re-wire the output sink the factory does not set.
-    let mut guard = ctx.tree.lock();
-    let outcome = spawned.and_then(|pane| guard.complete_respawn(plan, pane));
-    // On success this wires the replacement; on failure the old pane (if
-    // it still exists) resumes forwarding as before the command.
-    if let Some(pane) = guard.pane_mut(pane_id) {
-        pane.on_output(pane_output_sink(ctx.clients, pane_id));
-        if let (Ok(_), Some(note)) = (&outcome, &note) {
-            // Same visibility rule as a fresh spawn's gone cwd: the note
-            // lands on the screen.
-            pane.terminal().write().process(note.as_bytes());
+    let command = plan.command.clone();
+    // Phases 2 and 3: spawn the replacement off the tree lock with its sink
+    // live, then swap it in.
+    let outcome = spawn_and_wire(ctx, &*factory, plan, command.as_deref(), note.as_deref());
+    if outcome.is_err() {
+        // The spawn or the swap failed: the old pane (if it still exists)
+        // is the live pane again, so it resumes forwarding as before the
+        // command.
+        if let Some(pane) = ctx.tree.lock().pane_mut(pane_id) {
+            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(ctx.clients, pane_id))));
         }
     }
-    drop(guard);
     match outcome {
         Ok(pane_id) => Outcome::ok(ctx, "").notifying(TmuxNotification::PaneRespawned {
             pane_id: pane_id.to_string(),
@@ -969,34 +949,7 @@ fn cmd_new_window(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    let outcome =
-        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
-            Ok(pane) => {
-                let mut guard = ctx.tree.lock();
-                match guard.complete_window(plan, pane) {
-                    Ok(window_id) => {
-                        // Wire the new window's pane the same way new-session does.
-                        let pane_ids = guard
-                            .window(window_id)
-                            .map(|w| w.panes())
-                            .unwrap_or_default();
-                        for pane_id in pane_ids {
-                            if let Some(pane) = guard.pane_mut(pane_id) {
-                                pane.on_output(pane_output_sink(ctx.clients, pane_id));
-                                if let Some(note) = &note {
-                                    // Same visibility rule as a restore's gone cwd.
-                                    pane.terminal().write().process(note.as_bytes());
-                                }
-                            }
-                        }
-                        Ok(window_id)
-                    }
-                    Err(err) => Err(err),
-                }
-            }
-            Err(err) => Err(err),
-        };
-    match outcome {
+    match spawn_and_wire(ctx, &*factory, plan, None, note.as_deref()) {
         Ok(window_id) => {
             Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
                 window_id: window_id.to_string(),

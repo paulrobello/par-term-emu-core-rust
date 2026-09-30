@@ -17,7 +17,7 @@ use crate::mux::ipc::{
     accept_connection, bind_local_listener, prepare_socket_path, ConnectionAbort, LocalListener,
     LocalStream,
 };
-use crate::mux::pane::ShellPaneFactory;
+use crate::mux::pane::{OutputSink, ShellPaneFactory};
 use crate::mux::persist::{write_job, PersistState, SaveOrigin};
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
@@ -1106,7 +1106,11 @@ pub(crate) fn pane_output_sink(
 }
 
 /// Wire every pane in `tree` to push its output to `clients` — the restore
-/// path's counterpart of the per-pane wiring each creation command does.
+/// path's counterpart of the dispatcher's spawn-and-wire. Restore is exempt
+/// from carrying the sink in the spawn context (ARC-103): `persist` spawns
+/// every pane before `clients` exists, and no client can connect before the
+/// accept loop starts, so no audience exists for the early bytes. They
+/// still land in the grid that clients seed from.
 fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
     let pane_ids: Vec<PaneId> = {
         let guard = tree.lock();
@@ -1122,7 +1126,7 @@ fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
     let mut guard = tree.lock();
     for pane_id in pane_ids {
         if let Some(pane) = guard.pane_mut(pane_id) {
-            pane.on_output(pane_output_sink(clients, pane_id));
+            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(clients, pane_id))));
         }
     }
 }

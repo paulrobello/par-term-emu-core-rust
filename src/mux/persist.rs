@@ -472,6 +472,11 @@ impl MuxTree {
                         window: Some(WindowId(window.id)),
                         env: Some(&session.env),
                         cwd: cwd.as_deref(),
+                        // No client can connect before the accept loop
+                        // starts, so restore wires after the tree is built
+                        // (`MuxServer::bind_with_tree`); the bytes land in
+                        // the grid that clients seed from.
+                        output: None,
                     };
                     let mut created = match resume_argv {
                         Some(argv) => factory.create_argv_pane(
