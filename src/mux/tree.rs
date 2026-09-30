@@ -130,6 +130,7 @@ impl RespawnSpawn {
             window: Some(self.window_id),
             env: Some(&self.env),
             cwd: self.cwd.as_deref(),
+            output: None,
         }
     }
 }
@@ -142,6 +143,7 @@ impl SessionSpawn {
             window: Some(self.window_id),
             env: Some(&self.env),
             cwd: None,
+            output: None,
         }
     }
 }
@@ -168,6 +170,7 @@ impl WindowSpawn {
             window: Some(self.window_id),
             env: Some(&self.env),
             cwd: self.cwd.as_deref(),
+            output: None,
         }
     }
 }
@@ -198,7 +201,88 @@ impl SplitSpawn {
             window: Some(self.window_id),
             env: self.env.as_ref(),
             cwd: self.cwd.as_deref(),
+            output: None,
         }
+    }
+}
+
+/// A reserved spawn the dispatcher runs through one spawn-and-wire helper
+/// (ARC-103): the four `begin_*` plans share phases 2 and 3, so they share
+/// this seam instead of four copies of the wiring.
+pub(crate) trait SpawnPlan {
+    /// What a successful completion returns.
+    type Done;
+    /// The reserved pane id.
+    fn pane_id(&self) -> PaneId;
+    /// The pane's initial grid size.
+    fn size(&self) -> (u16, u16);
+    /// The factory-facing context.
+    fn spawn_context(&self) -> SpawnContext<'_>;
+    /// Phase 3: insert the spawned pane, or kill it and report why not.
+    fn complete(self, tree: &mut MuxTree, pane: MuxPane) -> Result<Self::Done, MuxError>;
+}
+
+impl SpawnPlan for SessionSpawn {
+    type Done = SessionId;
+    fn pane_id(&self) -> PaneId {
+        self.pane_id
+    }
+    fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+    fn spawn_context(&self) -> SpawnContext<'_> {
+        SessionSpawn::context(self)
+    }
+    fn complete(self, tree: &mut MuxTree, pane: MuxPane) -> Result<SessionId, MuxError> {
+        tree.complete_session(self, pane)
+    }
+}
+
+impl SpawnPlan for WindowSpawn {
+    type Done = WindowId;
+    fn pane_id(&self) -> PaneId {
+        self.pane_id
+    }
+    fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+    fn spawn_context(&self) -> SpawnContext<'_> {
+        WindowSpawn::context(self)
+    }
+    fn complete(self, tree: &mut MuxTree, pane: MuxPane) -> Result<WindowId, MuxError> {
+        tree.complete_window(self, pane)
+    }
+}
+
+impl SpawnPlan for SplitSpawn {
+    type Done = (PaneId, WindowId);
+    fn pane_id(&self) -> PaneId {
+        self.pane_id
+    }
+    fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+    fn spawn_context(&self) -> SpawnContext<'_> {
+        SplitSpawn::context(self)
+    }
+    fn complete(self, tree: &mut MuxTree, pane: MuxPane) -> Result<(PaneId, WindowId), MuxError> {
+        tree.complete_split(self, pane)
+    }
+}
+
+impl SpawnPlan for RespawnSpawn {
+    type Done = PaneId;
+    fn pane_id(&self) -> PaneId {
+        self.pane_id
+    }
+    fn size(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+    fn spawn_context(&self) -> SpawnContext<'_> {
+        RespawnSpawn::context(self)
+    }
+    fn complete(self, tree: &mut MuxTree, pane: MuxPane) -> Result<PaneId, MuxError> {
+        tree.complete_respawn(self, pane)
     }
 }
 
