@@ -44,7 +44,6 @@ pub type ScrollbackCell = (
 /// Emit a small set of simple read-only getters for `$ty`, using
 /// [`TerminalAccess::term_ref`]. Validates the shared-method macro pattern
 /// (ARC-003/QA-001); the same shape scales to the full duplicated set.
-#[macro_export]
 macro_rules! impl_terminal_simple_getters {
     ($ty:ty) => {
         #[pymethods]
@@ -99,7 +98,6 @@ macro_rules! impl_terminal_simple_getters {
 
 /// Emit a batch of read-only query/state getters for `$ty`, using
 /// [`TerminalAccess::term_ref`]. (ARC-003/QA-001 scaling batch 1.)
-#[macro_export]
 macro_rules! impl_terminal_query_getters {
     ($ty:ty) => {
         #[pymethods]
@@ -312,7 +310,6 @@ macro_rules! impl_terminal_query_getters {
 
 /// Emit the custom rendering-hint color setters for `$ty`, using
 /// [`TerminalAccess::term_mut`]. (ARC-003/QA-001 scaling batch 2.)
-#[macro_export]
 macro_rules! impl_terminal_color_setters {
     ($ty:ty) => {
         #[pymethods]
@@ -443,7 +440,6 @@ macro_rules! impl_terminal_color_setters {
 
 /// Emit core state/config setters for `$ty`, using [`TerminalAccess::term_mut`].
 /// (ARC-003/QA-001 scaling batch 3.)
-#[macro_export]
 macro_rules! impl_terminal_state_setters {
     ($ty:ty) => {
         #[pymethods]
@@ -681,7 +677,6 @@ macro_rules! impl_terminal_state_setters {
 /// Emit pure-function static utility helpers for `$ty`. These do not access
 /// the terminal at all (they wrap `crate::ansi_utils`); they are duplicated
 /// only for API symmetry. (ARC-003/QA-001 batch: static helpers.)
-#[macro_export]
 macro_rules! impl_terminal_static_helpers {
     ($ty:ty) => {
         #[pymethods]
@@ -738,7 +733,6 @@ macro_rules! impl_terminal_static_helpers {
 
 /// Emit the Sixel resource-limit / graphics-query methods for `$ty`.
 /// (ARC-003/QA-001 batch: sixel + graphics.)
-#[macro_export]
 macro_rules! impl_terminal_sixel_graphics {
     ($ty:ty) => {
         #[pymethods]
@@ -882,7 +876,6 @@ macro_rules! impl_terminal_sixel_graphics {
 /// class that runs untrusted programs — had no way to change the mode; the
 /// definitions moved here from `PyTerminal`'s image_api so both classes emit
 /// them from one definition.)
-#[macro_export]
 macro_rules! impl_terminal_kitty_file_media {
     ($ty:ty) => {
         #[pymethods]
@@ -939,7 +932,6 @@ macro_rules! impl_terminal_kitty_file_media {
 
 /// Emit badge / session-variable methods for `$ty`. (ARC-003/QA-001 batch:
 /// badge API.) `set_badge_color` already lives in `impl_terminal_color_setters!`.
-#[macro_export]
 macro_rules! impl_terminal_badge_session {
     ($ty:ty) => {
         #[pymethods]
@@ -1089,7 +1081,6 @@ macro_rules! impl_terminal_badge_session {
 
 /// Emit progress-bar (OSC 9;4) and notification (OSC 9 / OSC 777) methods
 /// plus device-query response drainers for `$ty`. (ARC-003/QA-001 batch.)
-#[macro_export]
 macro_rules! impl_terminal_progress_notifications {
     ($ty:ty) => {
         #[pymethods]
@@ -1260,7 +1251,6 @@ macro_rules! impl_terminal_progress_notifications {
 /// the correct receiver since these mutate terminal state. Python-visible
 /// behavior is unchanged (PyO3 does not enforce `&mut self` at the Python
 /// level — the GIL already provides exclusive access).
-#[macro_export]
 macro_rules! impl_terminal_recording {
     ($ty:ty) => {
         #[pymethods]
@@ -1354,7 +1344,6 @@ macro_rules! impl_terminal_recording {
 
 /// Emit cell / color / line query methods for `$ty`. (ARC-003/QA-001 batch:
 /// cell & line queries.) All read-only, using [`TerminalAccess::term_ref`].
-#[macro_export]
 macro_rules! impl_terminal_cell_line_queries {
     ($ty:ty) => {
         #[pymethods]
@@ -1559,7 +1548,6 @@ macro_rules! impl_terminal_cell_line_queries {
 
 /// Emit content, clipboard, cursor-style, shell-integration, insecure-sequence,
 /// and focus/paste event-sequence methods for `$ty`. (ARC-003/QA-001 batch.)
-#[macro_export]
 macro_rules! impl_terminal_content_misc {
     ($ty:ty) => {
         #[pymethods]
@@ -1712,7 +1700,6 @@ macro_rules! impl_terminal_content_misc {
 
 /// Emit search / selection / scrollback-line-query methods for `$ty`.
 /// (ARC-003/QA-001 batch: search & selection.)
-#[macro_export]
 macro_rules! impl_terminal_search_select {
     ($ty:ty) => {
         #[pymethods]
@@ -1858,7 +1845,6 @@ macro_rules! impl_terminal_search_select {
 }
 
 /// Emit debug-snapshot methods for `$ty`. (ARC-003/QA-001 batch: debug.)
-#[macro_export]
 macro_rules! impl_terminal_debug_snapshots {
     ($ty:ty) => {
         #[pymethods]
@@ -1917,9 +1903,8 @@ macro_rules! impl_terminal_debug_snapshots {
 }
 
 /// Emit file-transfer API methods for `$ty`. (ARC-003/QA-001 batch: file transfer.)
-/// Uses `transfer_to_py_dict` defined in `python_bindings::terminal::mod` (pub(super),
+/// Uses `transfer_to_py_dict` defined in `python_bindings::terminal::mod` (pub(crate),
 /// visible to both the `terminal::*` submodules and the sibling `pty` module).
-#[macro_export]
 macro_rules! impl_terminal_file_transfer {
     ($ty:ty) => {
         #[pymethods]
@@ -2074,7 +2059,6 @@ macro_rules! impl_terminal_file_transfer {
 
 /// Emit text/html export + animation-tick methods for `$ty`.
 /// (ARC-003/QA-001 batch: exports + animations.)
-#[macro_export]
 macro_rules! impl_terminal_exports {
     ($ty:ty) => {
         #[pymethods]
@@ -2518,7 +2502,6 @@ macro_rules! impl_terminal_exports {
 /// axis the other shared-method macros abstract. When `bold_brightening`
 /// or `background_color` are not given, the terminal's own theme values
 /// are used (both docstrings already documented that default).
-#[macro_export]
 macro_rules! impl_terminal_screenshot_methods {
     ($ty:ty) => {
         #[pymethods]
@@ -2784,3 +2767,16 @@ macro_rules! impl_terminal_screenshot_methods {
         }
     };
 }
+
+// ARC-117: crate-private re-exports instead of #[macro_export], which put
+// these macros in the public crate-root API although they expand to
+// pub(crate) items (`TerminalAccess`). Invoke them as
+// `crate::python_bindings::common::impl_terminal_X!(Ty)`.
+pub(crate) use {
+    impl_terminal_badge_session, impl_terminal_cell_line_queries, impl_terminal_color_setters,
+    impl_terminal_content_misc, impl_terminal_debug_snapshots, impl_terminal_exports,
+    impl_terminal_file_transfer, impl_terminal_kitty_file_media,
+    impl_terminal_progress_notifications, impl_terminal_query_getters, impl_terminal_recording,
+    impl_terminal_screenshot_methods, impl_terminal_search_select, impl_terminal_simple_getters,
+    impl_terminal_sixel_graphics, impl_terminal_state_setters, impl_terminal_static_helpers,
+};
