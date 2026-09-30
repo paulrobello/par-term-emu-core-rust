@@ -581,7 +581,7 @@ def test_background_colors():
     term.process_str("\x1b[42mGreen BG\x1b[0m")  # Green background
 
     bg_color = term.get_bg_color(0, 0)
-    assert bg_color == (0, 128, 0)
+    assert bg_color == term.get_ansi_palette()[2]
 
 
 def test_256_color_foreground():
@@ -2381,12 +2381,13 @@ def test_bce_el0_clear_to_end_of_line():
     term.process_str("\x1b[42mGREEN+EL\x1b[K")
 
     # Text cells should have green bg
+    green = term.get_ansi_palette()[2]
     bg_text = term.get_bg_color(0, 0)
-    assert bg_text == (0, 128, 0), f"Text cell bg should be green, got {bg_text}"
+    assert bg_text == green, f"Text cell bg should be green, got {bg_text}"
 
     # Erased cells (beyond text) should also have green bg (BCE)
     bg_erased = term.get_bg_color(20, 0)
-    assert bg_erased == (0, 128, 0), f"Erased cell bg should be green, got {bg_erased}"
+    assert bg_erased == green, f"Erased cell bg should be green, got {bg_erased}"
 
 
 def test_bce_el1_clear_to_start_of_line():
@@ -2397,7 +2398,8 @@ def test_bce_el1_clear_to_start_of_line():
 
     # Erased cells (0-8) should have red bg
     bg_erased = term.get_bg_color(0, 0)
-    assert bg_erased == (128, 0, 0), f"Erased cell bg should be red, got {bg_erased}"
+    red = term.get_ansi_palette()[1]
+    assert bg_erased == red, f"Erased cell bg should be red, got {bg_erased}"
 
 
 def test_bce_el2_clear_entire_line():
@@ -2406,10 +2408,11 @@ def test_bce_el2_clear_entire_line():
     term.process_str("\x1b[44mBLUE\x1b[2K")
 
     # All cells on the line should have blue bg
+    blue = term.get_ansi_palette()[4]
     bg = term.get_bg_color(0, 0)
-    assert bg == (0, 0, 128), f"Line start bg should be blue, got {bg}"
+    assert bg == blue, f"Line start bg should be blue, got {bg}"
     bg_end = term.get_bg_color(39, 0)
-    assert bg_end == (0, 0, 128), f"Line end bg should be blue, got {bg_end}"
+    assert bg_end == blue, f"Line end bg should be blue, got {bg_end}"
 
 
 def test_bce_ed0_clear_to_end_of_screen():
@@ -2418,10 +2421,11 @@ def test_bce_ed0_clear_to_end_of_screen():
     term.process_str("\x1b[45m\x1b[H\x1b[J")
 
     # All cells should have magenta bg
+    magenta = term.get_ansi_palette()[5]
     bg = term.get_bg_color(0, 0)
-    assert bg == (128, 0, 128), f"Cell (0,0) bg should be magenta, got {bg}"
+    assert bg == magenta, f"Cell (0,0) bg should be magenta, got {bg}"
     bg_last = term.get_bg_color(19, 4)
-    assert bg_last == (128, 0, 128), f"Last cell bg should be magenta, got {bg_last}"
+    assert bg_last == magenta, f"Last cell bg should be magenta, got {bg_last}"
 
 
 def test_bce_ed2_clear_entire_screen():
@@ -2431,10 +2435,11 @@ def test_bce_ed2_clear_entire_screen():
     term.process_str("\x1b[46m\x1b[2J")
 
     # All cells should be cleared with cyan bg
+    cyan = term.get_ansi_palette()[6]
     bg = term.get_bg_color(0, 0)
-    assert bg == (0, 128, 128), f"Cell (0,0) bg should be cyan, got {bg}"
+    assert bg == cyan, f"Cell (0,0) bg should be cyan, got {bg}"
     bg_last = term.get_bg_color(19, 4)
-    assert bg_last == (0, 128, 128), f"Last cell bg should be cyan, got {bg_last}"
+    assert bg_last == cyan, f"Last cell bg should be cyan, got {bg_last}"
 
 
 def test_bce_ech_erase_characters():
@@ -2445,16 +2450,17 @@ def test_bce_ech_erase_characters():
 
     # First 5 cells erased with green bg
     bg = term.get_bg_color(0, 0)
-    assert bg == (0, 128, 0), f"Erased cell bg should be green, got {bg}"
+    green = term.get_ansi_palette()[2]
+    assert bg == green, f"Erased cell bg should be green, got {bg}"
 
 
 def test_bce_default_bg_is_black():
-    """Without SGR bg set, erase should use default black bg"""
+    """Without SGR bg set, erase should use the default (OSC 11) bg"""
     term = Terminal(40, 2)
     term.process_str("Hello\x1b[K")
 
     bg_erased = term.get_bg_color(10, 0)
-    assert bg_erased == (0, 0, 0), f"Default bg should be black, got {bg_erased}"
+    assert bg_erased == term.default_bg(), f"Default bg expected, got {bg_erased}"
 
 
 def test_kitty_placement_advances_cursor():

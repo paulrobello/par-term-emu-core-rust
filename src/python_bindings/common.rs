@@ -152,7 +152,7 @@ macro_rules! impl_terminal_query_getters {
             ///     Tuple of (r, g, b) integers
             fn default_fg(&self) -> pyo3::PyResult<(u8, u8, u8)> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.default_fg().to_rgb())
+                Ok(t.resolve_color(&t.default_fg()))
             }
 
             /// Get default background color (OSC 11)
@@ -163,7 +163,7 @@ macro_rules! impl_terminal_query_getters {
             ///     Tuple of (r, g, b) integers
             fn default_bg(&self) -> pyo3::PyResult<(u8, u8, u8)> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.default_bg().to_rgb())
+                Ok(t.resolve_color(&t.default_bg()))
             }
 
             /// Get faint/dim text alpha multiplier
@@ -1359,7 +1359,7 @@ macro_rules! impl_terminal_cell_line_queries {
             fn get_fg_color(&self, col: usize, row: usize) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 if let Some(cell) = t.active_grid().get(col, row) {
-                    Ok(Some(cell.fg.to_rgb()))
+                    Ok(Some(t.resolve_cell_colors(cell).fg))
                 } else {
                     Ok(None)
                 }
@@ -1376,7 +1376,7 @@ macro_rules! impl_terminal_cell_line_queries {
             fn get_bg_color(&self, col: usize, row: usize) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 if let Some(cell) = t.active_grid().get(col, row) {
-                    Ok(Some(cell.bg.to_rgb()))
+                    Ok(Some(t.resolve_cell_colors(cell).bg))
                 } else {
                     Ok(None)
                 }
@@ -1397,7 +1397,7 @@ macro_rules! impl_terminal_cell_line_queries {
             ) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 if let Some(cell) = t.active_grid().get(col, row) {
-                    Ok(cell.underline_color.map(|c| c.to_rgb()))
+                    Ok(cell.underline_color.map(|c| t.resolve_color(&c)))
                 } else {
                     Ok(None)
                 }
@@ -1483,10 +1483,11 @@ macro_rules! impl_terminal_cell_line_queries {
                 let result = (0..cols)
                     .filter_map(|col| {
                         grid.get(col, row).map(|cell| {
+                            let colors = t.resolve_cell_colors(cell);
                             (
                                 cell.get_grapheme(),
-                                cell.fg.to_rgb(),
-                                cell.bg.to_rgb(),
+                                colors.fg,
+                                colors.bg,
                                 $crate::python_bindings::types::PyAttributes::from(cell),
                             )
                         })
@@ -1827,10 +1828,11 @@ macro_rules! impl_terminal_search_select {
                     let cells: Vec<_> = line
                         .iter()
                         .map(|cell| {
+                            let colors = t.resolve_cell_colors(cell);
                             (
                                 cell.get_grapheme(),
-                                cell.fg.to_rgb(),
-                                cell.bg.to_rgb(),
+                                colors.fg,
+                                colors.bg,
                                 $crate::python_bindings::types::PyAttributes::from(cell),
                             )
                         })
@@ -2253,13 +2255,6 @@ macro_rules! impl_terminal_exports {
                 let rows = grid.rows();
                 let cols = grid.cols();
 
-                // Get bold brightening setting
-                let bold_brightening = t.bold_brightening();
-
-                // Resolve through the live ANSI palette (the core resolver, ARC-101)
-                let resolve_color =
-                    |color: $crate::color::Color| -> (u8, u8, u8) { t.resolve_color(&color) };
-
                 // Capture all lines while holding terminal reference
                 let mut lines = Vec::with_capacity(rows);
                 let mut wrapped_lines = Vec::with_capacity(rows);
@@ -2267,22 +2262,13 @@ macro_rules! impl_terminal_exports {
                     let mut line = Vec::with_capacity(cols);
                     for col in 0..cols {
                         if let Some(cell) = grid.get(col, row) {
-                            // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
-                            let mut fg = cell.fg;
-                            if bold_brightening && cell.flags.bold() {
-                                if let $crate::color::Color::Named(named) = fg {
-                                    if (named as u8) < 8 {
-                                        fg = $crate::color::Color::Named(
-                                            $crate::color::NamedColor::from_u8(named as u8 + 8),
-                                        );
-                                    }
-                                }
-                            }
-
+                            // Palette, OSC 10/11 defaults and bold
+                            // brightening: the shared resolver (ARC-101).
+                            let colors = t.resolve_cell_colors(cell);
                             line.push((
                                 cell.get_grapheme(),
-                                resolve_color(fg),
-                                resolve_color(cell.bg),
+                                colors.fg,
+                                colors.bg,
                                 $crate::python_bindings::types::PyAttributes::from(cell),
                             ));
                         } else {

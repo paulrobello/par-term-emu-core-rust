@@ -40,6 +40,13 @@ use crate::terminal::{Terminal, TerminalEvent, TerminalEventKind};
 ///
 /// The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
 /// for any Unicode scalar value). `text_len` indicates how many bytes are valid.
+/// When the cell also carries combining marks, `attrs` has
+/// `TERM_ATTR_HAS_COMBINING` set and `terminal_read_cell_grapheme` returns the
+/// full UTF-8 cluster (ARC-101).
+///
+/// Colors are resolved for display (ARC-101): the live ANSI palette (OSC 4),
+/// the terminal default colors (OSC 10/11) for default cells, flagged with
+/// `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG`, and bold brightening.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedCell {
@@ -59,10 +66,24 @@ pub struct SharedCell {
     pub bg_g: u8,
     /// Background color — blue component
     pub bg_b: u8,
-    /// Bitfield of cell attributes (bold, italic, etc.) — see `CellBitflags`
+    /// Bitfield: `TERM_CELL_*` cell attributes (bits 0-11) plus the
+    /// `TERM_ATTR_*` readback bits (12-14)
     pub attrs: u16,
     /// Display width of the character (typically 1 or 2)
     pub width: u8,
+}
+
+/// `SharedCell.attrs` readback bits above the `TERM_CELL_*` attribute bits
+/// (ARC-101). The values are the `TERM_ATTR_*` defines in
+/// terminal_core_layout.h, pinned by `layout_header_defines_match_rust`.
+pub mod attr_bits {
+    /// The foreground is the terminal default (OSC 10), not an SGR color.
+    pub const DEFAULT_FG: u16 = 1 << 12;
+    /// The background is the terminal default (OSC 11), not an SGR color.
+    pub const DEFAULT_BG: u16 = 1 << 13;
+    /// The cell carries combining marks after its base character; read the
+    /// full cluster with `terminal_read_cell_grapheme`.
+    pub const HAS_COMBINING: u16 = 1 << 14;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,20 +166,21 @@ impl SharedState {
 
         // Cells
         let mut cells_vec: Vec<SharedCell> = Vec::with_capacity(cols * rows);
+        let pad = SharedCell::padding(term);
 
         for row_idx in 0..rows {
             if let Some(row_cells) = grid.row(row_idx) {
                 for col_idx in 0..cols {
                     let cell = row_cells
                         .get(col_idx)
-                        .map(SharedCell::from_cell)
-                        .unwrap_or_else(SharedCell::blank);
+                        .map(|c| SharedCell::from_cell(term, c))
+                        .unwrap_or_else(|| pad.clone());
                     cells_vec.push(cell);
                 }
             } else {
                 // Row doesn't exist — fill with default cells
                 for _ in 0..cols {
-                    cells_vec.push(SharedCell::blank());
+                    cells_vec.push(pad.clone());
                 }
             }
         }
@@ -521,12 +543,24 @@ pub struct TermModeState {
 }
 
 impl SharedCell {
-    /// Build a `SharedCell` from one grid cell.
-    fn from_cell(cell: &crate::cell::Cell) -> Self {
+    /// Build a `SharedCell` from one grid cell, with colors resolved through
+    /// `term`'s palette and defaults ([`Terminal::resolve_cell_colors`]).
+    fn from_cell(term: &Terminal, cell: &crate::cell::Cell) -> Self {
         let mut text = [0u8; 4];
         let text_len = cell.c.encode_utf8(&mut text).len() as u8;
-        let (fg_r, fg_g, fg_b) = cell.fg.to_rgb();
-        let (bg_r, bg_g, bg_b) = cell.bg.to_rgb();
+        let colors = term.resolve_cell_colors(cell);
+        let (fg_r, fg_g, fg_b) = colors.fg;
+        let (bg_r, bg_g, bg_b) = colors.bg;
+        let mut attrs = cell.flags.to_bitflags();
+        if colors.default_fg {
+            attrs |= attr_bits::DEFAULT_FG;
+        }
+        if colors.default_bg {
+            attrs |= attr_bits::DEFAULT_BG;
+        }
+        if cell.has_combining_chars() {
+            attrs |= attr_bits::HAS_COMBINING;
+        }
         SharedCell {
             text,
             text_len,
@@ -536,12 +570,21 @@ impl SharedCell {
             bg_r,
             bg_g,
             bg_b,
-            attrs: cell.flags.to_bitflags(),
+            attrs,
             width: cell.width,
         }
     }
 
-    /// The default (space) cell used to pad short rows.
+    /// The cell that pads a line shorter than the grid: an unstyled space,
+    /// resolved like any real blank cell (default colors and bits).
+    fn padding(term: &Terminal) -> Self {
+        Self::from_cell(term, &crate::cell::Cell::default())
+    }
+
+    /// A placeholder value for initializing caller-side buffers before a
+    /// read. It is not what the readback writes for a blank cell: that is
+    /// resolved through the terminal's default colors and carries the
+    /// `TERM_ATTR_DEFAULT_*` bits.
     pub fn blank() -> Self {
         SharedCell {
             text: [b' ', 0, 0, 0],
@@ -569,12 +612,13 @@ fn mouse_mode_code(mode: MouseMode) -> u8 {
 /// `terminal_read_row` and `terminal_read_scrollback_row`. With `out` NULL
 /// returns the cells available from `col_start` (the sizing answer);
 /// otherwise copies `cells[col_start..cols]` into `out` (up to `cap`),
-/// padding a line shorter than `cols` with blank cells, and returns the
-/// number written.
+/// padding a line shorter than `cols` with resolved blank cells, and returns
+/// the number written.
 ///
 /// # Safety
 /// `out` must be NULL or valid for writes of `cap` `SharedCell` values.
 unsafe fn copy_row(
+    term: &Terminal,
     cells: &[crate::cell::Cell],
     cols: u32,
     col_start: u32,
@@ -589,8 +633,8 @@ unsafe fn copy_row(
     while col < cols && written < cap {
         let cell = cells
             .get(col as usize)
-            .map(SharedCell::from_cell)
-            .unwrap_or_else(SharedCell::blank);
+            .map(|c| SharedCell::from_cell(term, c))
+            .unwrap_or_else(|| SharedCell::padding(term));
         // SAFETY: `written < cap`, and the caller guarantees `out` is valid
         // for `cap` writes.
         unsafe { out.add(written as usize).write(cell) };
@@ -845,7 +889,7 @@ pub unsafe extern "C" fn terminal_read_row(
     };
     // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
     // which is `copy_row`'s contract.
-    unsafe { copy_row(row_cells, grid.cols() as u32, col_start, out, cap) }
+    unsafe { copy_row(term_ref, row_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
 /// Copy a run of scrollback cells into a caller-owned buffer.
@@ -877,7 +921,71 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
     };
     // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
     // which is `copy_row`'s contract.
-    unsafe { copy_row(line_cells, grid.cols() as u32, col_start, out, cap) }
+    unsafe {
+        copy_row(
+            term_ref,
+            line_cells,
+            grid.cols() as u32,
+            col_start,
+            out,
+            cap,
+        )
+    }
+}
+
+/// Copy the full grapheme cluster of one screen cell — the base character
+/// plus every combining mark — as UTF-8 into a caller-owned buffer
+/// (ARC-101). `SharedCell.text` holds only the base character; a cell whose
+/// `attrs` has `TERM_ATTR_HAS_COMBINING` needs this call for the rest.
+///
+/// Writes up to `cap` bytes (no NUL terminator) and returns the cluster's
+/// total byte length — if the return exceeds `cap`, call again with a larger
+/// buffer; `out` NULL with `cap` 0 is the sizing call. Returns 0 for a
+/// position outside the active grid. Same active-grid addressing as
+/// `terminal_read_row`.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` bytes, or NULL with `cap` 0 for a
+/// sizing call. `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_read_cell_grapheme(
+    term: *const Terminal,
+    row: u32,
+    col: u32,
+    out: *mut u8,
+    cap: u32,
+) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+    let term_ref = unsafe { &*term };
+    let Some(cell) = term_ref.active_grid().get(col as usize, row as usize) else {
+        return 0;
+    };
+    let mut buf = [0u8; 4];
+    let mut total = cell.c.encode_utf8(&mut buf).len();
+    for ch in cell.combining() {
+        total += ch.len_utf8();
+    }
+    if !out.is_null() && cap > 0 {
+        let mut written = 0usize;
+        let cap = cap as usize;
+        for ch in std::iter::once(cell.c).chain(cell.combining().iter().copied()) {
+            let bytes = ch.encode_utf8(&mut buf).as_bytes();
+            let take = bytes.len().min(cap - written);
+            // SAFETY: `written + take <= cap`, `out` is non-null, and the
+            // caller guarantees `out` is valid for `cap` byte writes; `buf`
+            // is a stack array, so the ranges cannot overlap.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.add(written), take) };
+            written += take;
+            if written == cap {
+                break;
+            }
+        }
+    }
+    u32::try_from(total).unwrap_or(u32::MAX)
 }
 
 /// Number of lines currently held in scrollback.
@@ -1192,8 +1300,8 @@ mod tests {
         grid.row(row)
             .expect("row exists")
             .iter()
-            .map(SharedCell::from_cell)
-            .chain(std::iter::repeat(SharedCell::blank()))
+            .map(|c| SharedCell::from_cell(term, c))
+            .chain(std::iter::repeat(SharedCell::padding(term)))
             .take(RT_COLS)
             .collect()
     }
@@ -1266,7 +1374,8 @@ mod tests {
         //    oldest first (line 0 = oldest).
         let sb = unsafe { terminal_scrollback_count(term) };
         assert!(sb >= 3, "expected scrollback after 8-line frame, got {sb}");
-        let grid = unsafe { &*term }.active_grid();
+        let term_ref = unsafe { &*term };
+        let grid = term_ref.active_grid();
         for line in 0..sb as usize {
             let mut buf = vec![SharedCell::blank(); RT_COLS];
             let n = unsafe {
@@ -1277,7 +1386,7 @@ mod tests {
                 .scrollback_line(line)
                 .expect("scrollback line exists")
                 .iter()
-                .map(SharedCell::from_cell)
+                .map(|c| SharedCell::from_cell(term_ref, c))
                 .collect();
             assert_eq!(buf, core, "scrollback line {line} FFI != core");
         }
@@ -1676,6 +1785,14 @@ mod tests {
         ];
         let mut expected = expected;
         expected.extend(TERM_EVENT_CODES.iter().map(|&(n, c)| (n, c as u32)));
+        expected.extend([
+            ("TERM_ATTR_DEFAULT_FG", attr_bits::DEFAULT_FG as u32),
+            ("TERM_ATTR_DEFAULT_BG", attr_bits::DEFAULT_BG as u32),
+            ("TERM_ATTR_HAS_COMBINING", attr_bits::HAS_COMBINING as u32),
+        ]);
+        // The readback bits must sit above every CellBitflags bit.
+        let readback = attr_bits::DEFAULT_FG | attr_bits::DEFAULT_BG | attr_bits::HAS_COMBINING;
+        assert_eq!(CellBitflags::all().bits() & readback, 0);
 
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -2007,6 +2124,108 @@ mod tests {
         assert!(json["id"].is_null());
         assert_eq!(json["row"], 1);
         assert_eq!(json["col"], 2);
+    }
+
+    fn read_cell(term: *const Terminal, row: u32, col: u32) -> SharedCell {
+        let mut buf = vec![SharedCell::blank(); 1];
+        let n = unsafe { terminal_read_row(term, row, col, buf.as_mut_ptr(), 1) };
+        assert_eq!(n, 1);
+        buf.remove(0)
+    }
+
+    /// ARC-101 audit probe, replayed through the C entry points: after
+    /// `OSC 4;1;rgb:00/00/ff`, SGR 31 reads back as the new palette color
+    /// (it read (128,0,0) on ABI 3), and default cells carry the default
+    /// bits with the OSC 10/11 colors.
+    #[test]
+    fn read_row_follows_palette_and_defaults() {
+        let term = unsafe { terminal_create(20, 4, 10) };
+        let seq = b"\x1b]4;1;rgb:00/00/ff\x07\x1b[31mR\x1b[0mD\x1b[1;31mB";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let red = read_cell(term, 0, 0);
+        assert_eq!((red.fg_r, red.fg_g, red.fg_b), (0, 0, 255));
+        assert_eq!(red.attrs & attr_bits::DEFAULT_FG, 0);
+        assert_ne!(red.attrs & attr_bits::DEFAULT_BG, 0);
+
+        let plain = read_cell(term, 0, 1);
+        assert_ne!(plain.attrs & attr_bits::DEFAULT_FG, 0);
+        // The default fg is Named(White) out of the box: the live palette's
+        // slot 7, not Color::to_rgb's fixed (192,192,192).
+        let t = unsafe { &*term };
+        assert_eq!(
+            (plain.fg_r, plain.fg_g, plain.fg_b),
+            t.resolve_color(&t.default_fg())
+        );
+        assert_eq!(
+            (plain.fg_r, plain.fg_g, plain.fg_b),
+            t.get_ansi_palette()[7].to_rgb()
+        );
+
+        // Bold brightening: bold SGR 31 → palette slot 9.
+        let bold = read_cell(term, 0, 2);
+        let slot9 = unsafe { &*term }.get_ansi_palette()[9].to_rgb();
+        assert_eq!((bold.fg_r, bold.fg_g, bold.fg_b), slot9);
+
+        let seq = b"\x1b]10;rgb:11/22/33\x07\x1b]11;rgb:44/55/66\x07";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        let blank = read_cell(term, 3, 5);
+        assert_eq!((blank.fg_r, blank.fg_g, blank.fg_b), (0x11, 0x22, 0x33));
+        assert_eq!((blank.bg_r, blank.bg_g, blank.bg_b), (0x44, 0x55, 0x66));
+        assert_ne!(blank.attrs & attr_bits::DEFAULT_FG, 0);
+        assert_ne!(blank.attrs & attr_bits::DEFAULT_BG, 0);
+
+        // The snapshot resolves the same way as the pinned readback.
+        let state = unsafe { terminal_get_state(term) };
+        let s = unsafe { &*state };
+        let cells = unsafe { std::slice::from_raw_parts(s.cells, s.cell_count as usize) };
+        assert_eq!(cells[0], read_cell(term, 0, 0));
+        assert_eq!(cells[3 * 20 + 5], blank);
+        unsafe { terminal_free_state(state) };
+        unsafe { terminal_free(term) };
+    }
+
+    /// ARC-101 audit probe: `x` + U+0301 kept only `x`. The base char stays
+    /// in `text`, `TERM_ATTR_HAS_COMBINING` flags the cell, and
+    /// `terminal_read_cell_grapheme` returns the whole cluster with the
+    /// cap/return-total protocol.
+    #[test]
+    fn read_cell_grapheme_returns_full_cluster() {
+        let term = unsafe { terminal_create(10, 3, 0) };
+        let seq = "x\u{301}y".as_bytes();
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let x = read_cell(term, 0, 0);
+        assert_eq!(&x.text[..x.text_len as usize], b"x");
+        assert_ne!(x.attrs & attr_bits::HAS_COMBINING, 0);
+        let y = read_cell(term, 0, 1);
+        assert_eq!(y.attrs & attr_bits::HAS_COMBINING, 0);
+
+        let want = "x\u{301}".as_bytes();
+        let total = unsafe { terminal_read_cell_grapheme(term, 0, 0, std::ptr::null_mut(), 0) };
+        assert_eq!(total as usize, want.len());
+        let mut buf = [0u8; 8];
+        let n = unsafe { terminal_read_cell_grapheme(term, 0, 0, buf.as_mut_ptr(), 8) };
+        assert_eq!(&buf[..n as usize], want);
+
+        // A short buffer gets a prefix and the full total back.
+        let mut short = [0u8; 2];
+        let n = unsafe { terminal_read_cell_grapheme(term, 0, 0, short.as_mut_ptr(), 2) };
+        assert_eq!(n as usize, want.len());
+        assert_eq!(&short, &want[..2]);
+
+        // A plain cell's cluster is its base char; off-grid is 0.
+        let n = unsafe { terminal_read_cell_grapheme(term, 0, 1, buf.as_mut_ptr(), 8) };
+        assert_eq!(&buf[..n as usize], b"y");
+        assert_eq!(
+            unsafe { terminal_read_cell_grapheme(term, 9, 0, buf.as_mut_ptr(), 8) },
+            0
+        );
+        assert_eq!(
+            unsafe { terminal_read_cell_grapheme(std::ptr::null(), 0, 0, buf.as_mut_ptr(), 8) },
+            0
+        );
+        unsafe { terminal_free(term) };
     }
 
     /// The `TERM_EVENT_*` codes are exactly 1..=26 with no gaps or

@@ -66,6 +66,13 @@ typedef struct {
  *
  * The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
  * for any Unicode scalar value). `text_len` indicates how many bytes are valid.
+ * When the cell also carries combining marks, `attrs` has
+ * `TERM_ATTR_HAS_COMBINING` set and `terminal_read_cell_grapheme` returns the
+ * full UTF-8 cluster (ARC-101).
+ *
+ * Colors are resolved for display (ARC-101): the live ANSI palette (OSC 4),
+ * the terminal default colors (OSC 10/11) for default cells, flagged with
+ * `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG`, and bold brightening.
  */
 typedef struct {
   /**
@@ -101,7 +108,8 @@ typedef struct {
    */
   uint8_t bg_b;
   /**
-   * Bitfield of cell attributes (bold, italic, etc.) — see `CellBitflags`
+   * Bitfield: `TERM_CELL_*` cell attributes (bits 0-11) plus the
+   * `TERM_ATTR_*` readback bits (12-14)
    */
   uint16_t attrs;
   /**
@@ -518,6 +526,28 @@ uint32_t terminal_read_scrollback_row(const Terminal *term,
                                       uint32_t col_start,
                                       SharedCell *out,
                                       uint32_t cap);
+
+/**
+ * Copy the full grapheme cluster of one screen cell — the base character
+ * plus every combining mark — as UTF-8 into a caller-owned buffer
+ * (ARC-101). `SharedCell.text` holds only the base character; a cell whose
+ * `attrs` has `TERM_ATTR_HAS_COMBINING` needs this call for the rest.
+ *
+ * Writes up to `cap` bytes (no NUL terminator) and returns the cluster's
+ * total byte length — if the return exceeds `cap`, call again with a larger
+ * buffer; `out` NULL with `cap` 0 is the sizing call. Returns 0 for a
+ * position outside the active grid. Same active-grid addressing as
+ * `terminal_read_row`.
+ *
+ * # Safety
+ * `out` must be valid for writes of `cap` bytes, or NULL with `cap` 0 for a
+ * sizing call. `term` must be a valid pointer to a `Terminal`.
+ */
+uint32_t terminal_read_cell_grapheme(const Terminal *term,
+                                     uint32_t row,
+                                     uint32_t col,
+                                     uint8_t *out,
+                                     uint32_t cap);
 
 /**
  * Number of lines currently held in scrollback.

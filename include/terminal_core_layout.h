@@ -8,6 +8,7 @@
  * Every #define below is pinned to its Rust source of truth by
  * layout_header_defines_match_rust in src/ffi.rs:
  * - TERM_CELL_* == crate::cell::CellBitflags bits
+ * - TERM_ATTR_* == crate::ffi::attr_bits
  * - TERM_MOUSE_MODE_* == crate::mouse::MouseMode discriminants
  * - TERM_MOD_* == crate::keyboard::modifiers
  * - TERM_KEY_* == crate::keyboard::TermKey discriminants (kitty codes)
@@ -38,6 +39,12 @@
 #define TERM_CELL_GUARDED 512u        /* bit 9 */
 #define TERM_CELL_WIDE_CHAR 1024u     /* bit 10 */
 #define TERM_CELL_WIDE_CHAR_SPACER 2048u /* bit 11 */
+
+/* Readback bits in SharedCell.attrs above the TERM_CELL_* bits (ARC-101;
+ * crate::ffi::attr_bits). */
+#define TERM_ATTR_DEFAULT_FG 4096u     /* bit 12: fg is the OSC 10 default */
+#define TERM_ATTR_DEFAULT_BG 8192u     /* bit 13: bg is the OSC 11 default */
+#define TERM_ATTR_HAS_COMBINING 16384u /* bit 14: read the cluster with terminal_read_cell_grapheme */
 
 /* Mouse tracking modes — SharedState.mouse_mode / TermModeState.mouse_mode
  * (MouseMode discriminants in mouse.rs). */
