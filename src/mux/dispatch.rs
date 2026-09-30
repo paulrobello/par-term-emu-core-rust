@@ -13,7 +13,7 @@
 //! [`crate::mux::server`] keeps the accept loop, client threads, and the
 //! broadcast sinks this module calls into.
 
-use crate::mux::command::{MuxCommand, ResizeAdjustment};
+use crate::mux::command::{MuxCommand, ResizeAdjustment, SendKeysPayload};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
@@ -435,17 +435,23 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, &body)
 }
 
-fn cmd_send_keys(ctx: &Ctx<'_>, pane: Target<PaneId>, keys: &[u8]) -> Outcome {
+fn cmd_send_keys(ctx: &Ctx<'_>, pane: Target<PaneId>, keys: &SendKeysPayload) -> Outcome {
     let mut guard = ctx.tree.lock();
     let pane = match guard.resolve_pane_target(pane) {
         Ok(id) => id,
         Err(err) => return Outcome::err(ctx, &err.to_string()),
     };
     match guard.pane_mut(pane) {
-        Some(target) => match target.write(keys) {
-            Ok(()) => Outcome::ok(ctx, ""),
-            Err(err) => Outcome::err(ctx, &err.to_string()),
-        },
+        Some(target) => {
+            // Navigation/function keys encode against the pane's live modes
+            // (DECCKM, kitty flags); the read guard drops before the write.
+            let terminal = target.terminal();
+            let bytes = keys.encode(|| terminal.read());
+            match target.write(&bytes) {
+                Ok(()) => Outcome::ok(ctx, ""),
+                Err(err) => Outcome::err(ctx, &err.to_string()),
+            }
+        }
         None => Outcome::err(ctx, &format!("no such pane: {pane}")),
     }
 }

@@ -70,8 +70,15 @@ def test_option_key_modes(term):
     opts = {"left_option": NORMAL, "right_option": META}
     assert term.encode_key(CHAR, ALT, ord("a"), **opts) == b"a"
     assert term.encode_key(CHAR, ALT | ALT_RIGHT, ord("a"), **opts) == b"\xe1"
-    # Defaults (0) are Normal passthrough.
-    assert term.encode_key(CHAR, ALT, ord("a")) == b"a"
+    # Defaults are ESC on both sides (same as C/Rust).
+    assert term.encode_key(CHAR, ALT, ord("a")) == b"\x1ba"
+    assert term.encode_key(CHAR, ALT | ALT_RIGHT, ord("a")) == b"\x1ba"
+
+
+def test_python_default_matches_c_default(term):
+    # C terminal_encode_key and Rust KeyEncodeOptions::default() both ESC-
+    # prefix Alt; the Python binding must send the same bytes (ARC-093).
+    assert term.encode_key(CHAR, ALT, ord("f")) == b"\x1bf"
 
 
 def test_modify_other_keys(term):

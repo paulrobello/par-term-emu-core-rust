@@ -1,7 +1,69 @@
 //! Control-mode command parsing (client → server).
 
+use std::ops::Deref;
+
+use crate::keyboard::{self, modifiers, TermKey, TermKeyEvent};
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
+use crate::terminal::Terminal;
+
+/// One piece of a `send-keys` payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendKeysPart {
+    /// Bytes written verbatim: literal text, `-l`/`-H` payloads, `0xNN`
+    /// tokens, and the control-byte key names (`C-x`, `Escape`, `BSpace`,
+    /// `Space`, `Enter`, `Tab`).
+    Bytes(Vec<u8>),
+    /// A navigation or function key, encoded by [`keyboard::encode_key`]
+    /// against the target pane's negotiated modes (DECCKM, kitty flags).
+    Key(TermKeyEvent),
+}
+
+/// A parsed `send-keys` payload: the parts in order, adjacent `Bytes`
+/// merged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SendKeysPayload(pub Vec<SendKeysPart>);
+
+impl SendKeysPayload {
+    /// The bytes for the pane's PTY: `Bytes` parts verbatim, `Key` parts
+    /// encoded against the terminal `terminal` returns. `terminal` is
+    /// called only when a `Key` part needs it, so a payload of plain bytes
+    /// (par-term's keystroke stream) never takes the terminal lock.
+    pub fn encode<T: Deref<Target = Terminal>>(&self, terminal: impl FnOnce() -> T) -> Vec<u8> {
+        let term = self
+            .0
+            .iter()
+            .any(|part| matches!(part, SendKeysPart::Key(_)))
+            .then(terminal);
+        let mut out = Vec::new();
+        for part in &self.0 {
+            match part {
+                SendKeysPart::Bytes(bytes) => out.extend_from_slice(bytes),
+                SendKeysPart::Key(ev) => {
+                    if let Some(term) = term.as_deref() {
+                        out.extend(keyboard::encode_key(ev, term));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        if let Some(SendKeysPart::Bytes(last)) = self.0.last_mut() {
+            last.extend_from_slice(bytes);
+        } else {
+            self.0.push(SendKeysPart::Bytes(bytes.to_vec()));
+        }
+    }
+
+    fn push(&mut self, part: SendKeysPart) {
+        match part {
+            SendKeysPart::Bytes(bytes) => self.push_bytes(&bytes),
+            key => self.0.push(key),
+        }
+    }
+}
 
 /// How a `resize-pane` moves a pane's borders (T4.C).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,10 +114,12 @@ pub enum MuxCommand {
     SendKeys {
         /// Target pane.
         pane: Target<PaneId>,
-        /// Final bytes for the pane's PTY — key names interpreted, quotes
-        /// resolved, no terminator added. `Enter` is an expressible key, not
-        /// an implicit one (tmux semantics; par-mux.md Phase 4 T4.B).
-        keys: Vec<u8>,
+        /// The payload — key names interpreted, quotes resolved, no
+        /// terminator added. `Enter` is an expressible key, not an implicit
+        /// one (tmux semantics; par-mux.md Phase 4 T4.B). Navigation and
+        /// function keys are encoded against the pane's modes at dispatch
+        /// ([`SendKeysPayload::encode`]).
+        keys: SendKeysPayload,
     },
     /// Kill a pane.
     KillPane {
@@ -808,34 +872,63 @@ fn shell_split(raw: &str) -> Vec<String> {
     tokens
 }
 
-/// Map one send-keys token to the bytes a terminal expects for that key.
+/// Map one send-keys token to its payload part (tmux key names,
+/// `key-string.c`).
 ///
-/// The table covers exactly the names par-term's `escape_keys_for_tmux`
-/// emits, plus `Enter` (which replaces the removed implicit newline) and the
-/// arrow keys. Unknown tokens are NOT errors: they are written literally, so
-/// passthrough text works without quoting every word (a deliberate, narrower
-/// contract than tmux's, which rejects unknown key names).
-fn key_to_bytes(name: &str) -> Option<Vec<u8>> {
+/// Two classes, on purpose:
+/// - The control-byte names par-term's `escape_keys_for_tmux` emits for
+///   bytes it has ALREADY encoded (`C-x`, `C-Space`, `Escape`, `BSpace`,
+///   `Space`), plus `Enter` and `Tab`, stay raw bytes. Re-encoding them
+///   against the pane's modes would double-encode par-term input (`C-c`
+///   under modifyOtherKeys 2 would become `CSI 27;5;99~`).
+/// - Navigation and function keys, which par-term never emits by name,
+///   resolve to a key event that dispatch encodes against the pane's
+///   DECCKM/kitty state, as tmux does (`input-keys.c`).
+///
+/// Unknown tokens are NOT errors: they are written literally, so
+/// passthrough text works without quoting every word (a deliberate,
+/// narrower contract than tmux's, which rejects unknown key names).
+fn key_part(name: &str) -> Option<SendKeysPart> {
+    let key = |key: TermKey| Some(SendKeysPart::Key(TermKeyEvent::functional(key, 0)));
+    let byte = |b: u8| Some(SendKeysPart::Bytes(vec![b]));
     match name {
-        "C-Space" => Some(vec![0x00]),
-        "Enter" => Some(vec![0x0d]),
-        "Escape" | "Esc" => Some(vec![0x1b]),
-        "BSpace" => Some(vec![0x7f]),
-        "Space" => Some(vec![b' ']),
-        "Up" => Some(vec![0x1b, b'[', b'A']),
-        "Down" => Some(vec![0x1b, b'[', b'B']),
-        "Right" => Some(vec![0x1b, b'[', b'C']),
-        "Left" => Some(vec![0x1b, b'[', b'D']),
+        "C-Space" => byte(0x00),
+        "Enter" => byte(0x0d),
+        "Tab" => byte(0x09),
+        "Escape" | "Esc" => byte(0x1b),
+        "BSpace" => byte(0x7f),
+        "Space" => byte(b' '),
+        "Up" => key(TermKey::Up),
+        "Down" => key(TermKey::Down),
+        "Right" => key(TermKey::Right),
+        "Left" => key(TermKey::Left),
+        "Home" => key(TermKey::Home),
+        "End" => key(TermKey::End),
+        "PageUp" | "PgUp" | "PPage" => key(TermKey::PageUp),
+        "PageDown" | "PgDn" | "NPage" => key(TermKey::PageDown),
+        "IC" | "Insert" => key(TermKey::Insert),
+        "DC" | "Delete" => key(TermKey::Delete),
+        "F1" => key(TermKey::F1),
+        "F2" => key(TermKey::F2),
+        "F3" => key(TermKey::F3),
+        "F4" => key(TermKey::F4),
+        "F5" => key(TermKey::F5),
+        "F6" => key(TermKey::F6),
+        "F7" => key(TermKey::F7),
+        "F8" => key(TermKey::F8),
+        "F9" => key(TermKey::F9),
+        "F10" => key(TermKey::F10),
+        "F11" => key(TermKey::F11),
+        "F12" => key(TermKey::F12),
+        "BTab" => Some(SendKeysPart::Key(TermKeyEvent::functional(
+            TermKey::Tab,
+            modifiers::SHIFT,
+        ))),
         _ => {
             let letter = name.strip_prefix("C-")?;
-            if letter.len() != 1 {
-                return None;
-            }
-            let c = letter.chars().next()?.to_ascii_lowercase();
-            if c.is_ascii_lowercase() {
-                Some(vec![c as u8 - b'a' + 1])
-            } else {
-                None
+            match *letter.as_bytes() {
+                [c] if c.is_ascii_alphabetic() => byte(c.to_ascii_lowercase() - b'a' + 1),
+                _ => None,
             }
         }
     }
@@ -851,7 +944,7 @@ fn hex_byte_token(token: &str) -> Option<u8> {
     u8::from_str_radix(digits, 16).ok()
 }
 
-/// Parse a send-keys payload into the final bytes for the pane's PTY.
+/// Parse a send-keys payload into its parts (see [`key_part`]).
 ///
 /// Three modes, mirroring tmux's contract:
 /// - default: tokens are keys — quoted or bare words resolve through the key
@@ -864,7 +957,7 @@ fn hex_byte_token(token: &str) -> Option<u8> {
 /// - `-H`: tokens are hex byte pairs, `0x` prefix optional.
 ///
 /// No terminator is appended in any mode.
-fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
+fn parse_send_keys_payload(raw: &str) -> Result<SendKeysPayload, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("send-keys requires a payload".to_string());
@@ -879,26 +972,26 @@ fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
     if tokens.is_empty() {
         return Err("send-keys requires a payload".to_string());
     }
-    let mut out = Vec::new();
+    let mut out = SendKeysPayload::default();
     if hex {
         for token in &tokens {
             let digits = token.strip_prefix("0x").unwrap_or(token);
             let byte =
                 u8::from_str_radix(digits, 16).map_err(|_| format!("invalid hex byte: {token}"))?;
-            out.push(byte);
+            out.push_bytes(&[byte]);
         }
     } else if literal {
         for token in tokens {
-            out.extend_from_slice(token.as_bytes());
+            out.push_bytes(token.as_bytes());
         }
     } else {
         for token in tokens {
-            if let Some(bytes) = key_to_bytes(&token) {
-                out.extend_from_slice(&bytes);
+            if let Some(part) = key_part(&token) {
+                out.push(part);
             } else if let Some(byte) = hex_byte_token(&token) {
-                out.push(byte);
+                out.push_bytes(&[byte]);
             } else {
-                out.extend_from_slice(token.as_bytes());
+                out.push_bytes(token.as_bytes());
             }
         }
     }
@@ -1531,6 +1624,24 @@ fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
 mod tests {
     use super::*;
 
+    /// A payload of one verbatim byte run.
+    fn bytes(b: &[u8]) -> SendKeysPayload {
+        SendKeysPayload(vec![SendKeysPart::Bytes(b.to_vec())])
+    }
+
+    /// The send-keys payload of `line`, encoded against `term`.
+    fn encoded_on(line: &str, term: &Terminal) -> Vec<u8> {
+        let MuxCommand::SendKeys { keys, .. } = parse_command(line).expect("parses") else {
+            panic!("not send-keys: {line}");
+        };
+        keys.encode(|| term)
+    }
+
+    /// The send-keys payload of `line`, encoded against a fresh terminal.
+    fn encoded(line: &str) -> Vec<u8> {
+        encoded_on(line, &Terminal::new(80, 24))
+    }
+
     #[test]
     fn pane_targets_parse_as_names_and_ids() {
         assert_eq!(
@@ -1589,7 +1700,7 @@ mod tests {
             parse_command("send-keys -t build Enter").unwrap(),
             MuxCommand::SendKeys {
                 pane: Target::Name("build".to_string()),
-                keys: vec![b'\r'],
+                keys: bytes(b"\r"),
             }
         );
     }
@@ -1835,7 +1946,7 @@ mod tests {
             cmd,
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(3)),
-                keys: b"hello".to_vec()
+                keys: bytes(b"hello")
             }
         );
     }
@@ -1849,7 +1960,7 @@ mod tests {
             cmd,
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(3)),
-                keys: b"\r".to_vec()
+                keys: bytes(b"\r")
             }
         );
     }
@@ -1861,23 +1972,89 @@ mod tests {
             cmd,
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(3)),
-                keys: vec![0x03]
+                keys: bytes(&[0x03])
             }
         );
-        let cmd = parse_command("send-keys -t %3 C-Space Escape BSpace Space Enter").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, vec![0x00, 0x1b, 0x7f, b' ', 0x0d]);
+        assert_eq!(
+            encoded("send-keys -t %3 C-Space Escape BSpace Space Enter Tab"),
+            vec![0x00, 0x1b, 0x7f, b' ', 0x0d, 0x09]
+        );
     }
 
     #[test]
     fn send_keys_maps_arrows_to_csi_sequences() {
-        let cmd = parse_command("send-keys -t %3 Up Down Left Right").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
+        assert_eq!(
+            encoded("send-keys -t %3 Up Down Left Right"),
+            b"\x1b[A\x1b[B\x1b[D\x1b[C".to_vec()
+        );
+    }
+
+    #[test]
+    fn send_keys_arrows_honor_application_cursor_mode() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[?1h");
+        assert_eq!(
+            encoded_on("send-keys -t %3 Up Down Right Left Home End", &term),
+            b"\x1bOA\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF".to_vec()
+        );
+    }
+
+    #[test]
+    fn send_keys_resolves_navigation_and_function_keys() {
+        for (token, expected) in [
+            ("Home", &b"\x1b[H"[..]),
+            ("End", b"\x1b[F"),
+            ("PPage", b"\x1b[5~"),
+            ("PageUp", b"\x1b[5~"),
+            ("PgUp", b"\x1b[5~"),
+            ("NPage", b"\x1b[6~"),
+            ("PageDown", b"\x1b[6~"),
+            ("PgDn", b"\x1b[6~"),
+            ("IC", b"\x1b[2~"),
+            ("Insert", b"\x1b[2~"),
+            ("DC", b"\x1b[3~"),
+            ("Delete", b"\x1b[3~"),
+            ("F1", b"\x1bOP"),
+            ("F4", b"\x1bOS"),
+            ("F5", b"\x1b[15~"),
+            ("F12", b"\x1b[24~"),
+            ("BTab", b"\x1b[Z"),
+        ] {
+            assert_eq!(
+                encoded(&format!("send-keys -t %3 {token}")),
+                expected.to_vec(),
+                "{token}"
+            );
+        }
+    }
+
+    #[test]
+    fn send_keys_byte_class_names_ignore_terminal_modes() {
+        // par-term sends already-encoded keystrokes as these names;
+        // re-encoding them against the pane's modes would double-encode.
+        let line = "send-keys -t %3 C-c Escape BSpace Space Enter Tab C-Space";
+        let raw = vec![0x03, 0x1b, 0x7f, b' ', 0x0d, 0x09, 0x00];
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[>4;2m");
+        assert_eq!(encoded_on(line, &term), raw);
+        term.process(b"\x1b[>1u");
+        assert_eq!(encoded_on(line, &term), raw);
+        // A navigation key does follow the kitty flags.
+        assert_eq!(
+            encoded_on("send-keys -t %3 F5", &term),
+            b"\x1b[57380u".to_vec()
+        );
+    }
+
+    #[test]
+    fn send_keys_plain_bytes_never_read_the_terminal() {
+        let MuxCommand::SendKeys { keys, .. } =
+            parse_command("send-keys -t %3 'hi ' 0xe2 C-c Enter").expect("parses")
+        else {
             panic!("send-keys");
         };
-        assert_eq!(keys, b"\x1b[A\x1b[B\x1b[D\x1b[C".to_vec());
+        let out = keys.encode(|| -> &Terminal { panic!("a byte payload must not lock") });
+        assert_eq!(out, b"hi \xe2\x03\r".to_vec());
     }
 
     #[test]
@@ -1885,64 +2062,50 @@ mod tests {
         // Quoted runs are literal, spaces inside them survive, and the
         // '\'' idiom yields a real single quote — the escape_keys_for_tmux
         // round trip.
-        let cmd = parse_command("send-keys -t %3 'hello world'").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"hello world".to_vec());
-
-        let cmd = parse_command("send-keys -t %3 'it'\\''s'").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"it's".to_vec());
+        assert_eq!(
+            encoded("send-keys -t %3 'hello world'"),
+            b"hello world".to_vec()
+        );
+        assert_eq!(encoded("send-keys -t %3 'it'\\''s'"), b"it's".to_vec());
     }
 
     #[test]
     fn send_keys_space_between_bare_words_is_explicit_not_implicit() {
         // tmux semantics: tokens join with nothing between them; a space is
         // the Space key. escape_keys_for_tmux encodes exactly this.
-        let cmd = parse_command("send-keys -t %3 'hello' Space 'world'").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"hello world".to_vec());
-
-        let cmd = parse_command("send-keys -t %3 hello world").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"helloworld".to_vec());
+        assert_eq!(
+            encoded("send-keys -t %3 'hello' Space 'world'"),
+            b"hello world".to_vec()
+        );
+        assert_eq!(
+            encoded("send-keys -t %3 hello world"),
+            b"helloworld".to_vec()
+        );
     }
 
     #[test]
     fn send_keys_literal_flag_disables_interpretation() {
-        let cmd = parse_command("send-keys -t %3 -l C-c").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"C-c".to_vec());
+        assert_eq!(encoded("send-keys -t %3 -l C-c"), b"C-c".to_vec());
+        assert_eq!(encoded("send-keys -t %3 -l Home"), b"Home".to_vec());
     }
 
     #[test]
     fn send_keys_hex_flag_takes_byte_pairs() {
         // The form format_send_hex_keys emits for CSI-u sequences.
-        let cmd = parse_command("send-keys -t %3 -H 1b 5b 41").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, vec![0x1b, 0x5b, 0x41]);
+        assert_eq!(
+            encoded("send-keys -t %3 -H 1b 5b 41"),
+            vec![0x1b, 0x5b, 0x41]
+        );
 
         assert!(parse_command("send-keys -t %3 -H zz").is_err());
     }
 
     #[test]
     fn send_keys_bare_hex_token_is_one_byte() {
-        let cmd = parse_command("send-keys -t %3 0x1b 'prompt> '").unwrap();
-        let MuxCommand::SendKeys { keys, .. } = cmd else {
-            panic!("send-keys");
-        };
-        assert_eq!(keys, b"\x1bprompt> ".to_vec());
+        assert_eq!(
+            encoded("send-keys -t %3 0x1b 'prompt> '"),
+            b"\x1bprompt> ".to_vec()
+        );
     }
 
     #[test]
@@ -1954,7 +2117,7 @@ mod tests {
         let MuxCommand::SendKeys { keys, .. } = cmd else {
             panic!("send-keys");
         };
-        assert_eq!(keys, b"hi \xe2\x82\xac\x03".to_vec());
+        assert_eq!(keys, bytes(b"hi \xe2\x82\xac\x03"));
     }
 
     #[test]
@@ -2906,7 +3069,7 @@ mod tests {
             MuxCommand::ListAgents,
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(0)),
-                keys: Vec::new(),
+                keys: SendKeysPayload::default(),
             },
             MuxCommand::RefreshClient {
                 pane: Target::Id(PaneId(0)),

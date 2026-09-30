@@ -107,28 +107,31 @@ impl MacroEngine {
     /// Returns bytes to send to PTY for KeyPress events, None for others
     /// Screenshot events are stored in macro_screenshot_triggers
     pub fn tick_macro(term: &mut Terminal) -> Option<Vec<u8>> {
-        if let Some(ref mut playback) = term.macros.macro_playback {
-            if let Some(event) = playback.next_event() {
-                match event {
-                    crate::macros::MacroEvent::KeyPress { key, .. } => {
-                        let bytes = crate::macros::KeyParser::parse_key(&key);
-                        return Some(bytes);
-                    }
-                    crate::macros::MacroEvent::Screenshot { label, .. } => {
-                        term.macros
-                            .macro_screenshot_triggers
-                            .push(label.unwrap_or_else(|| "screenshot".to_string()));
-                    }
-                    crate::macros::MacroEvent::Delay { .. } => {
-                        // Delays are handled by timing in the playback state machine
-                    }
-                }
+        let playback = term.macros.macro_playback.as_mut()?;
+        let event = playback.next_event();
+        match event {
+            Some(crate::macros::MacroEvent::KeyPress { key, .. }) => {
+                // Encoded against the terminal's live modes (DECCKM, kitty
+                // flags), so replayed keys match a real keypress (ARC-093).
+                return Some(crate::macros::KeyParser::encode_key(&key, term));
             }
+            Some(crate::macros::MacroEvent::Screenshot { label, .. }) => {
+                term.macros
+                    .macro_screenshot_triggers
+                    .push(label.unwrap_or_else(|| "screenshot".to_string()));
+            }
+            // Delays are handled by timing in the playback state machine
+            Some(crate::macros::MacroEvent::Delay { .. }) | None => {}
+        }
 
-            // Check if playback is finished and clean up
-            if playback.is_finished() {
-                term.macros.macro_playback = None;
-            }
+        // Check if playback is finished and clean up
+        if term
+            .macros
+            .macro_playback
+            .as_ref()
+            .is_some_and(|p| p.is_finished())
+        {
+            term.macros.macro_playback = None;
         }
         None
     }
@@ -274,6 +277,20 @@ mod tests {
 
         // Both events consumed -> playback auto-clears.
         assert!(!MacroEngine::is_macro_playing(&term));
+    }
+
+    #[test]
+    fn tick_macro_encodes_keys_against_the_terminal_modes() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[?1h"); // DECCKM on
+        let mut m = Macro::new("arrows");
+        m.add_key("up");
+        MacroEngine::load_macro(&mut term, "arrows".to_string(), m);
+        MacroEngine::play_macro(&mut term, "arrows").unwrap();
+        assert_eq!(
+            MacroEngine::tick_macro(&mut term).as_deref(),
+            Some(&b"\x1bOA"[..])
+        );
     }
 
     #[test]

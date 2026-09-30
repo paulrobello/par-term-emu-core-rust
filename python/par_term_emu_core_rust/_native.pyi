@@ -4768,8 +4768,8 @@ class Terminal:
         key: Any,
         modifiers: Any,
         codepoint: Any = 0,
-        left_option: Any = 0,
-        right_option: Any = 0,
+        left_option: Any = 2,
+        right_option: Any = 2,
     ) -> bytes:
         """Encode a key event into the bytes a terminal application expects.
 
@@ -4790,8 +4790,11 @@ class Terminal:
                 Ignored for functional keys.
             left_option: Option-key mode for the left Alt key —
                 0 normal (pass the character through), 1 meta (8th bit on
-                ASCII bases), 2 esc (ESC-prefix). Default 0.
-            right_option: Option-key mode for the right Alt key. Default 0.
+                ASCII bases), 2 esc (ESC-prefix). Default 2 (esc) — the same
+                default as C ``terminal_encode_key`` and Rust
+                ``KeyEncodeOptions::default()``.
+            right_option: Option-key mode for the right Alt key. Default 2
+                (esc).
 
         Returns:
             bytes: The bytes to write to the PTY. Empty bytes mean the key
@@ -4803,7 +4806,8 @@ class Terminal:
             term = Terminal(80, 24)
             term.encode_key(1, 4, ord("c"))   # b'\\\\x03'  (Ctrl+C)
             term.encode_key(57430, 0, 0)      # b'\\\\x1b[A' (Up arrow)
-            term.encode_key(1, 2, ord("f"), left_option=2)  # b'\\\\x1bf'
+            term.encode_key(1, 2, ord("f"))   # b'\\\\x1bf'  (Alt+f, esc default)
+            term.encode_key(1, 2, ord("f"), left_option=0)  # b'f'
             ```
         """
     def end_command_execution(self, exit_code: Any) -> Any:

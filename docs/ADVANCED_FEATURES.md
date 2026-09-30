@@ -2514,6 +2514,7 @@ print(f"Event count: {len(loaded.events)}")
 - Function keys: `f1` through `f12`
 - Arrow keys: `up`, `down`, `left`, `right`
 - Special keys: `home`, `end`, `pageup`, `pagedown`, `delete`
+- Playback encodes keys with the shared key encoder against the terminal's live modes, so `up` becomes `ESC O A` once the app enables application cursor keys
 
 **YAML Format:**
 ```yaml
