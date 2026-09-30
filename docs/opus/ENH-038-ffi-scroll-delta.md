@@ -4,6 +4,7 @@
 > Sequencing:
 > - After **ARC-100** (`HostConfig`), then **ARC-092** (one Terminal-owned damage clock). The new per-row content generation stamps from that clock, and the full-redraw sentinel below hooks ARC-092's single `set_visible_screen()`.
 > - Independent of **D4**. If this card ships first it takes ABI **4** (additive), and D4's breaking batch (ARC-101/112/114) becomes **5**. Record the renumbering on the D4 cards.
+>   - **Resolved 2026-09-30: D4 shipped first as ABI v4.** This card is now **ABI v5 (additive)**. Read every "4" below as "5". Every export is `ptec_`-prefixed (`ptec_terminal_scroll_delta_since`, `ptec_terminal_content_dirty_ranges_since`, `ptec_terminal_dirty_ranges_since`, …). The `src/ffi.rs` line numbers are stale; re-locate them.
 > - Cross-repo follow-up: ParDeck adopts the call. It has no ABI guard today, so nothing breaks on its side.
 
 **Priority**: medium · **Estimate**: L

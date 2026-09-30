@@ -187,7 +187,7 @@ Each `SharedCell` carries up to 4 UTF-8 bytes of the base character (`text`/`tex
 **Colors are display colors** (ABI v4, ARC-101), resolved the way the Python snapshot resolves them:
 
 - The 16 base colors (SGR 30–37/40–47/90–97/100–107, and `38;5;0`–`15`) follow the live ANSI palette, so `OSC 4` recolors them. The 256-color cube, the grayscale ramp and 24-bit RGB are fixed.
-- A **default** color — an unstyled cell, or one written after SGR 0/39/49 — resolves through the terminal's default foreground/background (`OSC 10`/`OSC 11`) and sets `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG` in `attrs`, so a renderer with its own theme can substitute it. An explicit SGR 37/40 is indistinguishable from the default and is flagged the same way.
+- A **default** color resolves through the terminal's default foreground/background (`OSC 10`/`OSC 11`) and sets `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG` in `attrs`, so a renderer with its own theme can substitute it. Default is recognized by value: a color equal to the unstyled color or to the *current* OSC 10/11 value. An explicit SGR 37/40 is indistinguishable from the default and is flagged the same way. A cell written after SGR 0/39/49 stores the default of that moment, so if OSC 10/11 later changes again it keeps its old color and is no longer flagged.
 - Bold brightening (on by default) maps a bold ANSI 0–7 foreground to its bright 8–15 slot.
 - Reverse video, dim and hidden are **not** applied — they stay `TERM_CELL_*` bits for the renderer.
 

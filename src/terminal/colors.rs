@@ -253,13 +253,16 @@ impl Terminal {
 
     /// Resolve a cell's foreground and background for display (ARC-101).
     ///
-    /// - A **default** color is one equal to what an unstyled cell carries
-    ///   (`Named(White)` fg / `Named(Black)` bg, as `Cell::default()` and the
-    ///   erase paths write) or to the current OSC 10 / OSC 11 default, which
-    ///   SGR 0/39/49 write. It resolves through that default, and the
+    /// - A **default** color is recognized by value: one equal to what an
+    ///   unstyled cell carries (`Named(White)` fg / `Named(Black)` bg, as
+    ///   `Cell::default()` and the erase paths write) or to the *current*
+    ///   OSC 10 / OSC 11 value. It resolves through that default, and the
     ///   matching `default_fg`/`default_bg` flag is set. An explicit SGR 37
     ///   or 40 (or `38;5;7` / `48;5;0`) is indistinguishable from the
-    ///   default and follows it too.
+    ///   default and follows it too. Cells store the color SGR 0/39/49
+    ///   copied, not a marker, so a cell written under an earlier OSC 10/11
+    ///   value keeps that color and is not flagged once the default moves
+    ///   again.
     /// - Bold brightening (on by default) then maps a bold `Named` 0-7
     ///   foreground to its bright 8-15 slot, after default substitution, so
     ///   bold default text is bright white on the default theme.
@@ -964,5 +967,47 @@ mod tests {
         );
         let red = term.resolve_cell_colors(&row[3]);
         assert!(!red.default_fg && red.default_bg);
+    }
+
+    /// ARC-101 limit, pinned: "default" is recognized by value, because a
+    /// cell stores the color SGR 0/39/49 copied, not a "default" marker.
+    /// A cell written under an earlier OSC 10 keeps that color and loses
+    /// the default flag once OSC 10 changes again. OSC 110 stores an RGB
+    /// default, so a bold default cell written before it (Named White)
+    /// stays bright, while one written after it is not brightened.
+    #[test]
+    fn resolve_cell_colors_default_is_recognized_by_value() {
+        let mut term = create_test_terminal();
+        term.process(b"\x1b]10;rgb:11/22/33\x07\x1b[0mx");
+        term.process(b"\x1b]10;rgb:44/55/66\x07");
+        let x = term.active_grid().get(0, 0).expect("cell").clone();
+        let got = term.resolve_cell_colors(&x);
+        assert!(
+            !got.default_fg,
+            "stale OSC 10 value is no longer the default"
+        );
+        assert_eq!(
+            got.fg,
+            (0x11, 0x22, 0x33),
+            "it keeps the color it was written with"
+        );
+
+        let mut term = create_test_terminal();
+        term.process(b"\x1b[1mb");
+        term.process(b"\x1b]110\x07\x1b[0;1mc");
+        let b = term.active_grid().get(0, 0).expect("cell").clone();
+        let c = term.active_grid().get(1, 0).expect("cell").clone();
+        let bright_white = term.get_ansi_palette()[15].to_rgb();
+        let before = term.resolve_cell_colors(&b);
+        assert!(before.default_fg);
+        assert_eq!(
+            before.fg,
+            (0xE5, 0xE5, 0xE5),
+            "the default is now Rgb, which bold brightening leaves alone"
+        );
+        let after = term.resolve_cell_colors(&c);
+        assert!(after.default_fg);
+        assert_eq!(after.fg, (0xE5, 0xE5, 0xE5));
+        assert_ne!(before.fg, bright_white);
     }
 }

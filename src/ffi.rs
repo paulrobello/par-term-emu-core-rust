@@ -46,7 +46,9 @@ use crate::terminal::{Terminal, TerminalEvent, TerminalEventKind};
 ///
 /// Colors are resolved for display (ARC-101): the live ANSI palette (OSC 4),
 /// the terminal default colors (OSC 10/11) for default cells, flagged with
-/// `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG`, and bold brightening.
+/// `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG`, and bold brightening. A
+/// color counts as default when it equals the unstyled color or the current
+/// OSC 10/11 value ([`Terminal::resolve_cell_colors`]).
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedCell {
