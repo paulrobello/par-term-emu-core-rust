@@ -1004,18 +1004,18 @@ for event in macro.events:
 ### Supported Keys
 
 **Alphabetic Keys:**
-```
+```text
 a-z  # Lowercase letters
 A-Z  # Uppercase letters (or shift+a-z)
 ```
 
 **Numeric Keys:**
-```
+```text
 0-9  # Number row
 ```
 
 **Special Characters:**
-```
+```text
 space      # Space bar
 enter      # Enter/Return
 return     # Alias for enter
@@ -1026,7 +1026,7 @@ esc        # Alias for escape
 ```
 
 **Navigation Keys:**
-```
+```text
 up         # Arrow up
 down       # Arrow down
 left       # Arrow left
@@ -1044,7 +1044,7 @@ del        # Alias for delete
 ```
 
 **Function Keys:**
-```
+```text
 f1, f2, f3, f4, f5, f6
 f7, f8, f9, f10, f11, f12
 ```
@@ -1138,7 +1138,7 @@ assert_eq!(bytes, vec![0x61]);
 **Storage Best Practices:**
 
 1. **File Organization:**
-   ```
+   ```text
    macros/
    ├── demos/
    │   ├── product_overview.yaml

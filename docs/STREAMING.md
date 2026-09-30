@@ -161,7 +161,7 @@ sequenceDiagram
 The streaming protocol uses binary Protocol Buffers messages with optional compression:
 
 **Wire Format:**
-```
+```text
 +----------------+------------------+
 | 1 byte: flags  | N bytes: payload |
 +----------------+------------------+
@@ -614,7 +614,7 @@ npm run dev
 ```
 
 **Project Structure:**
-```
+```text
 web-terminal-frontend/
 ├── app/
 │   ├── globals.css       # Global styles and Tailwind
@@ -690,7 +690,7 @@ const getResponsiveFontSize = (): number => {
 - Connection state preserved across reconnects
 
 **UI Toggle:**
-```
+```text
 ┌─────────────────────────────────┐
 │ [Header - WebSocket URL input]  │  ← Hideable
 ├─────────────────────────────────┤

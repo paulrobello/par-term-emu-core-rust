@@ -19,7 +19,7 @@ This document analyzes our project's compliance with [Maturin](https://github.co
 ### Following Best Practices
 
 #### 1. **Project Structure**
-```
+```text
 par-term-emu-core-rust/
 ├── Cargo.toml
 ├── python/
@@ -105,74 +105,25 @@ graph TB
 ```
 
 #### 2. **pyproject.toml Configuration**
-```toml
-[build-system]
-requires = ["maturin>=1.13.3,<2.0"]
-build-backend = "maturin"
 
-[project]
-name = "par-term-emu-core-rust"
-version = "0.45.0"
-requires-python = ">=3.12"
-
-[tool.maturin]
-features = ["pyo3/extension-module"]
-python-source = "python"
-module-name = "par_term_emu_core_rust._native"
-
-[dependency-groups]
-dev = ["maturin>=1.13.3", ...]
-```
+See [`pyproject.toml`](../pyproject.toml): `[build-system]`, `[project]` and `[tool.maturin]`.
 
 **Status**: **Compliant**
 - Proper PEP 517/518 build system configuration
-- Maturin version: `>=1.13.3,<2.0` (build), `>=1.13.3` (dev)
+- Maturin version bounds are set in `pyproject.toml` (build backend and dev group)
 - Maturin as build backend
 - Python 3.12+ requirement (aligned with modern Python)
 - Correct feature flags for PyO3
 - Explicit module naming to avoid conflicts
 
 #### 3. **Cargo.toml Configuration**
-```toml
-[package]
-rust-version = "1.98"
-version = "0.45.0"
-edition = "2021"
 
-[lib]
-name = "par_term_emu_core_rust"
-crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "par-term-streamer"
-path = "src/bin/streaming_server/main.rs"
-required-features = ["streaming-bin"]
-
-[dependencies]
-pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
-
-[features]
-default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
-# Library streaming (WebSocket/protobuf server for embedders; no CLI deps)
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http",
-             "futures-util", "prost", "rustls", "tokio-rustls",
-             "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
-# Binary-only deps (CLI/logging/download) for the par-term-streamer binary
-streaming-bin = ["streaming", "clap", "anyhow", "tracing",
-                 "tracing-subscriber", "reqwest", "tar"]
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-```
+See [`Cargo.toml`](../Cargo.toml): `[package]`, `[lib]` (`crate-type = ["cdylib", "rlib"]`), the `[[bin]]` targets, `[features]` and `[profile.release]`.
 
 **Status**: **Compliant**
 - Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
-- PyO3 version: 0.29 (latest stable, made optional for flexibility)
-- Minimum Rust version: 1.98
+- PyO3 is optional, behind the `python` feature (version in `Cargo.toml`)
+- Minimum Rust version: `rust-version` in `Cargo.toml`
 - Rust edition: 2021
 - Proper PyO3 extension-module feature in `python` feature
 - Feature-based architecture (python, streaming, streaming-bin, rust-only, full, jemalloc)
@@ -519,7 +470,7 @@ strip = true       # Strip symbols (smaller wheel)
 | Category | Score | Notes |
 |----------|-------|-------|
 | Project Structure | 10/10 | Perfect structure with `python-source` pattern + Protocol Buffers |
-| Build Configuration | 10/10 | Maturin 1.13.3+, PyO3 0.29, optimal settings |
+| Build Configuration | 10/10 | maturin build backend, PyO3 behind a feature, release profile tuned (versions in the manifests) |
 | Cross-Platform (macOS) | 10/10 | x86_64 + universal2 (Intel + Apple Silicon) |
 | Cross-Platform (Linux) | 10/10 | x86_64 + ARM64/aarch64 with QEMU |
 | Cross-Platform (Windows) | 10/10 | x86_64 with smart PTY test exclusion |

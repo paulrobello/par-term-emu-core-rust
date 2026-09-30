@@ -379,7 +379,7 @@ For implementation details, see:
 
 Test images are available in the repository:
 
-```
+```text
 images/
 ├── snake.png         # Snake game screenshot (274KB)
 ├── snake.sixel       # Snake as Sixel (265KB)

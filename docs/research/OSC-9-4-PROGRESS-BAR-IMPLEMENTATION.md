@@ -31,7 +31,7 @@ OSC 9;4 is a terminal escape sequence for displaying progress bars. Originally c
 
 ### Full Syntax
 
-```
+```text
 ESC ] 9 ; 4 ; [state] ; [progress] ST
 ```
 
@@ -49,7 +49,7 @@ Where:
 
 To clear the progress bar:
 
-```
+```text
 ESC ] 9 ; 4 ST
 ```
 

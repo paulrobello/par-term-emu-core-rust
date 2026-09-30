@@ -20,7 +20,6 @@ class TestTerminalBasics:
     def test_create_terminal(self):
         """Test creating a Terminal instance"""
         term = Terminal(80, 24)
-        assert term is not None
         assert term.size() == (80, 24)
 
     def test_create_with_scrollback(self):
@@ -219,8 +218,7 @@ class TestColorOperations:
 
         # Get color at position
         color = term.get_fg_color(0, 0)
-        assert color is not None
-        # Color is returned as (r, g, b) tuple or named color index
+        assert color == (128, 0, 0)
 
     def test_get_bg_color(self):
         """Test getting background colors"""
@@ -230,7 +228,7 @@ class TestColorOperations:
         term.process_str("\x1b[42mGreen BG")
 
         color = term.get_bg_color(0, 0)
-        assert color is not None
+        assert color == (0, 128, 0)
 
     def test_rgb_colors(self):
         """Test RGB color support"""
@@ -241,7 +239,7 @@ class TestColorOperations:
 
         # Get color (should be RGB)
         color = term.get_fg_color(0, 0)
-        assert color is not None
+        assert color == (255, 128, 64)
 
     def test_256_colors(self):
         """Test 256-color palette support"""
@@ -251,7 +249,7 @@ class TestColorOperations:
         term.process_str("\x1b[38;5;123m256 Color")
 
         color = term.get_fg_color(0, 0)
-        assert color is not None
+        assert color == (102, 255, 255)
 
     def test_color_reset(self):
         """Test color reset to defaults"""
@@ -260,7 +258,7 @@ class TestColorOperations:
         # Set colors
         term.process_str("\x1b[31;42mColored")
         fg, bg = term.get_fg_color(0, 0), term.get_bg_color(0, 0)
-        assert fg is not None and bg is not None, "colors applied"
+        assert fg == (128, 0, 0) and bg == (0, 128, 0), "colors applied"
 
         # Reset
         term.process_str("\x1b[0mReset")
@@ -286,8 +284,7 @@ class TestCellAttributes:
 
         attrs = term.get_attributes(0, 0)
         assert attrs is not None
-        # Attributes is a custom type with specific fields
-        assert hasattr(attrs, "bold") or hasattr(attrs, "is_bold")
+        assert attrs.bold is True
 
     def test_get_attributes_italic(self):
         """Test getting italic attribute"""
@@ -297,6 +294,7 @@ class TestCellAttributes:
 
         attrs = term.get_attributes(0, 0)
         assert attrs is not None
+        assert attrs.italic is True
 
     def test_get_attributes_underline(self):
         """Test getting underline attribute"""
@@ -306,6 +304,7 @@ class TestCellAttributes:
 
         attrs = term.get_attributes(0, 0)
         assert attrs is not None
+        assert attrs.underline is True
 
     def test_get_attributes_multiple(self):
         """Test multiple attributes combined"""
@@ -315,6 +314,9 @@ class TestCellAttributes:
 
         attrs = term.get_attributes(0, 0)
         assert attrs is not None
+        assert attrs.bold is True
+        assert attrs.italic is True
+        assert attrs.underline is True
 
 
 class TestTitleOperations:

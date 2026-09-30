@@ -245,26 +245,26 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 #### Extended Colors
 
 **256-Color Mode:**
-```
+```text
 CSI 38 ; 5 ; n m    - Set foreground to color n (0-255)
 CSI 48 ; 5 ; n m    - Set background to color n (0-255)
 ```
 
 **24-bit True Color:**
-```
+```text
 CSI 38 ; 2 ; r ; g ; b m    - Set foreground RGB
 CSI 48 ; 2 ; r ; g ; b m    - Set background RGB
 ```
 
 **Underline Color (xterm):**
-```
+```text
 CSI 58 ; 2 ; r ; g ; b m    - Set underline color to RGB
 CSI 58 ; 5 ; n m            - Set underline color to palette index n
 CSI 59 m                     - Reset underline color (use foreground)
 ```
 
 **Default Colors:**
-```
+```text
 CSI 39 m    - Default foreground
 CSI 49 m    - Default background
 ```
@@ -389,7 +389,7 @@ CSI 49 m    - Default background
 - Grid unconditional erase method `erase_rectangle_unconditional()` in `src/grid/mod.rs`
 
 **Sequence Examples:**
-```
+```text
 CSI ? 1 " q        Enable protection (or ESC V for SPA)
 Hello World        (these chars are protected)
 CSI ? 0 " q        Disable protection (or ESC W for EPA)
@@ -586,7 +586,7 @@ All other mode numbers return state `0` (not recognized).
 - Conformance level types in `src/conformance_level.rs`
 
 **Example:**
-```
+```text
 CSI 62 ; 2 " p    # Set to VT220 with 8-bit controls
 CSI 5 " p         # Set to VT520 (short form)
 CSI 65 " p        # Set to VT520 (long form)
@@ -613,7 +613,7 @@ CSI 65 " p        # Set to VT520 (long form)
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
 
 **Example:**
-```
+```text
 CSI 0 SP t    # Turn off warning bell
 CSI 4 SP t    # Set to medium volume
 CSI 8 SP t    # Set to maximum volume
@@ -639,7 +639,7 @@ CSI 8 SP t    # Set to maximum volume
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
 
 **Example:**
-```
+```text
 CSI 0 SP u    # Turn off margin bell
 CSI 4 SP u    # Set to medium volume
 CSI 8 SP u    # Set to maximum volume
@@ -769,7 +769,7 @@ where `ST` is either `ESC \` or `BEL` (`\x07`)
 - Can be disabled via `disable_insecure_sequences`
 
 **Example:**
-```
+```text
 OSC 8 ; ; https://example.com ST clickable text OSC 8 ; ; ST
 OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 ```
@@ -801,7 +801,7 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 | Warning | 4 | Yes (0-100) | Operation with potential issues |
 
 **Examples:**
-```
+```text
 OSC 9 ; 4 ; 1 ; 50 ST    # Set progress to 50%
 OSC 9 ; 4 ; 0 ST         # Hide progress bar
 OSC 9 ; 4 ; 2 ; 100 ST   # Show error state at 100%
@@ -838,7 +838,7 @@ OSC 9 ; 4 ; 4 ; 75 ST    # Show warning state at 75%
 | `state=S` | `normal`, `indeterminate`, `warning`, `error`, `hidden` | Progress state |
 
 **Examples:**
-```
+```text
 OSC 934 ; set ; dl-1 ; percent=50 ; label=Downloading ST
 OSC 934 ; set ; build ; state=indeterminate ; label=Compiling ST
 OSC 934 ; set ; job ; state=error ; label=Build failed ST
@@ -957,7 +957,7 @@ Implementation: `src/terminal/sequences/csi/color_stack.rs`. The report reply ma
 - Output selection
 
 **Example sequence:**
-```
+```text
 OSC 133 ; A ST           # Prompt starts
 OSC 133 ; B ST           # Command starts
 (user types command)
@@ -999,7 +999,7 @@ OSC 133 ; D ; 0 ST       # Command finished with exit code 0
 - `Ncells` - Terminal cells (e.g., `10cells`)
 
 **Example:**
-```
+```text
 OSC 1337 ; File=inline=1:iVBORw0KGgoAAAA... ST
 ```
 
@@ -1210,7 +1210,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - Final chunk uses `m=0` (default)
 
 **Query Response:**
-```
+```text
 APC G i=<id>;OK ST
 ```
 
@@ -1240,7 +1240,7 @@ APC (Application Program Command) sequences follow: `ESC _ ... ESC \`
 See [Kitty Graphics Protocol](#kitty-graphics-protocol-apc-g) in the DCS Sequences section above.
 
 **Sequence Format:**
-```
+```text
 APC G <key>=<value>,<key>=<value>;<base64-data> ST
 ```
 

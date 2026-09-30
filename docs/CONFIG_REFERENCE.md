@@ -376,7 +376,7 @@ Default colors can be queried and are used when SGR reset (0) is applied.
 | `cursor_color` | `Color` | White | `OSC 12 ; ? ST` |
 
 **Query Response Format:**
-```
+```text
 OSC 10;rgb:rrrr/gggg/bbbb ST  (foreground)
 OSC 11;rgb:rrrr/gggg/bbbb ST  (background)
 OSC 12;rgb:rrrr/gggg/bbbb ST  (cursor)

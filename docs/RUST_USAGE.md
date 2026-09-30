@@ -77,9 +77,8 @@ graph TB
 Choose the feature set that matches your needs:
 
 #### Rust Only (No Python)
-```toml
-[dependencies]
-par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["pty_session"] }
+```bash
+cargo add par-term-emu-core-rust --no-default-features --features pty_session
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -87,31 +86,24 @@ par-term-emu-core-rust = { version = "0.50", default-features = false, features 
 > **Note:** Since v0.46.0 the `pty_session` module is gated behind the `pty_session` feature. Omit it only if you do not need `PtySession` (see the headless `sim` profile in the [Feature Flags](#feature-flags) table).
 
 #### Rust with Streaming (No Python)
-```toml
-[dependencies]
-par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
+```bash
+cargo add par-term-emu-core-rust --no-default-features --features streaming,pty_session
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
 
 #### Python Only
-```toml
-[dependencies]
-par-term-emu-core-rust = { version = "0.50" }
-# Or explicitly:
-par-term-emu-core-rust = { version = "0.50", features = ["python"] }
+```bash
+# default features include python
+cargo add par-term-emu-core-rust
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
 
 #### Python with Streaming
-```toml
-[dependencies]
-# Streaming server library only:
-par-term-emu-core-rust = { version = "0.50", features = ["python", "streaming"] }
-# Or the convenience feature, which also pulls in the CLI deps used by the
-# standalone `par-term-streamer` binary (clap, tracing, reqwest, tar, ...):
-par-term-emu-core-rust = { version = "0.50", features = ["full"] }
+```bash
+cargo add par-term-emu-core-rust --features python,streaming
+# or: cargo add par-term-emu-core-rust --features full  (also pulls the par-term-streamer CLI deps)
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
@@ -310,13 +302,12 @@ fn main() -> std::io::Result<()> {
 
 ### Basic Streaming Server
 
-```toml
-[dependencies]
-par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```bash
+cargo add par-term-emu-core-rust --no-default-features --features streaming,pty_session
+cargo add tokio --features macros,rt-multi-thread
 # The crate uses parking_lot internally; PtySession::get_writer() and
 # terminal() return parking_lot locks, so reuse it for your own wrappers.
-parking_lot = "0.12"
+cargo add parking_lot
 ```
 
 ```rust
@@ -576,7 +567,7 @@ cargo doc --all-features --open
 
 ## C FFI
 
-The library ships a C embedding surface: hand-written header [`include/terminal_core.h`](../include/terminal_core.h) mirroring `src/ffi.rs`, with a damage-driven render loop (`terminal_feed` / `terminal_dirty_ranges` / `terminal_read_row`), key encoding, snapshots, and observers. Build it for Apple platforms with `make xcframework`, or as a static library with `cargo rustc --lib --crate-type staticlib`.
+The library ships a C embedding surface: the cbindgen-generated header [`include/terminal_core.h`](../include/terminal_core.h) (generated from `src/ffi.rs` by `make ffi-header`; the `TERM_*` constants and layout asserts live in the hand-written `terminal_core_layout.h`), with a damage-driven render loop (`terminal_feed` / `terminal_dirty_ranges` / `terminal_read_row`), key encoding, snapshots, and observers. Build it for Apple platforms with `make xcframework`, or as a static library with `cargo rustc --lib --crate-type staticlib`.
 
 See the [FFI Guide](FFI_GUIDE.md) for the full surface, contracts, and examples.
 

@@ -421,14 +421,14 @@ if term.bracketed_paste():
 ### How It Works
 
 Without bracketed paste:
-```
+```text
 user pastes: echo "line 1"\necho "line 2"
 shell receives: echo "line 1"<Enter>echo "line 2"<Enter>
 result: Both commands execute immediately
 ```
 
 With bracketed paste:
-```
+```text
 user pastes: echo "line 1"\necho "line 2"
 shell receives: \x1b[200~echo "line 1"\necho "line 2"\x1b[201~
 result: Shell knows it's a paste, can handle specially
@@ -592,7 +592,7 @@ if url:
 
 ### Format
 
-```
+```text
 \x1b]8;<params>;<url>\x07<link text>\x1b]8;;\x07
 ```
 
@@ -721,7 +721,7 @@ term.clear_progress()
 
 ### Sequence Format
 
-```
+```text
 ESC ] 9 ; 4 ; state [ ; progress ] ST
 ```
 
@@ -2623,13 +2623,13 @@ npm run dev  # Development server on http://localhost:3000
 **Wire Format:**
 The protocol uses binary Protocol Buffers over WebSocket:
 
-```
+```text
 [N bytes: protobuf ServerMessage/ClientMessage]
 ```
 
 For bandwidth optimization, payloads larger than 256 bytes are automatically zlib-compressed. Every message is prefixed with a 1-byte flag:
 
-```
+```text
 [1 byte: flag][N bytes: protobuf payload]
 ```
 

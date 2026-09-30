@@ -442,11 +442,6 @@ impl PyCallbackObserver {
     }
 }
 
-// Safety: Py<PyAny> is Send+Sync when we acquire the GIL before use.
-// We only access the callback inside `Python::attach`.
-unsafe impl Send for PyCallbackObserver {}
-unsafe impl Sync for PyCallbackObserver {}
-
 impl TerminalObserver for PyCallbackObserver {
     fn on_event(&self, event: &TerminalEvent) {
         // Guard against reentrant dispatch deadlocking on the Terminal mutex
@@ -482,11 +477,6 @@ impl PyQueueObserver {
     }
 }
 
-// Safety: Py<PyAny> is Send+Sync when GIL is acquired before use.
-// We only access the queue inside `Python::attach`.
-unsafe impl Send for PyQueueObserver {}
-unsafe impl Sync for PyQueueObserver {}
-
 impl TerminalObserver for PyQueueObserver {
     fn on_event(&self, event: &TerminalEvent) {
         // Same reentrancy guard as the sync callback (ARC-016).
@@ -508,6 +498,16 @@ impl TerminalObserver for PyQueueObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // pyo3 implements Send + Sync for Py<T>, so both observers get the auto
+    // traits without an `unsafe impl`; this fails to compile if a future
+    // field breaks that.
+    #[test]
+    fn python_observers_are_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PyCallbackObserver>();
+        assert_send_sync::<PyQueueObserver>();
+    }
 
     #[test]
     fn reentrancy_guard_blocks_nested_dispatch_and_clears_on_exit() {

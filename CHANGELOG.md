@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **par-mux pane zoom** (`b42e1e0`): `resize-pane -Z` zooms a pane to fill its window and restores the exact prior layout on unzoom; zoom state broadcasts `%layout-change` with the zoomed layout.
 - **par-mux pane move family** (`37be711`): `break-pane`, `join-pane`, `move-window`, and `swap-window` — panes and windows can be reorganized across sessions/windows, closing the gap with tmux's layout commands. Wire tests and `docs/MUX.md` rows included.
 - **par-mux dead-pane hold and respawn** (`4437667`, `0b58dc3`, `4dde9e5`): a pane whose child exits is held with its exit code (remain-on-exit semantics) instead of being torn down immediately; `respawn-pane -t %N [-k] [-c dir] [command]` replaces the command in a live or held pane. `%pane-exited`/`%pane-respawned` notifications are mapped in the Python `TmuxNotification` converter.
+- **par-mux `split-window -b` and a `pane-info` foreground-command token** (`1c4c479`): `split-window -b` places the new pane before its target — left of it under `-h`, above it in the default direction — keeping exactly its `-p` share. `pane-info` replies append an optional last `cmd=<base64>` token (standard base64 of the pane's foreground command name, tmux `#{pane_current_command}`), absent on Windows or when the process argv is unreadable. The fixed `%N @W COLSxROWS` prefix is unchanged, so existing parsers keep working.
 
 ### Changed
 - **ENH-026: allocation-free FFI dirty ranges** (`bab1b27`): `terminal_dirty_ranges` coalesces runs in place on the caller-owned buffer instead of building an intermediate allocation, cutting per-frame readback cost.
@@ -32,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **QA-156: par-mux rejects future-dated telemetry** (`aa6286b`): `sampled_at_unix_ms` ahead of the daemon clock is rejected instead of poisoning the agent roster.
 - **Real constructor signatures in the stub, and constructor/property coverage in the API_REFERENCE checker** (ENH-030; `scripts/generate_stubs.py`, `scripts/check_api_reference.py`). PyO3 0.29 sets the class-level `__text_signature__` from `#[new]`/`#[pyo3(signature=…)]`, so the stub generator now renders every `__init__` from it — all 13 `*args/**kwargs` constructors became real signatures, with the opaque form kept only as a fallback for classes exposing no signature. The generator refuses to run against a non-streaming build (placeholder `StreamingConfig` has a `'()'` signature) with a message pointing at `make dev-streaming`. `check_api_reference.py` now also validates the first fenced `ClassName(args)` block or bullet per class section against the stub's `__init__` (names + default presence, DOC-064 rules), and checks `### Properties` sections bidirectionally — documented names must be stub properties and every stub property must be documented (empty escape-hatch allowlist). First catch: `StreamingConfig.kitty_file_media` was missing from both the constructor signature and the Properties section (audit DOC-073) — documented now with its SEC-101 semantics.
-- **The shared key encoder now covers modifyOtherKeys and the macOS option-key modes** (ENH-028; `src/keyboard.rs`, `src/ffi.rs`, `src/python_bindings/terminal/input_api.rs`). `keyboard::encode_key` grows into the single encoder par-term, ParDeck and Python all call, replacing the modes that previously lived only in par-term's `key_encoding.rs`: text keys with Ctrl or Alt held encode as `CSI 27;mods;codepoint~` under modifyOtherKeys mode 1/2 (one rule set, matching par-term exactly — Shift-only exempt, ASCII bases only), and `encode_key_with(ev, term, &KeyEncodeOptions{left_option, right_option})` selects Normal/Meta/Esc option-key handling per side, picked by the new `modifiers::ALT_RIGHT` side bit (bit 6, above the kitty-order bits; ignored by every parameter field). Also par-term parity: Shift+Enter sends LF, and the legacy modifier parameter counts Shift/Alt/Ctrl only, so Super held alone no longer fabricates `CSI 1;N` parameters. Defaults (ESC both sides) keep `encode_key`/`terminal_encode_key` byte-identical to the previous wire behavior. New surface: FFI `terminal_encode_key_ex` + `KeyEncodeOptions` (TERM_OPTION_MODE_* constants, ABI 3); Python `Terminal.encode_key(key, modifiers, codepoint=0, left_option=0, right_option=0)`. Data-driven conformance tests derive from par-term-input's suite (~360 rows plus a 1350-case no-truncation sweep), red-proofed against the old encoder first; two deliberate divergences are noted in the test module (Home/End keep SS3 under DECCKM, Alt+Space runs the option transform). Kitty protocol levels 2-4 remain out of scope (level 1 unchanged, pinned by tests).
+- **The shared key encoder now covers modifyOtherKeys and the macOS option-key modes** (ENH-028; `src/keyboard.rs`, `src/ffi.rs`, `src/python_bindings/terminal/input_api.rs`). `keyboard::encode_key` grows into the single encoder par-term, ParDeck and Python all call, replacing the modes that previously lived only in par-term's `key_encoding.rs`: text keys with Ctrl or Alt held encode as `CSI 27;mods;codepoint~` under modifyOtherKeys mode 1/2 (one rule set, matching par-term exactly — Shift-only exempt, ASCII bases only), and `encode_key_with(ev, term, &KeyEncodeOptions{left_option, right_option})` selects Normal/Meta/Esc option-key handling per side, picked by the new `modifiers::ALT_RIGHT` side bit (bit 6, above the kitty-order bits; ignored by every parameter field). Also par-term parity: Shift+Enter sends LF, and the legacy modifier parameter counts Shift/Alt/Ctrl only, so Super held alone no longer fabricates `CSI 1;N` parameters. Defaults (ESC both sides) keep `encode_key`/`terminal_encode_key` byte-identical to the previous wire behavior. New surface: FFI `terminal_encode_key_ex` + `TermKeyOptions` (Rust `KeyEncodeOptions`) (TERM_OPTION_MODE_* constants, ABI 3); Python `Terminal.encode_key(key, modifiers, codepoint=0, left_option=0, right_option=0)`. Data-driven conformance tests derive from par-term-input's suite (~360 rows plus a 1350-case no-truncation sweep), red-proofed against the old encoder first; two deliberate divergences are noted in the test module (Home/End keep SS3 under DECCKM, Alt+Space runs the option transform). Kitty protocol levels 2-4 remain out of scope (level 1 unchanged, pinned by tests).
 
 ## [0.56.0] - 2026-09-29
 
@@ -1807,6 +1808,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.57.0...HEAD
+[0.57.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.56.0...v0.57.0
+[0.56.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.55.0...v0.56.0
+[0.55.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.54.0...v0.55.0
+[0.54.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.53.0...v0.54.0
+[0.53.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.52.0...v0.53.0
+[0.52.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.51.0...v0.52.0
+[0.51.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.50.0...v0.51.0
+[0.50.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.49.0...v0.50.0
+[0.49.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.48.0...v0.49.0
+[0.48.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.47.0...v0.48.0
+[0.47.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.46.0...v0.47.0
+[0.46.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.45.0...v0.46.0
+[0.45.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.44.0...v0.45.0
+[0.44.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.43.1...v0.44.0
+[0.43.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.43.0...v0.43.1
+[0.43.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.4...v0.43.0
+[0.42.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.3...v0.42.4
+[0.42.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.2...v0.42.3
+[0.42.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.1...v0.42.2
+[0.42.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.0...v0.42.1
+[0.42.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.41.1...v0.42.0
+[0.41.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.41.0...v0.41.1
+[0.41.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.8...v0.40.0
+[0.39.8]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.7...v0.39.8
+[0.39.7]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.6...v0.39.7
+[0.39.6]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.5...v0.39.6
+[0.39.5]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.4...v0.39.5
+[0.39.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.3...v0.39.4
+[0.39.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.2...v0.39.3
+[0.39.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.1...v0.39.2
+[0.39.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.38.0...v0.39.0
+[0.38.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.34.0...v0.35.0

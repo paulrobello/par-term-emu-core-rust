@@ -336,7 +336,7 @@ graph TD
 
     classDef api fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
     classDef owned fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    classDef free fill:#b71c1c,stroke:#f4436,stroke-width:2px,color:#ffffff
+    classDef free fill:#FFC107,stroke:#FFC107,stroke-width:2px,color:#1E1E1E
     class A api
     class B,C,D,E owned
     class F free
