@@ -3165,6 +3165,67 @@ impl std::fmt::Debug for StreamingServer {
 
 #[cfg(test)]
 mod tests {
+
+    fn roster_msg() -> ServerMessage {
+        ServerMessage::AgentRoster { agents: vec![] }
+    }
+
+    fn delta_msg() -> ServerMessage {
+        ServerMessage::AgentStateChanged {
+            agent: crate::streaming::protocol::AgentEntry::default(),
+            released: false,
+        }
+    }
+
+    #[test]
+    fn should_send_passes_roster_messages_through_any_filter() {
+        use crate::streaming::protocol::EventType;
+        let only_bell: Option<std::collections::HashSet<EventType>> =
+            Some([EventType::Bell].into_iter().collect());
+        let empty: Option<std::collections::HashSet<EventType>> =
+            Some(std::collections::HashSet::new());
+        for subs in [&only_bell, &empty, &None] {
+            assert!(should_send(&roster_msg(), subs));
+            assert!(should_send(&delta_msg(), subs));
+        }
+        // Control: a filtered event type is still dropped.
+        assert!(!should_send(&ServerMessage::Bell, &empty));
+    }
+
+    #[tokio::test]
+    async fn broadcast_all_reaches_every_session() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
+        let second = Arc::new(StreamSessionState::new(
+            "second".to_string(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            false,
+        ));
+        server
+            .sessions
+            .insert("second".to_string(), Arc::clone(&second))
+            .unwrap();
+        let mut rx_default = server
+            .sessions
+            .get("default")
+            .unwrap()
+            .broadcast_tx
+            .subscribe();
+        let mut rx_second = second.broadcast_tx.subscribe();
+
+        server.broadcast_all(delta_msg());
+
+        assert!(matches!(
+            rx_default.try_recv(),
+            Ok(ServerMessage::AgentStateChanged { .. })
+        ));
+        assert!(matches!(
+            rx_second.try_recv(),
+            Ok(ServerMessage::AgentStateChanged { .. })
+        ));
+    }
+
     use super::*;
     use crate::terminal::Terminal;
 
