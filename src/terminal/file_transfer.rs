@@ -7,6 +7,7 @@
 //! The `FileTransferManager` maintains active transfers in progress and a
 //! bounded ring buffer of completed transfers for later retrieval.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use crate::terminal::unix_millis;
@@ -150,21 +151,19 @@ impl FileTransferManager {
     /// Returns `Ok(())` on success, or `Err(String)` if the transfer is not found,
     /// not in a valid state for appending, or would exceed the maximum transfer size.
     pub fn append_data(&mut self, id: TransferId, data: &[u8]) -> Result<(), String> {
-        let transfer = self
-            .active_transfers
-            .get_mut(&id)
-            .ok_or_else(|| format!("transfer {id} not found"))?;
+        let Entry::Occupied(entry) = self.active_transfers.entry(id) else {
+            return Err(format!("transfer {id} not found"));
+        };
 
-        let new_size = transfer.data.len() + data.len();
+        let new_size = entry.get().data.len() + data.len();
         if new_size > self.max_transfer_size {
-            // Fail the transfer on size limit violation
+            // Fail the transfer on size limit violation and move it to completed
+            let mut transfer = entry.remove();
             transfer.status = TransferStatus::Failed(format!(
                 "transfer exceeds maximum size of {} bytes",
                 self.max_transfer_size
             ));
             transfer.completed_at = Some(unix_millis());
-            // Move to completed
-            let transfer = self.active_transfers.remove(&id).unwrap();
             self.push_completed(transfer);
             return Err(format!(
                 "transfer {id} exceeds maximum size of {} bytes",
@@ -172,6 +171,7 @@ impl FileTransferManager {
             ));
         }
 
+        let transfer = entry.into_mut();
         transfer.data.extend_from_slice(data);
 
         // Update status to InProgress with current byte count

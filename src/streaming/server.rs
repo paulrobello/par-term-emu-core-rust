@@ -2307,7 +2307,7 @@ async fn api_auth_middleware(
     next: axum::middleware::Next,
     auth_config: ApiAuthConfig,
 ) -> axum::response::Response {
-    use axum::http::{header, StatusCode};
+    use axum::http::{header, HeaderValue, StatusCode};
     use axum::response::IntoResponse;
     use subtle::ConstantTimeEq;
 
@@ -2380,14 +2380,12 @@ async fn api_auth_middleware(
     }
 
     // Build 401 response
-    let mut headers = Vec::new();
-    if auth_config.http_basic_auth.is_some() {
-        headers.push((header::WWW_AUTHENTICATE, "Basic realm=\"Terminal Server\""));
-    }
-
     let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-    for (key, value) in headers {
-        response.headers_mut().insert(key, value.parse().unwrap());
+    if auth_config.http_basic_auth.is_some() {
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"Terminal Server\""),
+        );
     }
     response
 }
@@ -3440,6 +3438,62 @@ mod tests {
     // =========================================================================
     // ApiAuthConfig Tests
     // =========================================================================
+
+    /// Send one credential-less GET through `api_auth_middleware` (wired the
+    /// same way `build_http_app` wires it) and return the response.
+    async fn unauthenticated_response(
+        auth_config: ApiAuthConfig,
+    ) -> axum::http::Response<axum::body::Body> {
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+
+        let app =
+            Router::new()
+                .route("/ok", get(|| async { "ok" }))
+                .layer(axum::middleware::from_fn(move |req, next| {
+                    let auth_config = auth_config.clone();
+                    api_auth_middleware(req, next, auth_config)
+                }));
+        let req = axum::http::Request::builder()
+            .uri("/ok")
+            .body(axum::body::Body::empty())
+            .expect("static request parts are valid");
+        app.oneshot(req).await.expect("router is infallible")
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_basic_auth_401_carries_challenge() {
+        let res = unauthenticated_response(ApiAuthConfig {
+            api_key: None,
+            http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                "admin".to_string(),
+                "secret".to_string(),
+            )),
+            allow_api_key_in_query: false,
+        })
+        .await;
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            res.headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|v| v.to_str().ok()),
+            Some("Basic realm=\"Terminal Server\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
+        let res = unauthenticated_response(ApiAuthConfig {
+            api_key: Some("key".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: false,
+        })
+        .await;
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert!(!res
+            .headers()
+            .contains_key(axum::http::header::WWW_AUTHENTICATE));
+    }
 
     // ─── InputRateLimiter tests ─────────────────────────────────────────────
 }
