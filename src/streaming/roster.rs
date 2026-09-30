@@ -27,7 +27,7 @@ pub enum RosterDelta {
 pub fn translate_notification(line: &str) -> Option<RosterDelta> {
     let (verb, rest) = line.trim_start().split_once(char::is_whitespace)?;
     match verb {
-        "%agent-state-changed" => parse_line(rest).map(RosterDelta::Upsert),
+        "%agent-state-changed" => parse_state_changed(rest).map(RosterDelta::Upsert),
         "%agent-released" | "%pane-exited" => {
             let pane_id = rest
                 .split_whitespace()
@@ -39,6 +39,33 @@ pub fn translate_notification(line: &str) -> Option<RosterDelta> {
         }
         _ => None,
     }
+}
+
+/// Parses the notification body `<pane_id> <agent> <state>[ source=<hook|scrape>]`.
+///
+/// The source rides as an optional `source=` tail token and is absent when the
+/// daemon has no provenance. Reasons are never carried on this notification.
+fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
+    let mut tokens = rest.split_whitespace();
+    let pane_id = tokens.next()?.trim_start_matches('%').parse::<u32>().ok()?;
+    let agent = tokens.next()?;
+    let state = tokens.next()?;
+    let mut source = "";
+    for token in tokens {
+        if let Some(("source", value)) = token.split_once('=') {
+            if value != "hook" && value != "scrape" {
+                return None;
+            }
+            source = value;
+        }
+    }
+    Some(AgentEntry {
+        pane_id,
+        agent: agent.to_owned(),
+        state: state.to_owned(),
+        source: source.to_owned(),
+        reason: String::new(),
+    })
 }
 
 fn parse_line(line: &str) -> Option<AgentEntry> {
@@ -119,16 +146,38 @@ mod tests {
     }
 
     #[test]
-    fn state_changed_line_upserts() {
-        let line = "%agent-state-changed %12 claude-code blocked hook reason=SGVsbG8=";
+    fn state_changed_line_upserts_with_source() {
+        let line = "%agent-state-changed %12 claude-code blocked source=hook";
         match translate_notification(line) {
             Some(RosterDelta::Upsert(e)) => {
                 assert_eq!(e.pane_id, 12);
+                assert_eq!(e.agent, "claude-code");
                 assert_eq!(e.state, "blocked");
-                assert_eq!(e.reason, "Hello");
+                assert_eq!(e.source, "hook");
+                assert_eq!(e.reason, "");
             }
             other => panic!("expected upsert, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn state_changed_line_without_source_has_empty_source() {
+        match translate_notification("%agent-state-changed %12 claude-code working") {
+            Some(RosterDelta::Upsert(e)) => {
+                assert_eq!(e.state, "working");
+                assert_eq!(e.source, "");
+            }
+            other => panic!("expected upsert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_changed_with_bogus_source_or_short_is_none() {
+        assert!(
+            translate_notification("%agent-state-changed %12 claude blocked source=bogus")
+                .is_none()
+        );
+        assert!(translate_notification("%agent-state-changed %12 claude").is_none());
     }
 
     #[test]
