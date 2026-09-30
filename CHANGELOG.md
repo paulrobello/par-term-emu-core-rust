@@ -1802,6 +1802,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.57.0...HEAD
+[0.57.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.56.0...v0.57.0
+[0.56.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.55.0...v0.56.0
+[0.55.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.54.0...v0.55.0
+[0.54.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.53.0...v0.54.0
+[0.53.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.52.0...v0.53.0
+[0.52.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.51.0...v0.52.0
+[0.51.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.50.0...v0.51.0
+[0.50.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.49.0...v0.50.0
+[0.49.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.48.0...v0.49.0
+[0.48.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.47.0...v0.48.0
+[0.47.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.46.0...v0.47.0
+[0.46.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.45.0...v0.46.0
+[0.45.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.44.0...v0.45.0
+[0.44.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.43.1...v0.44.0
+[0.43.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.43.0...v0.43.1
+[0.43.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.4...v0.43.0
+[0.42.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.3...v0.42.4
+[0.42.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.2...v0.42.3
+[0.42.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.1...v0.42.2
+[0.42.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.42.0...v0.42.1
+[0.42.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.41.1...v0.42.0
+[0.41.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.41.0...v0.41.1
+[0.41.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.8...v0.40.0
+[0.39.8]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.7...v0.39.8
+[0.39.7]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.6...v0.39.7
+[0.39.6]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.5...v0.39.6
+[0.39.5]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.4...v0.39.5
+[0.39.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.3...v0.39.4
+[0.39.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.2...v0.39.3
+[0.39.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.1...v0.39.2
+[0.39.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.38.0...v0.39.0
+[0.38.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.34.0...v0.35.0
