@@ -2970,8 +2970,14 @@ mod tests {
             .wait_for_update(gen_before_spawn, std::time::Duration::from_secs(30))
             .expect("shell printed a prompt");
 
-        // Send Ctrl+C
+        // Send Ctrl+C, and let its ^C echo and prompt redraw land before the
+        // command, so the shell has handled the interrupt first.
+        let gen_before_ctrl_c = session.update_generation();
         session.write(b"\x03").unwrap();
+        session
+            .update_waiter()
+            .wait_for_update(gen_before_ctrl_c, std::time::Duration::from_secs(30))
+            .expect("the shell redrew after Ctrl+C");
 
         // Now send a normal command
         let gen_before_echo = session.update_generation();
