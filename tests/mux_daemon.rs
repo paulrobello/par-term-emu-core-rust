@@ -1446,3 +1446,63 @@ fn pane_info_reports_the_panes_foreground_command() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// ARC-095: a held-dead pane's exit is a query, not only a push. A client
+/// that connects after `%pane-exited` reads the code from `pane-info`'s
+/// `exited=` token.
+#[cfg(unix)]
+#[test]
+fn pane_info_reports_exit_for_held_pane() {
+    let fixture = MuxFixture::new("paneexit");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut first = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    first.send("new-session -s paneexit").expect("new-session");
+    first
+        .send("respawn-pane -t %0 -k exit 3")
+        .expect("respawn into exit 3");
+    next_notification(&mut first, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+                pane_id,
+                exit_code: Some(3),
+            } if pane_id == "%0"
+        )
+    });
+
+    // A client that missed the push.
+    let mut late = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect late");
+    let reply = late.send("pane-info -t %0").expect("info").join("");
+    assert!(
+        reply.trim_end().ends_with(" exited=3"),
+        "a held pane's pane-info carries its exit code: {reply:?}"
+    );
+    assert!(
+        !reply.contains("cmd="),
+        "a reaped child has no foreground command: {reply:?}"
+    );
+}
+
+/// ARC-095: a live pane's `pane-info` carries no `exited=` token.
+#[test]
+fn pane_info_live_pane_has_no_exited_token() {
+    let fixture = MuxFixture::new("panelive");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s panelive").expect("new-session");
+    let reply = client.send("pane-info -t %0").expect("info").join("");
+    assert!(
+        reply.starts_with("%0 @0 "),
+        "pane-info answers for the live pane: {reply:?}"
+    );
+    assert!(
+        !reply.contains("exited="),
+        "a live pane has no exited= token: {reply:?}"
+    );
+}
