@@ -145,8 +145,8 @@ pub struct MuxPane {
     /// HELD in this state (remain-on-exit): its frozen screen stays for
     /// `respawn-pane` to restart in place.
     dead: bool,
-    /// The recorded exit code, valid once `dead` — `None` when the child
-    /// died by signal or was reaped before the code could be read.
+    /// The recorded exit code, valid once `dead` — `None` when the OS had
+    /// no exit status to report as the death was observed.
     exit_code: Option<i32>,
     metadata: HashMap<String, String>,
     /// Last persistence snapshot, valid while the terminal has not changed

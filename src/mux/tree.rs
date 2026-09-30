@@ -110,8 +110,8 @@ pub struct RespawnSpawn {
     /// The command to run: the explicit override, else the pane's stored
     /// spawn command.
     pub command: Option<String>,
-    /// The restart's working directory: the explicit override, else the
-    /// pane's last known cwd.
+    /// The restart's working directory: the explicit override, else
+    /// [`MuxPane::respawn_cwd`]; `None` defers to the factory's cwd.
     pub cwd: Option<std::path::PathBuf>,
     /// The old pane's user title, carried to the replacement.
     user_title: Option<String>,
@@ -1059,10 +1059,9 @@ impl MuxTree {
             cols,
             rows,
             command: command.or(stored_command),
-            cwd: cwd
-                .map(Path::to_owned)
-                .or(stored_cwd)
-                .or_else(|| std::env::current_dir().ok()),
+            // `None` lets the factory's cwd apply, then the spawn's `$HOME`
+            // fallback — where a fresh pane lands (SEC-128).
+            cwd: cwd.map(Path::to_owned).or(stored_cwd),
             user_title,
         })
     }
@@ -2847,6 +2846,36 @@ mod tests {
             let cwd = respawn_cwd_after_osc7(h, dir.path());
             assert_eq!(cwd.as_deref(), Some(dir.path()), "host {h:?}");
         }
+    }
+
+    /// SEC-128: a held dead pane with no OSC 7 has no cwd to offer (its
+    /// reaped PID is not read, SEC-125), so the plan defers to the
+    /// factory's cwd rather than the daemon's own working directory.
+    #[cfg(unix)]
+    #[test]
+    fn respawn_of_a_dead_pane_without_osc7_defers_the_cwd() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let pane = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("exit 3"))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let p = tree.pane_mut(pane).unwrap();
+            if !p.poll_running() {
+                p.mark_dead();
+                if p.exit_code().is_some() {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "never reaped");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let plan = tree.begin_respawn(pane, false, None, None).unwrap();
+        let _ = tree.pane_mut(first).unwrap().kill();
+        assert_eq!(plan.cwd, None);
     }
 
     /// SEC-128: a local OSC 7 path that no longer exists is not used.
