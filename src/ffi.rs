@@ -196,6 +196,8 @@ impl Drop for SharedState {
     fn drop(&mut self) {
         // Free the title CString
         if !self.title.is_null() {
+            // SAFETY: `title` came from `CString::into_raw` in `to_c_string`;
+            // nulling it below makes this the only reconstruction.
             unsafe {
                 let _ = CString::from_raw(self.title);
             }
@@ -204,6 +206,8 @@ impl Drop for SharedState {
 
         // Free the cwd CString
         if !self.cwd.is_null() {
+            // SAFETY: as for `title` — a non-null `cwd` is always a
+            // `to_c_string` allocation, freed exactly once.
             unsafe {
                 let _ = CString::from_raw(self.cwd);
             }
@@ -272,6 +276,8 @@ pub struct TerminalObserverVtable {
 // SAFETY: The user_data pointer is opaque and the FFI contract requires the
 // caller to ensure thread safety of the data it points to.
 unsafe impl Send for TerminalObserverVtable {}
+// SAFETY: same contract as `Send`: the vtable is never mutated after
+// registration, and the caller owns any synchronization `user_data` needs.
 unsafe impl Sync for TerminalObserverVtable {}
 
 // ---------------------------------------------------------------------------
@@ -295,6 +301,9 @@ impl FfiObserver {
         if let Some(f) = cb {
             let desc = format!("{:?}", event);
             if let Ok(cstr) = CString::new(desc) {
+                // SAFETY: `f` and `user_data` come from the caller's vtable,
+                // which `terminal_add_observer`'s contract keeps valid while
+                // registered; `cstr` outlives the call.
                 unsafe {
                     f(self.vtable.user_data, cstr.as_ptr());
                 }
@@ -528,6 +537,8 @@ pub unsafe extern "C" fn terminal_create(cols: u32, rows: u32, scrollback: u32) 
 #[no_mangle]
 pub unsafe extern "C" fn terminal_free(term: *mut Terminal) {
     if !term.is_null() {
+        // SAFETY: non-null, and per this fn's contract it came from
+        // `terminal_create`'s `Box::into_raw` and is not used afterwards.
         drop(unsafe { Box::from_raw(term) });
     }
 }
@@ -542,7 +553,11 @@ pub unsafe extern "C" fn terminal_feed(term: *mut Terminal, bytes: *const u8, le
     if term.is_null() || bytes.is_null() {
         return;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
     let term_ref = unsafe { &mut *term };
+    // SAFETY: `bytes` is non-null (checked above) and the caller guarantees
+    // it is valid for reads of `len` bytes.
     let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
     term_ref.process(data);
 }
@@ -556,6 +571,8 @@ pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u
     if term.is_null() || cols == 0 || rows == 0 {
         return;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
     let term_ref = unsafe { &mut *term };
     term_ref.resize(cols as usize, rows as usize);
 }
@@ -601,7 +618,11 @@ pub unsafe extern "C" fn terminal_dirty_ranges(
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `write_ranges`' contract.
     unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range(f)) }
 }
 
@@ -618,6 +639,8 @@ pub unsafe extern "C" fn terminal_damage_generation(term: *const Terminal) -> u6
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     unsafe { &*term }.damage_generation()
 }
 
@@ -641,7 +664,11 @@ pub unsafe extern "C" fn terminal_dirty_ranges_since(
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `write_ranges`' contract.
     unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range_since(gen, f)) }
 }
 
@@ -654,6 +681,8 @@ pub unsafe extern "C" fn terminal_mark_clean(term: *mut Terminal) {
     if term.is_null() {
         return;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
     unsafe { &mut *term }.mark_clean();
 }
 
@@ -677,11 +706,15 @@ pub unsafe extern "C" fn terminal_read_row(
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
     let grid = term_ref.active_grid();
     let Some(row_cells) = grid.row(row as usize) else {
         return 0;
     };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `copy_row`'s contract.
     unsafe { copy_row(row_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
@@ -705,11 +738,15 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
     let grid = term_ref.active_grid();
     let Some(line_cells) = grid.scrollback_line(line as usize) else {
         return 0;
     };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `copy_row`'s contract.
     unsafe { copy_row(line_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
@@ -722,6 +759,8 @@ pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     unsafe { &*term }.active_grid().scrollback_len() as u32
 }
 
@@ -744,6 +783,8 @@ pub unsafe extern "C" fn terminal_scrollback_total_scrolled(term: *const Termina
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     unsafe { &*term }.active_grid().total_lines_scrolled() as u64
 }
 
@@ -756,6 +797,8 @@ pub unsafe extern "C" fn terminal_get_cursor(term: *const Terminal, out: *mut Te
     if term.is_null() || out.is_null() {
         return;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
     let cursor = term_ref.cursor();
     let style = match cursor.style {
@@ -766,6 +809,8 @@ pub unsafe extern "C" fn terminal_get_cursor(term: *const Terminal, out: *mut Te
         crate::cursor::CursorStyle::BlinkingBar => 4,
         crate::cursor::CursorStyle::SteadyBar => 5,
     };
+    // SAFETY: `out` is non-null (checked above) and the caller guarantees it
+    // is valid for one `TermCursorState` write.
     unsafe {
         *out = TermCursorState {
             col: cursor.col as u32,
@@ -785,9 +830,13 @@ pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut Ter
     if term.is_null() || out.is_null() {
         return;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
     let mouse_mode = mouse_mode_code(term_ref.mouse_mode());
     let (cols, rows) = term_ref.size();
+    // SAFETY: `out` is non-null (checked above) and the caller guarantees it
+    // is valid for one `TermModeState` write.
     unsafe {
         *out = TermModeState {
             alt_screen: term_ref.is_alt_screen_active(),
@@ -821,7 +870,9 @@ pub unsafe extern "C" fn terminal_encode_key(
     out: *mut u8,
     cap: u32,
 ) -> u32 {
-    terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap)
+    // SAFETY: forwards this fn's own contract; a NULL `opts` is allowed by
+    // `terminal_encode_key_ex`.
+    unsafe { terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap) }
 }
 
 /// [`terminal_encode_key`] with explicit macOS Option-key modes
@@ -846,8 +897,14 @@ pub unsafe extern "C" fn terminal_encode_key_ex(
     if term.is_null() || ev.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
+    // SAFETY: `ev` is non-null (checked above) and the caller guarantees it
+    // is valid for reads of one `TermKeyEvent`.
     let ev_ref = unsafe { &*ev };
+    // SAFETY: `as_ref` maps NULL to `None`; otherwise the caller guarantees
+    // `opts` is valid for reads of one `TermKeyOptions`.
     let opts_ref = match unsafe { opts.as_ref() } {
         Some(o) => o,
         None => &crate::keyboard::KeyEncodeOptions::default(),
@@ -855,6 +912,9 @@ pub unsafe extern "C" fn terminal_encode_key_ex(
     let bytes = crate::keyboard::encode_key_with(ev_ref, term_ref, opts_ref);
     let fill = (bytes.len() as u32).min(cap);
     if fill > 0 && !out.is_null() {
+        // SAFETY: `fill <= cap`, `out` is non-null, and the caller guarantees
+        // `out` is valid for `cap` byte writes; `bytes` is a separate
+        // allocation, so the ranges cannot overlap.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
     }
     bytes.len() as u32
@@ -876,6 +936,8 @@ pub unsafe extern "C" fn terminal_get_state(term: *const Terminal) -> *mut Share
     if term.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
     let term_ref = unsafe { &*term };
     let state = SharedState::from_terminal(term_ref);
     Box::into_raw(Box::new(state))
@@ -889,6 +951,8 @@ pub unsafe extern "C" fn terminal_get_state(term: *const Terminal) -> *mut Share
 #[no_mangle]
 pub unsafe extern "C" fn terminal_free_state(state: *mut SharedState) {
     if !state.is_null() {
+        // SAFETY: non-null, and per this fn's contract it came from
+        // `terminal_get_state`'s `Box::into_raw` and is not used afterwards.
         unsafe {
             let _ = Box::from_raw(state);
         }
@@ -911,6 +975,8 @@ pub unsafe extern "C" fn terminal_add_observer(
     if term.is_null() {
         return 0;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
     let term_ref = unsafe { &mut *term };
     let observer = FfiObserver::new(vtable);
     term_ref.add_observer(Arc::new(observer))
@@ -927,6 +993,8 @@ pub unsafe extern "C" fn terminal_remove_observer(term: *mut Terminal, id: u64) 
     if term.is_null() {
         return false;
     }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
     let term_ref = unsafe { &mut *term };
     term_ref.remove_observer(id)
 }
@@ -1145,7 +1213,8 @@ mod tests {
         use crate::keyboard::{modifiers, option_modes, KeyEncodeOptions, TermKeyEvent};
 
         let term = unsafe { terminal_create(10, 6, 50) };
-        unsafe { terminal_feed(term, b"\x1b[>4;2m".as_ptr(), 8) };
+        let seq = b"\x1b[>4;2m";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
         let ev = TermKeyEvent::char_('f', modifiers::ALT);
 
         let mut buf = [0u8; 32];
@@ -1162,7 +1231,8 @@ mod tests {
         assert_eq!(&buf[..n as usize], b"\x1b[27;3;102~");
 
         // Reset modifyOtherKeys; now the option modes decide.
-        unsafe { terminal_feed(term, b"\x1b[>4m".as_ptr(), 6) };
+        let seq = b"\x1b[>4m";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
         let n = unsafe {
             terminal_encode_key_ex(
                 term,
@@ -1198,7 +1268,8 @@ mod tests {
     #[test]
     fn ffi_dirty_ranges_coalesce_and_resize_marks_damage() {
         let term = unsafe { terminal_create(10, 6, 50) };
-        unsafe { terminal_feed(term, b"\x1b[Hrow0\x1b[3Hrow2\x1b[5Hrow4".as_ptr(), 26) };
+        let seq = b"\x1b[Hrow0\x1b[3Hrow2\x1b[5Hrow4";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
 
         let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
         let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
@@ -1214,7 +1285,8 @@ mod tests {
         );
 
         // A full-row write makes the ranges coalesce.
-        unsafe { terminal_feed(term, b"\x1b[2Hxxxx\x1b[4Hxxxx".as_ptr(), 18) };
+        let seq = b"\x1b[2Hxxxx\x1b[4Hxxxx";
+        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
         let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
         let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
         unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };

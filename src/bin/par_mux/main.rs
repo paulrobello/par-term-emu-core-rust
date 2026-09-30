@@ -3,6 +3,9 @@
 //! Owns PTYs and serves the control-mode protocol over a local socket. Runs
 //! until killed: clients come and go, panes do not (see par-mux.md D5).
 
+// QA-201: every production `unsafe` block states its invariant.
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 use clap::Parser;
 
 /// par-mux: a tmux-control-mode-compatible multiplexer daemon.
@@ -295,6 +298,9 @@ fn daemonize() -> std::io::Result<()> {
 
     // Flush the stop-phase report lines before the fork duplicates buffers.
     let _ = std::io::stderr().flush();
+    // SAFETY: the caller runs this before serve mode spawns any thread (see
+    // the doc comment), so the child inherits a single-threaded process and
+    // may call non-async-signal-safe functions.
     match unsafe { fork() }.map_err(std::io::Error::from)? {
         ForkResult::Parent { .. } => std::process::exit(0),
         ForkResult::Child => {
@@ -310,6 +316,8 @@ fn daemonize() -> std::io::Result<()> {
             let fd = null.as_raw_fd();
             for target in [0, 1, 2] {
                 // libc rather than nix::unistd: nix 0.31 no longer ships dup2.
+                // SAFETY: `fd` is the open /dev/null handle `null` owns for
+                // this whole loop, and 0-2 are the standard descriptors.
                 if unsafe { libc::dup2(fd, target) } == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -351,6 +359,8 @@ fn install_signal_handlers() -> std::io::Result<()> {
         SaFlags::empty(),
         signal::SigSet::empty(),
     );
+    // SAFETY: `on_sigterm` is async-signal-safe: it only reads an
+    // initialized `OnceLock` and performs one atomic store.
     unsafe { signal::sigaction(signal::SIGTERM, &shutdown) }.map_err(std::io::Error::other)?;
     let ignore = SigAction::new(
         SigHandler::SigIgn,
@@ -364,6 +374,8 @@ fn install_signal_handlers() -> std::io::Result<()> {
         signal::SIGPIPE,
         signal::SIGTSTP,
     ] {
+        // SAFETY: SIG_IGN runs no handler code, so no signal-safety
+        // requirement applies.
         unsafe { signal::sigaction(terminal_signal, &ignore) }.map_err(std::io::Error::other)?;
     }
     Ok(())
