@@ -20,6 +20,9 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
     let agent = tokens.next()?;
     let state = tokens.next()?;
     let source = tokens.next()?;
+    if source != "hook" && source != "scrape" {
+        return None;
+    }
     let mut reason = String::new();
     for token in tokens {
         if let Some(("reason", value)) = token.split_once('=') {
@@ -65,6 +68,7 @@ mod tests {
         let raw = "not-a-number claude working hook\n\
                    12 claude\n\
                    12 claude working\n\
+                   12 claude working reason=SGVsbG8=\n\
                    \n\
                    12 claude working hook\n";
         let got = parse_agents_output(raw);
