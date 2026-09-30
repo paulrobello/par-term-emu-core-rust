@@ -366,28 +366,6 @@ impl Default for TmuxState {
     }
 }
 
-/// Trigger registry, highlights, action results, and pending scan rows
-/// (Feature 18: Triggers & Automation).
-pub(crate) struct TriggerState {
-    pub(crate) trigger_registry: trigger::TriggerRegistry,
-    pub(crate) trigger_highlights: Vec<trigger::TriggerHighlight>,
-    pub(crate) trigger_action_results: Vec<trigger::ActionResult>,
-    pub(crate) max_action_results: usize,
-    pub(crate) pending_trigger_rows: HashSet<usize>,
-}
-
-impl Default for TriggerState {
-    fn default() -> Self {
-        Self {
-            trigger_registry: trigger::TriggerRegistry::default(),
-            trigger_highlights: Vec::new(),
-            trigger_action_results: Vec::new(),
-            max_action_results: 100,
-            pending_trigger_rows: HashSet::new(),
-        }
-    }
-}
-
 /// Terminal notification state.
 ///
 /// Combines the OSC 9/777 notification buffer with the Feature 37 notification
@@ -1256,8 +1234,8 @@ pub struct Terminal {
     pub(crate) event_subscription: Option<HashSet<TerminalEventKind>>,
 
     // === Feature 18: Triggers & Automation ===
-    /// Trigger & automation state (ARC-001 sub-struct)
-    pub(crate) triggers: TriggerState,
+    /// Trigger & automation state (ARC-001 sub-struct; owned by `trigger`, ARC-102)
+    pub(crate) triggers: trigger::TriggerState,
 
     // === ACS (Alternate Character Set) state ===
     /// G0/G1 charset designations and active slot (ARC-001 sub-struct)
@@ -1362,7 +1340,7 @@ impl Terminal {
                 ),
             },
             event_subscription: None,
-            triggers: TriggerState::default(),
+            triggers: trigger::TriggerState::default(),
             charset_state: CharsetState::default(),
         }
     }
@@ -3262,10 +3240,7 @@ impl Terminal {
 
         // The trigger registry survives; highlights, action results, and
         // pending scan rows reset.
-        std::mem::swap(
-            &mut fresh.triggers.trigger_registry,
-            &mut self.triggers.trigger_registry,
-        );
+        fresh.triggers.carry_registry_from(&mut self.triggers);
 
         std::mem::swap(&mut fresh.macros, &mut self.macros);
 
@@ -3377,80 +3352,17 @@ impl Terminal {
         self.active_grid_mut().mark_row_damage(row);
     }
 
-    /// Queue a row for trigger scanning (ARC-064).
-    ///
-    /// Triggers observe written text, not incidental render damage: only
-    /// the printable-write path calls this, so erases, scrolls, attribute
-    /// changes and screen switches cannot re-fire a trigger that already
-    /// matched. Render damage still goes through `mark_row_dirty`.
-    pub(crate) fn mark_row_written(&mut self, row: usize) {
-        if self.triggers.trigger_registry.has_active_triggers() {
-            self.triggers.pending_trigger_rows.insert(row);
-        }
-    }
-
-    /// Move pending trigger rows with their content after a region scroll.
-    ///
-    /// Rows outside the scrolled region are untouched. A row whose content
-    /// left the region was already scanned by
-    /// `scan_departing_trigger_rows`; any still listed is dropped here.
-    fn shift_pending_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
-        if self.triggers.pending_trigger_rows.is_empty() {
-            return;
-        }
-        let pending = std::mem::take(&mut self.triggers.pending_trigger_rows);
-        self.triggers.pending_trigger_rows = pending
-            .into_iter()
-            .filter_map(|r| {
-                if r < top || r > bottom {
-                    Some(r)
-                } else if down {
-                    (r + n <= bottom).then_some(r + n)
-                } else {
-                    r.checked_sub(n).filter(|nr| *nr >= top)
-                }
-            })
-            .collect();
-    }
-
     /// Scan the pending rows a region scroll is about to push off the
-    /// screen, before the grid moves them (ARC-091).
-    ///
-    /// `down`/`n`/`top`/`bottom` mean what they mean to
-    /// `shift_pending_trigger_rows`: content moving up leaves at `top`,
-    /// content moving down leaves at `bottom`. Only rows already pending
-    /// are scanned (the ARC-064 written-text rule), and each is removed
-    /// from the set first, so it is scanned exactly once. A departing
-    /// row's match reports the row it occupied before the scroll.
+    /// screen, before the grid moves them (ARC-091). The row selection is
+    /// [`trigger::TriggerState::take_departing`]; a departing row's match
+    /// reports the row it occupied before the scroll.
     fn scan_departing_trigger_rows(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
-        if self.triggers.pending_trigger_rows.is_empty()
-            || !self.triggers.trigger_registry.has_active_triggers()
-        {
-            return;
-        }
-        let bottom = bottom.min(self.active_grid().rows().saturating_sub(1));
-        if n == 0 || top > bottom {
-            return;
-        }
-        let n = n.min(bottom - top + 1);
-        let (first, last) = if down {
-            (bottom + 1 - n, bottom)
-        } else {
-            (top, top + n - 1)
-        };
-        let mut departing: Vec<usize> = self
+        let grid_rows = self.active_grid().rows();
+        let departing = self
             .triggers
-            .pending_trigger_rows
-            .iter()
-            .copied()
-            .filter(|r| (first..=last).contains(r))
-            .collect();
+            .take_departing(down, n, top, bottom, grid_rows);
         if departing.is_empty() {
             return;
-        }
-        departing.sort_unstable();
-        for r in &departing {
-            self.triggers.pending_trigger_rows.remove(r);
         }
         crate::terminal::TriggerEngine::scan_rows(self, departing);
     }
@@ -3463,7 +3375,7 @@ impl Terminal {
         self.scan_departing_trigger_rows(false, n, top, bottom);
         self.active_grid_mut().scroll_region_up(n, top, bottom);
         self.adjust_graphics_for_scroll_up(n, top, bottom);
-        self.shift_pending_trigger_rows(false, n, top, bottom);
+        self.triggers.shift_pending(false, n, top, bottom);
     }
 
     /// Scroll `[top, bottom]` of the active grid down by `n`; the mirror of
@@ -3472,7 +3384,7 @@ impl Terminal {
         self.scan_departing_trigger_rows(true, n, top, bottom);
         self.active_grid_mut().scroll_region_down(n, top, bottom);
         self.adjust_graphics_for_scroll_down(n, top, bottom);
-        self.shift_pending_trigger_rows(true, n, top, bottom);
+        self.triggers.shift_pending(true, n, top, bottom);
     }
 
     /// IL: insert `n` blank lines at `row`, pushing `[row, bottom]` down.
@@ -3480,7 +3392,7 @@ impl Terminal {
     pub(crate) fn insert_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
         self.scan_departing_trigger_rows(true, n, row, bottom);
         self.active_grid_mut().insert_lines(n, row, bottom);
-        self.shift_pending_trigger_rows(true, n, row, bottom);
+        self.triggers.shift_pending(true, n, row, bottom);
     }
 
     /// DL: delete `n` lines at `row`, pulling `[row, bottom]` up. The
@@ -3488,13 +3400,13 @@ impl Terminal {
     pub(crate) fn delete_lines_tracked(&mut self, n: usize, row: usize, bottom: usize) {
         self.scan_departing_trigger_rows(false, n, row, bottom);
         self.active_grid_mut().delete_lines(n, row, bottom);
-        self.shift_pending_trigger_rows(false, n, row, bottom);
+        self.triggers.shift_pending(false, n, row, bottom);
     }
 
     /// Scan pending rows before content moves somewhere row indices cannot
     /// follow (alt-screen grid swap, reflowing resize).
     pub(crate) fn flush_pending_trigger_rows(&mut self) {
-        if !self.triggers.pending_trigger_rows.is_empty() {
+        if self.triggers.has_pending() {
             crate::terminal::TriggerEngine::process_trigger_scans(self);
         }
     }

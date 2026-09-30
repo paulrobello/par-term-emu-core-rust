@@ -205,7 +205,7 @@ impl Terminal {
     pub fn restore_from_snapshot(&mut self, snap: TerminalSnapshot) {
         // Restored rows replace the screen wholesale; pending trigger
         // indices from before the restore point at different text (ARC-064).
-        self.triggers.pending_trigger_rows.clear();
+        self.triggers.clear_pending();
         self.grid.restore_from_snapshot(&snap.grid);
         self.alt_grid.restore_from_snapshot(&snap.alt_grid);
         self.alt_screen_active = snap.alt_screen_active;

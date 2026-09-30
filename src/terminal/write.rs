@@ -250,7 +250,7 @@ impl Terminal {
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         // New text landed: render damage plus trigger scan
-        self.mark_row_written(cursor_row);
+        self.triggers.mark_written(cursor_row);
 
         // Advance cursor by character width
         self.cursor.col += char_width;
@@ -389,7 +389,7 @@ impl Terminal {
                     }
                 }
 
-                self.mark_row_written(target_row);
+                self.triggers.mark_written(target_row);
             }
             return true;
         }
@@ -463,7 +463,7 @@ impl Terminal {
                             }
                         }
 
-                        self.mark_row_written(target_row);
+                        self.triggers.mark_written(target_row);
                     }
                     return true;
                 }
@@ -548,9 +548,9 @@ impl Terminal {
                 }
             }
 
-            self.mark_row_written(prev_row);
+            self.triggers.mark_written(prev_row);
             if cursor_row != prev_row {
-                self.mark_row_written(cursor_row);
+                self.triggers.mark_written(cursor_row);
             }
             return;
         }
@@ -621,7 +621,7 @@ impl Terminal {
         }
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
-        self.mark_row_written(cursor_row);
+        self.triggers.mark_written(cursor_row);
 
         // Advance cursor by 1
         self.cursor.col += 1;

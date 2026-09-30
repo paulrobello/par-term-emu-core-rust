@@ -4,7 +4,7 @@
 //! configurable actions (highlight, notify, bookmark, set variable, etc.).
 //! Uses `RegexSet` for efficient multi-pattern matching in a single pass.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Unique trigger identifier
 pub type TriggerId = u64;
@@ -129,6 +129,134 @@ pub struct TriggerHighlight {
     pub expiry: u64,
 }
 
+/// Trigger registry, highlights, action results, and pending scan rows
+/// (Feature 18: Triggers & Automation).
+pub(crate) struct TriggerState {
+    trigger_registry: TriggerRegistry,
+    trigger_highlights: Vec<TriggerHighlight>,
+    trigger_action_results: Vec<ActionResult>,
+    max_action_results: usize,
+    pending_trigger_rows: HashSet<usize>,
+}
+
+impl Default for TriggerState {
+    fn default() -> Self {
+        Self {
+            trigger_registry: TriggerRegistry::default(),
+            trigger_highlights: Vec::new(),
+            trigger_action_results: Vec::new(),
+            max_action_results: 100,
+            pending_trigger_rows: HashSet::new(),
+        }
+    }
+}
+
+impl TriggerState {
+    /// Queue a row for trigger scanning (ARC-064).
+    ///
+    /// Triggers observe written text, not incidental render damage: only
+    /// the printable-write path calls this, so erases, scrolls, attribute
+    /// changes and screen switches cannot re-fire a trigger that already
+    /// matched. Render damage still goes through `mark_row_dirty`.
+    pub(crate) fn mark_written(&mut self, row: usize) {
+        if self.trigger_registry.has_active_triggers() {
+            self.pending_trigger_rows.insert(row);
+        }
+    }
+
+    /// Move pending trigger rows with their content after a region scroll.
+    ///
+    /// Rows outside the scrolled region are untouched. A row whose content
+    /// left the region was already scanned via [`TriggerState::take_departing`];
+    /// any still listed is dropped here.
+    pub(crate) fn shift_pending(&mut self, down: bool, n: usize, top: usize, bottom: usize) {
+        if self.pending_trigger_rows.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_trigger_rows);
+        self.pending_trigger_rows = pending
+            .into_iter()
+            .filter_map(|r| {
+                if r < top || r > bottom {
+                    Some(r)
+                } else if down {
+                    (r + n <= bottom).then_some(r + n)
+                } else {
+                    r.checked_sub(n).filter(|nr| *nr >= top)
+                }
+            })
+            .collect();
+    }
+
+    /// Remove and return, sorted, the pending rows a region scroll is about
+    /// to push off the screen of a `grid_rows`-row grid (ARC-091).
+    ///
+    /// `down`/`n`/`top`/`bottom` mean what they mean to
+    /// [`TriggerState::shift_pending`]: content moving up leaves at `top`,
+    /// content moving down leaves at `bottom`. Only rows already pending
+    /// are returned (the ARC-064 written-text rule), and each is removed
+    /// from the set, so it is scanned exactly once. Empty when no trigger
+    /// is active.
+    pub(crate) fn take_departing(
+        &mut self,
+        down: bool,
+        n: usize,
+        top: usize,
+        bottom: usize,
+        grid_rows: usize,
+    ) -> Vec<usize> {
+        if self.pending_trigger_rows.is_empty() || !self.trigger_registry.has_active_triggers() {
+            return Vec::new();
+        }
+        let bottom = bottom.min(grid_rows.saturating_sub(1));
+        if n == 0 || top > bottom {
+            return Vec::new();
+        }
+        let n = n.min(bottom - top + 1);
+        let (first, last) = if down {
+            (bottom + 1 - n, bottom)
+        } else {
+            (top, top + n - 1)
+        };
+        let mut departing: Vec<usize> = self
+            .pending_trigger_rows
+            .iter()
+            .copied()
+            .filter(|r| (first..=last).contains(r))
+            .collect();
+        if departing.is_empty() {
+            return departing;
+        }
+        departing.sort_unstable();
+        for r in &departing {
+            self.pending_trigger_rows.remove(r);
+        }
+        departing
+    }
+
+    /// Whether any written row is waiting to be scanned.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending_trigger_rows.is_empty()
+    }
+
+    /// Remove and return every pending row.
+    pub(crate) fn take_pending(&mut self) -> Vec<usize> {
+        self.pending_trigger_rows.drain().collect()
+    }
+
+    /// Drop every pending row without scanning it.
+    pub(crate) fn clear_pending(&mut self) {
+        self.pending_trigger_rows.clear();
+    }
+
+    /// Carry the registry across RIS: `self` is the fresh state, `old` the
+    /// state being replaced. Highlights, action results, and pending scan
+    /// rows reset.
+    pub(crate) fn carry_registry_from(&mut self, old: &mut TriggerState) {
+        std::mem::swap(&mut self.trigger_registry, &mut old.trigger_registry);
+    }
+}
+
 use crate::terminal::Terminal;
 
 /// Trigger & automation operations on a [`Terminal`] (ARC-039).
@@ -182,11 +310,11 @@ impl TriggerEngine {
     /// (ARC-091), so this covers the rows still visible.
     pub fn process_trigger_scans(term: &mut Terminal) {
         if !term.triggers.trigger_registry.has_active_triggers() {
-            term.triggers.pending_trigger_rows.clear();
+            term.triggers.clear_pending();
             return;
         }
 
-        let rows_to_scan: Vec<usize> = term.triggers.pending_trigger_rows.drain().collect();
+        let rows_to_scan: Vec<usize> = term.triggers.take_pending();
         Self::scan_rows(term, rows_to_scan);
     }
 
