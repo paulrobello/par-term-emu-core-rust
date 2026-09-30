@@ -40,6 +40,15 @@ use crate::terminal::{Terminal, TerminalEvent, TerminalEventKind};
 ///
 /// The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
 /// for any Unicode scalar value). `text_len` indicates how many bytes are valid.
+/// When the cell also carries combining marks, `attrs` has
+/// `TERM_ATTR_HAS_COMBINING` set and `ptec_terminal_read_cell_grapheme` returns the
+/// full UTF-8 cluster (ARC-101).
+///
+/// Colors are resolved for display (ARC-101): the live ANSI palette (OSC 4),
+/// the terminal default colors (OSC 10/11) for default cells, flagged with
+/// `TERM_ATTR_DEFAULT_FG` / `TERM_ATTR_DEFAULT_BG`, and bold brightening. A
+/// color counts as default when it equals the unstyled color or the current
+/// OSC 10/11 value ([`Terminal::resolve_cell_colors`]).
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedCell {
@@ -59,10 +68,24 @@ pub struct SharedCell {
     pub bg_g: u8,
     /// Background color — blue component
     pub bg_b: u8,
-    /// Bitfield of cell attributes (bold, italic, etc.) — see `CellBitflags`
+    /// Bitfield: `TERM_CELL_*` cell attributes (bits 0-11) plus the
+    /// `TERM_ATTR_*` readback bits (12-14)
     pub attrs: u16,
     /// Display width of the character (typically 1 or 2)
     pub width: u8,
+}
+
+/// `SharedCell.attrs` readback bits above the `TERM_CELL_*` attribute bits
+/// (ARC-101). The values are the `TERM_ATTR_*` defines in
+/// terminal_core_layout.h, pinned by `layout_header_defines_match_rust`.
+pub mod attr_bits {
+    /// The foreground is the terminal default (OSC 10), not an SGR color.
+    pub const DEFAULT_FG: u16 = 1 << 12;
+    /// The background is the terminal default (OSC 11), not an SGR color.
+    pub const DEFAULT_BG: u16 = 1 << 13;
+    /// The cell carries combining marks after its base character; read the
+    /// full cluster with `ptec_terminal_read_cell_grapheme`.
+    pub const HAS_COMBINING: u16 = 1 << 14;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,20 +168,21 @@ impl SharedState {
 
         // Cells
         let mut cells_vec: Vec<SharedCell> = Vec::with_capacity(cols * rows);
+        let pad = SharedCell::padding(term);
 
         for row_idx in 0..rows {
             if let Some(row_cells) = grid.row(row_idx) {
                 for col_idx in 0..cols {
                     let cell = row_cells
                         .get(col_idx)
-                        .map(SharedCell::from_cell)
-                        .unwrap_or_else(SharedCell::blank);
+                        .map(|c| SharedCell::from_cell(term, c))
+                        .unwrap_or_else(|| pad.clone());
                     cells_vec.push(cell);
                 }
             } else {
                 // Row doesn't exist — fill with default cells
                 for _ in 0..cols {
-                    cells_vec.push(SharedCell::blank());
+                    cells_vec.push(pad.clone());
                 }
             }
         }
@@ -232,7 +256,7 @@ impl Drop for SharedState {
 // TerminalObserverVtable — C function-pointer table for observers
 // ---------------------------------------------------------------------------
 
-/// The callback shape shared by every [`TerminalObserverVtable`] slot:
+/// The callback shape shared by the text slots of [`TerminalObserverVtable`]:
 /// receives the vtable's `user_data` and a NUL-terminated, Debug-formatted
 /// event description valid only for the duration of the call. A named alias
 /// (not an inline type) so cbindgen emits the `term_event_cb` typedef the
@@ -242,35 +266,143 @@ impl Drop for SharedState {
 pub type term_event_cb =
     Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>;
 
+/// The structured-event callback of [`TerminalObserverVtable::on_event_v2`]
+/// (ARC-114): receives the vtable's `user_data` and one [`TermEvent`], both
+/// valid only for the duration of the call.
+// snake_case on purpose: the name is the C typedef the header exports.
+#[allow(nonstandard_style)]
+pub type term_event_v2_cb =
+    Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event: *const TermEvent)>;
+
+/// One terminal event in structured form, delivered to `on_event_v2`
+/// (ARC-114).
+///
+/// `kind` is a `TERM_EVENT_*` code (terminal_core_layout.h). `payload` is a
+/// UTF-8 JSON object of `payload_len` bytes, **not** NUL-terminated: text
+/// fields are JSON strings, so an interior NUL arrives escaped (`\u0000`)
+/// instead of truncating the payload. Its keys are the event's named fields
+/// (the same keys as the Python event dicts, including `"type"`); an unset
+/// optional field is present as `null`. The key set is part of the
+/// `TERM_CORE_ABI_VERSION` contract. The struct and the bytes it points to
+/// are owned by the library and valid only during the callback — copy what
+/// you need.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TermEvent {
+    /// `TERM_EVENT_*` kind code
+    pub kind: u16,
+    /// Reserved, always 0
+    pub _pad: u16,
+    /// Length of `payload` in bytes
+    pub payload_len: u32,
+    /// UTF-8 JSON object, `payload_len` bytes, not NUL-terminated
+    pub payload: *const u8,
+}
+
 /// A C-compatible vtable for terminal event observation.
 ///
-/// Each function pointer receives the `user_data` pointer and a
-/// Debug-formatted (`{:?}`) event description as a NUL-terminated C string.
-/// The payload is DIAGNOSTIC TEXT, not a stable format: it changes whenever
-/// the Rust event enum changes — parse it only for logging. The callee must
-/// NOT free the event string — it is owned by the caller and valid only for
-/// the duration of the callback.
+/// The five text slots receive the `user_data` pointer and a Debug-formatted
+/// (`{:?}`) event description as a NUL-terminated C string. That text is
+/// DIAGNOSTIC, not a stable format: it changes whenever the Rust event enum
+/// changes — parse it only for logging. An interior NUL in the text is
+/// replaced with U+FFFD, never dropped. The callee must NOT free the event
+/// string — it is owned by the caller and valid only for the duration of the
+/// callback.
+///
+/// `on_event_v2` is the structured channel (ARC-114): one [`TermEvent`] per
+/// event, carrying a `TERM_EVENT_*` kind and a length-delimited JSON payload.
+/// Any slot may be NULL; a NULL slot costs nothing (its text or JSON is never
+/// built).
 ///
 /// Callbacks fire inline while the terminal is processing input. A callback
 /// must NOT re-enter the FFI on the same `Terminal` handle (any
-/// `terminal_*` function): the terminal is mutably borrowed for the
+/// `ptec_terminal_*` function): the terminal is mutably borrowed for the
 /// duration of the dispatch, so re-entry aliases `&`/`&mut` — undefined
-/// behavior. Queue what you need and call back after `terminal_feed`
+/// behavior. Queue what you need and call back after `ptec_terminal_feed`
 /// returns.
 #[repr(C)]
 pub struct TerminalObserverVtable {
-    /// Called for zone lifecycle events
+    /// Called for zone lifecycle events (diagnostic text)
     pub on_zone_event: term_event_cb,
-    /// Called for command/shell integration events
+    /// Called for command/shell integration events (diagnostic text)
     pub on_command_event: term_event_cb,
-    /// Called for environment change events
+    /// Called for environment change events (diagnostic text)
     pub on_environment_event: term_event_cb,
-    /// Called for screen content events
+    /// Called for screen content events (diagnostic text)
     pub on_screen_event: term_event_cb,
-    /// Called for ALL events (catch-all)
+    /// Called for ALL events (catch-all, diagnostic text)
     pub on_event: term_event_cb,
+    /// Called for ALL events with the structured [`TermEvent`] (ARC-114)
+    pub on_event_v2: term_event_v2_cb,
     /// Opaque pointer passed to every callback
     pub user_data: *mut std::ffi::c_void,
+}
+
+/// Declares the `TERM_EVENT_*` code of every [`TerminalEventKind`] once: the
+/// exhaustive match forces a code for a new kind, and the same invocation
+/// feeds the header-define test, so the C constant cannot be forgotten.
+/// Codes are stable ABI — never renumber; append new kinds.
+macro_rules! term_event_kinds {
+    ($($variant:ident = $code:literal => $cname:literal),* $(,)?) => {
+        /// The `TERM_EVENT_*` code for an event kind (ARC-114).
+        fn event_kind_code(kind: &TerminalEventKind) -> u16 {
+            match kind {
+                $(TerminalEventKind::$variant => $code,)*
+            }
+        }
+
+        /// Every (`TERM_EVENT_*` name, code) pair, for the header pin test.
+        #[cfg(test)]
+        const TERM_EVENT_CODES: &[(&str, u16)] = &[$(($cname, $code)),*];
+    };
+}
+
+term_event_kinds! {
+    BellRang = 1 => "TERM_EVENT_BELL",
+    TitleChanged = 2 => "TERM_EVENT_TITLE_CHANGED",
+    SizeChanged = 3 => "TERM_EVENT_SIZE_CHANGED",
+    ModeChanged = 4 => "TERM_EVENT_MODE_CHANGED",
+    GraphicsAdded = 5 => "TERM_EVENT_GRAPHICS_ADDED",
+    HyperlinkAdded = 6 => "TERM_EVENT_HYPERLINK_ADDED",
+    DirtyRegion = 7 => "TERM_EVENT_DIRTY_REGION",
+    CwdChanged = 8 => "TERM_EVENT_CWD_CHANGED",
+    TriggerMatched = 9 => "TERM_EVENT_TRIGGER_MATCHED",
+    UserVarChanged = 10 => "TERM_EVENT_USER_VAR_CHANGED",
+    ProgressBarChanged = 11 => "TERM_EVENT_PROGRESS_BAR_CHANGED",
+    BadgeChanged = 12 => "TERM_EVENT_BADGE_CHANGED",
+    ShellIntegrationEvent = 13 => "TERM_EVENT_SHELL_INTEGRATION",
+    ZoneOpened = 14 => "TERM_EVENT_ZONE_OPENED",
+    ZoneClosed = 15 => "TERM_EVENT_ZONE_CLOSED",
+    ZoneScrolledOut = 16 => "TERM_EVENT_ZONE_SCROLLED_OUT",
+    EnvironmentChanged = 17 => "TERM_EVENT_ENVIRONMENT_CHANGED",
+    RemoteHostTransition = 18 => "TERM_EVENT_REMOTE_HOST_TRANSITION",
+    SubShellDetected = 19 => "TERM_EVENT_SUB_SHELL_DETECTED",
+    FileTransferStarted = 20 => "TERM_EVENT_FILE_TRANSFER_STARTED",
+    FileTransferProgress = 21 => "TERM_EVENT_FILE_TRANSFER_PROGRESS",
+    FileTransferCompleted = 22 => "TERM_EVENT_FILE_TRANSFER_COMPLETED",
+    FileTransferFailed = 23 => "TERM_EVENT_FILE_TRANSFER_FAILED",
+    UploadRequested = 24 => "TERM_EVENT_UPLOAD_REQUESTED",
+    ScreenCleared = 25 => "TERM_EVENT_SCREEN_CLEARED",
+    InlineImageDropped = 26 => "TERM_EVENT_INLINE_IMAGE_DROPPED",
+}
+
+/// The `on_event_v2` JSON payload for an event: an object of the event's
+/// named fields (`event_fields`, shared with the Python dicts), `null` for an
+/// unset optional.
+fn event_payload_json(event: &TerminalEvent) -> Vec<u8> {
+    use crate::terminal::event_fields::{event_fields, EventField};
+    use serde_json::Value;
+    let mut map = serde_json::Map::new();
+    for (key, field) in event_fields(event) {
+        let value = match field {
+            EventField::Str(s) => Value::String(s),
+            EventField::Int(i) => Value::from(i),
+            EventField::Bool(b) => Value::Bool(b),
+            EventField::None => Value::Null,
+        };
+        map.insert(key, value);
+    }
+    serde_json::to_vec(&Value::Object(map)).expect("a JSON object of scalars always serializes")
 }
 
 // SAFETY: The user_data pointer is opaque and the FFI contract requires the
@@ -296,17 +428,38 @@ impl FfiObserver {
     }
 
     /// Format a terminal event as a Debug-formatted (`{:?}`) string and call
-    /// an FFI callback with it.
+    /// an FFI text callback with it. An interior NUL is replaced (U+FFFD)
+    /// rather than dropping the event.
     fn call_callback(&self, cb: term_event_cb, event: &TerminalEvent) {
         if let Some(f) = cb {
-            let desc = format!("{:?}", event);
-            if let Ok(cstr) = CString::new(desc) {
-                // SAFETY: `f` and `user_data` come from the caller's vtable,
-                // which `terminal_add_observer`'s contract keeps valid while
-                // registered; `cstr` outlives the call.
-                unsafe {
-                    f(self.vtable.user_data, cstr.as_ptr());
-                }
+            let (ptr, _len) = to_c_string(&format!("{:?}", event));
+            // SAFETY: `ptr` came from `CString::into_raw` just above and is
+            // reclaimed exactly once, after the call.
+            let cstr = unsafe { CString::from_raw(ptr) };
+            // SAFETY: `f` and `user_data` come from the caller's vtable,
+            // which `ptec_terminal_add_observer`'s contract keeps valid while
+            // registered; `cstr` outlives the call.
+            unsafe {
+                f(self.vtable.user_data, cstr.as_ptr());
+            }
+        }
+    }
+
+    /// Deliver the structured [`TermEvent`] to `on_event_v2`, if set.
+    fn call_v2(&self, event: &TerminalEvent) {
+        if let Some(f) = self.vtable.on_event_v2 {
+            let payload = event_payload_json(event);
+            let ev = TermEvent {
+                kind: event_kind_code(&event.kind()),
+                _pad: 0,
+                payload_len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+                payload: payload.as_ptr(),
+            };
+            // SAFETY: `f` and `user_data` come from the caller's vtable,
+            // which `ptec_terminal_add_observer`'s contract keeps valid while
+            // registered; `ev` and `payload` outlive the call.
+            unsafe {
+                f(self.vtable.user_data, &ev);
             }
         }
     }
@@ -331,6 +484,7 @@ impl TerminalObserver for FfiObserver {
 
     fn on_event(&self, event: &TerminalEvent) {
         self.call_callback(self.vtable.on_event, event);
+        self.call_v2(event);
     }
 
     fn subscriptions(&self) -> Option<&HashSet<TerminalEventKind>> {
@@ -391,12 +545,24 @@ pub struct TermModeState {
 }
 
 impl SharedCell {
-    /// Build a `SharedCell` from one grid cell.
-    fn from_cell(cell: &crate::cell::Cell) -> Self {
+    /// Build a `SharedCell` from one grid cell, with colors resolved through
+    /// `term`'s palette and defaults ([`Terminal::resolve_cell_colors`]).
+    fn from_cell(term: &Terminal, cell: &crate::cell::Cell) -> Self {
         let mut text = [0u8; 4];
         let text_len = cell.c.encode_utf8(&mut text).len() as u8;
-        let (fg_r, fg_g, fg_b) = cell.fg.to_rgb();
-        let (bg_r, bg_g, bg_b) = cell.bg.to_rgb();
+        let colors = term.resolve_cell_colors(cell);
+        let (fg_r, fg_g, fg_b) = colors.fg;
+        let (bg_r, bg_g, bg_b) = colors.bg;
+        let mut attrs = cell.flags.to_bitflags();
+        if colors.default_fg {
+            attrs |= attr_bits::DEFAULT_FG;
+        }
+        if colors.default_bg {
+            attrs |= attr_bits::DEFAULT_BG;
+        }
+        if cell.has_combining_chars() {
+            attrs |= attr_bits::HAS_COMBINING;
+        }
         SharedCell {
             text,
             text_len,
@@ -406,12 +572,21 @@ impl SharedCell {
             bg_r,
             bg_g,
             bg_b,
-            attrs: cell.flags.to_bitflags(),
+            attrs,
             width: cell.width,
         }
     }
 
-    /// The default (space) cell used to pad short rows.
+    /// The cell that pads a line shorter than the grid: an unstyled space,
+    /// resolved like any real blank cell (default colors and bits).
+    fn padding(term: &Terminal) -> Self {
+        Self::from_cell(term, &crate::cell::Cell::default())
+    }
+
+    /// A placeholder value for initializing caller-side buffers before a
+    /// read. It is not what the readback writes for a blank cell: that is
+    /// resolved through the terminal's default colors and carries the
+    /// `TERM_ATTR_DEFAULT_*` bits.
     pub fn blank() -> Self {
         SharedCell {
             text: [b' ', 0, 0, 0],
@@ -436,15 +611,16 @@ fn mouse_mode_code(mode: MouseMode) -> u8 {
 }
 
 /// Copy one grid line into a caller buffer — the shared body of
-/// `terminal_read_row` and `terminal_read_scrollback_row`. With `out` NULL
+/// `ptec_terminal_read_row` and `ptec_terminal_read_scrollback_row`. With `out` NULL
 /// returns the cells available from `col_start` (the sizing answer);
 /// otherwise copies `cells[col_start..cols]` into `out` (up to `cap`),
-/// padding a line shorter than `cols` with blank cells, and returns the
-/// number written.
+/// padding a line shorter than `cols` with resolved blank cells, and returns
+/// the number written.
 ///
 /// # Safety
 /// `out` must be NULL or valid for writes of `cap` `SharedCell` values.
 unsafe fn copy_row(
+    term: &Terminal,
     cells: &[crate::cell::Cell],
     cols: u32,
     col_start: u32,
@@ -459,8 +635,8 @@ unsafe fn copy_row(
     while col < cols && written < cap {
         let cell = cells
             .get(col as usize)
-            .map(SharedCell::from_cell)
-            .unwrap_or_else(SharedCell::blank);
+            .map(|c| SharedCell::from_cell(term, c))
+            .unwrap_or_else(|| SharedCell::padding(term));
         // SAFETY: `written < cap`, and the caller guarantees `out` is valid
         // for `cap` writes.
         unsafe { out.add(written as usize).write(cell) };
@@ -497,15 +673,19 @@ unsafe fn write_ranges(
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
 /// the cbindgen-generated include/terminal_core.h); bump both on any layout
-/// or contract change. Version 3: `TermKeyOptions` +
-/// `terminal_encode_key_ex` + the `TERM_MOD_ALT_RIGHT` side bit (ENH-028).
-pub const TERM_CORE_ABI_VERSION: u32 = 3;
+/// or contract change. Version 4 (breaking, D4): the `ptec_` symbol prefix
+/// (ARC-112), palette-resolved `SharedCell` colors with the `TERM_ATTR_*`
+/// bits and `ptec_terminal_read_cell_grapheme` (ARC-101), the `on_event_v2`
+/// vtable slot and `TermEvent` (ARC-114), and
+/// `ptec_terminal_scrollback_total_scrolled`, which shipped while the
+/// constant still read 3.
+pub const TERM_CORE_ABI_VERSION: u32 = 4;
 
 /// The ABI version this library implements. A binary detects a mismatch
 /// by comparing this call's return against its compiled-in header macro.
 /// Safe to call at any time — it touches no terminal state.
 #[no_mangle]
-pub extern "C" fn terminal_abi_version() -> u32 {
+pub extern "C" fn ptec_terminal_abi_version() -> u32 {
     TERM_CORE_ABI_VERSION
 }
 
@@ -516,9 +696,13 @@ pub extern "C" fn terminal_abi_version() -> u32 {
 ///
 /// # Safety
 /// Caller owns the returned `Terminal` and must release it with
-/// `terminal_free`.
+/// `ptec_terminal_free`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_create(cols: u32, rows: u32, scrollback: u32) -> *mut Terminal {
+pub unsafe extern "C" fn ptec_terminal_create(
+    cols: u32,
+    rows: u32,
+    scrollback: u32,
+) -> *mut Terminal {
     if cols == 0 || rows == 0 {
         return std::ptr::null_mut();
     }
@@ -529,16 +713,16 @@ pub unsafe extern "C" fn terminal_create(cols: u32, rows: u32, scrollback: u32) 
     )))
 }
 
-/// Free a `Terminal` created by `terminal_create`.
+/// Free a `Terminal` created by `ptec_terminal_create`.
 ///
 /// # Safety
-/// `term` must have been returned by `terminal_create` and must not be
+/// `term` must have been returned by `ptec_terminal_create` and must not be
 /// used after this call.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_free(term: *mut Terminal) {
+pub unsafe extern "C" fn ptec_terminal_free(term: *mut Terminal) {
     if !term.is_null() {
         // SAFETY: non-null, and per this fn's contract it came from
-        // `terminal_create`'s `Box::into_raw` and is not used afterwards.
+        // `ptec_terminal_create`'s `Box::into_raw` and is not used afterwards.
         drop(unsafe { Box::from_raw(term) });
     }
 }
@@ -549,7 +733,7 @@ pub unsafe extern "C" fn terminal_free(term: *mut Terminal) {
 /// `bytes` must be valid for reads of `len` bytes. `term` must be a valid
 /// pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_feed(term: *mut Terminal, bytes: *const u8, len: u32) {
+pub unsafe extern "C" fn ptec_terminal_feed(term: *mut Terminal, bytes: *const u8, len: u32) {
     if term.is_null() || bytes.is_null() {
         return;
     }
@@ -567,7 +751,7 @@ pub unsafe extern "C" fn terminal_feed(term: *mut Terminal, bytes: *const u8, le
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u32) {
+pub unsafe extern "C" fn ptec_terminal_resize(term: *mut Terminal, cols: u32, rows: u32) {
     if term.is_null() || cols == 0 || rows == 0 {
         return;
     }
@@ -603,14 +787,14 @@ fn coalesce_row_ranges(rows: impl Iterator<Item = usize>) -> Vec<TermRowRange> {
 /// Writes up to `cap` ranges into `out` (caller-owned) and returns the
 /// total range count — if the return exceeds `cap`, call again with a
 /// larger buffer. A renderer redraws only rows inside the returned ranges.
-/// Serves the built-in default consumer; `terminal_mark_clean` advances it.
+/// Serves the built-in default consumer; `ptec_terminal_mark_clean` advances it.
 ///
 /// # Safety
 /// `out` must be valid for writes of `cap` `TermRowRange` values. It may
 /// be NULL only as a sizing call, with `cap` 0 — the call then just
 /// returns the total range count.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_dirty_ranges(
+pub unsafe extern "C" fn ptec_terminal_dirty_ranges(
     term: *const Terminal,
     out: *mut TermRowRange,
     cap: u32,
@@ -627,15 +811,15 @@ pub unsafe extern "C" fn terminal_dirty_ranges(
 }
 
 /// Current damage generation. A renderer remembers this value between
-/// frames and passes it to `terminal_dirty_ranges_since` to observe only
-/// what changed since — independent of `terminal_mark_clean`, which
+/// frames and passes it to `ptec_terminal_dirty_ranges_since` to observe only
+/// what changed since — independent of `ptec_terminal_mark_clean`, which
 /// advances the default consumer's generation and cannot hide damage from
 /// generation consumers (ENH-025).
 ///
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_damage_generation(term: *const Terminal) -> u64 {
+pub unsafe extern "C" fn ptec_terminal_damage_generation(term: *const Terminal) -> u64 {
     if term.is_null() {
         return 0;
     }
@@ -645,8 +829,8 @@ pub unsafe extern "C" fn terminal_damage_generation(term: *const Terminal) -> u6
 }
 
 /// Coalesced dirty-row ranges since generation `gen`, from an earlier
-/// `terminal_damage_generation` call. Same buffer contract as
-/// `terminal_dirty_ranges`: fills up to `cap` ranges into `out` and
+/// `ptec_terminal_damage_generation` call. Same buffer contract as
+/// `ptec_terminal_dirty_ranges`: fills up to `cap` ranges into `out` and
 /// returns the total count; `out` may be NULL with `cap` 0 as a sizing
 /// call. A screen switch dirties every row of the newly visible grid.
 ///
@@ -655,7 +839,7 @@ pub unsafe extern "C" fn terminal_damage_generation(term: *const Terminal) -> u6
 /// with `cap` 0 for a sizing call. `term` must be a valid pointer to a
 /// `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_dirty_ranges_since(
+pub unsafe extern "C" fn ptec_terminal_dirty_ranges_since(
     term: *const Terminal,
     gen: u64,
     out: *mut TermRowRange,
@@ -677,7 +861,7 @@ pub unsafe extern "C" fn terminal_dirty_ranges_since(
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_mark_clean(term: *mut Terminal) {
+pub unsafe extern "C" fn ptec_terminal_mark_clean(term: *mut Terminal) {
     if term.is_null() {
         return;
     }
@@ -696,7 +880,7 @@ pub unsafe extern "C" fn terminal_mark_clean(term: *mut Terminal) {
 /// `out` must be valid for writes of `cap` `SharedCell` values, or NULL
 /// with `cap` 0 for a sizing call.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_read_row(
+pub unsafe extern "C" fn ptec_terminal_read_row(
     term: *const Terminal,
     row: u32,
     col_start: u32,
@@ -715,7 +899,7 @@ pub unsafe extern "C" fn terminal_read_row(
     };
     // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
     // which is `copy_row`'s contract.
-    unsafe { copy_row(row_cells, grid.cols() as u32, col_start, out, cap) }
+    unsafe { copy_row(term_ref, row_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
 /// Copy a run of scrollback cells into a caller-owned buffer.
@@ -728,7 +912,7 @@ pub unsafe extern "C" fn terminal_read_row(
 /// `out` must be valid for writes of `cap` `SharedCell` values, or NULL
 /// with `cap` 0 for a sizing call.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_read_scrollback_row(
+pub unsafe extern "C" fn ptec_terminal_read_scrollback_row(
     term: *const Terminal,
     line: u32,
     col_start: u32,
@@ -747,7 +931,71 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
     };
     // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
     // which is `copy_row`'s contract.
-    unsafe { copy_row(line_cells, grid.cols() as u32, col_start, out, cap) }
+    unsafe {
+        copy_row(
+            term_ref,
+            line_cells,
+            grid.cols() as u32,
+            col_start,
+            out,
+            cap,
+        )
+    }
+}
+
+/// Copy the full grapheme cluster of one screen cell — the base character
+/// plus every combining mark — as UTF-8 into a caller-owned buffer
+/// (ARC-101). `SharedCell.text` holds only the base character; a cell whose
+/// `attrs` has `TERM_ATTR_HAS_COMBINING` needs this call for the rest.
+///
+/// Writes up to `cap` bytes (no NUL terminator) and returns the cluster's
+/// total byte length — if the return exceeds `cap`, call again with a larger
+/// buffer; `out` NULL with `cap` 0 is the sizing call. Returns 0 for a
+/// position outside the active grid. Same active-grid addressing as
+/// `ptec_terminal_read_row`.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` bytes, or NULL with `cap` 0 for a
+/// sizing call. `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_read_cell_grapheme(
+    term: *const Terminal,
+    row: u32,
+    col: u32,
+    out: *mut u8,
+    cap: u32,
+) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+    let term_ref = unsafe { &*term };
+    let Some(cell) = term_ref.active_grid().get(col as usize, row as usize) else {
+        return 0;
+    };
+    let mut buf = [0u8; 4];
+    let mut total = cell.c.encode_utf8(&mut buf).len();
+    for ch in cell.combining() {
+        total += ch.len_utf8();
+    }
+    if !out.is_null() && cap > 0 {
+        let mut written = 0usize;
+        let cap = cap as usize;
+        for ch in std::iter::once(cell.c).chain(cell.combining().iter().copied()) {
+            let bytes = ch.encode_utf8(&mut buf).as_bytes();
+            let take = bytes.len().min(cap - written);
+            // SAFETY: `written + take <= cap`, `out` is non-null, and the
+            // caller guarantees `out` is valid for `cap` byte writes; `buf`
+            // is a stack array, so the ranges cannot overlap.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.add(written), take) };
+            written += take;
+            if written == cap {
+                break;
+            }
+        }
+    }
+    u32::try_from(total).unwrap_or(u32::MAX)
 }
 
 /// Number of lines currently held in scrollback.
@@ -755,7 +1003,7 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32 {
+pub unsafe extern "C" fn ptec_terminal_scrollback_count(term: *const Terminal) -> u32 {
     if term.is_null() {
         return 0;
     }
@@ -768,7 +1016,7 @@ pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32
 ///
 /// Monotone within a buffer's lifetime; `clear_scrollback` resets it to 0
 /// together with the count. An embedder mirroring the scrollback window
-/// pairs this with `terminal_scrollback_count`: the window holds lines
+/// pairs this with `ptec_terminal_scrollback_count`: the window holds lines
 /// `[total - count, total)`, so head evictions and tail appends are both
 /// derivable per frame, including when the ring is full and the count
 /// alone stops moving. This counts buffer entries only — alt-screen and
@@ -779,7 +1027,7 @@ pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_scrollback_total_scrolled(term: *const Terminal) -> u64 {
+pub unsafe extern "C" fn ptec_terminal_scrollback_total_scrolled(term: *const Terminal) -> u64 {
     if term.is_null() {
         return 0;
     }
@@ -793,7 +1041,10 @@ pub unsafe extern "C" fn terminal_scrollback_total_scrolled(term: *const Termina
 /// # Safety
 /// `out` must be valid for writes of one `TermCursorState`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_get_cursor(term: *const Terminal, out: *mut TermCursorState) {
+pub unsafe extern "C" fn ptec_terminal_get_cursor(
+    term: *const Terminal,
+    out: *mut TermCursorState,
+) {
     if term.is_null() || out.is_null() {
         return;
     }
@@ -826,7 +1077,7 @@ pub unsafe extern "C" fn terminal_get_cursor(term: *const Terminal, out: *mut Te
 /// # Safety
 /// `out` must be valid for writes of one `TermModeState`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut TermModeState) {
+pub unsafe extern "C" fn ptec_terminal_get_modes(term: *const Terminal, out: *mut TermModeState) {
     if term.is_null() || out.is_null() {
         return;
     }
@@ -864,21 +1115,21 @@ pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut Ter
 /// for writes of `cap` bytes, or NULL with `cap` 0 to fetch the total
 /// encoded length.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_encode_key(
+pub unsafe extern "C" fn ptec_terminal_encode_key(
     term: *const Terminal,
     ev: *const crate::keyboard::TermKeyEvent,
     out: *mut u8,
     cap: u32,
 ) -> u32 {
     // SAFETY: forwards this fn's own contract; a NULL `opts` is allowed by
-    // `terminal_encode_key_ex`.
-    unsafe { terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap) }
+    // `ptec_terminal_encode_key_ex`.
+    unsafe { ptec_terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap) }
 }
 
-/// [`terminal_encode_key`] with explicit macOS Option-key modes
+/// [`ptec_terminal_encode_key`] with explicit macOS Option-key modes
 /// (`TermKeyOptions`, ENH-028). Pass NULL `opts` for the defaults (ESC
 /// prefix on both sides — the classic xterm Alt behavior, identical to
-/// `terminal_encode_key`). A zeroed struct means Normal passthrough on
+/// `ptec_terminal_encode_key`). A zeroed struct means Normal passthrough on
 /// both sides; see `terminal_core_layout.h` for the mode values.
 ///
 /// # Safety
@@ -887,7 +1138,7 @@ pub unsafe extern "C" fn terminal_encode_key(
 /// valid for writes of `cap` bytes, or NULL with `cap` 0 to fetch the
 /// total encoded length.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_encode_key_ex(
+pub unsafe extern "C" fn ptec_terminal_encode_key_ex(
     term: *const Terminal,
     ev: *const crate::keyboard::TermKeyEvent,
     opts: *const crate::keyboard::KeyEncodeOptions,
@@ -927,12 +1178,12 @@ pub unsafe extern "C" fn terminal_encode_key_ex(
 /// Create a snapshot of the terminal's current state.
 ///
 /// The caller owns the returned `SharedState` and must free it by calling
-/// `terminal_free_state`.
+/// `ptec_terminal_free_state`.
 ///
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_get_state(term: *const Terminal) -> *mut SharedState {
+pub unsafe extern "C" fn ptec_terminal_get_state(term: *const Terminal) -> *mut SharedState {
     if term.is_null() {
         return std::ptr::null_mut();
     }
@@ -943,16 +1194,16 @@ pub unsafe extern "C" fn terminal_get_state(term: *const Terminal) -> *mut Share
     Box::into_raw(Box::new(state))
 }
 
-/// Free a `SharedState` previously returned by `terminal_get_state`.
+/// Free a `SharedState` previously returned by `ptec_terminal_get_state`.
 ///
 /// # Safety
-/// `state` must be a pointer previously returned by `terminal_get_state`,
+/// `state` must be a pointer previously returned by `ptec_terminal_get_state`,
 /// and must not be used after this call.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_free_state(state: *mut SharedState) {
+pub unsafe extern "C" fn ptec_terminal_free_state(state: *mut SharedState) {
     if !state.is_null() {
         // SAFETY: non-null, and per this fn's contract it came from
-        // `terminal_get_state`'s `Box::into_raw` and is not used afterwards.
+        // `ptec_terminal_get_state`'s `Box::into_raw` and is not used afterwards.
         unsafe {
             let _ = Box::from_raw(state);
         }
@@ -961,14 +1212,14 @@ pub unsafe extern "C" fn terminal_free_state(state: *mut SharedState) {
 
 /// Register an FFI observer on the terminal.
 ///
-/// Returns an observer ID that can be passed to `terminal_remove_observer`.
+/// Returns an observer ID that can be passed to `ptec_terminal_remove_observer`.
 ///
 /// # Safety
 /// `term` must be a valid, mutable pointer to a `Terminal`.
 /// The `vtable` must remain valid (including its `user_data`) for as long as
 /// the observer is registered.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_add_observer(
+pub unsafe extern "C" fn ptec_terminal_add_observer(
     term: *mut Terminal,
     vtable: TerminalObserverVtable,
 ) -> u64 {
@@ -989,7 +1240,7 @@ pub unsafe extern "C" fn terminal_add_observer(
 /// # Safety
 /// `term` must be a valid, mutable pointer to a `Terminal`.
 #[no_mangle]
-pub unsafe extern "C" fn terminal_remove_observer(term: *mut Terminal, id: u64) -> bool {
+pub unsafe extern "C" fn ptec_terminal_remove_observer(term: *mut Terminal, id: u64) -> bool {
     if term.is_null() {
         return false;
     }
@@ -1025,7 +1276,12 @@ mod tests {
         assert_eq!(align_of::<SharedState>(), 8);
         assert_eq!(offset_of!(SharedState, title), 24);
         assert_eq!(offset_of!(SharedState, cells), 56);
-        assert_eq!(size_of::<TerminalObserverVtable>(), 48);
+        assert_eq!(size_of::<TerminalObserverVtable>(), 56);
+        assert_eq!(offset_of!(TerminalObserverVtable, on_event_v2), 40);
+        assert_eq!(offset_of!(TerminalObserverVtable, user_data), 48);
+        assert_eq!(size_of::<TermEvent>(), 16);
+        assert_eq!(offset_of!(TermEvent, payload_len), 4);
+        assert_eq!(offset_of!(TermEvent, payload), 8);
         assert_eq!(size_of::<TermRowRange>(), 8);
         assert_eq!(size_of::<TermCursorState>(), 12);
         assert_eq!(size_of::<TermModeState>(), 20);
@@ -1046,7 +1302,9 @@ mod tests {
     /// FFI-read one full row through a pinned caller buffer.
     fn read_row_ffi(term: *const Terminal, row: usize) -> Vec<SharedCell> {
         let mut buf = vec![SharedCell::blank(); RT_COLS];
-        let n = unsafe { terminal_read_row(term, row as u32, 0, buf.as_mut_ptr(), RT_COLS as u32) };
+        let n = unsafe {
+            ptec_terminal_read_row(term, row as u32, 0, buf.as_mut_ptr(), RT_COLS as u32)
+        };
         assert_eq!(n as usize, RT_COLS);
         buf
     }
@@ -1057,15 +1315,15 @@ mod tests {
         grid.row(row)
             .expect("row exists")
             .iter()
-            .map(SharedCell::from_cell)
-            .chain(std::iter::repeat(SharedCell::blank()))
+            .map(|c| SharedCell::from_cell(term, c))
+            .chain(std::iter::repeat(SharedCell::padding(term)))
             .take(RT_COLS)
             .collect()
     }
 
     #[test]
     fn ffi_round_trip_matches_core_state() {
-        let term = unsafe { terminal_create(RT_COLS as u32, RT_ROWS as u32, 200) };
+        let term = unsafe { ptec_terminal_create(RT_COLS as u32, RT_ROWS as u32, 200) };
         assert!(!term.is_null());
 
         // Frame chunks: text, colors, cursor moves, wide chars, full erase,
@@ -1092,7 +1350,7 @@ mod tests {
             (0..RT_ROWS).map(|r| read_row_ffi(term, r)).collect();
 
         for (i, frame) in frames.iter().enumerate() {
-            unsafe { terminal_feed(term, frame.as_ptr(), frame.len() as u32) };
+            unsafe { ptec_terminal_feed(term, frame.as_ptr(), frame.len() as u32) };
 
             // 1. Screen byte-for-byte: FFI readback == the core's own cells.
             for row in 0..RT_ROWS {
@@ -1103,9 +1361,9 @@ mod tests {
 
             // 2. Damage completeness: every row that differs from the
             //    previous frame must be inside a dirty range.
-            let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            let cap = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
             let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
-            let got = unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+            let got = unsafe { ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
             assert_eq!(got, cap);
 
             for (row, prev) in prev_screen.iter_mut().enumerate() {
@@ -1122,27 +1380,34 @@ mod tests {
                 *prev = now;
             }
 
-            unsafe { terminal_mark_clean(term) };
-            let after = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            unsafe { ptec_terminal_mark_clean(term) };
+            let after = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
             assert_eq!(after, 0, "frame {i}: mark_clean left dirty ranges");
         }
 
         // 3. Scrollback: FFI readback matches the core's scrollback cells,
         //    oldest first (line 0 = oldest).
-        let sb = unsafe { terminal_scrollback_count(term) };
+        let sb = unsafe { ptec_terminal_scrollback_count(term) };
         assert!(sb >= 3, "expected scrollback after 8-line frame, got {sb}");
-        let grid = unsafe { &*term }.active_grid();
+        let term_ref = unsafe { &*term };
+        let grid = term_ref.active_grid();
         for line in 0..sb as usize {
             let mut buf = vec![SharedCell::blank(); RT_COLS];
             let n = unsafe {
-                terminal_read_scrollback_row(term, line as u32, 0, buf.as_mut_ptr(), RT_COLS as u32)
+                ptec_terminal_read_scrollback_row(
+                    term,
+                    line as u32,
+                    0,
+                    buf.as_mut_ptr(),
+                    RT_COLS as u32,
+                )
             };
             assert_eq!(n as usize, RT_COLS);
             let core: Vec<SharedCell> = grid
                 .scrollback_line(line)
                 .expect("scrollback line exists")
                 .iter()
-                .map(SharedCell::from_cell)
+                .map(|c| SharedCell::from_cell(term_ref, c))
                 .collect();
             assert_eq!(buf, core, "scrollback line {line} FFI != core");
         }
@@ -1151,17 +1416,17 @@ mod tests {
         // scrollback readback: every row must land in a dirty range
         // (ARC-058's damage contract, pinned here at the FFI boundary).
         {
-            unsafe { terminal_feed(term, b"\x1bc".as_ptr(), 2) };
-            let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            unsafe { ptec_terminal_feed(term, b"\x1bc".as_ptr(), 2) };
+            let cap = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
             let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
-            unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+            unsafe { ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
             for row in 0..RT_ROWS {
                 let inside = ranges
                     .iter()
                     .any(|r| row >= r.start as usize && row <= r.end as usize);
                 assert!(inside, "RIS: row {row} not in any dirty range {ranges:?}");
             }
-            let sb = unsafe { terminal_scrollback_count(term) };
+            let sb = unsafe { ptec_terminal_scrollback_count(term) };
             assert_eq!(sb, 0, "RIS clears scrollback");
         }
 
@@ -1172,14 +1437,14 @@ mod tests {
             visible: false,
             style: 0,
         };
-        unsafe { terminal_get_cursor(term, &mut cur) };
+        unsafe { ptec_terminal_get_cursor(term, &mut cur) };
         let c = unsafe { &*term }.cursor();
         assert_eq!(cur.col as usize, c.col);
         assert_eq!(cur.row as usize, c.row);
         assert_eq!(cur.visible, c.visible);
 
         let mut modes = TermModeState::default();
-        unsafe { terminal_get_modes(term, &mut modes) };
+        unsafe { ptec_terminal_get_modes(term, &mut modes) };
         let t = unsafe { &*term };
         assert_eq!(modes.cols as usize, RT_COLS);
         assert_eq!(modes.rows as usize, RT_ROWS);
@@ -1195,32 +1460,32 @@ mod tests {
             crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Enter, 0),
         ] {
             let mut buf = [0u8; 32];
-            let n = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
+            let n = unsafe { ptec_terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
             assert_eq!(
                 &buf[..n as usize],
                 crate::keyboard::encode_key(&ev, unsafe { &*term }).as_slice()
             );
         }
 
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
     }
 
-    /// ENH-028: `terminal_encode_key_ex` honors `TermKeyOptions` (NULL opts
+    /// ENH-028: `ptec_terminal_encode_key_ex` honors `TermKeyOptions` (NULL opts
     /// = the ESC defaults, a zeroed struct = Normal passthrough, and the
     /// modifyOtherKeys mode read from the terminal's own negotiated state).
     #[test]
     fn ffi_encode_key_ex_options_and_null_default() {
         use crate::keyboard::{modifiers, option_modes, KeyEncodeOptions, TermKeyEvent};
 
-        let term = unsafe { terminal_create(10, 6, 50) };
+        let term = unsafe { ptec_terminal_create(10, 6, 50) };
         let seq = b"\x1b[>4;2m";
-        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
         let ev = TermKeyEvent::char_('f', modifiers::ALT);
 
         let mut buf = [0u8; 32];
         // modifyOtherKeys 2 outranks the option modes: CSI 27-form.
         let n = unsafe {
-            terminal_encode_key_ex(
+            ptec_terminal_encode_key_ex(
                 term,
                 &ev,
                 &KeyEncodeOptions::default(),
@@ -1232,9 +1497,9 @@ mod tests {
 
         // Reset modifyOtherKeys; now the option modes decide.
         let seq = b"\x1b[>4m";
-        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
         let n = unsafe {
-            terminal_encode_key_ex(
+            ptec_terminal_encode_key_ex(
                 term,
                 &ev,
                 &KeyEncodeOptions {
@@ -1247,10 +1512,11 @@ mod tests {
         };
         assert_eq!(&buf[..n as usize], &[0xE6], "left Alt → Meta mode");
 
-        // NULL opts = ESC defaults, byte-identical to terminal_encode_key.
-        let n =
-            unsafe { terminal_encode_key_ex(term, &ev, std::ptr::null(), buf.as_mut_ptr(), 32) };
-        let m = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
+        // NULL opts = ESC defaults, byte-identical to ptec_terminal_encode_key.
+        let n = unsafe {
+            ptec_terminal_encode_key_ex(term, &ev, std::ptr::null(), buf.as_mut_ptr(), 32)
+        };
+        let m = unsafe { ptec_terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
         assert_eq!(&buf[..n as usize], &[0x1b, b'f']);
         assert_eq!(n, m);
 
@@ -1259,21 +1525,21 @@ mod tests {
             left_option: 0,
             right_option: 0,
         };
-        let n = unsafe { terminal_encode_key_ex(term, &ev, &zeroed, buf.as_mut_ptr(), 32) };
+        let n = unsafe { ptec_terminal_encode_key_ex(term, &ev, &zeroed, buf.as_mut_ptr(), 32) };
         assert_eq!(&buf[..n as usize], b"f");
 
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
     }
 
     #[test]
     fn ffi_dirty_ranges_coalesce_and_resize_marks_damage() {
-        let term = unsafe { terminal_create(10, 6, 50) };
+        let term = unsafe { ptec_terminal_create(10, 6, 50) };
         let seq = b"\x1b[Hrow0\x1b[3Hrow2\x1b[5Hrow4";
-        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
 
-        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        let cap = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
         let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
-        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        unsafe { ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
         // Rows 0, 2, 4 were written: three one-row ranges, none adjacent.
         assert_eq!(
             ranges,
@@ -1286,21 +1552,21 @@ mod tests {
 
         // A full-row write makes the ranges coalesce.
         let seq = b"\x1b[2Hxxxx\x1b[4Hxxxx";
-        unsafe { terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
-        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        let cap = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
         let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
-        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        unsafe { ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
         assert_eq!(ranges, vec![TermRowRange { start: 0, end: 4 }]);
 
         // Resize must mark the whole (new) screen dirty.
-        unsafe { terminal_mark_clean(term) };
-        unsafe { terminal_resize(term, 12, 4) };
-        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        unsafe { ptec_terminal_mark_clean(term) };
+        unsafe { ptec_terminal_resize(term, 12, 4) };
+        let cap = unsafe { ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
         let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
-        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        unsafe { ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
         assert_eq!(ranges, vec![TermRowRange { start: 0, end: 3 }]);
 
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
     }
 
     /// Damage localization gate for the readback benchmark: an in-place
@@ -1338,45 +1604,46 @@ mod tests {
 
     /// DOC-071: every buffer-returning embedding call accepts
     /// out == NULL / cap == 0 as a sizing call and returns the total,
-    /// the way terminal_dirty_ranges always has.
+    /// the way ptec_terminal_dirty_ranges always has.
     #[test]
     fn ffi_sizing_calls_return_totals_without_buffers() {
-        let term = unsafe { terminal_create(20, 5, 100) };
+        let term = unsafe { ptec_terminal_create(20, 5, 100) };
         assert!(!term.is_null());
-        unsafe { terminal_feed(term, b"hello\nworld".as_ptr(), 11) };
+        unsafe { ptec_terminal_feed(term, b"hello\nworld".as_ptr(), 11) };
 
         // read_row sizes to the columns available from col_start.
-        let n = unsafe { terminal_read_row(term, 0, 0, std::ptr::null_mut(), 0) };
+        let n = unsafe { ptec_terminal_read_row(term, 0, 0, std::ptr::null_mut(), 0) };
         assert_eq!(n, 20);
-        let n = unsafe { terminal_read_row(term, 0, 17, std::ptr::null_mut(), 0) };
+        let n = unsafe { ptec_terminal_read_row(term, 0, 17, std::ptr::null_mut(), 0) };
         assert_eq!(n, 3);
-        let n = unsafe { terminal_read_row(term, 0, 20, std::ptr::null_mut(), 0) };
+        let n = unsafe { ptec_terminal_read_row(term, 0, 20, std::ptr::null_mut(), 0) };
         assert_eq!(n, 0);
-        let n = unsafe { terminal_read_row(term, 99, 0, std::ptr::null_mut(), 0) };
+        let n = unsafe { ptec_terminal_read_row(term, 99, 0, std::ptr::null_mut(), 0) };
         assert_eq!(n, 0, "row past the screen sizes to 0");
 
         // read_scrollback_row sizes the same way, once scrollback exists.
-        unsafe { terminal_feed(term, b"a\nb\nc\nd\ne\nf\ng\nh".as_ptr(), 15) };
-        let sb = unsafe { terminal_scrollback_count(term) };
+        unsafe { ptec_terminal_feed(term, b"a\nb\nc\nd\ne\nf\ng\nh".as_ptr(), 15) };
+        let sb = unsafe { ptec_terminal_scrollback_count(term) };
         assert!(sb >= 1, "expected scrollback after 8 lines on 5 rows");
-        let n = unsafe { terminal_read_scrollback_row(term, 0, 0, std::ptr::null_mut(), 0) };
+        let n = unsafe { ptec_terminal_read_scrollback_row(term, 0, 0, std::ptr::null_mut(), 0) };
         assert_eq!(n, 20);
-        let n = unsafe { terminal_read_scrollback_row(term, sb - 1, 18, std::ptr::null_mut(), 0) };
+        let n =
+            unsafe { ptec_terminal_read_scrollback_row(term, sb - 1, 18, std::ptr::null_mut(), 0) };
         assert_eq!(n, 2);
 
         // encode_key sizing total equals the written length for the event.
         let ev = crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Up, 0);
-        let total = unsafe { terminal_encode_key(term, &ev, std::ptr::null_mut(), 0) };
+        let total = unsafe { ptec_terminal_encode_key(term, &ev, std::ptr::null_mut(), 0) };
         let mut buf = [0u8; 16];
-        let written = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 16) };
+        let written = unsafe { ptec_terminal_encode_key(term, &ev, buf.as_mut_ptr(), 16) };
         assert_eq!(total, written);
         assert_eq!(&buf[..written as usize], b"\x1b[A");
 
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
     }
 
-    /// The scrollback window cursor: `terminal_scrollback_total_scrolled`
-    /// paired with `terminal_scrollback_count` gives an embedder the window
+    /// The scrollback window cursor: `ptec_terminal_scrollback_total_scrolled`
+    /// paired with `ptec_terminal_scrollback_count` gives an embedder the window
     /// `[total - count, total)`, so head evictions and tail appends are
     /// derivable even when the ring is full and the count freezes at the
     /// cap. Pinned here: the `count == min(total, cap)` invariant (a
@@ -1387,11 +1654,11 @@ mod tests {
         let cols = 20;
         let rows = 5;
         let cap = 4;
-        let term = unsafe { terminal_create(cols, rows, cap) };
+        let term = unsafe { ptec_terminal_create(cols, rows, cap) };
         assert!(!term.is_null());
 
-        let total = |t: *const Terminal| unsafe { terminal_scrollback_total_scrolled(t) };
-        let count = |t: *const Terminal| unsafe { terminal_scrollback_count(t) };
+        let total = |t: *const Terminal| unsafe { ptec_terminal_scrollback_total_scrolled(t) };
+        let count = |t: *const Terminal| unsafe { ptec_terminal_scrollback_count(t) };
 
         assert_eq!(total(term), 0);
         assert_eq!(count(term), 0);
@@ -1400,7 +1667,7 @@ mod tests {
         // raises the total; the count tracks it only until the cap.
         for i in 0..(rows + cap + 3) {
             let line = format!("line{i}\r\n");
-            unsafe { terminal_feed(term, line.as_ptr(), line.len() as u32) };
+            unsafe { ptec_terminal_feed(term, line.as_ptr(), line.len() as u32) };
             let (t, c) = (total(term), count(term));
             assert_eq!(
                 c as u64,
@@ -1415,24 +1682,24 @@ mod tests {
         // The alternate screen is a separate scrollback-less grid: reads
         // target it while active, and the primary window survives the
         // round trip (a switch is a replace, not a slide, for consumers).
-        unsafe { terminal_feed(term, b"\x1b[?1049h".as_ptr(), 8) };
+        unsafe { ptec_terminal_feed(term, b"\x1b[?1049h".as_ptr(), 8) };
         assert_eq!(count(term), 0);
         assert_eq!(total(term), 0, "the alt grid has its own (empty) counters");
-        unsafe { terminal_feed(term, b"\x1b[?1049l".as_ptr(), 8) };
+        unsafe { ptec_terminal_feed(term, b"\x1b[?1049l".as_ptr(), 8) };
         assert_eq!(count(term), cap);
         assert_eq!(total(term), (rows + cap + 3 - (rows - 1)) as u64);
 
         // ED 3J clears the buffer: both counters reset together, so a
         // delta consumer sees an empty window, never a negative one.
-        unsafe { terminal_feed(term, b"\x1b[3J".as_ptr(), 4) };
+        unsafe { ptec_terminal_feed(term, b"\x1b[3J".as_ptr(), 4) };
         assert_eq!(count(term), 0);
         assert_eq!(total(term), 0);
 
         assert_eq!(
-            unsafe { terminal_scrollback_total_scrolled(std::ptr::null()) },
+            unsafe { ptec_terminal_scrollback_total_scrolled(std::ptr::null()) },
             0
         );
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
     }
 
     /// ARC-063: the exported ABI version must equal the header's
@@ -1440,15 +1707,15 @@ mod tests {
     /// comparing the two. Bumping one side without the other fails here.
     #[test]
     fn abi_version_matches_header_macro() {
-        assert_eq!(terminal_abi_version(), 3);
+        assert_eq!(ptec_terminal_abi_version(), 4);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/include/terminal_core_layout.h"
         ))
         .expect("header readable");
         assert!(
-            header.contains("#define TERM_CORE_ABI_VERSION 3"),
-            "header TERM_CORE_ABI_VERSION drifted from terminal_abi_version()"
+            header.contains("#define TERM_CORE_ABI_VERSION 4"),
+            "header TERM_CORE_ABI_VERSION drifted from ptec_terminal_abi_version()"
         );
     }
 
@@ -1539,6 +1806,16 @@ mod tests {
             ("TERM_KEY_F11", tk(TermKey::F11)),
             ("TERM_KEY_F12", tk(TermKey::F12)),
         ];
+        let mut expected = expected;
+        expected.extend(TERM_EVENT_CODES.iter().map(|&(n, c)| (n, c as u32)));
+        expected.extend([
+            ("TERM_ATTR_DEFAULT_FG", attr_bits::DEFAULT_FG as u32),
+            ("TERM_ATTR_DEFAULT_BG", attr_bits::DEFAULT_BG as u32),
+            ("TERM_ATTR_HAS_COMBINING", attr_bits::HAS_COMBINING as u32),
+        ]);
+        // The readback bits must sit above every CellBitflags bit.
+        let readback = attr_bits::DEFAULT_FG | attr_bits::DEFAULT_BG | attr_bits::HAS_COMBINING;
+        assert_eq!(CellBitflags::all().bits() & readback, 0);
 
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1581,81 +1858,81 @@ mod tests {
     }
 
     /// ENH-025: the FFI generation consumer and the built-in default
-    /// consumer (`terminal_dirty_ranges`/`terminal_mark_clean`) each
+    /// consumer (`ptec_terminal_dirty_ranges`/`ptec_terminal_mark_clean`) each
     /// observe the same edit, and the default consumer's mark_clean does
     /// not hide damage from the generation consumer.
     #[test]
     fn two_damage_consumers_are_isolated() {
-        let term = unsafe { terminal_create(20, 4, 0) };
+        let term = unsafe { ptec_terminal_create(20, 4, 0) };
         assert!(!term.is_null());
         unsafe {
-            terminal_feed(term, b"hello\r\nworld".as_ptr(), 12);
+            ptec_terminal_feed(term, b"hello\r\nworld".as_ptr(), 12);
 
             // Both consumers observe the edit.
-            let gen0 = terminal_damage_generation(term);
+            let gen0 = ptec_terminal_damage_generation(term);
             assert!(gen0 > 0, "feeding must advance the generation");
             assert_eq!(
-                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
                 1,
                 "default consumer sees rows 0-1 coalesced"
             );
             assert_eq!(
-                terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
                 0,
                 "nothing changed since gen0 was captured"
             );
 
-            terminal_feed(term, b"!".as_ptr(), 1);
+            ptec_terminal_feed(term, b"!".as_ptr(), 1);
 
-            let cap = terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0);
+            let cap = ptec_terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0);
             assert_eq!(cap, 1, "generation consumer sees only row 1");
             let mut since = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
             assert_eq!(
-                terminal_dirty_ranges_since(term, gen0, since.as_mut_ptr(), cap),
+                ptec_terminal_dirty_ranges_since(term, gen0, since.as_mut_ptr(), cap),
                 cap
             );
             assert_eq!(since[0], TermRowRange { start: 1, end: 1 });
             assert_eq!(
-                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
                 1,
                 "default consumer also sees row 1"
             );
 
             // The default consumer repaints; the generation consumer's
             // window is untouched.
-            terminal_mark_clean(term);
+            ptec_terminal_mark_clean(term);
             assert_eq!(
-                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
                 0,
                 "mark_clean advances the default consumer"
             );
             assert_eq!(
-                terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
                 1,
                 "mark_clean must not hide damage from the generation consumer"
             );
 
             // A fresh generation window starts empty.
-            let gen1 = terminal_damage_generation(term);
+            let gen1 = ptec_terminal_damage_generation(term);
             assert!(gen1 > gen0);
             assert_eq!(
-                terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0),
+                ptec_terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0),
                 0
             );
 
             // A screen switch dirties every row of the new grid for any
             // consumer holding an older generation.
             let bytes = b"\x1b[?1049h";
-            terminal_feed(term, bytes.as_ptr(), bytes.len() as u32);
-            let cap = terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0);
+            ptec_terminal_feed(term, bytes.as_ptr(), bytes.len() as u32);
+            let cap = ptec_terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0);
             let mut switched = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
             assert_eq!(
-                terminal_dirty_ranges_since(term, gen1, switched.as_mut_ptr(), cap),
+                ptec_terminal_dirty_ranges_since(term, gen1, switched.as_mut_ptr(), cap),
                 cap
             );
             assert_eq!(switched[0], TermRowRange { start: 0, end: 3 });
 
-            terminal_free(term);
+            ptec_terminal_free(term);
         }
     }
 
@@ -1717,22 +1994,22 @@ mod tests {
     }
 
     /// QA-215: `cell_count` is the length of the allocation `cells` points
-    /// to, so the last cell is readable and `terminal_free_state` rebuilds
+    /// to, so the last cell is readable and `ptec_terminal_free_state` rebuilds
     /// exactly that slice.
     #[test]
     fn shared_state_cell_count_matches_grid() {
-        let term = unsafe { terminal_create(7, 3, 10) };
+        let term = unsafe { ptec_terminal_create(7, 3, 10) };
         assert!(!term.is_null());
-        unsafe { terminal_feed(term, b"\x1b[3;7HZ".as_ptr(), 7) };
-        let state = unsafe { terminal_get_state(term) };
+        unsafe { ptec_terminal_feed(term, b"\x1b[3;7HZ".as_ptr(), 7) };
+        let state = unsafe { ptec_terminal_get_state(term) };
         assert!(!state.is_null());
         let s = unsafe { &*state };
         assert_eq!(s.cell_count, 21);
         let cells = unsafe { std::slice::from_raw_parts(s.cells, s.cell_count as usize) };
         let last = &cells[20];
         assert_eq!(&last.text[..last.text_len as usize], b"Z");
-        unsafe { terminal_free_state(state) };
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free_state(state) };
+        unsafe { ptec_terminal_free(term) };
     }
 
     /// QA-151: an arbitrary uint16_t in `TermKeyEvent.key` — a value C or
@@ -1741,7 +2018,7 @@ mod tests {
     /// the F-keys and Insert, 0xFFFF is the extreme.
     #[test]
     fn encode_key_rejects_invalid_discriminants_without_ub() {
-        let term = unsafe { terminal_create(20, 5, 100) };
+        let term = unsafe { ptec_terminal_create(20, 5, 100) };
         assert!(!term.is_null());
         let mut out = [0u8; 16];
         for raw in [2u16, 57388, 0xFFFF] {
@@ -1751,13 +2028,240 @@ mod tests {
                 _pad: 0,
                 codepoint: 0,
             };
-            let n = unsafe { terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
+            let n =
+                unsafe { ptec_terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
             assert_eq!(n, 0, "raw key {raw} has no encoding");
         }
         // A real key still encodes through the same path.
         let ev = crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Up, 0);
-        let n = unsafe { terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
+        let n = unsafe { ptec_terminal_encode_key(term, &ev, out.as_mut_ptr(), out.len() as u32) };
         assert_eq!(&out[..n as usize], b"\x1b[A");
-        unsafe { terminal_free(term) };
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    /// What an observer test callback recorded: (kind, payload bytes) from
+    /// `on_event_v2`, and the text from `on_event`.
+    #[derive(Default)]
+    struct Recorded {
+        v2: Vec<(u16, Vec<u8>)>,
+        text: Vec<Vec<u8>>,
+    }
+
+    unsafe extern "C" fn record_v2(user_data: *mut std::ffi::c_void, ev: *const TermEvent) {
+        let rec = unsafe { &mut *(user_data as *mut Recorded) };
+        let ev = unsafe { &*ev };
+        let bytes = unsafe { std::slice::from_raw_parts(ev.payload, ev.payload_len as usize) };
+        assert_eq!(ev._pad, 0);
+        rec.v2.push((ev.kind, bytes.to_vec()));
+    }
+
+    unsafe extern "C" fn record_text(user_data: *mut std::ffi::c_void, text: *const c_char) {
+        let rec = unsafe { &mut *(user_data as *mut Recorded) };
+        rec.text
+            .push(unsafe { CStr::from_ptr(text) }.to_bytes().to_vec());
+    }
+
+    fn vtable_for(rec: &mut Recorded, text: bool, v2: bool) -> TerminalObserverVtable {
+        TerminalObserverVtable {
+            on_zone_event: None,
+            on_command_event: None,
+            on_environment_event: None,
+            on_screen_event: None,
+            on_event: if text { Some(record_text) } else { None },
+            on_event_v2: if v2 { Some(record_v2) } else { None },
+            user_data: rec as *mut Recorded as *mut std::ffi::c_void,
+        }
+    }
+
+    /// ARC-114: `on_event_v2` delivers a `TERM_EVENT_*` kind and a JSON
+    /// payload whose keys match the Python event dicts, once per event.
+    #[test]
+    fn event_v2_carries_kind_and_json_payload() {
+        let mut rec = Recorded::default();
+        let term = unsafe { ptec_terminal_create(20, 4, 10) };
+        let id = unsafe { ptec_terminal_add_observer(term, vtable_for(&mut rec, false, true)) };
+        assert_ne!(id, 0);
+
+        let seq = b"\x1b]0;hello\x07\x07";
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let title = rec
+            .v2
+            .iter()
+            .find(|(k, _)| *k == event_kind_code(&TerminalEventKind::TitleChanged))
+            .expect("TitleChanged delivered");
+        let json: serde_json::Value = serde_json::from_slice(&title.1).expect("payload is JSON");
+        assert_eq!(json["type"], "title_changed");
+        assert_eq!(json["title"], "hello");
+
+        let bell = rec
+            .v2
+            .iter()
+            .find(|(k, _)| *k == event_kind_code(&TerminalEventKind::BellRang))
+            .expect("BellRang delivered");
+        let json: serde_json::Value = serde_json::from_slice(&bell.1).expect("payload is JSON");
+        assert_eq!(json["type"], "bell");
+        assert!(json["bell_type"].is_string(), "bell_type rides the payload");
+
+        // Exactly one v2 delivery per dispatched event (not one per slot).
+        let before = rec.v2.len();
+        unsafe { ptec_terminal_feed(term, b"\x07".as_ptr(), 1) };
+        assert_eq!(rec.v2.len(), before + 1);
+
+        assert!(unsafe { ptec_terminal_remove_observer(term, id) });
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    /// ARC-114: text that contains a NUL reaches both channels. The old
+    /// `CString::new` path silently dropped such an event from every text
+    /// slot; v2 carries it length-delimited (JSON-escaped), and the text
+    /// slots carry it with U+FFFD.
+    #[test]
+    fn event_with_nul_is_delivered_on_both_channels() {
+        let mut rec = Recorded::default();
+        let observer = FfiObserver::new(vtable_for(&mut rec, true, true));
+        let event = TerminalEvent::TitleChanged("a\0b".to_string());
+        crate::observer::TerminalObserver::on_event(&observer, &event);
+
+        assert_eq!(rec.text.len(), 1, "text slot no longer drops NUL events");
+        assert!(!rec.text[0].contains(&0), "C string has no interior NUL");
+        assert_eq!(rec.v2.len(), 1);
+        let json: serde_json::Value = serde_json::from_slice(&rec.v2[0].1).expect("JSON");
+        assert_eq!(json["title"], "a\u{0}b", "v2 carries the NUL intact");
+        assert_eq!(
+            rec.v2[0].0,
+            event_kind_code(&TerminalEventKind::TitleChanged)
+        );
+    }
+
+    /// ARC-114: unset optional fields are present as JSON null, and integer
+    /// fields are JSON numbers (the Python dict value types).
+    #[test]
+    fn event_v2_payload_keeps_nulls_and_numbers() {
+        let payload = event_payload_json(&TerminalEvent::HyperlinkAdded {
+            url: "https://example.com".to_string(),
+            row: 1,
+            col: 2,
+            id: None,
+        });
+        let json: serde_json::Value = serde_json::from_slice(&payload).expect("JSON");
+        assert!(json["id"].is_null());
+        assert_eq!(json["row"], 1);
+        assert_eq!(json["col"], 2);
+    }
+
+    fn read_cell(term: *const Terminal, row: u32, col: u32) -> SharedCell {
+        let mut buf = vec![SharedCell::blank(); 1];
+        let n = unsafe { ptec_terminal_read_row(term, row, col, buf.as_mut_ptr(), 1) };
+        assert_eq!(n, 1);
+        buf.remove(0)
+    }
+
+    /// ARC-101 audit probe, replayed through the C entry points: after
+    /// `OSC 4;1;rgb:00/00/ff`, SGR 31 reads back as the new palette color
+    /// (it read (128,0,0) on ABI 3), and default cells carry the default
+    /// bits with the OSC 10/11 colors.
+    #[test]
+    fn read_row_follows_palette_and_defaults() {
+        let term = unsafe { ptec_terminal_create(20, 4, 10) };
+        let seq = b"\x1b]4;1;rgb:00/00/ff\x07\x1b[31mR\x1b[0mD\x1b[1;31mB";
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let red = read_cell(term, 0, 0);
+        assert_eq!((red.fg_r, red.fg_g, red.fg_b), (0, 0, 255));
+        assert_eq!(red.attrs & attr_bits::DEFAULT_FG, 0);
+        assert_ne!(red.attrs & attr_bits::DEFAULT_BG, 0);
+
+        let plain = read_cell(term, 0, 1);
+        assert_ne!(plain.attrs & attr_bits::DEFAULT_FG, 0);
+        // The default fg is Named(White) out of the box: the live palette's
+        // slot 7, not Color::to_rgb's fixed (192,192,192).
+        let t = unsafe { &*term };
+        assert_eq!(
+            (plain.fg_r, plain.fg_g, plain.fg_b),
+            t.resolve_color(&t.default_fg())
+        );
+        assert_eq!(
+            (plain.fg_r, plain.fg_g, plain.fg_b),
+            t.get_ansi_palette()[7].to_rgb()
+        );
+
+        // Bold brightening: bold SGR 31 → palette slot 9.
+        let bold = read_cell(term, 0, 2);
+        let slot9 = unsafe { &*term }.get_ansi_palette()[9].to_rgb();
+        assert_eq!((bold.fg_r, bold.fg_g, bold.fg_b), slot9);
+
+        let seq = b"\x1b]10;rgb:11/22/33\x07\x1b]11;rgb:44/55/66\x07";
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+        let blank = read_cell(term, 3, 5);
+        assert_eq!((blank.fg_r, blank.fg_g, blank.fg_b), (0x11, 0x22, 0x33));
+        assert_eq!((blank.bg_r, blank.bg_g, blank.bg_b), (0x44, 0x55, 0x66));
+        assert_ne!(blank.attrs & attr_bits::DEFAULT_FG, 0);
+        assert_ne!(blank.attrs & attr_bits::DEFAULT_BG, 0);
+
+        // The snapshot resolves the same way as the pinned readback.
+        let state = unsafe { ptec_terminal_get_state(term) };
+        let s = unsafe { &*state };
+        let cells = unsafe { std::slice::from_raw_parts(s.cells, s.cell_count as usize) };
+        assert_eq!(cells[0], read_cell(term, 0, 0));
+        assert_eq!(cells[3 * 20 + 5], blank);
+        unsafe { ptec_terminal_free_state(state) };
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    /// ARC-101 audit probe: `x` + U+0301 kept only `x`. The base char stays
+    /// in `text`, `TERM_ATTR_HAS_COMBINING` flags the cell, and
+    /// `ptec_terminal_read_cell_grapheme` returns the whole cluster with the
+    /// cap/return-total protocol.
+    #[test]
+    fn read_cell_grapheme_returns_full_cluster() {
+        let term = unsafe { ptec_terminal_create(10, 3, 0) };
+        let seq = "x\u{301}y".as_bytes();
+        unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+
+        let x = read_cell(term, 0, 0);
+        assert_eq!(&x.text[..x.text_len as usize], b"x");
+        assert_ne!(x.attrs & attr_bits::HAS_COMBINING, 0);
+        let y = read_cell(term, 0, 1);
+        assert_eq!(y.attrs & attr_bits::HAS_COMBINING, 0);
+
+        let want = "x\u{301}".as_bytes();
+        let total =
+            unsafe { ptec_terminal_read_cell_grapheme(term, 0, 0, std::ptr::null_mut(), 0) };
+        assert_eq!(total as usize, want.len());
+        let mut buf = [0u8; 8];
+        let n = unsafe { ptec_terminal_read_cell_grapheme(term, 0, 0, buf.as_mut_ptr(), 8) };
+        assert_eq!(&buf[..n as usize], want);
+
+        // A short buffer gets a prefix and the full total back.
+        let mut short = [0u8; 2];
+        let n = unsafe { ptec_terminal_read_cell_grapheme(term, 0, 0, short.as_mut_ptr(), 2) };
+        assert_eq!(n as usize, want.len());
+        assert_eq!(&short, &want[..2]);
+
+        // A plain cell's cluster is its base char; off-grid is 0.
+        let n = unsafe { ptec_terminal_read_cell_grapheme(term, 0, 1, buf.as_mut_ptr(), 8) };
+        assert_eq!(&buf[..n as usize], b"y");
+        assert_eq!(
+            unsafe { ptec_terminal_read_cell_grapheme(term, 9, 0, buf.as_mut_ptr(), 8) },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                ptec_terminal_read_cell_grapheme(std::ptr::null(), 0, 0, buf.as_mut_ptr(), 8)
+            },
+            0
+        );
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    /// The `TERM_EVENT_*` codes are exactly 1..=26 with no gaps or
+    /// duplicates, so a new `TerminalEventKind` must take the next code.
+    #[test]
+    fn term_event_codes_are_dense_and_unique() {
+        let mut codes: Vec<u16> = TERM_EVENT_CODES.iter().map(|&(_, c)| c).collect();
+        codes.sort_unstable();
+        let want: Vec<u16> = (1..=TERM_EVENT_CODES.len() as u16).collect();
+        assert_eq!(codes, want);
     }
 }

@@ -9,8 +9,24 @@
 //! - Bold text colors
 //! - Color mode flags
 
-use crate::color::Color;
+use crate::cell::Cell;
+use crate::color::{Color, NamedColor};
 use crate::terminal::Terminal;
+
+/// A cell's display colors as every palette-aware readback reports them —
+/// the FFI `SharedCell`, the Python snapshot and the Python per-cell getters
+/// (ARC-101). Produced by [`Terminal::resolve_cell_colors`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedCellColors {
+    /// Foreground RGB
+    pub fg: (u8, u8, u8),
+    /// Background RGB
+    pub bg: (u8, u8, u8),
+    /// The cell's foreground is the terminal default (OSC 10)
+    pub default_fg: bool,
+    /// The cell's background is the terminal default (OSC 11)
+    pub default_bg: bool,
+}
 
 impl Terminal {
     /// Get default ANSI color palette
@@ -232,6 +248,57 @@ impl Terminal {
             Color::Named(named) => palette[named as usize].to_rgb(),
             Color::Indexed(idx) if (idx as usize) < palette.len() => palette[idx as usize].to_rgb(),
             _ => color.to_rgb(),
+        }
+    }
+
+    /// Resolve a cell's foreground and background for display (ARC-101).
+    ///
+    /// - A **default** color is recognized by value: one equal to what an
+    ///   unstyled cell carries (`Named(White)` fg / `Named(Black)` bg, as
+    ///   `Cell::default()` and the erase paths write) or to the *current*
+    ///   OSC 10 / OSC 11 value. It resolves through that default, and the
+    ///   matching `default_fg`/`default_bg` flag is set. An explicit SGR 37
+    ///   or 40 (or `38;5;7` / `48;5;0`) is indistinguishable from the
+    ///   default and follows it too. Cells store the color SGR 0/39/49
+    ///   copied, not a marker, so a cell written under an earlier OSC 10/11
+    ///   value keeps that color and is not flagged once the default moves
+    ///   again.
+    /// - Bold brightening (on by default) then maps a bold `Named` 0-7
+    ///   foreground to its bright 8-15 slot, after default substitution, so
+    ///   bold default text is bright white on the default theme.
+    /// - Everything resolves through [`Terminal::resolve_color`] (the live
+    ///   ANSI palette for the 16 base slots).
+    ///
+    /// Reverse video, dim and hidden are not applied: they stay attribute
+    /// flags for the renderer.
+    pub fn resolve_cell_colors(&self, cell: &Cell) -> ResolvedCellColors {
+        let theme = &self.theme;
+        let default_fg = cell.fg == Color::Named(NamedColor::White) || cell.fg == theme.default_fg;
+        let default_bg = cell.bg == Color::Named(NamedColor::Black) || cell.bg == theme.default_bg;
+
+        let mut fg = if default_fg {
+            theme.default_fg
+        } else {
+            cell.fg
+        };
+        if self.bold_brightening() && cell.flags.bold() {
+            if let Color::Named(named) = fg {
+                if (named as u8) < 8 {
+                    fg = Color::Named(NamedColor::from_u8(named as u8 + 8));
+                }
+            }
+        }
+        let bg = if default_bg {
+            theme.default_bg
+        } else {
+            cell.bg
+        };
+
+        ResolvedCellColors {
+            fg: self.resolve_color(&fg),
+            bg: self.resolve_color(&bg),
+            default_fg,
+            default_bg,
         }
     }
 
@@ -797,5 +864,150 @@ mod tests {
             Color::Indexed(196).to_rgb()
         );
         assert_eq!(term.resolve_color(&Color::Rgb(1, 2, 3)), (1, 2, 3));
+    }
+
+    /// The pre-ARC-101 Python `create_snapshot` resolution: bold-brighten a
+    /// `Named` 0-7 foreground, then resolve both colors through the palette.
+    fn legacy_snapshot_colors(term: &Terminal, cell: &Cell) -> ((u8, u8, u8), (u8, u8, u8)) {
+        let mut fg = cell.fg;
+        if term.bold_brightening() && cell.flags.bold() {
+            if let Color::Named(named) = fg {
+                if (named as u8) < 8 {
+                    fg = Color::Named(NamedColor::from_u8(named as u8 + 8));
+                }
+            }
+        }
+        (term.resolve_color(&fg), term.resolve_color(&cell.bg))
+    }
+
+    /// Every cell of `row` 0 after feeding `seq` to a fresh terminal.
+    fn cells_after(seq: &str) -> (Terminal, Vec<Cell>) {
+        let mut term = create_test_terminal();
+        term.process(seq.as_bytes());
+        let cells = term.active_grid().row(0).expect("row 0").to_vec();
+        (term, cells)
+    }
+
+    /// ARC-101: on the default theme the shared cell resolver reports
+    /// exactly what the Python snapshot reported before it (SGR 30-37,
+    /// 40-47, 90-97, 100-107, bold on and off, 256-color, RGB, and
+    /// unstyled cells), so moving `create_snapshot` onto it changes nothing
+    /// until OSC 10/11 move the defaults.
+    #[test]
+    fn resolve_cell_colors_matches_legacy_snapshot_on_default_theme() {
+        let mut seq = String::from("u");
+        for code in (30..=37).chain(90..=97) {
+            seq.push_str(&format!("\x1b[0;{code}mf\x1b[1mb"));
+        }
+        for code in (40..=47).chain(100..=107) {
+            seq.push_str(&format!("\x1b[0;{code}mg\x1b[1mh"));
+        }
+        seq.push_str("\x1b[0;38;5;123mi\x1b[48;5;21mj\x1b[38;2;1;2;3mk\x1b[0;1ml");
+        let mut term = Terminal::new(200, 4);
+        term.process(seq.as_bytes());
+        let row = term.active_grid().row(0).expect("row 0");
+        let written = seq.chars().filter(|c| c.is_ascii_lowercase()).count();
+        for (col, cell) in row.iter().take(written).enumerate() {
+            let got = term.resolve_cell_colors(cell);
+            assert_eq!(
+                (got.fg, got.bg),
+                legacy_snapshot_colors(&term, cell),
+                "col {col} ({:?})",
+                cell.c
+            );
+        }
+        // And an untouched cell past the text.
+        let blank = &row[written + 5];
+        let got = term.resolve_cell_colors(blank);
+        assert_eq!((got.fg, got.bg), legacy_snapshot_colors(&term, blank));
+    }
+
+    /// ARC-101: the exact values the palette-aware readbacks report on the
+    /// default theme — the numbers the Python tests assert through
+    /// `get_ansi_palette()`.
+    #[test]
+    fn resolve_cell_colors_pins_default_theme_values() {
+        let (term, cells) = cells_after("\x1b[31;42mx\x1b[0my\x1b[1;31mz");
+        let red = term.resolve_cell_colors(&cells[0]);
+        assert_eq!(red.fg, (0xB4, 0x3C, 0x2A), "SGR 31 → palette[1]");
+        assert_eq!(red.bg, (0x00, 0x81, 0x5B), "SGR 42 → palette[2]");
+        assert!(!red.default_fg && !red.default_bg);
+
+        let plain = term.resolve_cell_colors(&cells[1]);
+        assert_eq!(plain.fg, (0xE5, 0xE5, 0xE5), "default fg → palette[7]");
+        assert_eq!(plain.bg, (0x14, 0x19, 0x1E), "default bg → palette[0]");
+        assert!(plain.default_fg && plain.default_bg);
+
+        let bold_red = term.resolve_cell_colors(&cells[2]);
+        assert_eq!(bold_red.fg, (0xFF, 0x61, 0x48), "bold SGR 31 → palette[9]");
+    }
+
+    /// ARC-101: OSC 10/11 move the default colors for cells written before
+    /// and after the change, and the default flags survive bold.
+    #[test]
+    fn resolve_cell_colors_follows_osc10_osc11() {
+        let mut term = create_test_terminal();
+        term.process(b"a");
+        term.process(b"\x1b]10;rgb:11/22/33\x07\x1b]11;rgb:44/55/66\x07");
+        term.process(b"\x1b[0mb\x1b[1mc\x1b[0;31md");
+        let row = term.active_grid().row(0).expect("row 0").to_vec();
+
+        for (col, label) in [(0, "before OSC 10"), (1, "after SGR 0")] {
+            let got = term.resolve_cell_colors(&row[col]);
+            assert_eq!(got.fg, (0x11, 0x22, 0x33), "{label}: fg follows OSC 10");
+            assert_eq!(got.bg, (0x44, 0x55, 0x66), "{label}: bg follows OSC 11");
+            assert!(got.default_fg && got.default_bg, "{label}");
+        }
+        let bold = term.resolve_cell_colors(&row[2]);
+        assert!(bold.default_fg);
+        assert_eq!(
+            bold.fg,
+            (0x11, 0x22, 0x33),
+            "an RGB default is not brightened"
+        );
+        let red = term.resolve_cell_colors(&row[3]);
+        assert!(!red.default_fg && red.default_bg);
+    }
+
+    /// ARC-101 limit, pinned: "default" is recognized by value, because a
+    /// cell stores the color SGR 0/39/49 copied, not a "default" marker.
+    /// A cell written under an earlier OSC 10 keeps that color and loses
+    /// the default flag once OSC 10 changes again. OSC 110 stores an RGB
+    /// default, so a bold default cell written before it (Named White)
+    /// stays bright, while one written after it is not brightened.
+    #[test]
+    fn resolve_cell_colors_default_is_recognized_by_value() {
+        let mut term = create_test_terminal();
+        term.process(b"\x1b]10;rgb:11/22/33\x07\x1b[0mx");
+        term.process(b"\x1b]10;rgb:44/55/66\x07");
+        let x = term.active_grid().get(0, 0).expect("cell").clone();
+        let got = term.resolve_cell_colors(&x);
+        assert!(
+            !got.default_fg,
+            "stale OSC 10 value is no longer the default"
+        );
+        assert_eq!(
+            got.fg,
+            (0x11, 0x22, 0x33),
+            "it keeps the color it was written with"
+        );
+
+        let mut term = create_test_terminal();
+        term.process(b"\x1b[1mb");
+        term.process(b"\x1b]110\x07\x1b[0;1mc");
+        let b = term.active_grid().get(0, 0).expect("cell").clone();
+        let c = term.active_grid().get(1, 0).expect("cell").clone();
+        let bright_white = term.get_ansi_palette()[15].to_rgb();
+        let before = term.resolve_cell_colors(&b);
+        assert!(before.default_fg);
+        assert_eq!(
+            before.fg,
+            (0xE5, 0xE5, 0xE5),
+            "the default is now Rgb, which bold brightening leaves alone"
+        );
+        let after = term.resolve_cell_colors(&c);
+        assert!(after.default_fg);
+        assert_eq!(after.fg, (0xE5, 0xE5, 0xE5));
+        assert_ne!(before.fg, bright_white);
     }
 }

@@ -2,7 +2,7 @@
 // calls them twice per frame. This binary holds exactly one test so the
 // counting allocator's window contains only this test's FFI calls; a
 // sibling test allocating concurrently would make the zero flaky.
-use par_term_emu_core_rust::ffi::{terminal_dirty_ranges, TermRowRange};
+use par_term_emu_core_rust::ffi::{ptec_terminal_dirty_ranges, TermRowRange};
 use par_term_emu_core_rust::terminal::Terminal;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -43,8 +43,8 @@ fn terminal_dirty_ranges_does_not_allocate() {
     let mut buf = vec![TermRowRange { start: 0, end: 0 }; 64];
 
     let before = ALLOCS.load(Relaxed);
-    let fill = unsafe { terminal_dirty_ranges(&term, buf.as_mut_ptr(), 64) };
-    let sizing = unsafe { terminal_dirty_ranges(&term, std::ptr::null_mut(), 0) };
+    let fill = unsafe { ptec_terminal_dirty_ranges(&term, buf.as_mut_ptr(), 64) };
+    let sizing = unsafe { ptec_terminal_dirty_ranges(&term, std::ptr::null_mut(), 0) };
     let after = ALLOCS.load(Relaxed);
 
     assert_eq!(

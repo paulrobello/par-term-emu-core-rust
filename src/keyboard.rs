@@ -87,7 +87,7 @@ pub struct KeyEncodeOptions {
 
 impl Default for KeyEncodeOptions {
     /// ESC on both sides — byte-identical to the pre-options encoder
-    /// (`encode_key` and `terminal_encode_key` keep their existing wire
+    /// (`encode_key` and `ptec_terminal_encode_key` keep their existing wire
     /// behavior for Alt, the classic xterm ESC prefix).
     fn default() -> Self {
         Self {

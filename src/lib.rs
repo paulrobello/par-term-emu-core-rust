@@ -60,7 +60,7 @@ compile_error!(
 );
 #[macro_use]
 pub mod debug;
-// The C ABI (`terminal_*` exports) is opt-in so Python wheels and Rust
+// The C ABI (`ptec_terminal_*` exports) is opt-in so Python wheels and Rust
 // embedders do not export unprefixed global symbols (ARC-112); the
 // xcframework build and C/Swift embedders enable `ffi`.
 #[cfg(feature = "ffi")]

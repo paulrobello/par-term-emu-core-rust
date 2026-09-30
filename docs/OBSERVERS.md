@@ -268,55 +268,59 @@ A C-compatible vtable for terminal event observation:
 
 ```c
 typedef struct {
-    // Called for zone lifecycle events
-    void (*on_zone_event)(void* user_data, const char* event_json);
-    // Called for command/shell integration events
-    void (*on_command_event)(void* user_data, const char* event_json);
-    // Called for environment change events
-    void (*on_environment_event)(void* user_data, const char* event_json);
-    // Called for screen content events
-    void (*on_screen_event)(void* user_data, const char* event_json);
-    // Called for ALL events (catch-all)
-    void (*on_event)(void* user_data, const char* event_json);
+    // Called for zone lifecycle events (diagnostic text)
+    void (*on_zone_event)(void* user_data, const char* event_text);
+    // Called for command/shell integration events (diagnostic text)
+    void (*on_command_event)(void* user_data, const char* event_text);
+    // Called for environment change events (diagnostic text)
+    void (*on_environment_event)(void* user_data, const char* event_text);
+    // Called for screen content events (diagnostic text)
+    void (*on_screen_event)(void* user_data, const char* event_text);
+    // Called for ALL events (catch-all, diagnostic text)
+    void (*on_event)(void* user_data, const char* event_text);
+    // Called for ALL events with the structured TermEvent (ABI v4)
+    void (*on_event_v2)(void* user_data, const TermEvent* event);
     // Opaque pointer passed to every callback
     void* user_data;
 } TerminalObserverVtable;
 ```
 
-Each callback receives a JSON-encoded event description as a NUL-terminated C string. The callee must NOT free the event string - it is owned by the caller and valid only for the duration of the callback.
+The five text slots receive the Rust `Debug` formatting of the event as a NUL-terminated C string. It is **not JSON** and has no stable format: use it for logging only. An interior NUL is replaced with U+FFFD.
+
+`on_event_v2` receives a `TermEvent`: `kind` is a `TERM_EVENT_*` constant, and `payload`/`payload_len` is a length-delimited (not NUL-terminated) UTF-8 JSON object whose keys match the Python event dicts in the [Event Dict Reference](#event-dict-reference) below, including `"type"`, with `null` for an unset optional field.
+
+The callee must NOT free any pointer it receives: the text, the `TermEvent` and its payload are owned by the library and valid only for the duration of the callback. See the [FFI Guide](FFI_GUIDE.md#observers) for the full contract.
 
 ### FFI Functions
 
 ```c
 // Register an FFI observer on the terminal
 // Returns an observer ID for later removal
-uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
+uint64_t ptec_terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
 
 // Remove a previously registered observer
 // Returns true if the observer was found and removed
-bool terminal_remove_observer(Terminal* term, uint64_t id);
+bool ptec_terminal_remove_observer(Terminal* term, uint64_t id);
 ```
 
 ### Example (C)
 
 ```c
-void on_event_callback(void* user_data, const char* event_json) {
-    printf("Event: %s\n", event_json);
+void on_event_v2_callback(void* user_data, const TermEvent* event) {
+    if (event->kind == TERM_EVENT_TITLE_CHANGED) {
+        printf("Event: %.*s\n", (int)event->payload_len, (const char*)event->payload);
+    }
 }
 
 TerminalObserverVtable vtable = {
-    .on_zone_event = NULL,
-    .on_command_event = NULL,
-    .on_environment_event = NULL,
-    .on_screen_event = NULL,
-    .on_event = on_event_callback,
+    .on_event_v2 = on_event_v2_callback, /* unnamed slots are NULL */
     .user_data = my_context
 };
 
-uint64_t observer_id = terminal_add_observer(term, vtable);
+uint64_t observer_id = ptec_terminal_add_observer(term, vtable);
 
 // Later...
-terminal_remove_observer(term, observer_id);
+ptec_terminal_remove_observer(term, observer_id);
 ```
 
 ## Event Dict Reference

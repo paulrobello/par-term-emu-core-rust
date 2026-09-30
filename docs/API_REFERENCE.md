@@ -247,7 +247,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 **Note:** Mode resets to 0 on terminal reset and when exiting alternate screen.
 
 #### Key Encoding
-- `encode_key(key: int, modifiers: int, codepoint: int = 0, left_option: int = 2, right_option: int = 2) -> bytes`: Encode a key event into the bytes a terminal application expects, honoring the terminal's negotiated input state (application cursor keys, kitty flags, modifyOtherKeys mode). `key` is a `TERM_KEY_*`-style value (1 = character key; functional codes 9 Tab, 13 Enter, 27 Escape, 127 Backspace, 57428..57437 arrows/Home/End, 57376..57387 F1..F12). `modifiers` bits: shift=1, alt=2, ctrl=4, super=8, hyper=16, meta=32, alt_right=64 (side info selecting `right_option`). `codepoint` is the typed form for plain text, the base form when ctrl/alt drive the encoding. Option-key modes: 0 normal (passthrough), 1 meta (8th bit on ASCII bases), 2 esc (ESC prefix). Both sides default to 2 (esc), the same default as C `terminal_encode_key` and Rust `KeyEncodeOptions::default()`. Empty bytes mean the key has no encoding.
+- `encode_key(key: int, modifiers: int, codepoint: int = 0, left_option: int = 2, right_option: int = 2) -> bytes`: Encode a key event into the bytes a terminal application expects, honoring the terminal's negotiated input state (application cursor keys, kitty flags, modifyOtherKeys mode). `key` is a `TERM_KEY_*`-style value (1 = character key; functional codes 9 Tab, 13 Enter, 27 Escape, 127 Backspace, 57428..57437 arrows/Home/End, 57376..57387 F1..F12). `modifiers` bits: shift=1, alt=2, ctrl=4, super=8, hyper=16, meta=32, alt_right=64 (side info selecting `right_option`). `codepoint` is the typed form for plain text, the base form when ctrl/alt drive the encoding. Option-key modes: 0 normal (passthrough), 1 meta (8th bit on ASCII bases), 2 esc (ESC prefix). Both sides default to 2 (esc), the same default as C `ptec_terminal_encode_key` and Rust `KeyEncodeOptions::default()`. Empty bytes mean the key has no encoding.
 
 ```python
 term = Terminal(80, 24)
@@ -257,7 +257,7 @@ term.encode_key(1, 2, ord("f"))  # b'\x1bf' (Alt+f, esc default)
 term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 ```
 
-**Note:** Byte-identical to the C FFI's `terminal_encode_key_ex` and par-term's encoder (ENH-028), so a Python frontend sends the same bytes as the desktop app.
+**Note:** Byte-identical to the C FFI's `ptec_terminal_encode_key_ex` and par-term's encoder (ENH-028), so a Python frontend sends the same bytes as the desktop app.
 
 #### Clipboard Operations (OSC 52)
 - `clipboard() -> str | None`: Get clipboard content
@@ -2483,18 +2483,25 @@ print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} by
 
 The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability, pinned by `_Static_assert`s against the Rust side. The authoritative reference is the cbindgen-generated header `include/terminal_core.h` (regenerate with `make ffi-header`; the `TERM_*` constants and layout asserts live in the hand-written `terminal_core_layout.h`) — see the [FFI Guide](FFI_GUIDE.md) for the full surface (lifecycle, the damage-driven render loop, key encoding, snapshots, observers, and the `make xcframework` iOS build).
 
+The C surface is at ABI v4: every function carries the `ptec_` prefix. The FFI Guide's "ABI Version" section has the version table and v3 migration notes.
+
 ### SharedCell
 
 A frozen cell value with text, colors, and attributes.
 
 | Field | Type | Description |
 |---|---|---|
-| `text` | `[u8; 4]` | UTF-8 encoded character bytes (up to 4 bytes) |
+| `text` | `[u8; 4]` | UTF-8 bytes of the base character (up to 4 bytes); the full cluster comes from `ptec_terminal_read_cell_grapheme` when `TERM_ATTR_HAS_COMBINING` is set |
 | `text_len` | `u8` | Number of valid bytes in `text` |
-| `fg_r`, `fg_g`, `fg_b` | `u8` | Foreground color (resolved to RGB) |
-| `bg_r`, `bg_g`, `bg_b` | `u8` | Background color (resolved to RGB) |
-| `attrs` | `u16` | Packed cell attribute bitfield (bold, italic, underline, etc.) |
+| `fg_r`, `fg_g`, `fg_b` | `u8` | Foreground display color: live palette, OSC 10 default, bold brightening |
+| `bg_r`, `bg_g`, `bg_b` | `u8` | Background display color: live palette, OSC 11 default |
+| `attrs` | `u16` | `TERM_CELL_*` attributes (bits 0-11) plus `TERM_ATTR_DEFAULT_FG`, `TERM_ATTR_DEFAULT_BG`, `TERM_ATTR_HAS_COMBINING` (bits 12-14) |
 | `width` | `u8` | Display width of the character (typically 1 or 2) |
+
+The colors come from the Rust resolvers the Python readbacks share:
+
+- `Terminal::resolve_color(&Color) -> (u8, u8, u8)` resolves one color through the live ANSI palette (OSC 4 / `set_ansi_palette_color` for the 16 base slots, the fixed tables for the 256-color cube, grayscale and RGB).
+- `Terminal::resolve_cell_colors(&Cell) -> ResolvedCellColors` resolves a cell for display. A default cell resolves through the OSC 10/11 colors and is flagged `default_fg`/`default_bg`. Bold brightening applies, then `resolve_color`. Reverse, dim and hidden are left to the renderer. The Python `get_fg_color`, `get_bg_color`, `get_line_cells`, `scrollback_line` and `create_snapshot` use it too.
 
 ### SharedState
 
@@ -2522,22 +2529,22 @@ A frozen snapshot of the full terminal state, allocated on the heap.
 
 ```c
 // Get a frozen snapshot of the terminal state.
-// Returns a heap-allocated SharedState that must be freed with terminal_free_state().
-SharedState* terminal_get_state(const Terminal* term);
+// Returns a heap-allocated SharedState that must be freed with ptec_terminal_free_state().
+SharedState* ptec_terminal_get_state(const Terminal* term);
 
-// Free a SharedState previously returned by terminal_get_state().
-void terminal_free_state(SharedState* state);
+// Free a SharedState previously returned by ptec_terminal_get_state().
+void ptec_terminal_free_state(SharedState* state);
 
 // Register a C observer via vtable. Returns an observer ID (0 on error).
-uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
+uint64_t ptec_terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
 
 // Remove a previously registered observer by ID. Returns true if found.
-bool terminal_remove_observer(Terminal* term, uint64_t id);
+bool ptec_terminal_remove_observer(Terminal* term, uint64_t id);
 ```
 
 ### TerminalObserverVtable
 
-A C function-pointer table for receiving terminal events. Each callback receives a `user_data` pointer and a Debug-formatted event text (valid only for the duration of the callback) — diagnostic text with no stable format, not JSON; parse it only for logging. Callbacks fire inline while the terminal processes input and must not re-enter any `terminal_*` function on the same handle.
+A C function-pointer table for receiving terminal events. The five text callbacks receive a `user_data` pointer and a Debug-formatted event text (valid only for the duration of the callback). That text is diagnostic, has no stable format and is not JSON, so parse it only for logging. `on_event_v2` receives a structured `TermEvent`: a `TERM_EVENT_*` kind plus a length-delimited JSON payload keyed like the Python event dicts. Callbacks fire inline while the terminal processes input and must not re-enter any `ptec_terminal_*` function on the same handle.
 
 ```c
 typedef struct {
@@ -2551,9 +2558,18 @@ typedef struct {
     void (*on_screen_event)(void* user_data, const char* event_text);   // optional
     // Called for ALL events (catch-all, fires in addition to the specific callbacks above)
     void (*on_event)(void* user_data, const char* event_text);          // optional
+    // Called for ALL events with the structured TermEvent (ABI v4)
+    void (*on_event_v2)(void* user_data, const TermEvent* event);       // optional
     // Opaque user data passed to every callback
     void* user_data;
 } TerminalObserverVtable;
+
+typedef struct {
+    uint16_t kind;           // TERM_EVENT_* code
+    uint16_t _pad;           // reserved, 0
+    uint32_t payload_len;    // bytes in payload
+    const uint8_t* payload;  // UTF-8 JSON object, not NUL-terminated
+} TermEvent;
 ```
 
 ## See Also

@@ -16,6 +16,9 @@ pub mod clipboard;
 mod colors;
 pub mod compliance;
 pub mod event;
+// Consumed only by the Python event dicts and the FFI structured events.
+#[cfg(any(feature = "python", feature = "python-test", feature = "ffi"))]
+pub(crate) mod event_fields;
 pub mod file_transfer;
 mod graphics;
 pub mod image;
@@ -41,6 +44,7 @@ pub use clipboard::{
     ClipboardEntry, ClipboardHistoryEntry, ClipboardOperation, ClipboardSlot, ClipboardSyncEvent,
     ClipboardTarget,
 };
+pub use colors::ResolvedCellColors;
 pub use compliance::{ComplianceLevel, ComplianceReport, ComplianceTest};
 pub use event::{BellEvent, CwdChange, ShellEvent, TerminalEvent, TerminalEventKind};
 pub use file_transfer::{

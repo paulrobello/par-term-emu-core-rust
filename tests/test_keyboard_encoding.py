@@ -76,7 +76,7 @@ def test_option_key_modes(term):
 
 
 def test_python_default_matches_c_default(term):
-    # C terminal_encode_key and Rust KeyEncodeOptions::default() both ESC-
+    # C ptec_terminal_encode_key and Rust KeyEncodeOptions::default() both ESC-
     # prefix Alt; the Python binding must send the same bytes (ARC-093).
     assert term.encode_key(CHAR, ALT, ord("f")) == b"\x1bf"
 

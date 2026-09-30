@@ -216,9 +216,10 @@ class TestColorOperations:
         # Write with red foreground
         term.process_str("\x1b[31mRed")
 
-        # Get color at position
+        # Get color at position: SGR 31 resolves through the live
+        # ANSI palette (ARC-101), not a fixed xterm table.
         color = term.get_fg_color(0, 0)
-        assert color == (128, 0, 0)
+        assert color == term.get_ansi_palette()[1]
 
     def test_get_bg_color(self):
         """Test getting background colors"""
@@ -228,7 +229,7 @@ class TestColorOperations:
         term.process_str("\x1b[42mGreen BG")
 
         color = term.get_bg_color(0, 0)
-        assert color == (0, 128, 0)
+        assert color == term.get_ansi_palette()[2]
 
     def test_rgb_colors(self):
         """Test RGB color support"""
@@ -258,7 +259,8 @@ class TestColorOperations:
         # Set colors
         term.process_str("\x1b[31;42mColored")
         fg, bg = term.get_fg_color(0, 0), term.get_bg_color(0, 0)
-        assert fg == (128, 0, 0) and bg == (0, 128, 0), "colors applied"
+        palette = term.get_ansi_palette()
+        assert fg == palette[1] and bg == palette[2], "colors applied"
 
         # Reset
         term.process_str("\x1b[0mReset")

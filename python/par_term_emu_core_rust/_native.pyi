@@ -4791,7 +4791,7 @@ class Terminal:
             left_option: Option-key mode for the left Alt key —
                 0 normal (pass the character through), 1 meta (8th bit on
                 ASCII bases), 2 esc (ESC-prefix). Default 2 (esc) — the same
-                default as C ``terminal_encode_key`` and Rust
+                default as C ``ptec_terminal_encode_key`` and Rust
                 ``KeyEncodeOptions::default()``.
             right_option: Option-key mode for the right Alt key. Default 2
                 (esc).

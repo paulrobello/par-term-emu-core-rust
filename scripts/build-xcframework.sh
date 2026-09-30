@@ -7,7 +7,7 @@
 # `python` feature links the host's libpython, which cannot link into an iOS
 # binary (ld: "building for 'iOS', but linking in dylib built for 'macOS'").
 # The `ffi` feature compiles the C surface itself; without it the archive
-# exports no terminal_* symbols (ARC-112).
+# exports no ptec_terminal_* symbols (ARC-112).
 #
 # Run via `make xcframework`. Requires Xcode (xcodebuild/xcrun/clang) and the
 # Rust targets aarch64-apple-ios + aarch64-apple-ios-sim
@@ -96,11 +96,16 @@ fi
 
 probe_dir="$(mktemp -d)"
 trap 'rm -rf "$probe_dir"' EXIT
+# The probe names v4-only surface (the ptec_ prefix, the grapheme side
+# channel, TermEvent) so a stale archive or header fails the link.
 cat > "$probe_dir/probe.c" <<'EOF'
 #include "terminal_core.h"
 int main(void) {
-    terminal_free_state(0);
-    return 0;
+    ptec_terminal_free_state(0);
+    TermEvent ev = { .kind = TERM_EVENT_TITLE_CHANGED };
+    (void)ev;
+    return (int)ptec_terminal_read_cell_grapheme(0, 0, 0, 0, 0)
+        + (ptec_terminal_abi_version() == TERM_CORE_ABI_VERSION ? 0 : 1);
 }
 EOF
 link_probe() { # link_probe <archive> <triple> <sysroot> <min-version-flag>
@@ -135,8 +140,14 @@ cat > "$probe_dir/probe.swift" <<'EOF'
 import TerminalCore
 
 let ev = TermKeyEvent(key: UInt16(TERM_KEY_ENTER), modifiers: 0, _pad: 0, codepoint: 0)
-terminal_free_state(nil)
+ptec_terminal_free_state(nil)
 _ = ev
+let combining = UInt16(TERM_ATTR_HAS_COMBINING)
+let kind = UInt16(TERM_EVENT_TITLE_CHANGED)
+_ = ptec_terminal_read_cell_grapheme(nil, 0, 0, nil, 0)
+var vtable = TerminalObserverVtable()
+vtable.on_event_v2 = { _, event in _ = event?.pointee.payload_len }
+_ = (combining, kind, vtable)
 EOF
 if [ ! -f "$sim_slice/Modules/module.modulemap" ]; then
     echo "ERROR: no Modules/module.modulemap in $sim_slice" >&2
