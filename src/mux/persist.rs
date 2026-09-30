@@ -1799,7 +1799,7 @@ mod tests {
 
     /// One pane whose metadata carries the full hook-reported identity.
     fn tree_with_agent_pane() -> (MuxTree, PaneId) {
-        tree_with_metadata(&[
+        let (mut tree, pane_id) = tree_with_metadata(&[
             ("agent", "pi"),
             ("agent_session_id", "s-1"),
             ("agent_session_path", "/tmp/pi-session.jsonl"),
@@ -1808,17 +1808,21 @@ mod tests {
                 "agent_resume_argv",
                 r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
             ),
-            // Keys that must NOT travel: state-shaped, provenance-of-start,
-            // and display-only telemetry.
+            // Keys that must NOT travel: state-shaped and
+            // provenance-of-start.
             ("agent_state", "working"),
             ("agent_state_source", "hook"),
             ("agent_seq", "1000"),
             ("agent_session_start_source", "startup"),
-            (
-                "agent_telemetry",
-                r#"{"version":1,"source":"claude_code","sampled_at_unix_ms":1}"#,
-            ),
-        ])
+        ]);
+        // Nor the typed, display-only half of the claim (ARC-113).
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.telemetry = Some(crate::mux::hooks::StoredTelemetry {
+            sampled_at_unix_ms: 1,
+            canonical_b64: "e30=".to_string(),
+        });
+        pane.seq_by_source.insert("par-mux:pi".to_string(), 1000);
+        (tree, pane_id)
     }
 
     /// The resume spawn re-lands in the pane's persisted cwd: the agent's
@@ -1949,8 +1953,12 @@ mod tests {
             "start source describes the PREVIOUS process's start — stale after a restart"
         );
         assert!(
-            !pane.metadata().contains_key("agent_telemetry"),
+            pane.telemetry.is_none(),
             "telemetry is display-only and ephemeral — a restored pane serves absent, never a stale sample"
+        );
+        assert!(
+            pane.seq_by_source.is_empty(),
+            "sequence stamps are volatile — the restarted agent's first report is never stale"
         );
     }
 

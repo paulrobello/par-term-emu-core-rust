@@ -35,9 +35,93 @@ use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// The metadata key holding the pane's host-probed telemetry — sibling of
-/// the hook-reported `agent_telemetry`, cleared with the claim likewise.
-pub(crate) const HOST_TELEMETRY_KEY: &str = "agent_host_telemetry";
+/// One host-probed value and the wall-clock time it was sampled; each
+/// field ages out on its own at serve time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stamped<T> {
+    pub(crate) value: T,
+    pub(crate) sampled_at_unix_ms: u64,
+}
+
+/// A pane's host-probed telemetry (ARC-113), stored typed on
+/// [`crate::mux::pane::MuxPane::host_telemetry`] — sibling of the
+/// hook-reported telemetry, cleared with the claim likewise. The roster
+/// renders it through [`fresh_host_telemetry_b64`] with no JSON parse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct HostTelemetry {
+    pub(crate) disk_free_percent: Option<Stamped<u64>>,
+    pub(crate) git_branch: Option<Stamped<String>>,
+    pub(crate) git_dirty: Option<Stamped<bool>>,
+}
+
+impl HostTelemetry {
+    /// Stamp every field a probe produced with the sweep's sample time.
+    fn from_probe(probe: &HostProbe, sampled_at_unix_ms: u64) -> Self {
+        fn stamp<T: Clone>(value: &Option<T>, at: u64) -> Option<Stamped<T>> {
+            value.as_ref().map(|value| Stamped {
+                value: value.clone(),
+                sampled_at_unix_ms: at,
+            })
+        }
+        Self {
+            disk_free_percent: stamp(&probe.disk_free_percent, sampled_at_unix_ms),
+            git_branch: stamp(&probe.git_branch, sampled_at_unix_ms),
+            git_dirty: stamp(&probe.git_dirty, sampled_at_unix_ms),
+        }
+    }
+
+    /// The roster's JSON object: the `version`/`source` envelope plus every
+    /// field sampled within `max_age_ms` of `now_ms` (all fields when
+    /// `max_age_ms` is `None`), each as `{"sampled_at_unix_ms", "value"}`.
+    /// `serde_json::Map` sorts keys (no `preserve_order`), so the bytes
+    /// match what the stored-JSON representation emitted before ARC-113.
+    /// `None` when no field qualifies.
+    fn to_json(&self, now_ms: u64, max_age_ms: Option<u64>) -> Option<String> {
+        let fresh = |at: u64| max_age_ms.is_none_or(|max| now_ms.saturating_sub(at) <= max);
+        let mut object = serde_json::Map::new();
+        let mut field = |name: &str, value: serde_json::Value, at: u64| {
+            if fresh(at) {
+                let mut stamped = serde_json::Map::new();
+                stamped.insert("value".to_string(), value);
+                stamped.insert(
+                    "sampled_at_unix_ms".to_string(),
+                    serde_json::Value::from(at),
+                );
+                object.insert(name.to_string(), serde_json::Value::Object(stamped));
+            }
+        };
+        if let Some(disk) = &self.disk_free_percent {
+            field(
+                "disk_free_percent",
+                serde_json::Value::from(disk.value),
+                disk.sampled_at_unix_ms,
+            );
+        }
+        if let Some(branch) = &self.git_branch {
+            field(
+                "git_branch",
+                serde_json::Value::String(branch.value.clone()),
+                branch.sampled_at_unix_ms,
+            );
+        }
+        if let Some(dirty) = &self.git_dirty {
+            field(
+                "git_dirty",
+                serde_json::Value::Bool(dirty.value),
+                dirty.sampled_at_unix_ms,
+            );
+        }
+        if object.is_empty() {
+            return None;
+        }
+        object.insert("version".to_string(), serde_json::Value::from(1));
+        object.insert(
+            "source".to_string(),
+            serde_json::Value::String("host-probe".to_string()),
+        );
+        Some(serde_json::Value::Object(object).to_string())
+    }
+}
 
 /// How often the sweep re-probes a pane, and how long the probe thread
 /// sleeps between shutdown checks (it must never outlive `run` by more
@@ -344,38 +428,6 @@ fn kill_detached(mut child: Child, outstanding: &Arc<AtomicUsize>) {
         });
 }
 
-/// The canonical host-probe object: per-field `{value, sampled_at_unix_ms}`
-/// pairs (fields age independently — git may change while disk holds),
-/// with `version` and `source: "host-probe"` so a client can attribute
-/// every field. Fields the probe could not measure are omitted outright.
-fn host_telemetry_json(probe: &HostProbe, sampled_at_unix_ms: u64) -> String {
-    let mut object = serde_json::Map::new();
-    object.insert("version".to_string(), serde_json::Value::from(1));
-    object.insert(
-        "source".to_string(),
-        serde_json::Value::String("host-probe".to_string()),
-    );
-    let mut field = |name: &str, value: serde_json::Value| {
-        let mut stamped = serde_json::Map::new();
-        stamped.insert("value".to_string(), value);
-        stamped.insert(
-            "sampled_at_unix_ms".to_string(),
-            serde_json::Value::from(sampled_at_unix_ms),
-        );
-        object.insert(name.to_string(), serde_json::Value::Object(stamped));
-    };
-    if let Some(disk) = probe.disk_free_percent {
-        field("disk_free_percent", serde_json::Value::from(disk));
-    }
-    if let Some(branch) = &probe.git_branch {
-        field("git_branch", serde_json::Value::String(branch.clone()));
-    }
-    if let Some(dirty) = probe.git_dirty {
-        field("git_dirty", serde_json::Value::Bool(dirty));
-    }
-    serde_json::Value::Object(object).to_string()
-}
-
 /// Cross-sweep probe state (SEC-133), owned by the probe worker.
 #[derive(Default)]
 pub(crate) struct ProbeState {
@@ -516,7 +568,7 @@ pub(crate) fn host_probe_sweep(
         ) {
             Ok(probe) => {
                 state.timed_out.remove(pane_id);
-                results.push((*pane_id, host_telemetry_json(&probe, now_ms)));
+                results.push((*pane_id, HostTelemetry::from_probe(&probe, now_ms)));
             }
             Err(ProbeMiss::TimedOut) => {
                 crate::debug_error!(
@@ -533,42 +585,26 @@ pub(crate) fn host_probe_sweep(
     let mut guard = tree.lock();
     for (pane_id, telemetry) in results {
         if let Some(pane) = guard.pane_mut(pane_id) {
-            pane.set_metadata(HOST_TELEMETRY_KEY, &telemetry);
+            pane.host_telemetry = Some(telemetry);
         }
     }
 }
 
-/// The pane's host-probed telemetry for the roster row: the stored object
+/// The pane's host-probed telemetry for the roster row: the stored sample
 /// with every field older than the freshness window dropped (per-field —
 /// the sweep rewrites all of them together, but a stopped sweep must not
-/// pin aged data), base64-encoded as one whitespace-free token. `None`
-/// when nothing fresh remains — the row then carries no host token at
-/// all, exactly like a pane that was never probed.
-pub(crate) fn fresh_host_telemetry_b64(
-    metadata: &std::collections::HashMap<String, String>,
-) -> Option<String> {
+/// pin aged data), rendered as the canonical object and base64-encoded as
+/// one whitespace-free token. `None` when nothing fresh remains — the row
+/// then carries no host token at all, exactly like a pane that was never
+/// probed.
+pub(crate) fn fresh_host_telemetry_b64(telemetry: Option<&HostTelemetry>) -> Option<String> {
     use base64::Engine as _;
 
-    let raw = metadata.get(HOST_TELEMETRY_KEY)?;
-    let mut object = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    let fields = object.as_object_mut()?;
-    let now_ms = unix_now_ms();
-    let window = crate::mux::hooks::TELEMETRY_FRESHNESS_MS;
-    // The envelope (version, source) rides unconditionally; every stamped
-    // field ages on its own clock.
-    fields.retain(|name, stamped| {
-        if name == "version" || name == "source" {
-            return true;
-        }
-        stamped
-            .get("sampled_at_unix_ms")
-            .and_then(serde_json::Value::as_u64)
-            .is_some_and(|sampled| now_ms.saturating_sub(sampled) <= window)
-    });
-    if fields.len() <= 2 {
-        return None;
-    }
-    Some(base64::engine::general_purpose::STANDARD.encode(object.to_string()))
+    let json = telemetry?.to_json(
+        unix_now_ms(),
+        Some(crate::mux::hooks::TELEMETRY_FRESHNESS_MS),
+    )?;
+    Some(base64::engine::general_purpose::STANDARD.encode(json))
 }
 
 fn unix_now_ms() -> u64 {
@@ -875,12 +911,7 @@ mod tests {
         state.timed_out.insert(pane_id, cwd.clone());
         host_probe_sweep(&tree, &shutdown, &mut state);
         assert!(
-            !tree
-                .lock()
-                .pane(pane_id)
-                .unwrap()
-                .metadata()
-                .contains_key(HOST_TELEMETRY_KEY),
+            tree.lock().pane(pane_id).unwrap().host_telemetry.is_none(),
             "the wedged (pane, cwd) pair is not probed"
         );
         assert_eq!(state.timed_out.get(&pane_id), Some(&cwd));
@@ -890,11 +921,7 @@ mod tests {
             .insert(pane_id, PathBuf::from("/a-cwd-the-pane-left"));
         host_probe_sweep(&tree, &shutdown, &mut state);
         assert!(
-            tree.lock()
-                .pane(pane_id)
-                .unwrap()
-                .metadata()
-                .contains_key(HOST_TELEMETRY_KEY),
+            tree.lock().pane(pane_id).unwrap().host_telemetry.is_some(),
             "a changed cwd is probed again"
         );
         assert!(state.timed_out.is_empty(), "success clears the record");
@@ -923,12 +950,7 @@ mod tests {
             &Arc::new(AtomicBool::new(true)),
             &mut ProbeState::default(),
         );
-        assert!(!tree
-            .lock()
-            .pane(pane_id)
-            .unwrap()
-            .metadata()
-            .contains_key(HOST_TELEMETRY_KEY));
+        assert!(tree.lock().pane(pane_id).unwrap().host_telemetry.is_none());
     }
 
     /// SEC-115: a repo whose config names an fsmonitor hook must not run
@@ -1030,16 +1052,13 @@ mod tests {
             std::fs::canonicalize(repo.path()).ok(),
             "probe_cwd is the child's actual cwd"
         );
-        let raw = pane
-            .metadata()
-            .get(HOST_TELEMETRY_KEY)
-            .expect("rostered pane probed");
-        let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let telemetry = pane.host_telemetry.as_ref().expect("rostered pane probed");
         assert_eq!(
-            parsed["git_branch"]["value"], "main",
+            telemetry.git_branch.as_ref().map(|b| b.value.as_str()),
+            Some("main"),
             "the probe ran in the child's cwd, not the OSC 7 path"
         );
-        assert_eq!(parsed["git_dirty"]["value"], false);
+        assert_eq!(telemetry.git_dirty.as_ref().map(|d| d.value), Some(false));
         assert!(
             !marker_path.exists(),
             "the sweep never executed the repo-configured fsmonitor hook"
@@ -1053,8 +1072,12 @@ mod tests {
             git_branch: Some("main".to_string()),
             git_dirty: Some(true),
         };
-        let parsed: serde_json::Value =
-            serde_json::from_str(&host_telemetry_json(&probe, 1_000)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(
+            &HostTelemetry::from_probe(&probe, 1_000)
+                .to_json(1_000, None)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(parsed["version"], 1);
         assert_eq!(parsed["source"], "host-probe");
         assert_eq!(parsed["disk_free_percent"]["value"], 37);
@@ -1063,20 +1086,52 @@ mod tests {
         assert_eq!(parsed["git_dirty"]["value"], true);
     }
 
+    /// ARC-113: the typed sample renders the exact bytes the stored-JSON
+    /// representation emitted (captured from the pre-change
+    /// `host_telemetry_json`), so the roster's `host_telemetry=` token is
+    /// unchanged on the wire.
+    #[test]
+    fn host_telemetry_json_is_byte_identical_to_the_stored_form() {
+        let full = HostProbe {
+            disk_free_percent: Some(37),
+            git_branch: Some("main".to_string()),
+            git_dirty: Some(true),
+        };
+        assert_eq!(
+            HostTelemetry::from_probe(&full, 1_000)
+                .to_json(1_000, None)
+                .unwrap(),
+            r#"{"disk_free_percent":{"sampled_at_unix_ms":1000,"value":37},"git_branch":{"sampled_at_unix_ms":1000,"value":"main"},"git_dirty":{"sampled_at_unix_ms":1000,"value":true},"source":"host-probe","version":1}"#
+        );
+        let partial = HostProbe {
+            disk_free_percent: None,
+            git_branch: Some("feat x".to_string()),
+            git_dirty: None,
+        };
+        assert_eq!(
+            HostTelemetry::from_probe(&partial, 1_000)
+                .to_json(1_000, None)
+                .unwrap(),
+            r#"{"git_branch":{"sampled_at_unix_ms":1000,"value":"feat x"},"source":"host-probe","version":1}"#
+        );
+    }
+
     #[test]
     fn serving_drops_aged_fields_and_keeps_fresh_ones() {
         let now = unix_now_ms();
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            HOST_TELEMETRY_KEY.to_string(),
-            format!(
-                r#"{{"version":1,"source":"host-probe","disk_free_percent":{{"value":37,"sampled_at_unix_ms":{}}},"git_branch":{{"value":"main","sampled_at_unix_ms":{}}}}}"#,
-                now - 1_000,
-                now - 2 * 3_600_000
-            ),
-        );
+        let telemetry = HostTelemetry {
+            disk_free_percent: Some(Stamped {
+                value: 37,
+                sampled_at_unix_ms: now - 1_000,
+            }),
+            git_branch: Some(Stamped {
+                value: "main".to_string(),
+                sampled_at_unix_ms: now - 2 * 3_600_000,
+            }),
+            git_dirty: None,
+        };
         use base64::Engine as _;
-        let encoded = fresh_host_telemetry_b64(&metadata).expect("fresh fields remain");
+        let encoded = fresh_host_telemetry_b64(Some(&telemetry)).expect("fresh fields remain");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .unwrap();
@@ -1093,15 +1148,14 @@ mod tests {
 
     #[test]
     fn serving_serves_nothing_when_all_fields_aged() {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            HOST_TELEMETRY_KEY.to_string(),
-            format!(
-                r#"{{"version":1,"source":"host-probe","git_dirty":{{"value":true,"sampled_at_unix_ms":{}}}}}"#,
-                unix_now_ms() - 2 * 3_600_000
-            ),
-        );
-        assert_eq!(fresh_host_telemetry_b64(&metadata), None);
+        let telemetry = HostTelemetry {
+            git_dirty: Some(Stamped {
+                value: true,
+                sampled_at_unix_ms: unix_now_ms() - 2 * 3_600_000,
+            }),
+            ..HostTelemetry::default()
+        };
+        assert_eq!(fresh_host_telemetry_b64(Some(&telemetry)), None);
     }
 
     /// The sweep writes host telemetry for a rostered pane and skips an
@@ -1122,16 +1176,17 @@ mod tests {
             let mut guard = tree.lock();
             let pane = guard.pane_mut(pane_id).unwrap();
             assert!(
-                pane.metadata().contains_key(HOST_TELEMETRY_KEY),
+                pane.host_telemetry.is_some(),
                 "the rostered pane carries host telemetry"
             );
-            pane.clear_metadata(&["agent", "agent_state", HOST_TELEMETRY_KEY]);
+            pane.clear_metadata(&["agent", "agent_state"]);
+            pane.host_telemetry = None;
         }
         sweep(&tree);
         let guard = tree.lock();
         let pane = guard.pane(pane_id).unwrap();
         assert!(
-            !pane.metadata().contains_key(HOST_TELEMETRY_KEY),
+            pane.host_telemetry.is_none(),
             "the unrostered pane is never probed"
         );
     }

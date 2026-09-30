@@ -149,6 +149,17 @@ pub struct MuxPane {
     /// no exit status to report as the death was observed.
     exit_code: Option<i32>,
     metadata: HashMap<String, String>,
+    /// The hook-reported telemetry, parsed and encoded once on write so the
+    /// roster reads it without re-parsing JSON under the tree lock
+    /// (ARC-113). Ephemeral like the rest of the claim: never persisted,
+    /// cleared with it ([`crate::mux::hooks::clear_agent_claim`]).
+    pub(crate) telemetry: Option<crate::mux::hooks::StoredTelemetry>,
+    /// The host probe's typed sample, each field stamped (ARC-113).
+    pub(crate) host_telemetry: Option<crate::mux::host_probe::HostTelemetry>,
+    /// The last accepted report `seq` per reporting source (herdr's
+    /// `hook_report_sequences`; ARC-113). Reports without a source share
+    /// the empty-string bucket.
+    pub(crate) seq_by_source: HashMap<String, u64>,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
     /// handle so a capture started under the tree lock can finish OFF it
@@ -653,6 +664,9 @@ impl ShellPaneFactory {
             dead: false,
             exit_code: None,
             metadata: HashMap::new(),
+            telemetry: None,
+            host_telemetry: None,
+            seq_by_source: HashMap::new(),
             snapshot_cache: Arc::new(Mutex::new(None)),
         }
     }

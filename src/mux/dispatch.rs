@@ -419,16 +419,10 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             // host probe's sibling token follows the same rule, aged
             // per field — and neither ever triggers a probe: the roster
             // reads only what the cadence thread already wrote.
-            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.metadata());
-            let host = crate::mux::host_probe::fresh_host_telemetry_b64(pane.metadata());
-            let entry = roster_row_entry(
-                agent,
-                state,
-                source,
-                reason,
-                telemetry.as_deref(),
-                host.as_deref(),
-            );
+            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.telemetry.as_ref());
+            let host =
+                crate::mux::host_probe::fresh_host_telemetry_b64(pane.host_telemetry.as_ref());
+            let entry = roster_row_entry(agent, state, source, reason, telemetry, host.as_deref());
             Some((p, entry))
         })
         .collect();
