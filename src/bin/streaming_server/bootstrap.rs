@@ -6,15 +6,18 @@
 
 use anyhow::{Context, Result};
 use par_term_emu_core_rust::pty_session::PtySession;
+use par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message;
 use par_term_emu_core_rust::streaming::{
-    HttpBasicAuthConfig, SessionFactory, SessionFactoryResult, StreamSessionState, StreamingServer,
+    HttpBasicAuthConfig, ServerMessage, SessionFactory, SessionFactoryResult, StreamSessionState,
+    StreamingServer,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::time;
@@ -40,6 +43,55 @@ pub enum RunMode {
     /// Interactive shell mode; PTY sessions are created per-client by
     /// [`BinarySessionFactory`].
     Shell,
+}
+
+/// Longest an event forwarder sleeps without new PTY output. Events raised
+/// outside PTY output (API calls on the terminal) wait at most this long.
+const EVENT_IDLE_WAKE: Duration = Duration::from_secs(1);
+/// Shortest gap between two event polls, so a PTY producing output
+/// continuously costs at most the old 20 Hz of terminal-lock takes.
+const EVENT_MIN_SPACING: Duration = Duration::from_millis(50);
+
+/// Forward a PTY session's terminal events to clients on a named thread.
+///
+/// Woken by the PTY's applied-output signal instead of a timer: an idle
+/// session costs one wake per [`EVENT_IDLE_WAKE`], not 20 per second, and a
+/// poll takes only the terminal lock, never the `PtySession` mutex. Every
+/// wake, the idle one included, drains `poll_events`, which also bounds
+/// the terminal's event queue and emits `ZoneScrolledOut`. `deliver` gets
+/// each converted message; the thread exits once `keep_running` is false.
+fn spawn_event_forwarder(
+    name: String,
+    session: &PtySession,
+    keep_running: impl Fn() -> bool + Send + 'static,
+    deliver: impl Fn(ServerMessage) + Send + 'static,
+) -> std::io::Result<()> {
+    let waiter = session.update_waiter();
+    let terminal = session.terminal();
+    let mut seen = session.update_generation();
+    std::thread::Builder::new().name(name).spawn(move || {
+        let mut last_poll = Instant::now();
+        while keep_running() {
+            let started = Instant::now();
+            match waiter.wait_for_update(seen, EVENT_IDLE_WAKE) {
+                Some(generation) => {
+                    seen = generation;
+                    std::thread::sleep(EVENT_MIN_SPACING.saturating_sub(last_poll.elapsed()));
+                }
+                // With no live child (exited, restarting, or never
+                // spawned) the wait returns at once: pace to the idle wake.
+                None => std::thread::sleep(EVENT_IDLE_WAKE.saturating_sub(started.elapsed())),
+            }
+            let events = terminal.write().poll_events();
+            last_poll = Instant::now();
+            for event in events {
+                if let Some(msg) = terminal_event_to_server_message(event) {
+                    deliver(msg);
+                }
+            }
+        }
+    })?;
+    Ok(())
 }
 
 /// Resolve the run mode from CLI arguments, creating the macro-mode PTY
@@ -213,31 +265,6 @@ impl ServerState {
         info!("PTY status monitor exiting");
     }
 
-    /// Poll terminal events and broadcast to clients
-    async fn poll_terminal_events(&self) {
-        let mut interval = tokio::time::interval(Duration::from_millis(50)); // 20Hz polling
-        loop {
-            interval.tick().await;
-
-            let events = {
-                let session = self.pty_session.lock();
-                let terminal = session.terminal();
-                let mut term = terminal.write();
-                term.poll_events()
-            };
-
-            for event in events {
-                if let Some(msg) =
-                    par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message(
-                        event,
-                    )
-                {
-                    self.streaming_server.broadcast(msg);
-                }
-            }
-        }
-    }
-
     /// Run the main event loop
     async fn run(&self) -> Result<()> {
         let resize_handle = {
@@ -254,12 +281,18 @@ impl ServerState {
             })
         };
 
-        let event_handle = {
-            let state = self.clone_state();
-            tokio::spawn(async move {
-                state.poll_terminal_events().await;
-            })
-        };
+        let stop_events = Arc::new(AtomicBool::new(false));
+        {
+            let stop = Arc::clone(&stop_events);
+            let server = Arc::clone(&self.streaming_server);
+            spawn_event_forwarder(
+                "term-events-macro".to_string(),
+                &self.pty_session.lock(),
+                move || !stop.load(Ordering::Relaxed),
+                move |msg| server.broadcast(msg),
+            )
+            .context("Failed to start the terminal event forwarder")?;
+        }
 
         // Wait for either Ctrl+C or PTY exit (when restart is disabled)
         tokio::select! {
@@ -278,7 +311,7 @@ impl ServerState {
 
         // Cancel background tasks
         resize_handle.abort();
-        event_handle.abort();
+        stop_events.store(true, Ordering::Relaxed);
 
         Ok(())
     }
@@ -549,34 +582,36 @@ impl SessionFactory for BinarySessionFactory {
             }
         });
 
-        // Spawn terminal event poller for this session
-        let pty_clone = Arc::clone(&pty_session);
-        let session_id_clone = session_id.to_string();
-        let server_ref = self.streaming_server.read().clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
-            loop {
-                interval.tick().await;
-
-                let events = {
-                    let ps = pty_clone.lock();
-                    let terminal = ps.terminal();
-                    let mut term = terminal.write();
-                    term.poll_events()
-                };
-
-                let server = match server_ref {
-                    Some(ref s) => s,
-                    None => continue,
-                };
-
-                for event in events {
-                    if let Some(msg) = par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message(event) {
-                        server.send_to_session(&session_id_clone, msg);
+        // Forward this session's terminal events until teardown removes
+        // this PTY session from the factory. The server is held weakly: the
+        // server owns this factory.
+        {
+            let sessions = Arc::clone(&self.pty_sessions);
+            let this_session = Arc::downgrade(&pty_session);
+            let owner_id = session_id.to_string();
+            let target_id = session_id.to_string();
+            let server = self.streaming_server.read().as_ref().map(Arc::downgrade);
+            spawn_event_forwarder(
+                format!("term-events-{session_id}"),
+                &pty_session.lock(),
+                move || {
+                    sessions
+                        .read()
+                        .get(&owner_id)
+                        .is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), this_session.as_ptr()))
+                },
+                move |msg| {
+                    if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
+                        server.send_to_session(&target_id, msg);
                     }
-                }
-            }
-        });
+                },
+            )
+            .map_err(|e| {
+                par_term_emu_core_rust::streaming::error::StreamingError::ServerError(format!(
+                    "Failed to start the event forwarder for session '{session_id}': {e}"
+                ))
+            })?;
+        }
 
         // Spawn system stats collection task if enabled
         if self.enable_system_stats {
@@ -849,4 +884,56 @@ pub fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig
     anyhow::bail!(
         "--http-user requires one of: --http-password, --http-password-hash, or --http-password-file"
     );
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A BEL printed by the child reaches `deliver` as a bell message, and
+    /// clearing `keep_running` stops the forwarder thread.
+    #[test]
+    fn event_forwarder_delivers_a_bell_and_stops() {
+        let mut session = PtySession::new(80, 24, 100);
+        let running = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let running = Arc::clone(&running);
+            spawn_event_forwarder(
+                "term-events-test".to_string(),
+                &session,
+                move || running.load(Ordering::Relaxed),
+                move |msg| {
+                    let _ = tx.send(msg);
+                },
+            )
+            .expect("forwarder thread");
+        }
+        session
+            .spawn("/bin/sh", &["-c", "printf '\\007'; sleep 5"])
+            .expect("spawn");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(ServerMessage::Bell) => break,
+                Ok(_) => continue,
+                Err(e) => panic!("no bell message within 10 s: {e}"),
+            }
+        }
+
+        running.store(false, Ordering::Relaxed);
+        // The thread exits within one idle wake and drops its sender.
+        let deadline = Instant::now() + EVENT_IDLE_WAKE * 3;
+        loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(_) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("forwarder still running after keep_running went false")
+                }
+            }
+        }
+    }
 }
