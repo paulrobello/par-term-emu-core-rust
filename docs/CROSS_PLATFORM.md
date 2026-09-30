@@ -54,13 +54,13 @@ All VT100/VT220/VT320/VT420 sequences work identically across platforms.
 
 **Platform Independence: Excellent (via portable-pty)**
 
-PTY operations in `src/pty_session.rs` use the `portable-pty` crate for cross-platform compatibility:
+PTY operations in `src/pty_session/mod.rs` use the `portable-pty` crate for cross-platform compatibility:
 
 **Shell Detection:**
 - **Windows**: Uses `%COMSPEC%` environment variable (typically `cmd.exe`), fallback to `cmd.exe`
 - **Unix/macOS**: Uses `$SHELL` environment variable, fallback to `/bin/bash`
 
-Implementation in `src/pty_session.rs`:
+Implementation in `src/pty_session/mod.rs`:
 ```rust
 pub fn get_default_shell() -> String {
     if cfg!(windows) {

@@ -324,7 +324,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - Pane output management
 
 **PTY Support**
-- `pty_session.rs` - PTY session management with portable-pty
+- `pty_session/` - PTY session management with portable-pty (`mod.rs`; the output reader thread in `reader.rs`)
 - `pty_error.rs` - PTY-specific error types
 - `badge.rs` - iTerm2 OSC 1337 SetBadgeFormat parsing and badge format evaluation
 
