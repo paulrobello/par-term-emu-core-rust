@@ -44,8 +44,8 @@ impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
 }
 
 // ARC-003/QA-001 validation: shared getters generated from one definition.
-crate::impl_terminal_simple_getters!(PyPtyTerminal);
-crate::impl_terminal_query_getters!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_simple_getters!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_query_getters!(PyPtyTerminal);
 
 // Geometry getters served from PtySession's wait-free mirror (ENH-023):
 // a polling UI calling size()/cursor_position() many times per second never
@@ -69,21 +69,21 @@ impl PyPtyTerminal {
         Ok(self.inner.cursor_position())
     }
 }
-crate::impl_terminal_color_setters!(PyPtyTerminal);
-crate::impl_terminal_state_setters!(PyPtyTerminal);
-crate::impl_terminal_static_helpers!(PyPtyTerminal);
-crate::impl_terminal_sixel_graphics!(PyPtyTerminal);
-crate::impl_terminal_kitty_file_media!(PyPtyTerminal);
-crate::impl_terminal_badge_session!(PyPtyTerminal);
-crate::impl_terminal_progress_notifications!(PyPtyTerminal);
-crate::impl_terminal_recording!(PyPtyTerminal);
-crate::impl_terminal_cell_line_queries!(PyPtyTerminal);
-crate::impl_terminal_content_misc!(PyPtyTerminal);
-crate::impl_terminal_search_select!(PyPtyTerminal);
-crate::impl_terminal_debug_snapshots!(PyPtyTerminal);
-crate::impl_terminal_file_transfer!(PyPtyTerminal);
-crate::impl_terminal_exports!(PyPtyTerminal);
-crate::impl_terminal_screenshot_methods!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_color_setters!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_state_setters!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_static_helpers!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_sixel_graphics!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_kitty_file_media!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_badge_session!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_progress_notifications!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_recording!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_cell_line_queries!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_content_misc!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_search_select!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_debug_snapshots!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_file_transfer!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_exports!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_screenshot_methods!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {

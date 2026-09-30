@@ -5,9 +5,14 @@
 //!
 //! ## Example
 //!
+//! YAML save/load needs the `macro-yaml` feature (enabled by `python` and
+//! `streaming-bin`).
+//!
 //! ```rust,no_run
 //! use par_term_emu_core_rust::macros::{Macro, MacroEvent};
 //! # fn main() -> std::io::Result<()> {
+//! # #[cfg(feature = "macro-yaml")]
+//! # {
 //! let mut macro_seq = Macro::new("Test Macro");
 //! macro_seq.add_key("ctrl+c");
 //! macro_seq.add_delay(100);
@@ -18,16 +23,16 @@
 //!
 //! // Load from YAML
 //! let loaded = Macro::load_yaml("/path/to/macro.yaml")?;
+//! # }
 //! # Ok(())
 //! # }
 //! ```
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::io;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "macro-yaml")]
+use std::{fs, io, path::Path};
 
 /// A single macro event
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,7 +158,12 @@ impl Macro {
         self.env.insert(key.into(), value.into());
         self
     }
+}
 
+/// YAML persistence (ARC-116): only with the `macro-yaml` feature, so slim
+/// profiles do not compile `serde_yaml_ng`.
+#[cfg(feature = "macro-yaml")]
+impl Macro {
     /// Save the macro to a YAML file
     pub fn save_yaml<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
         let yaml = serde_yaml_ng::to_string(self)
@@ -411,6 +421,7 @@ mod tests {
         assert_eq!(KeyParser::parse_key("a"), vec![b'a']);
     }
 
+    #[cfg(feature = "macro-yaml")]
     #[test]
     fn test_yaml_serialization() {
         let mut macro_seq = Macro::new("Test Macro");

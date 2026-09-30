@@ -1,12 +1,12 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python checkall check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
         streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install \
-        stubs stub-check \
+        stubs stub-check stub-drift \
         grind-start grind-start-anthropic grind-start-zai grind-start-grok grind-start-codex grind-start-omp grind-stop grind-clean-logs
 
 help:
@@ -20,15 +20,15 @@ help:
 	@echo ""
 	@echo "Setup & Installation:"
 	@echo "  setup-venv      - Create virtual environment and install tools"
-	@echo "  dev             - Install library in development mode (release)"
+	@echo "  dev             - Install library in development mode (release, streaming included)"
 	@echo "  install         - Build and install the package"
 	@echo "  install-force   - Force uninstall and reinstall the package"
 	@echo ""
 	@echo "Building:"
-	@echo "  build            - Build the library in development mode (debug)"
-	@echo "  build-release    - Build the library in development mode (release)"
-	@echo "  build-streaming  - Build with streaming feature (debug)"
-	@echo "  dev-streaming    - Build with streaming feature (release, for dev)"
+	@echo "  build            - Build the library in development mode (debug, streaming included)"
+	@echo "  build-release    - Build the library in development mode (release, streaming included)"
+	@echo "  build-streaming  - Alias of build (streaming is in pyproject features)"
+	@echo "  dev-streaming    - Alias of dev (streaming is in pyproject features)"
 	@echo "  xcframework      - Build TerminalCore.xcframework (iOS device + simulator) from the C FFI (needs Xcode)"
 	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
@@ -48,27 +48,31 @@ help:
 	@echo "  fmt-python      - Format Python code with ruff"
 	@echo "  lint            - Run Rust linters (clippy + fmt, auto-fix)"
 	@echo "  lint-python     - Run Python linters (format + ruff + pyright, auto-fix)"
+	@echo "  lint-check      - Non-mutating lint gate: fmt --check, clippy, ruff --check, pyright (used by checkall)"
 	@echo "  check           - Check Rust code without building"
 	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
-	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
+	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after make dev)"
 	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
+	@echo "  stub-drift      - Rebuild (dev-streaming), regenerate the stub, and fail if it differs from the committed file"
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
-	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
+	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
 	@echo "Fuzzing (nightly + cargo-fuzz; not part of checkall):"
-	@echo "  fuzz-all              - Run all five fuzz targets for FUZZ_SECONDS each (default 60)"
+	@echo "  fuzz-all              - Run all seven fuzz targets for FUZZ_SECONDS each (default 60)"
 	@echo "  fuzz-terminal_process - Fuzz the whole VTE pipeline"
 	@echo "  fuzz-sixel            - Fuzz the Sixel state machine"
 	@echo "  fuzz-kitty            - Fuzz the Kitty graphics APC parser"
 	@echo "  fuzz-apc_filter       - Fuzz the APC pre-filter"
 	@echo "  fuzz-tmux_control     - Fuzz the tmux control-mode parser"
+	@echo "  fuzz-mux_parse_command - Fuzz the par-mux control-line parser"
+	@echo "  fuzz-mux_hook_report  - Fuzz the par-mux hook-report JSON grammar"
 	@echo ""
 	@echo "Pre-commit Hooks:"
 	@echo "  pre-commit-install   - Install pre-commit hooks"
@@ -183,31 +187,17 @@ build-release:
 	fi
 	uv run maturin develop --release
 
-build-streaming:
-	@echo "Building library with streaming feature (debug mode)..."
-	@if [ ! -d ".venv" ]; then \
-		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
-		exit 1; \
-	fi
-	uv run maturin develop --features streaming
+# ARC-105: `streaming` is in pyproject's [tool.maturin] features, so every
+# maturin build already includes it; kept as an alias for muscle memory.
+build-streaming: build
 
 # TerminalCore.xcframework (iOS device + simulator) from the C FFI surface —
 # what ParDeck embeds. Requires Xcode; not part of checkall.
 xcframework:
 	bash scripts/build-xcframework.sh
 
-dev-streaming:
-	@echo "Building library with streaming feature (release mode)..."
-	@if [ ! -d ".venv" ]; then \
-		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
-		exit 1; \
-	fi
-	uv sync
-	uv run maturin develop --release --features streaming
-	@echo ""
-	@echo "======================================================================"
-	@echo "  Streaming feature enabled!"
-	@echo "======================================================================"
+# ARC-105: alias of `dev` (streaming comes from pyproject features).
+dev-streaming: dev
 	@echo ""
 	@echo "You can now run the streaming demo:"
 	@echo "  make examples-streaming"
@@ -240,7 +230,7 @@ test-rust:
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
 	cargo test --lib --no-default-features --features rust-only,serde
 	@echo "Running the full mux suite (lib unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
-	cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
+	cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 
@@ -291,7 +281,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:
@@ -300,22 +290,34 @@ lint-python:
 	uv run ruff check --fix .
 	uv run pyright .
 
+# ARC-115: the non-mutating lint gate checkall runs. `lint`/`lint-python`
+# stay the auto-fix targets; a gate reports drift instead of rewriting it.
+# Keep the clippy feature list in sync with `lint` and `clippy`.
+lint-check:
+	@echo "Running non-mutating lint checks (Rust fmt + clippy, Python ruff + pyright)..."
+	cargo fmt -- --check
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
+	uv run ruff format --check .
+	uv run ruff check .
+	uv run pyright .
+
 check:
 	@echo "Checking Rust code..."
 	cargo check
 
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
-	cargo check --all-targets --features python,streaming,mux
+	cargo check --all-targets --features python,streaming,mux,mux-bin
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
-# Build with streaming first so streaming-only methods are captured:
-#   make dev-streaming && make stubs
+# Needs a streaming build so streaming-only classes are captured; since
+# ARC-105 `make dev` is one:
+#   make dev && make stubs
 stubs:
 	@echo "Regenerating python/par_term_emu_core_rust/_native.pyi..."
 	@if [ ! -d ".venv" ]; then \
@@ -335,6 +337,12 @@ stub-check:
 	uv run python -c "import par_term_emu_core_rust"
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 	uv run python scripts/check_api_reference.py
+
+# QA-204: regenerate the stub from a streaming build and fail on drift.
+# Not in checkall: it rebuilds the extension. The stub must come from a
+# streaming build; since ARC-105 `dev` is one (dev-streaming is its alias).
+stub-drift: dev-streaming stubs
+	git diff --exit-code -- python/par_term_emu_core_rust/_native.pyi
 
 # ENH-022: regenerate the resource-caps table in docs/SECURITY.md from the
 # `/// cap:` doc comments on the size constants; the check flavor gates drift.
@@ -379,7 +387,26 @@ ffi-header-check:
 ffi-surface-check:
 	python3 scripts/check_ffi_surface.py
 
-checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint lint-python stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+	@echo ""
+	@echo "======================================================================"
+	@echo "  All code quality checks passed!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Summary:"
+	@echo "  ✓ FFI header + surface checks"
+	@echo "  ✓ Rust tests"
+	@echo "  ✓ Rust streaming tests"
+	@echo "  ✓ Rust format (checked)"
+	@echo "  ✓ Rust lint (clippy, -D warnings)"
+	@echo "  ✓ Python format (checked)"
+	@echo "  ✓ Python lint (ruff)"
+	@echo "  ✓ Python type check (pyright)"
+	@echo "  ✓ Python stub check (pyright)"
+	@echo "  ✓ Python tests"
+	@echo "  ✓ Web frontend tests (vitest)"
+	@echo "  ✓ Caps table in sync"
+	@echo ""
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.
@@ -389,23 +416,6 @@ check-features:
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
 	cargo bench --no-default-features --features rust-only
-	@echo ""
-	@echo "======================================================================"
-	@echo "  All code quality checks passed!"
-	@echo "======================================================================"
-	@echo ""
-	@echo "Summary:"
-	@echo "  ✓ Rust tests"
-	@echo "  ✓ Rust streaming tests"
-	@echo "  ✓ Rust format (auto-fixed)"
-	@echo "  ✓ Rust lint (clippy auto-fixed)"
-	@echo "  ✓ Python format (auto-fixed)"
-	@echo "  ✓ Python lint (ruff auto-fixed)"
-	@echo "  ✓ Python type check (pyright)"
-	@echo "  ✓ Python stub check (pyright)"
-	@echo "  ✓ Python tests"
-	@echo "  ✓ Web frontend tests (vitest)"
-	@echo ""
 
 # ============================================================================
 # Pre-commit Hooks
@@ -944,4 +954,10 @@ fuzz-apc_filter: ## Fuzz the APC pre-filter byte state machine (ENH-020)
 fuzz-tmux_control: ## Fuzz the tmux control-mode parser
 	cargo +nightly fuzz run tmux_control -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
-fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control ## Run all five fuzz targets for FUZZ_SECONDS each (default 60)
+fuzz-mux_parse_command: ## Fuzz the par-mux control-line parser (ARC-121)
+	cargo +nightly fuzz run mux_parse_command -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-mux_hook_report: ## Fuzz the par-mux hook-report JSON grammar (ARC-121)
+	cargo +nightly fuzz run mux_hook_report -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control fuzz-mux_parse_command fuzz-mux_hook_report ## Run all seven fuzz targets for FUZZ_SECONDS each (default 60)

@@ -163,7 +163,7 @@ jobs:
       # moving-target openpty failures observed locally (card
       # 01a0c64fc43e7913b474c038db0635d5); the whole suite is seconds, so
       # serialization costs nothing.
-      run: cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
+      run: cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
 
     - name: Run mux-backed streaming tests (MuxSessionFactory)
       # The only run with streaming and mux together; without it these
@@ -199,7 +199,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin -- -D warnings
+      run: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

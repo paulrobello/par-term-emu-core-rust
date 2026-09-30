@@ -1,7 +1,7 @@
 name: Fuzz
 
 # Coverage-guided fuzzing of the untrusted-byte parsers (ENH-014, +apc_filter
-# in ENH-020). Manual-dispatch like every other workflow in this repo, plus a
+# in ENH-020, +the par-mux control-line and hook-report parsers in ARC-121). Manual-dispatch like every other workflow in this repo, plus a
 # nightly schedule — the cron keeps looking when nobody remembers to.
 # -rss_limit_mb=512 (ENH-020): memory blowups count as failures.
 on:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [terminal_process, sixel, kitty, apc_filter, tmux_control]
+        target: [terminal_process, sixel, kitty, apc_filter, tmux_control, mux_parse_command, mux_hook_report]
     steps:
       - uses: actions/checkout@v7
 

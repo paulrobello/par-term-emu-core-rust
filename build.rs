@@ -123,9 +123,28 @@ fn source_digest() -> Option<String> {
 }
 
 /// The checkout's short sha, with `-dirty` appended when tracked files have
-/// uncommitted changes. `None` when git is absent or the checkout is not a
-/// repository (crates.io tarballs) — never an error, the stamp degrades.
+/// uncommitted changes. `None` when git is absent, the checkout is not a
+/// repository (crates.io tarballs), or the enclosing repository is not this
+/// crate's own — never an error, the stamp degrades to the source digest.
 fn git_short_sha() -> Option<String> {
+    // ARC-120: a crate vendored inside another repository (or a crates.io
+    // tarball extracted in one) would otherwise stamp the OUTER repo's
+    // commit. Git identity describes this crate only when the toplevel is
+    // the manifest dir; canonicalize both (macOS /tmp -> /private/tmp).
+    let toplevel = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !toplevel.status.success() {
+        return None;
+    }
+    let toplevel = String::from_utf8(toplevel.stdout).ok()?;
+    let toplevel = std::fs::canonicalize(toplevel.trim()).ok()?;
+    let manifest_dir = std::fs::canonicalize(std::env::var_os("CARGO_MANIFEST_DIR")?).ok()?;
+    if toplevel != manifest_dir {
+        return None;
+    }
+
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .output()

@@ -72,8 +72,12 @@ image = [
 ]
 
 [tool.maturin]
+# Single source of truth for what a wheel contains (ARC-105): every maturin
+# build/develop call (make dev, CI, TestPyPI, PyPI) reads these, so no command
+# passes its own --features.
 features = [
     "pyo3/extension-module",
+    "streaming",
 ]
 python-source = "python"
 module-name = "par_term_emu_core_rust._native"

@@ -52,7 +52,7 @@ impl crate::python_bindings::common::TerminalAccess for PyTerminal {
 }
 
 // ARC-003/QA-001: shared query/state getters generated from one definition.
-crate::impl_terminal_query_getters!(PyTerminal);
+crate::python_bindings::common::impl_terminal_query_getters!(PyTerminal);
 
 // The plain terminal's geometry getters, served from the terminal itself
 // (the shared macro leaves these per-type so the PTY wrapper can serve its
@@ -76,21 +76,21 @@ impl PyTerminal {
         Ok((cursor.col, cursor.row))
     }
 }
-crate::impl_terminal_color_setters!(PyTerminal);
-crate::impl_terminal_state_setters!(PyTerminal);
-crate::impl_terminal_static_helpers!(PyTerminal);
-crate::impl_terminal_sixel_graphics!(PyTerminal);
-crate::impl_terminal_kitty_file_media!(PyTerminal);
-crate::impl_terminal_badge_session!(PyTerminal);
-crate::impl_terminal_progress_notifications!(PyTerminal);
-crate::impl_terminal_recording!(PyTerminal);
-crate::impl_terminal_cell_line_queries!(PyTerminal);
-crate::impl_terminal_content_misc!(PyTerminal);
-crate::impl_terminal_search_select!(PyTerminal);
-crate::impl_terminal_debug_snapshots!(PyTerminal);
-crate::impl_terminal_file_transfer!(PyTerminal);
-crate::impl_terminal_exports!(PyTerminal);
-crate::impl_terminal_screenshot_methods!(PyTerminal);
+crate::python_bindings::common::impl_terminal_color_setters!(PyTerminal);
+crate::python_bindings::common::impl_terminal_state_setters!(PyTerminal);
+crate::python_bindings::common::impl_terminal_static_helpers!(PyTerminal);
+crate::python_bindings::common::impl_terminal_sixel_graphics!(PyTerminal);
+crate::python_bindings::common::impl_terminal_kitty_file_media!(PyTerminal);
+crate::python_bindings::common::impl_terminal_badge_session!(PyTerminal);
+crate::python_bindings::common::impl_terminal_progress_notifications!(PyTerminal);
+crate::python_bindings::common::impl_terminal_recording!(PyTerminal);
+crate::python_bindings::common::impl_terminal_cell_line_queries!(PyTerminal);
+crate::python_bindings::common::impl_terminal_content_misc!(PyTerminal);
+crate::python_bindings::common::impl_terminal_search_select!(PyTerminal);
+crate::python_bindings::common::impl_terminal_debug_snapshots!(PyTerminal);
+crate::python_bindings::common::impl_terminal_file_transfer!(PyTerminal);
+crate::python_bindings::common::impl_terminal_exports!(PyTerminal);
+crate::python_bindings::common::impl_terminal_screenshot_methods!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
