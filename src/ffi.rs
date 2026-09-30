@@ -132,14 +132,7 @@ impl SharedState {
         let rows = grid.rows();
         let cursor = term.cursor();
 
-        // Mouse mode mapping
-        let mouse_mode = match term.mouse_mode() {
-            MouseMode::Off => 0u8,
-            MouseMode::X10 => 1,
-            MouseMode::Normal => 2,
-            MouseMode::ButtonEvent => 3,
-            MouseMode::AnyEvent => 4,
-        };
+        let mouse_mode = mouse_mode_code(term.mouse_mode());
 
         // Title
         let (title, title_len) = to_c_string(term.title());
@@ -426,6 +419,72 @@ impl SharedCell {
     }
 }
 
+/// The `TERM_MOUSE_MODE_*` code for a mouse mode (0 Off, 1 X10, 2 Normal,
+/// 3 ButtonEvent, 4 AnyEvent). The discriminants are the codes;
+/// `layout_header_defines_match_rust` pins them to the header.
+fn mouse_mode_code(mode: MouseMode) -> u8 {
+    mode as u8
+}
+
+/// Copy one grid line into a caller buffer — the shared body of
+/// `terminal_read_row` and `terminal_read_scrollback_row`. With `out` NULL
+/// returns the cells available from `col_start` (the sizing answer);
+/// otherwise copies `cells[col_start..cols]` into `out` (up to `cap`),
+/// padding a line shorter than `cols` with blank cells, and returns the
+/// number written.
+///
+/// # Safety
+/// `out` must be NULL or valid for writes of `cap` `SharedCell` values.
+unsafe fn copy_row(
+    cells: &[crate::cell::Cell],
+    cols: u32,
+    col_start: u32,
+    out: *mut SharedCell,
+    cap: u32,
+) -> u32 {
+    if out.is_null() {
+        return cols.saturating_sub(col_start);
+    }
+    let mut written = 0u32;
+    let mut col = col_start;
+    while col < cols && written < cap {
+        let cell = cells
+            .get(col as usize)
+            .map(SharedCell::from_cell)
+            .unwrap_or_else(SharedCell::blank);
+        // SAFETY: `written < cap`, and the caller guarantees `out` is valid
+        // for `cap` writes.
+        unsafe { out.add(written as usize).write(cell) };
+        col += 1;
+        written += 1;
+    }
+    written
+}
+
+/// Write the ranges `each` visits into `out` (up to `cap`) and return the
+/// total visited — the shared body of the two dirty-range calls. `out` may
+/// be NULL for a sizing call. Allocation-free: the render loop calls it
+/// twice per frame (ENH-026, pinned by tests/ffi_dirty_ranges_alloc.rs).
+///
+/// # Safety
+/// `out` must be NULL or valid for writes of `cap` `TermRowRange` values.
+unsafe fn write_ranges(
+    out: *mut TermRowRange,
+    cap: u32,
+    each: impl FnOnce(&mut dyn FnMut(u32, u32)),
+) -> u32 {
+    let mut total: u32 = 0;
+    each(&mut |start, end| {
+        if total < cap && !out.is_null() {
+            // SAFETY: `total < cap` and `out` is non-null, and the caller
+            // guarantees `out` is valid for `cap` writes.
+            unsafe { out.add(total as usize).write(TermRowRange { start, end }) };
+        }
+        total += 1;
+    });
+    total
+}
+
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
 /// the cbindgen-generated include/terminal_core.h); bump both on any layout
@@ -543,14 +602,7 @@ pub unsafe extern "C" fn terminal_dirty_ranges(
         return 0;
     }
     let term_ref = unsafe { &*term };
-    let mut total: u32 = 0;
-    term_ref.for_each_dirty_range(|start, end| {
-        if total < cap && !out.is_null() {
-            unsafe { out.add(total as usize).write(TermRowRange { start, end }) };
-        }
-        total += 1;
-    });
-    total
+    unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range(f)) }
 }
 
 /// Current damage generation. A renderer remembers this value between
@@ -590,14 +642,7 @@ pub unsafe extern "C" fn terminal_dirty_ranges_since(
         return 0;
     }
     let term_ref = unsafe { &*term };
-    let mut total: u32 = 0;
-    term_ref.for_each_dirty_range_since(gen, |start, end| {
-        if total < cap && !out.is_null() {
-            unsafe { out.add(total as usize).write(TermRowRange { start, end }) };
-        }
-        total += 1;
-    });
-    total
+    unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range_since(gen, f)) }
 }
 
 /// Mark the screen clean (all damage consumed).
@@ -637,23 +682,7 @@ pub unsafe extern "C" fn terminal_read_row(
     let Some(row_cells) = grid.row(row as usize) else {
         return 0;
     };
-    let cols = grid.cols() as u32;
-    let total = cols.saturating_sub(col_start);
-    if out.is_null() {
-        return total;
-    }
-    let mut written = 0u32;
-    let mut col = col_start;
-    while col < cols && written < cap {
-        let cell = row_cells
-            .get(col as usize)
-            .map(SharedCell::from_cell)
-            .unwrap_or_else(SharedCell::blank);
-        unsafe { *out.add(written as usize) = cell };
-        col += 1;
-        written += 1;
-    }
-    written
+    unsafe { copy_row(row_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
 /// Copy a run of scrollback cells into a caller-owned buffer.
@@ -681,23 +710,7 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
     let Some(line_cells) = grid.scrollback_line(line as usize) else {
         return 0;
     };
-    let cols = grid.cols() as u32;
-    let total = cols.saturating_sub(col_start);
-    if out.is_null() {
-        return total;
-    }
-    let mut written = 0u32;
-    let mut col = col_start;
-    while col < cols && written < cap {
-        let cell = line_cells
-            .get(col as usize)
-            .map(SharedCell::from_cell)
-            .unwrap_or_else(SharedCell::blank);
-        unsafe { *out.add(written as usize) = cell };
-        col += 1;
-        written += 1;
-    }
-    written
+    unsafe { copy_row(line_cells, grid.cols() as u32, col_start, out, cap) }
 }
 
 /// Number of lines currently held in scrollback.
@@ -773,13 +786,7 @@ pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut Ter
         return;
     }
     let term_ref = unsafe { &*term };
-    let mouse_mode = match term_ref.mouse_mode() {
-        MouseMode::Off => 0u8,
-        MouseMode::X10 => 1,
-        MouseMode::Normal => 2,
-        MouseMode::ButtonEvent => 3,
-        MouseMode::AnyEvent => 4,
-    };
+    let mouse_mode = mouse_mode_code(term_ref.mouse_mode());
     let (cols, rows) = term_ref.size();
     unsafe {
         *out = TermModeState {
