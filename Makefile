@@ -64,12 +64,14 @@ help:
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
 	@echo "Fuzzing (nightly + cargo-fuzz; not part of checkall):"
-	@echo "  fuzz-all              - Run all five fuzz targets for FUZZ_SECONDS each (default 60)"
+	@echo "  fuzz-all              - Run all seven fuzz targets for FUZZ_SECONDS each (default 60)"
 	@echo "  fuzz-terminal_process - Fuzz the whole VTE pipeline"
 	@echo "  fuzz-sixel            - Fuzz the Sixel state machine"
 	@echo "  fuzz-kitty            - Fuzz the Kitty graphics APC parser"
 	@echo "  fuzz-apc_filter       - Fuzz the APC pre-filter"
 	@echo "  fuzz-tmux_control     - Fuzz the tmux control-mode parser"
+	@echo "  fuzz-mux_parse_command - Fuzz the par-mux control-line parser"
+	@echo "  fuzz-mux_hook_report  - Fuzz the par-mux hook-report JSON grammar"
 	@echo ""
 	@echo "Pre-commit Hooks:"
 	@echo "  pre-commit-install   - Install pre-commit hooks"
@@ -945,4 +947,10 @@ fuzz-apc_filter: ## Fuzz the APC pre-filter byte state machine (ENH-020)
 fuzz-tmux_control: ## Fuzz the tmux control-mode parser
 	cargo +nightly fuzz run tmux_control -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
-fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control ## Run all five fuzz targets for FUZZ_SECONDS each (default 60)
+fuzz-mux_parse_command: ## Fuzz the par-mux control-line parser (ARC-121)
+	cargo +nightly fuzz run mux_parse_command -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-mux_hook_report: ## Fuzz the par-mux hook-report JSON grammar (ARC-121)
+	cargo +nightly fuzz run mux_hook_report -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control fuzz-mux_parse_command fuzz-mux_hook_report ## Run all seven fuzz targets for FUZZ_SECONDS each (default 60)
