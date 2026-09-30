@@ -891,8 +891,8 @@ impl MuxTree {
     }
 
     /// Remove `window_id` from the tree and its session's window list,
-    /// closing the session when it was the last window — the same
-    /// cascade [`Self::kill_pane`] runs for a window emptied of panes.
+    /// closing the session when it was the last window — the one cascade
+    /// `kill-pane`, `kill-window`, `break-pane` and `join-pane` share.
     /// Returns the removed session, when the cascade reached it. The
     /// caller guarantees the window exists and every pane it held has
     /// already been re-homed or killed.
@@ -1549,26 +1549,7 @@ impl MuxTree {
             }
         });
 
-        let mut removed_session = None;
-        if let Some(window_id) = empty_window {
-            self.windows.remove(&window_id);
-            let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
-                if let Some(pos) = session.windows.iter().position(|w| *w == window_id) {
-                    session.windows.remove(pos);
-                    if session.active >= session.windows.len() && !session.windows.is_empty() {
-                        session.active = session.windows.len() - 1;
-                    }
-                    if session.windows.is_empty() {
-                        return Some(*id);
-                    }
-                }
-                None
-            });
-            if let Some(session_id) = empty_session {
-                self.sessions.remove(&session_id);
-                removed_session = Some(session_id);
-            }
-        }
+        let removed_session = empty_window.and_then(|window_id| self.drop_empty_window(window_id));
 
         // The killed pane left its window's layout; a surviving pane takes
         // the freed extent and its terminal must grow into it. The layout
@@ -1615,29 +1596,17 @@ impl MuxTree {
     /// Ok value names that removed session, when the cascade reached it, so
     /// the caller can broadcast `%sessions-changed`.
     pub fn kill_window(&mut self, window_id: WindowId) -> Result<Option<SessionId>, MuxError> {
-        let window = self
+        let pane_ids = self
             .windows
-            .remove(&window_id)
-            .ok_or(MuxError::NoSuchWindow(window_id))?;
-        for pane_id in window.panes() {
+            .get(&window_id)
+            .ok_or(MuxError::NoSuchWindow(window_id))?
+            .panes();
+        for pane_id in pane_ids {
             if let Some(pane) = self.panes.remove(&pane_id) {
                 kill_detached(pane);
             }
         }
-
-        let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
-            let pos = session.windows.iter().position(|w| *w == window_id)?;
-            session.windows.remove(pos);
-            if session.active >= session.windows.len() && !session.windows.is_empty() {
-                session.active = session.windows.len() - 1;
-            }
-            session.windows.is_empty().then_some(*id)
-        });
-        let removed = empty_session.inspect(|&session_id| {
-            self.sessions.remove(&session_id);
-        });
-
-        Ok(removed)
+        Ok(self.drop_empty_window(window_id))
     }
 
     /// Rename a session. The tree's name is what future pane spawns export

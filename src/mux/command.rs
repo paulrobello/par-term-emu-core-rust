@@ -1189,11 +1189,11 @@ fn parse_kill_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillSession { session })
 }
 
-fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let pane = a.pane("-t")?;
-    // tmux's flags name the arrangement, not the divider: `-h`
-    // puts the new pane beside the target (our Vertical
-    // orientation), `-v`/default below it (Horizontal).
+/// The split arrangement `split-window` and `join-pane` share: `-h` puts
+/// the pane beside the target (our Vertical orientation), `-v`/default
+/// below it (Horizontal) — tmux's flags name the arrangement, not the
+/// divider — and `-p` is the pane's share, 1-99 (default 50).
+fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32), String> {
     let direction = if a.has_flag("-h") {
         SplitDirection::Vertical
     } else {
@@ -1211,6 +1211,12 @@ fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
         }
         None => 50,
     };
+    Ok((direction, percent))
+}
+
+fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    let (direction, percent) = parse_split_geometry(a)?;
     Ok(MuxCommand::SplitWindow {
         pane,
         direction,
@@ -1314,25 +1320,7 @@ fn parse_break_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 fn parse_join_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     let source = a.pane("-s")?;
     let target = a.pane("-t")?;
-    // The same arrangement rule split-window uses: `-h` beside the
-    // target, `-v`/default below it.
-    let direction = if a.has_flag("-h") {
-        SplitDirection::Vertical
-    } else {
-        SplitDirection::Horizontal
-    };
-    let percent = match a.flag("-p") {
-        Some(raw) => {
-            let percent: u32 = raw
-                .parse()
-                .map_err(|_| format!("invalid percentage: {raw}"))?;
-            if !(1..=99).contains(&percent) {
-                return Err(format!("percentage must be 1-99: {raw}"));
-            }
-            percent
-        }
-        None => 50,
-    };
+    let (direction, percent) = parse_split_geometry(a)?;
     Ok(MuxCommand::JoinPane {
         source,
         target,
@@ -2440,6 +2428,16 @@ mod tests {
         assert!(
             parse_command("join-pane -s %1 -t %0 -p 0").is_err(),
             "the share percentage stays in 1-99"
+        );
+        // QA-187: the shared geometry parser keeps split-window's error
+        // text on join-pane too.
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0 -p 100").unwrap_err(),
+            "percentage must be 1-99: 100"
+        );
+        assert_eq!(
+            parse_command("join-pane -s %1 -t %0 -p x").unwrap_err(),
+            "invalid percentage: x"
         );
         assert_eq!(
             parse_command("move-window -s @2 -t 0").unwrap(),
