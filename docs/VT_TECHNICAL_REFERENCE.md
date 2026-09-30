@@ -1134,8 +1134,8 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 |--------|------|-------------|
 | PNG | `f=100` | PNG image data (default) |
 | RGB/RGBA | `f=24/32` | Raw RGB(A) pixel data |
-| File | `t=f` | Load from file path |
-| Temporary File | `t=t` | Load from temporary file |
+| File | `t=f` | Load from file path (requires file-media mode `all`; refused by default) |
+| Temporary File | `t=t` | Load from temporary file (default mode: spec-named temp files only) |
 
 #### Parameters
 

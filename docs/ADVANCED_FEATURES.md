@@ -1245,6 +1245,7 @@ if cell.c == '\u{10EEEE}':
 # Note: File path data is base64 encoded (like all payload data)
 file_path = "/path/to/image.png"
 file_path_b64 = base64.standard_b64encode(file_path.encode()).decode()
+term.set_allow_file_media("all")  # t=f is refused by default ("temp_only")
 term.process_str(f"\x1b_Ga=T,f=100,t=f;{file_path_b64}\x1b\\")
 
 # The parser will:
@@ -1253,6 +1254,8 @@ term.process_str(f"\x1b_Ga=T,f=100,t=f;{file_path_b64}\x1b\\")
 # 3. Decode the image (PNG format)
 # 4. Display the image
 ```
+
+> **Note:** `t=f` loads only after the embedder opts in with `set_allow_file_media("all")`. The default `"temp_only"` mode refuses `t=f` and loads `t=t` only for spec-named temp files under an allowed temp root. See [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission).
 
 ### Delete Images
 
@@ -1275,7 +1278,7 @@ term.process_str("\x1b_Ga=d,i=42\x1b\\")
 | Image ID | `i` | Image identifier for reuse | `i=42` |
 | Placement ID | `p` | Placement identifier | `p=1` |
 | Format | `f` | Image format | `f=100` (PNG), `f=32` (RGBA), `f=24` (RGB) |
-| Transmission | `t` | Transmission medium | `t=d` (direct), `t=f` (file) |
+| Transmission | `t` | Transmission medium | `t=d` (direct), `t=f` (file; requires `set_allow_file_media("all")`) |
 | Frame Number | `r` | Animation frame number | `r=1` |
 | Frame Delay | `z` | Delay in milliseconds | `z=500` |
 | Virtual | `U` | Virtual placement flag | `U=1` |

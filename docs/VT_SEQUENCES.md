@@ -510,8 +510,8 @@ Kitty graphics protocol support for modern terminal graphics with animation, com
 
 **Transmission media:**
 - `t=d` - Direct in-band data
-- `t=f` - Read from file
-- `t=t` - Read from temp file and delete
+- `t=f` - Read from file (requires the file-media mode `all`, Python `set_allow_file_media("all")`; refused by default)
+- `t=t` - Read from temp file and delete (default `temp_only` mode: spec-named files under an allowed temp root only)
 - `t=s` - Shared memory (not supported)
 
 **Additional features:**
