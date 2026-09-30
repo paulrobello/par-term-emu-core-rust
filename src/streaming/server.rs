@@ -497,6 +497,9 @@ pub struct StreamingServer {
     shutdown: Arc<tokio::sync::Notify>,
     /// The default session (for backward-compatible single-session mode)
     default_session: Option<Arc<StreamSessionState>>,
+    /// par-mux roster watcher; when set, every client receives the roster on connect
+    #[cfg(feature = "mux")]
+    roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
 }
 
 impl StreamingServer {
@@ -535,6 +538,8 @@ impl StreamingServer {
 
         Self {
             client_count: AtomicUsize::new(0),
+            #[cfg(feature = "mux")]
+            roster: std::sync::OnceLock::new(),
             addr,
             config,
             sessions,
@@ -555,6 +560,8 @@ impl StreamingServer {
 
         Self {
             client_count: AtomicUsize::new(0),
+            #[cfg(feature = "mux")]
+            roster: std::sync::OnceLock::new(),
             addr,
             config,
             sessions,
@@ -657,6 +664,32 @@ impl StreamingServer {
     pub fn broadcast(&self, msg: ServerMessage) {
         if let Some(ref session) = self.default_session {
             session.broadcast(msg);
+        }
+    }
+
+    /// Broadcast a message to the clients of every session
+    pub fn broadcast_all(&self, msg: ServerMessage) {
+        for session in self.sessions.all() {
+            session.broadcast(msg.clone());
+        }
+    }
+
+    /// Attach the par-mux roster watcher whose snapshot every connecting
+    /// client receives. First call wins.
+    #[cfg(feature = "mux")]
+    pub fn set_roster_watcher(&self, watcher: Arc<crate::streaming::RosterWatcher>) {
+        let _ = self.roster.set(watcher);
+    }
+
+    /// The roster snapshot to send a freshly connected client, if a watcher is attached.
+    fn roster_snapshot(&self) -> Option<ServerMessage> {
+        #[cfg(feature = "mux")]
+        {
+            self.roster.get().map(|w| w.snapshot())
+        }
+        #[cfg(not(feature = "mux"))]
+        {
+            None
         }
     }
 
