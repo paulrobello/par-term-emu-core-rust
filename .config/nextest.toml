@@ -1,0 +1,13 @@
+# QA-185: nextest profile for the Mux CI job. A test running past 30s is
+# flagged slow, and terminate-after kills it at 4x that — the harness bound
+# for a wedged daemon or a hung PTY spawn, where the plain `cargo test` run
+# this replaces hung until the job's own timeout-minutes ceiling.
+[profile.ci]
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# The suite's PTY spawns contend under parallel test threads —
+# moving-target openpty failures observed locally (card
+# 01a0c64fc43e7913b474c038db0635d5) — so the cargo-test run this replaces
+# passed --test-threads=1; the ci profile keeps that serial execution.
+override-threads = true
+threads = 1
