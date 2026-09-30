@@ -418,7 +418,17 @@ The Swift names are the C names unchanged; struct initializers are memberwise. W
 
 ## ABI Version
 
-`TERM_CORE_ABI_VERSION` (in the header) and `terminal_abi_version()` (in the library) are the contract version of this surface — struct layouts, function signatures, and the behavioral contracts above. They are bumped together on any layout or contract change to the C surface. Version 2 added `terminal_damage_generation` and `terminal_dirty_ranges_since` (per-consumer damage). Guard at startup:
+`TERM_CORE_ABI_VERSION` (in the header) and `terminal_abi_version()` (in the library) are the contract version of this surface — struct layouts, function signatures, and the behavioral contracts above. They are bumped together on any layout or contract change to the C surface. Each version keeps the previous surface and adds to it:
+
+| Version | First release | Adds |
+|---------|---------------|------|
+| v1 | none (development builds only; 0.56.0 shipped v2) | The initial embedding surface: `terminal_abi_version`, lifecycle, `terminal_feed`, `terminal_dirty_ranges`/`terminal_mark_clean`, row and scrollback readback, cursor and mode state, `terminal_encode_key`, snapshots, and observers |
+| v2 | 0.56.0 | Per-consumer damage: `terminal_damage_generation`, `terminal_dirty_ranges_since` |
+| v3 | 0.57.0 | Per-side Option-key modes: `TermKeyOptions`, `terminal_encode_key_ex`, `TERM_MOD_ALT_RIGHT`, `TERM_OPTION_MODE_*` |
+
+The `ffi` feature gate (see [Building](#building)) changes how the surface is compiled, not the surface itself: the symbol names, the header, and `TERM_CORE_ABI_VERSION` (3) are unchanged by it.
+
+Guard at startup:
 
 ```c
 #include "terminal_core.h"
