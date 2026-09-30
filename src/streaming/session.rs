@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 type PtyWriterHandle = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 
 /// Message capacity of the per-session PTY input queue (QA-131).
+/// cap: Client input chunks queued per session pending write to the PTY.
 const INPUT_QUEUE_MESSAGES: usize = 256;
 /// Byte budget for the per-session PTY input queue (QA-131): the total
 /// size of chunks waiting to be written to the PTY. A child that never

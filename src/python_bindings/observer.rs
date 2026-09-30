@@ -414,6 +414,7 @@ pub(crate) struct PyCallbackObserver {
 }
 
 impl PyCallbackObserver {
+    /// Wrap `callback`; `subscriptions` limits delivery to those event kinds (`None` = all).
     pub fn new(callback: Py<PyAny>, subscriptions: Option<HashSet<TerminalEventKind>>) -> Self {
         Self {
             callback,
@@ -449,6 +450,7 @@ pub(crate) struct PyQueueObserver {
 }
 
 impl PyQueueObserver {
+    /// Wrap an asyncio queue; `subscriptions` limits delivery to those event kinds (`None` = all).
     pub fn new(queue: Py<PyAny>, subscriptions: Option<HashSet<TerminalEventKind>>) -> Self {
         Self {
             queue,

@@ -160,6 +160,7 @@ const PROBE_POLL: Duration = Duration::from_millis(100);
 const OUTPUT_GRACE: Duration = Duration::from_millis(250);
 
 /// The branch string cap — the hub's `_bounded_string(branch, 128)`.
+/// cap: Bytes of git branch name the host probe serves for one pane cwd.
 const MAX_GIT_BRANCH_LEN: usize = 128;
 
 /// One sweep's measurements for one pane. Every field is optional: a

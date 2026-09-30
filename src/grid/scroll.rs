@@ -269,6 +269,10 @@ impl Grid {
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
     }
 
+    /// Resize the visible grid to `cols` × `rows`. A width change reflows the
+    /// screen and its scrollback; a height-only change resizes in place. Every
+    /// row is marked damaged. A no-op when the size is unchanged or either
+    /// dimension is zero.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         if self.cols == cols && self.rows == rows {
             return;

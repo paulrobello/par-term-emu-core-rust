@@ -42,7 +42,9 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 /// [`WS_MAX_FRAME_SIZE`] bytes (16 MiB each). This is well above any
 /// legitimate terminal streaming frame but far below tungstenite's 64 MiB
 /// default, limiting the blast radius of a malicious or buggy client.
+/// cap: Bytes accepted in one inbound WebSocket message from a streaming client.
 const WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+/// cap: Bytes accepted in one inbound WebSocket frame from a streaming client.
 const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
 /// Maximum accepted `Input` message payload (SEC-005). Larger payloads are

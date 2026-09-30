@@ -73,6 +73,7 @@ const EXIT_EMPTY_GRACE: Duration = Duration::from_millis(300);
 /// past that it is disconnected — and the disconnect frees the queue
 /// (ENH-012) — rather than growing the daemon without bound (tmux's own
 /// policy for a control client that stops draining).
+/// cap: Broadcast lines queued per control-socket client before the daemon evicts it.
 const CLIENT_QUEUE_DEPTH: usize = 4096;
 
 /// Per-line byte budget for the control-socket read loop (SEC-104). A line

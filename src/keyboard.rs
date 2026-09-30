@@ -40,11 +40,17 @@ use crate::terminal::Terminal;
 
 /// Modifier bitfield — `TermKeyEvent::modifiers`.
 pub mod modifiers {
+    /// Shift held.
     pub const SHIFT: u8 = 1;
+    /// Alt (Option) held.
     pub const ALT: u8 = 2;
+    /// Control held.
     pub const CTRL: u8 = 4;
+    /// Super (Command) held.
     pub const SUPER: u8 = 8;
+    /// Hyper held.
     pub const HYPER: u8 = 16;
+    /// Meta held.
     pub const META: u8 = 32;
     /// Side info, not a modifier: the held Alt key is the right one, so
     /// option-key handling uses `right_option`. Absent means the left key —
@@ -134,6 +140,7 @@ pub enum TermKey {
 macro_rules! term_key_from_raw {
     ($($variant:ident),* $(,)?) => {
         impl TermKey {
+            /// Map a raw `TermKeyEvent.key` value to a variant; any value that is not a defined discriminant becomes [`TermKey::Unknown`].
             pub fn from_raw(v: u16) -> TermKey {
                 match v {
                     $(x if x == TermKey::$variant as u16 => TermKey::$variant,)*

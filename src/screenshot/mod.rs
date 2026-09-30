@@ -1,3 +1,9 @@
+//! Terminal-to-image rendering (`screenshot` feature).
+//!
+//! [`render_terminal`] and [`save_terminal`] render a [`Terminal`]'s grid,
+//! cursor and inline graphics to PNG, JPEG, SVG or BMP with embedded fonts.
+//! SVG output carries the text only, without the cursor or graphics.
+
 mod config;
 mod error;
 mod font_cache;
