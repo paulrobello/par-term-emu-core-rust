@@ -81,6 +81,7 @@ impl PyScreenshotConfig {
         faint_text_alpha = 0.5,
         minimum_contrast = 0.5
     ))]
+    // Python keyword arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
     fn new(
         format: &str,

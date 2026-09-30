@@ -775,6 +775,25 @@ pub struct AgentPaneFactory {
     pub bin_path: Option<String>,
 }
 
+impl AgentPaneFactory {
+    /// Spawn through a [`ShellPaneFactory`] carrying this factory's cwd,
+    /// socket and bin path, then tag the pane's agent identity — the body
+    /// both spawn paths share (QA-214).
+    fn spawn_tagged(
+        &self,
+        spawn: impl FnOnce(&ShellPaneFactory) -> Result<MuxPane, MuxError>,
+    ) -> Result<MuxPane, MuxError> {
+        let shell = ShellPaneFactory {
+            cwd: self.cwd.clone(),
+            socket_path: self.socket_path.clone(),
+            bin_path: self.bin_path.clone(),
+        };
+        let mut pane = spawn(&shell)?;
+        pane.set_metadata("agent", &self.agent);
+        Ok(pane)
+    }
+}
+
 impl PaneFactory for AgentPaneFactory {
     fn create_pane(
         &self,
@@ -784,14 +803,7 @@ impl PaneFactory for AgentPaneFactory {
         command: Option<&str>,
         context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
-        let shell = ShellPaneFactory {
-            cwd: self.cwd.clone(),
-            socket_path: self.socket_path.clone(),
-            bin_path: self.bin_path.clone(),
-        };
-        let mut pane = shell.create_pane(id, cols, rows, command, context)?;
-        pane.set_metadata("agent", &self.agent);
-        Ok(pane)
+        self.spawn_tagged(|shell| shell.create_pane(id, cols, rows, command, context))
     }
 
     /// Delegates to [`ShellPaneFactory`]'s argv path so a Windows resume
@@ -805,14 +817,7 @@ impl PaneFactory for AgentPaneFactory {
         argv: &[String],
         context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
-        let shell = ShellPaneFactory {
-            cwd: self.cwd.clone(),
-            socket_path: self.socket_path.clone(),
-            bin_path: self.bin_path.clone(),
-        };
-        let mut pane = shell.create_argv_pane(id, cols, rows, argv, context)?;
-        pane.set_metadata("agent", &self.agent);
-        Ok(pane)
+        self.spawn_tagged(|shell| shell.create_argv_pane(id, cols, rows, argv, context))
     }
 }
 

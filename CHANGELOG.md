@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 - **`streaming::Broadcaster`** (ARC-112). `StreamingServer` never used it (clients are managed per session), and it has no users outside its own tests. It will be removed in a future release.
 - **`TmuxNotification.name` carrying the `pane-exited` exit code** (QA-190). Read `exit_code` instead; `name` stops carrying the code for `pane-exited` in 0.59.0.
+- **`ServerMessage::connected_full`** (QA-212). Use `ServerMessage::connected_builder()`, the single edit site for `Connected` fields, like the other deprecated `connected_*` constructors.
 
 ### Fixed
 - **A PTY spawn no longer panics on a non-UTF-8 parent environment** (QA-196; `src/pty_session.rs`). The inherited-env drop read `std::env::vars()`, which panics on a variable whose name or value is not valid Unicode; it now reads `vars_os()` once.

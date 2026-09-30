@@ -88,6 +88,58 @@ fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::ce
     result.push('m');
 }
 
+/// The SGR attributes a styled export last emitted; starts (and resets) at
+/// the default white-on-black, no flags.
+struct SgrState {
+    fg: Color,
+    bg: Color,
+    flags: crate::cell::CellFlags,
+}
+
+impl SgrState {
+    fn reset() -> Self {
+        Self {
+            fg: Color::Named(NamedColor::White),
+            bg: Color::Named(NamedColor::Black),
+            flags: crate::cell::CellFlags::default(),
+        }
+    }
+}
+
+/// Append `row_cells` up to column `last_sig` (exclusive), skipping wide-char
+/// spacers and emitting an SGR run whenever a cell's style differs from
+/// `state` — the cell loop every styled export shares (QA-214). Row framing
+/// (cursor addressing, resets, newlines) stays with the caller. Returns
+/// whether any SGR run was emitted.
+fn push_styled_cells(
+    result: &mut String,
+    row_cells: &[Cell],
+    last_sig: usize,
+    state: &mut SgrState,
+) -> bool {
+    let mut emitted_sgr = false;
+    for (col, cell) in row_cells.iter().enumerate() {
+        if cell.flags.wide_char_spacer() {
+            continue;
+        }
+        if col >= last_sig {
+            break;
+        }
+        if cell.fg != state.fg || cell.bg != state.bg || cell.flags != state.flags {
+            push_sgr_style(result, &cell.fg, &cell.bg, &cell.flags);
+            state.fg = cell.fg;
+            state.bg = cell.bg;
+            state.flags = cell.flags;
+            emitted_sgr = true;
+        }
+        result.push(cell.c);
+        for &combining in &cell.combining {
+            result.push(combining);
+        }
+    }
+    emitted_sgr
+}
+
 impl Grid {
     /// Export the entire buffer (scrollback + visible) as plain text
     pub fn export_text_buffer(&self) -> String {
@@ -177,37 +229,15 @@ impl Grid {
     /// Export the entire buffer with ANSI styling
     pub fn export_styled_buffer(&self) -> String {
         let mut result = String::new();
-        let mut current_fg = Color::Named(NamedColor::White);
-        let mut current_bg = Color::Named(NamedColor::Black);
-        let mut current_flags = crate::cell::CellFlags::default();
+        let mut state = SgrState::reset();
 
         for i in 0..self.scrollback_lines {
             if let Some(line) = self.scrollback_line(i) {
                 let last_sig = self.find_last_significant(line);
-                for (col, cell) in line.iter().enumerate() {
-                    if cell.flags.wide_char_spacer() {
-                        continue;
-                    }
-                    if col >= last_sig {
-                        break;
-                    }
-                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
-                    {
-                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                        current_fg = cell.fg;
-                        current_bg = cell.bg;
-                        current_flags = cell.flags;
-                    }
-                    result.push(cell.c);
-                    for &combining in &cell.combining {
-                        result.push(combining);
-                    }
-                }
+                push_styled_cells(&mut result, line, last_sig, &mut state);
                 if !self.is_scrollback_wrapped(i) {
                     result.push_str("\x1b[0m\n");
-                    current_fg = Color::Named(NamedColor::White);
-                    current_bg = Color::Named(NamedColor::Black);
-                    current_flags = crate::cell::CellFlags::default();
+                    state = SgrState::reset();
                 }
             }
         }
@@ -215,31 +245,11 @@ impl Grid {
         for row in 0..self.rows {
             if let Some(line) = self.row(row) {
                 let last_sig = self.find_last_significant(line);
-                for (col, cell) in line.iter().enumerate() {
-                    if cell.flags.wide_char_spacer() {
-                        continue;
-                    }
-                    if col >= last_sig {
-                        break;
-                    }
-                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
-                    {
-                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                        current_fg = cell.fg;
-                        current_bg = cell.bg;
-                        current_flags = cell.flags;
-                    }
-                    result.push(cell.c);
-                    for &combining in &cell.combining {
-                        result.push(combining);
-                    }
-                }
+                push_styled_cells(&mut result, line, last_sig, &mut state);
                 if row < self.rows - 1 {
                     if !self.is_line_wrapped(row) {
                         result.push_str("\x1b[0m\n");
-                        current_fg = Color::Named(NamedColor::White);
-                        current_bg = Color::Named(NamedColor::Black);
-                        current_flags = crate::cell::CellFlags::default();
+                        state = SgrState::reset();
                     }
                 } else if last_sig > 0 {
                     result.push_str("\x1b[0m\n");
@@ -258,27 +268,7 @@ impl Grid {
         if last_sig == 0 {
             return result;
         }
-        let mut current_fg = Color::Named(NamedColor::White);
-        let mut current_bg = Color::Named(NamedColor::Black);
-        let mut current_flags = crate::cell::CellFlags::default();
-        for (col, cell) in row_cells.iter().enumerate() {
-            if cell.flags.wide_char_spacer() {
-                continue;
-            }
-            if col >= last_sig {
-                break;
-            }
-            if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags {
-                push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                current_fg = cell.fg;
-                current_bg = cell.bg;
-                current_flags = cell.flags;
-            }
-            result.push(cell.c);
-            for &combining in &cell.combining {
-                result.push(combining);
-            }
-        }
+        push_styled_cells(&mut result, row_cells, last_sig, &mut SgrState::reset());
         result.push_str("\x1b[0m");
         result
     }
@@ -287,9 +277,7 @@ impl Grid {
     pub fn export_visible_screen_styled(&self) -> String {
         let mut result = String::new();
         result.push_str("\x1b[H");
-        let mut current_fg = Color::Named(NamedColor::White);
-        let mut current_bg = Color::Named(NamedColor::Black);
-        let mut current_flags = crate::cell::CellFlags::default();
+        let mut state = SgrState::reset();
 
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
@@ -298,29 +286,9 @@ impl Grid {
                     continue;
                 }
                 result.push_str(&format!("\x1b[{};1H", row + 1));
-                for (col, cell) in row_cells.iter().enumerate() {
-                    if cell.flags.wide_char_spacer() {
-                        continue;
-                    }
-                    if col >= last_sig {
-                        break;
-                    }
-                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
-                    {
-                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                        current_fg = cell.fg;
-                        current_bg = cell.bg;
-                        current_flags = cell.flags;
-                    }
-                    result.push(cell.c);
-                    for &combining in &cell.combining {
-                        result.push(combining);
-                    }
-                }
+                push_styled_cells(&mut result, row_cells, last_sig, &mut state);
                 result.push_str("\x1b[0m");
-                current_fg = Color::Named(NamedColor::White);
-                current_bg = Color::Named(NamedColor::Black);
-                current_flags = crate::cell::CellFlags::default();
+                state = SgrState::reset();
             }
         }
         result
@@ -338,32 +306,11 @@ impl Grid {
     pub fn export_visible_screen_styled_lines(&self) -> String {
         let mut result = String::new();
         for row in 0..self.rows {
-            let mut current_fg = Color::Named(NamedColor::White);
-            let mut current_bg = Color::Named(NamedColor::Black);
-            let mut current_flags = crate::cell::CellFlags::default();
             let mut emitted_sgr = false;
             if let Some(row_cells) = self.row(row) {
                 let last_sig = self.find_last_significant(row_cells);
-                for (col, cell) in row_cells.iter().enumerate() {
-                    if cell.flags.wide_char_spacer() {
-                        continue;
-                    }
-                    if col >= last_sig {
-                        break;
-                    }
-                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
-                    {
-                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                        current_fg = cell.fg;
-                        current_bg = cell.bg;
-                        current_flags = cell.flags;
-                        emitted_sgr = true;
-                    }
-                    result.push(cell.c);
-                    for &combining in &cell.combining {
-                        result.push(combining);
-                    }
-                }
+                emitted_sgr =
+                    push_styled_cells(&mut result, row_cells, last_sig, &mut SgrState::reset());
             }
             if emitted_sgr {
                 result.push_str("\x1b[0m");
@@ -383,37 +330,15 @@ impl Grid {
             .unwrap_or(self.scrollback_lines)
             .min(self.scrollback_lines);
         let mut result = String::new();
-        let mut current_fg = Color::Named(NamedColor::White);
-        let mut current_bg = Color::Named(NamedColor::Black);
-        let mut current_flags = crate::cell::CellFlags::default();
+        let mut state = SgrState::reset();
 
         for i in (0..lines_to_export).rev() {
             if let Some(line) = self.scrollback_line(i) {
                 let last_sig = self.find_last_significant(line);
-                for (col, cell) in line.iter().enumerate() {
-                    if cell.flags.wide_char_spacer() {
-                        continue;
-                    }
-                    if col >= last_sig {
-                        break;
-                    }
-                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
-                    {
-                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
-                        current_fg = cell.fg;
-                        current_bg = cell.bg;
-                        current_flags = cell.flags;
-                    }
-                    result.push(cell.c);
-                    for &combining in &cell.combining {
-                        result.push(combining);
-                    }
-                }
+                push_styled_cells(&mut result, line, last_sig, &mut state);
                 if !self.is_scrollback_wrapped(i) {
                     result.push_str("\x1b[0m\n");
-                    current_fg = Color::Named(NamedColor::White);
-                    current_bg = Color::Named(NamedColor::Black);
-                    current_flags = crate::cell::CellFlags::default();
+                    state = SgrState::reset();
                 }
             }
         }

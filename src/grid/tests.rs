@@ -872,6 +872,52 @@ fn test_export_styled_buffer() {
     assert!(styled.contains("\x1b["));
 }
 
+/// Pins the exact bytes of every styled exporter (QA-214 hoisted their shared
+/// cell loop): SGR diffing within a row, the reset at unwrapped row ends,
+/// SGR state carried across a wrapped scrollback row, trailing-blank
+/// trimming, skipped empty rows, and the per-row framing each path adds.
+#[test]
+fn test_styled_exports_golden_bytes() {
+    let mut grid = Grid::new(4, 3, 10);
+    let mut red_bold = Cell::new('A');
+    red_bold.fg = Color::Named(NamedColor::Red);
+    red_bold.flags.set_bold(true);
+    grid.set(0, 0, red_bold);
+    grid.set(1, 0, Cell::new('b'));
+    grid.set_line_wrapped(0, true);
+    let mut red_bold_c = Cell::new('C');
+    red_bold_c.fg = Color::Named(NamedColor::Red);
+    red_bold_c.flags.set_bold(true);
+    grid.set(0, 1, red_bold_c);
+    grid.scroll_up(2);
+    let mut green_bg = Cell::new('x');
+    green_bg.bg = Color::Named(NamedColor::Green);
+    grid.set(1, 0, green_bg);
+    grid.set(0, 2, Cell::new('z'));
+
+    assert_eq!(
+        grid.export_styled_buffer(),
+        "\x1b[0;31;40;1mA\x1b[0;37;40mb\x1b[0;31;40;1mC\x1b[0m\n \x1b[0;37;42mx\x1b[0m\n\x1b[0m\nz\x1b[0m\n"
+    );
+    assert_eq!(
+        grid.export_scrollback_styled(None),
+        "\x1b[0;31;40;1mC\x1b[0m\n\x1b[0;31;40;1mA\x1b[0;37;40mb"
+    );
+    assert_eq!(
+        grid.export_visible_screen_styled(),
+        "\x1b[H\x1b[1;1H \x1b[0;37;42mx\x1b[0m\x1b[3;1Hz\x1b[0m"
+    );
+    assert_eq!(
+        grid.export_visible_screen_styled_lines(),
+        " \x1b[0;37;42mx\x1b[0m\n\nz\n"
+    );
+    assert_eq!(
+        grid.export_row_styled(grid.row(0).unwrap()),
+        " \x1b[0;37;42mx\x1b[0m"
+    );
+    assert_eq!(grid.export_row_styled(grid.row(1).unwrap()), "");
+}
+
 #[test]
 fn test_clear_row() {
     let mut grid = Grid::new(80, 24, 1000);

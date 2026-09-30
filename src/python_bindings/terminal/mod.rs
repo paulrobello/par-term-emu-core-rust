@@ -109,9 +109,7 @@ impl PyTerminal {
     #[new]
     #[pyo3(signature = (cols, rows, scrollback=10000))]
     fn new(cols: usize, rows: usize, scrollback: usize) -> PyResult<Self> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         Ok(Self {
             inner: crate::terminal::Terminal::with_scrollback(cols, rows, scrollback),
         })
@@ -149,9 +147,7 @@ impl PyTerminal {
     ///     cols: New number of columns
     ///     rows: New number of rows
     fn resize(&mut self, cols: usize, rows: usize) -> PyResult<()> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         self.inner.resize(cols, rows);
         Ok(())
     }
@@ -171,9 +167,7 @@ impl PyTerminal {
         pixel_width: usize,
         pixel_height: usize,
     ) -> PyResult<()> {
-        if cols == 0 || rows == 0 {
-            return Err(PyValueError::new_err("Dimensions must be greater than 0"));
-        }
+        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         self.inner.resize(cols, rows);
         self.inner.set_pixel_size(pixel_width, pixel_height);
         Ok(())

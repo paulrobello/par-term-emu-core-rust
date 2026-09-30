@@ -42,6 +42,7 @@ impl PyTerminal {
     ///     term = Terminal(80, 24)
     ///     term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
     ///     ```
+    // Python positional arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
     fn record_mouse_event(
         &mut self,

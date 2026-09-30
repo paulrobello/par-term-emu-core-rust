@@ -34,6 +34,7 @@ impl Clone for PyStreamingConfig {
 impl PyStreamingConfig {
     #[new]
     #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only"))]
+    // Python keyword arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -999,6 +1000,7 @@ impl PyStreamingServer {
     ///     captures: List of capture group strings
     ///     timestamp: Unix timestamp of the match
     #[pyo3(signature = (trigger_id, row, col, end_col, text, captures=vec![], timestamp=0))]
+    // Python keyword arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
     fn send_trigger_matched(
         &self,
@@ -1161,16 +1163,36 @@ pub fn encode_server_message<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     use crate::streaming::protocol::ServerMessage;
 
-    let msg = ServerMessage::from_py_kwargs(message_type, kwargs)?.ok_or_else(|| {
+    encode_tagged_message(
+        py,
+        message_type,
+        ServerMessage::from_py_kwargs(message_type, kwargs)?,
+        ServerMessage::py_type_tags(),
+        crate::streaming::encode_server_message,
+    )
+}
+
+/// The shared tail of `encode_server_message`/`encode_client_message`:
+/// reject an unknown `message_type` (listing `type_tags`), then protobuf-
+/// encode the decoded message with `encode`.
+#[cfg(feature = "streaming")]
+fn encode_tagged_message<'py, M>(
+    py: Python<'py>,
+    message_type: &str,
+    msg: Option<M>,
+    type_tags: &[&str],
+    encode: impl FnOnce(&M) -> crate::streaming::Result<Vec<u8>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let msg = msg.ok_or_else(|| {
         PyRuntimeError::new_err(format!(
             "Unknown message type: {}. Valid types: {}",
             message_type,
-            ServerMessage::py_type_tags().join(", ")
+            type_tags.join(", ")
         ))
     })?;
 
-    let encoded = crate::streaming::encode_server_message(&msg)
-        .map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
+    let encoded =
+        encode(&msg).map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
 
     Ok(PyBytes::new(py, &encoded))
 }
@@ -1234,18 +1256,13 @@ pub fn encode_client_message<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     use crate::streaming::protocol::ClientMessage;
 
-    let msg = ClientMessage::from_py_kwargs(message_type, kwargs)?.ok_or_else(|| {
-        PyRuntimeError::new_err(format!(
-            "Unknown message type: {}. Valid types: {}",
-            message_type,
-            ClientMessage::py_type_tags().join(", ")
-        ))
-    })?;
-
-    let encoded = crate::streaming::encode_client_message(&msg)
-        .map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
-
-    Ok(PyBytes::new(py, &encoded))
+    encode_tagged_message(
+        py,
+        message_type,
+        ClientMessage::from_py_kwargs(message_type, kwargs)?,
+        ClientMessage::py_type_tags(),
+        crate::streaming::encode_client_message,
+    )
 }
 
 /// Decode a binary protobuf client message

@@ -122,6 +122,7 @@ pub fn mouse_event_type_from_py(value: Option<&Bound<'_, pyo3::types::PyAny>>) -
 ///
 /// Nested cpu/memory/disks/networks/load_average dicts; the corresponding
 /// keys are omitted (not `None`) when absent or empty, as before.
+// The `#[pydict(to)]` derive hook passes one argument per variant field.
 #[allow(clippy::too_many_arguments)]
 pub fn system_stats_to_py_dict<'py>(
     py: Python<'py>,
