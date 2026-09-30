@@ -975,6 +975,12 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::ScreenCleared(sc)) => Ok(AppServerMessage::ScreenCleared {
                 include_scrollback: sc.include_scrollback,
             }),
+            Some(Message::AgentRoster(_)) => Err(StreamingError::InvalidMessage(
+                "AgentRoster is not mapped to AppServerMessage".into(),
+            )),
+            Some(Message::AgentStateChanged(_)) => Err(StreamingError::InvalidMessage(
+                "AgentStateChanged is not mapped to AppServerMessage".into(),
+            )),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),

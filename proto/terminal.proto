@@ -95,6 +95,8 @@ message ServerMessage {
     FileTransferFailed file_transfer_failed = 35;
     UploadRequested upload_requested = 36;
     ScreenCleared screen_cleared = 37;
+    AgentRoster agent_roster = 38;
+    AgentStateChanged agent_state_changed = 39;
   }
 }
 
@@ -497,4 +499,24 @@ message UploadRequested {
 // Screen cleared (ED 2J or ED 3J)
 message ScreenCleared {
   bool include_scrollback = 1;    // True if scrollback was also cleared (ED 3J)
+}
+
+// One agent's roster entry, verbatim from par-mux (list-agents).
+message AgentEntry {
+  uint32 pane_id = 1;  // par-mux %N
+  string agent = 2;    // agent name; agentless panes are not roster entries
+  string state = 3;    // par-mux state string (working/blocked/...) — a string on purpose
+  string source = 4;   // "hook" | "scrape" — provenance, shown as reported
+  string reason = 5;   // decoded blocked reason ("" when none)
+}
+
+// Full roster snapshot (pane-id ascending), pushed once per client connect.
+message AgentRoster {
+  repeated AgentEntry agents = 1;
+}
+
+// One roster delta: upsert `agent`, or remove when `released` is true.
+message AgentStateChanged {
+  AgentEntry agent = 1;
+  bool released = 2;  // true → remove; only pane_id is set
 }
