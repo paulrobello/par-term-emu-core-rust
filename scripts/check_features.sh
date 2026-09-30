@@ -53,6 +53,8 @@ assert_absent() {
 assert_absent rust-only pyo3
 assert_absent rust-only tokio
 assert_absent rust-only clap
+# Macro YAML is the `macro-yaml` feature's alone (ARC-116).
+assert_absent rust-only serde_yaml_ng
 # Guarded on ARC-043 (screenshot dep-gating swash) so the script is useful
 # before and after that fix lands.
 if grep -q 'screenshot = \["dep:swash"\]' Cargo.toml; then
@@ -67,6 +69,7 @@ assert_absent sim portable-pty
 assert_absent sim pyo3
 assert_absent sim tokio
 assert_absent sim swash
+assert_absent sim serde_yaml_ng
 
 # mux: a daemon, not a WebSocket client — no streaming client stack.
 assert_absent rust-only,mux tokio-tungstenite

@@ -80,13 +80,15 @@ serde_json = "1.0.150"
 # par-mux agent scrape patterns (bundled + local override) — comments in the
 # override files are the point, so the format is TOML not JSON.
 toml = { version = "0.9", optional = true }
-serde_yaml_ng = "0.10.0"
+# Macro YAML save/load only (ARC-116): gated behind `macro-yaml` so slim
+# profiles (rust-only/sim/mux) do not compile it.
+serde_yaml_ng = { version = "0.10.0", optional = true }
 percent-encoding = "2.3.2"
 url = "2.5.8"
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
 
 # Streaming server dependencies
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "signal", "test-util"], optional = true }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "signal"], optional = true }
 tokio-tungstenite = { version = "0.29", optional = true }
 axum = { version = "0.8.9", features = ["ws"], optional = true }
 tower-http = { version = "0.6.11", features = ["fs", "trace", "cors"], optional = true }
@@ -224,12 +226,12 @@ required-features = ["pty_session"]
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session", "screenshot"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session", "screenshot", "macro-yaml"]
 # The `python` feature's deps WITHOUT pyo3/extension-module, so the bindings
 # (and their #[cfg(test)] unit tests) link a real interpreter in `cargo test`.
 # maturin needs no knowledge of this: pyproject's [tool.maturin] features add
 # pyo3/extension-module to wheel builds independently.
-python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_session", "screenshot"]
+python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_session", "screenshot", "macro-yaml"]
 
 # Terminal-to-image screenshot renderer (embedded fonts + swash/image deps).
 # Enabled by `python`/`full`. The `sim` profile has excluded it since 0.54.0
@@ -247,7 +249,7 @@ streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
 
 # Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
 # deps the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session", "macro-yaml"]
 
 # Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
 # control-mode socket. Needs real PTYs and a local socket, so it is
@@ -263,6 +265,12 @@ mux = ["pty_session", "interprocess", "widestring", "windows-sys", "serde", "dir
 # (par-term) never compile clap. `"clap"`, not `"dep:clap"`: a `dep:` reference
 # removes clap's implicit feature, which `streaming-bin` relies on.
 mux-bin = ["mux", "clap"]
+
+# `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` (ARC-116). Enabled by
+# `python`/`python-test` (the Python `Macro` YAML methods) and `streaming-bin`
+# (`--macro-file` playback); `dep:` is safe because nothing names
+# serde_yaml_ng's implicit feature.
+macro-yaml = ["dep:serde_yaml_ng"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
