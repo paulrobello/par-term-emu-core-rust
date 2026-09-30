@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **FFI `terminal_scrollback_total_scrolled`**: total lines ever pushed into scrollback, so an embedder mirroring the scrollback window (ParDeck's history view) derives head evictions and tail appends from the `total`/`count` pair instead of re-reading the whole buffer — the count alone freezes at the ring cap. Pinned by `ffi_scrollback_total_scrolled_tracks_the_window` (invariant `count == min(total, cap)`, cap freeze, alt-screen active-grid reads, ED 3J reset). Note for ENH-038: this counter is a window cursor, not a scroll-damage source — the four failure modes listed there are exactly why.
 
+### Security
+- **Kitty `t=t` reads and deletes only the file that passed the temp gate** (`src/graphics/kitty.rs`, audit SEC-130, CWE-367). The gate checked the canonicalized path, but the file was opened and later deleted through the original path, and `O_NOFOLLOW` guards only the final component, so a parent directory swapped for a symlink in between redirected both. The read now opens the canonical path, re-runs the temp-root and filename gate on the path the kernel reports for the open handle (`/proc/self/fd` on Linux, `F_GETPATH` on macOS), and pins the pending delete to the handle's `(dev, ino)`: a file swapped in at that path after the read is left in place. Behavior change: on Linux without `/proc` mounted, `t=t` now fails closed.
+
 ## [0.57.0] - 2026-09-29
 
 ### Added
