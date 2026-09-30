@@ -20,6 +20,9 @@ pub fn get_tty_size() -> Option<(u16, u16)> {
         return None;
     }
 
+    // SAFETY: `winsize` is plain integers, so all-zero is a valid value;
+    // TIOCGWINSZ writes exactly one `winsize` through the pointer, and `fd`
+    // is stdout's descriptor, open for the whole call.
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
         let fd = stdout.as_raw_fd();

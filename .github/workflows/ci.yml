@@ -95,10 +95,10 @@ jobs:
         uv run pyright python/par_term_emu_core_rust/_native.pyi
 
     - name: Run Rust tests
-      run: cargo test --lib --no-default-features --features pyo3/auto-initialize
+      run: cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi
 
     - name: Run Rust streaming tests
-      run: cargo test --no-default-features --features pyo3/auto-initialize,streaming
+      run: cargo test --no-default-features --features pyo3/auto-initialize,streaming,ffi
 
     - name: Run python_bindings unit tests (python-test)
       run: cargo test --lib --no-default-features --features python-test
@@ -199,7 +199,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
+      run: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

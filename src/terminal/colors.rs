@@ -219,6 +219,22 @@ impl Terminal {
         &self.theme.ansi_palette
     }
 
+    /// Resolve a cell color to RGB through the live ANSI palette.
+    ///
+    /// The 16 base slots (`Named`, and `Indexed` 0-15) follow the palette as
+    /// set by OSC 4 / `set_ansi_palette_color`; the 256-color cube,
+    /// grayscale ramp, and `Rgb` resolve through the fixed tables of
+    /// [`Color::to_rgb`]. This is the single resolver shared by every
+    /// palette-aware readback (ARC-101).
+    pub fn resolve_color(&self, color: &Color) -> (u8, u8, u8) {
+        let palette = &self.theme.ansi_palette;
+        match *color {
+            Color::Named(named) => palette[named as usize].to_rgb(),
+            Color::Indexed(idx) if (idx as usize) < palette.len() => palette[idx as usize].to_rgb(),
+            _ => color.to_rgb(),
+        }
+    }
+
     /// Get current cursor color
     pub fn get_cursor_color(&self) -> Color {
         self.theme.cursor_color
@@ -753,5 +769,33 @@ mod tests {
         for (i, expected_color) in test_colors.iter().enumerate() {
             assert_eq!(term.theme.ansi_palette[i], *expected_color);
         }
+    }
+
+    /// ARC-101: the core resolver follows OSC 4 for the 16 base slots (named
+    /// and indexed) and leaves the 256-color cube, grayscale, and RGB on the
+    /// fixed tables.
+    #[test]
+    fn resolve_color_follows_osc4() {
+        use crate::color::NamedColor;
+
+        let mut term = create_test_terminal();
+        term.process(b"\x1b]4;1;rgb:00/00/ff\x07");
+
+        assert_eq!(
+            term.resolve_color(&Color::Named(NamedColor::Red)),
+            (0, 0, 255)
+        );
+        assert_eq!(term.resolve_color(&Color::Indexed(1)), (0, 0, 255));
+        // Untouched base slot: the live palette, not Color::to_rgb's table.
+        assert_eq!(
+            term.resolve_color(&Color::Named(NamedColor::Green)),
+            Terminal::default_ansi_palette()[2].to_rgb()
+        );
+        // Outside the 16 base slots the fixed tables apply.
+        assert_eq!(
+            term.resolve_color(&Color::Indexed(196)),
+            Color::Indexed(196).to_rgb()
+        );
+        assert_eq!(term.resolve_color(&Color::Rgb(1, 2, 3)), (1, 2, 3));
     }
 }

@@ -224,7 +224,7 @@ test: test-rust test-rust-streaming test-python
 
 test-rust:
 	@echo "Running Rust tests (lib unit tests + integration tests in tests/)..."
-	cargo test --no-default-features --features pyo3/auto-initialize
+	cargo test --no-default-features --features pyo3/auto-initialize,ffi
 	@echo "Running python_bindings unit tests (python-test: python minus extension-module, so tests link a real interpreter)..."
 	cargo test --lib --no-default-features --features python-test
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
@@ -281,7 +281,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:
@@ -296,7 +296,7 @@ lint-python:
 lint-check:
 	@echo "Running non-mutating lint checks (Rust fmt + clippy, Python ruff + pyright)..."
 	cargo fmt -- --check
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright .
@@ -307,12 +307,12 @@ check:
 
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
-	cargo check --all-targets --features python,streaming,mux,mux-bin
+	cargo check --all-targets --features python,streaming,mux,mux-bin,ffi
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Needs a streaming build so streaming-only classes are captured; since
@@ -415,7 +415,7 @@ check-features:
 
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
-	cargo bench --no-default-features --features rust-only
+	cargo bench --no-default-features --features rust-only,ffi
 
 # ============================================================================
 # Pre-commit Hooks

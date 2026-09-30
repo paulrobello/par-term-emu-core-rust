@@ -3562,12 +3562,14 @@ impl Terminal {
     /// rows (inclusive, ascending) — the allocation-free coalescing behind
     /// the FFI dirty-range surface (ENH-026). Serves the built-in default
     /// consumer, like `dirty_row_indices`.
+    #[cfg(feature = "ffi")]
     pub(crate) fn for_each_dirty_range(&self, f: impl FnMut(u32, u32)) {
         self.for_each_dirty_range_since(self.default_consumer_gen, f);
     }
 
     /// Generation-aware [`Terminal::for_each_dirty_range`]: a run per
     /// maximal streak of rows damaged since `gen`.
+    #[cfg(feature = "ffi")]
     pub(crate) fn for_each_dirty_range_since(&self, gen: u64, f: impl FnMut(u32, u32)) {
         self.active_grid().for_each_damage_range_since(gen, f);
     }

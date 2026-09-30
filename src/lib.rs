@@ -34,6 +34,10 @@
 //! - Full Unicode support including emoji and wide characters
 //! - Bell event tracking for visual bell implementations
 
+// QA-201: every production `unsafe` block states its invariant. Test modules
+// are exempt — their FFI calls restate the fn contract and add only noise.
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 pub mod ansi_utils;
 pub mod badge;
 pub mod cell;
@@ -56,6 +60,10 @@ compile_error!(
 );
 #[macro_use]
 pub mod debug;
+// The C ABI (`terminal_*` exports) is opt-in so Python wheels and Rust
+// embedders do not export unprefixed global symbols (ARC-112); the
+// xcframework build and C/Swift embedders enable `ffi`.
+#[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod grapheme;
 pub mod graphics;
@@ -64,7 +72,10 @@ pub mod html_export;
 pub mod keyboard;
 pub mod macros;
 pub mod mouse;
+// Remove this allow once src/mux/{pane,host_probe,client}.rs carry SAFETY
+// comments on their remaining unsafe blocks (QA-201 remainder).
 #[cfg(feature = "mux")]
+#[cfg_attr(not(test), allow(clippy::undocumented_unsafe_blocks))]
 pub mod mux;
 pub mod observer;
 pub mod pty_error;

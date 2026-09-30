@@ -41,6 +41,9 @@ uv run pytest tests/test_terminal.py::test_function_name -v
 
 # Rust streaming tests
 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming test_name
+
+# C FFI tests (src/ffi.rs compiles only with the `ffi` feature — without it the filter matches 0 tests)
+cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi ffi
 ```
 
 The `--no-default-features --features pyo3/auto-initialize` flags are required because:
@@ -145,6 +148,7 @@ The crate produces three artifacts:
 | `mux-bin` | The `par-mux` daemon binary: `mux` + `clap` (mirrors `streaming`/`streaming-bin`). Required by `cargo build --bin par-mux` and by the integration tests that exec the daemon |
 | `macro-yaml` | `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` via `serde_yaml_ng`. Enabled by `python`, `python-test`, and `streaming-bin` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
+| `ffi` | The C ABI (`src/ffi.rs`, `terminal_*` exports). Off by default so Python wheels export no C symbols; `make xcframework` builds `rust-only,ffi` (ARC-112) |
 | `rust-only` | No Python bindings (empty convenience feature) |
 | `sim` | Headless profile: grid + terminal only (no PTY/python/streaming/screenshot — screenshot is opt-in since 0.54.0). For pure-Rust embedders, e.g. a server-side screen model |
 | `full` | `python` + `streaming` + `streaming-bin` |

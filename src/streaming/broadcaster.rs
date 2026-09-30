@@ -12,6 +12,10 @@ use uuid::Uuid;
 /// Manages broadcasting messages to multiple connected clients.
 ///
 /// Generic over the client transport stream `S` to match `Client<S>`.
+#[deprecated(
+    since = "0.58.0",
+    note = "unused by StreamingServer; clients are managed per session. Will be removed in a future release."
+)]
 pub struct Broadcaster<S> {
     /// Map of client ID to client connection
     clients: Arc<RwLock<HashMap<Uuid, Client<S>>>>,

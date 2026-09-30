@@ -292,6 +292,10 @@ fn kinfo_layout() -> Option<usize> {
         // fill's is the real one-entry size (648) — allocate the bound,
         // trust the fill.
         let mut len: libc::size_t = 0;
+        // SAFETY: `mib` holds the 4 names passed; the sizing call passes a
+        // NULL buffer, and the fill passes `buf` with `len` = its length, so
+        // the kernel writes at most `buf.len()` bytes. `getppid` has no
+        // preconditions.
         let fill_len = unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
@@ -332,6 +336,9 @@ fn snapshot_metas() -> Option<Vec<ProcMeta>> {
     let stride = kinfo_layout()?;
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_ALL];
     let mut len: libc::size_t = 0;
+    // SAFETY: `mib` holds the 3 names passed; the sizing call passes a NULL
+    // buffer, and the fill passes `buf` with `len` = its length, so the
+    // kernel writes at most `buf.len()` bytes.
     unsafe {
         if libc::sysctl(
             mib.as_mut_ptr(),
@@ -393,6 +400,8 @@ fn read_argv(pid: i32) -> Option<Vec<String>> {
     // first argc strings after the count yields argv.
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut len: libc::size_t = 0;
+    // SAFETY: sizing call — `mib` holds the 3 names passed and the buffer is
+    // NULL, so the kernel only writes `len`.
     if unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -407,6 +416,8 @@ fn read_argv(pid: i32) -> Option<Vec<String>> {
         return None;
     }
     let mut buf: Vec<u8> = vec![0; len];
+    // SAFETY: `buf` is `len` bytes and `len` is passed as its capacity, so
+    // the kernel writes at most `buf.len()` bytes.
     if unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),

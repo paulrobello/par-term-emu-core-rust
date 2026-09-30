@@ -67,6 +67,9 @@
 //! - [`bootstrap`] — run-mode resolution, session factory, event loop, auth
 //! - [`theme`] — terminal color themes
 
+// QA-201: every production `unsafe` block states its invariant.
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 // Use jemalloc for better server performance (5-15% throughput improvement)
 // Only available on non-Windows platforms
 #[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
