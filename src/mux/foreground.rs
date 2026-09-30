@@ -322,9 +322,8 @@ fn kinfo_layout() -> Option<usize> {
             {
                 return None;
             }
-            let pid = i32::from_ne_bytes(buf[KP_PID_OFFSET..KP_PID_OFFSET + 4].try_into().unwrap());
-            let ppid =
-                i32::from_ne_bytes(buf[KP_PPID_OFFSET..KP_PPID_OFFSET + 4].try_into().unwrap());
+            let pid = i32::from_ne_bytes(*buf[KP_PID_OFFSET..].first_chunk::<4>()?);
+            let ppid = i32::from_ne_bytes(*buf[KP_PPID_OFFSET..].first_chunk::<4>()?);
             (pid == me && ppid == libc::getppid()).then_some(len)?
         };
         Some(fill_len)
@@ -368,16 +367,8 @@ fn snapshot_metas() -> Option<Vec<ProcMeta>> {
         let mut metas = Vec::with_capacity(buf.len() / stride);
         let mut offset = 0;
         while offset + stride <= buf.len() {
-            let pid = i32::from_ne_bytes(
-                buf[offset + KP_PID_OFFSET..offset + KP_PID_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let ppid = i32::from_ne_bytes(
-                buf[offset + KP_PPID_OFFSET..offset + KP_PPID_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
+            let pid = i32::from_ne_bytes(*buf[offset + KP_PID_OFFSET..].first_chunk::<4>()?);
+            let ppid = i32::from_ne_bytes(*buf[offset + KP_PPID_OFFSET..].first_chunk::<4>()?);
             // pid 0 is the kernel slot the ALL listing leads with; the
             // calibration entry has already verified the layout, so a
             // non-process entry is skipped, not fatal.
