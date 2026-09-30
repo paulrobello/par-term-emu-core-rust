@@ -14,8 +14,8 @@ Rust terminal emulator library with Python 3.12+ bindings (PyO3). Provides VT100
 
 ```bash
 make setup-venv          # Initial setup: creates .venv, installs deps
-make dev                 # Build library (release mode via maturin) - USE THIS, not cargo build
-make dev-streaming       # Build with streaming feature enabled
+make dev                 # Build library (release mode via maturin, streaming included) - USE THIS, not cargo build
+make dev-streaming       # Alias of make dev (streaming is in pyproject's [tool.maturin] features)
 make checkall            # All quality checks (run before every commit)
 make ffi-header          # Regenerate include/terminal_core.h with cbindgen (after FFI surface changes)
 ```
@@ -51,6 +51,7 @@ The `--no-default-features --features pyo3/auto-initialize` flags are required b
 
 ```bash
 make lint                # Rust clippy + fmt (auto-fix)
+make lint-check          # Non-mutating gate checkall runs: fmt --check, clippy, ruff, pyright
 make lint-python         # Python ruff format + check + pyright
 make fmt                 # Rust format only
 make fmt-python          # Python format only
@@ -81,7 +82,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 #    2026-09-27: --all-targets passed while the mux test build failed on it). For
 #    mux/pty changes, run step 4b's feature set as a check too:
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests --no-default-features --features rust-only,mux,serde"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests --no-default-features --features rust-only,mux-bin,serde"
 
 # 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
 #     As of 2026-09-26 the mux:: filter is expected to PASS on Windows.
@@ -101,7 +102,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --lib --tests -
 #     a `\n`-terminated line but never SUBMITS it — a typed Enter must be
 #     `\r` (26100 submitted `\n`; CI intermittents during the image rollout
 #     were mixed runner builds, card 01a0ee2fcfa67d62bb9b9906a353deea).
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux:: -- --test-threads=1"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux-bin,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```
@@ -139,8 +140,10 @@ The crate produces three artifacts:
 | `screenshot` | Terminal-to-image renderer (embedded fonts + swash/image). Enabled by `python`/`python-test`; excluded from `sim` since 0.54.0 — render-capable sim embedders add `features = ["sim", "screenshot"]` (ENH-024). Free functions: `screenshot::render_terminal` / `save_terminal`; the `Terminal::screenshot*` forwarders were removed in 0.55.0 |
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |
 | `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
-| `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session`) |
-| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, `clap`, and on Windows `widestring`/`windows-sys` |
+| `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session` and `macro-yaml`) |
+| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, and on Windows `widestring`/`windows-sys`. No `clap` |
+| `mux-bin` | The `par-mux` daemon binary: `mux` + `clap` (mirrors `streaming`/`streaming-bin`). Required by `cargo build --bin par-mux` and by the integration tests that exec the daemon |
+| `macro-yaml` | `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` via `serde_yaml_ng`. Enabled by `python`, `python-test`, and `streaming-bin` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
 | `rust-only` | No Python bindings (empty convenience feature) |
 | `sim` | Headless profile: grid + terminal only (no PTY/python/streaming/screenshot — screenshot is opt-in since 0.54.0). For pure-Rust embedders, e.g. a server-side screen model |
