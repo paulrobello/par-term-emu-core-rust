@@ -1,6 +1,6 @@
 //! Per-frame dirty-range readback cost for the C FFI embedding surface
 //! (ParDeck DESIGN.md RQ2): feed a frame, collect dirty ranges, copy only
-//! the rows inside them — versus the full-grid `terminal_get_state`
+//! the rows inside them — versus the full-grid `ptec_terminal_get_state`
 //! snapshot, so the delta is visible in the numbers.
 //!
 //! Two frame shapes:
@@ -16,8 +16,9 @@
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use par_term_emu_core_rust::ffi::{
-    terminal_create, terminal_dirty_ranges, terminal_feed, terminal_free, terminal_free_state,
-    terminal_get_state, terminal_mark_clean, terminal_read_row, SharedCell, TermRowRange,
+    ptec_terminal_create, ptec_terminal_dirty_ranges, ptec_terminal_feed, ptec_terminal_free,
+    ptec_terminal_free_state, ptec_terminal_get_state, ptec_terminal_mark_clean,
+    ptec_terminal_read_row, SharedCell, TermRowRange,
 };
 
 const COLS: usize = 120;
@@ -55,7 +56,7 @@ fn bench_dirty_readback(c: &mut Criterion) {
     group.throughput(Throughput::Elements(FRAMES as u64));
     group.sample_size(30);
 
-    let make = || unsafe { terminal_create(COLS as u32, ROWS as u32, SCROLLBACK as u32) };
+    let make = || unsafe { ptec_terminal_create(COLS as u32, ROWS as u32, SCROLLBACK as u32) };
     let row_buf = vec![SharedCell::blank(); COLS];
     let mut ranges = vec![TermRowRange { start: 0, end: 0 }; ROWS];
 
@@ -67,14 +68,14 @@ fn bench_dirty_readback(c: &mut Criterion) {
             let mut cells = 0usize;
             for f in 0..FRAMES {
                 let bytes = agent_frame(f);
-                unsafe { terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
+                unsafe { ptec_terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
                 let n = unsafe {
-                    terminal_dirty_ranges(term, ranges.as_mut_ptr(), ranges.len() as u32)
+                    ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), ranges.len() as u32)
                 };
                 for r in &ranges[..n as usize] {
                     for row in r.start..=r.end {
                         cells += unsafe {
-                            terminal_read_row(
+                            ptec_terminal_read_row(
                                 term,
                                 row,
                                 0,
@@ -84,9 +85,9 @@ fn bench_dirty_readback(c: &mut Criterion) {
                         } as usize;
                     }
                 }
-                unsafe { terminal_mark_clean(term) };
+                unsafe { ptec_terminal_mark_clean(term) };
             }
-            unsafe { terminal_free(term) };
+            unsafe { ptec_terminal_free(term) };
             cells
         })
     });
@@ -99,14 +100,14 @@ fn bench_dirty_readback(c: &mut Criterion) {
             let mut cells = 0usize;
             for f in 0..FRAMES {
                 let bytes = status_frame(f);
-                unsafe { terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
+                unsafe { ptec_terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
                 let n = unsafe {
-                    terminal_dirty_ranges(term, ranges.as_mut_ptr(), ranges.len() as u32)
+                    ptec_terminal_dirty_ranges(term, ranges.as_mut_ptr(), ranges.len() as u32)
                 };
                 for r in &ranges[..n as usize] {
                     for row in r.start..=r.end {
                         cells += unsafe {
-                            terminal_read_row(
+                            ptec_terminal_read_row(
                                 term,
                                 row,
                                 0,
@@ -116,9 +117,9 @@ fn bench_dirty_readback(c: &mut Criterion) {
                         } as usize;
                     }
                 }
-                unsafe { terminal_mark_clean(term) };
+                unsafe { ptec_terminal_mark_clean(term) };
             }
-            unsafe { terminal_free(term) };
+            unsafe { ptec_terminal_free(term) };
             cells
         })
     });
@@ -131,12 +132,12 @@ fn bench_dirty_readback(c: &mut Criterion) {
             let mut count = 0usize;
             for f in 0..FRAMES {
                 let bytes = agent_frame(f);
-                unsafe { terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
-                let state = unsafe { terminal_get_state(term) };
+                unsafe { ptec_terminal_feed(term, bytes.as_ptr(), bytes.len() as u32) };
+                let state = unsafe { ptec_terminal_get_state(term) };
                 count += unsafe { (*state).cell_count as usize };
-                unsafe { terminal_free_state(state) };
+                unsafe { ptec_terminal_free_state(state) };
             }
-            unsafe { terminal_free(term) };
+            unsafe { ptec_terminal_free(term) };
             count
         })
     });

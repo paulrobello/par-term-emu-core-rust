@@ -290,11 +290,11 @@ Each callback receives a JSON-encoded event description as a NUL-terminated C st
 ```c
 // Register an FFI observer on the terminal
 // Returns an observer ID for later removal
-uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
+uint64_t ptec_terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
 
 // Remove a previously registered observer
 // Returns true if the observer was found and removed
-bool terminal_remove_observer(Terminal* term, uint64_t id);
+bool ptec_terminal_remove_observer(Terminal* term, uint64_t id);
 ```
 
 ### Example (C)
@@ -313,10 +313,10 @@ TerminalObserverVtable vtable = {
     .user_data = my_context
 };
 
-uint64_t observer_id = terminal_add_observer(term, vtable);
+uint64_t observer_id = ptec_terminal_add_observer(term, vtable);
 
 // Later...
-terminal_remove_observer(term, observer_id);
+ptec_terminal_remove_observer(term, observer_id);
 ```
 
 ## Event Dict Reference

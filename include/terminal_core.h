@@ -6,15 +6,15 @@
  * pins live in terminal_core_layout.h, included at the end of this file.
  *
  * Ownership contract:
- * - terminal_get_state returns a heap-allocated SharedState owned by the
- *   caller; release it with terminal_free_state. Its `title`, `cwd`, and
+ * - ptec_terminal_get_state returns a heap-allocated SharedState owned by the
+ *   caller; release it with ptec_terminal_free_state. Its `title`, `cwd`, and
  *   `cells` pointers are valid only until that call.
  * - The vtable (including its user_data) must stay valid for the lifetime
  *   of the observer registration.
  *
  * Cross-cutting contract notes (DOC-071):
  * - Reads target the ACTIVE grid: while the alternate screen is active,
- *   terminal_scrollback_count returns 0 — the alternate screen has no
+ *   ptec_terminal_scrollback_count returns 0 — the alternate screen has no
  *   scrollback.
  * - Handles are single-threaded: no concurrent calls on one Terminal.
  * - No entry point catches a panic. A panic inside any call aborts the
@@ -24,7 +24,7 @@
  *
  * ABI version (ARC-063): TERM_CORE_ABI_VERSION (terminal_core_layout.h) is
  * the contract version of this header. A binary compares it against
- * terminal_abi_version() at runtime to detect a layout mismatch; bump the
+ * ptec_terminal_abi_version() at runtime to detect a layout mismatch; bump the
  * macro and the Rust constant together on any layout or contract change.
  */
 
@@ -67,7 +67,7 @@ typedef struct {
  * The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
  * for any Unicode scalar value). `text_len` indicates how many bytes are valid.
  * When the cell also carries combining marks, `attrs` has
- * `TERM_ATTR_HAS_COMBINING` set and `terminal_read_cell_grapheme` returns the
+ * `TERM_ATTR_HAS_COMBINING` set and `ptec_terminal_read_cell_grapheme` returns the
  * full UTF-8 cluster (ARC-101).
  *
  * Colors are resolved for display (ARC-101): the live ANSI palette (OSC 4),
@@ -356,9 +356,9 @@ typedef void (*term_event_v2_cb)(void *user_data, const TermEvent *event);
  *
  * Callbacks fire inline while the terminal is processing input. A callback
  * must NOT re-enter the FFI on the same `Terminal` handle (any
- * `terminal_*` function): the terminal is mutably borrowed for the
+ * `ptec_terminal_*` function): the terminal is mutably borrowed for the
  * duration of the dispatch, so re-entry aliases `&`/`&mut` — undefined
- * behavior. Queue what you need and call back after `terminal_feed`
+ * behavior. Queue what you need and call back after `ptec_terminal_feed`
  * returns.
  */
 typedef struct {
@@ -401,7 +401,7 @@ extern "C" {
  * by comparing this call's return against its compiled-in header macro.
  * Safe to call at any time — it touches no terminal state.
  */
-uint32_t terminal_abi_version(void);
+uint32_t ptec_terminal_abi_version(void);
 
 /**
  * Create a terminal for C embedding.
@@ -411,18 +411,18 @@ uint32_t terminal_abi_version(void);
  *
  * # Safety
  * Caller owns the returned `Terminal` and must release it with
- * `terminal_free`.
+ * `ptec_terminal_free`.
  */
-Terminal *terminal_create(uint32_t cols, uint32_t rows, uint32_t scrollback);
+Terminal *ptec_terminal_create(uint32_t cols, uint32_t rows, uint32_t scrollback);
 
 /**
- * Free a `Terminal` created by `terminal_create`.
+ * Free a `Terminal` created by `ptec_terminal_create`.
  *
  * # Safety
- * `term` must have been returned by `terminal_create` and must not be
+ * `term` must have been returned by `ptec_terminal_create` and must not be
  * used after this call.
  */
-void terminal_free(Terminal *term);
+void ptec_terminal_free(Terminal *term);
 
 /**
  * Feed raw PTY/application output bytes into the terminal (VT parsing).
@@ -431,7 +431,7 @@ void terminal_free(Terminal *term);
  * `bytes` must be valid for reads of `len` bytes. `term` must be a valid
  * pointer to a `Terminal`.
  */
-void terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
+void ptec_terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
 
 /**
  * Resize the terminal grid. A zero `cols` or `rows` is a no-op.
@@ -439,7 +439,7 @@ void terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-void terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
+void ptec_terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
 
 /**
  * Coalesce the dirty-row generations into inclusive row ranges.
@@ -447,31 +447,31 @@ void terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
  * Writes up to `cap` ranges into `out` (caller-owned) and returns the
  * total range count — if the return exceeds `cap`, call again with a
  * larger buffer. A renderer redraws only rows inside the returned ranges.
- * Serves the built-in default consumer; `terminal_mark_clean` advances it.
+ * Serves the built-in default consumer; `ptec_terminal_mark_clean` advances it.
  *
  * # Safety
  * `out` must be valid for writes of `cap` `TermRowRange` values. It may
  * be NULL only as a sizing call, with `cap` 0 — the call then just
  * returns the total range count.
  */
-uint32_t terminal_dirty_ranges(const Terminal *term, TermRowRange *out, uint32_t cap);
+uint32_t ptec_terminal_dirty_ranges(const Terminal *term, TermRowRange *out, uint32_t cap);
 
 /**
  * Current damage generation. A renderer remembers this value between
- * frames and passes it to `terminal_dirty_ranges_since` to observe only
- * what changed since — independent of `terminal_mark_clean`, which
+ * frames and passes it to `ptec_terminal_dirty_ranges_since` to observe only
+ * what changed since — independent of `ptec_terminal_mark_clean`, which
  * advances the default consumer's generation and cannot hide damage from
  * generation consumers (ENH-025).
  *
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-uint64_t terminal_damage_generation(const Terminal *term);
+uint64_t ptec_terminal_damage_generation(const Terminal *term);
 
 /**
  * Coalesced dirty-row ranges since generation `gen`, from an earlier
- * `terminal_damage_generation` call. Same buffer contract as
- * `terminal_dirty_ranges`: fills up to `cap` ranges into `out` and
+ * `ptec_terminal_damage_generation` call. Same buffer contract as
+ * `ptec_terminal_dirty_ranges`: fills up to `cap` ranges into `out` and
  * returns the total count; `out` may be NULL with `cap` 0 as a sizing
  * call. A screen switch dirties every row of the newly visible grid.
  *
@@ -480,10 +480,10 @@ uint64_t terminal_damage_generation(const Terminal *term);
  * with `cap` 0 for a sizing call. `term` must be a valid pointer to a
  * `Terminal`.
  */
-uint32_t terminal_dirty_ranges_since(const Terminal *term,
-                                     uint64_t gen,
-                                     TermRowRange *out,
-                                     uint32_t cap);
+uint32_t ptec_terminal_dirty_ranges_since(const Terminal *term,
+                                          uint64_t gen,
+                                          TermRowRange *out,
+                                          uint32_t cap);
 
 /**
  * Mark the screen clean (all damage consumed).
@@ -491,7 +491,7 @@ uint32_t terminal_dirty_ranges_since(const Terminal *term,
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-void terminal_mark_clean(Terminal *term);
+void ptec_terminal_mark_clean(Terminal *term);
 
 /**
  * Copy a run of grid cells into a caller-owned buffer (pinned readback —
@@ -504,11 +504,11 @@ void terminal_mark_clean(Terminal *term);
  * `out` must be valid for writes of `cap` `SharedCell` values, or NULL
  * with `cap` 0 for a sizing call.
  */
-uint32_t terminal_read_row(const Terminal *term,
-                           uint32_t row,
-                           uint32_t col_start,
-                           SharedCell *out,
-                           uint32_t cap);
+uint32_t ptec_terminal_read_row(const Terminal *term,
+                                uint32_t row,
+                                uint32_t col_start,
+                                SharedCell *out,
+                                uint32_t cap);
 
 /**
  * Copy a run of scrollback cells into a caller-owned buffer.
@@ -521,11 +521,11 @@ uint32_t terminal_read_row(const Terminal *term,
  * `out` must be valid for writes of `cap` `SharedCell` values, or NULL
  * with `cap` 0 for a sizing call.
  */
-uint32_t terminal_read_scrollback_row(const Terminal *term,
-                                      uint32_t line,
-                                      uint32_t col_start,
-                                      SharedCell *out,
-                                      uint32_t cap);
+uint32_t ptec_terminal_read_scrollback_row(const Terminal *term,
+                                           uint32_t line,
+                                           uint32_t col_start,
+                                           SharedCell *out,
+                                           uint32_t cap);
 
 /**
  * Copy the full grapheme cluster of one screen cell — the base character
@@ -537,17 +537,17 @@ uint32_t terminal_read_scrollback_row(const Terminal *term,
  * total byte length — if the return exceeds `cap`, call again with a larger
  * buffer; `out` NULL with `cap` 0 is the sizing call. Returns 0 for a
  * position outside the active grid. Same active-grid addressing as
- * `terminal_read_row`.
+ * `ptec_terminal_read_row`.
  *
  * # Safety
  * `out` must be valid for writes of `cap` bytes, or NULL with `cap` 0 for a
  * sizing call. `term` must be a valid pointer to a `Terminal`.
  */
-uint32_t terminal_read_cell_grapheme(const Terminal *term,
-                                     uint32_t row,
-                                     uint32_t col,
-                                     uint8_t *out,
-                                     uint32_t cap);
+uint32_t ptec_terminal_read_cell_grapheme(const Terminal *term,
+                                          uint32_t row,
+                                          uint32_t col,
+                                          uint8_t *out,
+                                          uint32_t cap);
 
 /**
  * Number of lines currently held in scrollback.
@@ -555,14 +555,14 @@ uint32_t terminal_read_cell_grapheme(const Terminal *term,
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-uint32_t terminal_scrollback_count(const Terminal *term);
+uint32_t ptec_terminal_scrollback_count(const Terminal *term);
 
 /**
  * Total lines ever pushed into scrollback.
  *
  * Monotone within a buffer's lifetime; `clear_scrollback` resets it to 0
  * together with the count. An embedder mirroring the scrollback window
- * pairs this with `terminal_scrollback_count`: the window holds lines
+ * pairs this with `ptec_terminal_scrollback_count`: the window holds lines
  * `[total - count, total)`, so head evictions and tail appends are both
  * derivable per frame, including when the ring is full and the count
  * alone stops moving. This counts buffer entries only — alt-screen and
@@ -573,7 +573,7 @@ uint32_t terminal_scrollback_count(const Terminal *term);
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-uint64_t terminal_scrollback_total_scrolled(const Terminal *term);
+uint64_t ptec_terminal_scrollback_total_scrolled(const Terminal *term);
 
 /**
  * Read cursor position/style.
@@ -581,7 +581,7 @@ uint64_t terminal_scrollback_total_scrolled(const Terminal *term);
  * # Safety
  * `out` must be valid for writes of one `TermCursorState`.
  */
-void terminal_get_cursor(const Terminal *term, TermCursorState *out);
+void ptec_terminal_get_cursor(const Terminal *term, TermCursorState *out);
 
 /**
  * Read per-frame mode state.
@@ -589,7 +589,7 @@ void terminal_get_cursor(const Terminal *term, TermCursorState *out);
  * # Safety
  * `out` must be valid for writes of one `TermModeState`.
  */
-void terminal_get_modes(const Terminal *term, TermModeState *out);
+void ptec_terminal_get_modes(const Terminal *term, TermModeState *out);
 
 /**
  * Encode a key event against the terminal's negotiated input state
@@ -603,16 +603,16 @@ void terminal_get_modes(const Terminal *term, TermModeState *out);
  * for writes of `cap` bytes, or NULL with `cap` 0 to fetch the total
  * encoded length.
  */
-uint32_t terminal_encode_key(const Terminal *term,
-                             const TermKeyEvent *ev,
-                             uint8_t *out,
-                             uint32_t cap);
+uint32_t ptec_terminal_encode_key(const Terminal *term,
+                                  const TermKeyEvent *ev,
+                                  uint8_t *out,
+                                  uint32_t cap);
 
 /**
- * [`terminal_encode_key`] with explicit macOS Option-key modes
+ * [`ptec_terminal_encode_key`] with explicit macOS Option-key modes
  * (`TermKeyOptions`, ENH-028). Pass NULL `opts` for the defaults (ESC
  * prefix on both sides — the classic xterm Alt behavior, identical to
- * `terminal_encode_key`). A zeroed struct means Normal passthrough on
+ * `ptec_terminal_encode_key`). A zeroed struct means Normal passthrough on
  * both sides; see `terminal_core_layout.h` for the mode values.
  *
  * # Safety
@@ -621,43 +621,43 @@ uint32_t terminal_encode_key(const Terminal *term,
  * valid for writes of `cap` bytes, or NULL with `cap` 0 to fetch the
  * total encoded length.
  */
-uint32_t terminal_encode_key_ex(const Terminal *term,
-                                const TermKeyEvent *ev,
-                                const TermKeyOptions *opts,
-                                uint8_t *out,
-                                uint32_t cap);
+uint32_t ptec_terminal_encode_key_ex(const Terminal *term,
+                                     const TermKeyEvent *ev,
+                                     const TermKeyOptions *opts,
+                                     uint8_t *out,
+                                     uint32_t cap);
 
 /**
  * Create a snapshot of the terminal's current state.
  *
  * The caller owns the returned `SharedState` and must free it by calling
- * `terminal_free_state`.
+ * `ptec_terminal_free_state`.
  *
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.
  */
-SharedState *terminal_get_state(const Terminal *term);
+SharedState *ptec_terminal_get_state(const Terminal *term);
 
 /**
- * Free a `SharedState` previously returned by `terminal_get_state`.
+ * Free a `SharedState` previously returned by `ptec_terminal_get_state`.
  *
  * # Safety
- * `state` must be a pointer previously returned by `terminal_get_state`,
+ * `state` must be a pointer previously returned by `ptec_terminal_get_state`,
  * and must not be used after this call.
  */
-void terminal_free_state(SharedState *state);
+void ptec_terminal_free_state(SharedState *state);
 
 /**
  * Register an FFI observer on the terminal.
  *
- * Returns an observer ID that can be passed to `terminal_remove_observer`.
+ * Returns an observer ID that can be passed to `ptec_terminal_remove_observer`.
  *
  * # Safety
  * `term` must be a valid, mutable pointer to a `Terminal`.
  * The `vtable` must remain valid (including its `user_data`) for as long as
  * the observer is registered.
  */
-uint64_t terminal_add_observer(Terminal *term, TerminalObserverVtable vtable);
+uint64_t ptec_terminal_add_observer(Terminal *term, TerminalObserverVtable vtable);
 
 /**
  * Remove a previously registered observer.
@@ -667,7 +667,7 @@ uint64_t terminal_add_observer(Terminal *term, TerminalObserverVtable vtable);
  * # Safety
  * `term` must be a valid, mutable pointer to a `Terminal`.
  */
-bool terminal_remove_observer(Terminal *term, uint64_t id);
+bool ptec_terminal_remove_observer(Terminal *term, uint64_t id);
 
 #ifdef __cplusplus
 }  // extern "C"

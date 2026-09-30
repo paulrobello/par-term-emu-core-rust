@@ -294,7 +294,7 @@ jemalloc = ["tikv-jemallocator"]
 # Regenerate protobuf code from proto/terminal.proto (requires protoc installed)
 regenerate-proto = ["prost-build"]
 
-# C ABI surface (`terminal_*` exports, src/ffi.rs) for the xcframework and
+# C ABI surface (`ptec_terminal_*` exports, src/ffi.rs) for the xcframework and
 # C/Swift embedders; off in Python wheels so they export no unprefixed C
 # symbols (ARC-112). Build with `--features rust-only,ffi`.
 ffi = []

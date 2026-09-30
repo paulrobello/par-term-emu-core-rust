@@ -21,10 +21,12 @@
 #define PAR_TERM_EMU_CORE_TERMINAL_CORE_LAYOUT_H
 
 /* Contract version of terminal_core.h (ARC-063). Compare against
- * terminal_abi_version() at runtime to detect a layout mismatch; bump on
- * any layout or contract change to the C surface. Version 3: TermKeyOptions
- * + terminal_encode_key_ex + TERM_MOD_ALT_RIGHT (ENH-028). */
-#define TERM_CORE_ABI_VERSION 3
+ * ptec_terminal_abi_version() at runtime to detect a layout mismatch; bump on
+ * any layout or contract change to the C surface. Version 4 (breaking): the
+ * ptec_ symbol prefix, palette-resolved SharedCell colors + TERM_ATTR_* bits,
+ * ptec_terminal_read_cell_grapheme, the on_event_v2 slot + TermEvent, and
+ * ptec_terminal_scrollback_total_scrolled. */
+#define TERM_CORE_ABI_VERSION 4
 
 /* Cell attribute bits — SharedCell.attrs (mirrors CellBitflags in cell.rs). */
 #define TERM_CELL_BOLD 1u             /* bit 0 */
@@ -44,7 +46,7 @@
  * crate::ffi::attr_bits). */
 #define TERM_ATTR_DEFAULT_FG 4096u     /* bit 12: fg is the OSC 10 default */
 #define TERM_ATTR_DEFAULT_BG 8192u     /* bit 13: bg is the OSC 11 default */
-#define TERM_ATTR_HAS_COMBINING 16384u /* bit 14: read the cluster with terminal_read_cell_grapheme */
+#define TERM_ATTR_HAS_COMBINING 16384u /* bit 14: read the cluster with ptec_terminal_read_cell_grapheme */
 
 /* Mouse tracking modes — SharedState.mouse_mode / TermModeState.mouse_mode
  * (MouseMode discriminants in mouse.rs). */
@@ -67,7 +69,7 @@
 #define TERM_MOD_ALT_RIGHT 64u /* bit 6 */
 
 /* macOS Option-key modes for TermKeyOptions (ENH-028) — left_option /
- * right_option fields of terminal_encode_key_ex. */
+ * right_option fields of ptec_terminal_encode_key_ex. */
 #define TERM_OPTION_MODE_NORMAL 0u /* pass the composed character through */
 #define TERM_OPTION_MODE_META 1u   /* 8th bit on ASCII bases, ESC otherwise */
 #define TERM_OPTION_MODE_ESC 2u    /* ESC-prefix the base character */

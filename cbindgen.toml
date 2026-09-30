@@ -29,15 +29,15 @@ header = """
  * pins live in terminal_core_layout.h, included at the end of this file.
  *
  * Ownership contract:
- * - terminal_get_state returns a heap-allocated SharedState owned by the
- *   caller; release it with terminal_free_state. Its `title`, `cwd`, and
+ * - ptec_terminal_get_state returns a heap-allocated SharedState owned by the
+ *   caller; release it with ptec_terminal_free_state. Its `title`, `cwd`, and
  *   `cells` pointers are valid only until that call.
  * - The vtable (including its user_data) must stay valid for the lifetime
  *   of the observer registration.
  *
  * Cross-cutting contract notes (DOC-071):
  * - Reads target the ACTIVE grid: while the alternate screen is active,
- *   terminal_scrollback_count returns 0 — the alternate screen has no
+ *   ptec_terminal_scrollback_count returns 0 — the alternate screen has no
  *   scrollback.
  * - Handles are single-threaded: no concurrent calls on one Terminal.
  * - No entry point catches a panic. A panic inside any call aborts the
@@ -47,7 +47,7 @@ header = """
  *
  * ABI version (ARC-063): TERM_CORE_ABI_VERSION (terminal_core_layout.h) is
  * the contract version of this header. A binary compares it against
- * terminal_abi_version() at runtime to detect a layout mismatch; bump the
+ * ptec_terminal_abi_version() at runtime to detect a layout mismatch; bump the
  * macro and the Rust constant together on any layout or contract change.
  */
 """
