@@ -687,16 +687,52 @@ mod tests {
     #[cfg(windows)]
     const TYPED_AFTER: &str = "echo DELTA^-AFTER";
 
+    /// Bound on the graceful exit of [`daemon`]'s serving thread. Only a
+    /// wedged `run()` exceeds it, and by then the test is over anyway.
+    const SERVING_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Owns [`daemon`]'s serving thread: Drop raises the shutdown flag and
+    /// joins — bounded — so a finished test cannot leak a detached daemon
+    /// thread holding the socket into whatever runs next (QA-185).
+    struct ServingGuard {
+        shutdown: std::sync::Arc<AtomicBool>,
+        serving: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for ServingGuard {
+        fn drop(&mut self) {
+            self.shutdown.store(true, Ordering::Relaxed);
+            if let Some(serving) = self.serving.take() {
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = serving.join();
+                    let _ = done_tx.send(());
+                });
+                if done_rx.recv_timeout(SERVING_EXIT_TIMEOUT).is_err() {
+                    eprintln!(
+                        "mux_factory daemon still serving {SERVING_EXIT_TIMEOUT:?} after shutdown"
+                    );
+                }
+            }
+        }
+    }
+
     /// A served daemon with one session; returns its socket dir (keep it
-    /// alive), socket path, a control client, and the first pane id `%N`.
-    fn daemon() -> (tempfile::TempDir, PathBuf, MuxClient, String) {
+    /// alive), socket path, the serving-thread guard, a control client, and
+    /// the first pane id `%N`.
+    fn daemon() -> (tempfile::TempDir, PathBuf, ServingGuard, MuxClient, String) {
         let dir = tempfile::Builder::new()
             .prefix("par-mux-str-")
             .tempdir()
             .expect("temp dir");
         let socket = dir.path().join("s");
         let server = MuxServer::bind(&socket).expect("bind");
-        std::thread::spawn(move || server.run());
+        let shutdown = server.shutdown_handle();
+        let serving = std::thread::spawn(move || server.run());
+        let guard = ServingGuard {
+            shutdown,
+            serving: Some(serving),
+        };
         let mut control = MuxClient::connect(&socket).expect("control client");
         control.send("new-session -s stream").expect("new-session");
         let pane = control
@@ -706,7 +742,7 @@ mod tests {
             .map(|l| l.trim().to_string())
             .find(|l| l.starts_with('%'))
             .expect("a pane");
-        (dir, socket, control, pane)
+        (dir, socket, guard, control, pane)
     }
 
     /// The session machinery spawns tasks (`resolve_session` starts the
@@ -798,7 +834,7 @@ mod tests {
     fn a_mirror_is_seeded_from_the_pane_then_follows_its_output() {
         let rt = runtime();
         let _entered = rt.enter();
-        let (_dir, socket, mut control, pane) = daemon();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
 
         // Output that exists BEFORE the viewer attaches arrives via the seed.
         control
@@ -830,7 +866,7 @@ mod tests {
     fn the_mirror_starts_at_the_pane_size_and_a_viewer_resize_refits_the_pane() {
         let rt = runtime();
         let _entered = rt.enter();
-        let (_dir, socket, mut control, pane) = daemon();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
         control
             .send(&format!("refresh-client -t {pane} -C 100x30"))
             .expect("the desktop's size");
@@ -877,7 +913,7 @@ mod tests {
     fn a_mouse_report_encoded_by_the_mirror_reaches_the_pane() {
         let rt = runtime();
         let _entered = rt.enter();
-        let (_dir, socket, mut control, pane) = daemon();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
         let server = streaming(&socket);
         let session = mirror(&server, &pane);
 
@@ -918,7 +954,7 @@ mod tests {
     fn two_viewers_of_one_pane_both_stay_live() {
         let rt = runtime();
         let _entered = rt.enter();
-        let (_dir, socket, _control, pane) = daemon();
+        let (_dir, socket, _serving, _control, pane) = daemon();
 
         // Two streaming servers stand for two independent mobile viewers:
         // each holds its own daemon connection to the same pane.
@@ -939,7 +975,7 @@ mod tests {
     fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
         let rt = runtime();
         let _entered = rt.enter();
-        let (dir, socket, _control, pane) = daemon();
+        let (dir, socket, _serving, _control, pane) = daemon();
         let viewer_a = streaming(&socket);
         // A second viewer doubles the pane's %output fanout and the daemon
         // connections racing the input socket.
@@ -1091,7 +1127,7 @@ mod tests {
 
     #[test]
     fn a_killed_pane_marks_its_mirror_dead() {
-        let (_dir, socket, mut control, pane) = daemon();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
         let second = control
             .send(&format!("split-window -h -t {pane}"))
             .expect("split")

@@ -1781,8 +1781,21 @@ mod tests {
         unsafe { libc::close(null) };
 
         // The accept loop sees a non-socket and breaks; the fault exit must
-        // still save. The join returns because the fault ends the loop.
-        serving.join().expect("the fault-exit path returns");
+        // still save. Bounded like the silent-client sibling below: a
+        // regression that wedges the exit fails here instead of hanging.
+        let (exited_tx, exited_rx) = channel();
+        let mut serving = Some(serving);
+        std::thread::spawn(move || {
+            if let Some(handle) = serving.take() {
+                let _ = handle.join();
+            }
+            let _ = exited_tx.send(());
+        });
+        let deadline = std::time::Duration::from_secs(10);
+        assert!(
+            exited_rx.recv_timeout(deadline).is_ok(),
+            "the fault-exit path is held open past {deadline:?}"
+        );
         match load_or_quarantine(&state_path) {
             Loaded::State(state) => assert_eq!(
                 state.sessions.len(),
@@ -1938,7 +1951,21 @@ mod tests {
         let shutdown = server.shutdown_handle();
         let serving = std::thread::spawn(move || server.run());
         shutdown.store(true, Ordering::Relaxed);
-        serving.join().expect("server exits cleanly");
+        // Bounded like the silent-client siblings: a shutdown that never
+        // finishes fails here instead of hanging the suite.
+        let (exited_tx, exited_rx) = channel();
+        let mut serving = Some(serving);
+        std::thread::spawn(move || {
+            if let Some(handle) = serving.take() {
+                let _ = handle.join();
+            }
+            let _ = exited_tx.send(());
+        });
+        let deadline = std::time::Duration::from_secs(10);
+        assert!(
+            exited_rx.recv_timeout(deadline).is_ok(),
+            "the shutdown exit is held open past {deadline:?}"
+        );
         assert!(!path.exists(), "the socket file is removed after shutdown");
     }
 

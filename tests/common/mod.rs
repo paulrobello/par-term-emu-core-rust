@@ -80,12 +80,20 @@ impl Drop for MuxFixture {
     }
 }
 
+/// One reply block must complete within this budget: a daemon that drains
+/// forever (reply lines that never reach `%end`) fails the issuing test
+/// here with the partial block in hand. A single read that never RETURNS
+/// (a wedged daemon holding the socket open) is nextest's
+/// `terminate-after` to kill, not this loop's.
+const COMMAND_DEADLINE: Duration = Duration::from_secs(10);
+
 /// Run one command and drain its `%begin`…`%end` block. Pushed `%output`
 /// notifications may interleave with the reply; they are collected as body
 /// noise, same as the daemon tests.
 pub fn command(stream: &mut impl Write, reader: &mut impl BufRead, line: &str) -> Vec<String> {
     writeln!(stream, "{line}").expect("write command");
     stream.flush().expect("flush");
+    let started = Instant::now();
     let mut out = Vec::new();
     loop {
         let mut buf = String::new();
@@ -96,6 +104,10 @@ pub fn command(stream: &mut impl Write, reader: &mut impl BufRead, line: &str) -
         if done {
             return out;
         }
+        assert!(
+            started.elapsed() < COMMAND_DEADLINE,
+            "command {line:?} never completed within {COMMAND_DEADLINE:?}: {out:?}"
+        );
     }
 }
 
@@ -264,10 +276,21 @@ pub fn rerun_isolated(test: &str, set: &[(&str, &str)], unset: &[&str]) -> bool 
 }
 
 /// Poll until the daemon's socket accepts connections (its listener is up).
+/// Panics on timeout: a silent return used to push the failure into a far
+/// later `connect`, away from the spawn that never came up.
 pub fn wait_listening(path: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while connect_local_stream(path).is_err() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
+    loop {
+        match connect_local_stream(path) {
+            Ok(_) => return,
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => panic!(
+                "daemon never listened on {} within 5s: {err}",
+                path.display()
+            ),
+        }
     }
 }
 
