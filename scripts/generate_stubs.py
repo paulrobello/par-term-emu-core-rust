@@ -11,9 +11,11 @@ method surface, ``make dev`` covers the same class/function names):
 
     uv run python scripts/generate_stubs.py
 
-Known limitations (deliberate, see AUDIT.md ARC-002):
-- All value types are ``Any``: signatures carry parameter names, kinds and
-  defaults (the parts PyO3 exposes) but not types.
+Known limitations (deliberate, see AUDIT.md ARC-002 and DOC-116):
+- Docstrings are copied from ``__doc__``. Return types come from a
+  Google-style ``Returns:`` line whose first token is a type over builtins
+  and native classes, and parameter types from ``name (TYPE):`` Args
+  entries. Everything else, including every property, is ``Any``.
 - Properties are emitted with both a getter and a setter; read-only
   properties are over-promised in the stub (harmless for type checking).
 - Constructors fall back to ``*args``/``**kwargs`` only for classes whose
@@ -27,7 +29,9 @@ public ``dir()`` member of the module appears in the stub.
 from __future__ import annotations
 
 import ast
+import inspect
 import keyword
+import re
 from pathlib import Path
 
 import par_term_emu_core_rust._native as native
@@ -70,12 +74,46 @@ HEADER = """\
 #
 # Runtime-introspected stub for the PyO3 `_native` module (ARC-002).
 # Parameter names, kinds and defaults come from PyO3 `__text_signature__`
-# (methods, and constructors via the class-level signature — ENH-030);
-# value types are `Any` because the native layer does not expose them.
+# (methods, and constructors via the class-level signature — ENH-030).
+# Docstrings are copied from `__doc__` (DOC-116). Return types come from a
+# Google-style `Returns:` line whose first token is a type over builtins and
+# native classes, and parameter types from `name (TYPE):` Args entries.
+# Everything else, including every property, is `Any`.
 
 from types import TracebackType
 from typing import Any
 """
+
+BUILTIN_TYPE_NAMES = {
+    "int",
+    "float",
+    "str",
+    "bytes",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    "set",
+    "object",
+    "None",
+}
+# AST nodes a docstring type expression may contain: names, `None`,
+# subscripts (`list[int]`), tuples inside subscripts and `X | Y` unions.
+# Anything else (attributes like `asyncio.Queue`, `int or None`, calls) is
+# prose, not a type.
+ALLOWED_TYPE_NODES = (
+    ast.Expression,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Subscript,
+    ast.Tuple,
+    ast.BinOp,
+    ast.BitOr,
+)
+RETURNS_RE = re.compile(r"^Returns:[ \t]*\n[ \t]+([^\n:]+?):", re.MULTILINE)
+ARGS_BLOCK_RE = re.compile(r"^Args:[ \t]*\n((?:[ \t]+.*\n?)+)", re.MULTILINE)
+TYPED_ARG_RE = re.compile(r"^[ \t]+([A-Za-z_]\w*) \(([^)]+)\):", re.MULTILINE)
 
 
 def split_top_level(text: str) -> list[str]:
@@ -121,11 +159,75 @@ def sanitize_default(default_text: str) -> str | None:
     return default_text
 
 
-def render_params(text_sig: str | None, *, implicit_self: bool) -> list[str] | None:
+def doc_type(expr: str, known: set[str]) -> str | None:
+    """Return ``expr`` when it is a type expression over builtins and native classes, else None."""
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ALLOWED_TYPE_NODES):
+            return None
+        if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.BitOr):
+            return None
+        if isinstance(node, ast.Name) and node.id not in BUILTIN_TYPE_NAMES | known:
+            return None
+        if isinstance(node, ast.Constant) and node.value is not None:
+            return None
+    return expr.strip()
+
+
+def returns_type(doc: str | None, known: set[str]) -> str:
+    """Return type named by the docstring's ``Returns:`` section, or ``Any``."""
+    m = RETURNS_RE.search(inspect.cleandoc(doc)) if doc else None
+    return (doc_type(m.group(1), known) if m else None) or "Any"
+
+
+def arg_types(doc: str | None, known: set[str]) -> dict[str, str]:
+    """Map parameter names to types from ``name (TYPE):`` Args entries."""
+    if not doc:
+        return {}
+    block = ARGS_BLOCK_RE.search(inspect.cleandoc(doc))
+    if not block:
+        return {}
+    out: dict[str, str] = {}
+    for name, expr in TYPED_ARG_RE.findall(block.group(1)):
+        typed = doc_type(expr, known)
+        if typed:
+            out[name] = typed
+    return out
+
+
+def render_docstring(doc: str | None, indent: str) -> list[str]:
+    """Render ``doc`` as stub docstring lines at ``indent`` (empty when absent)."""
+    if not doc or not doc.strip():
+        return []
+    text = inspect.cleandoc(doc).replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+    lines = text.splitlines()
+    if len(lines) == 1:
+        line = lines[0]
+        if line.endswith('"'):
+            # `"""say "hi""""` does not parse; escape the final quote.
+            line = line[:-1] + '\\"'
+        return [f'{indent}"""{line}"""']
+    return [
+        f'{indent}"""{lines[0]}',
+        *[f"{indent}{line}" if line else "" for line in lines[1:]],
+        f'{indent}"""',
+    ]
+
+
+def render_params(
+    text_sig: str | None,
+    *,
+    implicit_self: bool,
+    types: dict[str, str] | None = None,
+) -> list[str] | None:
     """Turn a ``__text_signature__`` body into stub parameter strings.
 
-    Returns None when the signature cannot be represented (caller falls back
-    to ``*args``/``**kwargs``).
+    ``types`` maps parameter names to annotations (from the docstring);
+    unlisted parameters are ``Any``. Returns None when the signature cannot be
+    represented (caller falls back to ``*args``/``**kwargs``).
     """
     if not text_sig or not (text_sig.startswith("(") and text_sig.endswith(")")):
         return None
@@ -161,7 +263,11 @@ def render_params(text_sig: str | None, *, implicit_self: bool) -> list[str] | N
             continue
         if keyword.iskeyword(name):
             return None
-        rendered = f"{name}: Any"
+        annotation = (types or {}).get(name, "Any")
+        if default_text == "None" and annotation != "Any" and "None" not in annotation:
+            # Docs name the value type; a `None` default makes it optional.
+            annotation = f"{annotation} | None"
+        rendered = f"{name}: {annotation}"
         if default_text is not None:
             rendered += f" = {default_text}"
         params.append(rendered)
@@ -176,21 +282,34 @@ def render_function(
     *,
     is_static: bool = False,
     implicit_self: bool = True,
+    doc: str | None = None,
+    known: set[str] | frozenset[str] = frozenset(),
+    indent: str = "    ",
 ) -> str:
-    params = render_params(text_sig, implicit_self=implicit_self and not is_static)
+    ret = returns_type(doc, set(known))
+    types = arg_types(doc, set(known))
+    params = render_params(
+        text_sig, implicit_self=implicit_self and not is_static, types=types
+    )
     if params is None:
         params = ["*args: Any", "**kwargs: Any"]
-    indent = "    "
     lines = []
     if is_static:
         lines.append(f"{indent}@staticmethod")
-    lines.append(f"{indent}def {name}({', '.join(params)}) -> Any: ...")
+    docstring = render_docstring(doc, indent + "    ")
+    if docstring:
+        lines.append(f"{indent}def {name}({', '.join(params)}) -> {ret}:")
+        lines.extend(docstring)
+    else:
+        lines.append(f"{indent}def {name}({', '.join(params)}) -> {ret}: ...")
     return "\n".join(lines)
 
 
-def render_class(cls: type) -> list[str]:
+def render_class(cls: type, known: set[str]) -> list[str]:
     lines = [f"class {cls.__name__}:"]
-    emitted_any = False
+    class_doc = render_docstring(cls.__doc__, "    ")
+    lines.extend(class_doc)
+    emitted_any = bool(class_doc)
     for attr_name in sorted(vars(cls)):
         # Keep methods and interesting dunders (__enter__, __exit__, __int__,
         # ...); skip metadata (`__doc__`, `__module__`) and pass-through
@@ -230,23 +349,43 @@ def render_class(cls: type) -> list[str]:
                 )
                 emitted_any = True
                 continue
-            lines.append(render_function(attr_name, ts))
+            lines.append(render_function(attr_name, ts, doc=obj.__doc__, known=known))
             emitted_any = True
         elif kind == "staticmethod":
             ts = getattr(obj.__func__, "__text_signature__", None)
-            lines.append(render_function(attr_name, ts, is_static=True))
+            lines.append(
+                render_function(
+                    attr_name,
+                    ts,
+                    is_static=True,
+                    doc=obj.__func__.__doc__,
+                    known=known,
+                )
+            )
             emitted_any = True
         elif kind == "classmethod":
             ts = getattr(obj.__func__, "__text_signature__", None)
+            doc = obj.__func__.__doc__
             lines.append("    @classmethod")
-            params = render_params(ts, implicit_self=False)
+            params = render_params(ts, implicit_self=False, types=arg_types(doc, known))
             if params is None or not params or params[0].split(":")[0] != "cls":
                 params = (["cls"] + params) if params else ["cls"]
-            lines.append(f"    def {attr_name}({', '.join(params)}) -> Any: ...")
+            signature = f"    def {attr_name}({', '.join(params)}) -> {returns_type(doc, known)}:"
+            docstring = render_docstring(doc, "        ")
+            if docstring:
+                lines.append(signature)
+                lines.extend(docstring)
+            else:
+                lines.append(f"{signature} ...")
             emitted_any = True
         elif kind == "getset_descriptor":
             lines.append("    @property")
-            lines.append(f"    def {attr_name}(self) -> Any: ...")
+            prop_doc = render_docstring(obj.__doc__, "        ")
+            if prop_doc:
+                lines.append(f"    def {attr_name}(self) -> Any:")
+                lines.extend(prop_doc)
+            else:
+                lines.append(f"    def {attr_name}(self) -> Any: ...")
             lines.append(f"    @{attr_name}.setter")
             lines.append(f"    def {attr_name}(self, value: Any) -> None: ...")
             emitted_any = True
@@ -306,17 +445,32 @@ def main() -> None:
         value = constants[name]
         out.append(f"\n{name}: {type(value).__name__} = {value!r}")
 
+    known = set(classes)
     for cname in sorted(classes):
         out.append("")
-        out.extend(render_class(classes[cname]))
+        out.extend(render_class(classes[cname], known))
 
     for fname in sorted(functions):
-        ts = getattr(functions[fname], "__text_signature__", None)
+        func = functions[fname]
+        ts = getattr(func, "__text_signature__", None)
         out.append("")
-        out.append(render_function(fname, ts, implicit_self=False).strip())
+        out.append(
+            render_function(
+                fname,
+                ts,
+                implicit_self=False,
+                doc=getattr(func, "__doc__", None),
+                known=known,
+                indent="",
+            )
+        )
 
     text = "\n".join(out).rstrip() + "\n"
     ast.parse(text, filename=str(OUT_PATH))
+    # Pre-format, every `def` is one line, so the return annotation is on it.
+    typed_returns = len(
+        re.findall(r"^\s*def .*\) -> (?!Any:|None:)", text, re.MULTILINE)
+    )
 
     # Coverage self-check: every public module member must appear.
     stub_names = set(constants) | set(classes) | set(functions)
@@ -334,6 +488,7 @@ def main() -> None:
         f"  {len(classes)} classes, {n_methods} methods/constructors, "
         f"{n_props} properties, {len(functions)} functions, {len(constants)} constants"
     )
+    print(f"  typed returns: {typed_returns}")
     if SKIPPED_MEMBERS:
         print(f"  skipped (unrepresentable names): {', '.join(SKIPPED_MEMBERS)}")
 
