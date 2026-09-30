@@ -140,11 +140,14 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "ff"
 # Decoder exclusions (SEC-007 / ARC-007): AVIF is intentionally excluded — it
 # pulls in `ravif` → `rav1e` → the unmaintained `paste` proc-macro
 # (RUSTSEC-2024-0436). EXR is excluded for the same reason (exr → pulp →
-# paste) — the last remaining `paste` edge after the AVIF cut. HDR and DDS are
-# dropped as implausible terminal payloads. None of these formats are ever
-# produced by this crate (screenshots are PNG/JPEG/BMP; inline graphics decode
-# PNG/JPEG/GIF/WebP/TIFF/etc.), so the exclusions have no behavior impact
-# while keeping the tree free of unmaintained transitive dependencies.
+# paste). HDR and DDS are dropped as implausible terminal payloads. None of
+# these formats are ever produced by this crate (screenshots are PNG/JPEG/BMP;
+# inline graphics decode PNG/JPEG/GIF/WebP/TIFF/etc.), so the exclusions have
+# no behavior impact and `paste` is never compiled. It still appears in
+# Cargo.lock, and `cargo audit` still reports it, because the `rayon` feature
+# above declares the weak deps `ravif?/threading` and `exr?/rayon`, and cargo
+# records weakly referenced optional deps in the lockfile (SEC-134). This crate
+# calls no `image` rayon API, so dropping `rayon` removes the lockfile edge.
 # Optional (ARC-043): only the `screenshot` feature shapes text; slim
 # profiles (rust-only/mux/streaming-lib) must not compile it.
 swash = { version = "0.2.7", optional = true }
