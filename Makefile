@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python checkall check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -48,6 +48,7 @@ help:
 	@echo "  fmt-python      - Format Python code with ruff"
 	@echo "  lint            - Run Rust linters (clippy + fmt, auto-fix)"
 	@echo "  lint-python     - Run Python linters (format + ruff + pyright, auto-fix)"
+	@echo "  lint-check      - Non-mutating lint gate: fmt --check, clippy, ruff --check, pyright (used by checkall)"
 	@echo "  check           - Check Rust code without building"
 	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
@@ -58,7 +59,7 @@ help:
 	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
-	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
+	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
@@ -286,6 +287,17 @@ lint-python:
 	uv run ruff check --fix .
 	uv run pyright .
 
+# ARC-115: the non-mutating lint gate checkall runs. `lint`/`lint-python`
+# stay the auto-fix targets; a gate reports drift instead of rewriting it.
+# Keep the clippy feature list in sync with `lint` and `clippy`.
+lint-check:
+	@echo "Running non-mutating lint checks (Rust fmt + clippy, Python ruff + pyright)..."
+	cargo fmt -- --check
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin -- -D warnings
+	uv run ruff format --check .
+	uv run ruff check .
+	uv run pyright .
+
 check:
 	@echo "Checking Rust code..."
 	cargo check
@@ -366,7 +378,26 @@ ffi-header-check:
 ffi-surface-check:
 	python3 scripts/check_ffi_surface.py
 
-checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint lint-python stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+	@echo ""
+	@echo "======================================================================"
+	@echo "  All code quality checks passed!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Summary:"
+	@echo "  ✓ FFI header + surface checks"
+	@echo "  ✓ Rust tests"
+	@echo "  ✓ Rust streaming tests"
+	@echo "  ✓ Rust format (checked)"
+	@echo "  ✓ Rust lint (clippy, -D warnings)"
+	@echo "  ✓ Python format (checked)"
+	@echo "  ✓ Python lint (ruff)"
+	@echo "  ✓ Python type check (pyright)"
+	@echo "  ✓ Python stub check (pyright)"
+	@echo "  ✓ Python tests"
+	@echo "  ✓ Web frontend tests (vitest)"
+	@echo "  ✓ Caps table in sync"
+	@echo ""
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.
@@ -376,23 +407,6 @@ check-features:
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
 	cargo bench --no-default-features --features rust-only
-	@echo ""
-	@echo "======================================================================"
-	@echo "  All code quality checks passed!"
-	@echo "======================================================================"
-	@echo ""
-	@echo "Summary:"
-	@echo "  ✓ Rust tests"
-	@echo "  ✓ Rust streaming tests"
-	@echo "  ✓ Rust format (auto-fixed)"
-	@echo "  ✓ Rust lint (clippy auto-fixed)"
-	@echo "  ✓ Python format (auto-fixed)"
-	@echo "  ✓ Python lint (ruff auto-fixed)"
-	@echo "  ✓ Python type check (pyright)"
-	@echo "  ✓ Python stub check (pyright)"
-	@echo "  ✓ Python tests"
-	@echo "  ✓ Web frontend tests (vitest)"
-	@echo ""
 
 # ============================================================================
 # Pre-commit Hooks
