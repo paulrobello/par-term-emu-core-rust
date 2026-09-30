@@ -645,25 +645,32 @@ impl PyPtyTerminal {
     /// Args:
     ///     content: String content to paste
     fn paste(&mut self, content: &str) -> PyResult<()> {
-        let terminal = self.inner.terminal();
-        {
+        // QA-221: PtySession::write takes terminal.write() to record input,
+        // so a read guard held across self.write() is a read-to-write
+        // self-deadlock on the parking_lot RwLock, and any guard held across
+        // the PTY write starves the reader thread while write_all can block
+        // on a full PTY buffer. Snapshot the sequences under a short lock
+        // and write with no guard held.
+        let (start, end) = {
+            let terminal = self.inner.terminal();
             let term = terminal.read();
-            // Get the paste sequences (handles bracketed paste mode)
-            let start = term.bracketed_paste_start();
-            let end = term.bracketed_paste_end();
+            (
+                term.bracketed_paste_start().to_vec(),
+                term.bracketed_paste_end().to_vec(),
+            )
+        };
 
-            // Write start sequence if in bracketed paste mode
-            if !start.is_empty() {
-                self.write(start)?;
-            }
+        // Write start sequence if in bracketed paste mode
+        if !start.is_empty() {
+            self.write(&start)?;
+        }
 
-            // Write the actual content
-            self.write_str(content)?;
+        // Write the actual content
+        self.write_str(content)?;
 
-            // Write end sequence if in bracketed paste mode
-            if !end.is_empty() {
-                self.write(end)?;
-            }
+        // Write end sequence if in bracketed paste mode
+        if !end.is_empty() {
+            self.write(&end)?;
         }
         Ok(())
     }

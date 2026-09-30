@@ -2,6 +2,7 @@
 Integration tests for PTY functionality
 """
 
+import faulthandler
 import sys
 
 import pytest
@@ -728,6 +729,40 @@ def test_wait_for_text_releases_the_gil():
         f"wait_for_text starved a concurrent thread ({ticks['n']} ticks in 0.5 s); "
         "the GIL must be released while blocking"
     )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_paste_large_content_output_processing_continues():
+    """QA-221: paste() must not hold the terminal lock while writing to the PTY.
+
+    paste() read the bracketed-paste sequences under terminal.read() and kept
+    that guard across PtySession::write, which takes terminal.write() for
+    input recording — a read-to-write request on the same parking_lot RwLock,
+    i.e. an unconditional self-deadlock on every paste. Even after the lock
+    fix, a large paste only completes if the reader thread keeps processing
+    the child's echo while the write is in flight. The faulthandler bound is
+    C-level because a regressed paste parks with the GIL held, which starves
+    pytest-timeout's thread-method watchdog.
+    """
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/cat")
+
+    marker = "PASTE_MARK_QA221_END"
+    # Canonical-mode cat drops un-newlined input past the tty line buffer, so
+    # the payload is newline-terminated lines; the final line carries the
+    # marker.
+    payload = "x" * 128 + "\n"
+    faulthandler.dump_traceback_later(15, exit=True)
+    try:
+        term.paste(payload * 2048 + marker + "\n")
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+    # The tail marker can only surface if output processing kept running
+    # while the paste write was in flight.
+    assert wait_for(lambda: marker in term.content(), timeout=3.5)
 
 
 if __name__ == "__main__":
