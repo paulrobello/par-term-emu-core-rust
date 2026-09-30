@@ -301,7 +301,7 @@ mod tests {
             dir.path(),
             vec![
                 Conn {
-                    list_agents_body: "1 claude idle hook\n",
+                    list_agents_body: "1 claude idle hook\n9 ghost working scrape\n",
                     then_send: &["%agent-state-changed %1 claude working source=hook"],
                     hold: false,
                 },
@@ -314,7 +314,10 @@ mod tests {
         );
         let (on_message, rx) = collect();
         let watcher = RosterWatcher::spawn(path, on_message);
-        assert_eq!(entries(next(&rx)), vec![(1, "idle".to_string())]);
+        assert_eq!(
+            entries(next(&rx)),
+            vec![(1, "idle".to_string()), (9, "working".to_string())]
+        );
         assert!(matches!(
             next(&rx),
             ServerMessage::AgentStateChanged {
@@ -324,11 +327,15 @@ mod tests {
         ));
         // The double dropped the connection: a fresh roster follows, carrying
         // the state the daemon now reports (including a pane the watcher
-        // never saw a delta for).
+        // never saw a delta for) and dropping pane 9, which vanished while
+        // the watcher was disconnected.
         assert_eq!(
             entries(next(&rx)),
             vec![(1, "blocked".to_string()), (2, "idle".to_string())]
         );
-        assert_eq!(entries(watcher.snapshot()).len(), 2);
+        assert_eq!(
+            entries(watcher.snapshot()),
+            vec![(1, "blocked".to_string()), (2, "idle".to_string())]
+        );
     }
 }
