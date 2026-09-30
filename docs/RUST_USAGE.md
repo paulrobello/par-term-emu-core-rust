@@ -576,7 +576,7 @@ cargo doc --all-features --open
 
 ## C FFI
 
-The library ships a C embedding surface: hand-written header [`include/terminal_core.h`](../include/terminal_core.h) mirroring `src/ffi.rs`, with a damage-driven render loop (`terminal_feed` / `terminal_dirty_ranges` / `terminal_read_row`), key encoding, snapshots, and observers. Build it for Apple platforms with `make xcframework`, or as a static library with `cargo rustc --lib --crate-type staticlib`.
+The library ships a C embedding surface: the cbindgen-generated header [`include/terminal_core.h`](../include/terminal_core.h) (generated from `src/ffi.rs` by `make ffi-header`; the `TERM_*` constants and layout asserts live in the hand-written `terminal_core_layout.h`), with a damage-driven render loop (`terminal_feed` / `terminal_dirty_ranges` / `terminal_read_row`), key encoding, snapshots, and observers. Build it for Apple platforms with `make xcframework`, or as a static library with `cargo rustc --lib --crate-type staticlib`.
 
 See the [FFI Guide](FFI_GUIDE.md) for the full surface, contracts, and examples.
 

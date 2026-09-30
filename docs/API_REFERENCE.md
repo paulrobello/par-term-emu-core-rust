@@ -2477,7 +2477,7 @@ print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} by
 
 ## C-Compatible FFI
 
-The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability, pinned by `_Static_assert`s against the Rust side. The authoritative reference is the hand-written header `include/terminal_core.h` — see the [FFI Guide](FFI_GUIDE.md) for the full surface (lifecycle, the damage-driven render loop, key encoding, snapshots, observers, and the `make xcframework` iOS build).
+The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability, pinned by `_Static_assert`s against the Rust side. The authoritative reference is the cbindgen-generated header `include/terminal_core.h` (regenerate with `make ffi-header`; the `TERM_*` constants and layout asserts live in the hand-written `terminal_core_layout.h`) — see the [FFI Guide](FFI_GUIDE.md) for the full surface (lifecycle, the damage-driven render loop, key encoding, snapshots, observers, and the `make xcframework` iOS build).
 
 ### SharedCell
 
