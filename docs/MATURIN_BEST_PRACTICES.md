@@ -19,7 +19,7 @@ This document analyzes our project's compliance with [Maturin](https://github.co
 ### Following Best Practices
 
 #### 1. **Project Structure**
-```
+```text
 par-term-emu-core-rust/
 ├── Cargo.toml
 ├── python/

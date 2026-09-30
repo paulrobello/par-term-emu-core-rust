@@ -150,7 +150,7 @@ The crate produces three artifacts:
 
 ### Data Flow
 
-```
+```text
 Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/Cursor) → Python API queries
                            (src/terminal/sequences/)   (src/terminal/mod.rs)        (src/python_bindings/)
 ```

@@ -71,7 +71,7 @@ The test script creates two animations:
 
 ### Frame Transmission
 
-```
+```text
 ESC _ G a=f,i=<id>,r=<frame>,z=<delay>[,c=<comp>],f=100,t=d ; <base64_png> ESC \
 ```
 
@@ -95,7 +95,7 @@ print(f"\x1b_G{payload}\x1b\\", end="", flush=True)
 
 ### Animation Control
 
-```
+```text
 ESC _ G a=a,i=<id>,s=<state>[,v=<num_plays>] ESC \
 ```
 
@@ -325,7 +325,7 @@ tail -f /tmp/par_term_emu_core_rust_debug_rust.log
 ```
 
 **Expected log output:**
-```
+```text
 KITTY: Parsed animation control: s=3 -> Some(EnableLooping)
 ANIMATION: Adding frame 1 to image_id=42 (delay=500ms, size=100x100)
 ANIMATION: Frame 1 added. Total frames in animation: 1
