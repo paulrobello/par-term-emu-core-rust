@@ -104,6 +104,8 @@ When bumping the project version, update all three files to the same value in on
 
 Also update `CHANGELOG.md` and note breaking changes in both `CHANGELOG.md` and the README "What's New" section.
 
+Before tagging, `make release-check` must pass; then run `python3 scripts/check_release_notes.py --write` for the compare link.
+
 ## Rust to Python Binding Sync
 
 When you add or modify a Rust method on `Terminal` or `PtySession`, keep the layers in sync:
