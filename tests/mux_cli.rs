@@ -660,3 +660,288 @@ fn explicit_socket_and_name_beat_the_env_default() {
         by_flag.stderr
     );
 }
+
+// ---- ENH-039: the pane env contract's PAR_MUX_* set and the in-pane
+// `--cmd` reachability across the daemon's endpoint modes (card
+// 01a0f633, criterion 4). Unix-only: the probes type POSIX shell into a
+// pane.
+
+/// The variable names a default daemon's env contract exports into a pane —
+/// the pre-ENH-039 set. A contract change fails here first, so it lands
+/// deliberately.
+#[cfg(unix)]
+const DEFAULT_PANE_ENV: [&str; 7] = [
+    "PAR_MUX_BIN",
+    "PAR_MUX_ENV",
+    "PAR_MUX_PANE_ID",
+    "PAR_MUX_SESSION",
+    "PAR_MUX_SESSION_ID",
+    "PAR_MUX_SOCKET",
+    "PAR_MUX_WINDOW_ID",
+];
+
+/// Spawn the daemon with extra flags on the standard socket/state wiring —
+/// [`spawn_daemon`] extended for `--pane-endpoints`.
+#[cfg(unix)]
+fn spawn_daemon_with_args(fixture: &MuxFixture, extra: &[&str]) -> DaemonGuard {
+    let child = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .args(extra)
+        .env_remove("PAR_MUX_ENV")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("daemon spawns");
+    DaemonGuard::wrap(child)
+}
+
+/// Type one line into `pane` (literal, then Enter).
+#[cfg(unix)]
+fn type_line(socket: &Path, pane: &str, line: &str) {
+    cmd_ok(
+        socket,
+        &format!("send-keys -t {pane} -l '{}'", line.replace('\'', r"'\''")),
+    );
+    cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
+}
+
+/// The PAR_MUX_* variable names the pane's environment exports, sorted.
+/// `cut -d= -f1` keeps every line under the 80-column wrap, and
+/// `PAR_MUX_WINDOW_ID` sorts last, so its arrival means the sorted list is
+/// complete.
+#[cfg(unix)]
+fn pane_env_names(socket: &Path, pane: &str) -> Vec<String> {
+    type_line(socket, pane, "env | grep ^PAR_MUX | cut -d= -f1 | sort");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let screen = loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        if screen.lines().any(|l| l.trim() == "PAR_MUX_WINDOW_ID") {
+            break screen;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never printed its PAR_MUX env; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let mut names: Vec<String> = screen
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.starts_with("PAR_MUX_") && l.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+        })
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Assert the pane exports exactly `expected` — set equality, so an added
+/// or removed variable fails loudly.
+#[cfg(unix)]
+fn assert_env_set(names: &[String], expected: &[&str]) {
+    let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    assert_eq!(names, &want, "the pane's PAR_MUX_* env set");
+}
+
+/// `{marker}=MATCH` iff the pane's `var` matches `pattern`: type a `case`
+/// probe into the pane and wait for the verdict line. `pattern` is the raw
+/// case-pattern text — quote it (`"path"`) for a literal comparison, leave
+/// globs (`*.pane-*`) bare. Verdict lines are short, so a wrapped echo of
+/// the long probe text can never equal one.
+#[cfg(unix)]
+fn pane_var_verdict(socket: &Path, pane: &str, var: &str, pattern: &str, marker: &str) -> String {
+    type_line(
+        socket,
+        pane,
+        &format!(
+            "case \"${var}\" in {pattern}) echo {marker}=MATCH;; *) echo {marker}=DIFF;; esac"
+        ),
+    );
+    let want_match = format!("{marker}=MATCH");
+    let want_diff = format!("{marker}=DIFF");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        for line in screen.lines() {
+            let line = line.trim();
+            if line == want_match || line == want_diff {
+                return line.to_string();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never printed {marker}=MATCH/DIFF; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Type `"$PAR_MUX_BIN" --cmd list-panes; echo LP=$?` into the pane — the
+/// in-pane client form with no --socket and no NAME, whose target is
+/// whatever the env contract exported — and return the `LP=<code>` verdict
+/// line plus the screen it appeared on.
+#[cfg(unix)]
+fn pane_list_panes_exit(socket: &Path, pane: &str) -> (String, String) {
+    type_line(
+        socket,
+        pane,
+        r#""$PAR_MUX_BIN" --cmd list-panes; echo LP=$?"#,
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        if let Some(line) = screen
+            .lines()
+            .map(str::trim)
+            .find(|l| l.len() == 4 && l.starts_with("LP=") && l.as_bytes()[3].is_ascii_digit())
+        {
+            return (line.to_string(), screen);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never printed LP=<code>; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// ENH-039 criterion 4, default: a daemon started with neither new flag
+/// exports exactly the pre-ENH-039 PAR_MUX_* set, with PAR_MUX_SOCKET
+/// naming the control socket — and `list-panes` typed in the pane reaches
+/// the daemon.
+#[test]
+#[cfg(unix)]
+fn pane_env_contract_default_exports_the_historical_set() {
+    let fixture = MuxFixture::new("clienvdef");
+    let _daemon = daemon_with_session(&fixture, "clienvdef");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    assert_env_set(&pane_env_names(socket, &pane), &DEFAULT_PANE_ENV);
+    assert_eq!(
+        pane_var_verdict(
+            socket,
+            &pane,
+            "PAR_MUX_SOCKET",
+            &format!("\"{}\"", socket.to_str().expect("utf-8 socket path")),
+            "SS",
+        ),
+        "SS=MATCH",
+        "the default contract's socket is the control socket"
+    );
+
+    let (exit_line, screen) = pane_list_panes_exit(socket, &pane);
+    assert_eq!(
+        exit_line, "LP=0",
+        "list-panes typed in the pane succeeds; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains(pane.as_str()),
+        "the reply names this daemon's pane: {screen}"
+    );
+}
+
+/// ENH-039 criterion 4, exposed: with `--pane-endpoints
+/// --expose-control-socket` the pane's PAR_MUX_SOCKET names its hook-only
+/// endpoint, the full socket rides as PAR_MUX_CONTROL_SOCKET, and
+/// `list-panes` typed in the pane still succeeds — through that fallback,
+/// since the endpoint would have refused.
+#[test]
+#[cfg(unix)]
+fn pane_env_contract_with_pane_endpoints_and_exposed_control_socket() {
+    let fixture = MuxFixture::new("cliendexp");
+    let daemon = spawn_daemon_with_args(&fixture, &["--pane-endpoints", "--expose-control-socket"]);
+    wait_listening(fixture.socket());
+    let socket = fixture.socket();
+    cmd_ok(socket, "new-session -s cliendexp");
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    let mut expected = DEFAULT_PANE_ENV.to_vec();
+    expected.push("PAR_MUX_CONTROL_SOCKET");
+    assert_env_set(&pane_env_names(socket, &pane), &expected);
+
+    assert_eq!(
+        pane_var_verdict(socket, &pane, "PAR_MUX_SOCKET", "*.pane-*", "SS"),
+        "SS=MATCH",
+        "the pane's socket is its own endpoint"
+    );
+    assert_eq!(
+        pane_var_verdict(
+            socket,
+            &pane,
+            "PAR_MUX_CONTROL_SOCKET",
+            &format!("\"{}\"", socket.to_str().expect("utf-8 socket path")),
+            "CC",
+        ),
+        "CC=MATCH",
+        "the exposed control socket is the full socket"
+    );
+
+    let (exit_line, screen) = pane_list_panes_exit(socket, &pane);
+    assert_eq!(
+        exit_line, "LP=0",
+        "list-panes via the exposed control socket succeeds; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains(pane.as_str()),
+        "the reply names this daemon's pane: {screen}"
+    );
+
+    drop(daemon);
+}
+
+/// ENH-039 criterion 4, endpoint-only: `--pane-endpoints` alone keeps the
+/// control socket out of the pane's env — exactly the historical variable
+/// set, with PAR_MUX_SOCKET naming the endpoint — and `list-panes` typed
+/// in the pane exits non-zero with the hook-only message. The daemon
+/// itself keeps serving the control socket.
+#[test]
+#[cfg(unix)]
+fn pane_env_contract_with_pane_endpoints_alone_refuses_control() {
+    let fixture = MuxFixture::new("cliendonly");
+    let daemon = spawn_daemon_with_args(&fixture, &["--pane-endpoints"]);
+    wait_listening(fixture.socket());
+    let socket = fixture.socket();
+    cmd_ok(socket, "new-session -s cliendonly");
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    assert_env_set(&pane_env_names(socket, &pane), &DEFAULT_PANE_ENV);
+    assert_eq!(
+        pane_var_verdict(socket, &pane, "PAR_MUX_SOCKET", "*.pane-*", "SS"),
+        "SS=MATCH",
+        "the pane's socket is its own endpoint"
+    );
+
+    let (exit_line, screen) = pane_list_panes_exit(socket, &pane);
+    assert_eq!(
+        exit_line, "LP=1",
+        "list-panes exits non-zero through the hook-only endpoint; screen:\n{screen}"
+    );
+    // The refusal names the contract; newline-collapsed because the 80-column
+    // wrap can split the message mid-word.
+    assert!(
+        screen.replace('\n', "").contains("hook-only"),
+        "the refusal names the hook-only contract; screen:\n{screen}"
+    );
+    assert!(
+        pane_ids(&cmd_ok(socket, "list-panes")).contains(&pane),
+        "the daemon still serves the control socket"
+    );
+
+    drop(daemon);
+}

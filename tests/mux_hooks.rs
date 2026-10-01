@@ -21,7 +21,7 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 mod common;
 
 use base64::Engine as _;
-use common::{sigterm_clean, spawn_daemon, wait_listening, MuxFixture};
+use common::{sigterm_clean, wait_listening, MuxFixture};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -129,9 +129,30 @@ struct Stage {
 }
 
 fn stage(tag: &str) -> Stage {
+    stage_with(tag, &[])
+}
+
+/// [`stage`] on a daemon started with extra flags — `--pane-endpoints` and
+/// friends (ENH-039). Everything else is the same stage.
+fn stage_with(tag: &str, daemon_args: &[&str]) -> Stage {
+    use std::process::Stdio;
     let fixture = MuxFixture::new(tag);
     let path = fixture.socket().to_path_buf();
-    let daemon = spawn_daemon(&fixture);
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(&path)
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .args(daemon_args)
+        // Test daemons are deliberate, not nested: strip the pane marker so
+        // the nesting guard does not refuse them when the suite itself runs
+        // inside a mux pane (why common::spawn_daemon strips it too).
+        .env_remove("PAR_MUX_ENV")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("daemon binary spawns");
+    let daemon = common::DaemonGuard::wrap(child);
     wait_listening(&path);
     let mut control = Control::connect(&path);
     control.command("new-session -s hooks");
@@ -174,6 +195,57 @@ fn hook_round_trip(path: &std::path::Path, report: &str) -> String {
     let n = reader.read_line(&mut reply).expect("read reply");
     assert!(n > 0, "server closed before replying");
     reply
+}
+
+/// The endpoint path pane `pane`'s env exports as `PAR_MUX_SOCKET`. The
+/// pane prints the variable's basename (a full path would wrap past the
+/// 80-column screen and split); the test joins it with the fixture dir the
+/// endpoints are bound beside. `refresh-client` returns the styled grid —
+/// escapes wrap the text and row ends ride as escaped `\r\n` — so the
+/// marker is searched anywhere in a line and the value is read only up to
+/// the first character a socket file name cannot contain; the `.pane-`
+/// requirement skips the echoed command, which also contains the marker.
+fn pane_endpoint_of(stage: &mut Stage, pane: &str) -> std::path::PathBuf {
+    stage.control.command(&format!(
+        "send-keys -t {pane} -l '{}'",
+        r"echo PS=${PAR_MUX_SOCKET##*/}"
+    ));
+    stage.control.command(&format!("send-keys -t {pane} Enter"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found: Option<String> = None;
+    while found.is_none() {
+        let screen = stage
+            .control
+            .command(&format!("refresh-client -t {pane}"))
+            .join("");
+        for line in screen.lines() {
+            if let Some(idx) = line.find("PS=") {
+                let rest = &line[idx + "PS=".len()..];
+                let value: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '%'))
+                    .collect();
+                if value.contains(".pane-") {
+                    found = Some(value);
+                    break;
+                }
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never printed PS=<endpoint>; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let base = found.expect("checked above");
+    stage
+        .path
+        .parent()
+        .expect("the control socket has a parent dir")
+        .join(base)
 }
 
 /// The kimi script's report shape, for hand-driven reports: seq large and
@@ -624,13 +696,24 @@ fn a_hook_connection_receives_no_broadcast_pushes() {
     sigterm_clean(&mut stage.daemon);
 }
 
-#[test]
-fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
-    let mut stage = stage("port-proof");
+/// The port proof, parameterized over `--pane-endpoints` (ENH-039
+/// criterion 4): the asset script is untouched, and in endpoint mode it
+/// runs with the pane's own endpoint — the socket the pane's env actually
+/// exports — as its `PAR_MUX_SOCKET`, so its own-pane reports still land.
+fn herdr_kimi_script_env_renamed_drives(pane_endpoints: bool) {
+    let mut stage = stage_with(
+        "port-proof",
+        if pane_endpoints {
+            &["--pane-endpoints"][..]
+        } else {
+            &[][..]
+        },
+    );
     let pane = stage.pane.clone();
 
     // The daemon seeds the env contract into every pane it spawns — that is
-    // what lets a ported script run from INSIDE a pane.
+    // what lets a ported script run from INSIDE a pane. Endpoint mode keeps
+    // the marker pair (`PAR_MUX_ENV`/`PAR_MUX_PANE_ID`) intact.
     stage.control.command(&format!(
         "send-keys -t {pane} 'echo PM=$PAR_MUX_ENV/$PAR_MUX_PANE_ID' Enter"
     ));
@@ -650,6 +733,16 @@ fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // The socket the script reports through: the control socket by default,
+    // the pane's own hook-only endpoint under --pane-endpoints — read from
+    // the pane's env rather than assumed.
+    let script_socket: String = if pane_endpoints {
+        let endpoint = pane_endpoint_of(&mut stage, &pane);
+        endpoint.to_str().expect("utf-8 endpoint path").to_string()
+    } else {
+        stage.path.to_str().expect("utf-8 socket path").to_string()
+    };
+
     // herdr's own script, env-renamed, driving the daemon from outside.
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/assets/par-mux-agent-state.sh");
@@ -658,7 +751,7 @@ fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
             .arg(&script)
             .arg(action)
             .env("PAR_MUX_ENV", "1")
-            .env("PAR_MUX_SOCKET", &stage.path)
+            .env("PAR_MUX_SOCKET", &script_socket)
             .env("PAR_MUX_PANE_ID", &pane)
             .stdin(std::process::Stdio::null())
             .output()
@@ -674,6 +767,187 @@ fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
             "the ported script drove the pane's state"
         );
     }
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
+#[test]
+fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
+    herdr_kimi_script_env_renamed_drives(false);
+}
+
+/// The same port proof against a `--pane-endpoints` daemon: the script's
+/// socket is the pane's hook-only endpoint and its own-pane reports still
+/// land — the migration property ENH-039 promises (assets unchanged).
+#[test]
+fn herdr_kimi_script_env_renamed_drives_a_live_daemon_with_pane_endpoints() {
+    herdr_kimi_script_env_renamed_drives(true);
+}
+
+/// ENH-039 (card 01a0f633, criterion 1): under `--pane-endpoints` a pane's
+/// `PAR_MUX_SOCKET` accepts only hook reports. A pane connecting to it and
+/// sending `capture-pane -t %0`, `send-keys -t %0 x` or `kill-server` gets
+/// the hook-only refusal and a closed connection — and nothing changes:
+/// no `x` typed, no server killed, the daemon still serving commands.
+#[test]
+fn a_pane_endpoint_refuses_control_commands_and_leaves_the_daemon_unchanged() {
+    let mut stage = stage_with("endpoint-refuse", &["--pane-endpoints"]);
+    let pane = stage.pane.clone();
+    let endpoint = pane_endpoint_of(&mut stage, &pane);
+
+    // The pane's visible content — non-blank lines, reply framing
+    // (%begin/%end with per-reply counters) stripped. Blank rows churn as
+    // the shell's line editor redraws, so only content is compared.
+    fn content(text: &str) -> Vec<String> {
+        text.lines()
+            .filter(|l| {
+                !l.starts_with("%begin")
+                    && !l.starts_with("%end")
+                    && !l.starts_with("%error")
+                    && !l.starts_with("%output")
+                    && !l.trim().is_empty()
+            })
+            .map(str::to_string)
+            .collect()
+    }
+    // The pre-refusal content, once the pane is SETTLED: zsh draws the next
+    // prompt some time after the echo's output lands, so capture until two
+    // consecutive content snapshots agree.
+    let mut before = content(
+        &stage
+            .control
+            .command(&format!("capture-pane -t {pane}"))
+            .join(""),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        let next = content(
+            &stage
+                .control
+                .command(&format!("capture-pane -t {pane}"))
+                .join(""),
+        );
+        let settled = next == before;
+        before = next;
+        if settled || Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    for refused in [
+        format!("capture-pane -t {pane}"),
+        format!("send-keys -t {pane} x"),
+        "kill-server".to_string(),
+    ] {
+        let stream = UnixStream::connect(&endpoint).expect("the endpoint accepts");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout installs");
+        let mut writer = stream.try_clone().expect("clone");
+        writeln!(writer, "{refused}").expect("send command");
+        writer.flush().expect("flush");
+        let mut reader = BufReader::new(stream);
+        let mut reply = String::new();
+        reader.read_line(&mut reply).expect("read the refusal");
+        assert_eq!(
+            reply.trim(),
+            r#"{"error":"hook-only endpoint"}"#,
+            "{refused:?} is refused with the hook-only error: {reply}"
+        );
+        // The endpoint closes after refusing — the next read is EOF, so a
+        // control-mode client learns immediately instead of timing out.
+        let n = reader
+            .read_line(&mut String::new())
+            .expect("read after the refusal");
+        assert_eq!(n, 0, "the connection closes after the refusal: {refused:?}");
+    }
+
+    // No `x` typed (the content lists are equal and `before` has none) and
+    // the daemon still serves list-panes (kill-server was refused).
+    let after = content(
+        &stage
+            .control
+            .command(&format!("capture-pane -t {pane}"))
+            .join(""),
+    );
+    assert_eq!(
+        before, after,
+        "the pane's visible content is untouched by the refused commands"
+    );
+    assert!(
+        pane_ids(&stage.control.command("list-panes").join("")).contains(&pane),
+        "the daemon still serves commands after kill-server was refused"
+    );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
+/// ENH-039 (card 01a0f633, criterion 1): an endpoint is bound to its pane.
+/// Over pane %1's endpoint a report naming `%0` is refused with "pane_id
+/// does not match this endpoint" and nothing lands; the same report naming
+/// `%1` — or omitting pane_id, which the endpoint fills in — is accepted,
+/// broadcast, and visible in `list-agents` for `%1`.
+#[test]
+fn a_pane_endpoint_binds_hook_reports_to_its_own_pane() {
+    let mut stage = stage_with("endpoint-bind", &["--pane-endpoints"]);
+    stage
+        .control
+        .command(&format!("split-window -t {} -h", stage.pane));
+    let bound = "%1".to_string();
+    let endpoint = pane_endpoint_of(&mut stage, &bound);
+
+    // A report for another pane over %1's endpoint is refused before
+    // anything is looked up or written: %0 never reaches the roster.
+    let cross = hook_round_trip(&endpoint, &report("%0", "working", 1_000));
+    assert!(
+        cross.contains("pane_id does not match this endpoint"),
+        "a cross-pane report is refused: {cross}"
+    );
+
+    // The same report naming the bound pane is accepted and broadcast.
+    let own = hook_round_trip(&endpoint, &report(&bound, "working", 1_000));
+    assert!(
+        own.contains(r#""result":"ok""#),
+        "the bound pane's own report is accepted: {own}"
+    );
+    let broadcast = stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the bound pane's broadcast",
+    );
+    assert_eq!(
+        broadcast,
+        format!("%agent-state-changed {bound} kimi working source=hook\n"),
+        "the accepted report broadcast names the bound pane"
+    );
+
+    // A report omitting pane_id is filed for the bound pane — the minimal
+    // hook script needs no pane id at all.
+    let omitted = hook_round_trip(
+        &endpoint,
+        r#"{"id":"probe-1001","method":"pane.report_agent","params":{"agent":"kimi","state":"blocked","seq":1001,"source":"par-mux:test"}}"#,
+    );
+    assert!(
+        omitted.contains(r#""result":"ok""#),
+        "a report without pane_id is accepted: {omitted}"
+    );
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the pane-less report's broadcast",
+    );
+
+    // The roster carries %1's latest state and never %0's.
+    let roster = stage.control.command("list-agents").join("");
+    assert!(
+        roster.contains(&format!("{bound} kimi blocked hook")),
+        "the bound pane's latest state is rostered: {roster}"
+    );
+    assert!(
+        !roster.contains("%0 kimi"),
+        "no report ever landed for %0: {roster}"
+    );
 
     drop(stage.control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut stage.daemon);
