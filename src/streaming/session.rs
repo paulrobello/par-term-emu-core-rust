@@ -209,13 +209,20 @@ impl StreamSessionState {
         }
     }
 
-    /// Build a Connected message from current terminal state
+    /// Build a Connected message from current terminal state.
+    ///
+    /// The `initial_screen` payload (when `send_initial_screen` is set) is
+    /// the screen-restore encoding — main-screen scrollback first, then the
+    /// styled visible screen with cursor and modes — so a late joiner
+    /// replays history above the live screen (card 01a0efb2). The mux-backed
+    /// factory seeds its mirrors from `refresh-client`, which carries the
+    /// same shape, so a mux-pane session hands over its whole history too.
     pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
 
         let initial_screen = if self.send_initial_screen {
-            Some(terminal.export_visible_screen_styled())
+            Some(terminal.export_screen_restore_sequence())
         } else {
             None
         };
@@ -814,6 +821,47 @@ mod tests {
         assert_eq!(session.id, "test-session");
         assert_eq!(session.client_count(), 0);
         assert!(session.created_at > 0);
+    }
+
+    /// Card 01a0efb2: `initial_screen` carries the terminal's scrollback,
+    /// not just the live screen, so a late joiner sees history. The payload
+    /// must replay into a fresh same-size terminal with the history in its
+    /// scrollback and the live screen intact.
+    #[tokio::test]
+    async fn connect_message_initial_screen_carries_scrollback_history() {
+        let mut terminal = Terminal::new(80, 24);
+        for line in 0..30 {
+            terminal.process(format!("HISTORY-{line:02}\r\n").as_bytes());
+        }
+        terminal.process(b"LIVE-PROMPT> ");
+        let terminal = Arc::new(RwLock::new(terminal));
+        let session = StreamSessionState::new("hist".to_string(), terminal, None, true);
+
+        let screen = match session.build_connect_message("client-1", false) {
+            ServerMessage::Connected { initial_screen, .. } => {
+                initial_screen.expect("send_initial_screen=true produces a payload")
+            }
+            other => panic!("expected Connected, got {other:?}"),
+        };
+        assert!(
+            screen.contains("HISTORY-05"),
+            "scrolled-off history rides initial_screen"
+        );
+
+        let mut fresh = Terminal::new(80, 24);
+        fresh.process(screen.as_bytes());
+        assert!(
+            fresh
+                .export_scrollback(crate::terminal::ExportFormat::Plain, None)
+                .contains("HISTORY-05"),
+            "the replayed history sits in the fresh terminal's scrollback"
+        );
+        let visible = fresh.export_visible_screen_styled();
+        assert!(visible.contains("LIVE-PROMPT"), "the live screen is intact");
+        assert!(
+            !visible.contains("HISTORY-05"),
+            "history is not on the visible screen"
+        );
     }
     #[tokio::test]
     async fn test_session_state_client_count() {
