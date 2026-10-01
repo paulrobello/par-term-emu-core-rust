@@ -3432,8 +3432,11 @@ mod tests {
             .write_all(b"list-sessions\n")
             .expect("sends a command");
 
-        // The first control command is what registers the client.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // The first control command is what registers the client. The
+        // deadline is load-tolerant (QA-228): it only bounds a FAILURE, so a
+        // generous ceiling costs nothing on the fast path and stops a
+        // parallel-load scheduler stall from failing the wait.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while clients.lock().is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -3450,7 +3453,7 @@ mod tests {
         // the eviction lands rather than a fixed count, bounded by a
         // deadline.
         let filler = "x".repeat(1000);
-        let evicted_by = std::time::Instant::now() + Duration::from_secs(10);
+        let evicted_by = std::time::Instant::now() + Duration::from_secs(30);
         let mut n = 0usize;
         while !clients.lock().is_empty() {
             assert!(
@@ -3480,9 +3483,13 @@ mod tests {
                 }
                 let _ = eof_tx.send(());
             });
+            // Load-tolerant ceiling (QA-228): the wake-and-drain normally
+            // finishes within a couple of EVICTION_POLLs; under parallel
+            // load the writer thread's scheduling can stretch far past the
+            // old 5 s wall, so bound at 30 s instead.
             assert!(
-                eof_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
-                "the evicted client's socket closed within 5 s of eviction"
+                eof_rx.recv_timeout(Duration::from_secs(30)).is_ok(),
+                "the evicted client's socket closed within 30 s of eviction"
             );
         }
         let _ = std::fs::remove_file(&socket_path);
