@@ -84,16 +84,7 @@ repos:
         types: [python]
         pass_filenames: false
 
-  # Python tests with pytest
-  # NOTE: This runs on pre-commit. You may want to disable this if tests are slow.
-  # Comment out this section if you prefer to run tests manually before pushing.
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        description: Run Python integration tests
-        entry: bash -c 'uv sync && maturin develop && uv run pytest tests/ -v'
-        language: system
-        types: [python]
-        pass_filenames: false
-        stages: [pre-commit]
+  # Python tests are NOT run in pre-commit: the `maturin develop` rebuild made
+  # every Rust-touching commit take minutes, and the resulting machine load
+  # flaked the streaming suite's latency-sensitive timeouts. make checkall is
+  # the authoritative test gate (run before every push).
