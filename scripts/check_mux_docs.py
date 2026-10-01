@@ -53,7 +53,7 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "docs/API_REFERENCE.md",
 )
 
-COMMANDS_ROW_RE = re.compile(r'\("([a-z-]+)",\s*(\w+)\)')
+COMMANDS_ROW_RE = re.compile(r'\("([a-z-]+)",\s*(\w+)')
 VARIANT_RE = re.compile(r"MuxCommand::(\w+)")
 EMIT_STRING_RE = re.compile(r'"%([a-z-]+)')
 DOC_CMD_ROW_RE = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
@@ -141,7 +141,7 @@ def parse_commands(command_rs: str) -> list[tuple[str, str]]:
     rows = COMMANDS_ROW_RE.findall(command_rs[start:end])
     if not rows:
         fail(
-            "parsed nothing from src/mux/command.rs: no (name, parser) rows inside `const COMMANDS`"
+            "parsed nothing from src/mux/command.rs: no (name, parser, …) rows inside `const COMMANDS`"
         )
     return rows
 
@@ -409,11 +409,11 @@ def run_self_test(root: Path) -> int:
             "exit",
         ),
         (
-            'add a fake ("fake-cmd", parse_version) entry to COMMANDS',
+            'add a fake ("fake-cmd", parse_version, &[]) entry to COMMANDS',
             "src/mux/command.rs",
             lambda t: t.replace(
-                '("version", parse_version),',
-                '("version", parse_version),\n    ("fake-cmd", parse_version),',
+                '("version", parse_version, &[]),',
+                '("version", parse_version, &[]),\n    ("fake-cmd", parse_version, &[]),',
                 1,
             ),
             "fake-cmd",

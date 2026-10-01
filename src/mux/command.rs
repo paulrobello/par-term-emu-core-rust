@@ -1029,58 +1029,48 @@ fn parse_size_flag(
 /// One per-command parser, dispatched by name from the [`COMMANDS`] table.
 type CommandParser = fn(&Args<'_>) -> Result<MuxCommand, String>;
 
-/// The command table: every command name with its parser. Adding a tmux
+/// The command table (ARC-094b): every command's wire name, parser, and —
+/// third column — the feature tokens `list-commands` (ENH-037) reports for
+/// it, so a command's parser and its advertised metadata live on one
+/// declarative row instead of parallel lists. Feature grammar: tokens are
+/// `[a-z-]+`; a client must ignore unknown tokens and lines, and a daemon
+/// never removes a token without a CHANGELOG "Removed" entry. Adding a tmux
 /// command is one `parse_<cmd>` function plus one row here.
-const COMMANDS: &[(&str, CommandParser)] = &[
-    ("new-session", parse_new_session),
-    ("list-panes", parse_list_panes),
-    ("list-agents", parse_list_agents),
-    ("list-commands", parse_list_commands),
-    ("kill-pane", parse_kill_pane),
-    ("refresh-client", parse_refresh_client),
-    ("send-keys", parse_send_keys),
-    ("new-window", parse_new_window),
-    ("select-window", parse_select_window),
-    ("kill-window", parse_kill_window),
-    ("rename-window", parse_rename_window),
-    ("list-windows", parse_list_windows),
-    ("list-sessions", parse_list_sessions),
-    ("kill-server", parse_kill_server),
-    ("rename-session", parse_rename_session),
-    ("kill-session", parse_kill_session),
-    ("split-window", parse_split_window),
-    ("select-pane", parse_select_pane),
-    ("pane-title", parse_pane_title),
-    ("pane-info", parse_pane_info),
-    ("resize-pane", parse_resize_pane),
-    ("swap-pane", parse_swap_pane),
-    ("break-pane", parse_break_pane),
-    ("join-pane", parse_join_pane),
-    ("move-window", parse_move_window),
-    ("swap-window", parse_swap_windows),
-    ("respawn-pane", parse_respawn_pane),
-    ("capture-pane", parse_capture_pane),
-    ("set-buffer", parse_set_buffer),
-    ("set-client-colors", parse_set_client_colors),
-    ("set-environment", parse_set_environment),
-    ("show-buffer", parse_show_buffer),
-    ("paste-buffer", parse_paste_buffer),
-    ("version", parse_version),
-];
-
-/// Per-command feature tokens [`list_commands_body`] reports after a
-/// command's name (ENH-037): flags a client cannot probe by sending, so it
-/// gates its own UI on them. Grammar: tokens are `[a-z-]+`; a client must
-/// ignore unknown tokens and lines, and a daemon never removes a token
-/// without a CHANGELOG "Removed" entry. Keys must be [`COMMANDS`] names
-/// (pinned by a unit test, so a typo fails).
-const COMMAND_FEATURES: &[(&str, &[&str])] = &[
-    ("resize-pane", &["zoom", "absolute"]),
-    ("split-window", &["before", "start-dir"]),
-    ("respawn-pane", &["kill", "start-dir"]),
-    ("pane-info", &["cmd"]),
-    ("refresh-client", &["cell-pixels"]),
-    ("capture-pane", &["escape"]),
+const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
+    ("new-session", parse_new_session, &[]),
+    ("list-panes", parse_list_panes, &[]),
+    ("list-agents", parse_list_agents, &[]),
+    ("list-commands", parse_list_commands, &[]),
+    ("kill-pane", parse_kill_pane, &[]),
+    ("refresh-client", parse_refresh_client, &["cell-pixels"]),
+    ("send-keys", parse_send_keys, &[]),
+    ("new-window", parse_new_window, &[]),
+    ("select-window", parse_select_window, &[]),
+    ("kill-window", parse_kill_window, &[]),
+    ("rename-window", parse_rename_window, &[]),
+    ("list-windows", parse_list_windows, &[]),
+    ("list-sessions", parse_list_sessions, &[]),
+    ("kill-server", parse_kill_server, &[]),
+    ("rename-session", parse_rename_session, &[]),
+    ("kill-session", parse_kill_session, &[]),
+    ("split-window", parse_split_window, &["before", "start-dir"]),
+    ("select-pane", parse_select_pane, &[]),
+    ("pane-title", parse_pane_title, &[]),
+    ("pane-info", parse_pane_info, &["cmd"]),
+    ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
+    ("swap-pane", parse_swap_pane, &[]),
+    ("break-pane", parse_break_pane, &[]),
+    ("join-pane", parse_join_pane, &[]),
+    ("move-window", parse_move_window, &[]),
+    ("swap-window", parse_swap_windows, &[]),
+    ("respawn-pane", parse_respawn_pane, &["kill", "start-dir"]),
+    ("capture-pane", parse_capture_pane, &["escape"]),
+    ("set-buffer", parse_set_buffer, &[]),
+    ("set-client-colors", parse_set_client_colors, &[]),
+    ("set-environment", parse_set_environment, &[]),
+    ("show-buffer", parse_show_buffer, &[]),
+    ("paste-buffer", parse_paste_buffer, &[]),
+    ("version", parse_version, &[]),
 ];
 
 /// The `list-commands` reply body (ENH-037): one `name [feature …]` line
@@ -1091,12 +1081,13 @@ const COMMAND_FEATURES: &[(&str, &[&str])] = &[
 pub(crate) fn list_commands_body() -> String {
     let mut lines: Vec<String> = COMMANDS
         .iter()
-        .map(
-            |(name, _)| match COMMAND_FEATURES.iter().find(|(known, _)| known == name) {
-                Some((_, features)) => format!("{name} {}", features.join(" ")),
-                None => (*name).to_string(),
-            },
-        )
+        .map(|(name, _, features)| {
+            if features.is_empty() {
+                (*name).to_string()
+            } else {
+                format!("{name} {}", features.join(" "))
+            }
+        })
         .collect();
     lines.sort();
     lines.push("features replay-held-state".to_string());
@@ -1145,9 +1136,9 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         return Err("empty command".to_string());
     };
     let a = Args { name, args, line };
-    let (_, parse) = COMMANDS
+    let (_, parse, _) = COMMANDS
         .iter()
-        .find(|(known, _)| known == name)
+        .find(|(known, _, _)| known == name)
         .ok_or_else(|| format!("unknown command: {name}"))?;
     parse(&a)
 }
@@ -2236,7 +2227,7 @@ mod tests {
     #[test]
     fn every_command_table_name_parses_or_errors_on_its_own_grammar() {
         let mut seen = std::collections::HashSet::new();
-        for (name, _) in COMMANDS {
+        for (name, _, _) in COMMANDS {
             assert!(seen.insert(*name), "duplicate command table row {name:?}");
             if let Err(err) = parse_command(name) {
                 assert!(
@@ -2253,7 +2244,7 @@ mod tests {
     fn list_commands_reply_lists_every_command_exactly_once() {
         let body = list_commands_body();
         let lines: Vec<&str> = body.lines().collect();
-        for (name, _) in COMMANDS {
+        for (name, _, _) in COMMANDS {
             let hits = lines
                 .iter()
                 .filter(|line| line.split_whitespace().next() == Some(*name))
@@ -2266,15 +2257,18 @@ mod tests {
         assert!(lines.contains(&"features replay-held-state"));
     }
 
-    /// ENH-037: a feature key that is not a `COMMANDS` name is a typo and
-    /// would silently advertise a command the daemon cannot dispatch.
+    /// ENH-037/ARC-094b: feature tokens live on the command's own table
+    /// row; the documented wire grammar is `[a-z-]+`, and anything else
+    /// would hand clients a token they are told to treat as well-formed.
     #[test]
-    fn every_command_feature_key_is_a_command_name() {
-        for (name, _) in COMMAND_FEATURES {
-            assert!(
-                COMMANDS.iter().any(|(known, _)| known == name),
-                "COMMAND_FEATURES key {name:?} has no COMMANDS row"
-            );
+    fn every_command_feature_token_matches_the_wire_grammar() {
+        for (name, _, features) in COMMANDS {
+            for token in *features {
+                assert!(
+                    !token.is_empty() && token.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                    "command {name:?} advertises malformed feature token {token:?}"
+                );
+            }
         }
     }
 
