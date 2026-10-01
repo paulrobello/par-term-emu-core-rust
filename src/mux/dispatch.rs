@@ -13,7 +13,7 @@
 //! [`crate::mux::server`] keeps the accept loop, client threads, and the
 //! broadcast sinks this module calls into.
 
-use crate::mux::command::{MuxCommand, ResizeAdjustment, SendKeysPayload};
+use crate::mux::command::{list_commands_body, MuxCommand, ResizeAdjustment, SendKeysPayload};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
@@ -160,6 +160,7 @@ pub(super) fn dispatch_command(
         MuxCommand::NewSession { name, env } => cmd_new_session(ctx, name, env),
         MuxCommand::ListPanes => cmd_list_panes(ctx),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
+        MuxCommand::ListCommands => cmd_list_commands(ctx),
         MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
         MuxCommand::RefreshClient {
             pane,
@@ -1294,6 +1295,13 @@ fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
 /// state that a long-lived daemon could have torn down.
 fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, crate::mux::build_stamp())
+}
+
+/// ENH-037: capability discovery — the sorted command roster with feature
+/// tokens, generated from the same `COMMANDS` table the parser dispatches
+/// from, so a new command is discoverable the moment its row lands.
+fn cmd_list_commands(ctx: &Ctx<'_>) -> Outcome {
+    Outcome::ok(ctx, &list_commands_body())
 }
 
 #[cfg(test)]

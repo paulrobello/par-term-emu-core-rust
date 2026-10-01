@@ -551,6 +551,9 @@ fn read_control_line<R: BufRead>(reader: &mut R, evicted: &AtomicBool) -> Contro
 /// A connection's one-time join to the broadcast registry. Deferred until
 /// the first control command (or error reply), so hook-only connections
 /// never receive pushes; the abort handle moves into the registry then.
+/// Registration also replays held state (ENH-037): one `%pane-exited` per
+/// held pane and one `%layout-change` per zoomed window, queued on the
+/// client's own channel ahead of its first command's reply.
 struct Registration {
     done: bool,
     abort: Option<ConnectionAbort>,
@@ -559,20 +562,42 @@ struct Registration {
 impl Registration {
     fn ensure(
         &mut self,
+        tree: &Arc<Mutex<MuxTree>>,
         clients: &Clients,
         client_id: u64,
         tx: &SyncSender<String>,
         evicted: &Arc<AtomicBool>,
     ) {
-        if !self.done {
+        if self.done {
+            return;
+        }
+        // Snapshot held state and join the broadcast set under one tree-lock
+        // hold: a death marked after the snapshot is broadcast to a set that
+        // already includes this client. The one overlap — a pane in the
+        // snapshot whose broadcast has not yet gone out — delivers
+        // `%pane-exited` twice; that is idempotent (the state is "held with
+        // code N"), so it is documented rather than de-duplicated. Lock
+        // order is `tree` then `clients`, and nothing else nests these two
+        // in either direction (`reap_dead_panes` releases the tree before
+        // broadcasting; `push_to_clients` takes only `clients`), so this
+        // introduces no lock inversion.
+        let replay = {
+            let guard = tree.lock();
+            let lines = held_state_replay_lines(&guard);
             clients.lock().push((
                 client_id,
                 tx.clone(),
                 Arc::clone(evicted),
                 self.abort.take().expect("abort is registered once"),
             ));
-            self.done = true;
+            lines
+        };
+        for line in replay {
+            if tx.send(line).is_err() {
+                break;
+            }
         }
+        self.done = true;
     }
 }
 
@@ -652,7 +677,7 @@ fn handle_client(
             // malformed command and the connection is closed, whether the
             // line is complete or still unterminated.
             ControlLine::Oversize => {
-                registration.ensure(&clients, client_id, &tx, &evicted);
+                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
                 command_number += 1;
                 let _ = tx.send(emit_block(
                     command_number,
@@ -667,7 +692,7 @@ fn handle_client(
             // parse error — a numbered %error block — instead of dropping
             // the whole client.
             ControlLine::Undecodable(undecodable_len) => {
-                registration.ensure(&clients, client_id, &tx, &evicted);
+                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_error!(
                     "MUX",
@@ -705,7 +730,7 @@ fn handle_client(
                 }
             }
             Ok(Line::Control(command)) => {
-                registration.ensure(&clients, client_id, &tx, &evicted);
+                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_log!(
                     "MUX",
@@ -746,7 +771,7 @@ fn handle_client(
                 }
             }
             Err(err) => {
-                registration.ensure(&clients, client_id, &tx, &evicted);
+                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
                 command_number += 1;
                 crate::debug_error!(
                     "MUX",
@@ -1134,6 +1159,31 @@ fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
 /// the zoom shows in the other two fields instead: the visible layout is
 /// the zoomed pane alone at full extent, and the raw flags carry `Z`
 /// (tmux's zoom flag).
+/// Render the `%layout-change` line for `window_id` against `tree` — the
+/// line-rendering half of [`broadcast_layout_change`], shared with ENH-037's
+/// registration replay so the broadcast and replay forms cannot drift.
+/// `None` when the window is gone.
+fn render_layout_change(tree: &MuxTree, window_id: WindowId) -> Option<String> {
+    let window = tree.window(window_id)?;
+    let layout = window
+        .layout
+        .render(0, 0, window.cols as usize, window.rows as usize);
+    let (visible_layout, raw_flags) = match window.zoomed {
+        Some(pane) => (
+            // The single-pane form render_node produces for a leaf.
+            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
+            "Z".to_string(),
+        ),
+        None => (layout.clone(), String::new()),
+    };
+    Some(emit(&TmuxNotification::LayoutChange {
+        window_id: window_id.to_string(),
+        window_layout: layout,
+        window_visible_layout: visible_layout,
+        window_raw_flags: raw_flags,
+    }))
+}
+
 pub(crate) fn broadcast_layout_change(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -1141,28 +1191,46 @@ pub(crate) fn broadcast_layout_change(
 ) {
     let line = {
         let guard = tree.lock();
-        let Some(window) = guard.window(window_id) else {
-            return;
-        };
-        let layout = window
-            .layout
-            .render(0, 0, window.cols as usize, window.rows as usize);
-        let (visible_layout, raw_flags) = match window.zoomed {
-            Some(pane) => (
-                // The single-pane form render_node produces for a leaf.
-                format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
-                "Z".to_string(),
-            ),
-            None => (layout.clone(), String::new()),
-        };
-        emit(&TmuxNotification::LayoutChange {
-            window_id: window_id.to_string(),
-            window_layout: layout,
-            window_visible_layout: visible_layout,
-            window_raw_flags: raw_flags,
-        })
+        render_layout_change(&guard, window_id)
     };
-    push_to_clients(clients, line);
+    if let Some(line) = line {
+        push_to_clients(clients, line);
+    }
+}
+
+/// ENH-037: the held state a client that registers now has missed — one
+/// `%pane-exited` line per held pane and one `%layout-change` per zoomed
+/// window, each sorted by id for deterministic tests. Called under the tree
+/// lock; every line carries its trailing newline, ready for the client's
+/// own queue ahead of its first command's reply.
+fn held_state_replay_lines(tree: &MuxTree) -> Vec<String> {
+    let mut exits: Vec<(PaneId, String)> = tree
+        .panes
+        .iter()
+        .filter(|(_, pane)| pane.dead())
+        .map(|(id, pane)| {
+            let line = emit(&TmuxNotification::PaneExited {
+                pane_id: id.to_string(),
+                exit_code: pane.exit_code(),
+            });
+            (*id, line)
+        })
+        .collect();
+    exits.sort_by_key(|(id, _)| *id);
+    let mut lines: Vec<String> = exits.into_iter().map(|(_, line)| line).collect();
+
+    let mut zoomed: Vec<WindowId> = tree
+        .sessions()
+        .into_iter()
+        .filter_map(|s| tree.session(s))
+        .flat_map(|s| s.windows.iter().copied())
+        .filter(|w| tree.window(*w).is_some_and(|win| win.zoomed.is_some()))
+        .collect();
+    zoomed.sort();
+    for window_id in zoomed {
+        lines.extend(render_layout_change(tree, window_id));
+    }
+    lines
 }
 
 /// Resolve a `-S`/`-E` capture range against a pane's composed buffer.
@@ -1243,6 +1311,68 @@ mod tests {
         assert!(!reply_is_error("%begin 1 2 1\n%end 1 2 1\n"));
         // Notifications pushed between commands are not replies.
         assert!(!reply_is_error("%output %1 61"));
+    }
+
+    /// ENH-037: the registration replay covers a held pane and a zoomed
+    /// window — pane exits first, then layout changes, both id-sorted — and
+    /// a tree with neither replays nothing.
+    #[test]
+    fn held_state_replay_reports_held_panes_and_zoomed_windows() {
+        use crate::mux::dispatch::{dispatch_command, Ctx};
+        use crate::mux::pane::ShellPaneFactory;
+
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let run = |line: &str| {
+            dispatch_command(
+                crate::mux::command::parse_command(line).unwrap(),
+                &ctx,
+                None,
+                None,
+            )
+        };
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        run(&format!("resize-pane -t %{} -Z", pane.0));
+        tree.lock().pane_mut(pane).unwrap().mark_dead();
+
+        let lines = {
+            let guard = tree.lock();
+            held_state_replay_lines(&guard)
+        };
+        assert_eq!(lines.len(), 2, "lines: {lines:?}");
+        assert!(
+            lines[0].starts_with(&format!("%pane-exited %{}", pane.0)),
+            "lines: {lines:?}"
+        );
+        assert!(lines[1].starts_with("%layout-change @"), "lines: {lines:?}");
+        assert!(
+            lines[1].trim_end().ends_with("Z"),
+            "zoom must carry raw flags Z: {:?}",
+            lines[1]
+        );
+    }
+
+    /// ENH-037: a fresh tree holds nothing, so registration replays nothing.
+    #[test]
+    fn a_fresh_tree_replays_nothing() {
+        use crate::mux::pane::ShellPaneFactory;
+
+        let tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        assert!(held_state_replay_lines(&tree).is_empty());
     }
 
     #[test]

@@ -110,6 +110,10 @@ pub enum MuxCommand {
     ListPanes,
     /// List every pane a hook has claimed — the agent roster.
     ListAgents,
+    /// List every dispatchable command with its feature tokens — capability
+    /// discovery, so a client built against one daemon learns what another
+    /// daemon supports without probing command by command (ENH-037).
+    ListCommands,
     /// Send keys to a pane.
     SendKeys {
         /// Target pane.
@@ -400,6 +404,7 @@ impl MuxCommand {
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             MuxCommand::ListPanes
             | MuxCommand::ListAgents
+            | MuxCommand::ListCommands
             | MuxCommand::ListWindows
             | MuxCommand::ListSessions
             | MuxCommand::KillServer
@@ -1030,6 +1035,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("new-session", parse_new_session),
     ("list-panes", parse_list_panes),
     ("list-agents", parse_list_agents),
+    ("list-commands", parse_list_commands),
     ("kill-pane", parse_kill_pane),
     ("refresh-client", parse_refresh_client),
     ("send-keys", parse_send_keys),
@@ -1061,6 +1067,41 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("paste-buffer", parse_paste_buffer),
     ("version", parse_version),
 ];
+
+/// Per-command feature tokens [`list_commands_body`] reports after a
+/// command's name (ENH-037): flags a client cannot probe by sending, so it
+/// gates its own UI on them. Grammar: tokens are `[a-z-]+`; a client must
+/// ignore unknown tokens and lines, and a daemon never removes a token
+/// without a CHANGELOG "Removed" entry. Keys must be [`COMMANDS`] names
+/// (pinned by a unit test, so a typo fails).
+const COMMAND_FEATURES: &[(&str, &[&str])] = &[
+    ("resize-pane", &["zoom", "absolute"]),
+    ("split-window", &["before", "start-dir"]),
+    ("respawn-pane", &["kill", "start-dir"]),
+    ("pane-info", &["cmd"]),
+    ("refresh-client", &["cell-pixels"]),
+    ("capture-pane", &["escape"]),
+];
+
+/// The `list-commands` reply body (ENH-037): one `name [feature …]` line
+/// per [`COMMANDS`] row, sorted by name, plus one daemon-level trailing
+/// line announcing that registration replays held state. The `features`
+/// line has no `%` prefix and `features` is not a command name, so neither
+/// line can be mistaken for a command row by a reader classifying by grammar.
+pub(crate) fn list_commands_body() -> String {
+    let mut lines: Vec<String> = COMMANDS
+        .iter()
+        .map(
+            |(name, _)| match COMMAND_FEATURES.iter().find(|(known, _)| known == name) {
+                Some((_, features)) => format!("{name} {}", features.join(" ")),
+                None => (*name).to_string(),
+            },
+        )
+        .collect();
+    lines.sort();
+    lines.push("features replay-held-state".to_string());
+    lines.join("\n")
+}
 
 /// Parse one command line from a client.
 ///
@@ -1618,6 +1659,10 @@ fn parse_paste_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::Version)
+}
+
+fn parse_list_commands(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListCommands)
 }
 
 #[cfg(test)]
@@ -2199,6 +2244,37 @@ mod tests {
                     "table row {name:?} does not reach its parser: {err}"
                 );
             }
+        }
+    }
+
+    /// ENH-037: the `list-commands` reply carries every `COMMANDS` name
+    /// exactly once, plus the daemon-level `features` line.
+    #[test]
+    fn list_commands_reply_lists_every_command_exactly_once() {
+        let body = list_commands_body();
+        let lines: Vec<&str> = body.lines().collect();
+        for (name, _) in COMMANDS {
+            let hits = lines
+                .iter()
+                .filter(|line| line.split_whitespace().next() == Some(*name))
+                .count();
+            assert_eq!(
+                hits, 1,
+                "command {name:?} appears {hits} times in the reply"
+            );
+        }
+        assert!(lines.contains(&"features replay-held-state"));
+    }
+
+    /// ENH-037: a feature key that is not a `COMMANDS` name is a typo and
+    /// would silently advertise a command the daemon cannot dispatch.
+    #[test]
+    fn every_command_feature_key_is_a_command_name() {
+        for (name, _) in COMMAND_FEATURES {
+            assert!(
+                COMMANDS.iter().any(|(known, _)| known == name),
+                "COMMAND_FEATURES key {name:?} has no COMMANDS row"
+            );
         }
     }
 
