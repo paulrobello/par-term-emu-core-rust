@@ -74,7 +74,6 @@ pub mod macros;
 pub mod mouse;
 #[cfg(feature = "mux")]
 pub mod mux;
-pub mod observer;
 pub mod pty_error;
 #[cfg(feature = "pty_session")]
 pub mod pty_session;
@@ -98,6 +97,11 @@ pub mod tmux_control;
 pub mod unicode_normalization_config;
 pub mod unicode_width_config;
 pub mod zone;
+
+// The observer module lives in the terminal layer (its types are Terminal
+// state and dispatch); the crate-root path `crate::observer` is kept as a
+// re-export so existing internal and external paths still resolve (ARC-108).
+pub use terminal::observer;
 
 // Re-export commonly used types from unicode_normalization_config
 pub use unicode_normalization_config::NormalizationForm;

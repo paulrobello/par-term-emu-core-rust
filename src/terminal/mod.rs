@@ -25,6 +25,7 @@ pub mod image;
 pub mod macros;
 pub mod metrics;
 pub mod notification;
+pub mod observer;
 pub mod progress;
 pub mod recording;
 pub mod replay;
