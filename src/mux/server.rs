@@ -1676,6 +1676,66 @@ mod tests {
         assert!(held_state_replay_lines(&tree).is_empty());
     }
 
+    /// Card 01a0ef3b: a client whose first command arrives after a pane's
+    /// death sees the death, not a live pane — `Registration::ensure`
+    /// queues the held-state `%pane-exited` on the client's own channel,
+    /// exactly once across repeat registrations, and joins the broadcast
+    /// set so later deaths arrive as ordinary pushes.
+    #[test]
+    fn registration_after_a_death_delivers_the_held_exit_once() {
+        use crate::mux::dispatch::{dispatch_command, Ctx};
+        use crate::mux::ipc::ConnectionAbort;
+        use crate::mux::pane::ShellPaneFactory;
+
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        dispatch_command(
+            crate::mux::command::parse_command("new-session -s main").unwrap(),
+            &ctx,
+            None,
+            None,
+        );
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        tree.lock().pane_mut(pane).unwrap().mark_dead();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        let evicted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut registration = Registration {
+            done: false,
+            abort: Some(ConnectionAbort::none()),
+        };
+        registration.ensure(&tree, &clients, 7, &tx, &evicted);
+        registration.ensure(&tree, &clients, 7, &tx, &evicted);
+
+        let mut lines = Vec::new();
+        while let Ok(line) = rx.try_recv() {
+            lines.push(line);
+        }
+        assert_eq!(lines.len(), 1, "one held exit, delivered once: {lines:?}");
+        assert!(
+            lines[0].starts_with(&format!("%pane-exited %{}", pane.0)),
+            "lines: {lines:?}"
+        );
+        assert!(
+            clients.lock().iter().any(|(id, _, _, _)| *id == 7),
+            "the registering client joined the broadcast set"
+        );
+        let _ = tree.lock().pane_mut(pane).unwrap().kill();
+    }
+
     #[test]
     fn summarize_line_keeps_short_lines_and_cut_points_whole() {
         assert_eq!(
