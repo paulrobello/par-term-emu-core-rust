@@ -67,6 +67,33 @@ typedef struct {
 } TermRowRange;
 
 /**
+ * Scroll-aware damage report (ENH-038, ABI v5 additive): how the visible
+ * content moved since a generation. When `flags` has no
+ * `TERM_SCROLL_FULL_REDRAW` bit, a renderer can blit its previous frame's
+ * `[top, bottom]` region by `delta` rows and then redraw only the rows
+ * `ptec_terminal_content_dirty_ranges_since` reports — rows vacated by the
+ * blit always carry a fresh content generation and are in that set.
+ */
+typedef struct {
+  /**
+   * Net rows the region content moved; positive means content moved up.
+   */
+  int32_t delta;
+  /**
+   * First row of the scrolled region (0-indexed, inclusive)
+   */
+  uint32_t top;
+  /**
+   * Last row of the scrolled region (0-indexed, inclusive)
+   */
+  uint32_t bottom;
+  /**
+   * Bit flags; bit 0 is `TERM_SCROLL_FULL_REDRAW`.
+   */
+  uint32_t flags;
+} TermScrollDelta;
+
+/**
  * A single terminal cell in a C-compatible layout.
  *
  * The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
@@ -491,6 +518,38 @@ uint32_t ptec_terminal_dirty_ranges_since(const Terminal *term,
                                           uint64_t gen,
                                           TermRowRange *out,
                                           uint32_t cap);
+
+/**
+ * Scroll-aware damage since generation `gen` (ENH-038): writes how the
+ * visible content moved into `*out` and returns true. `flags` bit 0
+ * (`TERM_SCROLL_FULL_REDRAW`) marks the fallback contract: blitting is
+ * unsafe, treat every row as dirty. Returns false only when `term` or
+ * `out` is null.
+ *
+ * # Safety
+ * `out` must be a valid pointer to a `TermScrollDelta`. `term` must be a
+ * valid pointer to a `Terminal`.
+ */
+bool ptec_terminal_scroll_delta_since(const Terminal *term, uint64_t gen, TermScrollDelta *out);
+
+/**
+ * Coalesced *content*-dirty row ranges since generation `gen` (ENH-038):
+ * only the rows whose content changed — the blit-complement of
+ * `ptec_terminal_scroll_delta_since`. After blitting the reported region
+ * by the reported delta, redraw exactly these rows. Same buffer contract
+ * as `ptec_terminal_dirty_ranges_since` (NULL/0 sizing call, total-count
+ * return). A screen switch dirties the content of every row of the newly
+ * visible grid for any older generation.
+ *
+ * # Safety
+ * `out` must be valid for writes of `cap` `TermRowRange` values, or NULL
+ * with `cap` 0 for a sizing call. `term` must be a valid pointer to a
+ * `Terminal`.
+ */
+uint32_t ptec_terminal_content_dirty_ranges_since(const Terminal *term,
+                                                  uint64_t gen,
+                                                  TermRowRange *out,
+                                                  uint32_t cap);
 
 /**
  * Mark the screen clean (all damage consumed).

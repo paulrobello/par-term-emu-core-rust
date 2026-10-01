@@ -507,6 +507,32 @@ pub struct TermRowRange {
     pub end: u32,
 }
 
+/// `TermScrollDelta.flags` bit 0 (ENH-038): the scroll movement since the
+/// generation cannot be expressed — a screen switch, resize or reflow, RIS,
+/// snapshot restore, scrollback clear, scroll-log overflow, or mixed scroll
+/// regions happened. The renderer must treat every row as dirty and skip
+/// the blit (today's full-redraw behavior).
+pub const TERM_SCROLL_FULL_REDRAW: u32 = 1;
+
+/// Scroll-aware damage report (ENH-038, ABI v5 additive): how the visible
+/// content moved since a generation. When `flags` has no
+/// `TERM_SCROLL_FULL_REDRAW` bit, a renderer can blit its previous frame's
+/// `[top, bottom]` region by `delta` rows and then redraw only the rows
+/// `ptec_terminal_content_dirty_ranges_since` reports — rows vacated by the
+/// blit always carry a fresh content generation and are in that set.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermScrollDelta {
+    /// Net rows the region content moved; positive means content moved up.
+    pub delta: i32,
+    /// First row of the scrolled region (0-indexed, inclusive)
+    pub top: u32,
+    /// Last row of the scrolled region (0-indexed, inclusive)
+    pub bottom: u32,
+    /// Bit flags; bit 0 is `TERM_SCROLL_FULL_REDRAW`.
+    pub flags: u32,
+}
+
 /// Cursor position and style, C-compatible.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -678,8 +704,11 @@ unsafe fn write_ranges(
 /// bits and `ptec_terminal_read_cell_grapheme` (ARC-101), the `on_event_v2`
 /// vtable slot and `TermEvent` (ARC-114), and
 /// `ptec_terminal_scrollback_total_scrolled`, which shipped while the
-/// constant still read 3.
-pub const TERM_CORE_ABI_VERSION: u32 = 4;
+/// constant still read 3. Version 5 (additive, ENH-038):
+/// scroll-aware damage — `TermScrollDelta`,
+/// `ptec_terminal_scroll_delta_since`, `ptec_terminal_content_dirty_ranges_since`,
+/// and `TERM_SCROLL_FULL_REDRAW`.
+pub const TERM_CORE_ABI_VERSION: u32 = 5;
 
 /// The ABI version this library implements. A binary detects a mismatch
 /// by comparing this call's return against its compiled-in header macro.
@@ -854,6 +883,79 @@ pub unsafe extern "C" fn ptec_terminal_dirty_ranges_since(
     // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
     // which is `write_ranges`' contract.
     unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range_since(gen, f)) }
+}
+
+/// Scroll-aware damage since generation `gen` (ENH-038): writes how the
+/// visible content moved into `*out` and returns true. `flags` bit 0
+/// (`TERM_SCROLL_FULL_REDRAW`) marks the fallback contract: blitting is
+/// unsafe, treat every row as dirty. Returns false only when `term` or
+/// `out` is null.
+///
+/// # Safety
+/// `out` must be a valid pointer to a `TermScrollDelta`. `term` must be a
+/// valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_scroll_delta_since(
+    term: *const Terminal,
+    gen: u64,
+    out: *mut TermScrollDelta,
+) -> bool {
+    if term.is_null() || out.is_null() {
+        return false;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+    let term_ref = unsafe { &*term };
+    let report = term_ref.scroll_damage_since(gen);
+    // SAFETY: `out` is non-null (checked above) and the caller guarantees
+    // it points to a writable `TermScrollDelta`.
+    unsafe {
+        out.write(TermScrollDelta {
+            delta: report.delta,
+            top: report.top,
+            bottom: report.bottom,
+            flags: if report.full_redraw {
+                TERM_SCROLL_FULL_REDRAW
+            } else {
+                0
+            },
+        });
+    }
+    true
+}
+
+/// Coalesced *content*-dirty row ranges since generation `gen` (ENH-038):
+/// only the rows whose content changed — the blit-complement of
+/// `ptec_terminal_scroll_delta_since`. After blitting the reported region
+/// by the reported delta, redraw exactly these rows. Same buffer contract
+/// as `ptec_terminal_dirty_ranges_since` (NULL/0 sizing call, total-count
+/// return). A screen switch dirties the content of every row of the newly
+/// visible grid for any older generation.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` `TermRowRange` values, or NULL
+/// with `cap` 0 for a sizing call. `term` must be a valid pointer to a
+/// `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_content_dirty_ranges_since(
+    term: *const Terminal,
+    gen: u64,
+    out: *mut TermRowRange,
+    cap: u32,
+) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+    let term_ref = unsafe { &*term };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `write_ranges`' contract.
+    unsafe {
+        write_ranges(out, cap, |f| {
+            term_ref.for_each_content_dirty_range_since(gen, f)
+        })
+    }
 }
 
 /// Mark the screen clean (all damage consumed).
@@ -1283,6 +1385,12 @@ mod tests {
         assert_eq!(offset_of!(TermEvent, payload_len), 4);
         assert_eq!(offset_of!(TermEvent, payload), 8);
         assert_eq!(size_of::<TermRowRange>(), 8);
+        assert_eq!(size_of::<TermScrollDelta>(), 16);
+        assert_eq!(align_of::<TermScrollDelta>(), 4);
+        assert_eq!(offset_of!(TermScrollDelta, delta), 0);
+        assert_eq!(offset_of!(TermScrollDelta, top), 4);
+        assert_eq!(offset_of!(TermScrollDelta, bottom), 8);
+        assert_eq!(offset_of!(TermScrollDelta, flags), 12);
         assert_eq!(size_of::<TermCursorState>(), 12);
         assert_eq!(size_of::<TermModeState>(), 20);
         assert_eq!(size_of::<crate::keyboard::TermKeyEvent>(), 8);
@@ -1707,16 +1815,94 @@ mod tests {
     /// comparing the two. Bumping one side without the other fails here.
     #[test]
     fn abi_version_matches_header_macro() {
-        assert_eq!(ptec_terminal_abi_version(), 4);
+        assert_eq!(ptec_terminal_abi_version(), 5);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/include/terminal_core_layout.h"
         ))
         .expect("header readable");
         assert!(
-            header.contains("#define TERM_CORE_ABI_VERSION 4"),
+            header.contains("#define TERM_CORE_ABI_VERSION 5"),
             "header TERM_CORE_ABI_VERSION drifted from ptec_terminal_abi_version()"
         );
+    }
+
+    /// ENH-038: the scroll-aware damage surface. One linefeed at the bottom
+    /// of a full screen reports delta 1 over the whole screen with only the
+    /// cleared row content-dirty, while the positional surface still
+    /// reports every row (pre-v5 behavior unchanged). The same contract
+    /// holds on the alternate screen — where
+    /// `ptec_terminal_scrollback_total_scrolled` stays 0: it is a
+    /// window-sync counter, never a scroll-damage source — and under a
+    /// DECSTBM region.
+    #[test]
+    fn scroll_delta_reports_blittable_damage() {
+        unsafe {
+            let term = ptec_terminal_create(80, 24, 1000);
+            let mut fill = Vec::new();
+            for i in 0..24 {
+                if i > 0 {
+                    fill.extend_from_slice(b"\r\n");
+                }
+                fill.extend_from_slice(format!("row {i:02}").as_bytes());
+            }
+            ptec_terminal_feed(term, fill.as_ptr(), fill.len() as u32);
+            let gen = ptec_terminal_damage_generation(term);
+            ptec_terminal_feed(term, b"\n".as_ptr(), 1);
+
+            let mut delta = TermScrollDelta {
+                delta: 0,
+                top: 0,
+                bottom: 0,
+                flags: 0,
+            };
+            assert!(ptec_terminal_scroll_delta_since(term, gen, &mut delta));
+            assert_eq!(delta.delta, 1);
+            assert_eq!(delta.top, 0);
+            assert_eq!(delta.bottom, 23);
+            assert_eq!(delta.flags & TERM_SCROLL_FULL_REDRAW, 0);
+
+            let mut ranges = vec![TermRowRange { start: 0, end: 0 }; 8];
+            let n = ptec_terminal_content_dirty_ranges_since(term, gen, ranges.as_mut_ptr(), 8);
+            assert_eq!(n, 1);
+            assert_eq!(ranges[0], TermRowRange { start: 23, end: 23 });
+
+            // Positional damage unchanged: every row of the screen is dirty.
+            let n = ptec_terminal_dirty_ranges_since(term, gen, ranges.as_mut_ptr(), 8);
+            assert_eq!(n, 1);
+            assert_eq!(ranges[0], TermRowRange { start: 0, end: 23 });
+
+            // Alternate screen: the delta is reported although the
+            // window-sync counter stays 0.
+            ptec_terminal_feed(term, b"\x1b[?1049h\x1b[H".as_ptr(), 11);
+            ptec_terminal_feed(term, fill.as_ptr(), fill.len() as u32);
+            let gen = ptec_terminal_damage_generation(term);
+            ptec_terminal_feed(term, b"\n".as_ptr(), 1);
+            assert!(ptec_terminal_scroll_delta_since(term, gen, &mut delta));
+            assert_eq!(delta.delta, 1);
+            assert_eq!(delta.top, 0);
+            assert_eq!(delta.bottom, 23);
+            assert_eq!(delta.flags & TERM_SCROLL_FULL_REDRAW, 0);
+            assert_eq!(ptec_terminal_scrollback_total_scrolled(term), 0);
+
+            // DECSTBM 2;23: the report carries the region, not the screen.
+            ptec_terminal_feed(term, b"\x1b[?1049l\x1b[2;23r\x1b[H".as_ptr(), 17);
+            for _ in 0..22 {
+                ptec_terminal_feed(term, b"\n".as_ptr(), 1);
+            }
+            let gen = ptec_terminal_damage_generation(term);
+            ptec_terminal_feed(term, b"\n".as_ptr(), 1);
+            assert!(ptec_terminal_scroll_delta_since(term, gen, &mut delta));
+            assert_eq!(delta.delta, 1);
+            assert_eq!(delta.top, 1);
+            assert_eq!(delta.bottom, 22);
+            assert_eq!(delta.flags & TERM_SCROLL_FULL_REDRAW, 0);
+            let n = ptec_terminal_content_dirty_ranges_since(term, gen, ranges.as_mut_ptr(), 8);
+            assert_eq!(n, 1);
+            assert_eq!(ranges[0], TermRowRange { start: 22, end: 22 });
+
+            ptec_terminal_free(term);
+        }
     }
 
     /// ENH-027: every `#define` in terminal_core_layout.h — the hand-written
@@ -1738,6 +1924,7 @@ mod tests {
         let tk = |k: TermKey| k as u16 as u32;
         let expected: Vec<(&str, u32)> = vec![
             ("TERM_CORE_ABI_VERSION", TERM_CORE_ABI_VERSION),
+            ("TERM_SCROLL_FULL_REDRAW", TERM_SCROLL_FULL_REDRAW),
             ("TERM_CELL_BOLD", cb(CellBitflags::BOLD)),
             ("TERM_CELL_DIM", cb(CellBitflags::DIM)),
             ("TERM_CELL_ITALIC", cb(CellBitflags::ITALIC)),

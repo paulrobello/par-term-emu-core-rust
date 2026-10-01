@@ -14,6 +14,7 @@
  * - TERM_KEY_* == crate::keyboard::TermKey discriminants (kitty codes)
  * - TERM_EVENT_* == the term_event_kinds! table in src/ffi.rs
  * - TERM_CORE_ABI_VERSION == TERM_CORE_ABI_VERSION in src/ffi.rs
+ * - TERM_SCROLL_FULL_REDRAW == crate::ffi::TERM_SCROLL_FULL_REDRAW
  * Renumber either side and that test fails.
  */
 
@@ -25,8 +26,10 @@
  * any layout or contract change to the C surface. Version 4 (breaking): the
  * ptec_ symbol prefix, palette-resolved SharedCell colors + TERM_ATTR_* bits,
  * ptec_terminal_read_cell_grapheme, the on_event_v2 slot + TermEvent, and
- * ptec_terminal_scrollback_total_scrolled. */
-#define TERM_CORE_ABI_VERSION 4
+ * ptec_terminal_scrollback_total_scrolled. Version 5 (additive, ENH-038):
+ * scroll-aware damage — TermScrollDelta, ptec_terminal_scroll_delta_since,
+ * ptec_terminal_content_dirty_ranges_since, TERM_SCROLL_FULL_REDRAW. */
+#define TERM_CORE_ABI_VERSION 5
 
 /* Cell attribute bits — SharedCell.attrs (mirrors CellBitflags in cell.rs). */
 #define TERM_CELL_BOLD 1u             /* bit 0 */
@@ -134,6 +137,12 @@
 #define TERM_EVENT_SCREEN_CLEARED 25
 #define TERM_EVENT_INLINE_IMAGE_DROPPED 26
 
+/* Scroll-aware damage (ENH-038) — TermScrollDelta.flags. Bit 0: the scroll
+ * movement since the generation cannot be expressed (screen switch, resize,
+ * RIS, snapshot restore, scrollback clear, log overflow, mixed regions);
+ * treat every row as dirty and skip the blit. */
+#define TERM_SCROLL_FULL_REDRAW 1u
+
 /*
  * Layout pins. The structs come from terminal_core.h (included before this
  * file via its trailer); these asserts fail the compile of any consumer
@@ -158,6 +167,7 @@ _Static_assert(offsetof(TermEvent, payload) == 8, "TermEvent.payload offset must
 _Static_assert(offsetof(TermEvent, payload_len) == 4, "TermEvent.payload_len offset must match Rust");
 
 _Static_assert(sizeof(TermRowRange) == 8, "TermRowRange must match Rust repr(C) layout");
+_Static_assert(sizeof(TermScrollDelta) == 16, "TermScrollDelta must match Rust repr(C) layout");
 
 #ifdef __LP64__
 _Static_assert(sizeof(TermCursorState) == 12, "TermCursorState must match Rust repr(C) layout (LP64)");

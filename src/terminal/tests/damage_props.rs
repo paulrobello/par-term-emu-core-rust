@@ -140,4 +140,55 @@ proptest! {
             }
         }
     }
+
+    /// ENH-038: a renderer holding the previous frame rebuilds the screen
+    /// by blitting the reported region by the reported delta and re-reading
+    /// only the content-dirty rows. The rebuild must be cell-for-cell
+    /// identical to a fresh read; any sentinel case falls back to a full
+    /// read.
+    #[test]
+    fn scroll_blit_plus_content_dirty_rebuilds_the_screen(bytes in vt_stream()) {
+        let mut term = Terminal::new(COLS, ROWS);
+        term.process(b"seed line one\r\nseed line two\r\nseed line three");
+        let mut prev = snapshot_rows(&term);
+        let mut since = term.damage_generation();
+
+        // Two frames per stream so composed scroll ops across a frame
+        // boundary are exercised too.
+        let mid = bytes.len() / 2;
+        for chunk in [&bytes[..mid], &bytes[mid..]] {
+            term.process(chunk);
+            let report = term.scroll_damage_since(since);
+            let fresh = snapshot_rows(&term);
+            let blit = if report.full_redraw {
+                // Sentinel: the renderer treats every row as dirty and
+                // re-reads the whole screen.
+                fresh.clone()
+            } else {
+                let mut frame = prev.clone();
+                for row in report.top..=report.bottom {
+                    let src = i64::from(row) + i64::from(report.delta);
+                    if src >= i64::from(report.top) && src <= i64::from(report.bottom) {
+                        frame[row as usize] = prev[src as usize].clone();
+                    }
+                }
+                term.for_each_content_dirty_range_since(since, |start, end| {
+                    let grid = term.active_grid();
+                    for row in start..=end {
+                        if let Some(cells) = grid.row(row as usize) {
+                            frame[row as usize] = cells.to_vec();
+                        }
+                    }
+                });
+                frame
+            };
+            prop_assert!(
+                blit == fresh,
+                "blit+content-dirty rebuild diverged; stream={:?}",
+                String::from_utf8_lossy(&bytes)
+            );
+            prev = fresh;
+            since = term.damage_generation();
+        }
+    }
 }
