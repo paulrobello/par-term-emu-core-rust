@@ -104,8 +104,78 @@ def strip_line_comments(code: str) -> str:
     return re.sub(r"//[^\n]*", "", code)
 
 
+def skip_rust_string(code: str, i: int) -> int:
+    """Index just past the string literal whose opening `"` is at `i`:
+    ordinary and byte strings honor backslash escapes (`\\"` never ends the
+    literal); a raw-hash prefix (`r#"…"#`, `br#"…"#`) ends only at the
+    matching `"#` run. An unterminated literal consumes to end of text."""
+    n = len(code)
+    hashes = 0
+    while i - 1 - hashes >= 0 and code[i - 1 - hashes] == "#":
+        hashes += 1
+    r = i - 1 - hashes
+    if hashes > 0 and r >= 0 and code[r] == "r":
+        before = code[r - 1] if r > 0 else ""
+        if not (before.isalnum() or before == "_") or before in "bc":
+            closer = '"' + "#" * hashes
+            end = code.find(closer, i + 1)
+            return n if end < 0 else end + len(closer)
+    j = i + 1
+    while j < n:
+        c = code[j]
+        if c == "\\":
+            j += 2
+        elif c == '"':
+            return j + 1
+        else:
+            j += 1
+    return n
+
+
+def skip_block_comment(code: str, i: int) -> int:
+    """Index past the `/* … */` starting at `i` (Rust block comments nest);
+    an unterminated comment consumes to end of text."""
+    depth = 0
+    n = len(code)
+    while i < n:
+        if code.startswith("/*", i):
+            depth += 1
+            i += 2
+        elif code.startswith("*/", i):
+            depth -= 1
+            i += 2
+            if depth == 0:
+                return i
+        else:
+            i += 1
+    return n
+
+
+def char_literal_end(code: str, i: int) -> int | None:
+    """Index just past the closing `'` of the char literal starting at `i`,
+    or None when the shape is not a literal (lifetime `'a`, `'static`) —
+    the braced form of `\\u{…}` keeps its braces out of the count."""
+    n = len(code)
+    if i + 1 >= n:
+        return None
+    j = i + 1
+    if code[j] == "\\":
+        j += 2
+        if code[j - 1] == "u" and j < n and code[j] == "{":
+            close = code.find("}", j)
+            if close < 0:
+                return None
+            j = close + 1
+    else:
+        j += 1
+    if j < n and code[j] == "'":
+        return j + 1
+    return None
+
+
 def strip_test_modules(code: str) -> str:
-    """Remove `#[cfg(test)] mod <name> { … }` blocks (brace-matched)."""
+    """Remove `#[cfg(test)] mod <name> { … }` blocks (brace-matched; QA-229:
+    braces inside string and char literals do not count, escapes honored)."""
     out = code
     while True:
         m = re.search(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", out)
@@ -114,14 +184,33 @@ def strip_test_modules(code: str) -> str:
         open_brace = out.find("{", m.start())
         depth = 0
         end = None
-        for i in range(open_brace, len(out)):
-            if out[i] == "{":
+        i = open_brace
+        n = len(out)
+        while i < n:
+            c = out[i]
+            if c == "/" and out[i + 1 : i + 2] == "/":
+                nl = out.find("\n", i)
+                i = n if nl < 0 else nl + 1
+                continue
+            if c == "/" and out[i + 1 : i + 2] == "*":
+                i = skip_block_comment(out, i)
+                continue
+            if c == '"':
+                i = skip_rust_string(out, i)
+                continue
+            if c == "'":
+                literal_end = char_literal_end(out, i)
+                if literal_end is not None:
+                    i = literal_end
+                    continue
+            if c == "{":
                 depth += 1
-            elif out[i] == "}":
+            elif c == "}":
                 depth -= 1
                 if depth == 0:
                     end = i + 1
                     break
+            i += 1
         if end is None:
             fail("parsed nothing: unterminated #[cfg(test)] module")
         out = out[: m.start()] + out[end:]
@@ -431,7 +520,58 @@ def run_self_test(root: Path) -> int:
         if not any(needle in problem for problem in problems):
             fail(f"self-test: {label} was not reported naming `{needle}`: {problems}")
         print(f"self-test: drift reported as required — {label}")
-    print("self-test ok: baseline clean and all 5 injected drifts reported")
+
+    # QA-229: a cfg(test) module whose string/char literals carry unbalanced
+    # braces must be stripped whole — the test-only NEVER_SENT construction
+    # inside must not read as production code, and a real production
+    # construction must still be reported with the fixture present.
+    qa229_mod = (
+        "#[cfg(test)]\n"
+        "mod qa229_fixture {\n"
+        "    #[test]\n"
+        "    fn braces_stay_inside_literals() {\n"
+        '        let s = "{not json";\n'
+        '        let t = "escaped \\" quote }} still json";\n'
+        "        let c = '}';\n"
+        "        let _ = (s, t, c);\n"
+        "        let _ = TmuxNotification::PaneModeChanged;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def command_rs_with(append: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as td:
+            dst_root = Path(td)
+            copy_inputs(root, dst_root)
+            target = dst_root / "src/mux/command.rs"
+            target.write_text(target.read_text() + append)
+            problems, _ = collect_problems(dst_root)
+        return problems
+
+    problems = command_rs_with("\n" + qa229_mod)
+    if problems:
+        fail(
+            "self-test: QA-229 brace-bearing cfg(test) fixture was not ignored: "
+            + "; ".join(problems)
+        )
+    print("self-test: QA-229 brace-bearing cfg(test) fixture ignored")
+
+    problems = command_rs_with(
+        "\n"
+        + qa229_mod
+        + "fn qa229_production_hit() {\n    let _ = TmuxNotification::PaneModeChanged;\n}\n"
+    )
+    if not any("TmuxNotification::PaneModeChanged" in problem for problem in problems):
+        fail(
+            "self-test: QA-229 production NEVER_SENT construction was not reported: "
+            + "; ".join(problems)
+        )
+    print("self-test: QA-229 production construction after the fixture still reported")
+
+    print(
+        "self-test ok: baseline clean, all 5 injected drifts reported, "
+        "QA-229 brace-in-string fixture pinned"
+    )
     return 0
 
 
