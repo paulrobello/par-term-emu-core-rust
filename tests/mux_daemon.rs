@@ -1506,3 +1506,165 @@ fn pane_info_live_pane_has_no_exited_token() {
         "a live pane has no exited= token: {reply:?}"
     );
 }
+
+/// QA-230 (ENH-037): a registering client's held-state replay is queued
+/// ahead of its first command's reply — on the raw wire, `%pane-exited` for
+/// the held pane and the zoomed window's `%layout-change` (raw flags `Z`)
+/// are the only lines before the `%begin` of the reply, and that reply is
+/// the first command's (number 1).
+#[test]
+fn held_state_replay_precedes_the_first_commands_reply() {
+    use std::io::{BufRead, Write as _};
+
+    let fixture = MuxFixture::new("replayord");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    // Client A builds the state a late client must replay: pane %1 held
+    // with exit 7 and window @0 zoomed. Both waits prove the daemon has
+    // settled that state before B ever registers.
+    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    a.send("new-session -s replayord").expect("new-session");
+    a.send("split-window -h -t %0").expect("split");
+    a.send("respawn-pane -t %1 -k exit 7").expect("hold %1");
+    next_notification(&mut a, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+                pane_id,
+                exit_code: Some(7),
+            } if pane_id == "%1"
+        )
+    });
+    a.send("resize-pane -t %0 -Z").expect("zoom");
+    next_layout_change(&mut a, "Z", true);
+
+    // Client B registers by sending its first command; every line before
+    // the reply's %begin must be held-state replay.
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    writeln!(writer, "list-panes").expect("write first command");
+    writer.flush().expect("flush");
+
+    let (mut saw_exit, mut saw_zoom) = (false, false);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read wire");
+        assert!(n > 0, "server closed before the reply's %begin");
+        if line.starts_with("%begin") {
+            break;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("%pane-exited %1 7") {
+            saw_exit = true;
+        } else if trimmed.starts_with("%layout-change") && trimmed.ends_with(" Z") {
+            saw_zoom = true;
+        } else {
+            panic!("a line before the reply's %begin is not held-state replay: {trimmed:?}");
+        }
+    }
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(
+        fields[2], "1",
+        "the replay precedes the FIRST command's reply block: {line:?}"
+    );
+    assert!(
+        saw_exit,
+        "the held pane's %pane-exited must precede the reply"
+    );
+    assert!(
+        saw_zoom,
+        "the zoomed window's %layout-change must precede the reply"
+    );
+
+    // Drain the reply block so teardown never races a full socket buffer.
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read wire");
+        assert!(n > 0, "server closed before %end");
+        if line.starts_with("%end") || line.starts_with("%error") {
+            break;
+        }
+    }
+}
+
+/// QA-230 (ENH-037): on a fresh control connection the replay also precedes
+/// the `%begin` framing itself — the bare replay lines are wrapped in
+/// nothing, and the first `%begin` on the wire opens the first command's
+/// block. The first line here is an unknown command, so registration runs
+/// on the error-reply path and the numbered `%error` block is what the
+/// replay precedes.
+#[test]
+fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
+    use std::io::{BufRead, Write as _};
+
+    let fixture = MuxFixture::new("replayfrm");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    a.send("new-session -s replayfrm").expect("new-session");
+    a.send("respawn-pane -t %0 -k exit 3").expect("hold %0");
+    next_notification(&mut a, |note| {
+        matches!(
+            note,
+            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+                pane_id,
+                exit_code: Some(3),
+            } if pane_id == "%0"
+        )
+    });
+
+    // A fresh connection whose first line is an unknown command.
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    writeln!(writer, "no-such-command").expect("write unknown command");
+    writer.flush().expect("flush");
+
+    let mut saw_exit = false;
+    let begin;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read wire");
+        assert!(n > 0, "server closed before any %begin");
+        if line.starts_with("%begin") {
+            begin = line.clone();
+            break;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("%pane-exited %0 3") {
+            saw_exit = true;
+        } else {
+            panic!("a line before the first %begin is not held-state replay: {trimmed:?}");
+        }
+    }
+    assert!(
+        saw_exit,
+        "the held pane's %pane-exited must precede the framing"
+    );
+    let fields: Vec<&str> = begin.split_whitespace().collect();
+    assert_eq!(
+        fields[2], "1",
+        "the first %begin opens the first command's block: {begin:?}"
+    );
+    let mut block = begin;
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read wire");
+        assert!(n > 0, "server closed before the block closed");
+        block.push_str(&line);
+        if line.starts_with("%end") || line.starts_with("%error") {
+            break;
+        }
+    }
+    assert!(
+        block.contains("%error"),
+        "the unknown command is rejected with an error block: {block:?}"
+    );
+}
