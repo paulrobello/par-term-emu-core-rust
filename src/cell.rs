@@ -720,24 +720,33 @@ mod tests {
         let cell = Cell::from_grapheme("e\u{0301}\u{0302}\u{0303}");
         assert_eq!(cell.combining.len(), 3);
 
+        // Deterministic regression guard (QA-226): the marks must sit in the
+        // SmallVec's inline buffer so each clone is a memcpy with no heap
+        // allocation. A revert to Vec<char> fails to compile here; an inline
+        // capacity below 4 flips `spilled()` to true and fails the assert —
+        // no wall clock involved.
+        assert!(
+            !cell.combining.spilled(),
+            "combining marks spilled to the heap; every clone would allocate"
+        );
+
         // ~800k clones ≈ a 10k-line × 80-col reflow/scroll (the audit's worst case).
         let start = std::time::Instant::now();
         let clones: Vec<Cell> = std::iter::repeat_with(|| cell.clone())
             .take(80 * 10_000)
             .collect();
         let elapsed = start.elapsed();
-        assert!(!clones.is_empty());
+        assert!(clones.iter().all(|c| c == &cell));
         drop(clones);
 
-        // Regression guard, not a precision benchmark. Inline SmallVec clones
-        // are memcpy-fast (~100ms for 800k in isolation, ~250ms under the full
-        // test suite's memory/CPU state). A revert to Vec<char> (per-clone heap
-        // alloc) would be a seconds-scale allocation storm. The 1s budget sits
-        // far above realistic loaded-machine clone times and far below that
-        // catastrophe, so it catches the regression without flaking under load.
+        // Coarse sanity net only — the real regression guard is the `spilled()`
+        // check above. The budget must absorb scheduler load (the old 1s budget
+        // flaked at 1.019s with machine load ~75, vs ~0.3s isolated) while
+        // staying far below the seconds-scale allocation storm of a SmallVec
+        // revert.
         assert!(
-            elapsed < std::time::Duration::from_millis(1000),
-            "cloning 800k combining-bearing cells took {:?}, expected < 1000ms",
+            elapsed < std::time::Duration::from_millis(5000),
+            "cloning 800k combining-bearing cells took {:?}, expected < 5000ms",
             elapsed
         );
     }
