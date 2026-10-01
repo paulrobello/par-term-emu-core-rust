@@ -23,7 +23,7 @@
 //! re-fits only when a `%layout-change` changes that pane's rectangle. A
 //! streaming client's `Resize` becomes `refresh-client -t %N -C WxH`.
 
-use crate::mux::ipc::{connect_local_stream, LocalStream};
+use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
 use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::{SessionFactory, SessionFactoryResult, StreamingServer};

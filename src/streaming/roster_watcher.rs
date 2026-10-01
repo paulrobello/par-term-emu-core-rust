@@ -14,8 +14,7 @@
 
 use super::protocol::{AgentEntry, ServerMessage};
 use super::roster::{parse_agents_output, translate_notification, RosterDelta};
-use crate::mux::client::MuxClient;
-use crate::mux::emit::emit;
+use crate::mux::{emit, MuxClient};
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
