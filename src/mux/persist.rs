@@ -271,13 +271,18 @@ pub struct PersistAgentSession {
 /// a path, or a reported invocation — an agent label alone is a pane
 /// hook-claimed for state but carrying no session worth resuming.
 fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<PersistAgentSession> {
-    let agent = metadata.get("agent")?;
+    // Through the typed claim (ARC-113c): the same identity fields the
+    // roster reads, parsed once. The argv re-renders compact — byte-identical
+    // to what the report path stored, so the save format does not drift.
+    let claim = crate::mux::hooks::AgentClaim::from_metadata(metadata)?;
     let session = PersistAgentSession {
-        agent: agent.clone(),
-        session_id: metadata.get("agent_session_id").cloned(),
-        session_path: metadata.get("agent_session_path").cloned(),
-        source: metadata.get("agent_source").cloned(),
-        resume_argv: metadata.get("agent_resume_argv").cloned(),
+        agent: claim.agent,
+        session_id: claim.session_id,
+        session_path: claim.session_path,
+        source: claim.source,
+        resume_argv: claim
+            .resume_argv
+            .map(|argv| serde_json::to_string(&argv).unwrap_or_default()),
     };
     (session.session_id.is_some()
         || session.session_path.is_some()
@@ -548,24 +553,38 @@ impl MuxTree {
                             &context,
                         )?,
                     };
-                    // Identity comes back as metadata so the format
-                    // round-trips and task 6.3's hook-first lookup reads it
-                    // from the same place it reads a live pane's. Only the
-                    // identity keys — no state, no seq, no start source (a
-                    // restored pane reports those anew or holds none).
+                    // Identity comes back through the typed claim (ARC-113c)
+                    // so the format round-trips and task 6.3's hook-first
+                    // lookup reads it from the same place it reads a live
+                    // pane's. Only the identity fields — no state, no seq,
+                    // no start source (a restored pane reports those anew or
+                    // holds none).
                     if let Some(agent_session) = &pane.agent_session {
-                        created.set_metadata("agent", &agent_session.agent);
-                        if let Some(id) = &agent_session.session_id {
-                            created.set_metadata("agent_session_id", id);
+                        let mut claim = crate::mux::hooks::AgentClaim {
+                            agent: agent_session.agent.clone(),
+                            session_id: agent_session.session_id.clone(),
+                            session_path: agent_session.session_path.clone(),
+                            source: agent_session.source.clone(),
+                            ..Default::default()
+                        };
+                        // Verbatim argv passthrough: a malformed (hand-edited)
+                        // argv string in the state file cannot parse into the
+                        // typed argv, so it is stored raw rather than silently
+                        // dropped — loading an old file never loses what the
+                        // file said.
+                        let mut raw_argv: Option<&str> = None;
+                        match agent_session
+                            .resume_argv
+                            .as_deref()
+                            .map(|raw| (raw, serde_json::from_str::<Vec<String>>(raw)))
+                        {
+                            Some((_, Ok(argv))) => claim.resume_argv = Some(argv),
+                            Some((raw, Err(_))) => raw_argv = Some(raw),
+                            None => {}
                         }
-                        if let Some(path) = &agent_session.session_path {
-                            created.set_metadata("agent_session_path", path);
-                        }
-                        if let Some(source) = &agent_session.source {
-                            created.set_metadata("agent_source", source);
-                        }
-                        if let Some(argv) = &agent_session.resume_argv {
-                            created.set_metadata("agent_resume_argv", argv);
+                        created.set_agent_claim(&claim);
+                        if let Some(raw) = raw_argv {
+                            created.set_metadata("agent_resume_argv", raw);
                         }
                     }
                     if let Some(title) = &pane.user_title {
@@ -2253,6 +2272,76 @@ mod tests {
             pane.seq_by_source.is_empty(),
             "sequence stamps are volatile — the restarted agent's first report is never stale"
         );
+    }
+
+    /// ARC-113c: a PRE-CHANGE state file still loads. The on-disk identity
+    /// shape is unchanged by the typed claim — the fixture hand-writes the
+    /// legacy `agent_session` block (argv as a verbatim JSON string,
+    /// nothing state-shaped) into an otherwise captured state, and the
+    /// restored pane's claim reads back through the typed view.
+    #[test]
+    fn a_pre_change_agent_identity_json_loads_and_reads_typed() {
+        let (original, pane_id) = tree_with_agent_pane();
+        let mut value = serde_json::to_value(original.to_persist_state()).unwrap();
+        value["sessions"][0]["windows"][0]["panes"][0]["agent_session"] = serde_json::json!({
+            "agent": "pi",
+            "session_id": "s-1",
+            "session_path": "/tmp/pi-session.jsonl",
+            "source": "par-mux:pi",
+            "resume_argv": r#"["pi","--session","/tmp/pi-session.jsonl"]"#
+        });
+        let json = serde_json::to_string(&value).unwrap();
+        assert!(
+            json.contains(r#""resume_argv":"[\"pi\",\"--session\",\"/tmp/pi-session.jsonl\"]""#),
+            "the on-disk shape must keep argv a JSON string, not an array: {json}"
+        );
+
+        let state: PersistState = serde_json::from_str(&json).unwrap();
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let pane = restored.pane(pane_id).unwrap();
+        assert_eq!(pane.metadata().get("agent").map(String::as_str), Some("pi"));
+        assert_eq!(
+            pane.metadata().get("agent_session_id").map(String::as_str),
+            Some("s-1")
+        );
+        assert_eq!(
+            pane.metadata()
+                .get("agent_session_path")
+                .map(String::as_str),
+            Some("/tmp/pi-session.jsonl")
+        );
+        assert_eq!(
+            pane.metadata().get("agent_source").map(String::as_str),
+            Some("par-mux:pi")
+        );
+        assert_eq!(
+            pane.metadata().get("agent_resume_argv").map(String::as_str),
+            Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#),
+            "a valid argv lands byte-identical, not normalized"
+        );
+
+        let claim = pane.agent_claim().expect("restored identity is a claim");
+        assert_eq!(claim.agent, "pi");
+        assert_eq!(claim.session_id.as_deref(), Some("s-1"));
+        assert_eq!(claim.session_path.as_deref(), Some("/tmp/pi-session.jsonl"));
+        assert_eq!(claim.source.as_deref(), Some("par-mux:pi"));
+        assert_eq!(
+            claim.resume_argv.as_deref(),
+            Some(
+                &[
+                    "pi".to_string(),
+                    "--session".to_string(),
+                    "/tmp/pi-session.jsonl".to_string()
+                ][..]
+            )
+        );
+        assert_eq!(
+            claim.state, None,
+            "the old file carries nothing state-shaped"
+        );
+        assert_eq!(claim.seq, None);
+        assert_eq!(claim.session_start_source, None);
     }
 
     /// The pi/omp shape on the wire today: path-only identity plus the

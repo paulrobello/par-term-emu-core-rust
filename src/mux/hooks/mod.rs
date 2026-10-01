@@ -39,6 +39,7 @@ use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -172,6 +173,137 @@ pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent_liveness_misses_agent",
 ];
 
+/// The agent claim on a pane, typed (ARC-113c): roster label, reported
+/// state, hook authority, session identity, and the liveness sweep's miss
+/// counter — the twelve metadata keys [`AGENT_CLAIM_KEYS`] lists, read and
+/// written through one definition instead of a dozen `set_metadata` calls.
+///
+/// Storage stays the pane's stringly metadata map, because the map IS the
+/// wire-and-disk contract: the roster reader and `agent_session_from_metadata`
+/// key off these exact strings, and the save format copies named identity
+/// fields from them. The claim is therefore a typed VIEW — [`Self::from_metadata`]
+/// parses, [`Self::write_to_metadata`] renders — and unparseable numeric or
+/// argv values read as absent (a corrupted counter disappears on the next
+/// legitimate claim write rather than poisoning it). The serde form below is
+/// the migration-friendly representation for a future claim-shaped block in
+/// the state file; nothing writes it yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AgentClaim {
+    /// The roster label — the claim's anchor: a pane is claimed iff the
+    /// `agent` key is present.
+    pub agent: String,
+    /// The reported state (working/blocked/idle).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Who authored the state: `"hook"` (permanent once set) or `"scrape"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_source: Option<String>,
+    /// The blocked reason, whitespace-collapsed at the report door.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// The reporting script's source tag (`par-mux:claude:session-hook`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The most recent accepted report's sequence number, whatever its source.
+    #[serde(rename = "agent_seq", skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    /// The agent's session id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The agent's transcript path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_path: Option<String>,
+    /// Startup-vs-resume provenance, recorded when the wire carries it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_start_source: Option<String>,
+    /// The agent's own resume invocation, the JSON argv string the report
+    /// stored verbatim (`["pi","--session","<path>"]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_argv: Option<Vec<String>>,
+    /// Unbroken liveness mismatches before the sweep clears the claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liveness_misses: Option<u8>,
+    /// The agent label the miss count belongs to; a relabel starts fresh.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liveness_misses_agent: Option<String>,
+}
+
+impl AgentClaim {
+    /// Parse the claim out of a pane's metadata map, or `None` when the
+    /// pane carries no `agent` label. Numeric and argv fields parse
+    /// leniently: a value that does not decode reads as absent.
+    pub(crate) fn from_metadata(metadata: &HashMap<String, String>) -> Option<Self> {
+        let mut claim = Self {
+            agent: metadata.get("agent")?.clone(),
+            ..Self::default()
+        };
+        let get = |key: &str| metadata.get(key).map(String::as_str);
+        claim.state = get("agent_state").map(str::to_string);
+        claim.state_source = get("agent_state_source").map(str::to_string);
+        claim.message = get("agent_message").map(str::to_string);
+        claim.source = get("agent_source").map(str::to_string);
+        claim.seq = get("agent_seq").and_then(|value| value.parse().ok());
+        claim.session_id = get("agent_session_id").map(str::to_string);
+        claim.session_path = get("agent_session_path").map(str::to_string);
+        claim.session_start_source = get("agent_session_start_source").map(str::to_string);
+        claim.resume_argv = get("agent_resume_argv").and_then(|value| {
+            serde_json::from_str::<Vec<String>>(value)
+                .ok()
+                .filter(|argv| !argv.is_empty())
+        });
+        claim.liveness_misses = get("agent_liveness_misses").and_then(|value| value.parse().ok());
+        claim.liveness_misses_agent = get("agent_liveness_misses_agent").map(str::to_string);
+        Some(claim)
+    }
+
+    /// Render the claim back into a pane's metadata map: the label and every
+    /// present field are written under their stringly keys, every absent
+    /// field's key is REMOVED — a whole-claim write, so a field the caller
+    /// cleared cannot survive as a stale string.
+    pub(crate) fn write_to_metadata(&self, metadata: &mut HashMap<String, String>) {
+        fn put(metadata: &mut HashMap<String, String>, key: &str, value: &Option<String>) {
+            match value {
+                Some(value) => metadata.insert(key.to_string(), value.clone()),
+                None => metadata.remove(key),
+            };
+        }
+        metadata.insert("agent".to_string(), self.agent.clone());
+        put(metadata, "agent_state", &self.state);
+        put(metadata, "agent_state_source", &self.state_source);
+        put(metadata, "agent_message", &self.message);
+        put(metadata, "agent_source", &self.source);
+        match &self.seq {
+            Some(seq) => metadata.insert("agent_seq".to_string(), seq.to_string()),
+            None => metadata.remove("agent_seq"),
+        };
+        put(metadata, "agent_session_id", &self.session_id);
+        put(metadata, "agent_session_path", &self.session_path);
+        put(
+            metadata,
+            "agent_session_start_source",
+            &self.session_start_source,
+        );
+        match &self.resume_argv {
+            Some(argv) => metadata.insert(
+                "agent_resume_argv".to_string(),
+                serde_json::to_string(argv).unwrap_or_default(),
+            ),
+            None => metadata.remove("agent_resume_argv"),
+        };
+        match &self.liveness_misses {
+            Some(misses) => {
+                metadata.insert("agent_liveness_misses".to_string(), misses.to_string())
+            }
+            None => metadata.remove("agent_liveness_misses"),
+        };
+        put(
+            metadata,
+            "agent_liveness_misses_agent",
+            &self.liveness_misses_agent,
+        );
+    }
+}
+
 /// Clear a pane's whole agent claim — the metadata keys and the typed
 /// telemetry and sequence state — as `pane.release_agent` and the scrape
 /// tick's liveness sweep (`scrape.rs`) both do.
@@ -198,13 +330,14 @@ fn is_stale(pane: &MuxPane, source: Option<&str>, seq: u64) -> bool {
     }
 }
 
-/// Record `seq` as accepted: the plain `agent_seq` (the most recent
-/// report, whatever its source) and the reporting source's own bucket in
-/// [`MuxPane::seq_by_source`]. Volatile like everything state-shaped — the
-/// save format copies named identity fields only, so the buckets never
-/// reach disk.
+/// Record `seq` as accepted: the plain `agent_seq` stamp through the typed
+/// claim and the reporting source's own bucket in
+/// [`MuxPane::seq_by_source`]. Every caller writes the `agent` label before
+/// this, so the claim exists (a telemetry-only claim included). Volatile
+/// like everything state-shaped — the save format copies named identity
+/// fields only, so the buckets never reach disk.
 fn record_seq(pane: &mut MuxPane, source: Option<&str>, seq: u64) {
-    pane.set_metadata("agent_seq", &seq.to_string());
+    pane.update_agent_claim(|claim| claim.seq = Some(seq));
     pane.seq_by_source
         .insert(source.unwrap_or("").to_string(), seq);
 }

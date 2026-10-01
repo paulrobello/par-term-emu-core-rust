@@ -71,38 +71,47 @@ pub(super) fn handle_state_report(
             return (ok_reply(id), None);
         }
 
-        pane.set_metadata("agent", &header.agent);
-        pane.set_metadata("agent_state", state);
+        // The whole claim renders through the typed claim (ARC-113c): the
+        // report's fields overwrite, everything it omits survives from the
+        // prior claim — except the blocked reason, which is stored when
+        // present and CLEARED when a later report omits it, so a stale
+        // reason cannot survive into a new state.
+        let mut claim = pane.agent_claim().unwrap_or_default();
+        claim.agent = header.agent.clone();
+        claim.state = Some(state.to_string());
         // A hook state report makes this pane hook-authoritative from now
         // on: the scrape tier skips it forever after (the structural
         // precedence rule — a claim is never overwritten by a guess).
-        pane.set_metadata("agent_state_source", "hook");
-        record_seq(pane, header.source.as_deref(), header.seq);
+        claim.state_source = Some("hook".to_string());
+        claim.seq = Some(header.seq);
         if let Some(source) = &header.source {
-            pane.set_metadata("agent_source", source);
+            claim.source = Some(source.clone());
         }
         // Identity fields ride state reports too: the kimi script attaches
         // agent_session_id whenever it knows one, state report or not.
-        for field in ["agent_session_id", "agent_session_path"] {
-            if let Some(value) = params.get(field).and_then(serde_json::Value::as_str) {
-                pane.set_metadata(field, value);
-            }
+        if let Some(value) = params
+            .get("agent_session_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            claim.session_id = Some(value.to_string());
+        }
+        if let Some(value) = params
+            .get("agent_session_path")
+            .and_then(serde_json::Value::as_str)
+        {
+            claim.session_path = Some(value.to_string());
         }
         // The blocked reason pi and omp attach to their reports (the
-        // scannability field the roster exists for): stored when present,
-        // CLEARED when a later report omits it, so a stale reason cannot
-        // survive into a new state. Whitespace is collapsed at the door —
-        // the roster line is one line.
-        let message = params
+        // scannability field the roster exists for). Whitespace is collapsed
+        // at the door — the roster line is one line.
+        claim.message = params
             .get("message")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|message| !message.is_empty())
             .map(|message| message.split_whitespace().collect::<Vec<_>>().join(" "));
-        match message {
-            Some(message) => pane.set_metadata("agent_message", &message),
-            None => pane.clear_metadata(&["agent_message"]),
-        }
+        pane.set_agent_claim(&claim);
+        record_seq(pane, header.source.as_deref(), header.seq);
 
         Some(TmuxNotification::AgentStateChanged {
             pane_id: header.pane_id.to_string(),
@@ -182,36 +191,33 @@ pub(super) fn handle_session_report(
             return (ok_reply(id), None);
         }
 
-        // Prior identity, captured before the writes below replace it: a
-        // report that moves the pane to a DIFFERENT session without a fresh
-        // invocation must not leave the old session's argv behind.
-        let prior_session_id = pane.metadata().get("agent_session_id").cloned();
-        let prior_session_path = pane.metadata().get("agent_session_path").cloned();
+        // The whole claim renders through the typed claim (ARC-113c), read
+        // first so the writes below can compare against the prior identity.
+        let mut claim = pane.agent_claim().unwrap_or_default();
+        let prior_session_id = claim.session_id.clone();
+        let prior_session_path = claim.session_path.clone();
 
         // A report that moves the pane to a DIFFERENT agent ends the
         // previous agent's claim: its state, hook authority, and blocked
         // reason must not survive — and above all must not be rebroadcast
         // under the new label as though the new agent had claimed it (the
-        // rebroadcast below reads `agent_state`, which this just removed).
-        if pane
-            .metadata()
-            .get("agent")
-            .map(String::as_str)
-            .is_some_and(|label| label != header.agent)
-        {
-            pane.clear_metadata(&["agent_state", "agent_state_source", "agent_message"]);
+        // rebroadcast below reads `claim.state`, which this just cleared).
+        if claim.agent != header.agent {
+            claim.state = None;
+            claim.state_source = None;
+            claim.message = None;
         }
 
-        pane.set_metadata("agent", &header.agent);
-        record_seq(pane, header.source.as_deref(), header.seq);
+        claim.agent = header.agent.clone();
+        claim.seq = Some(header.seq);
         if let Some(source) = &header.source {
-            pane.set_metadata("agent_source", source);
+            claim.source = Some(source.clone());
         }
         if let Some(session_id) = &session_id {
-            pane.set_metadata("agent_session_id", session_id);
+            claim.session_id = Some((*session_id).to_string());
         }
         if let Some(session_path) = &session_path {
-            pane.set_metadata("agent_session_path", session_path);
+            claim.session_path = Some((*session_path).to_string());
         }
         // The resume path's provenance (startup vs resume), recorded now
         // because the wire carries it now — Phase 6 persists it.
@@ -219,7 +225,7 @@ pub(super) fn handle_session_report(
             .get("session_start_source")
             .and_then(serde_json::Value::as_str)
         {
-            pane.set_metadata("agent_session_start_source", start);
+            claim.session_start_source = Some(start.to_string());
         }
         // The agent's own resume invocation, stored as a JSON argv string:
         // Phase 6 spawns it verbatim (hook-first; the per-agent table is the
@@ -227,33 +233,34 @@ pub(super) fn handle_session_report(
         // that also moves to a different session means the stored argv is
         // the OLD session's — clear it rather than resume the wrong session.
         match &resume_argv {
-            Some(argv) => pane.set_metadata("agent_resume_argv", argv),
+            Some(argv) => claim.resume_argv = Some(argv.clone()),
             None => {
                 let changed = session_id
                     .is_some_and(|value| prior_session_id.as_deref() != Some(value))
                     || session_path
                         .is_some_and(|value| prior_session_path.as_deref() != Some(value));
                 if changed {
-                    pane.clear_metadata(&["agent_resume_argv"]);
+                    claim.resume_argv = None;
                 }
             }
         }
+        pane.set_agent_claim(&claim);
+        record_seq(pane, header.source.as_deref(), header.seq);
 
         // The rebroadcast keeps the state's OWN provenance: a claude-shaped
         // pane (identity by hook, state by scrape) must not relabel a
         // scrape guess as a hook claim on its session reports.
-        let state_source = pane
-            .metadata()
-            .get("agent_state_source")
-            .cloned()
-            .unwrap_or_else(|| "hook".to_string());
-        pane.metadata()
-            .get("agent_state")
+        claim
+            .state
+            .clone()
             .map(|state| TmuxNotification::AgentStateChanged {
                 pane_id: header.pane_id.to_string(),
                 agent: header.agent.clone(),
-                state: state.clone(),
-                source: state_source,
+                state,
+                source: claim
+                    .state_source
+                    .clone()
+                    .unwrap_or_else(|| "hook".to_string()),
             })
     };
     (ok_reply(id), notification)
@@ -266,7 +273,7 @@ pub(super) fn handle_session_report(
 /// settles is the one Phase 6 task 6.2 keys its override arm on). Absent is
 /// fine; present-but-malformed is an error so a broken script hears about
 /// it instead of silently losing its resume path.
-fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, String> {
+fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<Vec<String>>, String> {
     let Some(value) = params.get("session_resume_argv") else {
         return Ok(None);
     };
@@ -285,8 +292,10 @@ fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, Strin
     if argv.is_empty() {
         return Err("session_resume_argv must not be empty".to_string());
     }
+    // The length budget applies to the form that persists — the compact
+    // JSON rendering the claim stores under `agent_resume_argv`.
     let encoded =
         serde_json::to_string(&argv).map_err(|err| format!("session_resume_argv: {err}"))?;
     check_value_len("session_resume_argv", &encoded)?;
-    Ok(Some(encoded))
+    Ok(Some(argv))
 }

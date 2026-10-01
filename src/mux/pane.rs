@@ -436,6 +436,32 @@ impl MuxPane {
         }
     }
 
+    /// The pane's agent claim, typed ([`crate::mux::hooks::AgentClaim`],
+    /// ARC-113c) — or `None` when no hook or factory has claimed this pane.
+    pub(crate) fn agent_claim(&self) -> Option<crate::mux::hooks::AgentClaim> {
+        crate::mux::hooks::AgentClaim::from_metadata(&self.metadata)
+    }
+
+    /// Replace the pane's whole agent claim: every field renders to its
+    /// stringly key and every cleared field's key is removed, so a stale
+    /// value cannot survive a write that did not carry it.
+    pub(crate) fn set_agent_claim(&mut self, claim: &crate::mux::hooks::AgentClaim) {
+        claim.write_to_metadata(&mut self.metadata);
+    }
+
+    /// Mutate the pane's existing agent claim in place. No-op on an
+    /// unclaimed pane — every caller runs behind an `agent`-label guard
+    /// (a claim exists wherever the claim is edited).
+    pub(crate) fn update_agent_claim<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::mux::hooks::AgentClaim) -> R,
+    ) -> Option<R> {
+        let mut claim = self.agent_claim()?;
+        let result = f(&mut claim);
+        self.set_agent_claim(&claim);
+        Some(result)
+    }
+
     /// Install the sink that receives raw PTY output for this pane.
     ///
     /// The server wires this to the control-mode emitter so bytes become
@@ -1241,6 +1267,122 @@ mod tests {
         assert_eq!(
             pane.metadata().get("agent").map(String::as_str),
             Some("claude")
+        );
+    }
+
+    /// ARC-113c: the typed claim renders to exactly the stringly keys the
+    /// roster and the save format read — including the agent_seq rename and
+    /// the compact JSON argv — and parses back losslessly.
+    #[test]
+    fn agent_claim_round_trips_through_the_stringly_map() {
+        use crate::mux::hooks::{AgentClaim, AGENT_CLAIM_KEYS};
+
+        let full = AgentClaim {
+            agent: "pi".to_string(),
+            state: Some("blocked".to_string()),
+            state_source: Some("hook".to_string()),
+            message: Some("need approval".to_string()),
+            source: Some("par-mux:pi".to_string()),
+            seq: Some(1000),
+            session_id: Some("s-1".to_string()),
+            session_path: Some("/tmp/pi-session.jsonl".to_string()),
+            session_start_source: Some("startup".to_string()),
+            resume_argv: Some(vec!["pi".to_string(), "--session".to_string()]),
+            liveness_misses: Some(2),
+            liveness_misses_agent: Some("pi".to_string()),
+        };
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory
+            .create_pane(PaneId(30), 80, 24, None, &SpawnContext::default())
+            .unwrap();
+        pane.set_agent_claim(&full);
+
+        // The wire-and-disk shape: the claim's stringly rendering is the
+        // legacy metadata spelling, byte for byte.
+        assert_eq!(pane.metadata().len(), AGENT_CLAIM_KEYS.len());
+        for key in AGENT_CLAIM_KEYS {
+            assert!(
+                pane.metadata().contains_key(*key),
+                "full claim write must spell {key}"
+            );
+        }
+        assert_eq!(
+            pane.metadata().get("agent_seq").map(String::as_str),
+            Some("1000"),
+            "seq renders under the legacy agent_seq key"
+        );
+        assert_eq!(
+            pane.metadata().get("agent_resume_argv").map(String::as_str),
+            Some(r#"["pi","--session"]"#),
+            "argv renders as the compact JSON string the report path stores"
+        );
+        assert_eq!(pane.agent_claim().as_ref(), Some(&full));
+
+        // A cleared field's key is REMOVED, not empty-stringed.
+        let mut cleared = full.clone();
+        cleared.state = None;
+        cleared.message = None;
+        cleared.liveness_misses = None;
+        pane.set_agent_claim(&cleared);
+        assert!(!pane.metadata().contains_key("agent_state"));
+        assert!(!pane.metadata().contains_key("agent_message"));
+        assert!(!pane.metadata().contains_key("agent_liveness_misses"));
+        assert_eq!(
+            pane.metadata()
+                .get("agent_state_source")
+                .map(String::as_str),
+            Some("hook"),
+            "untouched fields survive the whole-claim write"
+        );
+    }
+
+    /// The typed view is lenient by design: a pane whose claim carries a
+    /// corrupt counter or argv reads those fields as absent instead of
+    /// failing the whole claim.
+    #[test]
+    fn unparseable_numeric_and_argv_values_read_as_absent() {
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory
+            .create_pane(PaneId(31), 80, 24, None, &SpawnContext::default())
+            .unwrap();
+        pane.set_metadata("agent", "omp");
+        pane.set_metadata("agent_seq", "not-a-number");
+        pane.set_metadata("agent_liveness_misses", "99999");
+        pane.set_metadata("agent_resume_argv", "[not json");
+        let claim = pane.agent_claim().expect("the agent label is present");
+        assert_eq!(claim.agent, "omp");
+        assert_eq!(claim.seq, None);
+        assert_eq!(claim.liveness_misses, None, "99999 overflows u8");
+        assert_eq!(claim.resume_argv, None);
+    }
+
+    /// The serde form is the migration representation for a future
+    /// claim-shaped block in the state file: agent_seq's rename is spelled
+    /// once, on the field, and absent Options are skipped.
+    #[test]
+    fn agent_claim_serializes_to_the_migration_representation() {
+        use crate::mux::hooks::AgentClaim;
+
+        let minimal = AgentClaim {
+            agent: "claude".to_string(),
+            ..AgentClaim::default()
+        };
+        let json = serde_json::to_value(&minimal).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"agent": "claude"}),
+            "absent fields are skipped so the representation stays stable"
+        );
+
+        let with_seq = AgentClaim {
+            seq: Some(7),
+            ..minimal
+        };
+        let json = serde_json::to_value(&with_seq).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"agent": "claude", "agent_seq": 7}),
+            "seq travels under its legacy key name"
         );
     }
 

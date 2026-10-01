@@ -489,41 +489,34 @@ pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<Tmu
 /// 1-second ticks is the death signal.
 const LIVENESS_MISSES_TO_CLEAR: u8 = 2;
 
-/// The keys the liveness sweep keeps its miss count under. The count
-/// belongs to one agent label, so it lives and dies with the claim
-/// (`AGENT_CLAIM_KEYS` clears it) and a relabel starts a fresh count.
-const LIVENESS_MISS_KEYS: &[&str] = &["agent_liveness_misses", "agent_liveness_misses_agent"];
-
 /// A tick that saw the agent alive drops the miss count: only unbroken
 /// mismatches clear a claim. `Unknown` deliberately does NOT reset — a
 /// measurement failure (argv unreadable mid-`exec`, the fresh-spawn
 /// window) is not liveness, and erasing proof because the probe went
 /// blind for a tick would let a dead agent's claim survive alternation.
 fn reset_liveness_misses(pane: &mut MuxPane) {
-    pane.clear_metadata(LIVENESS_MISS_KEYS);
+    pane.update_agent_claim(|claim| {
+        claim.liveness_misses = None;
+        claim.liveness_misses_agent = None;
+    });
 }
 
 /// Record one mismatching tick and return the count after the increment.
 /// A count carried under a different agent label is the previous agent's;
 /// restart from one under the current label.
 fn bump_liveness_misses(pane: &mut MuxPane, agent: &str) -> u8 {
-    let prior = if pane
-        .metadata()
-        .get("agent_liveness_misses_agent")
-        .map(String::as_str)
-        == Some(agent)
-    {
-        pane.metadata()
-            .get("agent_liveness_misses")
-            .and_then(|value| value.parse::<u8>().ok())
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let misses = prior.saturating_add(1);
-    pane.set_metadata("agent_liveness_misses", &misses.to_string());
-    pane.set_metadata("agent_liveness_misses_agent", agent);
-    misses
+    pane.update_agent_claim(|claim| {
+        let prior = if claim.liveness_misses_agent.as_deref() == Some(agent) {
+            claim.liveness_misses.unwrap_or(0)
+        } else {
+            0
+        };
+        let misses = prior.saturating_add(1);
+        claim.liveness_misses = Some(misses);
+        claim.liveness_misses_agent = Some(agent.to_string());
+        misses
+    })
+    .unwrap_or(0)
 }
 
 /// The tick with the process table injected — the liveness sweep's test
