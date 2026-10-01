@@ -235,12 +235,31 @@ impl PyTerminal {
     }
 
     /// Merge overlapping damage regions
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_damage_region(0, 0, 10, 5)
+    ///     term.add_damage_region(5, 2, 20, 8)
+    ///     term.merge_damage_regions()
+    ///     len(term.get_damage_regions())
+    ///     1
+    ///     ```
     fn merge_damage_regions(&mut self) -> PyResult<()> {
         self.inner.merge_damage_regions();
         Ok(())
     }
 
     /// Clear damage regions
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_damage_region(0, 0, 10, 5)
+    ///     term.clear_damage_regions()
+    ///     term.get_damage_regions()
+    ///     []
+    ///     ```
     fn clear_damage_regions(&mut self) -> PyResult<()> {
         self.inner.clear_damage_regions();
         Ok(())
@@ -273,6 +292,8 @@ impl PyTerminal {
     ///     ```python
     ///     term = Terminal(80, 24)
     ///     term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+    ///     len(term.get_rendering_hints())
+    ///     1
     ///     ```
     // Python positional arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
@@ -361,6 +382,15 @@ impl PyTerminal {
     }
 
     /// Clear rendering hints
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+    ///     term.clear_rendering_hints()
+    ///     term.get_rendering_hints()
+    ///     []
+    ///     ```
     fn clear_rendering_hints(&mut self) -> PyResult<()> {
         self.inner.clear_rendering_hints();
         Ok(())

@@ -124,6 +124,15 @@ impl PyTerminal {
     ///
     /// Raises:
     ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello")
+    ///     term.clear_clipboard_history("clipboard")
+    ///     term.get_clipboard_history("clipboard")
+    ///     []
+    ///     ```
     fn clear_clipboard_history(&mut self, slot: &str) -> PyResult<()> {
         let clipboard_slot = super::parse_clipboard_slot(slot)?;
         self.inner.clear_clipboard_history(clipboard_slot);
@@ -131,6 +140,15 @@ impl PyTerminal {
     }
 
     /// Clear all clipboard history
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello")
+    ///     term.clear_all_clipboard_history()
+    ///     term.get_clipboard_history("clipboard")
+    ///     []
+    ///     ```
     fn clear_all_clipboard_history(&mut self) -> PyResult<()> {
         self.inner.clear_all_clipboard_history();
         Ok(())
@@ -366,6 +384,15 @@ impl PyTerminal {
     }
 
     /// Clear clipboard sync events
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_clipboard_sync("clipboard", "set", "hello", False)
+    ///     term.clear_clipboard_sync_events()
+    ///     term.get_clipboard_sync_events()
+    ///     []
+    ///     ```
     fn clear_clipboard_sync_events(&mut self) -> PyResult<()> {
         self.inner.clear_clipboard_sync_events();
         Ok(())
@@ -375,6 +402,14 @@ impl PyTerminal {
     ///
     /// Args:
     ///     max: Maximum clipboard sync events to buffer (0 disables buffering)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_clipboard_sync_events(50)
+    ///     term.get_max_clipboard_sync_events()
+    ///     50
+    ///     ```
     fn set_max_clipboard_sync_events(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_sync_events(max);
         Ok(())
@@ -384,6 +419,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     int: Maximum clipboard sync events buffered
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_clipboard_sync_events(50)
+    ///     term.get_max_clipboard_sync_events()
+    ///     50
+    ///     ```
     fn get_max_clipboard_sync_events(&self) -> PyResult<usize> {
         Ok(self.inner.max_clipboard_sync_events())
     }
@@ -392,6 +435,14 @@ impl PyTerminal {
     ///
     /// Args:
     ///     max_bytes: Maximum bytes cached per event (0 clears cached content)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_clipboard_event_bytes(4096)
+    ///     term.get_max_clipboard_event_bytes()
+    ///     4096
+    ///     ```
     fn set_max_clipboard_event_bytes(&mut self, max_bytes: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_event_bytes(max_bytes);
         Ok(())
@@ -401,6 +452,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     int: Maximum bytes cached per clipboard event
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_clipboard_event_bytes(4096)
+    ///     term.get_max_clipboard_event_bytes()
+    ///     4096
+    ///     ```
     fn get_max_clipboard_event_bytes(&self) -> PyResult<usize> {
         Ok(self.inner.max_clipboard_event_bytes())
     }
@@ -409,6 +468,14 @@ impl PyTerminal {
     ///
     /// Args:
     ///     session_id: Optional session identifier
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_remote_session_id("ssh-session-1")
+    ///     term.remote_session_id()
+    ///     'ssh-session-1'
+    ///     ```
     fn set_remote_session_id(&mut self, session_id: Option<String>) -> PyResult<()> {
         self.inner.set_remote_session_id(session_id);
         Ok(())
@@ -418,6 +485,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Optional session identifier
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_remote_session_id("ssh-session-1")
+    ///     term.remote_session_id()
+    ///     'ssh-session-1'
+    ///     ```
     fn remote_session_id(&self) -> PyResult<Option<String>> {
         Ok(self.inner.remote_session_id().map(String::from))
     }
@@ -426,6 +501,12 @@ impl PyTerminal {
     ///
     /// Args:
     ///     max: Maximum number of entries per target
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_clipboard_sync_history(20)
+    ///     ```
     fn set_max_clipboard_sync_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_sync_history(max);
         Ok(())

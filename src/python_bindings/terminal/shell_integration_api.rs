@@ -14,6 +14,13 @@ impl PyTerminal {
     ///
     /// Args:
     ///     command: Command being executed
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.end_command_execution(0)
+    ///     ```
     fn start_command_execution(&mut self, command: String) -> PyResult<()> {
         self.inner.start_command_execution(command);
         Ok(())
@@ -23,6 +30,13 @@ impl PyTerminal {
     ///
     /// Args:
     ///     exit_code: Exit code of the command
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.end_command_execution(0)
+    ///     ```
     fn end_command_execution(&mut self, exit_code: i32) -> PyResult<()> {
         self.inner.end_command_execution(Some(exit_code));
         Ok(())
@@ -32,6 +46,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of PyCommandExecution
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.end_command_execution(0)
+    ///     len(term.get_command_history())
+    ///     1
+    ///     ```
     fn get_command_history(
         &self,
     ) -> PyResult<Vec<crate::python_bindings::types::PyCommandExecution>> {
@@ -47,6 +70,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Optional PyCommandExecution
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.get_current_command().command
+    ///     'ls -la'
+    ///     ```
     fn get_current_command(
         &self,
     ) -> PyResult<Option<crate::python_bindings::types::PyCommandExecution>> {
@@ -110,6 +141,14 @@ impl PyTerminal {
     ///     new_cwd: New working directory
     ///     hostname: Optional hostname (None for localhost)
     ///     username: Optional username (user@host form)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_cwd_change("/home/user", hostname="server1", username="alice")
+    ///     len(term.get_cwd_changes())
+    ///     1
+    ///     ```
     #[pyo3(signature = (new_cwd, hostname=None, username=None))]
     fn record_cwd_change(
         &mut self,
@@ -132,6 +171,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of PyCwdChange
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_cwd_change("/home/user")
+    ///     len(term.get_cwd_changes())
+    ///     1
+    ///     ```
     fn get_cwd_changes(&self) -> PyResult<Vec<crate::python_bindings::types::PyCwdChange>> {
         Ok(self
             .inner
@@ -145,6 +192,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     PyShellIntegrationStats
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.end_command_execution(0)
+    ///     term.get_shell_integration_stats().total_commands
+    ///     1
+    ///     ```
     fn get_shell_integration_stats(
         &self,
     ) -> PyResult<crate::python_bindings::types::PyShellIntegrationStats> {
@@ -153,12 +209,31 @@ impl PyTerminal {
     }
 
     /// Clear command execution history
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.start_command_execution("ls -la")
+    ///     term.end_command_execution(0)
+    ///     term.clear_command_history()
+    ///     term.get_command_history()
+    ///     []
+    ///     ```
     fn clear_command_history(&mut self) -> PyResult<()> {
         self.inner.clear_command_history();
         Ok(())
     }
 
     /// Clear CWD change history
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_cwd_change("/home/user")
+    ///     term.clear_cwd_history()
+    ///     term.get_cwd_changes()
+    ///     []
+    ///     ```
     fn clear_cwd_history(&mut self) -> PyResult<()> {
         self.inner.clear_cwd_history();
         Ok(())
@@ -168,6 +243,12 @@ impl PyTerminal {
     ///
     /// Args:
     ///     max: Maximum number of command entries
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_command_history(50)
+    ///     ```
     fn set_max_command_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_command_history(max);
         Ok(())
@@ -177,6 +258,12 @@ impl PyTerminal {
     ///
     /// Args:
     ///     max: Maximum number of CWD change entries
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_cwd_history(50)
+    ///     ```
     fn set_max_cwd_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_cwd_history(max);
         Ok(())

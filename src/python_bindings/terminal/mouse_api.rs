@@ -178,18 +178,46 @@ impl PyTerminal {
     }
 
     /// Clear mouse history
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+    ///     term.clear_mouse_history()
+    ///     term.get_mouse_events()
+    ///     []
+    ///     ```
     fn clear_mouse_history(&mut self) -> PyResult<()> {
         self.inner.clear_mouse_history();
         Ok(())
     }
 
     /// Set maximum mouse history size
+    ///
+    /// Args:
+    ///     max: Maximum number of events/positions retained
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_mouse_history(10)
+    ///     term.get_max_mouse_history()
+    ///     10
+    ///     ```
     fn set_max_mouse_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_mouse_history(max);
         Ok(())
     }
 
     /// Get maximum mouse history size
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_max_mouse_history(10)
+    ///     term.get_max_mouse_history()
+    ///     10
+    ///     ```
     fn get_max_mouse_history(&self) -> PyResult<usize> {
         Ok(self.inner.get_max_mouse_history())
     }

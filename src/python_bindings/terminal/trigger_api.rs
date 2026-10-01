@@ -55,6 +55,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     bool: True if trigger was found and removed
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> tid = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.remove_trigger(tid)
+    ///     True
+    ///     >>> term.remove_trigger(tid)
+    ///     False
     fn remove_trigger(&mut self, trigger_id: u64) -> PyResult<bool> {
         Ok(TriggerEngine::remove_trigger(&mut self.inner, trigger_id))
     }
@@ -67,6 +75,12 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     bool: True if trigger was found and updated
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> tid = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.set_trigger_enabled(tid, False)
+    ///     True
     fn set_trigger_enabled(&mut self, trigger_id: u64, enabled: bool) -> PyResult<bool> {
         Ok(TriggerEngine::set_trigger_enabled(
             &mut self.inner,
@@ -79,6 +93,12 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     list[Trigger]: List of all triggers
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> _ = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> len(term.list_triggers())
+    ///     1
     fn list_triggers(&self) -> PyResult<Vec<crate::python_bindings::types::PyTrigger>> {
         Ok(TriggerEngine::list_triggers(&self.inner)
             .iter()
@@ -93,6 +113,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Trigger | None: Trigger if found, None otherwise
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> tid = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.get_trigger(tid).name
+    ///     'errors'
+    ///     >>> term.get_trigger(9999) is None
+    ///     True
     fn get_trigger(
         &self,
         trigger_id: u64,
@@ -122,6 +150,14 @@ impl PyTerminal {
     /// Process trigger scans on dirty rows
     ///
     /// Called automatically in PTY mode. Use manually for non-PTY terminals.
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> _ = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.process(b"ERROR: disk full\r\n")
+    ///     >>> term.process_trigger_scans()
+    ///     >>> len(term.get_trigger_highlights())
+    ///     1
     fn process_trigger_scans(&mut self) -> PyResult<()> {
         TriggerEngine::process_trigger_scans(&mut self.inner);
         Ok(())
@@ -132,6 +168,14 @@ impl PyTerminal {
     /// Returns:
     ///     list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
     ///         where fg and bg are optional (r, g, b) tuples
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> _ = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.process(b"ERROR: disk full\r\n")
+    ///     >>> term.process_trigger_scans()
+    ///     >>> term.get_trigger_highlights()
+    ///     [(0, 0, 5, None, (255, 0, 0))]
     fn get_trigger_highlights(&self) -> PyResult<Vec<TriggerHighlight>> {
         Ok(TriggerEngine::get_trigger_highlights(&self.inner)
             .iter()
@@ -140,6 +184,15 @@ impl PyTerminal {
     }
 
     /// Clear all trigger highlights
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> _ = term.add_trigger("errors", r"ERROR", [action])
+    ///     >>> term.process(b"ERROR: disk full\r\n")
+    ///     >>> term.process_trigger_scans()
+    ///     >>> term.clear_trigger_highlights()
+    ///     >>> term.get_trigger_highlights()
+    ///     []
     fn clear_trigger_highlights(&mut self) -> PyResult<()> {
         TriggerEngine::clear_trigger_highlights(&mut self.inner);
         Ok(())
@@ -149,6 +202,14 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     list[dict]: List of action result dicts with 'type' and action-specific fields
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("notify", {"title": "Alert", "message": "Error: $1"})
+    ///     >>> _ = term.add_trigger("errs", r"ERROR: (.+)", [action])
+    ///     >>> term.process(b"ERROR: disk full\r\n")
+    ///     >>> term.process_trigger_scans()
+    ///     >>> term.poll_action_results()[0]["type"]
+    ///     'notify'
     fn poll_action_results(&mut self) -> PyResult<Vec<std::collections::HashMap<String, String>>> {
         use crate::terminal::trigger::ActionResult;
         Ok(TriggerEngine::poll_action_results(&mut self.inner)
