@@ -541,6 +541,78 @@ fn respawn_pane_restarts_a_restored_dead_pane_without_k() {
     sigterm_clean(&mut second);
 }
 
+/// SEC-128 across a restart: a dead pane whose last OSC 7 report named a
+/// REMOTE host (an SSH session) must not respawn in that remote path just
+/// because the same path exists locally. The persisted host rides with the
+/// cwd, so `respawn-pane` (no `-c`) falls through to the daemon default.
+#[test]
+fn respawn_of_a_restored_dead_pane_ignores_its_remote_osc7_cwd() {
+    let fixture = MuxFixture::new("remoteosc7");
+    let path = fixture.socket();
+    // A directory that exists locally and that the remote report names.
+    let remote_dir = fixture.state_dir().with_file_name("remote-cwd");
+    std::fs::create_dir_all(&remote_dir).expect("create the remote-named dir");
+    let recorded = fixture.state_dir().with_file_name("respawn-pwd");
+
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("first daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        command(&mut writer, &mut reader, "new-session -s remote");
+        command(
+            &mut writer,
+            &mut reader,
+            &format!(
+                "respawn-pane -t %0 -k printf 'REMOTE-MARK\\033]7;file://remote-host%s\\033\\\\' {}; exit 3",
+                remote_dir.display()
+            ),
+        );
+        common::wait_until(
+            &mut writer,
+            &mut reader,
+            "pane-info -t %0",
+            |info| info.contains(" exited=3"),
+            "the reaper flagging %0 dead with code 3",
+        );
+        wait_for(
+            &mut writer,
+            &mut reader,
+            "capture-pane -t %0 -p",
+            "REMOTE-MARK",
+        );
+        // The client stays connected so the final save carries the dead pane.
+        sigterm_clean(&mut first);
+    }
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut client = MuxClient::connect(path).expect("second daemon accepts");
+    let reply = client
+        .send_checked(&format!(
+            "respawn-pane -t %0 pwd > {}; sleep 30",
+            recorded.display()
+        ))
+        .expect("respawn");
+    assert!(reply.ok, "respawn succeeds: {:?}", reply.body);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let landed = loop {
+        let text = std::fs::read_to_string(&recorded).unwrap_or_default();
+        if text.ends_with('\n') || Instant::now() >= deadline {
+            break text.trim().to_string();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!landed.is_empty(), "the respawned command recorded its pwd");
+    assert_ne!(
+        std::fs::canonicalize(&landed).unwrap(),
+        std::fs::canonicalize(&remote_dir).unwrap(),
+        "a remote OSC 7 cwd must not pick the respawn directory"
+    );
+    sigterm_clean(&mut second);
+}
+
 /// A daemon restored with only dead panes and no client collects itself
 /// after the exit-when-empty grace, the same as one that saw them die.
 #[test]

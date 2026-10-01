@@ -212,6 +212,16 @@ impl PaneSnapshotParts {
         self.child_pid.and_then(process_cwd)
     }
 
+    /// The OSC 7 hostname that came with [`Self::cwd`], only when that cwd
+    /// is the OSC 7 report. A cwd read from the child's kernel state has no
+    /// OSC 7 host, so this is `None` then. Persisted beside the cwd so a
+    /// restored dead pane still knows a remote report is remote (SEC-128).
+    pub(crate) fn cwd_host(&self) -> Option<String> {
+        let term = self.terminal.read();
+        term.current_directory()?;
+        term.shell_integration().hostname().map(str::to_string)
+    }
+
     /// The host-probe target (SEC-115): only the child's kernel-reported
     /// cwd — pane output must never choose the directory the daemon runs
     /// git in, and OSC 7 is program output. `None` (no child, reaped pid,

@@ -242,6 +242,16 @@ pub struct PersistPane {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub cwd: Option<String>,
+    /// The OSC 7 hostname that came with [`Self::cwd`], only when the cwd
+    /// was an OSC 7 report (a remote shell's report names its host). Restore
+    /// seeds it beside the cwd on a held-dead pane so `respawn-pane` still
+    /// rejects a remote directory (SEC-128). Skipped when absent and
+    /// defaulted on load, so older save files restore as before.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub cwd_host: Option<String>,
     /// The pane was held dead (its process observed exited) at save time
     /// (ARC-114). A restore brings it back held-dead — processless, its
     /// frozen screen intact, `respawn-pane` available — instead of
@@ -394,6 +404,7 @@ impl PersistCapture {
                                     .parts
                                     .cwd()
                                     .map(|dir| dir.to_string_lossy().into_owned()),
+                                cwd_host: pane.parts.cwd_host(),
                                 dead: pane.dead,
                                 exit_code: pane.exit_code,
                             })
@@ -648,7 +659,9 @@ impl MuxTree {
                         // seeded there rather than lost with the process.
                         if let Some(dir) = &pane.cwd {
                             created.with_terminal_mut(|term| {
-                                term.shell_integration_mut().set_cwd(dir.clone());
+                                let si = term.shell_integration_mut();
+                                si.set_cwd(dir.clone());
+                                si.set_hostname(pane.cwd_host.clone());
                             });
                         }
                     }
@@ -1812,6 +1825,67 @@ mod tests {
             SessionId(state.next_ids.0),
             "a restored server's first new session must take the persisted next id"
         );
+    }
+
+    /// SEC-128: a dead pane whose OSC 7 report named a remote host saves and
+    /// restores with the host beside the cwd, so `respawn_cwd` still sees the
+    /// report as remote.
+    #[cfg(unix)]
+    #[test]
+    fn a_dead_panes_remote_osc7_host_survives_restore() {
+        let (tree, pane_id) = held_dead_tree(Some(0));
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(b"\x1b]7;file://remote-host/some/path\x1b\\");
+        let state = tree.to_persist_state();
+        let saved = &state.sessions[0].windows[0].panes[0];
+        assert_eq!(saved.cwd.as_deref(), Some("/some/path"));
+        assert_eq!(saved.cwd_host.as_deref(), Some("remote-host"));
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let pane = restored.pane(pane_id).unwrap();
+        let term = pane.terminal();
+        let term = term.read();
+        assert_eq!(term.current_directory(), Some("/some/path"));
+        assert_eq!(term.shell_integration().hostname(), Some("remote-host"));
+    }
+
+    /// A save file written before `cwd_host` existed decodes with no host
+    /// (today's behavior), and a pane without one serializes without the key.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_file_without_cwd_host_loads_as_before() {
+        let (tree, pane_id) = held_dead_tree(Some(0));
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(b"\x1b]7;file://remote-host/some/path\x1b\\");
+        let mut value = serde_json::to_value(tree.to_persist_state()).unwrap();
+        let pane = value["sessions"][0]["windows"][0]["panes"][0]
+            .as_object_mut()
+            .unwrap();
+        assert_eq!(
+            pane["cwd_host"], "remote-host",
+            "positive control: on the wire"
+        );
+        pane.remove("cwd_host");
+        let state: PersistState = serde_json::from_value(value).expect("old file decodes");
+        assert_eq!(state.sessions[0].windows[0].panes[0].cwd_host, None);
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let pane = restored.pane(pane_id).unwrap();
+        let term = pane.terminal();
+        let term = term.read();
+        assert_eq!(term.current_directory(), Some("/some/path"));
+        assert_eq!(term.shell_integration().hostname(), None);
+        drop(term);
+
+        let (plain, _) = held_dead_tree(Some(0));
+        let json = serde_json::to_string(&plain.to_persist_state()).unwrap();
+        assert!(!json.contains("cwd_host"), "absent host is not serialized");
     }
 
     #[test]
