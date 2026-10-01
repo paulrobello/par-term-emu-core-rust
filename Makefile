@@ -57,7 +57,7 @@ help:
 	@echo "  stub-drift      - Rebuild (dev-streaming), regenerate the stub, and fail if it differs from the committed file"
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
-	@echo "  ffi-surface-check - Fail when an FFI export is missing from terminal_core.h or docs/FFI_GUIDE.md"
+	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
@@ -383,10 +383,14 @@ ffi-header-check:
 	fi; \
 	exit $$status
 
-# Fail when an exported extern "C" fn is missing from the header or
-# docs/FFI_GUIDE.md.
+# ENH-027/ENH-034: fail when the FFI documentation drifts from src/ffi.rs
+# and the headers — exported fns, header typedefs, TERM_* constants, the
+# ABI Version table, and stale "hand-written header" claims. Pure python3,
+# no build needed; --self-test injects one drift per check. Same shape as
+# the mux docs gate.
 ffi-surface-check:
 	python3 scripts/check_ffi_surface.py
+	python3 scripts/check_ffi_surface.py --self-test
 
 # ENH-033: gate MUX.md and the API_REFERENCE notification_type list against
 # the mux code (COMMANDS, mutates(), emit(), notification_type). Pure
