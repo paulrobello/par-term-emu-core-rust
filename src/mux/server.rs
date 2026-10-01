@@ -1499,12 +1499,11 @@ pub(crate) fn broadcast_layout_change(
     }
 }
 
-/// ENH-037: the held state a client that registers now has missed — one
-/// `%pane-exited` line per held pane and one `%layout-change` per zoomed
-/// window, each sorted by id for deterministic tests. Called under the tree
-/// lock; every line carries its trailing newline, ready for the client's
-/// own queue ahead of its first command's reply.
-fn held_state_replay_lines(tree: &MuxTree) -> Vec<String> {
+/// The `%pane-exited` half of the held-state replay: one line per held
+/// pane, sorted by id, each with its trailing newline. Shared by the
+/// registration replay and the `pane-exited-replay` command (ENH-042).
+/// Called under the tree lock.
+pub(crate) fn replay_pane_exited_lines(tree: &MuxTree) -> Vec<String> {
     let mut exits: Vec<(PaneId, String)> = tree
         .panes
         .iter()
@@ -1518,7 +1517,16 @@ fn held_state_replay_lines(tree: &MuxTree) -> Vec<String> {
         })
         .collect();
     exits.sort_by_key(|(id, _)| *id);
-    let mut lines: Vec<String> = exits.into_iter().map(|(_, line)| line).collect();
+    exits.into_iter().map(|(_, line)| line).collect()
+}
+
+/// ENH-037: the held state a client that registers now has missed — one
+/// `%pane-exited` line per held pane and one `%layout-change` per zoomed
+/// window, each sorted by id for deterministic tests. Called under the tree
+/// lock; every line carries its trailing newline, ready for the client's
+/// own queue ahead of its first command's reply.
+fn held_state_replay_lines(tree: &MuxTree) -> Vec<String> {
+    let mut lines = replay_pane_exited_lines(tree);
 
     let mut zoomed: Vec<WindowId> = tree
         .sessions()

@@ -229,6 +229,10 @@ pub enum MuxCommand {
         /// Target pane.
         pane: Target<PaneId>,
     },
+    /// Ask for the currently held panes' `%pane-exited` lines on demand
+    /// (ENH-042). The lines go to the issuing client only; the reply body
+    /// is empty. Read-only.
+    PaneExitedReplay,
     /// Clear a pane's scrollback and wipe its visible screen (tmux's
     /// `clear-history`). Structural: the cleared scrollback is what a
     /// restart-restore replays, so a content classification would
@@ -421,6 +425,7 @@ impl MuxCommand {
             | MuxCommand::CapturePane { .. }
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
+            | MuxCommand::PaneExitedReplay
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::SetClientColors { .. }
@@ -1066,6 +1071,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-pane", parse_select_pane, &[]),
     ("pane-title", parse_pane_title, &[]),
     ("pane-info", parse_pane_info, &["cmd"]),
+    ("pane-exited-replay", parse_pane_exited_replay, &[]),
     ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
     ("swap-pane", parse_swap_pane, &[]),
@@ -1444,6 +1450,10 @@ fn parse_pane_info(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::PaneInfo {
         pane: a.pane("-t")?,
     })
+}
+
+fn parse_pane_exited_replay(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::PaneExitedReplay)
 }
 
 fn parse_clear_history(a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -2640,6 +2650,14 @@ mod tests {
             }
         );
         assert!(parse_command("pane-info").is_err());
+    }
+
+    #[test]
+    fn parses_pane_exited_replay() {
+        assert_eq!(
+            parse_command("pane-exited-replay").unwrap(),
+            MuxCommand::PaneExitedReplay
+        );
     }
 
     #[test]

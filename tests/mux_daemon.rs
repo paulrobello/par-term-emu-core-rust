@@ -1668,3 +1668,88 @@ fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
         "the unknown command is rejected with an error block: {block:?}"
     );
 }
+
+/// ENH-042: `pane-exited-replay` pushes the held panes' `%pane-exited` lines
+/// to the issuing client's stream only, with an empty reply block; the
+/// other connected clients receive nothing new.
+#[test]
+fn pane_exited_replay_reaches_only_the_issuing_client() {
+    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+
+    let fixture = MuxFixture::new("exitreplay");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect a");
+    a.send("new-session -s exitreplay").expect("new-session");
+    a.send("split-window -h -t %0").expect("split");
+    a.send("respawn-pane -t %1 -k exit 7").expect("hold %1");
+    let held = |note: &TmuxNotification| {
+        matches!(
+            note,
+            TmuxNotification::PaneExited { pane_id, exit_code: Some(7) } if pane_id == "%1"
+        )
+    };
+    next_notification(&mut a, held);
+
+    // B and C register on their first command; registration replay delivers
+    // the held exit once to each. Consume it so the on-demand replay is the
+    // next one B sees.
+    let mut b = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect b");
+    b.send("list-panes").expect("register b");
+    next_notification(&mut b, held);
+    let mut c = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect c");
+    c.send("list-panes").expect("register c");
+    next_notification(&mut c, held);
+
+    let reply = b.send_checked("pane-exited-replay").expect("replay");
+    assert!(reply.ok, "pane-exited-replay succeeds: {:?}", reply.body);
+    assert!(
+        reply.body.iter().all(|line| line.is_empty()),
+        "the reply body is empty, the pushed lines are the payload: {:?}",
+        reply.body
+    );
+    next_notification(&mut b, held);
+
+    // Give any wrongly broadcast copy time to land, then check the other
+    // clients saw no exit line.
+    std::thread::sleep(Duration::from_millis(500));
+    for (name, client) in [("a", &a), ("c", &c)] {
+        while let Ok(note) = client.notifications().try_recv() {
+            assert!(
+                !matches!(note, TmuxNotification::PaneExited { .. }),
+                "client {name} must not receive another client's replay: {note:?}"
+            );
+        }
+    }
+}
+
+/// ENH-042: with no held panes `pane-exited-replay` succeeds with an empty
+/// reply and pushes no `%pane-exited` line.
+#[test]
+fn pane_exited_replay_with_no_held_panes_is_empty() {
+    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+
+    let fixture = MuxFixture::new("exitnone");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s exitnone").expect("new-session");
+    let reply = client.send_checked("pane-exited-replay").expect("replay");
+    assert!(reply.ok, "succeeds with nothing held: {:?}", reply.body);
+    assert!(
+        reply.body.iter().all(|line| line.is_empty()),
+        "empty reply: {:?}",
+        reply.body
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    while let Ok(note) = client.notifications().try_recv() {
+        assert!(
+            !matches!(note, TmuxNotification::PaneExited { .. }),
+            "no held pane, no %pane-exited: {note:?}"
+        );
+    }
+}

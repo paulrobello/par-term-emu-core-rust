@@ -21,7 +21,8 @@ use crate::mux::layout::SplitDirection;
 use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
-    broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink, Clients,
+    broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink,
+    replay_pane_exited_lines, Clients,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use crate::tmux_control::TmuxNotification;
@@ -178,6 +179,7 @@ pub(super) fn dispatch_command(
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
+        MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
         MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
@@ -775,6 +777,21 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
         }
     }
     Outcome::ok(ctx, &line)
+}
+
+/// ENH-042: queue the held panes' `%pane-exited` lines on the issuing
+/// client's own channel — ahead of this command's (empty) reply, the same
+/// framing registration replay uses. Nothing is broadcast.
+fn cmd_pane_exited_replay(ctx: &Ctx<'_>, issuer: Option<&SyncSender<String>>) -> Outcome {
+    let lines = replay_pane_exited_lines(&ctx.tree.lock());
+    if let Some(tx) = issuer {
+        for line in lines {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    }
+    Outcome::ok(ctx, "")
 }
 
 fn cmd_clear_history(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
