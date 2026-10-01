@@ -56,11 +56,15 @@ par-mux --state-dir <dir>   Override the platform state directory the tree is pe
 par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
 par-mux [<name>] --restart  Stop, then serve the same socket from a detached process
 par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
+par-mux --pane-endpoints          Give each pane its own hook-only socket (see Agent Hook Reports)
+par-mux --expose-control-socket   With --pane-endpoints: also export PAR_MUX_CONTROL_SOCKET in panes
 ```
 
 `--socket <path>` is what `MuxClient::connect_or_spawn_at` passes when it starts a daemon. A second daemon on a path a live server already owns is refused with "another server owns <path>"; a stale socket remnant (dead socket file, Windows marker file, or a stray regular file at the path) is reclaimed.
 
 `--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket from a detached process — the state save the stop just completed is what it restores. The invocation returns as soon as the daemon detaches (fork + `setsid`, stdio to `/dev/null`), so no `&` is needed and closing the terminal it was typed into leaves the daemon and its panes running. This is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
+
+`--pane-endpoints` (opt-in, default off) gives every pane its own socket endpoint that accepts only hook reports — see [Agent Hook Reports](#agent-hook-reports). `--expose-control-socket` accompanies it: panes then also get `PAR_MUX_CONTROL_SOCKET` naming the full control socket, and a session env of `PAR_MUX_CONTROL=1` grants the same per session.
 
 ### Nested daemons
 
@@ -98,6 +102,7 @@ par-mux --cmd list-sessions   # resolves $PAR_MUX_SOCKET before the default sock
 | Command failed (`%error`) | — | The daemon's error text | 1 |
 | No daemon owns the socket | — | `no daemon running on <path>` | 1 |
 | Transport failure after connecting (no reply block, connection closed) | — | The I/O error | 2 |
+| Target is a pane endpoint (`--pane-endpoints` daemon) | — | `this pane has hook-only access; start the daemon with --expose-control-socket or pass --socket` | 1 |
 
 Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with nothing running fails immediately instead of booting one. The command string follows the daemon's grammar (see the quoting rules under [Command Reference](#command-reference)); wrap it in single quotes in the shell so its inner double quotes reach the daemon intact. One command per invocation — there is no `;` sequencing, interactive attach, or follow mode. Pushed notifications that arrive while the reply is pending are discarded. Stdout writes stop quietly on a closed pipe, so `par-mux --cmd '...' | head -1` does not panic.
 
@@ -113,7 +118,7 @@ The fallback-directory guard is tmux's `/tmp/tmux-<uid>` defense: `/tmp` is worl
 
 Which socket one `par-mux` invocation targets follows one precedence (`resolve_socket_path` in `src/mux/ipc.rs`): an explicit `--socket PATH`, then the positional `NAME`, then `$PAR_MUX_SOCKET`, then the unnamed `default`. The env tier is what makes the client flags work from inside a pane — every pane spawns with `PAR_MUX_SOCKET` naming its own daemon, so `par-mux --cmd list-sessions`, `--stop`, and `--restart` typed there target that daemon instead of failing against `par-mux-default.sock`. An empty value counts as unset. Note that `--stop`/`--restart` resolved this way kill the daemon that owns the very pane the command was typed into — the panes die with it, which is the point of a restart but worth knowing before typing it.
 
-The on-disk state file (see [Persistence and Restart](#persistence-and-restart)) never lives next to the socket:
+The on-disk state file (see [Persistence and Restart](#persistence-and-restart)) never lives next to the socket. With `--pane-endpoints`, each pane also gets a sibling socket beside the control socket, `<control stem>.pane-<pane id>.sock` in the same runtime directory — same `0600` mode and directory guard, one accept thread per pane, the socket file removed when the pane dies (crash remnants are reclaimed at the next daemon start). A path over the platform socket-address limit, or past the 256-endpoint-per-daemon cap, leaves the pane with no socket at all rather than a fallback to the control socket:
 
 ```text
 <state_dir>/par-mux/<socket-stem>.state.json
@@ -257,7 +262,8 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 | Variable | Value |
 |----------|-------|
 | `PAR_MUX_PANE_ID` | The pane's own id (`%N`) |
-| `PAR_MUX_SOCKET` | The control socket path. Also the CLI's fallback target: a `par-mux` invocation with no `--socket` and no positional NAME uses it before the unnamed default socket, so `par-mux --cmd …` / `--stop` / `--restart` typed inside a pane reach their own daemon |
+| `PAR_MUX_SOCKET` | The control socket path — or, on a daemon started with `--pane-endpoints`, the pane's own hook-only socket (see below). Also the CLI's fallback target: a `par-mux` invocation with no `--socket` and no positional NAME uses it before the unnamed default socket, so `par-mux --cmd …` / `--stop` / `--restart` typed inside a pane reach their own daemon |
+| `PAR_MUX_CONTROL_SOCKET` | The full control socket — exported only when the daemon runs `--pane-endpoints --expose-control-socket`, or the pane's session env carries `PAR_MUX_CONTROL=1`; absent otherwise |
 | `PAR_MUX_ENV` | `1` — marks the contract as present |
 | `PAR_MUX_SESSION_ID` | The owning session's id (`$N`) |
 | `PAR_MUX_SESSION` | The owning session's name |
@@ -265,6 +271,12 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 | `PAR_MUX_BIN` | The daemon executable, so a pane script can run client mode without `par-mux` on `PATH`: `"$PAR_MUX_BIN" --socket "$PAR_MUX_SOCKET" --cmd list-sessions`. Set by the `par-mux` binary; an embedded `MuxServer` leaves it unset unless its factory supplies `bin_path` |
 
 These are set for every spawn path: `new-session`, `new-window`, `split-window`, `respawn-pane`, and restore. They are **fixed at spawn**, as tmux's `TMUX`/`TMUX_PANE` are: a later `rename-session` leaves `PAR_MUX_SESSION` stale, and a `swap-pane` across windows or a `break-pane`/`join-pane` that moves the pane to another window leaves `PAR_MUX_WINDOW_ID` stale (and the session variables too when the move crosses sessions). `respawn-pane` re-seeds them with the pane's current ids. The ids stay valid; the name is advisory. `PAR_MUX_SOCKET`, `PAR_MUX_ENV`, and `PAR_MUX_BIN` are absent when the server has no socket path or binary path to export.
+
+### Pane endpoints (opt-in)
+
+`par-mux --pane-endpoints` changes what `PAR_MUX_SOCKET` names inside a pane: a per-pane socket that accepts exactly the four hook methods below, **bound to that pane** — a report whose `pane_id` names another pane is refused (`pane_id does not match this endpoint`), and a report that omits `pane_id` is filed for the bound pane. Any other line — a control command (`capture-pane`, `send-keys`, `kill-server`, …) — is answered with `{"error":"hook-only endpoint"}` and the connection closes. A pane's child processes can therefore report their agent state but cannot read other panes, type into them, or stop the server. The socket carries the same owner-only boundary as the control socket; it is not a defense against same-uid code, which can always reach the control socket directly (see SECURITY.md).
+
+The mode is **off by default**, and the default stays off: an in-pane `$PAR_MUX_SOCKET` naming the FULL control socket is a core feature — an agent in one pane must be able to spawn and drive agents in other panes via `par-mux --cmd`, and the par-mux skill depends on that in-pane fallback. **Default-flip gate** — the criteria that would ever have to be met to turn the mode on by default: an explicit decision by the repository owner (declined 2026-09-29), acceptance of the break it causes to the in-pane `--cmd` fallback for daemons started without `--expose-control-socket`, and a migration story for the hook shims and agent extensions that consume `PAR_MUX_SOCKET` today. Absent all three, pass `--pane-endpoints` per daemon to opt in, and add `--expose-control-socket` when agent-driven pane control should keep working through `PAR_MUX_CONTROL_SOCKET`.
 
 Four methods (`src/mux/hooks/`):
 

@@ -60,6 +60,21 @@ struct Cli {
         conflicts_with_all = ["stop", "restart", "state_dir"]
     )]
     command: Option<String>,
+
+    /// Give each pane its own hook-only socket endpoint: `PAR_MUX_SOCKET`
+    /// in a pane then names a socket that accepts ONLY hook reports for
+    /// that pane, so its child processes cannot drive other panes or stop
+    /// the server. Default off — the in-pane full-socket fallback is a core
+    /// feature; see docs/MUX.md for the trade and the default-flip gate.
+    #[arg(long)]
+    pane_endpoints: bool,
+
+    /// With --pane-endpoints: also export `PAR_MUX_CONTROL_SOCKET` (the
+    /// full control socket) in every pane, so agent-driven pane control
+    /// keeps working. A session env of `PAR_MUX_CONTROL=1` grants the same
+    /// per session without this flag.
+    #[arg(long)]
+    expose_control_socket: bool,
 }
 
 /// Run one control command against the daemon on `path` (client mode).
@@ -79,6 +94,17 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
     let reply = match client.send_checked(command) {
         Ok(reply) => reply,
         Err(err) => {
+            // A pane endpoint (ENH-039) answers a control command with one
+            // {"error":"hook-only endpoint"} JSON line and closes — no
+            // %begin/%end block, so the client sees a closed connection.
+            // Re-probe raw to map that to the actionable message.
+            if pane_endpoint_refusal(path, command) {
+                eprintln!(
+                    "par-mux: this pane has hook-only access; start the daemon with \
+                     --expose-control-socket or pass --socket"
+                );
+                return ExitCode::from(1);
+            }
             // Only the command name: arguments may carry set-environment
             // values, which can be secrets.
             let name = command.split_whitespace().next().unwrap_or_default();
@@ -100,6 +126,38 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
     }
     let _ = out.flush();
     ExitCode::SUCCESS
+}
+
+/// Whether `path` is a pane endpoint that just refused `command` (ENH-039):
+/// reconnect raw, resend, and look for the endpoint's hook-only error —
+/// the one-JSON-line reply a `MuxClient` cannot parse into a reply block.
+fn pane_endpoint_refusal(path: &std::path::Path, command: &str) -> bool {
+    use interprocess::TryClone as _;
+    use std::io::{BufRead, BufReader, Write as _};
+    let Ok(stream) = par_term_emu_core_rust::mux::connect_local_stream(path) else {
+        return false;
+    };
+    let Ok(mut writer) = stream.try_clone() else {
+        return false;
+    };
+    if writeln!(writer, "{command}")
+        .and_then(|()| writer.flush())
+        .is_err()
+    {
+        return false;
+    }
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) => {}
+        }
+        if line.contains("hook-only endpoint") {
+            return true;
+        }
+    }
 }
 
 /// How long --stop/--restart wait for the old daemon to release its socket.
@@ -167,11 +225,25 @@ fn main() -> std::process::ExitCode {
     // names the daemon to target before the `default` name is fallen back
     // to, so client flags typed inside a pane reach their own daemon, not
     // the unnamed default.
-    let path = par_term_emu_core_rust::mux::resolve_socket_path(
-        cli.socket.as_deref(),
-        cli.name.as_deref(),
-        std::env::var_os("PAR_MUX_SOCKET").as_deref(),
-    );
+    // Target precedence: an explicit --socket, then the positional NAME,
+    // then $PAR_MUX_CONTROL_SOCKET (the full socket, hidden from panes by
+    // --pane-endpoints), then $PAR_MUX_SOCKET, then the unnamed default
+    // (ENH-039). An empty value counts as unset.
+    let path = if cli.socket.is_some() || cli.name.is_some() {
+        par_term_emu_core_rust::mux::resolve_socket_path(
+            cli.socket.as_deref(),
+            cli.name.as_deref(),
+            None,
+        )
+    } else {
+        let socket_env = std::env::var_os("PAR_MUX_SOCKET").filter(|v| !v.is_empty());
+        let control_env = std::env::var_os("PAR_MUX_CONTROL_SOCKET").filter(|v| !v.is_empty());
+        par_term_emu_core_rust::mux::resolve_socket_path(
+            None,
+            None,
+            control_env.or(socket_env).as_deref(),
+        )
+    };
 
     if let Some(command) = cli.command.as_deref() {
         return run_command(&path, command);
@@ -228,6 +300,15 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         Some(dir) => par_term_emu_core_rust::mux::persist::state_file_in(&dir, &path),
         None => par_term_emu_core_rust::mux::persist::state_file_path(&path),
     };
+    // ENH-039: --pane-endpoints wires the pane-endpoint channel between the
+    // factory (which binds each pane's hook-only socket) and the server
+    // (which serves the connections the endpoints accept).
+    let (pane_endpoint_tx, pane_endpoint_rx) = if cli.pane_endpoints {
+        let (tx, rx) = par_term_emu_core_rust::mux::server::pane_endpoint_channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     // One factory serves both fresh and restored trees, so every pane gets
     // the same env contract. PAR_MUX_BIN is this executable: only the binary
     // knows it — in library code current_exe() names the embedding process.
@@ -236,6 +317,8 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         bin_path: std::env::current_exe()
             .ok()
             .map(|exe| exe.to_string_lossy().into_owned()),
+        pane_endpoint_tx: pane_endpoint_tx.clone(),
+        expose_control_socket: cli.expose_control_socket,
         ..Default::default()
     };
     let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
@@ -259,7 +342,17 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // loses cleanly instead of stealing the socket.
     let tree = restored
         .unwrap_or_else(|| par_term_emu_core_rust::mux::tree::MuxTree::new(Box::new(factory())));
-    let server = par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?;
+    if cli.pane_endpoints {
+        // Reclaim crash leftovers before this daemon binds anything, so the
+        // endpoint cap counts only live endpoints (ENH-039).
+        par_term_emu_core_rust::mux::server::sweep_pane_endpoint_remnants(&path);
+    }
+    let server = match pane_endpoint_rx {
+        Some(rx) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree_and_pane_endpoints(
+            &path, tree, rx,
+        )?,
+        None => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
+    };
     log::info!("par-mux listening on {}", path.display());
 
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests

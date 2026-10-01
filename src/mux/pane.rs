@@ -165,6 +165,13 @@ pub struct MuxPane {
     /// handle so a capture started under the tree lock can finish OFF it
     /// (ARC-032).
     snapshot_cache: Arc<Mutex<Option<SnapshotCacheEntry>>>,
+    /// The pane's own hook-only endpoint (ENH-039), bound by the factory
+    /// when the daemon runs with `--pane-endpoints`. `Drop` removes the
+    /// endpoint's socket file when the pane is killed or respawned; a crash
+    /// leaves the remnant for the daemon's startup sweep. Held for its
+    /// `Drop` side effect only — nothing reads the value.
+    #[allow(dead_code)]
+    pub(crate) pane_endpoint: Option<crate::mux::server::PaneEndpoint>,
 }
 
 /// The validity key of a cached snapshot: the pane's PTY generation (bumped
@@ -644,6 +651,19 @@ pub struct ShellPaneFactory {
     /// without `par-mux` on `PATH`. Set by the binary: in library code
     /// `current_exe()` would name whatever process embeds the server.
     pub bin_path: Option<String>,
+    /// ENH-039: when set, each pane gets its own hook-only socket endpoint
+    /// beside the control socket, and `PAR_MUX_SOCKET` names THAT instead
+    /// of the full control socket — a pane's child processes can report
+    /// their agent state but cannot drive other panes or the server. The
+    /// default stays `None` (mode off): the in-pane full-socket fallback is
+    /// a core feature; see docs/MUX.md for the trade and the default-flip
+    /// gate.
+    pub pane_endpoint_tx: Option<crate::mux::server::PaneEndpointTx>,
+    /// With `pane_endpoint_tx`: also export `PAR_MUX_CONTROL_SOCKET`
+    /// (naming the full control socket) in every pane, so an agent-driven
+    /// pane can opt back into full control. Independently granted per
+    /// session by `PAR_MUX_CONTROL=1` in the session's environment.
+    pub expose_control_socket: bool,
 }
 
 impl ShellPaneFactory {
@@ -656,6 +676,7 @@ impl ShellPaneFactory {
         cols: u16,
         rows: u16,
         context: &SpawnContext<'_>,
+        pane_socket: Option<&str>,
     ) -> PtySession {
         let mut session = PtySession::new(cols as usize, rows as usize, DEFAULT_SCROLLBACK);
 
@@ -673,13 +694,46 @@ impl ShellPaneFactory {
         // Session env first: the command builder applies vars in order, so
         // the PAR_MUX_* identity set after it cannot be overridden by a
         // client's set-environment.
+        // PAR_MUX_CONTROL=1 in the session's env grants the pane the full
+        // control socket even in endpoint mode (ENH-039); read before the
+        // loop below consumes the iterator.
+        let session_granted = context
+            .env
+            .into_iter()
+            .flatten()
+            .any(|(name, value)| name == "PAR_MUX_CONTROL" && value == "1");
         for (name, value) in context.env.into_iter().flatten() {
             session.set_env(name, value);
         }
         session.set_env("PAR_MUX_PANE_ID", &id.to_string());
-        if let Some(socket) = &self.socket_path {
-            session.set_env("PAR_MUX_SOCKET", socket);
-            session.set_env("PAR_MUX_ENV", "1");
+        if let Some(control) = &self.socket_path {
+            match pane_socket {
+                // Endpoint mode, endpoint bound: PAR_MUX_SOCKET names the
+                // pane's OWN hook-only socket (ENH-039). The full socket is
+                // exported as PAR_MUX_CONTROL_SOCKET only when opted in —
+                // the factory flag, or PAR_MUX_CONTROL=1 in the session env.
+                Some(pane_sock) => {
+                    session.set_env("PAR_MUX_SOCKET", pane_sock);
+                    session.set_env("PAR_MUX_ENV", "1");
+                    if self.expose_control_socket || session_granted {
+                        session.set_env("PAR_MUX_CONTROL_SOCKET", control);
+                    }
+                }
+                // Endpoint mode but no endpoint bound for this pane (the
+                // per-daemon cap, or the path over the platform
+                // socket-address limit): the contract marker still names
+                // this a pane, but NO socket is exported — least privilege
+                // does not fall back to the full control socket.
+                None if self.pane_endpoint_tx.is_some() => {
+                    session.set_env("PAR_MUX_ENV", "1");
+                }
+                // Endpoints off: the full-socket contract, byte-identical
+                // to the pre-ENH-039 behavior.
+                None => {
+                    session.set_env("PAR_MUX_SOCKET", control);
+                    session.set_env("PAR_MUX_ENV", "1");
+                }
+            }
         }
         // Fixed at spawn, as tmux's TMUX/TMUX_PANE are: a later
         // rename-session or cross-window swap-pane leaves these stale. The
@@ -702,8 +756,33 @@ impl ShellPaneFactory {
         session
     }
 
+    /// Bind this pane's hook-only endpoint (ENH-039) when endpoint mode is
+    /// on. `None` = mode off (silent), or the bind failed — the per-daemon
+    /// cap, or the path over the platform socket-address limit — which is
+    /// logged once here; either way the pane's env contract exports no
+    /// socket rather than falling back to the full control socket.
+    fn bind_pane_endpoint(&self, id: PaneId) -> Option<crate::mux::server::PaneEndpoint> {
+        let control = self.socket_path.as_deref()?;
+        let tx = self.pane_endpoint_tx.as_ref()?;
+        match crate::mux::server::PaneEndpoint::bind(std::path::Path::new(control), id, tx.clone())
+        {
+            Ok(endpoint) => Some(endpoint),
+            Err(err) => {
+                log::warn!(
+                    "par-mux: no hook-only endpoint for {id} ({err}); exporting no PAR_MUX_SOCKET"
+                );
+                None
+            }
+        }
+    }
+
     /// The shared back half: wrap a spawned session as a pane.
-    fn finish_pane(id: PaneId, session: PtySession, spawn_command: Option<String>) -> MuxPane {
+    fn finish_pane(
+        id: PaneId,
+        session: PtySession,
+        spawn_command: Option<String>,
+        pane_endpoint: Option<crate::mux::server::PaneEndpoint>,
+    ) -> MuxPane {
         // Client mirrors rebuild their grid from the raw PTY bytes forwarded
         // over %output — this terminal's read of a kitty t=t temp file must
         // not delete it, or the mirrors' later read finds nothing. The
@@ -724,6 +803,7 @@ impl ShellPaneFactory {
             host_telemetry: None,
             seq_by_source: HashMap::new(),
             snapshot_cache: Arc::new(Mutex::new(None)),
+            pane_endpoint,
         }
     }
 }
@@ -737,7 +817,9 @@ impl PaneFactory for ShellPaneFactory {
         command: Option<&str>,
         context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
-        let mut session = self.configured_session(id, cols, rows, context);
+        let endpoint = self.bind_pane_endpoint(id);
+        let pane_socket = endpoint.as_ref().map(|e| e.socket_path_string());
+        let mut session = self.configured_session(id, cols, rows, context, pane_socket.as_deref());
 
         match command {
             Some(cmd) => {
@@ -754,7 +836,12 @@ impl PaneFactory for ShellPaneFactory {
             None => session.spawn_shell()?,
         }
 
-        Ok(Self::finish_pane(id, session, command.map(str::to_string)))
+        Ok(Self::finish_pane(
+            id,
+            session,
+            command.map(str::to_string),
+            endpoint,
+        ))
     }
 
     /// Windows: the resume argv spawns without a shell when `argv[0]`
@@ -775,12 +862,15 @@ impl PaneFactory for ShellPaneFactory {
         if argv.is_empty() {
             return self.create_pane(id, cols, rows, None, context);
         }
-        let mut session = self.configured_session(id, cols, rows, context);
+        let endpoint = self.bind_pane_endpoint(id);
+        let pane_socket = endpoint.as_ref().map(|e| e.socket_path_string());
+        let mut session = self.configured_session(id, cols, rows, context, pane_socket.as_deref());
         super::win_resume::spawn_resume_argv(&mut session, argv)?;
         Ok(Self::finish_pane(
             id,
             session,
             Some(crate::mux::agent_resume::render_argv(argv)),
+            endpoint,
         ))
     }
 }
@@ -822,6 +912,7 @@ impl AgentPaneFactory {
             cwd: self.cwd.clone(),
             socket_path: self.socket_path.clone(),
             bin_path: self.bin_path.clone(),
+            ..Default::default()
         };
         let mut pane = spawn(&shell)?;
         pane.set_metadata("agent", &self.agent);

@@ -132,6 +132,11 @@ pub struct MuxServer {
     /// Per-instance shutdown flag (ARC-016): the accept loop polls it, the
     /// binary's signal handler reaches it through [`Self::shutdown_handle`].
     shutdown: Arc<AtomicBool>,
+    /// ENH-039: connections accepted by the tree's pane endpoints (the
+    /// opt-in `--pane-endpoints` mode), forwarded by their accept threads
+    /// through [`pane_endpoint_channel`]; drained and served on the accept
+    /// loop's idle tick. `None` = the mode is off.
+    pane_connections: Option<PaneEndpointRx>,
 }
 
 impl MuxServer {
@@ -171,7 +176,24 @@ impl MuxServer {
             tree,
             clients,
             shutdown: Arc::new(AtomicBool::new(false)),
+            pane_connections: None,
         })
+    }
+
+    /// [`Self::bind_with_tree`] serving pane endpoints too (ENH-039): the
+    /// daemon's `--pane-endpoints` mode wires the factory half of
+    /// [`pane_endpoint_channel`] into its pane factory and hands the
+    /// server half here. Connections the endpoints accept are answered for
+    /// their pane only — the four hook-report methods — never as control
+    /// commands.
+    pub fn bind_with_tree_and_pane_endpoints(
+        path: &Path,
+        tree: MuxTree,
+        pane_connections: PaneEndpointRx,
+    ) -> std::io::Result<Self> {
+        let mut server = Self::bind_with_tree(path, tree)?;
+        server.pane_connections = Some(pane_connections);
+        Ok(server)
     }
 
     /// The path this server is listening on.
@@ -294,6 +316,20 @@ impl MuxServer {
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
+                    // ENH-039: drain and serve the pane endpoints' accepted
+                    // connections. Each gets its own thread so one parked
+                    // pane client cannot stall the accept loop; a hook
+                    // exchange is one line in, one reply out.
+                    if let Some(pane_connections) = &self.pane_connections {
+                        while let Ok((stream, abort, pane_id)) = pane_connections.inner.try_recv() {
+                            let tree = Arc::clone(&self.tree);
+                            let clients = Arc::clone(&self.clients);
+                            std::thread::spawn(move || {
+                                let _ = abort;
+                                serve_pane_connection(stream, pane_id, &tree, &clients);
+                            });
+                        }
+                    }
                     if last_scrape.elapsed() >= SCRAPE_INTERVAL {
                         for notification in crate::mux::scrape::scrape_tick(&self.tree, &engine) {
                             broadcast_notification(&self.clients, &notification);
@@ -799,6 +835,271 @@ fn reply_is_error(reply: &str) -> bool {
         .lines()
         .last()
         .is_some_and(|l| l.starts_with("%error"))
+}
+
+// ---- ENH-039: per-pane hook-only endpoints (the opt-in `--pane-endpoints`
+// daemon mode) ----
+
+/// Max pane endpoints one daemon binds. Past the cap a new pane gets NO
+/// endpoint: `PAR_MUX_SOCKET` stays unset for it rather than falling back
+/// to the full control socket, which would silently restore the
+/// least-privilege hole the mode exists to close. The count is the
+/// endpoint socket files already beside the control socket at bind time
+/// (the startup sweep has removed the stale ones). Documented in
+/// docs/MUX.md "Agent Hook Reports".
+pub(crate) const MAX_PANE_ENDPOINTS: usize = 256;
+
+/// The file-name prefix of a pane endpoint beside `control_socket`:
+/// `<control stem>.pane-<N>.sock`.
+fn pane_endpoint_prefix(control_socket: &Path) -> String {
+    let name = control_socket
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = name.strip_suffix(".sock").unwrap_or(&name);
+    format!("{stem}.pane-")
+}
+
+/// The socket path of `pane_id`'s endpoint: beside the control socket, in
+/// the same guarded runtime directory, so the directory guard and the 0600
+/// bind mode apply unchanged.
+fn pane_endpoint_path(control_socket: &Path, pane_id: PaneId) -> PathBuf {
+    control_socket.with_file_name(format!(
+        "{}{pane_id}.sock",
+        pane_endpoint_prefix(control_socket)
+    ))
+}
+
+/// Whether a directory entry name is one of `control_socket`'s pane
+/// endpoints (the sweep's candidate test).
+fn is_pane_endpoint_name(control_socket: &Path, name: &str) -> bool {
+    name.starts_with(&pane_endpoint_prefix(control_socket)) && name.ends_with(".sock")
+}
+
+/// The factory half of the pane-endpoint channel: a bound endpoint hands
+/// each accepted connection here, and the server's accept loop serves it
+/// against the live tree on its next idle tick. A newtype so the public
+/// factory field need not name the crate-internal connection tuple.
+#[derive(Clone, Debug)]
+pub struct PaneEndpointTx {
+    inner: std::sync::mpsc::SyncSender<(LocalStream, ConnectionAbort, PaneId)>,
+}
+
+/// The server half: drained by [`MuxServer`]'s accept loop.
+#[derive(Debug)]
+pub struct PaneEndpointRx {
+    inner: std::sync::mpsc::Receiver<(LocalStream, ConnectionAbort, PaneId)>,
+}
+
+/// The pair a `--pane-endpoints` daemon wires between its pane factory and
+/// its server. Bounded: a wedged server backpressures the endpoint accept
+/// threads (the kernel accept queue then fills) instead of growing the
+/// daemon without bound.
+pub fn pane_endpoint_channel() -> (PaneEndpointTx, PaneEndpointRx) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    (PaneEndpointTx { inner: tx }, PaneEndpointRx { inner: rx })
+}
+
+/// One pane's hook-only endpoint (ENH-039): a socket beside the control
+/// socket that accepts ONLY hook reports bound to its pane — a pane process
+/// handed this path as `PAR_MUX_SOCKET` can report its agent state but
+/// cannot drive other panes or the server. Bound by the pane factory when
+/// the daemon runs with `--pane-endpoints`; dropped with the pane, which
+/// unlinks the socket file (a crash or SIGKILL leaves the remnant for
+/// [`sweep_pane_endpoint_remnants`]).
+///
+/// The accept thread holds no tree reference: accepted connections are
+/// forwarded through the [`PaneEndpointTx`] channel and served by the
+/// server's accept loop. A pane owning an endpoint therefore cannot keep
+/// the tree — and with it the pane itself — alive; that reference cycle
+/// would leak.
+pub(crate) struct PaneEndpoint {
+    socket_path: PathBuf,
+    accept_thread: Option<std::thread::JoinHandle<()>>,
+    /// Set on drop: the accept thread polls it between nonblocking accepts
+    /// and exits, so the join below is bounded by one poll interval.
+    closed: Arc<AtomicBool>,
+}
+
+impl PaneEndpoint {
+    /// Bind `pane_id`'s endpoint beside `control_socket`.
+    ///
+    /// Errors past [`MAX_PANE_ENDPOINTS`] live endpoints, when the path
+    /// exceeds the platform socket-address limit, or on a bind failure —
+    /// the factory answers any of these the same way: the pane's env
+    /// contract exports NO socket, never a fallback to the full control
+    /// socket.
+    pub(crate) fn bind(
+        control_socket: &Path,
+        pane_id: PaneId,
+        sink: PaneEndpointTx,
+    ) -> std::io::Result<Self> {
+        let socket_path = pane_endpoint_path(control_socket, pane_id);
+        let live = control_socket
+            .parent()
+            .and_then(|dir| std::fs::read_dir(dir).ok())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| {
+                        is_pane_endpoint_name(control_socket, &entry.file_name().to_string_lossy())
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if live >= MAX_PANE_ENDPOINTS {
+            return Err(std::io::Error::other(format!(
+                "pane endpoint cap reached ({MAX_PANE_ENDPOINTS})"
+            )));
+        }
+        prepare_socket_path(&socket_path)?;
+        let listener = bind_local_listener(&socket_path)?;
+
+        // Nonblocking accept on a poll, so Drop can end the thread through
+        // `closed` instead of leaving it parked in accept() forever — one
+        // thread leaks per spawned pane otherwise.
+        use interprocess::local_socket::ListenerNonblockingMode;
+        listener
+            .set_nonblocking(ListenerNonblockingMode::Accept)
+            .expect("the listener was just bound");
+        let closed = Arc::new(AtomicBool::new(false));
+        let thread_closed = Arc::clone(&closed);
+        let thread_sink = sink;
+        let accept_thread = std::thread::Builder::new()
+            .name(format!("par-mux-pane-endpoint-{pane_id}"))
+            .spawn(move || loop {
+                match accept_connection(&listener) {
+                    Ok((stream, abort)) => {
+                        if thread_sink.inner.send((stream, abort, pane_id)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if thread_closed.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    // A signal may land mid-accept; that is not a fault.
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(err) => {
+                        log::warn!("par-mux: pane endpoint accept failed: {err}");
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            socket_path,
+            accept_thread: Some(accept_thread),
+            closed,
+        })
+    }
+
+    /// The path to export as the pane's `PAR_MUX_SOCKET`.
+    pub(crate) fn socket_path_string(&self) -> String {
+        self.socket_path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for PaneEndpoint {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.accept_thread.take() {
+            let _ = thread.join();
+        }
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+/// Remove stale pane-endpoint socket remnants beside `control_socket` at
+/// daemon startup (ENH-039). [`PaneEndpoint`]'s `Drop` unlinks a live
+/// endpoint's socket file, but a crash or SIGKILL does not — without the
+/// sweep the remnants accumulate in the runtime directory. Each candidate
+/// goes through [`prepare_socket_path`], which reclaims exactly the stale
+/// ones (a dead socket file or a stray regular file) and refuses a live
+/// one; at startup nothing of this daemon's can be live yet, and no other
+/// daemon can own these names (the control socket path is exclusive).
+pub fn sweep_pane_endpoint_remnants(control_socket: &Path) {
+    let Some(dir) = control_socket.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_pane_endpoint_name(control_socket, &name) {
+            let _ = prepare_socket_path(&entry.path());
+        }
+    }
+}
+
+/// Serve one pane-endpoint connection (ENH-039): hook reports for the
+/// endpoint's pane only, answered in place; any control-command line is
+/// refused with the hook-only error and the connection closed. Reuses the
+/// control socket's bounded line reader (SEC-104). No registration, no
+/// broadcast-set membership, no eviction — a hook connection is one line
+/// in, one reply out.
+fn serve_pane_connection(
+    stream: LocalStream,
+    bound: PaneId,
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+) {
+    let mut writer = match stream.try_clone() {
+        Ok(writer) => writer,
+        Err(_) => return,
+    };
+    // A pane connection is never in the broadcast set, so nothing ever
+    // evicts it; the reader's flag exists for the shared line reader only.
+    let never_evicted = AtomicBool::new(false);
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut line = match read_control_line(&mut reader, &never_evicted) {
+            ControlLine::Line(line) => line,
+            ControlLine::Closed => break,
+            // Over-budget or non-UTF-8 input is refused and the connection
+            // closed — a pane endpoint carries one well-formed report per
+            // exchange, never a stream of malformed frames.
+            ControlLine::Oversize | ControlLine::Undecodable(_) => {
+                let _ = write_line(
+                    &mut writer,
+                    "{\"error\":\"hook-only endpoint\"}",
+                    &never_evicted,
+                );
+                break;
+            }
+        };
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_line(&line) {
+            Ok(Line::Hook(report)) => {
+                let (reply, broadcast) = crate::mux::hooks::handle_report_for(bound, &report, tree);
+                if let Some(notification) = broadcast {
+                    broadcast_notification(clients, &notification);
+                }
+                if write_line(&mut writer, &reply, &never_evicted).is_err() {
+                    break;
+                }
+            }
+            // Anything else — a control command or an unparseable line — is
+            // what the endpoint exists to refuse. The error is one JSON
+            // line, then the connection closes: a client that meant to talk
+            // control-mode learns immediately, not after a timeout.
+            _ => {
+                let _ = write_line(
+                    &mut writer,
+                    "{\"error\":\"hook-only endpoint\"}",
+                    &never_evicted,
+                );
+                break;
+            }
+        }
+    }
 }
 
 /// Commands whose arguments carry user data (typed input, clipboard):
@@ -3569,5 +3870,152 @@ mod tests {
                 Err(_) => panic!("notification channel died before %window-close"),
             }
         }
+    }
+
+    // ---- ENH-039: per-pane hook-only endpoints ----
+
+    /// A pane tree with one pane (`%0`), built on the default factory.
+    fn pane_tree() -> Arc<Mutex<MuxTree>> {
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        tree.new_session("t", 80, 24)
+            .expect("the test session spawns");
+        Arc::new(Mutex::new(tree))
+    }
+
+    /// The endpoint contract: a control command is refused with the
+    /// hook-only error and the connection closes; a hook report that omits
+    /// `pane_id` is filed for the bound pane; a report naming another pane
+    /// is refused by the binding; dropping the endpoint unlinks its socket.
+    #[test]
+    fn a_pane_endpoint_answers_hooks_and_refuses_control_commands() {
+        use crate::mux::ipc::connect_local_stream;
+        use std::str::FromStr;
+
+        let dir = temp_dir();
+        let control = dir.path().join("panehook.sock");
+        let pane_id = PaneId::from_str("%0").unwrap();
+        let tree = pane_tree();
+        let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = pane_endpoint_channel();
+        let endpoint = PaneEndpoint::bind(&control, pane_id, tx).expect("binds");
+
+        // One accepted connection at a time: drain the endpoint's channel
+        // and serve the connection off this test thread's tree.
+        let serve_next = |rx: &PaneEndpointRx, tree: &Arc<Mutex<MuxTree>>, clients: &Clients| {
+            let (stream, _abort, bound) = rx
+                .inner
+                .recv_timeout(Duration::from_secs(5))
+                .expect("forwards");
+            let tree = Arc::clone(tree);
+            let clients = Arc::clone(clients);
+            std::thread::spawn(move || serve_pane_connection(stream, bound, &tree, &clients));
+        };
+
+        // Refused: a control command on a hook-only endpoint — one JSON
+        // error line, then the connection closes.
+        let mut client = connect_local_stream(&endpoint.socket_path).expect("connects");
+        client
+            .write_all(b"capture-pane -t %0\n")
+            .expect("sends the control command");
+        serve_next(&rx, &tree, &clients);
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("reads the refusal");
+        assert!(
+            line.contains("hook-only endpoint"),
+            "the control command is refused: {line}"
+        );
+        assert_eq!(
+            reader.read_line(&mut String::new()).expect("eof"),
+            0,
+            "the connection closes after the refusal"
+        );
+
+        // Accepted: a report that omits pane_id is filed for the bound pane.
+        let mut client = connect_local_stream(&endpoint.socket_path).expect("connects");
+        writeln!(
+            client,
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"agent":"claude","seq":1,"state":"working"}}}}"#
+        )
+        .expect("sends the report");
+        serve_next(&rx, &tree, &clients);
+        let mut line = String::new();
+        BufReader::new(client)
+            .read_line(&mut line)
+            .expect("reads the ok reply");
+        assert!(line.contains("\"result\":\"ok\""), "{line}");
+        assert_eq!(
+            tree.lock()
+                .pane(pane_id)
+                .expect("pane")
+                .metadata()
+                .get("agent_state")
+                .map(String::as_str),
+            Some("working"),
+            "the pane-less report landed on the bound pane"
+        );
+
+        // Refused by the binding: a report naming another pane.
+        let mut client = connect_local_stream(&endpoint.socket_path).expect("connects");
+        writeln!(
+            client,
+            r#"{{"id":2,"method":"pane.report_agent","params":{{"pane_id":"%9","agent":"claude","seq":2,"state":"idle"}}}}"#
+        )
+        .expect("sends the cross-pane report");
+        serve_next(&rx, &tree, &clients);
+        let mut line = String::new();
+        BufReader::new(client)
+            .read_line(&mut line)
+            .expect("reads the binding refusal");
+        assert!(
+            line.contains("pane_id does not match this endpoint"),
+            "{line}"
+        );
+
+        // Dropping the endpoint unlinks its socket file.
+        let socket_path = endpoint.socket_path.clone();
+        drop(endpoint);
+        assert!(
+            !socket_path.exists(),
+            "the endpoint socket is unlinked on drop"
+        );
+    }
+
+    /// The startup sweep reclaims a stale `*.pane-*.sock` remnant and
+    /// leaves a bound listener alone.
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_sweep_removes_a_stale_pane_endpoint_remnant() {
+        use std::str::FromStr;
+
+        let dir = temp_dir();
+        let control = dir.path().join("sweeptest.sock");
+        let stale = pane_endpoint_path(&control, PaneId::from_str("%7").unwrap());
+        std::fs::write(&stale, b"stale remnant").expect("creates the remnant");
+        let live_path = pane_endpoint_path(&control, PaneId::from_str("%8").unwrap());
+        let live = bind_local_listener(&live_path).expect("binds the live endpoint");
+        sweep_pane_endpoint_remnants(&control);
+        assert!(!stale.exists(), "the stale remnant is reclaimed");
+        assert!(live_path.exists(), "a bound endpoint is not touched");
+        drop(live);
+    }
+
+    /// A pane endpoint beside a control socket whose sibling path exceeds
+    /// the platform socket-address limit fails the bind — the factory then
+    /// exports NO socket for the pane rather than falling back to the full
+    /// control socket.
+    #[cfg(unix)]
+    #[test]
+    fn an_over_long_pane_endpoint_path_fails_the_bind() {
+        use std::str::FromStr;
+
+        let dir = temp_dir();
+        let long = dir.path().join(format!("{}.sock", "x".repeat(200)));
+        let (tx, _rx) = pane_endpoint_channel();
+        let result = PaneEndpoint::bind(&long, PaneId::from_str("%0").unwrap(), tx);
+        assert!(
+            result.is_err(),
+            "an over-long pane socket path must fail the bind"
+        );
     }
 }

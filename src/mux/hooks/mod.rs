@@ -367,3 +367,107 @@ fn error_reply(id: Option<serde_json::Value>, message: &str) -> String {
     );
     format!("{}\n", serde_json::Value::Object(reply))
 }
+
+/// Dispatch one hook-report line against a per-pane endpoint bound to
+/// `bound` (ENH-039). Identical to [`handle_report`] except the binding: a
+/// report naming another pane is refused (`pane_id does not match this
+/// endpoint`) and a report omitting `pane_id` is filed for the bound pane,
+/// so a minimal hook script needs no pane id at all. The full control
+/// socket keeps [`handle_report`]'s unbound behavior — embedders and
+/// par-term's own control connection still report for any pane.
+pub fn handle_report_for(
+    bound: PaneId,
+    line: &str,
+    tree: &Arc<Mutex<MuxTree>>,
+) -> (String, Option<TmuxNotification>) {
+    let mut report: serde_json::Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(err) => return (error_reply(None, &format!("invalid JSON: {err}")), None),
+    };
+    let id = report.get("id").cloned();
+    match report
+        .get("params")
+        .and_then(|params| params.get("pane_id"))
+    {
+        // No pane named: the endpoint IS the pane.
+        None | Some(serde_json::Value::Null) => {
+            if let Some(params) = report.get_mut("params").and_then(|p| p.as_object_mut()) {
+                params.insert(
+                    "pane_id".to_string(),
+                    serde_json::Value::String(bound.to_string()),
+                );
+            }
+        }
+        // A pane named that is not this endpoint's: refused before anything
+        // is looked up or written.
+        Some(value) => {
+            let named = value.as_str().and_then(|raw| PaneId::from_str(raw).ok());
+            if named != Some(bound) {
+                return (
+                    error_reply(id, "pane_id does not match this endpoint"),
+                    None,
+                );
+            }
+        }
+    }
+    // The (possibly pane-filled) report goes through the unbound dispatch:
+    // same method table, same validation, same per-source seq rule.
+    handle_report(&report.to_string(), tree)
+}
+
+#[cfg(test)]
+mod pane_binding_tests {
+    use super::*;
+    use crate::mux::pane::ShellPaneFactory;
+
+    /// A tree with one pane (`%0`).
+    fn pane_tree() -> Arc<Mutex<MuxTree>> {
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        tree.new_session("t", 80, 24)
+            .expect("the test session spawns");
+        Arc::new(Mutex::new(tree))
+    }
+
+    /// A report naming another pane never passes the binding — checked
+    /// before anything is looked up or written, even for a pane that does
+    /// not exist.
+    #[test]
+    fn a_report_for_another_pane_is_refused() {
+        let tree = pane_tree();
+        let bound: PaneId = "%0".parse().expect("parses");
+        let (reply, broadcast) = handle_report_for(
+            bound,
+            r#"{"id":1,"method":"pane.report_agent","params":{"pane_id":"%9","agent":"a","seq":1,"state":"working"}}"#,
+            &tree,
+        );
+        assert!(
+            reply.contains("pane_id does not match this endpoint"),
+            "{reply}"
+        );
+        assert!(broadcast.is_none());
+    }
+
+    /// A report that omits pane_id is filed for the bound pane.
+    #[test]
+    fn an_omitted_pane_id_is_filled_with_the_bound_pane() {
+        let tree = pane_tree();
+        let bound: PaneId = "%0".parse().expect("parses");
+        let (reply, broadcast) = handle_report_for(
+            bound,
+            r#"{"id":2,"method":"pane.report_agent","params":{"agent":"a","seq":1,"state":"working"}}"#,
+            &tree,
+        );
+        assert!(reply.contains("\"result\":\"ok\""), "{reply}");
+        assert!(broadcast.is_some(), "an accepted state report broadcasts");
+        assert_eq!(
+            tree.lock()
+                .pane(bound)
+                .expect("pane")
+                .metadata()
+                .get("agent_state")
+                .map(String::as_str),
+            Some("working"),
+            "the pane-less report landed on the bound pane"
+        );
+    }
+}
