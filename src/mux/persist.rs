@@ -7,6 +7,7 @@
 //! (D3.5: spawn first, restore second — startup bytes must not overwrite a
 //! restored screen).
 
+use crate::cell::Cell;
 use crate::mux::agent_resume::resume_invocation;
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
@@ -58,6 +59,30 @@ fn clamp_restored_window_size(cols: u16, rows: u16) -> (u16, u16) {
         cols.clamp(MIN_RESTORED_COLS, MAX_RESTORED_COLS),
         rows.clamp(MIN_RESTORED_ROWS, MAX_RESTORED_ROWS),
     )
+}
+
+/// Clamp a restored snapshot's grid dimensions (ARC-113c2): each pane's
+/// persisted grids ride the state file beside the window size, and
+/// `Grid::restore_from_snapshot` adopts their `cols`/`rows`, `cells`, and
+/// `wrapped` wholesale — so a hostile snapshot drives the grid's row-major
+/// math and allocation the same way a hostile window size does. Hold each
+/// grid to the same bounds, reshaping `cells` and `wrapped` to the clamped
+/// shape so the restored grid keeps its invariants.
+fn clamp_restored_grid_dims(snapshot: &mut TerminalSnapshot) {
+    for grid in [&mut snapshot.grid, &mut snapshot.alt_grid] {
+        let cols = grid.cols.clamp(
+            usize::from(MIN_RESTORED_COLS),
+            usize::from(MAX_RESTORED_COLS),
+        );
+        let rows = grid.rows.clamp(
+            usize::from(MIN_RESTORED_ROWS),
+            usize::from(MAX_RESTORED_ROWS),
+        );
+        grid.cells.resize(rows * cols, Cell::default());
+        grid.wrapped.resize(rows, false);
+        grid.cols = cols;
+        grid.rows = rows;
+    }
 }
 
 /// Errors raised while saving or rebuilding persisted mux state.
@@ -556,7 +581,13 @@ impl MuxTree {
                         .get(&PaneId(pane.id))
                         .expect("just inserted above")
                         .with_terminal_mut(|restored| {
-                            restored.restore_for_new_process(pane.terminal.clone());
+                            // ARC-113c2: the snapshot's grid dims are
+                            // state-file input exactly like the window size
+                            // above, so clamp them before
+                            // `restore_for_new_process` adopts them.
+                            let mut snapshot = pane.terminal.clone();
+                            clamp_restored_grid_dims(&mut snapshot);
+                            restored.restore_for_new_process(snapshot);
                             // After the snapshot re-hangs, so the note is the
                             // last thing on screen rather than scrolled away.
                             if let Some(note) = cwd_fallbacks.get(&pane.id) {
@@ -1590,6 +1621,70 @@ mod tests {
             factory.size_for(PaneId(huge_pane)),
             (MAX_RESTORED_COLS, MAX_RESTORED_ROWS)
         );
+    }
+
+    /// ARC-113c2: a hostile snapshot's grid dims must clamp to the same
+    /// bounds as the window size, and the cell/wrapped vecs must be
+    /// reshaped to the clamped shape — `Grid::restore_from_snapshot`
+    /// adopts all of them wholesale.
+    #[test]
+    fn clamp_restored_grid_dims_clamps_hostile_dims_and_reshapes_cells() {
+        let tree = populated_tree();
+        let session_id = *tree.sessions.keys().next().unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let pane_id = tree.window(window_id).unwrap().panes()[0];
+        let mut snap = tree
+            .pane(pane_id)
+            .unwrap()
+            .terminal()
+            .read()
+            .capture_snapshot();
+
+        snap.grid.cols = 0;
+        snap.grid.rows = 0;
+        clamp_restored_grid_dims(&mut snap);
+        assert_eq!(snap.grid.cols, usize::from(MIN_RESTORED_COLS));
+        assert_eq!(snap.grid.rows, usize::from(MIN_RESTORED_ROWS));
+        assert_eq!(snap.grid.cells.len(), snap.grid.cols * snap.grid.rows);
+        assert_eq!(snap.grid.wrapped.len(), snap.grid.rows);
+
+        snap.grid.cols = usize::from(u16::MAX);
+        snap.grid.rows = usize::from(u16::MAX);
+        clamp_restored_grid_dims(&mut snap);
+        assert_eq!(snap.grid.cols, usize::from(MAX_RESTORED_COLS));
+        assert_eq!(snap.grid.rows, usize::from(MAX_RESTORED_ROWS));
+        assert_eq!(snap.grid.cells.len(), snap.grid.cols * snap.grid.rows);
+        assert_eq!(snap.grid.wrapped.len(), snap.grid.rows);
+    }
+
+    /// ARC-113c2 end to end: a state file carrying hostile grid dims in a
+    /// pane's snapshot must restore, with the pane's terminal left inside
+    /// the restored bounds and readable rather than panicking on collapsed
+    /// or giant row-major math.
+    #[test]
+    fn restore_survives_a_hostile_snapshot_grid_size() {
+        let mut state = populated_tree().to_persist_state();
+        let zero_pane = state.sessions[0].windows[0].panes[0].id;
+        let huge_pane = state.sessions[0].windows[1].panes[0].id;
+        state.sessions[0].windows[0].panes[0].terminal.grid.cols = 0;
+        state.sessions[0].windows[0].panes[0].terminal.grid.rows = 0;
+        state.sessions[0].windows[1].panes[0].terminal.grid.cols = usize::from(u16::MAX);
+        state.sessions[0].windows[1].panes[0].terminal.grid.rows = usize::from(u16::MAX);
+
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+
+        for pane_id in [PaneId(zero_pane), PaneId(huge_pane)] {
+            let terminal = restored.pane(pane_id).expect("restored pane").terminal();
+            let (cols, rows) = terminal.read().size();
+            assert!(
+                (usize::from(MIN_RESTORED_COLS)..=usize::from(MAX_RESTORED_COLS)).contains(&cols)
+                    && (usize::from(MIN_RESTORED_ROWS)..=usize::from(MAX_RESTORED_ROWS))
+                        .contains(&rows),
+                "restored pane is {cols}x{rows}, outside the restored bounds"
+            );
+            let _ = terminal.read().content();
+        }
     }
 
     /// A pane saved while a full-screen app held the alternate screen is
