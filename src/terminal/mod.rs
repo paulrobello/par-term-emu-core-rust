@@ -24,6 +24,7 @@ mod graphics;
 pub mod image;
 pub mod macros;
 pub mod metrics;
+mod mouse_api;
 pub mod notification;
 pub mod observer;
 pub mod progress;

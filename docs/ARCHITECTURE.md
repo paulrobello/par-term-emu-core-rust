@@ -217,10 +217,11 @@ The main terminal emulator that ties everything together, organized into submodu
   - `serialization.rs` - Graphics state serialization (snapshots/replay)
 - **Features**: Image reuse, scrolling, animation, composition modes
 
-**Mouse Handling** (`src/mouse.rs`)
+**Mouse Handling** (`src/mouse.rs`, history methods in `src/terminal/mouse_api.rs`)
 - Mouse event types and button tracking
 - Mouse mode management (Normal, Button, Any)
 - Mouse encoding formats (SGR, UTF-8, URXVT)
+- Mouse history methods (`record_mouse_event` and friends) live in the terminal layer so `src/mouse.rs` stays a leaf of wire-format types (ARC-108)
 
 **Shell Integration** (`src/shell_integration.rs`)
 - OSC 133 prompt/command/output markers
