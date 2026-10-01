@@ -464,10 +464,16 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
 /// Prepare `path` for binding: refuse it when a live server owns it, reclaim
 /// it when only a stale remnant (dead socket file or marker) does.
 ///
-/// A successful connect means a live server — `AddrInUse` is returned, which
-/// is what stops two daemons from owning one path. A stale-socket connect
-/// error means the previous owner is gone; the remnant is removed. Anything
-/// else is reported unchanged.
+/// A connect that keeps succeeding means a live server — `AddrInUse` is
+/// returned, which is what stops two daemons from owning one path. A
+/// stale-socket connect error means the previous owner is gone; the remnant
+/// is removed. Anything else is reported unchanged.
+///
+/// One successful connect is not enough to conclude "live": right after a
+/// listener closes, the kernel can still complete a connect against the
+/// dying socket (observed on macOS with no process holding the file —
+/// QA-223), so the probe is repeated briefly; a real server answers every
+/// attempt, while a teardown ghost stops answering within milliseconds.
 pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     guard_fallback_socket_dir(path)?;
@@ -496,10 +502,29 @@ pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
 
     match connect_local_stream(path) {
         Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                format!("another server owns {}", path.display()),
-            ));
+            // A just-closed listener can still complete one connect while the
+            // kernel tears the socket down (QA-223, observed on macOS with no
+            // process holding the file), so re-probe before refusing: a live
+            // server keeps answering every attempt, a teardown ghost stops
+            // answering within milliseconds. The delay lands only here — on
+            // the refusing path or on the ghost — never on the plain
+            // stale-remnant fast path.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                match connect_local_stream(path) {
+                    Ok(_) => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(io::Error::new(
+                                io::ErrorKind::AddrInUse,
+                                format!("another server owns {}", path.display()),
+                            ));
+                        }
+                    }
+                    Err(err) if stale_socket_connect_error(err.kind()) => break,
+                    Err(err) => return Err(err),
+                }
+            }
         }
         Err(err) if stale_socket_connect_error(err.kind()) => {}
         Err(err) => return Err(err),
