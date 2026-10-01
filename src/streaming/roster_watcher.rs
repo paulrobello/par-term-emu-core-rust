@@ -4,9 +4,13 @@
 //! callback. Every (re)connect fetches a fresh `list-agents` snapshot, replaces
 //! the cache and emits it as an [`ServerMessage::AgentRoster`]; agent
 //! notifications after that become [`ServerMessage::AgentStateChanged`] deltas.
-//! Loss of the connection is answered with a backoff redial and a fresh
-//! snapshot, so no agent from before a daemon restart survives as a ghost.
-//! There is no polling timer: the only wait is the reconnect backoff.
+//! Loss of the connection is answered with a backoff redial — cumulative
+//! and capped, reset only after a connection has held long enough to be
+//! stable — and a fresh snapshot, so no agent from before a daemon restart
+//! survives as a ghost. The list-agents fetch is timeout-bounded (bounded
+//! connect plus the client's reply timeout), so a hung daemon delays the
+//! watcher but cannot wedge its thread. There is no polling timer: the
+//! only waits are the fetch bounds and the reconnect backoff.
 
 use super::protocol::{AgentEntry, ServerMessage};
 use super::roster::{parse_agents_output, translate_notification, RosterDelta};
@@ -19,10 +23,19 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
+/// How long one connect attempt may block before the fetch cycle gives up
+/// and redials. A daemon hung with a full accept backlog would otherwise
+/// block the watcher's connect forever — the client's reply timeout does
+/// not cover the connect itself.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A connection must hold at least this long for its end to reset the redial
+/// backoff to [`BACKOFF_INITIAL`]. Anything shorter is a flap: the flap keeps
+/// the cumulative (capped) delay instead of redialing at 100ms forever.
+const BACKOFF_STABLE: Duration = Duration::from_secs(30);
 
 /// Callback receiving every roster message the watcher produces.
 pub type OnMessage = Arc<dyn Fn(ServerMessage) + Send + Sync>;
@@ -101,6 +114,18 @@ fn fetch_roster(client: &mut MuxClient) -> io::Result<Vec<AgentEntry>> {
     Ok(parse_agents_output(&reply.body.join("\n")))
 }
 
+/// The redial delay after one connect/fetch/serve cycle ends: a failed or
+/// short-lived cycle grows the cumulative backoff toward [`BACKOFF_MAX`],
+/// and only a connection that held [`BACKOFF_STABLE`] or longer resets it
+/// to [`BACKOFF_INITIAL`]. Passing the grown value forward is what keeps a
+/// connect-then-drop flap from redialing at the initial 100ms forever.
+fn next_backoff(current: Duration, held: Option<Duration>) -> Duration {
+    match held {
+        Some(held) if held >= BACKOFF_STABLE => BACKOFF_INITIAL,
+        _ => (current * 2).min(BACKOFF_MAX),
+    }
+}
+
 fn run(
     socket: &std::path::Path,
     roster: &Mutex<BTreeMap<u32, AgentEntry>>,
@@ -109,11 +134,12 @@ fn run(
 ) {
     let mut backoff = BACKOFF_INITIAL;
     while !stop.load(Ordering::Relaxed) {
-        let mut client = match MuxClient::connect(socket) {
+        let mut client = match MuxClient::connect_bounded(socket, Instant::now() + CONNECT_TIMEOUT)
+        {
             Ok(client) => client,
             Err(_) => {
                 std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(BACKOFF_MAX);
+                backoff = next_backoff(backoff, None);
                 continue;
             }
         };
@@ -123,11 +149,10 @@ fn run(
             Ok(entries) => entries,
             Err(_) => {
                 std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(BACKOFF_MAX);
+                backoff = next_backoff(backoff, None);
                 continue;
             }
         };
-        backoff = BACKOFF_INITIAL;
         let snapshot = {
             let mut map = roster.lock();
             *map = entries.into_iter().map(|e| (e.pane_id, e)).collect();
@@ -135,6 +160,7 @@ fn run(
         };
         on_message(snapshot);
 
+        let connected_at = Instant::now();
         while let Ok(notification) = client.notifications().recv() {
             if stop.load(Ordering::Relaxed) {
                 return;
@@ -163,7 +189,15 @@ fn run(
             }
             on_message(delta_message(delta));
         }
-        // Connection lost: fall through to the redial, which re-snapshots.
+        // Connection lost. A connection that held past BACKOFF_STABLE proves
+        // the daemon healthy: redial immediately at the initial delay. A
+        // short-lived one is a flap — wait out the cumulative backoff and
+        // grow it, so a connect-then-drop storm cannot spin at 100ms.
+        let held = connected_at.elapsed();
+        if held < BACKOFF_STABLE {
+            std::thread::sleep(backoff);
+        }
+        backoff = next_backoff(backoff, Some(held));
     }
 }
 
@@ -292,6 +326,36 @@ mod tests {
             other => panic!("expected release, got {other:?}"),
         }
         assert!(entries(watcher.snapshot()).is_empty());
+    }
+
+    #[test]
+    fn flap_grows_the_backoff_and_stability_resets_it() {
+        // A short-lived connection is a flap: the delay grows past the
+        // initial 100ms instead of resetting to it, capping at BACKOFF_MAX.
+        assert_eq!(
+            next_backoff(BACKOFF_INITIAL, None),
+            Duration::from_millis(200)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(4), None),
+            BACKOFF_MAX,
+            "growth caps at BACKOFF_MAX"
+        );
+        assert_eq!(next_backoff(BACKOFF_MAX, None), BACKOFF_MAX);
+        // A connection that held past BACKOFF_STABLE proves the daemon
+        // healthy, and the next redial starts over at the initial delay.
+        assert_eq!(
+            next_backoff(BACKOFF_MAX, Some(BACKOFF_STABLE)),
+            BACKOFF_INITIAL
+        );
+        // One millisecond under the stability mark still counts as a flap.
+        assert_eq!(
+            next_backoff(
+                BACKOFF_INITIAL,
+                Some(BACKOFF_STABLE - Duration::from_millis(1))
+            ),
+            Duration::from_millis(200)
+        );
     }
 
     #[test]

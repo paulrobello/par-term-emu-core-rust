@@ -1034,10 +1034,20 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::AgentRoster(roster)) => Ok(AppServerMessage::AgentRoster {
                 agents: roster.agents.into_iter().map(Into::into).collect(),
             }),
-            Some(Message::AgentStateChanged(change)) => Ok(AppServerMessage::AgentStateChanged {
-                agent: change.agent.map(Into::into).unwrap_or_default(),
-                released: change.released,
-            }),
+            Some(Message::AgentStateChanged(change)) => {
+                // Presence decides, not value: pane 0 is a legal pane id, so
+                // a missing field must stay distinct from a pane-0 entry —
+                // decoding it as the default would fabricate a release.
+                let agent = change.agent.ok_or_else(|| {
+                    StreamingError::InvalidMessage(
+                        "AgentStateChanged is missing its agent field".into(),
+                    )
+                })?;
+                Ok(AppServerMessage::AgentStateChanged {
+                    agent: agent.into(),
+                    released: change.released,
+                })
+            }
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -1369,6 +1379,44 @@ mod tests {
             panic!("expected delta");
         };
         assert_eq!(agent, entry);
+        assert!(released);
+    }
+
+    #[test]
+    fn test_agent_state_changed_missing_agent_is_rejected() {
+        let wire = pb::ServerMessage {
+            message: Some(pb::server_message::Message::AgentStateChanged(
+                pb::AgentStateChanged {
+                    agent: None,
+                    released: false,
+                },
+            )),
+        };
+        let err = AppServerMessage::try_from(wire).unwrap_err();
+        assert!(
+            matches!(err, StreamingError::InvalidMessage(_)),
+            "a missing agent field is a protocol violation, not a pane-0 \
+             release: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_agent_state_changed_pane_zero_is_a_valid_present_field() {
+        let msg = AppServerMessage::AgentStateChanged {
+            agent: AppAgentEntry {
+                pane_id: 0,
+                agent: "zed".into(),
+                state: "idle".into(),
+                source: "hook".into(),
+                reason: String::new(),
+            },
+            released: true,
+        };
+        let decoded = decode_server_message(&encode_server_message(&msg).unwrap()).unwrap();
+        let AppServerMessage::AgentStateChanged { agent, released } = decoded else {
+            panic!("expected delta");
+        };
+        assert_eq!(agent.pane_id, 0, "pane 0 is a legal pane id");
         assert!(released);
     }
 

@@ -37,6 +37,20 @@ impl MuxClient {
         Self::from_stream(stream)
     }
 
+    /// [`Self::connect`] with a bounded connect: always returns by `deadline`.
+    ///
+    /// The blocking connect is the unbounded step of a command cycle: a
+    /// daemon hung with a full accept backlog blocks every later connect
+    /// with no error to retry on. Replies are already bounded by
+    /// `REPLY_TIMEOUT` through `send_checked`, so with this the roster
+    /// watcher's whole fetch cycle (connect + `list-agents` reply) is
+    /// bounded and a hung daemon delays the redial instead of wedging the
+    /// thread forever.
+    pub(crate) fn connect_bounded(path: &Path, deadline: Instant) -> io::Result<Self> {
+        let stream = super::ipc::connect_local_stream_bounded(path, deadline)?;
+        Self::from_stream(stream)
+    }
+
     /// The transparency entry point: connect to the default socket for `name`,
     /// starting a daemon if none is running.
     ///

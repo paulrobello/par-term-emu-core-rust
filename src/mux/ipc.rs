@@ -461,6 +461,143 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     }
 }
 
+/// Connect to the Unix socket at `path`, giving up at `deadline`.
+///
+/// A blocking connect to a socket whose accept backlog is full waits with
+/// no error to retry on — the wedge this exists to prevent. A NONblocking
+/// AF_UNIX connect has no pending state: it returns `EAGAIN` immediately
+/// when the backlog is full, so the loop re-attempts with short sleeps
+/// until the deadline and fails with `TimedOut`.
+#[cfg(unix)]
+fn connect_unix_bounded(
+    path: &Path,
+    deadline: std::time::Instant,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: plain socket(2) fd creation; no process state touched.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Zeroed covers every platform's extra fields (macOS/BSD `sun_len`;
+    // a zero there is what connect(2) accepts). The path buffer is `i8` on
+    // some platforms, so write it through a `u8` view.
+    // SAFETY: libc::sockaddr_un is a plain C struct of integers and a fixed
+    // array, so an all-zero bit pattern is a valid value.
+    let mut addr = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    addr.sun_family = libc::AF_UNIX as _;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.len() >= addr.sun_path.len() {
+        // SAFETY: closing an fd this function created; nothing else holds it.
+        unsafe { libc::close(fd) };
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("socket path too long: {}", path.display()),
+        ));
+    }
+    // SAFETY: writing the path bytes into the (zeroed) sun_path storage;
+    // the u8 view aliases only the i8 path buffer, length-bounded.
+    let sun = unsafe {
+        std::slice::from_raw_parts_mut(addr.sun_path.as_mut_ptr().cast::<u8>(), addr.sun_path.len())
+    };
+    sun[..bytes.len()].copy_from_slice(bytes);
+
+    // SAFETY: fcntl on the socket this function created, before any thread
+    // shares it; F_SETFL O_NONBLOCK only sets the fd's own status flags.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+        let err = io::Error::last_os_error();
+        // SAFETY: see the close above.
+        unsafe { libc::close(fd) };
+        return Err(err);
+    }
+
+    let addrlen = std::mem::size_of_val(&addr) as libc::socklen_t;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            // SAFETY: closing an fd this function created.
+            unsafe { libc::close(fd) };
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("par-mux: timed out connecting to {}", path.display()),
+            ));
+        }
+        // SAFETY: fd and addr are owned by this call; the cast is the
+        // sockaddr_un → sockaddr form connect(2) takes.
+        let rc = unsafe {
+            libc::connect(
+                fd,
+                &addr as *const libc::sockaddr_un as *const libc::sockaddr,
+                addrlen,
+            )
+        };
+        if rc == 0 {
+            break;
+        }
+        let err = io::Error::last_os_error();
+        match err.kind() {
+            // A full accept backlog (EAGAIN — AF_UNIX connect has no
+            // EINPROGRESS pending state) and a signal arrival are the two
+            // retryable outcomes; the deadline check bounds the loop.
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            _ => {
+                // SAFETY: closing an fd this function created.
+                unsafe { libc::close(fd) };
+                return Err(err);
+            }
+        }
+    }
+
+    // Hand the stream off blocking, as every other connect path returns it.
+    // SAFETY: fcntl on the socket this function created.
+    unsafe { libc::fcntl(fd, libc::F_SETFL, 0) };
+    // SAFETY: ownership of the still-open, connected fd moves to the
+    // returned OwnedFd; every earlier failure path closed it.
+    Ok(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) })
+}
+
+/// Connect a stream to the server listening at `path` with a bounded wait.
+///
+/// A blocking connect to a Unix socket whose accept backlog is full waits
+/// with no error to retry on — a hung daemon fills its backlog and wedges
+/// every later connect (the roster watcher's redial among them). The bounded
+/// form retries the transient `EAGAIN` until `deadline`, then fails with
+/// `TimedOut`. Windows named-pipe connects fail immediately when no pipe
+/// instance is available (no `WaitNamedPipe` in the connect path), so the
+/// plain connect is used and the deadline is unused there.
+///
+/// The server-identity check matches [`connect_local_stream`].
+pub fn connect_local_stream_bounded(
+    path: &Path,
+    deadline: std::time::Instant,
+) -> io::Result<LocalStream> {
+    #[cfg(unix)]
+    {
+        use interprocess::os::unix::uds_local_socket::Stream as UdsStream;
+
+        guard_fallback_socket_dir(path)?;
+        let fd = connect_unix_bounded(path, deadline)?;
+        let stream = LocalStream::from(UdsStream::from(fd));
+        if !peer_is_current_user(&stream) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("par-mux: {} is served by another user", path.display()),
+            ));
+        }
+        Ok(stream)
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = deadline;
+        connect_local_stream(path)
+    }
+}
+
 /// Prepare `path` for binding: refuse it when a live server owns it, reclaim
 /// it when only a stale remnant (dead socket file or marker) does.
 ///
