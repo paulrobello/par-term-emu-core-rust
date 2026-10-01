@@ -289,6 +289,72 @@ pub enum TerminalEventKind {
     InlineImageDropped,
 }
 
+impl TerminalEventKind {
+    /// Every event kind, in declaration order.
+    pub const ALL: [TerminalEventKind; 26] = [
+        Self::BellRang,
+        Self::TitleChanged,
+        Self::SizeChanged,
+        Self::ModeChanged,
+        Self::GraphicsAdded,
+        Self::HyperlinkAdded,
+        Self::DirtyRegion,
+        Self::CwdChanged,
+        Self::TriggerMatched,
+        Self::UserVarChanged,
+        Self::ProgressBarChanged,
+        Self::BadgeChanged,
+        Self::ShellIntegrationEvent,
+        Self::ZoneOpened,
+        Self::ZoneClosed,
+        Self::ZoneScrolledOut,
+        Self::EnvironmentChanged,
+        Self::RemoteHostTransition,
+        Self::SubShellDetected,
+        Self::FileTransferStarted,
+        Self::FileTransferProgress,
+        Self::FileTransferCompleted,
+        Self::FileTransferFailed,
+        Self::UploadRequested,
+        Self::ScreenCleared,
+        Self::InlineImageDropped,
+    ];
+
+    /// The canonical event-type string for this kind: emitted as the `type`
+    /// field of every event dict (`event_fields`) and matched by
+    /// subscription-filter parsing (`PyTerminal::parse_event_kind`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::BellRang => "bell",
+            Self::TitleChanged => "title_changed",
+            Self::SizeChanged => "size_changed",
+            Self::ModeChanged => "mode_changed",
+            Self::GraphicsAdded => "graphics_added",
+            Self::HyperlinkAdded => "hyperlink_added",
+            Self::DirtyRegion => "dirty_region",
+            Self::CwdChanged => "cwd_changed",
+            Self::TriggerMatched => "trigger_matched",
+            Self::UserVarChanged => "user_var_changed",
+            Self::ProgressBarChanged => "progress_bar_changed",
+            Self::BadgeChanged => "badge_changed",
+            Self::ShellIntegrationEvent => "shell_integration",
+            Self::ZoneOpened => "zone_opened",
+            Self::ZoneClosed => "zone_closed",
+            Self::ZoneScrolledOut => "zone_scrolled_out",
+            Self::EnvironmentChanged => "environment_changed",
+            Self::RemoteHostTransition => "remote_host_transition",
+            Self::SubShellDetected => "sub_shell_detected",
+            Self::FileTransferStarted => "file_transfer_started",
+            Self::FileTransferProgress => "file_transfer_progress",
+            Self::FileTransferCompleted => "file_transfer_completed",
+            Self::FileTransferFailed => "file_transfer_failed",
+            Self::UploadRequested => "upload_requested",
+            Self::ScreenCleared => "screen_cleared",
+            Self::InlineImageDropped => "inline_image_dropped",
+        }
+    }
+}
+
 /// A drained shell integration event: (event_type, command, exit_code, timestamp, cursor_line).
 pub type ShellEvent = (
     String,

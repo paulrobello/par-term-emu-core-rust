@@ -33,43 +33,36 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             fields.push(($key.to_string(), $val))
         };
     }
+    put!("type", EventField::Str(event.kind().as_str().to_string()));
     match event {
-        TerminalEvent::BellRang(bell) => {
-            put!("type", EventField::Str("bell".to_string()));
-            match bell {
-                crate::terminal::BellEvent::VisualBell => {
-                    put!("bell_type", EventField::Str("visual".to_string()));
-                }
-                crate::terminal::BellEvent::WarningBell(vol) => {
-                    put!("bell_type", EventField::Str("warning".to_string()));
-                    put!("volume", EventField::Int(*vol as i64));
-                }
-                crate::terminal::BellEvent::MarginBell(vol) => {
-                    put!("bell_type", EventField::Str("margin".to_string()));
-                    put!("volume", EventField::Int(*vol as i64));
-                }
+        TerminalEvent::BellRang(bell) => match bell {
+            crate::terminal::BellEvent::VisualBell => {
+                put!("bell_type", EventField::Str("visual".to_string()));
             }
-        }
+            crate::terminal::BellEvent::WarningBell(vol) => {
+                put!("bell_type", EventField::Str("warning".to_string()));
+                put!("volume", EventField::Int(*vol as i64));
+            }
+            crate::terminal::BellEvent::MarginBell(vol) => {
+                put!("bell_type", EventField::Str("margin".to_string()));
+                put!("volume", EventField::Int(*vol as i64));
+            }
+        },
         TerminalEvent::TitleChanged(title) => {
-            put!("type", EventField::Str("title_changed".to_string()));
             put!("title", EventField::Str(title.clone()));
         }
         TerminalEvent::SizeChanged(cols, rows) => {
-            put!("type", EventField::Str("size_changed".to_string()));
             put!("cols", EventField::Int(*cols as i64));
             put!("rows", EventField::Int(*rows as i64));
         }
         TerminalEvent::ModeChanged(mode, enabled) => {
-            put!("type", EventField::Str("mode_changed".to_string()));
             put!("mode", EventField::Str(mode.clone()));
             put!("enabled", EventField::Bool(*enabled));
         }
         TerminalEvent::GraphicsAdded(row) => {
-            put!("type", EventField::Str("graphics_added".to_string()));
             put!("row", EventField::Int(*row as i64));
         }
         TerminalEvent::HyperlinkAdded { url, row, col, id } => {
-            put!("type", EventField::Str("hyperlink_added".to_string()));
             put!("url", EventField::Str(url.clone()));
             put!("row", EventField::Int(*row as i64));
             put!("col", EventField::Int(*col as i64));
@@ -79,12 +72,10 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
         }
         TerminalEvent::DirtyRegion(first, last) => {
-            put!("type", EventField::Str("dirty_region".to_string()));
             put!("first_row", EventField::Int(*first as i64));
             put!("last_row", EventField::Int(*last as i64));
         }
         TerminalEvent::CwdChanged(change) => {
-            put!("type", EventField::Str("cwd_changed".to_string()));
             put!(
                 "old_cwd",
                 change
@@ -110,7 +101,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             put!("timestamp", EventField::Int(change.timestamp as i64));
         }
         TerminalEvent::TriggerMatched(trigger_match) => {
-            put!("type", EventField::Str("trigger_matched".to_string()));
             put!(
                 "trigger_id",
                 EventField::Int(trigger_match.trigger_id as i64)
@@ -126,7 +116,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             value,
             old_value,
         } => {
-            put!("type", EventField::Str("user_var_changed".to_string()));
             put!("name", EventField::Str(name.clone()));
             put!("value", EventField::Str(value.clone()));
             put!(
@@ -141,7 +130,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             percent,
             label,
         } => {
-            put!("type", EventField::Str("progress_bar_changed".to_string()));
             let action_str = match action {
                 crate::terminal::ProgressBarAction::Set => "set",
                 crate::terminal::ProgressBarAction::Remove => "remove",
@@ -166,7 +154,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
         }
         TerminalEvent::BadgeChanged(badge) => {
-            put!("type", EventField::Str("badge_changed".to_string()));
             put!(
                 "badge",
                 badge.clone().map_or(EventField::None, EventField::Str)
@@ -179,7 +166,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             timestamp,
             cursor_line,
         } => {
-            put!("type", EventField::Str("shell_integration".to_string()));
             put!("event_type", EventField::Str(event_type.clone()));
             put!(
                 "command",
@@ -203,7 +189,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             zone_type,
             abs_row_start,
         } => {
-            put!("type", EventField::Str("zone_opened".to_string()));
             put!("zone_id", EventField::Int(*zone_id as i64));
             put!("zone_type", EventField::Str(zone_type.to_string()));
             put!("abs_row_start", EventField::Int(*abs_row_start as i64));
@@ -215,7 +200,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             abs_row_end,
             exit_code,
         } => {
-            put!("type", EventField::Str("zone_closed".to_string()));
             put!("zone_id", EventField::Int(*zone_id as i64));
             put!("zone_type", EventField::Str(zone_type.to_string()));
             put!("abs_row_start", EventField::Int(*abs_row_start as i64));
@@ -226,7 +210,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
         }
         TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
-            put!("type", EventField::Str("zone_scrolled_out".to_string()));
             put!("zone_id", EventField::Int(*zone_id as i64));
             put!("zone_type", EventField::Str(zone_type.to_string()));
         }
@@ -235,7 +218,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             value,
             old_value,
         } => {
-            put!("type", EventField::Str("environment_changed".to_string()));
             put!("key", EventField::Str(key.clone()));
             put!("value", EventField::Str(value.clone()));
             put!(
@@ -249,10 +231,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             old_hostname,
             old_username,
         } => {
-            put!(
-                "type",
-                EventField::Str("remote_host_transition".to_string())
-            );
             put!("hostname", EventField::Str(hostname.clone()));
             put!(
                 "username",
@@ -272,7 +250,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
         }
         TerminalEvent::SubShellDetected { depth, shell_type } => {
-            put!("type", EventField::Str("sub_shell_detected".to_string()));
             put!("depth", EventField::Int(*depth as i64));
             put!(
                 "shell_type",
@@ -285,7 +262,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             filename,
             total_bytes,
         } => {
-            put!("type", EventField::Str("file_transfer_started".to_string()));
             put!("id", EventField::Int(*id as i64));
             let dir_str = match direction {
                 crate::terminal::TransferDirection::Download => "download",
@@ -306,10 +282,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             bytes_transferred,
             total_bytes,
         } => {
-            put!(
-                "type",
-                EventField::Str("file_transfer_progress".to_string())
-            );
             put!("id", EventField::Int(*id as i64));
             put!(
                 "bytes_transferred",
@@ -321,10 +293,6 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
         }
         TerminalEvent::FileTransferCompleted { id, filename, size } => {
-            put!(
-                "type",
-                EventField::Str("file_transfer_completed".to_string())
-            );
             put!("id", EventField::Int(*id as i64));
             put!(
                 "filename",
@@ -333,20 +301,16 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             put!("size", EventField::Int(*size as i64));
         }
         TerminalEvent::FileTransferFailed { id, reason } => {
-            put!("type", EventField::Str("file_transfer_failed".to_string()));
             put!("id", EventField::Int(*id as i64));
             put!("reason", EventField::Str(reason.clone()));
         }
         TerminalEvent::UploadRequested { format } => {
-            put!("type", EventField::Str("upload_requested".to_string()));
             put!("format", EventField::Str(format.clone()));
         }
         TerminalEvent::ScreenCleared { include_scrollback } => {
-            put!("type", EventField::Str("screen_cleared".to_string()));
             put!("include_scrollback", EventField::Bool(*include_scrollback));
         }
         TerminalEvent::InlineImageDropped { reason } => {
-            put!("type", EventField::Str("inline_image_dropped".to_string()));
             put!("reason", EventField::Str(reason.clone()));
         }
     }

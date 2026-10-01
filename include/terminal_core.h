@@ -48,6 +48,11 @@
 typedef struct Terminal Terminal;
 
 /**
+ * Kind of terminal event for subscription filters
+ */
+typedef struct TerminalEventKind TerminalEventKind;
+
+/**
  * An inclusive [start, end] range of dirty screen rows, in coalesced form.
  */
 typedef struct {

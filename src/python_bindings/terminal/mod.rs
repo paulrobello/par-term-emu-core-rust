@@ -1566,36 +1566,9 @@ impl PyTerminal {
     ///
     /// Returns `None` for unrecognised strings (silently ignored).
     fn parse_event_kind(kind: &str) -> Option<crate::terminal::TerminalEventKind> {
-        use crate::terminal::TerminalEventKind;
-        match kind {
-            "bell" => Some(TerminalEventKind::BellRang),
-            "title_changed" => Some(TerminalEventKind::TitleChanged),
-            "size_changed" => Some(TerminalEventKind::SizeChanged),
-            "mode_changed" => Some(TerminalEventKind::ModeChanged),
-            "graphics_added" => Some(TerminalEventKind::GraphicsAdded),
-            "hyperlink_added" => Some(TerminalEventKind::HyperlinkAdded),
-            "dirty_region" => Some(TerminalEventKind::DirtyRegion),
-            "cwd_changed" => Some(TerminalEventKind::CwdChanged),
-            "trigger_matched" => Some(TerminalEventKind::TriggerMatched),
-            "user_var_changed" => Some(TerminalEventKind::UserVarChanged),
-            "progress_bar_changed" => Some(TerminalEventKind::ProgressBarChanged),
-            "badge_changed" => Some(TerminalEventKind::BadgeChanged),
-            "shell_integration" => Some(TerminalEventKind::ShellIntegrationEvent),
-            "zone_opened" => Some(TerminalEventKind::ZoneOpened),
-            "zone_closed" => Some(TerminalEventKind::ZoneClosed),
-            "zone_scrolled_out" => Some(TerminalEventKind::ZoneScrolledOut),
-            "environment_changed" => Some(TerminalEventKind::EnvironmentChanged),
-            "remote_host_transition" => Some(TerminalEventKind::RemoteHostTransition),
-            "sub_shell_detected" => Some(TerminalEventKind::SubShellDetected),
-            "file_transfer_started" => Some(TerminalEventKind::FileTransferStarted),
-            "file_transfer_progress" => Some(TerminalEventKind::FileTransferProgress),
-            "file_transfer_completed" => Some(TerminalEventKind::FileTransferCompleted),
-            "file_transfer_failed" => Some(TerminalEventKind::FileTransferFailed),
-            "upload_requested" => Some(TerminalEventKind::UploadRequested),
-            "inline_image_dropped" => Some(TerminalEventKind::InlineImageDropped),
-            "screen_cleared" => Some(TerminalEventKind::ScreenCleared),
-            _ => None,
-        }
+        crate::terminal::TerminalEventKind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == kind)
     }
 }
 
@@ -1674,4 +1647,51 @@ pub(crate) fn transfer_to_py_dict(
     }
 
     Ok(dict.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `type` string emitted by `event_fields` and the string matched by
+    /// `parse_event_kind` must remain one table (`TerminalEventKind::as_str`);
+    /// these 26 strings are pinned so the two sides cannot drift apart.
+    #[test]
+    fn observer_event_type_strings_round_trip_all_26() {
+        use crate::terminal::TerminalEventKind;
+
+        const TABLE: [&str; 26] = [
+            "bell",
+            "title_changed",
+            "size_changed",
+            "mode_changed",
+            "graphics_added",
+            "hyperlink_added",
+            "dirty_region",
+            "cwd_changed",
+            "trigger_matched",
+            "user_var_changed",
+            "progress_bar_changed",
+            "badge_changed",
+            "shell_integration",
+            "zone_opened",
+            "zone_closed",
+            "zone_scrolled_out",
+            "environment_changed",
+            "remote_host_transition",
+            "sub_shell_detected",
+            "file_transfer_started",
+            "file_transfer_progress",
+            "file_transfer_completed",
+            "file_transfer_failed",
+            "upload_requested",
+            "screen_cleared",
+            "inline_image_dropped",
+        ];
+        assert_eq!(TerminalEventKind::ALL.len(), TABLE.len());
+        for (kind, expected) in TerminalEventKind::ALL.into_iter().zip(TABLE) {
+            assert_eq!(kind.as_str(), expected);
+            assert_eq!(PyTerminal::parse_event_kind(expected), Some(kind));
+        }
+    }
 }
