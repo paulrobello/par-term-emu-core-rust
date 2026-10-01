@@ -2,6 +2,7 @@
 - Ensure the python bindings and streaming server are up to date
 - Bump version (all 3 files: Cargo.toml, pyproject.toml, python/par_term_emu_core_rust/__init__.py)
 - Update CHANGELOG.md, docs/ and README.md
+- Run `make release-check` (needs `git fetch --tags` first); cite any reported uncited feat/fix commits in the top CHANGELOG section, then `python3 scripts/check_release_notes.py --write` to add the compare links
 - Run `make pre-commit-run`
 - Commit and push
 - Run `make deploy` to trigger cicd workflow
