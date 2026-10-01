@@ -3,7 +3,7 @@
 use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::pty_error::PtyError;
-use crate::pty_session::{OutputCallback, PtySession};
+use crate::pty_session::{OutputCallback, PtyInputHandle, PtySession};
 use crate::terminal::replay_snapshot::TerminalSnapshot;
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
@@ -476,6 +476,15 @@ impl MuxPane {
     /// Write client input to the pane's PTY.
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), MuxError> {
         self.session.write(bytes).map_err(MuxError::from)
+    }
+
+    /// The pane's input path for a write issued with no tree lock held
+    /// (QA-225): snapshot this under the tree mutex, drop the mutex, then
+    /// write — a paste can block in `write_all` on a full PTY buffer.
+    pub(crate) fn input_handle(&self) -> Result<PtyInputHandle, MuxError> {
+        self.session
+            .input_handle()
+            .ok_or(MuxError::Pty(PtyError::NotStartedError))
     }
 
     /// Resize the pane.

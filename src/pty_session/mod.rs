@@ -105,6 +105,39 @@ impl GeometryMirror {
     }
 }
 
+/// The shared handles one PTY input write needs — writer, terminal, and
+/// liveness flag — cloned out of a session so the write can happen with no
+/// broader lock held. [`PtyInputHandle::write`] mirrors
+/// [`PtySession::write`] exactly: same liveness check, same input recording,
+/// same errors.
+#[derive(Clone)]
+pub(crate) struct PtyInputHandle {
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    terminal: Arc<RwLock<Terminal>>,
+    running: Arc<AtomicBool>,
+}
+
+impl PtyInputHandle {
+    pub(crate) fn write(&self, data: &[u8]) -> Result<(), PtyError> {
+        if !self.running.load(Ordering::SeqCst) {
+            return Err(PtyError::NotStartedError);
+        }
+
+        debug::log_pty_write(data);
+
+        // Record input for session recording
+        {
+            let mut term = self.terminal.write();
+            term.record_input(data);
+        }
+
+        let mut w = self.writer.lock();
+        w.write_all(data).map_err(PtyError::IoError)?;
+        w.flush().map_err(PtyError::IoError)?;
+        Ok(())
+    }
+}
+
 /// A PTY session that manages a shell process and terminal state
 pub struct PtySession {
     terminal: Arc<RwLock<Terminal>>,
@@ -928,6 +961,21 @@ impl PtySession {
     /// * `s` - String to write
     pub fn write_str(&mut self, s: &str) -> Result<(), PtyError> {
         self.write(s.as_bytes())
+    }
+
+    /// The input path detached from `&mut self`: writer, terminal, and
+    /// liveness flag as shared handles, so a caller holding a broader lock
+    /// (the mux dispatcher's tree mutex) can clone them under the lock,
+    /// release it, and only then write — `write_all` blocks once the PTY
+    /// buffer fills (QA-225). `None` when the session has no PTY writer
+    /// (never spawned), the same [`PtyError::NotStartedError`] condition
+    /// [`PtySession::write`] reports.
+    pub(crate) fn input_handle(&self) -> Option<PtyInputHandle> {
+        Some(PtyInputHandle {
+            writer: self.writer.as_ref()?.clone(),
+            terminal: Arc::clone(&self.terminal),
+            running: Arc::clone(&self.running),
+        })
     }
 
     /// Resize the PTY and terminal

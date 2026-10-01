@@ -1231,20 +1231,30 @@ fn cmd_show_buffer(ctx: &Ctx<'_>) -> Outcome {
 }
 
 fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
-    let mut guard = ctx.tree.lock();
-    let pane = match guard.resolve_pane_target(pane) {
-        Ok(id) => id,
-        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    // QA-225: the PTY write can block on a full kernel buffer, so it must
+    // not run under the tree mutex. Snapshot the target pane, the buffer
+    // content, and the pane's input handle under the lock, then write with
+    // the lock released (the QA-221 snapshot-then-write shape).
+    let (input, content) = {
+        let guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
+            return Outcome::err(ctx, "no buffers");
+        };
+        let Some(target) = guard.pane(pane) else {
+            return Outcome::err(ctx, &format!("no such pane: {pane}"));
+        };
+        match target.input_handle() {
+            Ok(handle) => (handle, content),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
     };
-    let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
-        return Outcome::err(ctx, "no buffers");
-    };
-    match guard.pane_mut(pane) {
-        Some(target) => match target.write(content.as_bytes()) {
-            Ok(()) => Outcome::ok(ctx, ""),
-            Err(err) => Outcome::err(ctx, &err.to_string()),
-        },
-        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    match input.write(content.as_bytes()) {
+        Ok(()) => Outcome::ok(ctx, ""),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
 
