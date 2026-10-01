@@ -572,3 +572,74 @@ fn an_all_dead_restore_with_no_client_exits_after_the_grace() {
     assert_eq!(pane["dead"], true, "still held dead in the final save");
     assert_eq!(pane["exit_code"], 3, "the original exit code survives");
 }
+
+/// The exact send-keys error reply for a dead pane: the `%begin` block body
+/// is the `NotStartedError` display string and the block closes with
+/// `%error`, never `%end`.
+fn assert_not_started_error_reply(reply: &str, kind: &str) {
+    assert!(
+        reply.contains("%begin "),
+        "{kind}: the reply opens a block: {reply:?}"
+    );
+    assert!(
+        reply.contains("PTY session has not been started"),
+        "{kind}: the body names NotStartedError: {reply:?}"
+    );
+    assert!(
+        reply.contains("%error "),
+        "{kind}: the block closes with %error: {reply:?}"
+    );
+    assert!(
+        !reply.contains("%end "),
+        "{kind}: a failed block never also closes with %end: {reply:?}"
+    );
+}
+
+/// `send-keys` to a born-dead pane — one restored held dead with no PTY
+/// behind it — fails with the `NotStartedError` reply block.
+#[test]
+fn send_keys_to_a_born_dead_pane_errors_not_started() {
+    let fixture = MuxFixture::new("deadkeys");
+    let path = fixture.socket();
+    stop_a_daemon_holding_a_dead_pane(&fixture);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("second daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let reply = command(&mut writer, &mut reader, "send-keys -t %0 -l hello").join("");
+        assert_not_started_error_reply(&reply, "born-dead pane");
+    }
+    sigterm_clean(&mut second);
+}
+
+/// `send-keys` to a pane that died at RUNTIME (reaper-flagged, PTY closed)
+/// produces the identical reply block: both dead-pane kinds funnel through
+/// the shared `PtySession::write` liveness check, so they are
+/// indistinguishable on the send-keys wire.
+#[test]
+fn send_keys_to_a_runtime_died_pane_errors_the_same() {
+    let fixture = MuxFixture::new("rundeadkeys");
+    let path = fixture.socket();
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        command(&mut writer, &mut reader, "new-session -s deadkeys");
+        command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 3");
+        common::wait_until(
+            &mut writer,
+            &mut reader,
+            "pane-info -t %0",
+            |info| info.contains(" exited=3"),
+            "the reaper flagging %0 dead with code 3",
+        );
+        let reply = command(&mut writer, &mut reader, "send-keys -t %0 -l hello").join("");
+        assert_not_started_error_reply(&reply, "runtime-died pane");
+    }
+    sigterm_clean(&mut daemon);
+}
