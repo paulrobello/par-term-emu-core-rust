@@ -3364,7 +3364,7 @@ mod tests {
     fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
         let (tree, clients) = harness();
 
-        crate::mux::dispatch::PANIC_ON_COMMAND.store(true, Ordering::Relaxed);
+        crate::mux::dispatch::PANIC_ON_COMMAND.with(|flag| flag.set(true));
         let ctx = Ctx {
             tree: &tree,
             clients: &clients,
@@ -3377,7 +3377,7 @@ mod tests {
             reply.contains("%error") && reply.contains("internal error"),
             "a panicked command answers with an error block: {reply}"
         );
-        crate::mux::dispatch::PANIC_ON_COMMAND.store(false, Ordering::Relaxed);
+        crate::mux::dispatch::PANIC_ON_COMMAND.with(|flag| flag.set(false));
 
         // The tree lock unwound free; the next command on the same
         // connection dispatches normally.

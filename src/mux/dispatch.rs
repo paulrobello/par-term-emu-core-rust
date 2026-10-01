@@ -44,11 +44,16 @@ const DEFAULT_ROWS: u16 = 24;
 /// this one slot under the hood.
 const DEFAULT_BUFFER: &str = "default";
 
-/// QA-113 test hook: when set, `dispatch_command` panics before running the
-/// command, so the containment tests can drive a guaranteed panic.
+// QA-113 test hook: when set on the dispatching thread, `dispatch_command`
+// panics before running the command, so the containment tests can drive a
+// guaranteed panic. Thread-local (QA-222): the former process-global flag
+// panicked commands every concurrently running test dispatched during the
+// injection window, forcing the mux::server tests to run serially.
 #[cfg(test)]
-pub(crate) static PANIC_ON_COMMAND: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    pub(crate) static PANIC_ON_COMMAND: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
 
 /// The per-dispatch context every handler shares.
 pub(super) struct Ctx<'a> {
@@ -147,7 +152,7 @@ pub(super) fn dispatch_command(
     // QA-113 test hook: force a dispatcher panic to exercise the client
     // thread's containment (see `dispatch_contained`).
     #[cfg(test)]
-    if crate::mux::dispatch::PANIC_ON_COMMAND.load(std::sync::atomic::Ordering::Relaxed) {
+    if crate::mux::dispatch::PANIC_ON_COMMAND.with(std::cell::Cell::get) {
         panic!("injected dispatcher panic (QA-113)");
     }
     let mutates = command.mutates();
