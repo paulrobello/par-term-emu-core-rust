@@ -203,7 +203,8 @@ pub struct PersistWindow {
     /// The interior pane structure; its leaf ids reference `panes` below.
     pub layout: LayoutTree,
     /// The window's panes. Carried beside the layout (D3.2) so restore can
-    /// spawn each pane's replacement process before re-hanging content.
+    /// spawn each live pane's replacement process (or build a held-dead
+    /// pane, ARC-114) before re-hanging content.
     pub panes: Vec<PersistPane>,
 }
 
@@ -241,6 +242,24 @@ pub struct PersistPane {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub cwd: Option<String>,
+    /// The pane was held dead (its process observed exited) at save time
+    /// (ARC-114). A restore brings it back held-dead — processless, its
+    /// frozen screen intact, `respawn-pane` available — instead of
+    /// respawning it. Skipped when false and defaulted on load, so older
+    /// save files (and older daemons reading newer ones) treat every pane
+    /// as live, which is the pre-ARC-114 respawn behavior.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub dead: bool,
+    /// The held-dead pane's recorded exit code; meaningful only with
+    /// [`Self::dead`]. Skipped when absent, defaulted on load.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub exit_code: Option<i32>,
 }
 
 /// The agent-session identity hooks write into pane metadata, persisted so
@@ -332,6 +351,8 @@ struct PaneCapture {
     spawn_command: Option<String>,
     user_title: Option<String>,
     agent_session: Option<PersistAgentSession>,
+    dead: bool,
+    exit_code: Option<i32>,
 }
 
 impl PersistCapture {
@@ -373,6 +394,8 @@ impl PersistCapture {
                                     .parts
                                     .cwd()
                                     .map(|dir| dir.to_string_lossy().into_owned()),
+                                dead: pane.dead,
+                                exit_code: pane.exit_code,
                             })
                             .collect(),
                     })
@@ -451,14 +474,17 @@ impl MuxTree {
                         spawn_command: pane.spawn_command().map(str::to_string),
                         user_title: pane.user_title().map(str::to_string),
                         agent_session: agent_session_from_metadata(pane.metadata()),
+                        dead: pane.dead(),
+                        exit_code: pane.exit_code(),
                     }
                 })
                 .collect(),
         }
     }
 
-    /// Rebuild a tree from persisted state (D3.5): spawn each pane's
-    /// replacement process first, then restore its terminal from the
+    /// Rebuild a tree from persisted state (D3.5): spawn each live pane's
+    /// replacement process first (a pane persisted held-dead gets a
+    /// processless pane instead, ARC-114), then restore its terminal from the
     /// snapshot, so process startup bytes never overwrite restored content.
     ///
     /// The id allocator resumes from the persisted counters, so restored
@@ -508,29 +534,38 @@ impl MuxTree {
                     // session id) renders with a fallback tail so the
                     // failure lands the pane on a live shell rather than a
                     // reaper deletion.
-                    let resume_argv = pane.agent_session.as_ref().and_then(resume_invocation);
+                    // A pane persisted held-dead has no process to resume or
+                    // to land in a cwd: it is rebuilt processless below, so
+                    // neither the agent resume invocation nor the cwd spawn
+                    // logic runs for it (ARC-114).
+                    let resume_argv = pane
+                        .agent_session
+                        .as_ref()
+                        .filter(|_| !pane.dead)
+                        .and_then(resume_invocation);
                     // The persisted cwd re-lands the pane where it left off.
                     // A directory that vanished between save and restore
                     // would fail the spawn, so it degrades to home — the
                     // spawn's success may not depend on a directory this
                     // process cannot control — and the pane says so after
                     // its content is restored.
-                    let cwd: Option<PathBuf> = match pane.cwd.as_deref().map(Path::new) {
-                        Some(dir) if dir.is_dir() => Some(dir.to_path_buf()),
-                        Some(dir) => {
-                            let home = dirs::home_dir().unwrap_or_default();
-                            cwd_fallbacks.insert(
-                                pane.id,
-                                format!(
-                                    "\r\npar-mux: {} is gone; pane restored in {}\r\n",
-                                    dir.display(),
-                                    home.display()
-                                ),
-                            );
-                            home.is_dir().then_some(home)
-                        }
-                        None => None,
-                    };
+                    let cwd: Option<PathBuf> =
+                        match pane.cwd.as_deref().map(Path::new).filter(|_| !pane.dead) {
+                            Some(dir) if dir.is_dir() => Some(dir.to_path_buf()),
+                            Some(dir) => {
+                                let home = dirs::home_dir().unwrap_or_default();
+                                cwd_fallbacks.insert(
+                                    pane.id,
+                                    format!(
+                                        "\r\npar-mux: {} is gone; pane restored in {}\r\n",
+                                        dir.display(),
+                                        home.display()
+                                    ),
+                                );
+                                home.is_dir().then_some(home)
+                            }
+                            None => None,
+                        };
                     let context = SpawnContext {
                         session: Some((SessionId(session.id), &session.name)),
                         window: Some(WindowId(window.id)),
@@ -542,21 +577,31 @@ impl MuxTree {
                         // the grid that clients seed from.
                         output: None,
                     };
-                    let mut created = match resume_argv {
-                        Some(argv) => factory.create_argv_pane(
-                            PaneId(pane.id),
-                            cols,
-                            rows,
-                            &argv,
-                            &context,
-                        )?,
-                        None => factory.create_pane(
+                    let mut created = if pane.dead {
+                        factory.create_dead_pane(
                             PaneId(pane.id),
                             cols,
                             rows,
                             pane.spawn_command.as_deref(),
-                            &context,
-                        )?,
+                            pane.exit_code,
+                        )?
+                    } else {
+                        match resume_argv {
+                            Some(argv) => factory.create_argv_pane(
+                                PaneId(pane.id),
+                                cols,
+                                rows,
+                                &argv,
+                                &context,
+                            )?,
+                            None => factory.create_pane(
+                                PaneId(pane.id),
+                                cols,
+                                rows,
+                                pane.spawn_command.as_deref(),
+                                &context,
+                            )?,
+                        }
                     };
                     // Identity comes back through the typed claim (ARC-113c)
                     // so the format round-trips and task 6.3's hook-first
@@ -595,6 +640,18 @@ impl MuxTree {
                     if let Some(title) = &pane.user_title {
                         created.set_user_title(title);
                     }
+                    if pane.dead {
+                        // `begin_respawn` reads the pane's cwd from the
+                        // terminal's OSC 7 state (the dead pane has no
+                        // child to ask), and the next save captures it
+                        // from the same place — so the persisted cwd is
+                        // seeded there rather than lost with the process.
+                        if let Some(dir) = &pane.cwd {
+                            created.with_terminal_mut(|term| {
+                                term.shell_integration_mut().set_cwd(dir.clone());
+                            });
+                        }
+                    }
                     panes.insert(PaneId(pane.id), created);
                 }
                 for pane in &window.panes {
@@ -611,7 +668,14 @@ impl MuxTree {
                             // `restore_for_new_process` adopts them.
                             let mut snapshot = pane.terminal.clone();
                             clamp_restored_grid_dims(&mut snapshot);
-                            restored.restore_for_new_process(snapshot);
+                            if pane.dead {
+                                // No new process to protect: the frozen
+                                // screen returns exactly as the client saw
+                                // it, modes and alt screen included.
+                                restored.restore_from_snapshot(snapshot);
+                            } else {
+                                restored.restore_for_new_process(snapshot);
+                            }
                             // After the snapshot re-hangs, so the note is the
                             // last thing on screen rather than scrolled away.
                             if let Some(note) = cwd_fallbacks.get(&pane.id) {
@@ -1113,6 +1177,17 @@ mod tests {
             self.sizes.lock().unwrap().push((id, cols, rows));
             ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
         }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
+        }
     }
 
     /// Two sessions: the first with a split window plus a second window, the
@@ -1560,6 +1635,162 @@ mod tests {
             "a missing field decodes as no cwd, not an error"
         );
         assert!(restored.pane(pane_id).is_some());
+    }
+
+    /// A one-pane tree on [`RecordingFactory`] (a silent `sleep`, so no
+    /// prompt bytes race the assertions) whose pane carries a frozen screen
+    /// that sets up an alt screen and mouse mode, then is marked held-dead
+    /// with `exit_code`. Returns the tree and the pane id.
+    fn held_dead_tree(exit_code: Option<i32>) -> (MuxTree, PaneId) {
+        let mut tree = MuxTree::new(Box::new(RecordingFactory::default()));
+        let session = tree.new_session("dead", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.terminal()
+            .write()
+            .process(b"MAIN-LINE\x1b[?1049h\x1b[?1000hALT-LINE");
+        pane.set_metadata("agent", "claude");
+        pane.set_metadata("agent_session_id", "sess-114");
+        pane.mark_dead_with_code(exit_code);
+        (tree, pane_id)
+    }
+
+    /// ARC-114: a held-dead pane survives a save/restore as a held-dead
+    /// pane — no process, exit code kept, screen byte-for-byte (the alt
+    /// screen and mouse mode a respawned pane would have reset stay), and
+    /// the spawn command retained for a later `respawn-pane`.
+    #[test]
+    fn a_held_dead_pane_round_trips_as_held_dead() {
+        let (tree, pane_id) = held_dead_tree(Some(3));
+        let state = tree.to_persist_state();
+        let saved = &state.sessions[0].windows[0].panes[0];
+        assert!(saved.dead, "positive control: dead is on the wire");
+        assert_eq!(saved.exit_code, Some(3));
+        assert!(saved.terminal.alt_screen_active, "control: alt screen up");
+
+        let json = serde_json::to_string(&state).unwrap();
+        let state: PersistState = serde_json::from_str(&json).unwrap();
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+
+        assert!(
+            factory.command_for(pane_id).is_none() && factory.sizes.lock().unwrap().is_empty(),
+            "a dead pane is never handed to the spawning factory path"
+        );
+        let pane = restored.pane(pane_id).unwrap();
+        assert!(pane.dead());
+        assert_eq!(pane.exit_code(), Some(3), "the code is not clobbered");
+        assert!(pane.child_pid().is_none(), "no process behind it");
+        assert_eq!(pane.spawn_command(), Some("sleep 60"));
+
+        // Identity is re-hung for a later respawn, but no resume invocation
+        // ran (the factory above was never asked to spawn anything).
+        let resaved = restored.to_persist_state();
+        assert!(saved.agent_session.is_some(), "control: identity was saved");
+        assert_eq!(
+            resaved.sessions[0].windows[0].panes[0].agent_session, saved.agent_session,
+            "the agent identity survives a dead restore"
+        );
+
+        let want = &state.sessions[0].windows[0].panes[0].terminal;
+        let got = pane.terminal().read().capture_snapshot();
+        assert_eq!(got.grid.cells, want.grid.cells, "main screen identical");
+        assert_eq!(
+            got.alt_grid.cells, want.alt_grid.cells,
+            "alt screen identical"
+        );
+        assert!(got.alt_screen_active, "alt screen not reset to primary");
+        assert_eq!(got.cursor.col, want.cursor.col);
+        assert_eq!(got.cursor.row, want.cursor.row);
+        assert_ne!(
+            pane.terminal().read().mouse_mode(),
+            crate::mouse::MouseMode::Off,
+            "mouse mode kept: there is no new process to protect"
+        );
+        let text: String = got.alt_grid.cells.iter().map(|c| c.c).collect();
+        assert!(text.contains("ALT-LINE"), "the frozen content is real");
+    }
+
+    /// A dead pane with an unknown exit code stays dead with `None`, and a
+    /// live pane in the same save is respawned as before.
+    #[test]
+    fn dead_state_is_per_pane_and_live_panes_still_respawn() {
+        let (mut tree, dead_id) = held_dead_tree(None);
+        let live_id = tree
+            .split_pane(dead_id, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let state = tree.to_persist_state();
+        let factory = RecordingFactory::default();
+        let mut restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert!(restored.pane(dead_id).unwrap().dead());
+        assert_eq!(restored.pane(dead_id).unwrap().exit_code(), None);
+        assert!(!restored.pane(live_id).unwrap().dead());
+        assert!(restored.pane_mut(live_id).unwrap().poll_running());
+        assert!(factory.command_for(live_id).is_some(), "live pane spawned");
+        assert!(factory.command_for(dead_id).is_none(), "dead pane did not");
+    }
+
+    /// ARC-114 compat: a save file without the new fields (any pre-ARC-114
+    /// daemon's) decodes and restores every pane alive, and a live pane
+    /// serializes without them so older daemons read newer files unchanged.
+    #[test]
+    fn a_save_file_without_the_dead_fields_loads_alive() {
+        let (tree, pane_id) = held_dead_tree(Some(5));
+        let mut value = serde_json::to_value(tree.to_persist_state()).unwrap();
+        let pane = &mut value["sessions"][0]["windows"][0]["panes"][0];
+        assert_eq!(pane["dead"], true, "positive control: on the wire");
+        assert_eq!(pane["exit_code"], 5, "positive control: on the wire");
+        let pane = pane.as_object_mut().unwrap();
+        pane.remove("dead");
+        pane.remove("exit_code");
+        let state: PersistState = serde_json::from_value(value).expect("old file decodes");
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        assert!(!restored.pane(pane_id).unwrap().dead());
+        assert_eq!(restored.pane(pane_id).unwrap().exit_code(), None);
+        assert!(
+            restored.pane_mut(pane_id).unwrap().poll_running(),
+            "respawned"
+        );
+
+        let live = serde_json::to_value(populated_tree().to_persist_state()).unwrap();
+        for pane in live["sessions"][0]["windows"][0]["panes"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(
+                pane.get("dead").is_none() && pane.get("exit_code").is_none(),
+                "a live pane serializes byte-compatibly with the older format"
+            );
+        }
+    }
+
+    /// The persisted cwd of a dead pane survives the restore (where
+    /// `begin_respawn` reads it) without any spawn-time landing logic.
+    #[cfg(unix)]
+    #[test]
+    fn a_dead_panes_cwd_survives_restore_for_respawn() {
+        let (tree, pane_id) = held_dead_tree(Some(0));
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(b"\x1b]7;file://localhost/tmp\x1b\\");
+        let state = tree.to_persist_state();
+        assert_eq!(
+            state.sessions[0].windows[0].panes[0].cwd.as_deref(),
+            Some("/tmp")
+        );
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        assert_eq!(
+            restored.pane(pane_id).unwrap().persistence_cwd().as_deref(),
+            Some(Path::new("/tmp")),
+            "re-saving a restored dead pane keeps its cwd"
+        );
+        let plan = restored.begin_respawn(pane_id, false, None, None).unwrap();
+        assert_eq!(plan.cwd.as_deref(), Some(Path::new("/tmp")));
     }
 
     #[test]

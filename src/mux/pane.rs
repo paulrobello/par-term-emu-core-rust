@@ -409,8 +409,17 @@ impl MuxPane {
     /// serves its recorded code (SEC-125). Best-effort: a code the OS
     /// could not report records `None`.
     pub fn mark_dead(&mut self) {
+        let code = self.session.try_wait().ok().flatten();
+        self.mark_dead_with_code(code);
+    }
+
+    /// Record a death with an already-known exit code, without asking the
+    /// OS child handle. The restore path's seam (ARC-114): a pane persisted
+    /// held-dead comes back with no process, so [`Self::mark_dead`] would
+    /// read no handle and clobber the persisted code with `None`.
+    pub fn mark_dead_with_code(&mut self, exit_code: Option<i32>) {
         self.dead = true;
-        self.exit_code = self.session.try_wait().ok().flatten();
+        self.exit_code = exit_code;
     }
 
     /// The exit code captured at [`Self::mark_dead`] — `None` before the
@@ -634,6 +643,21 @@ pub trait PaneFactory: Send + Sync {
         }
         self.create_pane(id, cols, rows, Some(&render_surviving(argv)), context)
     }
+
+    /// Create a pane that is born held-dead (ARC-114): no process is
+    /// spawned. The restore path's seam for a pane persisted as dead, whose
+    /// frozen screen is re-hung afterwards and whose `respawn-pane` later
+    /// starts a process in place. No default implementation: a
+    /// [`MuxPane`] always owns a session, which only a factory knows how
+    /// to build.
+    fn create_dead_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Result<MuxPane, MuxError>;
 }
 
 /// The default factory: spawns the user's shell, or an explicit command.
@@ -844,6 +868,23 @@ impl PaneFactory for ShellPaneFactory {
         ))
     }
 
+    fn create_dead_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Result<MuxPane, MuxError> {
+        // Never spawned: no process, no reader, and no hook-only endpoint
+        // (a dead pane has no child to hand one to; `respawn-pane` goes
+        // through `create_pane`, which binds it).
+        let session = self.configured_session(id, cols, rows, &SpawnContext::default(), None);
+        let mut pane = Self::finish_pane(id, session, command.map(str::to_string), None);
+        pane.mark_dead_with_code(exit_code);
+        Ok(pane)
+    }
+
     /// Windows: the resume argv spawns without a shell when `argv[0]`
     /// resolves to a PE image, and through a self-deleting cmd bridge for
     /// the npm `.cmd` shims — the transport choice lives in
@@ -930,6 +971,17 @@ impl PaneFactory for AgentPaneFactory {
         context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
         self.spawn_tagged(|shell| shell.create_pane(id, cols, rows, command, context))
+    }
+
+    fn create_dead_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Result<MuxPane, MuxError> {
+        self.spawn_tagged(|shell| shell.create_dead_pane(id, cols, rows, command, exit_code))
     }
 
     /// Delegates to [`ShellPaneFactory`]'s argv path so a Windows resume
@@ -1087,6 +1139,17 @@ pub(crate) mod test_support {
                 cwd: context.cwd.map(std::path::Path::to_path_buf),
             });
             ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
+        }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
         }
     }
 }

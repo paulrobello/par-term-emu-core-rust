@@ -1427,6 +1427,17 @@ mod tests {
             }
             ShellPaneFactory::default().create_pane(id, cols, rows, None, context)
         }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
+        }
     }
 
     /// ARC-089: `respawn-pane -k` stops forwarding the old process before

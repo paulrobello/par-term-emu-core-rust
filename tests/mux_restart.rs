@@ -374,3 +374,201 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
     }
     sigterm_clean(&mut second);
 }
+
+// ---------------------------------------------------------------------------
+// ARC-114: a pane held dead at save time comes back held dead.
+// ---------------------------------------------------------------------------
+
+use par_term_emu_core_rust::mux::MuxClient;
+use par_term_emu_core_rust::tmux_control::TmuxNotification;
+use std::time::{Duration, Instant};
+
+/// Run a first daemon whose only pane prints a marker and exits with code 3,
+/// wait until the reaper has flagged it held (`pane-info ... exited=3`) and
+/// the marker is on the frozen screen, then SIGTERM it with a client still
+/// connected so the final save carries the dead pane. Returns after the
+/// daemon has exited; the fixture's state dir holds the save.
+fn stop_a_daemon_holding_a_dead_pane(fixture: &MuxFixture) {
+    let path = fixture.socket();
+    let mut first = spawn_daemon(fixture);
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("first daemon accepts");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s held");
+    // The sentinel makes a re-run distinguishable: a daemon that respawned
+    // this pane on restore would run the command a second time and exit 9.
+    let ran = fixture.state_dir().with_file_name("ran-once");
+    command(
+        &mut writer,
+        &mut reader,
+        &format!(
+            "respawn-pane -t %0 -k [ -e {0} ] && exit 9; : > {0}; printf FROZEN-MARK; exit 3",
+            ran.display()
+        ),
+    );
+    common::wait_until(
+        &mut writer,
+        &mut reader,
+        "pane-info -t %0",
+        |info| info.contains(" exited=3"),
+        "the reaper flagging %0 dead with code 3",
+    );
+    wait_for(
+        &mut writer,
+        &mut reader,
+        "capture-pane -t %0 -p",
+        "FROZEN-MARK",
+    );
+    // The client stays connected: with nobody connected, a daemon whose
+    // every pane is dead collects itself before the SIGTERM can land.
+    sigterm_clean(&mut first);
+    drop((writer, reader));
+}
+
+/// The next notification matching `pred` within `wait`, if any.
+fn next_matching(
+    client: &MuxClient,
+    wait: Duration,
+    mut pred: impl FnMut(&TmuxNotification) -> bool,
+) -> Option<TmuxNotification> {
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        if let Ok(note) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            if pred(&note) {
+                return Some(note);
+            }
+        }
+    }
+    None
+}
+
+fn is_pane_exited_0_code_3(note: &TmuxNotification) -> bool {
+    matches!(
+        note,
+        TmuxNotification::PaneExited { pane_id, exit_code: Some(3) } if pane_id == "%0"
+    )
+}
+
+/// The restored dead pane is dead on the query side (`pane-info exited=3`),
+/// keeps its frozen screen, and has no process behind it.
+#[test]
+fn a_restart_restores_a_dead_pane_held_with_its_exit_code_and_screen() {
+    let fixture = MuxFixture::new("deadinfo");
+    let path = fixture.socket();
+    stop_a_daemon_holding_a_dead_pane(&fixture);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut client = MuxClient::connect(path).expect("second daemon accepts");
+    let info = client.send("pane-info -t %0").expect("info").join("");
+    assert!(
+        info.trim_end().ends_with(" exited=3"),
+        "the restored pane reports its persisted exit code: {info:?}"
+    );
+    assert!(
+        !info.contains("cmd="),
+        "a restored dead pane has no foreground process: {info:?}"
+    );
+    let screen = client
+        .send("capture-pane -t %0 -p")
+        .expect("capture")
+        .join("");
+    assert!(
+        screen.contains("FROZEN-MARK"),
+        "the frozen screen came back: {screen:?}"
+    );
+    sigterm_clean(&mut second);
+}
+
+/// Registration replay delivers the restored dead pane's `%pane-exited`
+/// with its code, and the reaper never announces it again: it skips an
+/// already-dead pane, so a born-dead pane is not polled or re-broadcast.
+#[test]
+fn a_restored_dead_pane_replays_its_exit_once_and_is_never_re_announced() {
+    let fixture = MuxFixture::new("deadreplay");
+    let path = fixture.socket();
+    stop_a_daemon_holding_a_dead_pane(&fixture);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let client = {
+        let mut client = MuxClient::connect(path).expect("second daemon accepts");
+        // The first command registers the client; the replay rides ahead
+        // of its reply.
+        client.send("list-panes").expect("register");
+        client
+    };
+    assert!(
+        next_matching(&client, Duration::from_secs(10), is_pane_exited_0_code_3).is_some(),
+        "registration replays %pane-exited %0 3 for the restored dead pane"
+    );
+    // Many reap passes (250 ms each) pass; a reaper that re-observed the
+    // born-dead pane would broadcast its death again.
+    assert!(
+        next_matching(&client, Duration::from_millis(1500), |note| {
+            matches!(note, TmuxNotification::PaneExited { .. })
+        })
+        .is_none(),
+        "the reaper must not re-announce an already-dead restored pane"
+    );
+    sigterm_clean(&mut second);
+}
+
+/// `respawn-pane` on a restored dead pane works without `-k` (there is no
+/// process to refuse over) and clears the dead state.
+#[test]
+fn respawn_pane_restarts_a_restored_dead_pane_without_k() {
+    let fixture = MuxFixture::new("deadrespawn");
+    let path = fixture.socket();
+    stop_a_daemon_holding_a_dead_pane(&fixture);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut client = MuxClient::connect(path).expect("second daemon accepts");
+    let reply = client
+        .send_checked("respawn-pane -t %0 sleep 30")
+        .expect("respawn");
+    assert!(reply.ok, "respawn without -k succeeds: {:?}", reply.body);
+    let info = client.send("pane-info -t %0").expect("info").join("");
+    assert!(
+        !info.contains("exited="),
+        "the respawn cleared the held-dead state: {info:?}"
+    );
+    sigterm_clean(&mut second);
+}
+
+/// A daemon restored with only dead panes and no client collects itself
+/// after the exit-when-empty grace, the same as one that saw them die.
+#[test]
+fn an_all_dead_restore_with_no_client_exits_after_the_grace() {
+    let fixture = MuxFixture::new("deadexit");
+    stop_a_daemon_holding_a_dead_pane(&fixture);
+
+    let mut second = spawn_daemon(&fixture);
+    // Production grace is 5 s; the bound is a starvation guard, not a
+    // timing assertion.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let status = loop {
+        if let Some(status) = second.try_wait().expect("daemon waitable") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "an all-dead restored daemon with no client never exited"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(status.success(), "exit-when-empty exits 0: {status:?}");
+    // The final save still holds the pane dead with its original code: a
+    // respawned pane would have re-run the sentinel command and saved 9.
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.state_path()).expect("state file"))
+            .expect("state file parses");
+    let pane = &saved["sessions"][0]["windows"][0]["panes"][0];
+    assert_eq!(pane["dead"], true, "still held dead in the final save");
+    assert_eq!(pane["exit_code"], 3, "the original exit code survives");
+}

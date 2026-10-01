@@ -2511,6 +2511,17 @@ mod tests {
         ) -> Result<crate::mux::pane::MuxPane, crate::mux::pane::MuxError> {
             ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 30"), context)
         }
+
+        fn create_dead_pane(
+            &self,
+            id: crate::mux::ids::PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<crate::mux::pane::MuxPane, crate::mux::pane::MuxError> {
+            ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
+        }
     }
 
     fn quiet_harness() -> (Arc<Mutex<MuxTree>>, Clients) {

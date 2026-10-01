@@ -274,6 +274,18 @@ fn a_slow_spawn_does_not_stall_other_clients() {
                 .recv_timeout(Duration::from_secs(30));
             self.inner.create_pane(id, cols, rows, command, context)
         }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            self.inner
+                .create_dead_pane(id, cols, rows, command, exit_code)
+        }
     }
 
     let (_dir, path) = socket_path("slowspawn");
@@ -385,6 +397,18 @@ fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
             )?;
             std::thread::sleep(Duration::from_millis(500));
             Ok(pane)
+        }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            self.inner
+                .create_dead_pane(id, cols, rows, command, exit_code)
         }
     }
 
