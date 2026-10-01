@@ -610,9 +610,9 @@ def test_server_operations_after_stop(pty_terminal, streaming_port):
 
 @pytest.mark.asyncio
 @pytest.mark.slow
-# The PTY writes block on the spawned shell reading its input; runtime sits
-# near 3 s of the 5 s global budget, so ordinary machine load tips it over
-# (failed 2 of 3 make checkall runs, and on unmodified main — 2026-09-30).
+# The 5s suite default is standalone-tuned; under hook/full-suite load the
+# paced writes and server delivery overshoot it, so give this test its own
+# generous budget.
 @pytest.mark.timeout(30)
 async def test_high_throughput_output(pty_terminal, streaming_port):
     """Test streaming with high-throughput output."""
@@ -628,14 +628,20 @@ async def test_high_throughput_output(pty_terminal, streaming_port):
             pty_terminal.write_str(f"Line {i}: " + "X" * 70 + "\n")
             await asyncio.sleep(0.01)
 
-        # Should have received multiple messages
+        # Drain toward 10 messages until a deadline, not a fixed small wait:
+        # under load the server thread's event loop can lag delivery past any
+        # single short recv timeout, which used to fail the first probe and
+        # the assert even though output was streaming. The regression guard
+        # is that high-throughput output streams at all, not how fast.
         messages_received = 0
-        try:
-            while messages_received < 10:
-                await asyncio.wait_for(websocket.recv(), timeout=0.1)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
+        while messages_received < 10 and loop.time() < deadline:
+            try:
+                await asyncio.wait_for(websocket.recv(), timeout=1.0)
                 messages_received += 1
-        except TimeoutError:
-            pass
+            except TimeoutError:
+                pass
 
         # Should have received at least some messages
         assert messages_received > 0
