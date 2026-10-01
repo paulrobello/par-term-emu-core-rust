@@ -10,10 +10,14 @@ a screenshot render can no longer stall behind the reader thread's ``process()``
 import os
 import tempfile
 
+import pytest
 from conftest import wait_for
 from par_term_emu_core_rust import PtyTerminal
 
 
+# PTY spawns and screenshot renders stall past the 5 s global budget under
+# machine load — hook runs on 2026-09-30 timed out inside the bare spawn.
+@pytest.mark.timeout(30)
 class TestPtyTerminalScreenshot:
     """Test screenshot functionality with PtyTerminal"""
 

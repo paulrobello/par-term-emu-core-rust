@@ -610,6 +610,10 @@ def test_server_operations_after_stop(pty_terminal, streaming_port):
 
 @pytest.mark.asyncio
 @pytest.mark.slow
+# The PTY writes block on the spawned shell reading its input; runtime sits
+# near 3 s of the 5 s global budget, so ordinary machine load tips it over
+# (failed 2 of 3 make checkall runs, and on unmodified main — 2026-09-30).
+@pytest.mark.timeout(30)
 async def test_high_throughput_output(pty_terminal, streaming_port):
     """Test streaming with high-throughput output."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
