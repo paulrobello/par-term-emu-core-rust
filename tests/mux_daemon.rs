@@ -766,7 +766,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowAdd { window_id }
+            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowAdd { window_id, .. }
                 if window_id == &broken
         )
     });

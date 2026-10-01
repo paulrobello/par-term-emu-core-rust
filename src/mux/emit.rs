@@ -39,8 +39,24 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::Output { pane_id, data } => {
             format!("%output {} {}\n", pane_id, escape_output(data))
         }
-        TmuxNotification::WindowAdd { window_id } => {
-            format!("%window-add {window_id}\n")
+        TmuxNotification::WindowAdd {
+            window_id,
+            window_layout,
+            window_visible_layout,
+            window_raw_flags,
+        } => {
+            // The triple rides only when set: a bare-id notification emits
+            // the shape real tmux writes, and the parser reads a missing
+            // triple back as empty fields.
+            let triple = if window_layout.is_empty()
+                && window_visible_layout.is_empty()
+                && window_raw_flags.is_empty()
+            {
+                String::new()
+            } else {
+                format!(" {window_layout} {window_visible_layout} {window_raw_flags}")
+            };
+            format!("%window-add {window_id}{triple}\n")
         }
         TmuxNotification::WindowClose { window_id } => {
             format!("%window-close {window_id}\n")
@@ -264,14 +280,45 @@ mod tests {
 
     #[test]
     fn window_add_round_trips() {
+        // The daemon's shape (card 01a0ef3b): the id plus the layout
+        // triple, so a client lays the new window out without waiting for
+        // a follow-up %layout-change. An unzoomed window's flags field is
+        // empty, so the wire ends with the field separator.
         let original = TmuxNotification::WindowAdd {
             window_id: "@2".to_string(),
+            window_layout: "0000,80x24,0,0,1".to_string(),
+            window_visible_layout: "0000,80x24,0,0,1".to_string(),
+            window_raw_flags: String::new(),
         };
+        let line = emit(&original);
+        assert_eq!(
+            line, "%window-add @2 0000,80x24,0,0,1 0000,80x24,0,0,1 \n",
+            "the wire shape"
+        );
         let parsed = round_trip(&original);
-        match &parsed[0] {
-            TmuxNotification::WindowAdd { window_id } => assert_eq!(window_id, "@2"),
-            other => panic!("expected WindowAdd, got {other:?}"),
-        }
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn window_add_bare_id_round_trips() {
+        // The backward-compatible shape: a bare id (real tmux's line, and
+        // this daemon's pre-triple emission) parses with all three layout
+        // fields empty and emits back without a triple or trailing space.
+        let original = TmuxNotification::WindowAdd {
+            window_id: "@2".to_string(),
+            window_layout: String::new(),
+            window_visible_layout: String::new(),
+            window_raw_flags: String::new(),
+        };
+        let line = emit(&original);
+        assert_eq!(
+            line, "%window-add @2\n",
+            "the bare-id shape: no triple, no trailing space"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
     }
 
     #[test]

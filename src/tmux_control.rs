@@ -63,8 +63,17 @@ pub enum TmuxNotification {
     UnlinkedWindowClose { window_id: String },
 
     /// Window added to attached session
-    /// Arguments: window_id
-    WindowAdd { window_id: String },
+    /// Arguments: window_id, [window_layout, window_visible_layout, window_raw_flags]
+    ///
+    /// The layout triple mirrors [`TmuxNotification::LayoutChange`] and is
+    /// optional: a bare-id line (real tmux's shape) parses with the three
+    /// fields empty.
+    WindowAdd {
+        window_id: String,
+        window_layout: String,
+        window_visible_layout: String,
+        window_raw_flags: String,
+    },
 
     /// Window added to another session (unlinked)
     /// Arguments: window_id
@@ -593,8 +602,16 @@ impl TmuxControlParser {
     }
 
     fn parse_window_add(args: &str) -> Option<TmuxNotification> {
+        // `window_id [layout visible-layout raw-flags]` — the triple is
+        // optional, so a bare-id line (real tmux's shape, and this daemon's
+        // pre-triple emission) parses with empty fields rather than failing.
+        let mut parts = args.splitn(4, ' ');
+        let window_id = parts.next().unwrap_or_default().trim().to_string();
         Some(TmuxNotification::WindowAdd {
-            window_id: args.trim().to_string(),
+            window_id,
+            window_layout: parts.next().unwrap_or_default().to_string(),
+            window_visible_layout: parts.next().unwrap_or_default().to_string(),
+            window_raw_flags: parts.next().unwrap_or_default().to_string(),
         })
     }
 

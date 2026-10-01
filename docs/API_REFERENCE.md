@@ -1852,9 +1852,9 @@ Tmux control mode notification.
 - `delay_ms: int | None`: Delay in milliseconds
 - `subscription_name: str | None`: Subscription name
 - `value: str | None`: Subscription value; for `agent-state-changed`, the agent's new state (`agent-released` and `agent-telemetry-changed` carry identity only — re-query `list-agents` for the payload)
-- `window_layout: str | None`: Window layout string
-- `window_visible_layout: str | None`: Visible window layout
-- `window_raw_flags: str | None`: Raw window flags string
+- `window_layout: str | None`: Window layout string; set for `layout-change` and for `window-add` lines carrying the layout triple (`None` on a bare-id `window-add` line)
+- `window_visible_layout: str | None`: Visible window layout; set for `layout-change` and for `window-add` lines carrying the layout triple (`None` on a bare-id `window-add` line)
+- `window_raw_flags: str | None`: Raw window flags string; set for `layout-change` and for `window-add` lines carrying the layout triple (`None` on a bare-id `window-add` line)
 - `raw_line: str | None`: Raw notification line
 
 ### Trigger

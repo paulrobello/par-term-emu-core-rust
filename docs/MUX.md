@@ -227,7 +227,7 @@ Broadcast lines every connected (registered) client receives, emitted in this or
 |------|---------|
 | `%output %N <data>` | Pane output, octal-escaped, pushed as bytes arrive — no polling |
 | `%layout-change @N <layout> <visible-layout> <flags>` | A window's geometry changed |
-| `%window-add @N` | A window was created |
+| `%window-add @N [layout visible-layout flags]` | A window was created; the layout triple mirrors `%layout-change` and is empty on a bare-id line (real tmux's shape, or an older daemon) |
 | `%window-close @N` | A window was killed |
 | `%window-renamed @N <name>` | A window was renamed |
 | `%window-pane-changed @N %N` | A window's active pane changed |

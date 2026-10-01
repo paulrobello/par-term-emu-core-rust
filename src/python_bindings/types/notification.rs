@@ -220,8 +220,19 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 window_id: Some(window_id.clone()),
                 ..Self::empty(kind)
             },
-            TmuxNotification::WindowAdd { window_id } => Self {
+            TmuxNotification::WindowAdd {
+                window_id,
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+            } => Self {
                 window_id: Some(window_id.clone()),
+                // The triple rides on newer emitters; a bare-id line (real
+                // tmux's shape) leaves the fields None.
+                window_layout: (!window_layout.is_empty()).then(|| window_layout.clone()),
+                window_visible_layout: (!window_visible_layout.is_empty())
+                    .then(|| window_visible_layout.clone()),
+                window_raw_flags: (!window_raw_flags.is_empty()).then(|| window_raw_flags.clone()),
                 ..Self::empty(kind)
             },
             TmuxNotification::UnlinkedWindowAdd { window_id } => Self {
@@ -526,7 +537,8 @@ mod tests {
         "window-pane-changed | None | Some(\"p-window-pane\") | Some(\"w-pane-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "window-close | None | None | Some(\"w-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "unlinked-window-close | None | None | Some(\"w-unlinked-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "window-add | None | None | Some(\"w-add\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "window-add | None | None | Some(\"w-add\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-add\") | Some(\"visible-add\") | Some(\"flags-add\") | None\n",
+        "window-add | None | None | Some(\"w-add-bare\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "unlinked-window-add | None | None | Some(\"w-unlinked-add\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "window-renamed | None | None | Some(\"w-renamed\") | None | Some(\"n-window-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "unlinked-window-renamed | None | None | Some(\"w-unlink-renamed\") | None | Some(\"n-unlink-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
@@ -591,6 +603,15 @@ mod tests {
             },
             TmuxNotification::WindowAdd {
                 window_id: "w-add".to_string(),
+                window_layout: "layout-add".to_string(),
+                window_visible_layout: "visible-add".to_string(),
+                window_raw_flags: "flags-add".to_string(),
+            },
+            TmuxNotification::WindowAdd {
+                window_id: "w-add-bare".to_string(),
+                window_layout: String::new(),
+                window_visible_layout: String::new(),
+                window_raw_flags: String::new(),
             },
             TmuxNotification::UnlinkedWindowAdd {
                 window_id: "w-unlinked-add".to_string(),

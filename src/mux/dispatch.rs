@@ -294,6 +294,40 @@ fn spawn_and_wire<P: SpawnPlan>(
     Ok(done)
 }
 
+/// Build the `%window-add` for a window this dispatch just created, with
+/// its layout triple formatted exactly as [`broadcast_layout_change`]
+/// renders a `%layout-change` (card 01a0ef3b) — clients lay the new
+/// window out without a follow-up notification. A window that vanished
+/// between creation and this read degrades to the bare-id form.
+fn window_add_notification(tree: &Arc<Mutex<MuxTree>>, window_id: WindowId) -> TmuxNotification {
+    let guard = tree.lock();
+    let Some(window) = guard.window(window_id) else {
+        return TmuxNotification::WindowAdd {
+            window_id: window_id.to_string(),
+            window_layout: String::new(),
+            window_visible_layout: String::new(),
+            window_raw_flags: String::new(),
+        };
+    };
+    let layout = window
+        .layout
+        .render(0, 0, window.cols as usize, window.rows as usize);
+    let (visible_layout, raw_flags) = match window.zoomed {
+        Some(pane) => (
+            // The single-pane form render_node produces for a leaf.
+            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
+            "Z".to_string(),
+        ),
+        None => (layout.clone(), String::new()),
+    };
+    TmuxNotification::WindowAdd {
+        window_id: window_id.to_string(),
+        window_layout: layout,
+        window_visible_layout: visible_layout,
+        window_raw_flags: raw_flags,
+    }
+}
+
 fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String)>) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
@@ -315,9 +349,7 @@ fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String
         Ok((session_id, window_ids)) => {
             let mut result = Outcome::ok(ctx, &session_id.to_string());
             for window in window_ids {
-                result = result.notifying(TmuxNotification::WindowAdd {
-                    window_id: window.to_string(),
-                });
+                result = result.notifying(window_add_notification(ctx.tree, window));
             }
             // The session set changed on the create side too — one cue for
             // both directions, so a client's "re-query list-sessions"
@@ -792,14 +824,15 @@ fn cmd_break_pane(ctx: &Ctx<'_>, source: Target<PaneId>, name: Option<String>) -
         }
     };
     let name = name.unwrap_or_else(|| "0".to_string());
-    match ctx.tree.lock().break_pane(source, &name) {
+    // Bound to a local so the scrutinee's tree-lock temporary drops here:
+    // the match arm below re-locks to read the new window's layout triple.
+    let broken = ctx.tree.lock().break_pane(source, &name);
+    match broken {
         Ok((window_id, source_window, source_closed)) => {
             // The new window is announced like new-window's; the source's
             // frame only exists while the source does.
-            let mut outcome =
-                Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
-                    window_id: window_id.to_string(),
-                });
+            let mut outcome = Outcome::ok(ctx, &window_id.to_string())
+                .notifying(window_add_notification(ctx.tree, window_id));
             if source_closed {
                 outcome = outcome.notifying(TmuxNotification::WindowClose {
                     window_id: source_window.to_string(),
@@ -974,11 +1007,8 @@ fn cmd_new_window(
         }
     };
     match spawn_and_wire(ctx, &*factory, plan, None, note.as_deref()) {
-        Ok(window_id) => {
-            Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
-                window_id: window_id.to_string(),
-            })
-        }
+        Ok(window_id) => Outcome::ok(ctx, &window_id.to_string())
+            .notifying(window_add_notification(ctx.tree, window_id)),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
