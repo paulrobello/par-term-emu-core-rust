@@ -18,7 +18,8 @@ impl Grid {
             cell.bg = bg;
         }
         self.zones.clear();
-        self.mark_rows_damage(0, self.rows.saturating_sub(1));
+        // Every cell changed, not just moved (ENH-038).
+        self.mark_rows_content(0, self.rows.saturating_sub(1));
     }
 
     /// Clear the entire grid with default background
@@ -109,5 +110,8 @@ impl Grid {
         self.total_lines_scrolled = 0;
         // Re-evict zones (effectively clears all zones that started in scrollback)
         self.evict_zones(0);
+        // ENH-038: a cleared scrollback cannot be reconciled with the scroll
+        // log's history — older generations get the full-redraw sentinel.
+        self.invalidate_scroll_log();
     }
 }

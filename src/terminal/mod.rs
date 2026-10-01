@@ -3441,7 +3441,17 @@ impl Terminal {
     fn invalidate_visible_screen(&mut self) {
         self.sync_damage_generations();
         let rows = self.active_grid().rows();
-        self.mark_rows_dirty(0, rows.saturating_sub(1));
+        // Content marks, not just positional ones (ENH-038): after a
+        // wholesale change the content-dirty set must cover every row of
+        // the newly visible grid, or a blit-aware renderer misses the
+        // swap entirely.
+        self.active_grid_mut()
+            .mark_rows_content(0, rows.saturating_sub(1));
+        // The visible content was replaced wholesale (screen switch, RIS,
+        // snapshot restore): the scroll log cannot describe how it moved,
+        // so every older generation gets the full-redraw sentinel (ENH-038).
+        self.grid.invalidate_scroll_log();
+        self.alt_grid.invalidate_scroll_log();
     }
 
     /// Mark the entire screen as clean
@@ -3485,6 +3495,26 @@ impl Terminal {
     #[cfg(feature = "ffi")]
     pub(crate) fn for_each_dirty_range_since(&self, gen: u64, f: impl FnMut(u32, u32)) {
         self.active_grid().for_each_damage_range_since(gen, f);
+    }
+
+    /// Scroll-aware damage report for a consumer holding generation `since`
+    /// (ENH-038): the net movement of the visible content and the single
+    /// region it moved in, or the full-redraw sentinel. A renderer blits
+    /// its previous frame's `[top, bottom]` region by `delta` rows
+    /// (positive = content moved up), then redraws the rows
+    /// [`Terminal::for_each_content_dirty_range_since`] reports — rows
+    /// vacated by the blit carry a fresh content generation, so they are
+    /// always in that set.
+    pub fn scroll_damage_since(&self, since: u64) -> crate::grid::ScrollDamage {
+        self.active_grid().scroll_damage_since(since)
+    }
+
+    /// Invoke `f(start, end)` once per maximal run of consecutive rows whose
+    /// *content* changed since `gen` — the blit-complement of
+    /// [`Terminal::scroll_damage_since`].
+    pub fn for_each_content_dirty_range_since(&self, since: u64, f: impl FnMut(u32, u32)) {
+        self.active_grid()
+            .for_each_content_damage_range_since(since, f);
     }
 
     /// Get all dirty rows (ascending)

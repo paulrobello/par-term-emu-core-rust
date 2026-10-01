@@ -26,11 +26,17 @@ impl Grid {
                 self.cells[dst_start + j] = self.cells[src_start + j].clone();
             }
         }
+        // Content generations move with their rows (ENH-038), matching the
+        // shift above; the inserted blanks below take fresh stamps.
+        self.row_content_gen[row..=effective_bottom].rotate_right(n);
 
         for i in row..(row + n).min(self.rows) {
             self.clear_row(i);
         }
         self.mark_rows_damage(row, effective_bottom);
+        if n > 0 {
+            self.record_scroll_op(row, effective_bottom, -(n as i32));
+        }
     }
 
     /// Delete n lines at row
@@ -56,12 +62,17 @@ impl Grid {
                 self.cells[dst_start + j] = self.cells[src_start + j].clone();
             }
         }
+        // Content generations move with their rows (ENH-038).
+        self.row_content_gen[row..=effective_bottom].rotate_left(n);
 
         let clear_start = effective_bottom + 1 - n;
         for i in clear_start..=effective_bottom {
             self.clear_row(i);
         }
         self.mark_rows_damage(row, effective_bottom);
+        if n > 0 {
+            self.record_scroll_op(row, effective_bottom, n as i32);
+        }
     }
 
     /// Insert n blank characters at position

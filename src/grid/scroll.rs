@@ -66,7 +66,15 @@ impl Grid {
         // refill matches what clear_row wrote on these rows before.
         self.cells.resize(self.rows * self.cols, Cell::default());
         self.wrapped.resize(wrapped_len, false);
+        // Content generations move with their rows (ENH-038); the n fresh
+        // blank rows at the bottom take fresh stamps.
+        self.row_content_gen.drain(0..n);
+        self.row_content_gen.resize(self.rows, 0);
+        for row in (self.rows - n)..self.rows {
+            self.mark_row_content(row);
+        }
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
+        self.record_scroll_op(0, self.rows - 1, n as i32);
     }
 
     /// Absorb rows drained out of the main grid into the scrollback buffer.
@@ -137,6 +145,7 @@ impl Grid {
         // fix; rows [0, n) land on stale bottom content and are cleared).
         self.cells.rotate_right(n * self.cols);
         self.wrapped.rotate_right(n);
+        self.row_content_gen.rotate_right(n);
 
         for i in 0..n {
             self.clear_row(i);
@@ -145,6 +154,7 @@ impl Grid {
             }
         }
         self.mark_rows_damage(0, self.rows.saturating_sub(1));
+        self.record_scroll_op(0, self.rows - 1, -(n as i32));
     }
 
     /// Scroll up within a region. Returns `false` if parameters are invalid.
@@ -176,6 +186,9 @@ impl Grid {
             for i in top..=effective_bottom {
                 self.clear_row(i);
             }
+            if n > 0 {
+                self.record_scroll_op(top, effective_bottom, n as i32);
+            }
             return true;
         }
 
@@ -185,11 +198,15 @@ impl Grid {
         let region_start = top * self.cols;
         let region_end = (effective_bottom + 1) * self.cols;
         self.cells[region_start..region_end].rotate_left(n * self.cols);
+        self.row_content_gen[top..=effective_bottom].rotate_left(n);
 
         for i in (effective_bottom - n + 1)..=effective_bottom {
             if i < self.rows {
                 self.clear_row(i);
             }
+        }
+        if n > 0 {
+            self.record_scroll_op(top, effective_bottom, n as i32);
         }
         true
     }
@@ -213,6 +230,9 @@ impl Grid {
             for i in top..=effective_bottom {
                 self.clear_row(i);
             }
+            if n > 0 {
+                self.record_scroll_op(top, effective_bottom, -(n as i32));
+            }
             return true;
         }
 
@@ -221,9 +241,13 @@ impl Grid {
         let region_start = top * self.cols;
         let region_end = (effective_bottom + 1) * self.cols;
         self.cells[region_start..region_end].rotate_right(n * self.cols);
+        self.row_content_gen[top..=effective_bottom].rotate_right(n);
 
         for i in top..(top + n).min(self.rows) {
             self.clear_row(i);
+        }
+        if n > 0 {
+            self.record_scroll_op(top, effective_bottom, -(n as i32));
         }
         true
     }
@@ -266,7 +290,12 @@ impl Grid {
     /// unchanged.
     fn reset_damage_for_resize(&mut self) {
         self.row_gen = vec![0u64; self.rows];
-        self.mark_rows_damage(0, self.rows.saturating_sub(1));
+        self.row_content_gen = vec![0u64; self.rows];
+        self.mark_rows_content(0, self.rows.saturating_sub(1));
+        // A resize or reflow moves/rewraps content wholesale; the scroll
+        // log cannot describe it, so older generations get the full-redraw
+        // sentinel (ENH-038).
+        self.invalidate_scroll_log();
     }
 
     /// Resize the visible grid to `cols` × `rows`. A width change reflows the
@@ -517,5 +546,152 @@ impl Grid {
         }
         wrapped_flags.push(false);
         (new_cells, wrapped_flags)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cell::Cell;
+    use crate::grid::{Grid, ScrollDamage, MAX_SCROLL_OPS};
+
+    fn grid() -> Grid {
+        Grid::new(8, 6, 100)
+    }
+
+    fn fill(grid: &mut Grid, ch: char) {
+        for row in 0..grid.rows() {
+            for col in 0..grid.cols() {
+                grid.set(col, row, Cell::new(ch));
+            }
+        }
+    }
+
+    fn content_dirty_rows(grid: &Grid, since: u64) -> Vec<u32> {
+        let mut rows = Vec::new();
+        grid.for_each_content_damage_range_since(since, |s, e| rows.extend(s..=e));
+        rows
+    }
+
+    #[test]
+    fn scroll_up_reports_delta_and_only_cleared_rows() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        g.scroll_up(1);
+
+        let d = g.scroll_damage_since(since);
+        assert_eq!(
+            d,
+            ScrollDamage {
+                full_redraw: false,
+                top: 0,
+                bottom: 5,
+                delta: 1
+            }
+        );
+        assert_eq!(content_dirty_rows(&g, since), vec![5]);
+        // Positional damage still covers every row: ENH-025 behavior unchanged.
+        assert_eq!(g.damage_indices(since).count(), 6);
+    }
+
+    #[test]
+    fn scroll_down_reports_negative_delta_and_cleared_top_rows() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        g.scroll_down(2);
+
+        let d = g.scroll_damage_since(since);
+        assert_eq!(d.delta, -2);
+        assert_eq!(d.top, 0);
+        assert_eq!(d.bottom, 5);
+        assert!(!d.full_redraw);
+        assert_eq!(content_dirty_rows(&g, since), vec![0, 1]);
+    }
+
+    #[test]
+    fn region_scroll_reports_the_region() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        assert!(g.scroll_region_up(1, 2, 4));
+
+        let d = g.scroll_damage_since(since);
+        assert_eq!(d.top, 2);
+        assert_eq!(d.bottom, 4);
+        assert_eq!(d.delta, 1);
+        assert!(!d.full_redraw);
+        assert_eq!(content_dirty_rows(&g, since), vec![4]);
+    }
+
+    #[test]
+    fn same_region_ops_compose_by_sum() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        g.scroll_up(1);
+        g.scroll_up(2);
+
+        assert_eq!(g.scroll_damage_since(since).delta, 3);
+    }
+
+    #[test]
+    fn mixed_regions_fall_back_to_full_redraw() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        g.scroll_up(1);
+        assert!(g.scroll_region_up(1, 1, 3));
+
+        assert!(g.scroll_damage_since(since).full_redraw);
+    }
+
+    #[test]
+    fn no_scrollback_grid_still_records_ops() {
+        // Alt-screen-shaped grid: max_scrollback == 0, so scroll_region_up
+        // takes the inline path instead of delegating to scroll_up.
+        let mut g = Grid::new(8, 6, 0);
+        fill(&mut g, 'x');
+        let since = g.generation();
+        assert!(g.scroll_region_up(1, 0, 5));
+
+        let d = g.scroll_damage_since(since);
+        assert_eq!(d.delta, 1);
+        assert_eq!(content_dirty_rows(&g, since), vec![5]);
+        assert_eq!(g.total_lines_scrolled(), 0);
+    }
+
+    #[test]
+    fn resize_clears_scrollback_and_restore_invalidate_the_log() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let snap = g.capture_snapshot();
+
+        let since = g.generation();
+        g.resize(4, 3);
+        assert!(g.scroll_damage_since(since).full_redraw);
+
+        let since = g.generation();
+        g.clear_scrollback();
+        assert!(g.scroll_damage_since(since).full_redraw);
+
+        let since = g.generation();
+        g.restore_from_snapshot(&snap);
+        assert!(g.scroll_damage_since(since).full_redraw);
+    }
+
+    #[test]
+    fn log_overflow_falls_back_to_full_redraw() {
+        let mut g = grid();
+        fill(&mut g, 'x');
+        let since = g.generation();
+        for _ in 0..MAX_SCROLL_OPS {
+            g.scroll_up(1);
+        }
+        // At the cap the whole history is still expressible.
+        assert_eq!(g.scroll_damage_since(since).delta, MAX_SCROLL_OPS as i32);
+
+        g.scroll_up(1);
+        assert!(g.scroll_damage_since(since).full_redraw);
     }
 }
