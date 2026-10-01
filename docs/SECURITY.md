@@ -77,6 +77,8 @@ term.spawn(
 
 ## Security Architecture
 
+Dependency advisories are gated by `make audit-deps` (cargo deny, `bun audit`, `pip-audit`; weekly in CI). Accepted advisories and the reasons they are tolerated are listed in `deny.toml`.
+
 The PTY system implements multiple security layers to protect against common attack vectors:
 
 ```mermaid

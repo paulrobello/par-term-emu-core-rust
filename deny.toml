@@ -1,0 +1,28 @@
+# ENH-040: dependency policy for `cargo deny check advisories sources bans`
+# (make audit-deps). Licenses are deliberately not part of the default check
+# set — a license policy is a separate decision.
+[graph]
+all-features = true            # audit every shipped feature combination's graph
+
+[advisories]
+version = 2
+yanked = "deny"
+# The paste ignore below documents a lockfile-only advisory that feature
+# pruning currently hides; "unused" is the expected state.
+unused-ignored-advisory = "allow"
+ignore = [
+  # paste: unmaintained (no vulnerability). Lockfile-only: required by
+  # rav1e/pulp, optional deps of `image`'s avif/exr features, which
+  # Cargo.toml does not enable. Remove when image drops it or if avif/exr
+  # is ever enabled (SEC-134).
+  { id = "RUSTSEC-2024-0436", reason = "lockfile-only via image avif/exr; not compiled" },
+]
+
+[bans]
+multiple-versions = "warn"     # informational; the graph has known dups
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

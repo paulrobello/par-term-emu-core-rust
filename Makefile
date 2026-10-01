@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check doc-links-check release-check \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check doc-links-check release-check audit-deps \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -61,6 +61,7 @@ help:
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
+	@echo "  audit-deps      - cargo deny + bun audit + pip-audit across Rust, web frontend and Python (needs network; not part of checkall)"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
@@ -420,6 +421,23 @@ doc-links-check:
 # the top CHANGELOG section is legitimately incomplete. Run before tagging.
 release-check:
 	python3 scripts/check_release_notes.py && python3 scripts/check_release_notes.py --self-test
+
+# ENH-040: dependency advisories across all three ecosystems. Needs network
+# (advisory DB, npm and PyPI audit APIs); deliberately NOT in checkall.
+# pip-audit runs under --python-preference only-system: uv-managed
+# (python-build-standalone) interpreters abort during pip-audit's venv
+# bootstrap on macOS because it copies the interpreter binary; system
+# interpreters survive the copy, on macOS and CI alike.
+audit-deps:
+	@command -v cargo-deny >/dev/null 2>&1 || { echo "ERROR: cargo-deny not found — cargo install cargo-deny --locked"; exit 1; }
+	@command -v bun >/dev/null 2>&1 || { echo "ERROR: bun not found — install from https://bun.sh"; exit 1; }
+	@command -v uvx >/dev/null 2>&1 || { echo "ERROR: uv not found — brew install uv (or https://docs.astral.sh/uv)"; exit 1; }
+	cargo deny check advisories sources bans
+	cd web-terminal-frontend && bun audit
+	@reqs=$$(mktemp); \
+	uv export --frozen --no-emit-project --no-hashes --all-extras --format requirements-txt -o $$reqs && \
+	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
+	status=$$?; rm -f $$reqs; exit $$status
 
 checkall: ffi-header-check ffi-surface-check mux-docs-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
