@@ -414,7 +414,9 @@ def self_test() -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="Release-notes completeness check (ENH-036)."
+    )
     parser.add_argument(
         "--root",
         type=Path,
