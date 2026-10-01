@@ -1378,7 +1378,9 @@ contains = ["Override Idle"]
             "the first mismatching tick never clears"
         );
         let mut released = Vec::new();
-        for _ in 0..40 {
+        // 10 s budget (200 x 50 ms): the release itself lands in a couple of
+        // ticks; the bound only has to absorb parallel-load stretches.
+        for _ in 0..200 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             released = scrape_tick(&tree, &engine);
             if !released.is_empty() {
@@ -1416,6 +1418,26 @@ contains = ["Override Idle"]
         let tree = Arc::new(Mutex::new(tree));
         hook_claim(&tree, sleeper, "sleep");
         let engine = ScrapeEngine::load(None);
+        // The split's `sleep 300` is exec'd asynchronously: under parallel
+        // load a real-table tick can run before exec lands, which reads as a
+        // provable mismatch and would clear the claim before the stand-in is
+        // ever visible. Wait for the probe to prove it first, bounded.
+        let child = tree
+            .lock()
+            .pane(sleeper)
+            .expect("pane exists")
+            .child_pid()
+            .expect("the split spawned a child");
+        let visible_by = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match ProcessTable::snapshot().map(|table| table.agent_alive(child, "sleep")) {
+                Some(Liveness::Matches) => break,
+                _ if std::time::Instant::now() >= visible_by => {
+                    panic!("the sleep stand-in never became visible to the real process table");
+                }
+                _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
         for _ in 0..5 {
             assert!(
                 scrape_tick(&tree, &engine).is_empty(),
