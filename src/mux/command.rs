@@ -229,6 +229,14 @@ pub enum MuxCommand {
         /// Target pane.
         pane: Target<PaneId>,
     },
+    /// Clear a pane's scrollback and wipe its visible screen (tmux's
+    /// `clear-history`). Structural: the cleared scrollback is what a
+    /// restart-restore replays, so a content classification would
+    /// resurrect the history the command just erased.
+    ClearHistory {
+        /// Target pane.
+        pane: Target<PaneId>,
+    },
     /// Grow or shrink a pane by moving its bordering divider, or set its
     /// absolute extents.
     ResizePane {
@@ -400,6 +408,7 @@ impl MuxCommand {
             | MuxCommand::SetBuffer { .. }
             | MuxCommand::SetEnvironment { .. }
             | MuxCommand::RenameSession { .. }
+            | MuxCommand::ClearHistory { .. }
             | MuxCommand::KillSession { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             MuxCommand::ListPanes
@@ -1057,6 +1066,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-pane", parse_select_pane, &[]),
     ("pane-title", parse_pane_title, &[]),
     ("pane-info", parse_pane_info, &["cmd"]),
+    ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
     ("swap-pane", parse_swap_pane, &[]),
     ("break-pane", parse_break_pane, &[]),
@@ -1432,6 +1442,12 @@ fn parse_pane_title(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_pane_info(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::PaneInfo {
+        pane: a.pane("-t")?,
+    })
+}
+
+fn parse_clear_history(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ClearHistory {
         pane: a.pane("-t")?,
     })
 }
@@ -2627,6 +2643,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_clear_history_query() {
+        assert_eq!(
+            parse_command("clear-history -t %3").unwrap(),
+            MuxCommand::ClearHistory {
+                pane: Target::Id(PaneId(3))
+            }
+        );
+        assert!(parse_command("clear-history").is_err());
+    }
+
+    #[test]
     fn parses_resize_pane_with_default_and_explicit_cells() {
         assert_eq!(
             parse_command("resize-pane -t %0 -R").unwrap(),
@@ -3080,6 +3107,9 @@ mod tests {
                 env: vec![],
             },
             MuxCommand::KillPane {
+                pane: Target::Id(PaneId(0)),
+            },
+            MuxCommand::ClearHistory {
                 pane: Target::Id(PaneId(0)),
             },
             MuxCommand::RefreshClient {

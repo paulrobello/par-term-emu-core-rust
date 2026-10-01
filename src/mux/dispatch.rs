@@ -178,6 +178,7 @@ pub(super) fn dispatch_command(
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
+        MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
         MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
@@ -776,6 +777,24 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     Outcome::ok(ctx, &line)
 }
 
+fn cmd_clear_history(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
+    let guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    match guard.pane(pane) {
+        Some(target) => {
+            // The clear rides the emulator's own ED 3 path, so graphics
+            // teardown and the ScreenCleared event stay in sync with the
+            // core instead of a parallel grid-only reimplementation.
+            target.with_terminal_mut(|term| term.process(b"\x1b[3J"));
+            Outcome::ok(ctx, "")
+        }
+        None => Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string()),
+    }
+}
+
 fn cmd_resize_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, adjustment: ResizeAdjustment) -> Outcome {
     let outcome = {
         let mut guard = ctx.tree.lock();
@@ -1315,6 +1334,64 @@ mod tests {
     use parking_lot::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+
+    /// `clear-history` wipes scrollback and the visible screen through the
+    /// pane's own emulator (ED 3), so neither a grid-length check nor the
+    /// daemon's own capture path finds the prefilled content afterward.
+    #[test]
+    fn clear_history_wipes_scrollback_and_screen() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        {
+            let terminal = tree.lock().pane(pane).unwrap().terminal();
+            let mut term = terminal.write();
+            for i in 0..60 {
+                term.process(format!("line-{i}\r\n").as_bytes());
+            }
+        }
+        assert!(
+            tree.lock()
+                .pane(pane)
+                .unwrap()
+                .terminal()
+                .read()
+                .grid()
+                .scrollback_len()
+                > 0,
+            "the prefill must produce scrollback"
+        );
+
+        let reply = run(&format!("clear-history -t {pane}"));
+        assert!(!reply.contains("%error"), "clear failed: {reply}");
+
+        let term = tree.lock().pane(pane).unwrap().terminal();
+        assert_eq!(
+            term.read().grid().scrollback_len(),
+            0,
+            "scrollback must be gone"
+        );
+        let capture = run(&format!("capture-pane -t {pane}"));
+        assert!(
+            !capture.contains("line-"),
+            "the visible screen must be wiped: {capture}"
+        );
+    }
 
     /// Spawns the first pane as a shell; every later spawn fails.
     struct FirstSpawnOnly(AtomicBool);
