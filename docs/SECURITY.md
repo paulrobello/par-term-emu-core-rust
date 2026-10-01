@@ -1287,12 +1287,12 @@ sections; the numbers live here.
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:154` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:156` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:158` | Bytes retained for one queued clipboard sync event. |
-| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:164` | Unpolled terminal events retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:168` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:945` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:156` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:158` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:160` | Bytes retained for one queued clipboard sync event. |
+| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:166` | Unpolled terminal events retained from processed output. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:170` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:947` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_BOOKMARKS` | 1,000 | `src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
