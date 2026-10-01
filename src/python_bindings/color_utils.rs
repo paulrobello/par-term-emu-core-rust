@@ -73,6 +73,7 @@ pub fn py_adjust_contrast_rgb(
 ///     >>> from par_term_emu_core_rust import lighten_rgb
 ///     >>> lightened = lighten_rgb((128, 64, 32), 0.5)
 ///     >>> print(f"Lightened: {lightened}")
+///     Lightened: (192, 160, 144)
 #[pyfunction]
 #[pyo3(name = "lighten_rgb")]
 pub fn py_lighten_rgb(rgb: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
@@ -93,6 +94,7 @@ pub fn py_lighten_rgb(rgb: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 ///     >>> from par_term_emu_core_rust import darken_rgb
 ///     >>> darkened = darken_rgb((200, 150, 100), 0.3)
 ///     >>> print(f"Darkened: {darkened}")
+///     Darkened: (140, 105, 70)
 #[pyfunction]
 #[pyo3(name = "darken_rgb")]
 pub fn py_darken_rgb(rgb: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
@@ -112,6 +114,7 @@ pub fn py_darken_rgb(rgb: (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 ///     >>> from par_term_emu_core_rust import color_luminance
 ///     >>> lum = color_luminance((255, 255, 255))
 ///     >>> print(f"White luminance: {lum:.2f}")
+///     White luminance: 1.00
 #[pyfunction]
 #[pyo3(name = "color_luminance")]
 pub fn py_color_luminance(rgb: (u8, u8, u8)) -> f32 {
@@ -216,6 +219,7 @@ pub fn py_meets_wcag_aaa(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> bool {
 ///     >>> from par_term_emu_core_rust import mix_colors
 ///     >>> mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)
 ///     >>> print(f"Purple: {mixed}")
+///     Purple: (128, 0, 128)
 #[pyfunction]
 #[pyo3(name = "mix_colors")]
 pub fn py_mix_colors(rgb1: (u8, u8, u8), rgb2: (u8, u8, u8), ratio: f32) -> (u8, u8, u8) {
@@ -319,6 +323,7 @@ pub fn py_adjust_hue(rgb: (u8, u8, u8), degrees: f32) -> (u8, u8, u8) {
 ///     >>> from par_term_emu_core_rust import complementary_color
 ///     >>> comp = complementary_color((255, 0, 0))  # Red -> Cyan
 ///     >>> print(f"Complement of red: {comp}")
+///     Complement of red: (0, 255, 255)
 #[pyfunction]
 #[pyo3(name = "complementary_color")]
 pub fn py_complementary_color(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
@@ -377,6 +382,7 @@ pub fn py_hex_to_rgb(hex_str: &str) -> Option<(u8, u8, u8)> {
 ///     >>> from par_term_emu_core_rust import rgb_to_ansi_256
 ///     >>> idx = rgb_to_ansi_256((255, 0, 0))
 ///     >>> print(f"Red is closest to ANSI color {idx}")
+///     Red is closest to ANSI color 196
 #[pyfunction]
 #[pyo3(name = "rgb_to_ansi_256")]
 pub fn py_rgb_to_ansi_256(rgb: (u8, u8, u8)) -> u8 {

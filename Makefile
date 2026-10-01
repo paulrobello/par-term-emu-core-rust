@@ -341,6 +341,7 @@ stub-check:
 	uv run python -c "import par_term_emu_core_rust"
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 	uv run python scripts/check_api_reference.py
+	@uv run python scripts/check_docstring_examples.py
 
 # QA-204: regenerate the stub from a streaming build and fail on drift.
 # Not in checkall: it rebuilds the extension. The stub must come from a

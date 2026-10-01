@@ -692,9 +692,10 @@ impl PyTerminal {
     ///     JSON string containing the serialized graphics snapshot
     ///
     /// Example:
-    ///     >>> json_str = terminal.export_graphics_json()
+    ///     >>> terminal.export_graphics_json()  # doctest: +SKIP
+    ///     '{"placements": [], "version": 1}'
     ///     >>> with open("session_graphics.json", "w") as f:
-    ///     ...     f.write(json_str)
+    ///     ...     f.write(terminal.export_graphics_json())  # doctest: +SKIP
     fn export_graphics_json(&self) -> PyResult<String> {
         self.inner
             .graphics_store()
@@ -714,10 +715,10 @@ impl PyTerminal {
     ///     Number of graphics restored
     ///
     /// Example:
-    ///     >>> with open("session_graphics.json") as f:
-    ///     ...     json_str = f.read()
+    ///     >>> json_str = terminal.export_graphics_json()
     ///     >>> count = terminal.import_graphics_json(json_str)
-    ///     >>> print(f"Restored {count} graphics")
+    ///     >>> count >= 0
+    ///     True
     fn import_graphics_json(&mut self, json: &str) -> PyResult<usize> {
         self.inner
             .graphics_store_mut()
@@ -883,7 +884,7 @@ impl PyTerminal {
     /// Example:
     ///     >>> term.set_normalization_form(NormalizationForm.NFC)  # Compose characters
     ///     >>> term.set_normalization_form(NormalizationForm.NFD)  # Decompose characters
-    ///     >>> term.set_normalization_form(NormalizationForm.None) # No normalization
+    ///     >>> term.set_normalization_form(NormalizationForm.Disabled)  # No normalization
     fn set_normalization_form(&mut self, form: super::enums::PyNormalizationForm) -> PyResult<()> {
         self.inner.set_normalization_form(form.into());
         Ok(())

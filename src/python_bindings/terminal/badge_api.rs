@@ -136,11 +136,9 @@ impl PyTerminal {
     ///     Zone text content as a string, or None
     ///
     /// Example:
-    ///     ```python
-    ///     text = term.get_zone_text(some_row)
-    ///     if text:
-    ///         print(f"Zone content: {text}")
-    ///     ```
+    ///     >>> term = Terminal(80, 24)
+    ///     >>> term.get_zone_text(0) is None  # no zones exist without shell integration
+    ///     True
     fn get_zone_text(&self, abs_row: usize) -> PyResult<Option<String>> {
         Ok(self.inner.get_zone_text(abs_row))
     }
@@ -285,7 +283,8 @@ impl PyTerminal {
     /// Example:
     ///     >>> term = Terminal(80, 24)
     ///     >>> info = term.capture_replay_snapshot()
-    ///     >>> print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
+    ///     >>> info["cols"], info["rows"]
+    ///     (80, 24)
     fn capture_replay_snapshot(&mut self) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
         use pyo3::types::PyDict;
 
