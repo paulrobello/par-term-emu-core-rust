@@ -28,17 +28,29 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct CellBitflags: u16 {
+        /// Bold (SGR 1).
         const BOLD = 1 << 0;
+        /// Dim/faint (SGR 2).
         const DIM = 1 << 1;
+        /// Italic (SGR 3).
         const ITALIC = 1 << 2;
+        /// Underline (SGR 4).
         const UNDERLINE = 1 << 3;
+        /// Blink (SGR 5).
         const BLINK = 1 << 4;
+        /// Reverse video (SGR 7).
         const REVERSE = 1 << 5;
+        /// Hidden/concealed (SGR 8).
         const HIDDEN = 1 << 6;
+        /// Strikethrough (SGR 9).
         const STRIKETHROUGH = 1 << 7;
+        /// Overline (SGR 53).
         const OVERLINE = 1 << 8;
+        /// Protected from selective erase (DECSCA).
         const GUARDED = 1 << 9;
+        /// Leading cell of a double-width character.
         const WIDE_CHAR = 1 << 10;
+        /// Trailing spacer cell of a double-width character.
         const WIDE_CHAR_SPACER = 1 << 11;
     }
 }

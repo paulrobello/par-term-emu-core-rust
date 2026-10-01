@@ -171,12 +171,17 @@ pub struct ThemeInfo {
 /// CPU statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuStats {
+    /// Overall CPU usage across all cores, in percent.
     pub overall_usage_percent: f64,
+    /// Number of physical cores.
     pub physical_core_count: u32,
+    /// Per-core usage in percent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_core_usage_percent: Vec<f64>,
+    /// CPU brand string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brand: Option<String>,
+    /// Current frequency in MHz.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frequency_mhz: Option<u64>,
 }
@@ -184,44 +189,68 @@ pub struct CpuStats {
 /// Memory statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryStats {
+    /// Total physical memory in bytes.
     pub total_bytes: u64,
+    /// Used physical memory in bytes.
     pub used_bytes: u64,
+    /// Available physical memory in bytes.
     pub available_bytes: u64,
+    /// Total swap in bytes.
     pub swap_total_bytes: u64,
+    /// Used swap in bytes.
     pub swap_used_bytes: u64,
 }
 
 /// Individual disk statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskStats {
+    /// Disk name.
     pub name: String,
+    /// Mount point path.
     pub mount_point: String,
+    /// Total capacity in bytes.
     pub total_bytes: u64,
+    /// Available space in bytes.
     pub available_bytes: u64,
+    /// Disk kind (e.g. SSD, HDD).
     pub kind: String,
+    /// File system name.
     pub file_system: String,
+    /// Whether the disk is removable.
     pub is_removable: bool,
 }
 
 /// Network interface statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInterfaceStats {
+    /// Interface name.
     pub name: String,
+    /// Bytes received since the last sample.
     pub received_bytes: u64,
+    /// Bytes transmitted since the last sample.
     pub transmitted_bytes: u64,
+    /// Total bytes received.
     pub total_received_bytes: u64,
+    /// Total bytes transmitted.
     pub total_transmitted_bytes: u64,
+    /// Packets received.
     pub packets_received: u64,
+    /// Packets transmitted.
     pub packets_transmitted: u64,
+    /// Receive errors.
     pub errors_received: u64,
+    /// Transmit errors.
     pub errors_transmitted: u64,
 }
 
 /// System load averages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadAverage {
+    /// One-minute load average.
     pub one_minute: f64,
+    /// Five-minute load average.
     pub five_minutes: f64,
+    /// Fifteen-minute load average.
     pub fifteen_minutes: f64,
 }
 

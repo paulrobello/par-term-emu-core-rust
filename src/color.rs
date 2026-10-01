@@ -16,21 +16,37 @@ pub enum Color {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum NamedColor {
+    /// Black.
     Black = 0,
+    /// Red.
     Red = 1,
+    /// Green.
     Green = 2,
+    /// Yellow.
     Yellow = 3,
+    /// Blue.
     Blue = 4,
+    /// Magenta.
     Magenta = 5,
+    /// Cyan.
     Cyan = 6,
+    /// White.
     White = 7,
+    /// Bright black (gray).
     BrightBlack = 8,
+    /// Bright red.
     BrightRed = 9,
+    /// Bright green.
     BrightGreen = 10,
+    /// Bright yellow.
     BrightYellow = 11,
+    /// Bright blue.
     BrightBlue = 12,
+    /// Bright magenta.
     BrightMagenta = 13,
+    /// Bright cyan.
     BrightCyan = 14,
+    /// Bright white.
     BrightWhite = 15,
 }
 

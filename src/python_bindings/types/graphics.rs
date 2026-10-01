@@ -242,8 +242,11 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
 #[pyclass(name = "ImageProtocol", from_py_object)]
 #[derive(Clone)]
 pub enum PyImageProtocol {
+    /// Sixel graphics.
     Sixel,
+    /// iTerm2 inline images.
     ITerm2,
+    /// Kitty graphics protocol.
     Kitty,
 }
 
@@ -251,11 +254,17 @@ pub enum PyImageProtocol {
 #[pyclass(name = "ImageFormat", from_py_object)]
 #[derive(Clone)]
 pub enum PyImageFormat {
+    /// PNG image.
     PNG,
+    /// JPEG image.
     JPEG,
+    /// GIF image.
     GIF,
+    /// BMP image.
     BMP,
+    /// Raw 8-bit RGBA pixels.
     RGBA,
+    /// Raw 8-bit RGB pixels.
     RGB,
 }
 

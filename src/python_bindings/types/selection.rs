@@ -71,8 +71,11 @@ impl PyDetectedItem {
 #[pyclass(name = "SelectionMode", from_py_object)]
 #[derive(Clone)]
 pub enum PySelectionMode {
+    /// Character-wise selection.
     Character,
+    /// Whole-line selection.
     Line,
+    /// Rectangular block selection.
     Block,
 }
 

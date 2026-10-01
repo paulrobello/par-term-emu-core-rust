@@ -66,9 +66,13 @@ pub enum AnimationHint {
 /// Priority for partial updates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UpdatePriority {
+    /// Lowest priority.
     Low = 0,
+    /// Default priority.
     Normal = 1,
+    /// Elevated priority.
     High = 2,
+    /// Highest priority.
     Critical = 3,
 }
 

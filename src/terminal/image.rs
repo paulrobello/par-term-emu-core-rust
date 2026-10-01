@@ -18,11 +18,17 @@ pub enum ImageProtocol {
 /// Image format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
+    /// PNG image.
     PNG,
+    /// JPEG image.
     JPEG,
+    /// GIF image.
     GIF,
+    /// BMP image.
     BMP,
+    /// Raw 8-bit RGBA pixels.
     RGBA,
+    /// Raw 8-bit RGB pixels.
     RGB,
 }
 

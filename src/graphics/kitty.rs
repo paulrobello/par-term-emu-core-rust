@@ -32,13 +32,20 @@ pub const MAX_KITTY_DECOMPRESSED_BYTES: usize = MAX_IMAGE_PIXELS * 4;
 /// Kitty graphics transmission action
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyAction {
+    /// Transmit image data (`t`).
     #[default]
     Transmit, // t - transmit image data
-    TransmitDisplay,  // T - transmit and display
-    Query,            // q - query terminal support
-    Put,              // p - display previously transmitted image
-    Delete,           // d - delete images
-    Frame,            // f - animation frame
+    /// Transmit and display (`T`).
+    TransmitDisplay, // T - transmit and display
+    /// Query terminal support (`q`).
+    Query, // q - query terminal support
+    /// Display a previously transmitted image (`p`).
+    Put, // p - display previously transmitted image
+    /// Delete images (`d`).
+    Delete, // d - delete images
+    /// Animation frame (`f`).
+    Frame, // f - animation frame
+    /// Animation control (`a`).
     AnimationControl, // a - animation control
 }
 
@@ -61,9 +68,12 @@ impl KittyAction {
 /// Kitty transmission format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyFormat {
+    /// 32-bit RGBA (`f=32`).
     #[default]
     Rgba, // 32 - 32-bit RGBA
+    /// 24-bit RGB (`f=24`).
     Rgb, // 24 - 24-bit RGB
+    /// PNG-compressed (`f=100`).
     Png, // 100 - PNG compressed
 }
 
@@ -82,10 +92,14 @@ impl KittyFormat {
 /// Kitty transmission medium
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyMedium {
+    /// Direct in-band data (`t=d`).
     #[default]
     Direct, // d - direct in-band data
-    File,      // f - read from file
-    TempFile,  // t - read from temp file and delete
+    /// Read from a file (`t=f`).
+    File, // f - read from file
+    /// Read from a temp file and delete it (`t=t`).
+    TempFile, // t - read from temp file and delete
+    /// Read from shared memory (`t=s`).
     SharedMem, // s - read from shared memory
 }
 
@@ -143,8 +157,10 @@ impl FileMediaMode {
 /// Kitty compression format (o= parameter)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyCompression {
+    /// No compression (default).
     #[default]
     None, // No compression (default)
+    /// zlib/deflate compression (`o=z`).
     Zlib, // zlib/deflate compression (o=z)
 }
 
@@ -161,14 +177,22 @@ impl KittyCompression {
 /// Kitty delete target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyDeleteTarget {
-    All,                           // a - all images
-    ById(u32),                     // i - by image id
+    /// All images (`a`).
+    All, // a - all images
+    /// By image id (`i`).
+    ById(u32), // i - by image id
+    /// By image id and optional placement id.
     ByPlacement(u32, Option<u32>), // (image_id, placement_id)
-    AtCursor,                      // c - at cursor position
-    InCell,                        // p - at specific cell
-    OnScreen,                      // z - visible on screen
-    ByColumn(u32),                 // x - in column
-    ByRow(u32),                    // y - in row
+    /// Images at the cursor position (`c`).
+    AtCursor, // c - at cursor position
+    /// Images at a specific cell (`p`).
+    InCell, // p - at specific cell
+    /// Images visible on screen (`z`).
+    OnScreen, // z - visible on screen
+    /// Images in a column (`x`).
+    ByColumn(u32), // x - in column
+    /// Images in a row (`y`).
+    ByRow(u32), // y - in row
 }
 
 /// Result of building a Kitty graphic
@@ -178,10 +202,15 @@ pub enum KittyGraphicResult {
     Graphic(TerminalGraphic),
     /// A virtual placement - insert Unicode placeholders into grid
     VirtualPlacement {
+        /// Kitty image id.
         image_id: u32,
+        /// Kitty placement id.
         placement_id: u32,
+        /// Placement position as (col, row).
         position: (usize, usize),
+        /// Placement width in columns.
         cols: usize,
+        /// Placement height in rows.
         rows: usize,
     },
     /// Command processed but no output (delete, query, transmit-only, etc.)

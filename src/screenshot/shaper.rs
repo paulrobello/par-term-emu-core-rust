@@ -22,8 +22,11 @@ pub struct ShapedGlyph {
 /// Font type indicator for shaped text
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontType {
+    /// Primary text font.
     Regular,
+    /// Color emoji font.
     Emoji,
+    /// CJK fallback font.
     Cjk,
 }
 

@@ -37,14 +37,28 @@
 // QA-201: every production `unsafe` block states its invariant. Test modules
 // are exempt — their FFI calls restate the fn contract and add only noise.
 #![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+// DOC-128: every public item is documented; `make lint-check` fails on a new
+// undocumented one (clippy runs with -D warnings).
+//
+// `missing_docs` allow-list (scaffolding to shrink; never add a crate-wide
+// allow). Every `#[allow(missing_docs)]` in the tree must be listed here.
+//
+//   src/streaming/proto.rs  `pb` module   ~217 hits (2026-09-30 count)
+//       Generated prost output (`terminal.pb.rs`); regeneration would discard
+//       hand-written docs. The wire contract lives in proto/terminal.proto.
+//       Next slice: emit docs from the .proto comments, then drop the allow.
+#![warn(missing_docs)]
 
 pub mod ansi_utils;
 pub mod badge;
+/// Terminal grid cells: character, colors, and attribute flags.
 pub mod cell;
+/// Color representation (named, 256-color palette, and true color).
 pub mod color;
 pub mod color_utils;
 pub mod conformance_level;
 pub mod coprocess;
+/// Cursor position and DECSCUSR style.
 pub mod cursor;
 
 // `sim` is an empty marker feature naming the headless profile; it is meant
@@ -65,15 +79,18 @@ pub mod debug;
 // xcframework build and C/Swift embedders enable `ffi`.
 #[cfg(feature = "ffi")]
 pub mod ffi;
+/// Grapheme cluster, variation selector, and emoji-sequence helpers.
 pub mod grapheme;
 pub mod graphics;
 pub mod grid;
 pub mod html_export;
 pub mod keyboard;
 pub mod macros;
+/// Mouse tracking modes, encodings, and event types.
 pub mod mouse;
 #[cfg(feature = "mux")]
 pub mod mux;
+/// Error type for PTY operations.
 pub mod pty_error;
 #[cfg(feature = "pty_session")]
 pub mod pty_session;
@@ -84,7 +101,9 @@ pub mod python_bindings;
 // render-capable sim embedders add `features = ["sim", "screenshot"]`.
 #[cfg(feature = "screenshot")]
 pub mod screenshot;
+/// Shell integration markers (OSC 133).
 pub mod shell_integration;
+/// Sixel graphics parsing for DEC VT340-compatible terminals.
 pub mod sixel;
 // The streaming module compiles for the streaming server itself and for the
 // Python bindings (whose codec entry points stub out when `streaming` is

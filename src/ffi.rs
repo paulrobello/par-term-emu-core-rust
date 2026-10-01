@@ -537,7 +537,9 @@ pub struct TermScrollDelta {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TermCursorState {
+    /// Cursor column (0-indexed).
     pub col: u32,
+    /// Cursor row (0-indexed).
     pub row: u32,
     /// Whether the cursor is visible (DECTCEM)
     pub visible: bool,
@@ -566,7 +568,9 @@ pub struct TermModeState {
     pub mouse_mode: u8,
     /// Kitty keyboard protocol progressive-enhancement flags
     pub kitty_flags: u16,
+    /// Grid width in columns.
     pub cols: u32,
+    /// Grid height in rows.
     pub rows: u32,
 }
 

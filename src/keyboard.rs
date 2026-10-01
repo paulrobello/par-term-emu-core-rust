@@ -103,34 +103,61 @@ impl Default for KeyEncodeOptions {
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermKey {
+    /// Unrecognized key.
     Unknown = 0,
     /// `codepoint` carries the character
     Char = 1,
+    /// Escape.
     Escape = 27,
+    /// Tab.
     Tab = 9,
+    /// Enter.
     Enter = 13,
+    /// Backspace.
     Backspace = 127,
+    /// Insert.
     Insert = 57426,
+    /// Delete.
     Delete = 57427,
+    /// Left arrow.
     Left = 57428,
+    /// Right arrow.
     Right = 57429,
+    /// Up arrow.
     Up = 57430,
+    /// Down arrow.
     Down = 57431,
+    /// Page Up.
     PageUp = 57432,
+    /// Page Down.
     PageDown = 57433,
+    /// Home.
     Home = 57434,
+    /// End.
     End = 57435,
+    /// Function key F1.
     F1 = 57376,
+    /// Function key F2.
     F2 = 57377,
+    /// Function key F3.
     F3 = 57378,
+    /// Function key F4.
     F4 = 57379,
+    /// Function key F5.
     F5 = 57380,
+    /// Function key F6.
     F6 = 57381,
+    /// Function key F7.
     F7 = 57382,
+    /// Function key F8.
     F8 = 57383,
+    /// Function key F9.
     F9 = 57384,
+    /// Function key F10.
     F10 = 57385,
+    /// Function key F11.
     F11 = 57386,
+    /// Function key F12.
     F12 = 57387,
 }
 

@@ -51,8 +51,11 @@ pub const SIXEL_DEFAULT_MAX_GRAPHICS: usize = 256;
 /// Per-terminal Sixel resource limits
 #[derive(Debug, Clone, Copy)]
 pub struct SixelLimits {
+    /// Maximum image width in pixels.
     pub max_width: usize,
+    /// Maximum image height in pixels.
     pub max_height: usize,
+    /// Maximum run-length repeat count.
     pub max_repeat: usize,
 }
 
@@ -80,8 +83,11 @@ impl Default for SixelLimits {
 /// RGB color value (0-255 for each component)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SixelColor {
+    /// Red component.
     pub r: u8,
+    /// Green component.
     pub g: u8,
+    /// Blue component.
     pub b: u8,
 }
 

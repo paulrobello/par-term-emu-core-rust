@@ -26,9 +26,13 @@ use std::path::Path;
 /// Cursor information for rendering
 #[derive(Debug, Clone)]
 pub struct CursorInfo {
+    /// Cursor column (0-indexed).
     pub col: usize,
+    /// Cursor row (0-indexed).
     pub row: usize,
+    /// Whether the cursor is visible.
     pub visible: bool,
+    /// Cursor shape.
     pub style: crate::cursor::CursorStyle,
 }
 

@@ -32,10 +32,15 @@ use std::os::unix::fs::OpenOptionsExt;
 /// Debug level configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DebugLevel {
+    /// Logging disabled.
     Off = 0,
+    /// Errors only.
     Error = 1,
+    /// Errors and informational messages.
     Info = 2,
+    /// Adds debug messages.
     Debug = 3,
+    /// Adds trace-level messages.
     Trace = 4,
 }
 
@@ -233,6 +238,7 @@ pub fn logf(level: DebugLevel, category: &str, args: fmt::Arguments) {
 }
 
 // Convenience macros for logging
+/// Log a formatted message at [`DebugLevel::Error`].
 #[macro_export]
 macro_rules! debug_error {
     ($category:expr, $($arg:tt)*) => {
@@ -240,6 +246,7 @@ macro_rules! debug_error {
     };
 }
 
+/// Log a formatted message at [`DebugLevel::Info`].
 #[macro_export]
 macro_rules! debug_info {
     ($category:expr, $($arg:tt)*) => {
@@ -247,6 +254,7 @@ macro_rules! debug_info {
     };
 }
 
+/// Log a formatted message at [`DebugLevel::Debug`].
 #[macro_export]
 macro_rules! debug_log {
     ($category:expr, $($arg:tt)*) => {
@@ -254,6 +262,7 @@ macro_rules! debug_log {
     };
 }
 
+/// Log a formatted message at [`DebugLevel::Trace`].
 #[macro_export]
 macro_rules! debug_trace {
     ($category:expr, $($arg:tt)*) => {

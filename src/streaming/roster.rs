@@ -17,8 +17,13 @@ pub fn parse_agents_output(raw: &str) -> Vec<AgentEntry> {
 /// A roster change derived from a single par-mux control notification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RosterDelta {
+    /// Insert or replace an agent entry.
     Upsert(AgentEntry),
-    Release { pane_id: u32 },
+    /// Remove the agent entry for the given pane.
+    Release {
+        /// Pane whose agent entry is removed.
+        pane_id: u32,
+    },
 }
 
 /// Translates one control-mode notification line into a roster delta.

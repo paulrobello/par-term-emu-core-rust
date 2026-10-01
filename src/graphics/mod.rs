@@ -204,9 +204,12 @@ impl ImagePlacement {
 /// Graphics protocol identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphicProtocol {
+    /// Sixel graphics (DCS).
     Sixel,
+    /// iTerm2 inline images (OSC 1337).
     ITermInline, // OSC 1337
-    Kitty,       // APC graphics protocol
+    /// Kitty graphics protocol (APC).
+    Kitty, // APC graphics protocol
 }
 
 impl GraphicProtocol {
@@ -223,11 +226,17 @@ impl GraphicProtocol {
 /// Limits for graphics to prevent resource exhaustion
 #[derive(Debug, Clone, Copy)]
 pub struct GraphicsLimits {
+    /// Maximum image width in pixels.
     pub max_width: u32,
+    /// Maximum image height in pixels.
     pub max_height: u32,
+    /// Maximum pixel count per image.
     pub max_pixels: usize,
+    /// Maximum total graphics memory in bytes.
     pub max_total_memory: usize,
+    /// Maximum number of visible graphics.
     pub max_graphics_count: usize,
+    /// Maximum number of graphics kept in scrollback.
     pub max_scrollback_graphics: usize,
 }
 
@@ -1014,13 +1023,21 @@ impl GraphicsStore {
 /// Graphics error types
 #[derive(Debug, Clone)]
 pub enum GraphicsError {
+    /// Zero or otherwise invalid width/height.
     InvalidDimensions(u32, u32),
+    /// Image exceeds the configured size limits.
     ImageTooLarge(usize, usize),
+    /// Unrecognized image format.
     UnsupportedFormat(String),
+    /// Image data could not be decoded.
     DecodeError(String),
+    /// Base64 payload was malformed.
     Base64Error(String),
+    /// Image library error.
     ImageError(String),
+    /// Kitty protocol error.
     KittyError(String),
+    /// iTerm2 inline image protocol error.
     ITermError(String),
 }
 

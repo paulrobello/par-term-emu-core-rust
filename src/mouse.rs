@@ -48,19 +48,28 @@ pub enum MouseEventType {
 /// Mouse button
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
+    /// Left button.
     Left,
+    /// Middle button.
     Middle,
+    /// Right button.
     Right,
+    /// No button (motion without a button held).
     None,
 }
 
 /// Mouse event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
+    /// Raw button code.
     pub button: u8,
+    /// Column (0-indexed).
     pub col: usize,
+    /// Row (0-indexed).
     pub row: usize,
+    /// `true` for press, `false` for release.
     pub pressed: bool,
+    /// Modifier bitmask (shift, alt, ctrl).
     pub modifiers: u8,
 }
 
@@ -77,6 +86,7 @@ pub struct MouseEventRecord {
     pub row: usize,
     /// Pixel position (for SGR 1016)
     pub pixel_x: Option<u16>,
+    /// Pixel Y position (for SGR 1016).
     pub pixel_y: Option<u16>,
     /// Modifier keys (shift, alt, ctrl)
     pub modifiers: u8,
@@ -87,8 +97,11 @@ pub struct MouseEventRecord {
 /// Mouse position history entry
 #[derive(Debug, Clone)]
 pub struct MousePosition {
+    /// Column (0-indexed).
     pub col: usize,
+    /// Row (0-indexed).
     pub row: usize,
+    /// Timestamp in microseconds.
     pub timestamp: u64,
 }
 

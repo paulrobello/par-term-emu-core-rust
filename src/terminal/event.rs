@@ -261,31 +261,57 @@ impl TerminalEvent {
 /// Kind of terminal event for subscription filters
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TerminalEventKind {
+    /// Matches [`TerminalEvent::BellRang`].
     BellRang,
+    /// Matches [`TerminalEvent::TitleChanged`].
     TitleChanged,
+    /// Matches [`TerminalEvent::SizeChanged`].
     SizeChanged,
+    /// Matches [`TerminalEvent::ModeChanged`].
     ModeChanged,
+    /// Matches [`TerminalEvent::GraphicsAdded`].
     GraphicsAdded,
+    /// Matches [`TerminalEvent::HyperlinkAdded`].
     HyperlinkAdded,
+    /// Matches [`TerminalEvent::DirtyRegion`].
     DirtyRegion,
+    /// Matches [`TerminalEvent::CwdChanged`].
     CwdChanged,
+    /// Matches [`TerminalEvent::TriggerMatched`].
     TriggerMatched,
+    /// Matches [`TerminalEvent::UserVarChanged`].
     UserVarChanged,
+    /// Matches [`TerminalEvent::ProgressBarChanged`].
     ProgressBarChanged,
+    /// Matches [`TerminalEvent::BadgeChanged`].
     BadgeChanged,
+    /// Matches [`TerminalEvent::ShellIntegrationEvent`].
     ShellIntegrationEvent,
+    /// Matches [`TerminalEvent::ZoneOpened`].
     ZoneOpened,
+    /// Matches [`TerminalEvent::ZoneClosed`].
     ZoneClosed,
+    /// Matches [`TerminalEvent::ZoneScrolledOut`].
     ZoneScrolledOut,
+    /// Matches [`TerminalEvent::EnvironmentChanged`].
     EnvironmentChanged,
+    /// Matches [`TerminalEvent::RemoteHostTransition`].
     RemoteHostTransition,
+    /// Matches [`TerminalEvent::SubShellDetected`].
     SubShellDetected,
+    /// Matches [`TerminalEvent::FileTransferStarted`].
     FileTransferStarted,
+    /// Matches [`TerminalEvent::FileTransferProgress`].
     FileTransferProgress,
+    /// Matches [`TerminalEvent::FileTransferCompleted`].
     FileTransferCompleted,
+    /// Matches [`TerminalEvent::FileTransferFailed`].
     FileTransferFailed,
+    /// Matches [`TerminalEvent::UploadRequested`].
     UploadRequested,
+    /// Matches [`TerminalEvent::ScreenCleared`].
     ScreenCleared,
+    /// Matches [`TerminalEvent::InlineImageDropped`].
     InlineImageDropped,
 }
 

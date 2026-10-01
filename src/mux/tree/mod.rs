@@ -92,9 +92,13 @@ pub struct MuxSession {
 pub struct SessionSpawn {
     /// The reserved ids, visible to the caller for the factory call.
     pub session_id: SessionId,
+    /// Reserved window id.
     pub window_id: WindowId,
+    /// Reserved id of the first pane.
     pub pane_id: PaneId,
+    /// Initial grid width in columns.
     pub cols: u16,
+    /// Initial grid height in rows.
     pub rows: u16,
     name: String,
     env: BTreeMap<String, String>,
@@ -116,6 +120,7 @@ pub struct RespawnSpawn {
     /// The pane's current grid size — the fresh terminal starts here,
     /// not at a construction default.
     pub cols: u16,
+    /// The pane grid height in rows.
     pub rows: u16,
     /// The command to run: the explicit override, else the pane's stored
     /// spawn command.
@@ -156,10 +161,14 @@ impl SessionSpawn {
 /// [`SessionSpawn`] for `new-window`: a second window in an existing
 /// session, so completion depends on that session surviving the spawn.
 pub struct WindowSpawn {
+    /// Reserved window id.
     pub window_id: WindowId,
+    /// Reserved id of the new window's first pane.
     pub pane_id: PaneId,
     session_id: SessionId,
+    /// Initial grid width in columns.
     pub cols: u16,
+    /// Initial grid height in rows.
     pub rows: u16,
     name: String,
     session_name: String,
@@ -183,6 +192,7 @@ impl WindowSpawn {
 /// [`SessionSpawn`] for `split-window`: completion depends on the target
 /// pane still being a live leaf of the same window after the spawn.
 pub struct SplitSpawn {
+    /// Reserved id of the new pane.
     pub pane_id: PaneId,
     window_id: WindowId,
     target: PaneId,
@@ -191,7 +201,9 @@ pub struct SplitSpawn {
     /// `-b`: the new pane takes `first` (left/top) of the new split
     /// instead of `second` (right/bottom).
     before: bool,
+    /// Initial grid width in columns.
     pub cols: u16,
+    /// Initial grid height in rows.
     pub rows: u16,
     session: Option<(SessionId, String)>,
     env: Option<BTreeMap<String, String>>,

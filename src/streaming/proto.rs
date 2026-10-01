@@ -29,6 +29,9 @@ use std::io::{Read, Write};
 /// Pre-generated from proto/terminal.proto to avoid requiring protoc at build time.
 /// To regenerate: run `cargo build --features streaming` with protoc installed,
 /// then copy the output from target/debug/build/.../out/terminal.rs
+// DOC-128 allow-list: prost output cannot carry hand-written docs; the wire
+// contract is documented in proto/terminal.proto.
+#[allow(missing_docs)]
 #[path = "terminal.pb.rs"]
 pub mod pb;
 

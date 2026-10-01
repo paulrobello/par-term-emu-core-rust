@@ -156,7 +156,13 @@ typedef struct {
  * Cursor position and style, C-compatible.
  */
 typedef struct {
+  /**
+   * Cursor column (0-indexed).
+   */
   uint32_t col;
+  /**
+   * Cursor row (0-indexed).
+   */
   uint32_t row;
   /**
    * Whether the cursor is visible (DECTCEM)
@@ -205,7 +211,13 @@ typedef struct {
    * Kitty keyboard protocol progressive-enhancement flags
    */
   uint16_t kitty_flags;
+  /**
+   * Grid width in columns.
+   */
   uint32_t cols;
+  /**
+   * Grid height in rows.
+   */
   uint32_t rows;
 } TermModeState;
 

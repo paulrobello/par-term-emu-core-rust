@@ -90,7 +90,12 @@ fn clamp_restored_grid_dims(snapshot: &mut TerminalSnapshot) {
 pub enum PersistError {
     /// The state was written under a `format_version` this build does not
     /// know — migrate or refuse, never guess.
-    UnsupportedVersion { found: u32, supported: u32 },
+    UnsupportedVersion {
+        /// `format_version` found in the file.
+        found: u32,
+        /// `format_version` this build supports.
+        supported: u32,
+    },
     /// Spawning a restored pane's replacement process failed.
     Mux(MuxError),
     /// Writing the state file failed.
@@ -941,7 +946,12 @@ pub enum Loaded {
     /// A file existed but was corrupt or carried an unknown version; it has
     /// been renamed aside and the daemon starts fresh (D3.2: unreadable
     /// state never blocks startup — match tmux).
-    Quarantined { from: PathBuf, to: PathBuf },
+    Quarantined {
+        /// The original state-file path.
+        from: PathBuf,
+        /// The path the file was renamed to.
+        to: PathBuf,
+    },
 }
 
 /// Read the state file at `target`, quarantining a corrupt or

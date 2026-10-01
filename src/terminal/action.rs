@@ -34,21 +34,31 @@ pub enum TerminalAction {
     Execute(u8),
     /// A CSI sequence (`Perform::csi_dispatch`).
     CsiDispatch {
+        /// CSI parameters, each a list of `:`-separated sub-parameters.
         params: Vec<Vec<u16>>,
+        /// Intermediate bytes.
         intermediates: Vec<u8>,
+        /// Whether the sequence overflowed parser limits and must be ignored.
         ignore: bool,
+        /// Final character.
         action: char,
     },
     /// An OSC sequence (`Perform::osc_dispatch`).
     OscDispatch {
+        /// OSC parameters, split on `;`.
         params: Vec<Vec<u8>>,
+        /// Whether the sequence ended with BEL rather than ST.
         bell_terminated: bool,
     },
     /// Start of a DCS sequence (`Perform::hook`).
     DcsHook {
+        /// DCS parameters, each a list of sub-parameters.
         params: Vec<Vec<u16>>,
+        /// Intermediate bytes.
         intermediates: Vec<u8>,
+        /// Whether the sequence overflowed parser limits and must be ignored.
         ignore: bool,
+        /// Final character.
         action: char,
     },
     /// One DCS payload byte (`Perform::put`).
@@ -57,8 +67,11 @@ pub enum TerminalAction {
     DcsUnhook,
     /// An ESC sequence (`Perform::esc_dispatch`).
     EscDispatch {
+        /// Intermediate bytes.
         intermediates: Vec<u8>,
+        /// Whether the sequence overflowed parser limits and must be ignored.
         ignore: bool,
+        /// Final byte.
         byte: u8,
     },
 }

@@ -36,25 +36,40 @@ pub enum ImageDataRef {
 /// Serializable animation frame metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableAnimationFrame {
+    /// Frame index within the animation.
     pub frame_number: u32,
+    /// Frame width in pixels.
     pub width: usize,
+    /// Frame height in pixels.
     pub height: usize,
+    /// Delay before the next frame in milliseconds.
     pub delay_ms: u32,
+    /// Horizontal offset within the canvas.
     pub x_offset: u32,
+    /// Vertical offset within the canvas.
     pub y_offset: u32,
+    /// How the frame composes onto the previous canvas.
     pub composition: CompositionMode,
+    /// Where the frame pixels live.
     pub data: ImageDataRef,
 }
 
 /// Serializable animation metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableAnimation {
+    /// Kitty image id the animation belongs to.
     pub image_id: u32,
+    /// Animation frames in order.
     pub frames: Vec<SerializableAnimationFrame>,
+    /// Delay applied to frames without their own, in milliseconds.
     pub default_delay_ms: u32,
+    /// Playback state.
     pub state: AnimationState,
+    /// Index of the frame currently shown.
     pub current_frame: u32,
+    /// Total loops requested (0 = infinite).
     pub loop_count: u32,
+    /// Loops completed so far.
     pub loops_completed: u32,
 }
 
@@ -86,13 +101,21 @@ pub struct SerializableGraphic {
     pub scrollback_row: Option<usize>,
 
     // Kitty-specific fields
+    /// Kitty image id.
     pub kitty_image_id: Option<u32>,
+    /// Kitty placement id.
     pub kitty_placement_id: Option<u32>,
+    /// Whether this is a virtual (Unicode placeholder) placement.
     pub is_virtual: bool,
+    /// Parent image id for relative placements.
     pub parent_image_id: Option<u32>,
+    /// Parent placement id for relative placements.
     pub parent_placement_id: Option<u32>,
+    /// Horizontal offset relative to the parent, in cells.
     pub relative_x_offset: i32,
+    /// Vertical offset relative to the parent, in cells.
     pub relative_y_offset: i32,
+    /// Whether the source payload was zlib-compressed.
     pub was_compressed: bool,
 
     /// Unified placement metadata

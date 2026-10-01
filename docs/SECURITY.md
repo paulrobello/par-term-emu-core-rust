@@ -1252,7 +1252,7 @@ sections; the numbers live here.
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1280` | Bytes read from one kitty file medium named by an escape payload. |
+| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
 | `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:457` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
@@ -1274,7 +1274,7 @@ sections; the numbers live here.
 | `SIXEL_DEFAULT_MAX_HEIGHT` | 1 KiB | `src/sixel.rs:42` | Default ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
 | `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
-| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
+| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:50` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:53` | Bytes accepted in one Input message payload from a streaming client. |

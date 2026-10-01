@@ -21,46 +21,74 @@ pub enum TmuxNotification {
     /// Command output block started
     /// Arguments: timestamp, command_number, flags
     Begin {
+        /// Unix timestamp of the block.
         timestamp: u64,
+        /// Command sequence number.
         command_number: u32,
+        /// Command flags.
         flags: String,
     },
 
     /// Command output block ended successfully
     /// Arguments: timestamp, command_number, flags
     End {
+        /// Unix timestamp of the block.
         timestamp: u64,
+        /// Command sequence number.
         command_number: u32,
+        /// Command flags.
         flags: String,
     },
 
     /// Command output block ended with error
     /// Arguments: timestamp, command_number, flags
     Error {
+        /// Unix timestamp of the block.
         timestamp: u64,
+        /// Command sequence number.
         command_number: u32,
+        /// Command flags.
         flags: String,
     },
 
     /// Pane output data
     /// Arguments: pane_id, output_data (octal-escaped for control chars)
-    Output { pane_id: String, data: Vec<u8> },
+    Output {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+        /// Raw output bytes (control characters decoded).
+        data: Vec<u8>,
+    },
 
     /// Pane mode changed
     /// Arguments: pane_id
-    PaneModeChanged { pane_id: String },
+    PaneModeChanged {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+    },
 
     /// Window's active pane changed
     /// Arguments: window_id, pane_id
-    WindowPaneChanged { window_id: String, pane_id: String },
+    WindowPaneChanged {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+    },
 
     /// Window closed in attached session
     /// Arguments: window_id
-    WindowClose { window_id: String },
+    WindowClose {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+    },
 
     /// Window closed in another session (unlinked)
     /// Arguments: window_id
-    UnlinkedWindowClose { window_id: String },
+    UnlinkedWindowClose {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+    },
 
     /// Window added to attached session
     /// Arguments: window_id, [window_layout, window_visible_layout, window_raw_flags]
@@ -69,39 +97,69 @@ pub enum TmuxNotification {
     /// optional: a bare-id line (real tmux's shape) parses with the three
     /// fields empty.
     WindowAdd {
+        /// Window id (e.g. `@1`).
         window_id: String,
+        /// Window layout string.
         window_layout: String,
+        /// Visible window layout string.
         window_visible_layout: String,
+        /// Raw window flags.
         window_raw_flags: String,
     },
 
     /// Window added to another session (unlinked)
     /// Arguments: window_id
-    UnlinkedWindowAdd { window_id: String },
+    UnlinkedWindowAdd {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+    },
 
     /// Window renamed in attached session
     /// Arguments: window_id, new_name
-    WindowRenamed { window_id: String, name: String },
+    WindowRenamed {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+        /// New window name.
+        name: String,
+    },
 
     /// Window renamed in another session (unlinked)
     /// Arguments: window_id, new_name
-    UnlinkedWindowRenamed { window_id: String, name: String },
+    UnlinkedWindowRenamed {
+        /// Window id (e.g. `@1`).
+        window_id: String,
+        /// New window name.
+        name: String,
+    },
 
     /// Attached session changed
     /// Arguments: session_id, session_name
-    SessionChanged { session_id: String, name: String },
+    SessionChanged {
+        /// Session id (e.g. `$1`).
+        session_id: String,
+        /// Session name.
+        name: String,
+    },
 
     /// Another client's session changed
     /// Arguments: client_name, session_id, session_name
     ClientSessionChanged {
+        /// Client name.
         client: String,
+        /// Session id (e.g. `$1`).
         session_id: String,
+        /// Session name.
         name: String,
     },
 
     /// Session renamed
     /// Arguments: session_id, new_name
-    SessionRenamed { session_id: String, name: String },
+    SessionRenamed {
+        /// Session id (e.g. `$1`).
+        session_id: String,
+        /// New session name.
+        name: String,
+    },
 
     /// Sessions changed (created or destroyed)
     SessionsChanged,
@@ -109,26 +167,37 @@ pub enum TmuxNotification {
     /// Session's current window changed
     /// Arguments: session_id, window_id
     SessionWindowChanged {
+        /// Session id (e.g. `$1`).
         session_id: String,
+        /// Window id (e.g. `@1`).
         window_id: String,
     },
 
     /// Client detached
     /// Arguments: client_name
-    ClientDetached { client: String },
+    ClientDetached {
+        /// Client name.
+        client: String,
+    },
 
     /// Client exited (only with -CC flag)
     Exit,
 
     /// Pane output paused (flow control)
     /// Arguments: pane_id
-    Pause { pane_id: String },
+    Pause {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+    },
 
     /// Extended output notification (flow control)
     /// Arguments: pane_id, milliseconds_behind, output_data
     ExtendedOutput {
+        /// Pane id (e.g. `%1`).
         pane_id: String,
+        /// How far output is behind, in milliseconds.
         delay_ms: u64,
+        /// Raw output bytes (control characters decoded).
         data: Vec<u8>,
     },
 
@@ -137,31 +206,49 @@ pub enum TmuxNotification {
 
     /// Subscription value changed
     /// Arguments: subscription_name, value
-    SubscriptionChanged { name: String, value: String },
+    SubscriptionChanged {
+        /// Subscription name.
+        name: String,
+        /// New subscription value.
+        value: String,
+    },
 
     /// Window layout changed
     /// Arguments: window_id, window_layout, window_visible_layout, window_raw_flags
     LayoutChange {
+        /// Window id (e.g. `@1`).
         window_id: String,
+        /// Window layout string.
         window_layout: String,
+        /// Visible window layout string.
         window_visible_layout: String,
+        /// Raw window flags.
         window_raw_flags: String,
     },
 
     /// Paste buffer changed
     /// Arguments: buffer_name
-    PasteBufferChanged { name: String },
+    PasteBufferChanged {
+        /// Buffer name.
+        name: String,
+    },
 
     /// Paste buffer deleted
     /// Arguments: buffer_name
-    PasteBufferDeleted { name: String },
+    PasteBufferDeleted {
+        /// Buffer name.
+        name: String,
+    },
 
     /// A pane's agent reported a state change (par-mux hook-fed agent
     /// layer, Phase 5 seam S3; real tmux never emits this).
     /// Arguments: pane_id, agent_label, state, source (`hook` or `scrape`)
     AgentStateChanged {
+        /// Pane id (e.g. `%1`).
         pane_id: String,
+        /// Agent label.
         agent: String,
+        /// Reported agent state.
         state: String,
         /// Who asserted the state: `hook` (the agent claimed it) or
         /// `scrape` (a pattern guessed it from pane content). Empty when
@@ -173,7 +260,12 @@ pub enum TmuxNotification {
     /// exited and its hook announced it). The pane left the roster — there
     /// is no state to report, only the removal.
     /// Arguments: pane_id, agent_label
-    AgentReleased { pane_id: String, agent: String },
+    AgentReleased {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+        /// Agent label.
+        agent: String,
+    },
 
     /// A pane's agent telemetry changed (`pane.report_agent_telemetry`;
     /// display-only roster data — model, effort, context and rate-limit
@@ -181,12 +273,22 @@ pub enum TmuxNotification {
     /// `list-agents` for the fresh blob, the same shape `%sessions-changed`
     /// teaches.
     /// Arguments: pane_id, agent_label
-    AgentTelemetryChanged { pane_id: String, agent: String },
+    AgentTelemetryChanged {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+        /// Agent label.
+        agent: String,
+    },
 
     /// A pane's user title changed (`select-pane -T`; par-mux pane-title
     /// extension — real tmux never emits this).
     /// Arguments: pane_id, new_title (empty = cleared)
-    PaneTitleChanged { pane_id: String, title: String },
+    PaneTitleChanged {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+        /// New pane title (empty = cleared).
+        title: String,
+    },
 
     /// A pane's process exited and the pane is held (remain-on-exit):
     /// the pane, its window, and its frozen screen stay in the tree for
@@ -195,7 +297,9 @@ pub enum TmuxNotification {
     /// reports `1`.
     /// Arguments: pane_id, exit_code (empty = none)
     PaneExited {
+        /// Pane id (e.g. `%1`).
         pane_id: String,
+        /// Process exit code, if known.
         exit_code: Option<i32>,
     },
 
@@ -203,15 +307,24 @@ pub enum TmuxNotification {
     /// pane id, window, and layout, fresh terminal. The cue clients use
     /// to clear their exited-state chrome.
     /// Arguments: pane_id
-    PaneRespawned { pane_id: String },
+    PaneRespawned {
+        /// Pane id (e.g. `%1`).
+        pane_id: String,
+    },
 
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
-    Unknown { line: String },
+    Unknown {
+        /// The raw notification line.
+        line: String,
+    },
 
     /// Regular terminal output (non-control mode data)
     /// This is used when we receive data that's not a control protocol message
-    TerminalOutput { data: Vec<u8> },
+    TerminalOutput {
+        /// Raw output bytes (control characters decoded).
+        data: Vec<u8>,
+    },
 }
 
 impl TmuxNotification {

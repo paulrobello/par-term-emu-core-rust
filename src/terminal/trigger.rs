@@ -12,23 +12,39 @@ pub type TriggerId = u64;
 /// Split direction for SplitPane trigger actions (mirrors par-term-config::TriggerSplitDirection)
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriggerSplitDirection {
+    /// Split side by side.
     Horizontal,
+    /// Split stacked.
     Vertical,
 }
 
 /// Which pane to split (mirrors par-term-config::TriggerSplitTarget)
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum TriggerSplitTarget {
+    /// Split the active pane.
     #[default]
     Active,
+    /// Split the pane that produced the match.
     Source,
 }
 
 /// Command to run in the new pane (mirrors par-term-config::SplitPaneCommand)
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriggerSplitCommand {
-    SendText { text: String, delay_ms: u64 },
-    InitialCommand { command: String, args: Vec<String> },
+    /// Send text to the new pane's shell.
+    SendText {
+        /// Text to send.
+        text: String,
+        /// Delay before sending, in milliseconds.
+        delay_ms: u64,
+    },
+    /// Run a command as the new pane's initial process.
+    InitialCommand {
+        /// Executable to run.
+        command: String,
+        /// Command arguments.
+        args: Vec<String>,
+    },
 }
 
 /// Action to execute when a trigger matches
@@ -36,31 +52,64 @@ pub enum TriggerSplitCommand {
 pub enum TriggerAction {
     /// Highlight matched text with specified colors and optional duration
     Highlight {
+        /// Foreground color (RGB), if any.
         fg: Option<(u8, u8, u8)>,
+        /// Background color (RGB), if any.
         bg: Option<(u8, u8, u8)>,
         /// Duration in milliseconds (0 = permanent)
         duration_ms: u64,
     },
     /// Send a notification (reuses existing notification system)
-    Notify { title: String, message: String },
+    Notify {
+        /// Notification title.
+        title: String,
+        /// Notification body.
+        message: String,
+    },
     /// Add a bookmark/mark on the matched line
     MarkLine {
+        /// Optional label for the mark.
         label: Option<String>,
+        /// Optional mark color (RGB).
         color: Option<(u8, u8, u8)>,
     },
     /// Set a session variable (reuses existing badge session_variables)
-    SetVariable { name: String, value: String },
+    SetVariable {
+        /// Variable name.
+        name: String,
+        /// Value to assign.
+        value: String,
+    },
     /// Run an external command (emitted as event for frontend)
-    RunCommand { command: String, args: Vec<String> },
+    RunCommand {
+        /// Executable to run.
+        command: String,
+        /// Command arguments.
+        args: Vec<String>,
+    },
     /// Play a sound (emitted as event for frontend)
-    PlaySound { sound_id: String, volume: u8 },
+    PlaySound {
+        /// Sound identifier.
+        sound_id: String,
+        /// Playback volume.
+        volume: u8,
+    },
     /// Send text to the terminal (emitted as event for frontend)
-    SendText { text: String, delay_ms: u64 },
+    SendText {
+        /// Text to send.
+        text: String,
+        /// Delay before sending, in milliseconds.
+        delay_ms: u64,
+    },
     /// Open a new pane (frontend-handled, emitted as ActionResult::SplitPane)
     SplitPane {
+        /// Split direction.
         direction: TriggerSplitDirection,
+        /// Command to run in the new pane.
         command: Option<TriggerSplitCommand>,
+        /// Whether the new pane takes focus.
         focus_new_pane: bool,
+        /// Which pane to split.
         target: TriggerSplitTarget,
     },
     /// Stop processing remaining actions for this trigger
@@ -549,41 +598,62 @@ impl TriggerEngine {
 pub enum ActionResult {
     /// Frontend should run this command
     RunCommand {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Command to run.
         command: String,
+        /// Command arguments.
         args: Vec<String>,
     },
     /// Frontend should play this sound
     PlaySound {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Sound identifier.
         sound_id: String,
+        /// Playback volume.
         volume: u8,
     },
     /// Frontend should send this text to the terminal
     SendText {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Text to send.
         text: String,
+        /// Delay before sending, in milliseconds.
         delay_ms: u64,
     },
     /// Frontend should display a notification
     Notify {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Notification title.
         title: String,
+        /// Notification body.
         message: String,
     },
     /// Frontend should add a scrollbar mark at the given row
     MarkLine {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Row to mark.
         row: usize,
+        /// Optional label for the mark.
         label: Option<String>,
+        /// Optional mark color (RGB).
         color: Option<(u8, u8, u8)>,
     },
     /// Frontend should open a new split pane and optionally run a command
     SplitPane {
+        /// Trigger that produced this result.
         trigger_id: TriggerId,
+        /// Split direction.
         direction: TriggerSplitDirection,
+        /// Command to run in the new pane.
         command: Option<TriggerSplitCommand>,
+        /// Whether the new pane takes focus.
         focus_new_pane: bool,
+        /// Which pane to split.
         target: TriggerSplitTarget,
         /// Pane ID that generated the match. None = per-pane polling not yet available.
         source_pane_id: Option<u64>,
