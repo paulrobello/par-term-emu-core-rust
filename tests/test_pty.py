@@ -125,6 +125,51 @@ def test_write_to_process_unix():
     assert wait_for(lambda: not term.is_running())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix PTY write-blocking semantics")
+def test_write_releases_gil_while_pty_write_blocks():
+    """QA-224: write() must not hold the GIL while blocked on a PTY write.
+
+    PtyTerminal is unsendable, so the write runs on the main thread while a
+    probe thread records when it could next take the GIL. The child never
+    reads: Linux parks the write until the child exits (~2s), macOS absorbs
+    the overflow but still needs ~1.4s for 50 MB — either way a GIL-holding
+    write stalls the probe past the 1.0s gate.
+    """
+    import threading
+    import time
+
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("sleep", args=["2"])
+
+    probe_ran_at = []
+    writer_note = []
+    started = time.monotonic()
+
+    def probe():
+        # The fixed short sleep returns by reacquiring the GIL, so the
+        # timestamp below is the measurement.
+        time.sleep(0.2)
+        probe_ran_at.append(time.monotonic() - started)
+
+    thread = threading.Thread(target=probe, daemon=True)
+    thread.start()
+
+    # Long enough to be stalled by a full PTY buffer on either platform.
+    try:
+        term.write(b"x" * 50_000_000)
+    except Exception as exc:  # noqa: BLE001 — the child's exit EIOs the blocked write
+        writer_note.append(exc)
+
+    thread.join(timeout=4.0)
+    assert probe_ran_at, "probe thread never ran"
+    assert probe_ran_at[0] < 1.0, (
+        "write() held the GIL while blocked on a PTY write "
+        f"(probe thread stalled {probe_ran_at[0]:.2f}s)"
+    )
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
 def test_spawn_with_env_vars():
     """Test spawning with custom environment variables"""

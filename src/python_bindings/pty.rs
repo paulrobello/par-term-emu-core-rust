@@ -94,6 +94,21 @@ crate::python_bindings::common::impl_terminal_file_transfer!(PyPtyTerminal);
 crate::python_bindings::common::impl_terminal_exports!(PyPtyTerminal);
 crate::python_bindings::common::impl_terminal_screenshot_methods!(PyPtyTerminal);
 
+/// QA-224: PtySession's write_all can park on a full PTY buffer for as long
+/// as the child refuses to read, so the GIL must not be held across it
+/// (same contract as the wait_* methods). The session handle is Send; the
+/// Python-owned slice is not, hence the copy before detaching. A free
+/// function, not a helper method: every fn in a `#[pymethods]` block is
+/// exported to Python.
+fn write_pty_detached(
+    py: pyo3::Python<'_>,
+    inner: &mut pty_session::PtySession,
+    data: &[u8],
+) -> PyResult<()> {
+    let data = data.to_vec();
+    py.detach(move || inner.write(&data).map_err(pyo3::PyErr::from))
+}
+
 #[pymethods]
 impl PyPtyTerminal {
     /// Create a new PTY terminal with the specified dimensions
@@ -177,20 +192,24 @@ impl PyPtyTerminal {
 
     /// Write data to the PTY (send to the child process)
     ///
+    /// The GIL is released while the underlying write blocks, so other
+    /// Python threads keep running.
+    ///
     /// Args:
     ///     data: Bytes to write
-    fn write(&mut self, data: &[u8]) -> PyResult<()> {
-        self.inner.write(data)?;
-        Ok(())
+    fn write(&mut self, py: pyo3::Python<'_>, data: &[u8]) -> PyResult<()> {
+        write_pty_detached(py, &mut self.inner, data)
     }
 
     /// Write a string to the PTY (convenience method)
     ///
+    /// The GIL is released while the underlying write blocks, so other
+    /// Python threads keep running.
+    ///
     /// Args:
     ///     s: String to write
-    fn write_str(&mut self, s: &str) -> PyResult<()> {
-        self.inner.write_str(s)?;
-        Ok(())
+    fn write_str(&mut self, py: pyo3::Python<'_>, s: &str) -> PyResult<()> {
+        write_pty_detached(py, &mut self.inner, s.as_bytes())
     }
 
     /// Resize the PTY and terminal
@@ -642,9 +661,12 @@ impl PyPtyTerminal {
     /// If bracketed paste mode is enabled, wraps the content with ESC[200~ and ESC[201~
     /// Otherwise, writes the content directly to the PTY
     ///
+    /// The GIL is released while the underlying writes block, so other
+    /// Python threads keep running.
+    ///
     /// Args:
     ///     content: String content to paste
-    fn paste(&mut self, content: &str) -> PyResult<()> {
+    fn paste(&mut self, py: pyo3::Python<'_>, content: &str) -> PyResult<()> {
         // QA-221: PtySession::write takes terminal.write() to record input,
         // so a read guard held across self.write() is a read-to-write
         // self-deadlock on the parking_lot RwLock, and any guard held across
@@ -660,19 +682,24 @@ impl PyPtyTerminal {
             )
         };
 
-        // Write start sequence if in bracketed paste mode
-        if !start.is_empty() {
-            self.write(&start)?;
-        }
+        // QA-224: each of the writes below can park on a full PTY buffer,
+        // so release the GIL across them (still with no guard held).
+        let content = content.to_owned();
+        py.detach(move || -> PyResult<()> {
+            // Write start sequence if in bracketed paste mode
+            if !start.is_empty() {
+                self.inner.write(&start)?;
+            }
 
-        // Write the actual content
-        self.write_str(content)?;
+            // Write the actual content
+            self.inner.write_str(&content)?;
 
-        // Write end sequence if in bracketed paste mode
-        if !end.is_empty() {
-            self.write(&end)?;
-        }
-        Ok(())
+            // Write end sequence if in bracketed paste mode
+            if !end.is_empty() {
+                self.inner.write(&end)?;
+            }
+            Ok(())
+        })
     }
 
     // synchronized_updates: provided by impl_terminal_query_getters! (ARC-003/QA-001)
@@ -978,14 +1005,14 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     True if an event was processed, False otherwise
-    fn tick_macro(&mut self) -> PyResult<bool> {
+    fn tick_macro(&mut self, py: pyo3::Python<'_>) -> PyResult<bool> {
         let bytes = {
             let mut term = self.inner.terminal_write();
             MacroEngine::tick_macro(&mut term)
         };
 
         if let Some(bytes) = bytes {
-            self.write(&bytes)?;
+            write_pty_detached(py, &mut self.inner, &bytes)?;
             Ok(true)
         } else {
             Ok(false)
