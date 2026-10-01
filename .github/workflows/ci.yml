@@ -217,6 +217,15 @@ jobs:
     - name: Run Python type checking
       run: uv run pyright .
 
+    - name: Install lychee
+      # Plain cargo install keeps the third-party action set unchanged,
+      # same policy as cargo-nextest.
+      run: cargo install lychee --locked
+
+    - name: Check doc links and anchors (ENH-035)
+      # Must match the local `make doc-links-check` flags and globs.
+      run: lychee --offline --include-fragments --no-progress docs/*.md README.md CONTRIBUTING.md QUICKSTART.md CHANGELOG.md CLAUDE.md
+
   build:
     name: Build wheels
     runs-on: ${{ matrix.os }}

@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check doc-links-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -59,6 +59,7 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
+	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
@@ -399,7 +400,22 @@ mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
 
-checkall: ffi-header-check ffi-surface-check mux-docs-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+# ENH-035: offline intra-repo link + GitHub-slug anchor check over the
+# shipped docs. External URLs are skipped (--offline). The non-recursive
+# docs/*.md glob keeps out docs/opus/, docs/fable/ and docs/research/
+# (planning and archive material); AUDIT*.md quote broken links as audit
+# evidence and stay out. Backticked placeholder paths are parsight's job,
+# not this gate's. No --cache: an offline run is sub-second and --cache
+# would drop .lycheecache into the working tree.
+DOC_LINK_FILES := docs/*.md README.md CONTRIBUTING.md QUICKSTART.md CHANGELOG.md CLAUDE.md
+doc-links-check:
+	@command -v lychee >/dev/null 2>&1 || { \
+		echo "ERROR: lychee not found — brew install lychee (or cargo install lychee --locked)"; \
+		exit 1; \
+	}
+	lychee --offline --include-fragments --no-progress $(DOC_LINK_FILES)
+
+checkall: ffi-header-check ffi-surface-check mux-docs-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -418,6 +434,7 @@ checkall: ffi-header-check ffi-surface-check mux-docs-check test-rust test-rust-
 	@echo "  ✓ Python tests"
 	@echo "  ✓ Web frontend tests (vitest)"
 	@echo "  ✓ Caps table in sync"
+	@echo "  ✓ Doc links + anchors (lychee, offline)"
 	@echo ""
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any

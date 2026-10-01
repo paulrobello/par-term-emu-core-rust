@@ -554,6 +554,8 @@ Use whichever tools fit the project:
 - Spell checking or terminology checks
 - Code block extraction and testing
 - Mermaid rendering validation
+
+Intra-repo links and heading anchors are checked by `make doc-links-check` (lychee, GitHub slug rules; an emoji-prefixed heading's slug starts with `-`).
 - API reference generation or schema validation
 
 ## Review Checklist
