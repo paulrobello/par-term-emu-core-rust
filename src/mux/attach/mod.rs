@@ -683,6 +683,15 @@ impl Session {
                 to_send.push(byte);
             }
         }
+        // A held-dead focused pane takes no bytes: the daemon answers every
+        // send-keys to it with the NotStartedError %error, and the pane's
+        // own PTY write would echo the bytes into its frozen screen either
+        // way. Drop the run (the user sees the (exited N) status cue and a
+        // respawn hint instead of their typing polluting the frozen view);
+        // prefix chords already routed above, so detach/respawn still work.
+        if self.exited.is_some() && !to_send.is_empty() {
+            return detached;
+        }
         self.send_chunked(&to_send);
         detached
     }
@@ -882,15 +891,10 @@ impl Session {
         changed
     }
 
-    /// The status line: reserve the bottom row with DECSTBM, draw
-    /// `session | title [| N agents] [| (exited N)]` inverse-video, and
-    /// restore the scroll region and cursor.
-    fn draw_status(&mut self) {
-        let (cols, rows) = conn::terminal_grid();
-        if rows < 2 || cols < 2 {
-            return; // nowhere to put a status row
-        }
-        let bottom = rows; // DECSTBM rows are 1-indexed inclusive
+    /// The composed status line, sans padding/positioning: session name,
+    /// pane title, agent count, and the held-dead cue with its respawn
+    /// hint.
+    fn status_line(&self) -> String {
         let session = if self.session_name.is_empty() {
             "-"
         } else {
@@ -907,10 +911,23 @@ impl Session {
         }
         if let Some(code) = self.exited {
             match code {
-                Some(code) => line.push_str(&format!(" | (exited {code})")),
-                None => line.push_str(" | (exited ?)"),
+                Some(code) => line.push_str(&format!(" | (exited {code} — C-b r respawns)")),
+                None => line.push_str(" | (exited ? — C-b r respawns)"),
             }
         }
+        line
+    }
+
+    /// The status line: reserve the bottom row with DECSTBM, draw
+    /// `session | title [| N agents] [| (exited N — C-b r respawns)]`
+    /// inverse-video, and restore the scroll region and cursor.
+    fn draw_status(&mut self) {
+        let (cols, rows) = conn::terminal_grid();
+        if rows < 2 || cols < 2 {
+            return; // nowhere to put a status row
+        }
+        let bottom = rows; // DECSTBM rows are 1-indexed inclusive
+        let line = self.status_line();
         let width = (cols as usize).saturating_sub(1);
         let mut text: String = line.chars().take(width).collect();
         let used = text.chars().count();
@@ -1076,6 +1093,18 @@ impl TerminalGuard {
         // Raw mode needs a tty; under a test harness (no tty) this is a
         // no-op so the scaffolding stays exercisable headless.
         let entered = crossterm::terminal::enable_raw_mode().is_ok();
+        // The alternate screen: the replay must not overwrite whatever the
+        // host terminal was showing before attach. Entered right after raw
+        // mode (only when it entered — the alt-screen write is worthless on
+        // a non-tty) and left before raw mode is dropped, so every exit
+        // path (detach, %exit, socket close, error, panic unwind) restores
+        // the host's screen. Render mode enters its own alt screen for its
+        // mouse-capture pairing; LeaveAlternateScreen is idempotent, so the
+        // guard's leave after the session's own is harmless.
+        if entered {
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+        }
         Self { entered }
     }
 }
@@ -1083,6 +1112,8 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered {
+            let _ =
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
             let _ = crossterm::terminal::disable_raw_mode();
         }
     }
@@ -1540,12 +1571,127 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
         };
-        // Plain bytes forward.
+        // Plain bytes forward when the pane is live.
         assert!(!session.route_bytes(b"hello"));
         assert!(session.route_bytes(&[0x02, b'd']), "prefix d detaches");
         assert!(
             !session.route_bytes(&[0x02, 0x02]),
             "prefix prefix consumes without detaching"
+        );
+    }
+
+    /// A held-dead focused pane takes no bytes: with `exited` set, plain
+    /// stdin bytes are dropped, so the daemon's NotStartedError `%error`
+    /// reply to a dead-pane send-keys never has a chance to (a) hit the
+    /// wire at all or (b) the bytes themselves never echo into the pane's
+    /// frozen screen. Prefix chords still route.
+    #[test]
+    fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
+        let mut session = Session {
+            conn: test_dead_conn(),
+            socket_path: PathBuf::from("/nonexistent"),
+            pane: "%0".to_string(),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: Some(Some(0)),
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+        };
+        assert!(
+            !session.route_bytes(b"typed while dead"),
+            "typing into a dead pane never detaches"
+        );
+        // Prefix keys still route on a dead pane.
+        assert!(
+            session.route_bytes(&[0x02, b'd']),
+            "prefix d still detaches"
+        );
+        assert!(
+            !session.route_bytes(&[0x02, 0x02]),
+            "prefix prefix still consumes"
+        );
+    }
+
+    /// The status line carries the respawn hint beside the exit code —
+    /// the cue that tells a user why their typing does nothing.
+    #[test]
+    fn status_line_names_the_respawn_chord_when_the_pane_is_dead() {
+        let mut session = Session {
+            conn: test_dead_conn(),
+            socket_path: PathBuf::from("/nonexistent"),
+            pane: "%0".to_string(),
+            window: String::new(),
+            session_id: None,
+            session_name: "work".to_string(),
+            pane_title: "bash".to_string(),
+            agents: 0,
+            exited: Some(Some(7)),
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+        };
+        let line = session.status_line();
+        assert!(
+            line.contains("(exited 7 — C-b r respawns)"),
+            "the held-dead cue names the respawn chord: {line}"
+        );
+        session.exited = Some(None);
+        assert!(
+            session
+                .status_line()
+                .contains("(exited ? — C-b r respawns)"),
+            "the unknown-code form carries the hint too"
+        );
+        session.exited = None;
+        assert!(
+            !session.status_line().contains("respawns"),
+            "a live pane's line has no exited cue"
+        );
+    }
+
+    /// Prefix r on a held-dead pane respawns it daemon-side and resumes
+    /// forwarding; the plain bytes typed afterwards go to the pane.
+    #[test]
+    fn respawn_chord_resumes_forwarding_after_revival() {
+        let (daemon, path) = FakeDaemon::bind("respawn");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: Some(Some(0)),
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+        };
+        // The fake daemon answers every unknown command with an ok empty
+        // block, so respawn-pane succeeds and clears the dead flag.
+        assert!(
+            !session.route_bytes(&[0x02, b'r']),
+            "prefix r never detaches"
+        );
+        assert!(session.exited.is_none(), "a successful respawn clears it");
+        // Forwarding resumed: the next plain byte is on the wire.
+        assert!(!session.route_bytes(b"x"));
+        // Handshake lines first (version, list-commands, set-client-colors,
+        // refresh-client -C), then the chord and respawn's resync
+        // (refresh-client -t) — the wire evidence forwarding is live again.
+        let lines = recorded(&daemon.received, 6);
+        assert_eq!(lines[4].0, "respawn-pane", "the chord respawned: {lines:?}");
+        assert_eq!(
+            lines[5].0, "refresh-client",
+            "the respawn resync rode the revived connection: {lines:?}"
         );
     }
 

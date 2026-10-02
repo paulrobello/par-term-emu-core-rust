@@ -335,24 +335,37 @@ fn detach_restores_the_terminal_region() {
         .to_string();
 
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
-    // Startup: the status-line DECSTBM reserve must appear — wait for the
-    // status DRAW (inverse-video bottom row), which is what carries it.
-    //
-    // The reserve bytes themselves are asserted on UNIX only. Windows
-    // ConPTY re-encodes the client's output: it INTERPRETS DECSTBM (the
-    // region is applied conhost-side) and does not pass the raw sequence
-    // through to the pty master, so ESC[1;23r never appears in the
-    // capture even though the client emitted it (the re-encoded status
-    // row draw does appear). The client-side emit is pinned by the unix
-    // run; the Windows run asserts the status draw ConPTY preserves.
+    // Startup: the alternate screen enter must come before anything else
+    // the client draws — the replay must not overwrite the host's prior
+    // content — and the status-line DECSTBM reserve must appear. Both are
+    // asserted on UNIX only. Windows ConPTY re-encodes the client's
+    // output: it INTERPRETS DECSTBM (the region is applied conhost-side)
+    // and consumes alt-screen switches into its own buffer model, so
+    // neither raw sequence passes through to the pty master even though
+    // the client emitted them (the re-encoded status row draw does
+    // appear). The client-side emits are pinned by the unix run; the
+    // Windows run asserts the status draw ConPTY preserves.
     if cfg!(unix) {
         let startup = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+        assert!(
+            startup.windows(8).any(|w| w == b"\x1b[?1049h"),
+            "attach must enter the alternate screen at startup, before the \
+             replay: {:?}\nstderr: {}",
+            String::from_utf8_lossy(&startup),
+            stderr.lock().unwrap()
+        );
         assert!(
             startup.windows(7).any(|w| w == b"\x1b[1;23r"),
             "attach must reserve the status row with DECSTBM (ESC[1;23r on a 24-row \
              terminal): {:?}\nstderr: {}",
             String::from_utf8_lossy(&startup),
             stderr.lock().unwrap()
+        );
+        assert!(
+            startup.windows(8).position(|w| w == b"\x1b[?1049h")
+                < startup.windows(7).position(|w| w == b"\x1b[1;23r"),
+            "the alt-screen enter precedes the status draw: {:?}",
+            String::from_utf8_lossy(&startup)
         );
     } else {
         let startup = wait_for_output(&host, b"\x1b[24;1H", Duration::from_secs(10));
@@ -375,15 +388,21 @@ fn detach_restores_the_terminal_region() {
     while let Ok(bytes) = host.output_rx.try_recv() {
         tail.extend_from_slice(&bytes);
     }
-    // The last thing the client writes before exit is the region restore.
-    // (crossterm's raw-mode disable is a termios call, not bytes.) On
-    // Windows ConPTY likewise absorbs the plain ESC[r reset, so the
-    // restore is asserted through the client's exit code there (already
-    // checked above) — the bytes themselves are pinned on unix.
+    // The last things the client writes before exit are the region restore
+    // and the alternate-screen leave. (crossterm's raw-mode disable is a
+    // termios call, not bytes.) On Windows ConPTY likewise absorbs ESC[r
+    // and the 1049 switch, so the restore is asserted through the client's
+    // exit code there (already checked above) — the bytes are pinned on
+    // unix.
     if cfg!(unix) {
         assert!(
             tail.windows(3).any(|w| w == b"\x1b[r"),
             "detach must restore the scroll region (ESC[r): {tail:?}"
+        );
+        assert!(
+            tail.windows(8).any(|w| w == b"\x1b[?1049l"),
+            "detach must leave the alternate screen (ESC[?1049l): {:?}",
+            String::from_utf8_lossy(&tail)
         );
     }
 }
@@ -468,6 +487,118 @@ fn daemon_exit_ends_the_client_cleanly() {
         "a daemon shutdown must end attach with exit 0. stderr: {}",
         stderr.lock().unwrap()
     );
+}
+
+/// Held-dead pane: typing into a dead pane must not flood the screen — the
+/// client drops the bytes (the daemon answers every send-keys to a dead
+/// pane with the NotStartedError `%error`, and the bytes would echo into
+/// the pane's frozen screen either way), the status row names the respawn
+/// chord, and prefix `r` respawns the pane and resumes forwarding.
+#[cfg(unix)]
+#[test]
+fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
+    let (fixture, _daemon, mut client) = fixture_with_session("deadpane");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // Kill the pane's shell: it is held dead (remain-on-exit) before the
+    // client attaches, the deterministic shape (the %pane-exited-mid-view
+    // path sets the same `exited` flag — pinned at the router level).
+    client
+        .send(&format!("send-keys -t {pane} -l 'exit'"))
+        .expect("exit");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info")
+            .join("");
+        assert!(Instant::now() < deadline, "the pane never died: {info}");
+        if info.contains("exited=") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
+    // Settle on the status draw; it must carry the respawn hint (the raw
+    // status text passes through the pty untouched; the em dash is its
+    // UTF-8 spelling \xe2\x80\x94).
+    let startup = wait_for_output(&host, b"respawns)", Duration::from_secs(10));
+    assert!(
+        startup.windows(14).any(|w| w == b"(exited 0 \xe2\x80\x94 "),
+        "the status row must show the held-dead cue: {:?}\nstderr: {}",
+        String::from_utf8_lossy(&startup),
+        stderr.lock().unwrap()
+    );
+    assert!(
+        startup.windows(15).any(|w| w == b"C-b r respawns)"),
+        "the status row must name the respawn chord: {:?}",
+        String::from_utf8_lossy(&startup)
+    );
+
+    // Type a burst: the client must drop the bytes. The only output that
+    // may follow is the settle-redraw status row (the one-shot redraw the
+    // client owes after the startup burst — same bytes as the first draw,
+    // no pane content), so assert no ECHO of the typed bytes and no
+    // send-keys error text renders.
+    host.to_child
+        .write_all(b"garbage typing \x1b[A x")
+        .expect("type");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(500));
+    let mut after = startup.clone();
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        after.extend_from_slice(&bytes);
+    }
+    let extra = &after[startup.len()..];
+    assert!(
+        !extra.windows(14).any(|w| w == b"garbage typing"),
+        "typed bytes must never echo to a held-dead pane's screen: {:?}",
+        String::from_utf8_lossy(&after)
+    );
+    assert!(
+        !extra.windows(7).any(|w| w == b"par-mux"),
+        "no error text may render over the dead pane: {:?}",
+        String::from_utf8_lossy(&after)
+    );
+    // At most the settle-redraw status row (an exact repeat of the first
+    // draw) may appear — no pane output, no flood.
+    assert!(
+        extra.len() <= startup.len(),
+        "a held-dead pane must take no stdin bytes (no echo, no error flood): \
+         the stream grew by {} bytes: {:?}. stderr: {}",
+        extra.len(),
+        String::from_utf8_lossy(extra),
+        stderr.lock().unwrap()
+    );
+
+    // Prefix r respawns the pane and resumes forwarding: a typed echo
+    // round-trips through the revived pane.
+    host.to_child.write_all(&[0x02, b'r']).expect("prefix r");
+    host.to_child.flush().ok();
+    host.to_child
+        .write_all(b"echo RESPAWNED-ROUNDTRIP\r")
+        .expect("type after respawn");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"RESPAWNED-ROUNDTRIP", Duration::from_secs(15));
+    assert!(
+        got.windows(b"RESPAWNED-ROUNDTRIP".len())
+            .any(|w| w == b"RESPAWNED-ROUNDTRIP"),
+        "prefix r must respawn the pane and resume forwarding. stderr: {}\n\
+         bytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    host.killer.kill().ok();
 }
 
 /// The `-t` target forms resolve: a pane id attaches to that pane (its
