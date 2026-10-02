@@ -106,8 +106,16 @@ pub enum MuxCommand {
         /// applied to every pane it spawns (tmux 3.x `new-session -e`).
         env: Vec<(String, String)>,
     },
-    /// List every live pane.
-    ListPanes,
+    /// List live panes: globally when `session` is `None`, or the panes of
+    /// one window when a window target rides `-t` (see
+    /// [`MuxCommand::ListWindows`]'s shape note on the one-enum-two-forms
+    /// rule).
+    ListPanes {
+        /// `-t <window>`: list that window's panes. `None` lists every pane
+        /// across every session (the global wire shape clients already
+        /// parse).
+        window: Option<Target<WindowId>>,
+    },
     /// List every pane a hook has claimed — the agent roster.
     ListAgents,
     /// List every dispatchable command with its feature tokens — capability
@@ -182,8 +190,18 @@ pub enum MuxCommand {
         /// New name.
         name: String,
     },
-    /// List every window across every session.
-    ListWindows,
+    /// List windows: across every session when `session` is `None`, or one
+    /// session's windows in order when a session target rides `-t`. One
+    /// enum variant for both forms, because tmux's wire grammar is one
+    /// command name with an optional `-t` — the parser cannot tell the
+    /// forms apart without carrying the distinction, and dispatch then
+    /// picks the reply shape.
+    ListWindows {
+        /// `-t <session>`: list that session's windows. `None` lists every
+        /// window across every session (the global wire shape clients
+        /// already parse).
+        session: Option<Target<SessionId>>,
+    },
     /// List every session.
     ListSessions,
     /// Shut the daemon down cleanly: the accept loop stops, the final state
@@ -415,10 +433,10 @@ impl MuxCommand {
             | MuxCommand::ClearHistory { .. }
             | MuxCommand::KillSession { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
-            MuxCommand::ListPanes
+            MuxCommand::ListPanes { .. }
             | MuxCommand::ListAgents
             | MuxCommand::ListCommands
-            | MuxCommand::ListWindows
+            | MuxCommand::ListWindows { .. }
             | MuxCommand::ListSessions
             | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
@@ -1052,7 +1070,7 @@ type CommandParser = fn(&Args<'_>) -> Result<MuxCommand, String>;
 /// command is one `parse_<cmd>` function plus one row here.
 const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("new-session", parse_new_session, &[]),
-    ("list-panes", parse_list_panes, &[]),
+    ("list-panes", parse_list_panes, &["targeted"]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),
     ("kill-pane", parse_kill_pane, &[]),
@@ -1062,7 +1080,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-window", parse_select_window, &[]),
     ("kill-window", parse_kill_window, &[]),
     ("rename-window", parse_rename_window, &[]),
-    ("list-windows", parse_list_windows, &[]),
+    ("list-windows", parse_list_windows, &["targeted"]),
     ("list-sessions", parse_list_sessions, &[]),
     ("kill-server", parse_kill_server, &[]),
     ("rename-session", parse_rename_session, &[]),
@@ -1261,9 +1279,24 @@ fn parse_set_environment(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
-fn parse_list_panes(_a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::ListPanes)
+fn parse_list_panes(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // `-t <window>` scopes the listing to one window (tmux's
+    // `list-panes -t <window>`); the bare form stays global. Any other
+    // positional is a client bug the reject_positionals rule exists for.
+    let window = match a.quoted_flag("-t")? {
+        Some(raw) => {
+            Some(Target::parse(&raw).map_err(|_| format!("invalid window target: {raw}"))?)
+        }
+        None => None,
+    };
+    reject_positionals(a, LIST_PANES_VALUE_FLAGS)?;
+    Ok(MuxCommand::ListPanes { window })
 }
+
+/// tmux's value-taking `list-panes` flags (QA-219's rule): the target, and
+/// the format flags a tmux-shaped sender may emit that this daemon ignores
+/// rather than misreading as pane names.
+const LIST_PANES_VALUE_FLAGS: &[&str] = &["-t", "-F", "-f"];
 
 fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListAgents)
@@ -1337,9 +1370,17 @@ fn parse_rename_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::RenameWindow { window, name })
 }
 
-fn parse_list_windows(_a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::ListWindows)
+fn parse_list_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // `-t <session>` scopes the listing to one session (tmux's
+    // `list-windows -t <session>`); the bare form stays global.
+    let session = a.session("-t")?;
+    reject_positionals(a, LIST_WINDOWS_VALUE_FLAGS)?;
+    Ok(MuxCommand::ListWindows { session })
 }
+
+/// tmux's value-taking `list-windows` flags (QA-219's rule), same shape as
+/// `LIST_PANES_VALUE_FLAGS`.
+const LIST_WINDOWS_VALUE_FLAGS: &[&str] = &["-t", "-F", "-f"];
 
 fn parse_list_sessions(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListSessions)
@@ -2190,7 +2231,10 @@ mod tests {
 
     #[test]
     fn parses_list_panes_and_kill_pane() {
-        assert_eq!(parse_command("list-panes").unwrap(), MuxCommand::ListPanes);
+        assert_eq!(
+            parse_command("list-panes").unwrap(),
+            MuxCommand::ListPanes { window: None }
+        );
         assert_eq!(
             parse_command("kill-pane -t %7").unwrap(),
             MuxCommand::KillPane {
@@ -2434,12 +2478,51 @@ mod tests {
     fn parses_list_windows_and_list_sessions() {
         assert_eq!(
             parse_command("list-windows").unwrap(),
-            MuxCommand::ListWindows
+            MuxCommand::ListWindows { session: None }
         );
         assert_eq!(
             parse_command("list-sessions").unwrap(),
             MuxCommand::ListSessions
         );
+    }
+
+    #[test]
+    fn parses_targeted_list_windows_and_list_panes() {
+        assert_eq!(
+            parse_command("list-windows -t $2").unwrap(),
+            MuxCommand::ListWindows {
+                session: Some(Target::Id(SessionId(2)))
+            }
+        );
+        assert_eq!(
+            parse_command("list-windows -t work").unwrap(),
+            MuxCommand::ListWindows {
+                session: Some(Target::Name("work".to_string()))
+            }
+        );
+        assert_eq!(
+            parse_command("list-panes -t @7").unwrap(),
+            MuxCommand::ListPanes {
+                window: Some(Target::Id(WindowId(7)))
+            }
+        );
+        assert_eq!(
+            parse_command("list-panes -t editor").unwrap(),
+            MuxCommand::ListPanes {
+                window: Some(Target::Name("editor".to_string()))
+            }
+        );
+        // A tmux-shaped -F rides along and is ignored, not misread as a
+        // positional pane name (QA-219's rule).
+        assert_eq!(
+            parse_command("list-windows -t work -F '#{window_name}'").unwrap(),
+            MuxCommand::ListWindows {
+                session: Some(Target::Name("work".to_string()))
+            }
+        );
+        // A stray positional is rejected.
+        assert!(parse_command("list-windows stray").is_err());
+        assert!(parse_command("list-panes stray").is_err());
     }
 
     #[test]
@@ -3183,7 +3266,7 @@ mod tests {
             );
         }
         let non_mutating = [
-            MuxCommand::ListPanes,
+            MuxCommand::ListPanes { window: None },
             MuxCommand::ListAgents,
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(0)),
@@ -3194,7 +3277,7 @@ mod tests {
                 size: None,
                 cell_pixels: None,
             },
-            MuxCommand::ListWindows,
+            MuxCommand::ListWindows { session: None },
             MuxCommand::ListSessions,
             MuxCommand::CapturePane {
                 pane: Target::Id(PaneId(0)),
@@ -3223,7 +3306,7 @@ mod tests {
         );
         assert_eq!(
             parse_line("list-panes").unwrap(),
-            Line::Control(MuxCommand::ListPanes)
+            Line::Control(MuxCommand::ListPanes { window: None })
         );
         let Err(err) = parse_line("frobnicate") else {
             panic!("an unknown command is a parse error");

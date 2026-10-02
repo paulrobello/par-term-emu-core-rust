@@ -16,6 +16,19 @@ fn ask(writer: &mut impl std::io::Write, reader: &mut impl std::io::BufRead, lin
     command(writer, reader, line).join("")
 }
 
+/// A reply block's body lines: framing (`%begin`/`%end`) and interleaved
+/// pushes (`%output`, …) stripped, body lines kept. Pane ids themselves
+/// start with `%`, so the prefix alone cannot classify — framing is the
+/// `%<word> ` shape, body lines never are.
+fn body_lines(reply: &str) -> Vec<&str> {
+    let framing = ["%begin", "%end", "%output", "%exit", "%error"];
+    reply
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| !framing.iter().any(|f| l.starts_with(f)))
+        .collect()
+}
+
 /// A pane target that is a user title resolves to the titled pane, and an
 /// unknown name is a reported error, not a silent miss.
 #[test]
@@ -214,6 +227,150 @@ fn ambiguous_window_target_errors_and_acts_on_nothing() {
     assert!(
         select.contains("@0") && select.contains("@1"),
         "the error lists both candidate windows: {select}"
+    );
+
+    drop(writer);
+    let _ = handle;
+}
+
+/// The attach path's tree reconstruction: `list-windows -t <session>`
+/// returns that session's windows in order with the active one marked, and
+/// `list-panes -t <window>` returns a window's panes in layout leaf order
+/// with the active one marked and a deterministic leaf index. The bare
+/// forms keep their exact pre-existing shapes.
+#[test]
+fn targeted_list_windows_and_list_panes_reconstruct_the_tree() {
+    let fixture = MuxFixture::new("treeq");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+
+    // Session alpha: window @0 (pane %0), a split -> %1, then two more
+    // windows @2 (pane %2) and @3 (pane %3). Session beta follows so the
+    // scoping is visible: its windows must NOT leak into alpha's reply.
+    command(&mut writer, &mut reader, "new-session -s alpha");
+    command(&mut writer, &mut reader, "split-window -t %0");
+    // %1 is active now; move it back so @0's marker is the asserted state.
+    command(&mut writer, &mut reader, "select-pane -t %0");
+    command(&mut writer, &mut reader, "new-window -t alpha -n second");
+    command(&mut writer, &mut reader, "rename-window -t second two");
+    command(&mut writer, &mut reader, "new-window -t alpha -n third");
+    command(&mut writer, &mut reader, "select-window -t two");
+    command(&mut writer, &mut reader, "new-session -s beta");
+    command(&mut writer, &mut reader, "new-window -t beta -n bwin");
+
+    // Window ids are daemon-monotonic, so alpha's windows are @0 (its
+    // first pane's window), @1 (`second`), @2 (`third`); beta's is @3.
+    // list-windows -t alpha: in session order with the active window @1
+    // marked and the name as the line remainder.
+    let listed = ask(&mut writer, &mut reader, "list-windows -t alpha");
+    let lines: Vec<&str> = listed
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.starts_with('%'))
+        .collect();
+    assert_eq!(
+        lines,
+        vec!["@0 - alpha", "@1 * two", "@2 - third"],
+        "session-scoped windows in order with the active marker: {listed}"
+    );
+
+    // The session target also works as a typed id, and beta's list does
+    // not contain alpha's windows.
+    let session_id = ask(&mut writer, &mut reader, "list-sessions")
+        .lines()
+        .find_map(|l| l.strip_prefix("$0: ").map(str::to_string))
+        .filter(|name| name == "alpha")
+        .map(|_| "$0".to_string());
+    let by_id = ask(&mut writer, &mut reader, "list-windows -t $0");
+    let strip = |text: String| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('%'))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        strip(by_id),
+        strip(listed.clone()),
+        "typed id and name targets agree"
+    );
+    let _ = session_id;
+    let beta_listed = ask(&mut writer, &mut reader, "list-windows -t beta");
+    assert!(
+        beta_listed.contains("@4 - bwin") && !beta_listed.contains("@0"),
+        "beta's list is scoped to beta (its windows are @3, @4): {beta_listed}"
+    );
+
+    // Wrong session name: an error block.
+    let missing = ask(&mut writer, &mut reader, "list-windows -t nosuch");
+    assert!(
+        missing.contains("%error") && missing.contains("no such session: nosuch"),
+        "unknown session errors: {missing}"
+    );
+
+    // list-panes -t @0: layout leaf order with the active pane marked.
+    let panes = ask(&mut writer, &mut reader, "list-panes -t @0");
+    let pane_lines: Vec<&str> = body_lines(&panes);
+    assert_eq!(
+        pane_lines,
+        vec!["%0 0 *", "%1 1 -"],
+        "window-scoped panes in leaf order with active marker and index: {panes}"
+    );
+
+    // The leaf index is deterministic across a re-split: split %0
+    // (leaf 0) — the new pane takes leaf 1, %1 shifts to 2, %0 stays 0.
+    command(&mut writer, &mut reader, "split-window -h -t %0");
+    let panes = ask(&mut writer, &mut reader, "list-panes -t @0");
+    let pane_lines: Vec<&str> = body_lines(&panes);
+    // The split target keeps its leaf index (0) and its old neighbor shifts
+    // to 2; the new pane takes leaf 1 and the focus (tmux semantics), so
+    // the marker rides on it — the index is deterministic, the marker is
+    // activity.
+    assert_eq!(
+        pane_lines[0], "%0 0 -",
+        "the split target keeps its leaf index: {panes}"
+    );
+    assert_eq!(
+        pane_lines[1], "%6 1 *",
+        "the new pane takes leaf 1 and the focus: {panes}"
+    );
+    assert_eq!(
+        pane_lines[2], "%1 2 -",
+        "the old leaf 1 shifts to 2: {panes}"
+    );
+    assert_eq!(pane_lines.len(), 3, "the split added a pane: {panes}");
+
+    // A dead/bare window id: an error block.
+    let no_window = ask(&mut writer, &mut reader, "list-panes -t @999");
+    assert!(
+        no_window.contains("%error") && no_window.contains("no such window: @999"),
+        "unknown window errors: {no_window}"
+    );
+
+    // The bare forms keep their pre-existing shapes exactly: every pane id
+    // alone on its line; every window as `@N: name`.
+    let global_panes = ask(&mut writer, &mut reader, "list-panes");
+    for line in body_lines(&global_panes) {
+        assert!(
+            line.starts_with('%') && line.split_whitespace().count() == 1,
+            "bare list-panes stays one id per line, got: {line:?}"
+        );
+    }
+    let global_windows = ask(&mut writer, &mut reader, "list-windows");
+    assert!(
+        body_lines(&global_windows).iter().all(|l| l
+            .split_once(": ")
+            .map(|(id, _)| id.starts_with('@'))
+            .unwrap_or(false)),
+        "bare list-windows keeps the `@N: name` shape: {global_windows}"
+    );
+    assert_eq!(
+        body_lines(&global_windows).len(),
+        5,
+        "every window across both sessions is listed: {global_windows}"
     );
 
     drop(writer);

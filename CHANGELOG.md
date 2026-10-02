@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **par-mux `list-windows -t <session>` and `list-panes -t <window>`** (`src/mux/command.rs`, `src/mux/dispatch.rs`): the attach path's tree queries. `list-windows -t` replies one line per window of that session in session order as the fixed positional shape `@N <marker> <name>` (`*` marks the session's active window, `-` the rest; the name is the line remainder, so a spaced name survives). `list-panes -t` replies one line per pane of that window in layout leaf order as `%N <leaf> <marker>` — `leaf` is the deterministic index a client maps tmux layout-string leaves to pane ids by, and the same marker marks the window's active pane. Both queries accept typed ids and names; the bare global forms keep their exact pre-existing shapes (`%N` lines, `@N: name` lines), so existing clients are untouched. `list-commands` advertises the new `targeted` feature token on both rows. Fixed shapes, no `-F` — the T4.E decision. Pinned by `targeted_list_windows_and_list_panes_reconstruct_the_tree` (`tests/mux_targets.rs`) and `parses_targeted_list_windows_and_list_panes` (`src/mux/command.rs`).
+
 ## [0.58.0] - 2026-10-01
 
 ### Added

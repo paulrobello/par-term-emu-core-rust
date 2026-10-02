@@ -159,7 +159,7 @@ pub(super) fn dispatch_command(
     let mutates = command.mutates();
     let outcome = match command {
         MuxCommand::NewSession { name, env } => cmd_new_session(ctx, name, env),
-        MuxCommand::ListPanes => cmd_list_panes(ctx),
+        MuxCommand::ListPanes { window } => cmd_list_panes(ctx, window),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::ListCommands => cmd_list_commands(ctx),
         MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
@@ -208,7 +208,7 @@ pub(super) fn dispatch_command(
         MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
         MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
-        MuxCommand::ListWindows => cmd_list_windows(ctx),
+        MuxCommand::ListWindows { session } => cmd_list_windows(ctx, session),
         MuxCommand::ListSessions => cmd_list_sessions(ctx),
         MuxCommand::KillServer => cmd_kill_server(ctx),
         MuxCommand::CapturePane {
@@ -368,20 +368,49 @@ fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String
     }
 }
 
-fn cmd_list_panes(ctx: &Ctx<'_>) -> Outcome {
-    // Wire contract: list-panes replies one line per pane, globally, each
-    // just the pane id (`%N`). Geometry arrives via %layout-change
-    // pushes; there is no -F (Phase 4 T4.E decision — push covers what
-    // the -F polling fallback existed for).
+fn cmd_list_panes(ctx: &Ctx<'_>, window: Option<Target<WindowId>>) -> Outcome {
+    // Wire contract: the bare form replies one line per pane, globally,
+    // each just the pane id (`%N`) — the shape every existing client
+    // parses. Geometry arrives via %layout-change pushes; there is no -F
+    // (Phase 4 T4.E decision — push covers what the -F polling fallback
+    // existed for).
+    //
+    // `list-panes -t <window>` (the attach card's criterion 2): one line
+    // per pane of THAT window, in layout leaf order — the same
+    // left-to-right/top-to-bottom order `LayoutTree::render` emits leaves
+    // in, so `leaf` is the index a client maps tmux layout-string leaves
+    // to pane ids by. Fixed positional shape (T4.E): `%N <leaf> <marker>`
+    // where marker `*` is the window's active pane and `-` is every other
+    // pane — the roster's fixed-prefix rule, and no -F.
     let guard = ctx.tree.lock();
-    let body = guard
-        .sessions()
-        .iter()
-        .filter_map(|s| guard.session(*s))
-        .flat_map(|s| s.windows.clone())
-        .filter_map(|w| guard.window(w))
-        .flat_map(|w| w.panes())
-        .map(|p| p.to_string())
+    let Some(window_id) = window.map(|target| guard.resolve_window_target(target)) else {
+        let body = guard
+            .sessions()
+            .iter()
+            .filter_map(|s| guard.session(*s))
+            .flat_map(|s| s.windows.clone())
+            .filter_map(|w| guard.window(w))
+            .flat_map(|w| w.panes())
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Outcome::ok(ctx, &body);
+    };
+    let window_id = match window_id {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    let Some(window) = guard.window(window_id) else {
+        return Outcome::err(ctx, &MuxError::NoSuchWindow(window_id).to_string());
+    };
+    let body = window
+        .panes()
+        .into_iter()
+        .enumerate()
+        .map(|(leaf, pane)| {
+            let marker = if pane == window.active { '*' } else { '-' };
+            format!("{pane} {leaf} {marker}")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     Outcome::ok(ctx, &body)
@@ -1118,17 +1147,49 @@ fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> O
     }
 }
 
-fn cmd_list_windows(ctx: &Ctx<'_>) -> Outcome {
-    // Wire contract: list-windows replies one line per window,
-    // globally, as `@N: name`.
+fn cmd_list_windows(ctx: &Ctx<'_>, session: Option<Target<SessionId>>) -> Outcome {
+    // Wire contract: the bare form replies one line per window, globally,
+    // as `@N: name` — the shape every existing client parses.
+    //
+    // `list-windows -t <session>` (the attach card's criterion 1): one
+    // line per window of THAT session, in the session's window order (the
+    // order `%sessions-changed` asks clients to re-query), as a fixed
+    // positional shape (T4.E): `@N <marker> <name>` — marker `*` for the
+    // session's active window, `-` otherwise; the name is the line
+    // remainder so a spaced name survives (same rule as the roster's
+    // entry and `@N: name`'s own split-on-first-colon). No -F.
     let guard = ctx.tree.lock();
-    let body = guard
-        .sessions()
+    let Some(session_id) = session.map(|target| guard.resolve_session_target(target)) else {
+        let body = guard
+            .sessions()
+            .iter()
+            .filter_map(|s| guard.session(*s))
+            .flat_map(|s| s.windows.clone())
+            .filter_map(|w| guard.window(w))
+            .map(|w| format!("{}: {}", w.id, w.name))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Outcome::ok(ctx, &body);
+    };
+    let session_id = match session_id {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    let Some(session) = guard.session(session_id) else {
+        return Outcome::err(ctx, &MuxError::NoSuchSession(session_id).to_string());
+    };
+    let body = session
+        .windows
         .iter()
-        .filter_map(|s| guard.session(*s))
-        .flat_map(|s| s.windows.clone())
-        .filter_map(|w| guard.window(w))
-        .map(|w| format!("{}: {}", w.id, w.name))
+        .enumerate()
+        .map(|(index, window_id)| {
+            let marker = if index == session.active { '*' } else { '-' };
+            let name = guard
+                .window(*window_id)
+                .map(|w| w.name.as_str())
+                .unwrap_or_default();
+            format!("{window_id} {marker} {name}")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     Outcome::ok(ctx, &body)
