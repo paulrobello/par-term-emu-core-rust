@@ -55,3 +55,6 @@ Per terminal, in passthrough then render mode, check:
 
 Mark cells pass / fail. Under the table, note every failure: terminal, mode,
 what broke, and the exact sequence.
+
+When finished: `$P --socket /tmp/manual-mux --stop` shuts the seed daemon
+down (or `kill` it — the socket lives under /tmp and dies with the process).
