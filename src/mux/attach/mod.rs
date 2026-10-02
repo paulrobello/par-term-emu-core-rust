@@ -217,6 +217,16 @@ fn parse_prefix(spec: &str) -> Option<u8> {
     }
 }
 
+/// One `list-sessions` reply line as `(session_id, name)`. The wire shape
+/// is `$N: name` (dispatch.rs), so the id ends at the colon — a plain
+/// whitespace split keeps it (`$0:`), which the daemon's id parser then
+/// rejects. The window roster's `@N: name` lines parse the same way.
+pub(crate) fn parse_session_line(line: &str) -> Option<(String, String)> {
+    let (id_part, name) = line.split_once(": ")?;
+    let id = id_part.split_whitespace().next()?;
+    Some((id.to_string(), name.to_string()))
+}
+
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane
 /// title name) goes straight to the daemon's matcher via `pane-info`; a
 /// window (`@N`/name) or session (`$N`/name) target narrows through the
@@ -430,18 +440,17 @@ impl Session {
         if let Ok(reply) = self.conn.send_checked("list-sessions") {
             if reply.ok {
                 for line in &reply.body {
-                    let Some((id_part, name)) = line.split_once(": ") else {
+                    let Some((sid, name)) = parse_session_line(line) else {
                         continue;
                     };
-                    let sid = id_part.split_whitespace().next().unwrap_or(id_part);
                     if let Ok(windows) = self.conn.send_checked(&format!("list-windows -t {sid}")) {
                         if windows
                             .body
                             .iter()
                             .any(|l| l.split_whitespace().next() == Some(self.window.as_str()))
                         {
-                            self.session_id = Some(sid.to_string());
-                            self.session_name = name.to_string();
+                            self.session_id = Some(sid);
+                            self.session_name = name;
                             break;
                         }
                         if !windows.ok {
@@ -762,9 +771,7 @@ impl Session {
         let sessions: Vec<String> = reply
             .body
             .iter()
-            .filter_map(|l| l.split_whitespace().next())
-            .filter(|s| s.starts_with('$'))
-            .map(str::to_string)
+            .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
             .collect();
         let Some(current) = sessions
             .iter()
@@ -1432,6 +1439,24 @@ mod tests {
                 "handshake then list-panes: {lines:?}"
             );
         }
+    }
+
+    /// The `list-sessions` / bare `list-windows` wire shape `$N: name`
+    /// parses to a colon-less id plus the name — the shape the daemon's
+    /// id parser (SessionId::from_str) accepts, and the reason a plain
+    /// whitespace split (`$0:`) breaks every downstream `-t $N:` query.
+    #[test]
+    fn parse_session_line_strips_the_sigil_colon() {
+        assert_eq!(
+            parse_session_line("$0: work"),
+            Some(("$0".to_string(), "work".to_string()))
+        );
+        assert_eq!(
+            parse_session_line("$12: spaced name"),
+            Some(("$12".to_string(), "spaced name".to_string()))
+        );
+        assert_eq!(parse_session_line("$12"), None, "no colon-space, no parse");
+        assert_eq!(parse_session_line(""), None);
     }
 
     /// `-t` with a pane id passes through; a window target resolves to the

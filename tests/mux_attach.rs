@@ -1364,3 +1364,136 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
     );
     host.killer.kill().ok();
 }
+
+/// Regression (render-mode target-less resolution): `par-mux attach
+/// --mode render` with no `-t` attaches to the newest session's newest
+/// pane — the documented default — and renders it. `list-sessions`
+/// replies `$N: name`; a whitespace split kept the colon (`$0:`), the
+/// daemon's id parser rejected it, and the client exited 1 with "the
+/// session has no windows". One session, one pane: the client must come
+/// up (alt-screen enter + the pane's marker in the rendered frame) and
+/// keys must still reach the pane — not exit.
+#[cfg(unix)]
+#[test]
+fn render_mode_without_target_attaches_the_newest_session() {
+    let (fixture, _daemon, mut client) = fixture_with_session("rendernotarget");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // A distinctive line on the pane's screen: the rendered frame must
+    // carry it once the client seeds from the replay.
+    client
+        .send(&format!("send-keys -t {pane} -l 'echo NO-TARGET-MARKER'"))
+        .expect("seed marker");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(600));
+
+    // No -t anywhere: resolution is entirely the client's job.
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    let got = wait_for_output(&host, b"NO-TARGET-MARKER", Duration::from_secs(15));
+    assert!(
+        !got.is_empty(),
+        "the render client with no -t must attach the session's pane and \
+         render its content (alt-screen enter + the replayed marker). \
+         stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    // Alt-screen enter: the render client took over the screen rather
+    // than exiting with an error banner.
+    assert!(
+        got.windows(8).any(|w| w == b"\x1b[?1049h"),
+        "the client must enter the alternate screen (render mode): {:?}",
+        String::from_utf8_lossy(&got)
+    );
+
+    // It stays up and routes keys: an echo lands on the pane's screen
+    // through the client's input router.
+    host.to_child
+        .write_all(b"echo STILL-UP-MARKER\r")
+        .expect("type");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"STILL-UP-MARKER", Duration::from_secs(10));
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture");
+    assert!(
+        capture.join("\n").contains("STILL-UP-MARKER"),
+        "keys must reach the pane through the target-less client: {capture:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// The target-less render client picks the NEWEST session when several
+/// exist: ids are monotonic, so a second session's pane is the target —
+/// its marker renders, the first session's does not.
+#[cfg(unix)]
+#[test]
+fn render_mode_without_target_picks_the_newest_session() {
+    let (fixture, _daemon, mut client) = fixture_with_session("renderoldest");
+    client
+        .send("new-session -s second")
+        .expect("second session");
+    // The bare global roster's order is unspecified; find each session's
+    // pane by querying per session.
+    let sessions = client.send("list-sessions").expect("sessions").join("\n");
+    let first_pane = client
+        .send("list-panes -t $0")
+        .expect("panes of $0")
+        .join("");
+    let first_pane = first_pane
+        .split_whitespace()
+        .next()
+        .expect("pane of $0")
+        .to_string();
+    let second_pane = client
+        .send("list-panes -t $1")
+        .expect("panes of $1")
+        .join("");
+    let second_pane = second_pane
+        .split_whitespace()
+        .next()
+        .expect("pane of $1")
+        .to_string();
+    client
+        .send(&format!(
+            "send-keys -t {first_pane} -l 'echo OLDEST-MARKER'"
+        ))
+        .expect("seed oldest");
+    client
+        .send(&format!("send-keys -t {first_pane} Enter"))
+        .expect("enter oldest");
+    client
+        .send(&format!(
+            "send-keys -t {second_pane} -l 'echo NEWEST-MARKER'"
+        ))
+        .expect("seed newest");
+    client
+        .send(&format!("send-keys -t {second_pane} Enter"))
+        .expect("enter newest");
+    std::thread::sleep(Duration::from_millis(600));
+    let _ = sessions;
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    let got = wait_for_output(&host, b"NEWEST-MARKER", Duration::from_secs(15));
+    assert!(
+        !got.is_empty(),
+        "the no-target client must attach the newest session ($1) and \
+         render its pane. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    assert!(
+        !got.windows(13).any(|w| w == b"OLDEST-MARKER"),
+        "the first session's content must not be the rendered view: {:?}",
+        String::from_utf8_lossy(&got)
+    );
+    host.killer.kill().ok();
+}

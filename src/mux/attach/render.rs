@@ -1316,9 +1316,7 @@ impl WindowSession {
         let sessions: Vec<String> = reply
             .body
             .iter()
-            .filter_map(|l| l.split_whitespace().next())
-            .filter(|s| s.starts_with('$'))
-            .map(str::to_string)
+            .filter_map(|l| super::parse_session_line(l).map(|(id, _)| id))
             .collect();
         // Which session owns the shown window right now?
         let Ok(windows) = conn.send_checked(&format!(
@@ -1682,11 +1680,21 @@ fn resolve_window_and_pane(
             let sessions = conn
                 .send_checked("list-sessions")
                 .map_err(|err| format!("list-sessions failed: {err}"))?;
+            // The wire shape is `$N: name`; the id ends at the colon — a
+            // whitespace split keeps it (`$0:`), which the daemon's id
+            // parser rejects. Newest = highest id (ids are monotonic), the
+            // same deterministic newest-stand-in rule passthrough uses.
             let session = sessions
                 .body
                 .iter()
-                .find(|l| l.starts_with('$'))
-                .and_then(|l| l.split_whitespace().next())
+                .filter_map(|l| super::parse_session_line(l).map(|(id, _)| id))
+                .filter(|id| id.starts_with('$'))
+                .filter_map(|id| {
+                    let n: u64 = id[1..].parse().ok()?;
+                    Some((n, id))
+                })
+                .max_by_key(|(n, _)| *n)
+                .map(|(_, id)| id)
                 .ok_or("no sessions exist — create one first")?;
             let windows = conn
                 .send_checked(&format!("list-windows -t {session}"))
@@ -2246,5 +2254,72 @@ mod tests {
         let expected: String = expected.iter().take(8).map(|c| c.c().to_string()).collect();
         let top: String = (0..8).map(|c| renderer.buffer[(c, 0)].symbol()).collect();
         assert_eq!(top, expected, "the viewport paints from history");
+    }
+
+    /// Regression (render-mode target-less resolution): a `list-sessions`
+    /// line is `$N: name`, so a whitespace split keeps the colon and the
+    /// daemon's id parser rejects `$0:` — the client exited with "the
+    /// session has no windows". The resolution must strip the colon, pick
+    /// the NEWEST session (highest id — the documented default), and its
+    /// active window's active pane.
+    #[test]
+    fn target_less_resolution_takes_newest_session_without_colon() {
+        use crate::mux::attach::conn;
+        use interprocess::local_socket::traits::Listener as _;
+        use std::io::{BufRead as _, BufReader, Write as _};
+
+        // Scripted daemon: two sessions (id 0 and 3, out of order to prove
+        // the newest pick is by id, not line order), each with windows, the
+        // newest session's window @9 marked active.
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "par-mux-attach-render-resolve-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = crate::mux::bind_local_listener(&path).expect("bind");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use interprocess::TryClone as _;
+            let Ok(stream) = listener.accept() else {
+                return;
+            };
+            let mut writer = stream.try_clone().expect("clone");
+            let mut reader = BufReader::new(stream);
+            let mut number = 0u32;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                number += 1;
+                let reply = match trimmed {
+                    "version" => "9.9.9+deadbeef".to_string(),
+                    "list-commands" => String::new(),
+                    "list-sessions" => "$0: old\n$3: new\n".to_string(),
+                    "list-windows -t $0" => "@1 - old-win\n".to_string(),
+                    "list-windows -t $3" => "@7 - mid\n@9 * new-win\n".to_string(),
+                    "list-panes -t @9" => "%5 0 -\n%8 1 *".to_string(),
+                    _ => String::new(),
+                };
+                tx.send(trimmed.to_owned()).ok();
+                writer
+                    .write_all(crate::mux::emit_block(number, &reply, true).as_bytes())
+                    .ok();
+                writer.flush().ok();
+            }
+        });
+
+        let mut conn = conn::AttachConn::connect(&path).expect("connect");
+        drop(rx);
+        let (window, pane) = resolve_window_and_pane(&mut conn, None).expect("resolve");
+        assert_eq!(window, "@9", "the newest session's active window");
+        assert_eq!(pane, "%8", "the active pane of that window");
     }
 }
