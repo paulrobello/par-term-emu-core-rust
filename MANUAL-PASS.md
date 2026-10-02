@@ -4,7 +4,7 @@ Human pass over the attach client in real terminal emulators — the ship
 gate's manual integration criterion. Build (from the repo root) and seed:
 
 ```sh
-cargo build --bin par-mux --no-default-features --features mux-bin,attach
+cargo build --release --bin par-mux --no-default-features --features mux-bin,attach
 P=target/release/par-mux
 $P --socket /tmp/manual-mux &                  # start a daemon
 $P --socket /tmp/manual-mux new-session -s demo
