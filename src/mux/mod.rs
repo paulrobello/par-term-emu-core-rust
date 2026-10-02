@@ -9,6 +9,8 @@
 //! everything here; see `par-mux.md`.
 
 pub mod agent_resume;
+#[cfg(feature = "attach")]
+pub mod attach;
 pub mod client;
 pub mod command;
 pub mod emit;

@@ -75,6 +75,64 @@ struct Cli {
     /// per session without this flag.
     #[arg(long)]
     expose_control_socket: bool,
+
+    /// Attach a client TUI to the daemon on the resolved socket (the
+    /// `attach` cargo feature builds it in). Subcommand, not flag: its
+    /// own positional/flag grammar. NOTE: a daemon literally named
+    /// "attach" must use --socket — the subcommand name shadows the
+    /// positional NAME form for that one name.
+    #[cfg(feature = "attach")]
+    #[command(subcommand)]
+    attach: Option<AttachCommand>,
+}
+
+/// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
+/// attach client (feature `attach`). A one-variant enum because clap's
+/// `Subcommand` derive only takes enums; the variant name is what spells the
+/// subcommand.
+#[cfg(feature = "attach")]
+#[derive(clap::Subcommand, Debug)]
+enum AttachCommand {
+    /// Attach a client to a running par-mux daemon; never starts one. A
+    /// daemon literally named "attach" must use --socket — the subcommand
+    /// name shadows the positional NAME form for that one name.
+    Attach(AttachArgs),
+}
+
+/// The `par-mux attach` argument set.
+#[cfg(feature = "attach")]
+#[derive(clap::Args, Debug)]
+struct AttachArgs {
+    /// Initial target (session/window/pane, tmux-style — resolves like a
+    /// send-keys -t target); Phase A's view attaches to it.
+    #[arg(short = 't', value_name = "TARGET")]
+    target: Option<String>,
+
+    /// Detach prefix key, tmux spelling (e.g. `C-b`); Phase A routes it.
+    #[arg(long = "prefix", value_name = "KEY")]
+    prefix: Option<String>,
+
+    /// Named default socket path. A daemon literally named "attach" must
+    /// use --socket instead — the subcommand name shadows this form.
+    name: Option<String>,
+
+    /// Connect to an explicit socket path instead of the named default.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<std::path::PathBuf>,
+}
+
+#[cfg(feature = "attach")]
+impl AttachCommand {
+    fn options(&self) -> par_term_emu_core_rust::mux::attach::AttachOptions {
+        match self {
+            AttachCommand::Attach(args) => par_term_emu_core_rust::mux::attach::AttachOptions {
+                socket: args.socket.clone(),
+                name: args.name.clone(),
+                target: args.target.clone(),
+                prefix: args.prefix.clone(),
+            },
+        }
+    }
 }
 
 /// Run one control command against the daemon on `path` (client mode).
@@ -218,6 +276,14 @@ fn main() -> std::process::ExitCode {
     log::set_logger(&STDERR_LOG)
         .map(|_| log::set_max_level(log::LevelFilter::Info))
         .ok();
+
+    // par-mux attach: subcommand form — run the attach client and exit
+    // with its code. Socket resolution lives in AttachOptions::socket_path
+    // (same precedence as the daemon/--cmd).
+    #[cfg(feature = "attach")]
+    if let Some(attach) = cli.attach.as_ref() {
+        return par_term_emu_core_rust::mux::attach::run(&attach.options());
+    }
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
     // binds an explicit path (what MuxClient::connect_or_spawn_at spawns).
@@ -494,3 +560,85 @@ impl log::Log for StderrLog {
 }
 
 static STDERR_LOG: StderrLog = StderrLog;
+
+#[cfg(all(test, feature = "attach"))]
+mod attach_cli_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn attach_parses_name_form() {
+        let cli = Cli::try_parse_from(["par-mux", "attach", "work"]).expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.name.as_deref(), Some("work"));
+        assert!(attach.socket.is_none());
+        assert!(attach.target.is_none());
+        assert!(attach.prefix.is_none());
+    }
+
+    #[test]
+    fn attach_target_flag_is_short_t_only() {
+        let cli = Cli::try_parse_from(["par-mux", "attach", "-t", "%0"]).expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.target.as_deref(), Some("%0"));
+        assert!(attach.prefix.is_none());
+    }
+
+    #[test]
+    fn attach_parses_socket_and_prefix() {
+        let cli = Cli::try_parse_from([
+            "par-mux",
+            "attach",
+            "--prefix",
+            "C-b",
+            "--socket",
+            "/tmp/x.sock",
+        ])
+        .expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.prefix.as_deref(), Some("C-b"));
+        assert_eq!(attach.socket, Some(std::path::PathBuf::from("/tmp/x.sock")));
+        assert!(attach.target.is_none());
+    }
+
+    #[test]
+    fn attach_target_and_prefix_together() {
+        let cli = Cli::try_parse_from(["par-mux", "attach", "work", "-t", "$0", "--prefix", "C-b"])
+            .expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.name.as_deref(), Some("work"));
+        assert_eq!(attach.target.as_deref(), Some("$0"));
+        assert_eq!(attach.prefix.as_deref(), Some("C-b"));
+    }
+
+    #[test]
+    fn attach_long_prefix_flag() {
+        let cli = Cli::try_parse_from(["par-mux", "attach", "--prefix", "C-a"]).expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.prefix.as_deref(), Some("C-a"));
+        assert!(attach.target.is_none());
+    }
+
+    #[test]
+    fn attach_socket_wins_over_name() {
+        let cli = Cli::try_parse_from(["par-mux", "attach", "work", "--socket", "/tmp/y.sock"])
+            .expect("parse");
+        let attach = cli.attach.expect("subcommand present");
+        let AttachCommand::Attach(attach) = attach;
+        assert_eq!(attach.socket, Some(std::path::PathBuf::from("/tmp/y.sock")));
+        assert_eq!(attach.name.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn daemon_mode_still_parses_without_subcommand() {
+        // The flag-based daemon form must keep parsing unchanged.
+        let cli = Cli::try_parse_from(["par-mux", "--socket", "/tmp/d.sock"]).expect("parse");
+        assert!(cli.attach.is_none());
+        assert_eq!(cli.socket, Some(std::path::PathBuf::from("/tmp/d.sock")));
+    }
+}

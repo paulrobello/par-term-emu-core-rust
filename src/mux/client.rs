@@ -46,6 +46,14 @@ impl MuxClient {
     /// watcher's whole fetch cycle (connect + `list-agents` reply) is
     /// bounded and a hung daemon delays the redial instead of wedging the
     /// thread forever.
+    // The only caller is the streaming roster watcher, which mux-only
+    // profiles (rust-only,mux-bin) do not compile — without this the
+    // clippy -D warnings gate fails on those feature sets (found while
+    // building `attach`, pre-existing on pristine HEAD).
+    #[cfg_attr(
+        not(any(feature = "streaming", feature = "python", feature = "python-test")),
+        expect(dead_code)
+    )]
     pub(crate) fn connect_bounded(path: &Path, deadline: Instant) -> io::Result<Self> {
         let stream = super::ipc::connect_local_stream_bounded(path, deadline)?;
         Self::from_stream(stream)
