@@ -7,10 +7,20 @@ gate's manual integration criterion. Build (from the repo root) and seed:
 cargo build --release --bin par-mux --no-default-features --features mux-bin,attach
 P=target/release/par-mux
 $P --socket /tmp/manual-mux &                  # start a daemon
-$P --socket /tmp/manual-mux new-session -s demo
-$P --socket /tmp/manual-mux split-window -t %0 -h
-$P --socket /tmp/manual-mux send-keys -t %0 -l 'echo LEFT'; $P --socket /tmp/manual-mux send-keys -t %0 Enter
-$P --socket /tmp/manual-mux send-keys -t %1 -l 'echo RIGHT'; $P --socket /tmp/manual-mux send-keys -t %1 Enter
+$P --socket /tmp/manual-mux --cmd "new-session -s demo"
+$P --socket /tmp/manual-mux --cmd "split-window -t %0 -h"
+```
+
+Client control commands ride `--cmd` (the daemon's clap layer does not take
+them bare). Prefer typing into the panes interactively once attached — that
+is what this pass exercises. For scripted seeding, note `send-keys -l`
+concatenates whitespace-separated tokens without the separator (`-l echo
+LEFT` types `echoLEFT`); use the hex form for text with spaces (`-H` takes
+space-separated hex byte pairs):
+
+```sh
+$P --socket /tmp/manual-mux --cmd "send-keys -t %0 -H 65 63 68 6f 20 4c 45 46 54"   # "echo LEFT"
+$P --socket /tmp/manual-mux --cmd "send-keys -t %0 Enter"
 ```
 
 Then attach from the terminal under test:
