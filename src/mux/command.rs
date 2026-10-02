@@ -142,8 +142,13 @@ pub enum MuxCommand {
     /// the client's renderer size (`-C`) and resize the pane's window.
     RefreshClient {
         /// Target pane; the window it belongs to is the one a `-C` resize
-        /// applies to.
-        pane: Target<PaneId>,
+        /// applies to. `None` is the target-less size-report form the
+        /// attach handshake sends before it has resolved a pane: with it,
+        /// `-p` still applies daemon-wide and `-C` resizes the newest
+        /// session's active window (the same newest-stand-in bare
+        /// `new-window` uses), and there is never a screen-restore replay —
+        /// replay is what the `-t` form is for.
+        pane: Option<Target<PaneId>>,
         /// `-C WxH`: the client's renderer grid size. The window-size
         /// policy (par-mux.md Phase 4): the LATEST such report wins —
         /// par-mux has no other client-size input, so latest-attached-client
@@ -1310,7 +1315,16 @@ fn parse_kill_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::RefreshClient {
-        pane: a.pane("-t")?,
+        // `-t` is optional: the attach handshake reports its renderer size
+        // (`-C`/`-p`) BEFORE it has resolved which pane it shows, so the
+        // target-less form is a pure size report. Replay stays bound to the
+        // `-t` form.
+        pane: match a.quoted_flag("-t")? {
+            Some(raw) => {
+                Some(Target::parse(&raw).map_err(|_| format!("invalid pane target: {raw}"))?)
+            }
+            None => None,
+        },
         size: a.size_pair("-C", (MAX_CLIENT_COLS, MAX_CLIENT_ROWS))?,
         cell_pixels: a.size_pair("-p", (MAX_CELL_PIXELS, MAX_CELL_PIXELS))?,
     })
@@ -3082,7 +3096,7 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0").unwrap(),
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: None,
                 cell_pixels: None
             }
@@ -3090,7 +3104,7 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0 -C 120x40").unwrap(),
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: Some((120, 40)),
                 cell_pixels: None
             }
@@ -3100,7 +3114,7 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0 -C 120x40 -p 10x20").unwrap(),
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: Some((120, 40)),
                 cell_pixels: Some((10, 20))
             }
@@ -3108,11 +3122,59 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0 -p 9x17").unwrap(),
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: None,
                 cell_pixels: Some((9, 17))
             }
         );
+    }
+
+    /// The attach handshake's shape: `refresh-client -C WxH -p WxH` with no
+    /// `-t`, sent before the client has resolved a pane target. It parses
+    /// to the `None` pane form — a pure size report, never a replay.
+    #[test]
+    fn parses_target_less_refresh_client_as_a_pure_size_report() {
+        assert_eq!(
+            parse_command("refresh-client -C 120x40 -p 10x20").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: None,
+                size: Some((120, 40)),
+                cell_pixels: Some((10, 20))
+            }
+        );
+        // Either measurement can appear alone in the target-less form.
+        assert_eq!(
+            parse_command("refresh-client -C 100x30").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: None,
+                size: Some((100, 30)),
+                cell_pixels: None
+            }
+        );
+        assert_eq!(
+            parse_command("refresh-client -p 10x20").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: None,
+                size: None,
+                cell_pixels: Some((10, 20))
+            }
+        );
+        // Caps and malformed values reject exactly as the -t form does.
+        assert!(parse_command("refresh-client -C 1001x40").is_err());
+        assert!(parse_command("refresh-client -p 10x513").is_err());
+        assert!(parse_command("refresh-client -C ax40").is_err());
+        // A bare `refresh-client` with neither measurement nor target is
+        // a no-op size report: it parses (dispatch answers an empty ok).
+        assert_eq!(
+            parse_command("refresh-client").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: None,
+                size: None,
+                cell_pixels: None
+            }
+        );
+        // And an invalid pane target still errors in the -t form.
+        assert!(parse_command("refresh-client -t %abc").is_err());
     }
 
     #[test]
@@ -3142,7 +3204,7 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0 -C 1000x500 -p 512x512").unwrap(),
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: Some((MAX_CLIENT_COLS, MAX_CLIENT_ROWS)),
                 cell_pixels: Some((MAX_CELL_PIXELS, MAX_CELL_PIXELS)),
             }
@@ -3214,7 +3276,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
             },
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: Some((80, 24)),
                 cell_pixels: None,
             },
@@ -3273,7 +3335,7 @@ mod tests {
                 keys: SendKeysPayload::default(),
             },
             MuxCommand::RefreshClient {
-                pane: Target::Id(PaneId(0)),
+                pane: Some(Target::Id(PaneId(0))),
                 size: None,
                 cell_pixels: None,
             },

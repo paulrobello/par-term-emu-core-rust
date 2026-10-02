@@ -528,65 +528,111 @@ fn cmd_send_keys(ctx: &Ctx<'_>, pane: Target<PaneId>, keys: &SendKeysPayload) ->
 
 fn cmd_refresh_client(
     ctx: &Ctx<'_>,
-    pane: Target<PaneId>,
+    pane: Option<Target<PaneId>>,
     size: Option<(u16, u16)>,
     cell_pixels: Option<(u16, u16)>,
 ) -> Outcome {
-    let pane = {
-        let guard = ctx.tree.lock();
-        match guard.resolve_pane_target(pane) {
-            Ok(id) => id,
-            Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
-    };
-    // `-p` is applied first and independently of `-C`: the cell size is
-    // daemon-wide state every later re-fit reads (sync_pane_sizes), so a
-    // combined report lands the pixels even when the grid resize below
-    // fails on a dead pane, and a pixels-only report re-fits at the
-    // current grid through the same sync path.
+    // `-p` is applied first and independently of `-C` and of the target:
+    // the cell size is daemon-wide state every later re-fit reads
+    // (sync_pane_sizes), so a report lands the pixels even when the grid
+    // resize below fails, and a pixels-only report re-fits at the current
+    // grid through the same sync path. This runs before pane resolution so
+    // the attach handshake's target-less report takes effect.
     if let Some((cell_w, cell_h)) = cell_pixels {
         ctx.tree.lock().set_client_cell_pixels(cell_w, cell_h);
     }
-    match size {
-        // The window-size policy's input (T4.C): a client's renderer
-        // reports its grid size, the pane's window is resized to it, and
-        // every pane terminal re-fits to the re-divided geometry —
-        // followed by a %layout-change so clients re-render.
-        // Latest report wins (par-mux.md Phase 4 decision).
-        Some((cols, rows)) => {
-            let outcome = {
-                let mut guard = ctx.tree.lock();
-                match guard.window_of_pane(pane) {
-                    Some(window_id) => guard
-                        .resize_window(window_id, cols, rows)
-                        .map(|()| window_id),
-                    None => Err(MuxError::NoSuchPane(pane)),
+    match pane {
+        None => {
+            // The target-less size-report form (the attach handshake's
+            // shape): never a replay — replay is what the -t form exists
+            // for, and resyncing a pane the client never named would push
+            // it screen bytes of the wrong pane. `-C` still resizes, using
+            // the same newest-session stand-in bare `new-window` documents.
+            match size {
+                Some((cols, rows)) => {
+                    let outcome: Result<WindowId, String> = {
+                        let mut guard = ctx.tree.lock();
+                        // Newest = highest id (ids are monotonic). The
+                        // map has no insertion order, so this is the
+                        // deterministic spelling of bare new-window's
+                        // documented stand-in.
+                        let session = guard.sessions().into_iter().max();
+                        match session {
+                            Some(session) => {
+                                let window = guard
+                                    .session(session)
+                                    .and_then(|s| s.windows.get(s.active).copied());
+                                match window {
+                                    Some(window_id) => guard
+                                        .resize_window(window_id, cols, rows)
+                                        .map(|()| window_id)
+                                        .map_err(|err| err.to_string()),
+                                    None => Err(format!("no such session: {session}")),
+                                }
+                            }
+                            None => Err("no sessions exist to size".to_string()),
+                        }
+                    };
+                    match outcome {
+                        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+                        Err(err) => Outcome::err(ctx, &err),
+                    }
                 }
-            };
-            match outcome {
-                Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
-                Err(err) => Outcome::err(ctx, &err.to_string()),
+                // Sizeless and targetless is meaningless (the parser
+                // rejects it), but dispatch stays total: an empty ok.
+                None => Outcome::ok(ctx, ""),
             }
         }
-        // Resync (D5.4): replay the pane's state as the screen-restore
-        // encoder's byte stream so a reattached client's emulator
-        // reproduces it exactly — the main screen's scrollback first (a
-        // reattached pane can scroll back), alt-screen selection (a TUI
-        // replays its TUI screen), then the styled content with
-        // absolute row addressing (`\x1b[R;1H`; a `\n`-joined reply
-        // staircases: LF preserves the column), attributes via SGR
-        // (a plain reply loses every color), trailing background-styled
-        // cells (plain text trims them), and finally the cursor
-        // position/visibility/style and the input modes a full-screen
-        // app's next %output deltas assume.
-        None => {
-            let guard = ctx.tree.lock();
-            match guard.pane(pane) {
-                Some(target) => {
-                    let screen = target.terminal().read().export_screen_restore_sequence();
-                    Outcome::ok(ctx, &screen)
+        Some(pane) => {
+            let pane = {
+                let guard = ctx.tree.lock();
+                match guard.resolve_pane_target(pane) {
+                    Ok(id) => id,
+                    Err(err) => return Outcome::err(ctx, &err.to_string()),
                 }
-                None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+            };
+            match size {
+                // The window-size policy's input (T4.C): a client's renderer
+                // reports its grid size, the pane's window is resized to it, and
+                // every pane terminal re-fits to the re-divided geometry —
+                // followed by a %layout-change so clients re-render.
+                // Latest report wins (par-mux.md Phase 4 decision).
+                Some((cols, rows)) => {
+                    let outcome = {
+                        let mut guard = ctx.tree.lock();
+                        match guard.window_of_pane(pane) {
+                            Some(window_id) => guard
+                                .resize_window(window_id, cols, rows)
+                                .map(|()| window_id),
+                            None => Err(MuxError::NoSuchPane(pane)),
+                        }
+                    };
+                    match outcome {
+                        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+                        Err(err) => Outcome::err(ctx, &err.to_string()),
+                    }
+                }
+                // Resync (D5.4): replay the pane's state as the screen-restore
+                // encoder's byte stream so a reattached client's emulator
+                // reproduces it exactly — the main screen's scrollback first (a
+                // reattached pane can scroll back), alt-screen selection (a TUI
+                // replays its TUI screen), then the styled content with
+                // absolute row addressing (`\x1b[R;1H`; a `\n`-joined reply
+                // staircases: LF preserves the column), attributes via SGR
+                // (a plain reply loses every color), trailing background-styled
+                // cells (plain text trims them), and finally the cursor
+                // position/visibility/style and the input modes a full-screen
+                // app's next %output deltas assume.
+                None => {
+                    let guard = ctx.tree.lock();
+                    match guard.pane(pane) {
+                        Some(target) => {
+                            let screen = target.terminal().read().export_screen_restore_sequence();
+                            Outcome::ok(ctx, &screen)
+                        }
+                        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+                    }
+                }
             }
         }
     }
@@ -1468,6 +1514,152 @@ mod tests {
         assert!(
             !capture.contains("line-"),
             "the visible screen must be wiped: {capture}"
+        );
+    }
+
+    /// The attach handshake's target-less `refresh-client -C WxH -p WxH`:
+    /// a pure size report. `-p` lands daemon-wide, `-C` resizes the newest
+    /// session's active window (the same stand-in bare `new-window` uses),
+    /// `%layout-change` broadcasts, and — the gap this form exists to close
+    /// — the command never errors and never replays a pane's screen.
+    #[test]
+    fn target_less_refresh_client_sizes_the_newest_active_window() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        // Two sessions: newest = second. Its active window is what -C hits.
+        run("new-session -s first");
+        run("new-session -s second");
+        // A registered broadcast sink, so the resize's %layout-change has
+        // somewhere to land (the a_failed_respawn test's client shape).
+        let (sink_tx, sink_rx) = std::sync::mpsc::sync_channel(4096);
+        clients.lock().push((
+            u64::MAX,
+            sink_tx,
+            Arc::new(AtomicBool::new(false)),
+            crate::mux::ipc::ConnectionAbort::none(),
+        ));
+        let (second_window, pane) = {
+            let guard = tree.lock();
+            let session = *guard
+                .sessions()
+                .iter()
+                .find(|s| guard.session(**s).unwrap().name == "second")
+                .expect("the second session exists");
+            let window = guard.session(session).unwrap().windows[0];
+            let pane = guard.window(window).unwrap().panes()[0];
+            (window, pane)
+        };
+        {
+            let guard = tree.lock();
+            assert_eq!(
+                guard.window(second_window).unwrap().cols,
+                80,
+                "the default grid starts at 80 columns"
+            );
+        }
+
+        let reply = run("refresh-client -C 100x40 -p 12x24");
+        assert!(
+            !reply.contains("%error"),
+            "the target-less size report must land, not error: {reply}"
+        );
+        // The resize broadcasts %layout-change to registered clients — here
+        // the one sink the test pushed into the registry.
+        let broadcast = sink_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the resize broadcast a layout change");
+        assert!(
+            broadcast.contains(&format!("%layout-change {second_window} ")),
+            "the resize broadcasts geometry: {broadcast}"
+        );
+        let guard = tree.lock();
+        let window = guard.window(second_window).unwrap();
+        assert_eq!(
+            (window.cols, window.rows),
+            (100, 40),
+            "the newest session's active window takes the reported size"
+        );
+        // -p is daemon-wide.
+        assert_eq!(
+            guard
+                .pane(pane)
+                .unwrap()
+                .terminal()
+                .read()
+                .graphics
+                .cell_dimensions,
+            (12, 24),
+            "the pixel report lands daemon-wide"
+        );
+    }
+
+    /// Target-less with no sessions at all: an error naming the absence,
+    /// not a panic — the same outcome bare `new-window` gives.
+    #[test]
+    fn target_less_refresh_client_with_no_sessions_errors_cleanly() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let reply = dispatch_command(
+            parse_command("refresh-client -C 100x40").unwrap(),
+            &ctx,
+            None,
+            None,
+        );
+        assert!(
+            reply.contains("%error") && reply.contains("no sessions"),
+            "an empty tree rejects the size report: {reply}"
+        );
+    }
+
+    /// The -t form keeps its contract: a screen-restore replay only ever
+    /// happens for it. The target-less size report of the same daemon
+    /// carries no pane content.
+    #[test]
+    fn target_less_refresh_client_never_replays_a_screen() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        {
+            let terminal = tree.lock().pane(pane).unwrap().terminal();
+            let mut term = terminal.write();
+            term.process(b"PANE-MARKER");
+        }
+        let reply = run("refresh-client -C 120x40");
+        assert!(
+            !reply.contains("PANE-MARKER"),
+            "a size report must never replay a pane screen: {reply}"
         );
     }
 
