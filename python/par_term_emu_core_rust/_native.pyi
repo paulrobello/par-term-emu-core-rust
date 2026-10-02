@@ -1096,7 +1096,7 @@ class Notification:
 
 class NotificationConfig:
     """Notification configuration"""
-    def __init__() -> None: ...
+    def __init__(self) -> None: ...
     @property
     def activity_enabled(self) -> Any:
         """Whether activity notifications are enabled"""

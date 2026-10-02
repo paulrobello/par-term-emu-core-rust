@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "par-term-emu-core-rust"
-version = "0.58.0"
+version = "0.58.1"
 dependencies = [
  "anyhow",
  "axum",
