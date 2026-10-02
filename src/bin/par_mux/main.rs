@@ -8,6 +8,52 @@
 
 use clap::Parser;
 
+use par_term_emu_core_rust::mux::config::{
+    self, load_canonical, resolve, write_file, EffectiveConfig, Overrides,
+};
+
+#[cfg(feature = "attach")]
+use par_term_emu_core_rust::mux::attach::AttachMode;
+
+/// The daemon's one config resolution: the file tier re-read per run, the
+/// env tier read from this process's env, the flag tier from the parsed
+/// CLI. `include_flags` splits the two consumers: `--gen-config` and the
+/// actual bind want the flag tier (a flagged socket/state-dir must win);
+/// the `reload-config` diff base wants file+env ONLY — startup flags are
+/// one-shot overrides the file cannot express, so a flag-spelled socket
+/// must not make every later reload report the socket changed. One
+/// function so the three cannot drift.
+fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
+    let file = load_canonical();
+    let flag_tier = if include_flags {
+        Overrides {
+            socket: cli
+                .socket
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .or(cli.name.clone()),
+            state_dir: cli
+                .state_dir
+                .as_ref()
+                .map(|d| d.to_string_lossy().into_owned()),
+            pane_endpoints: cli.pane_endpoints.then_some(true),
+            expose_control_socket: cli.expose_control_socket.then_some(true),
+            ..Overrides::default()
+        }
+    } else {
+        Overrides::default()
+    };
+    resolve(
+        &file,
+        &Overrides {
+            env_socket: std::env::var("PAR_MUX_SOCKET")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            ..flag_tier
+        },
+    )
+}
+
 /// par-mux: a tmux-control-mode-compatible multiplexer daemon.
 ///
 /// Binds one control socket and serves it until killed. `MuxClient::connect_or_spawn_at`
@@ -84,6 +130,19 @@ struct Cli {
     #[cfg(feature = "attach")]
     #[command(subcommand)]
     attach: Option<AttachCommand>,
+
+    /// Write the config file with the CURRENT EFFECTIVE settings (file if
+    /// present > env > built-in defaults; startup CLI flags are not
+    /// introspectable after parse, so a flagged value that also appears
+    /// here wins only where this code path sees the flag — the socket and
+    /// the daemon bools). Never overwrites without --force. With no config
+    /// file yet, this is how a user starts one.
+    #[arg(long)]
+    gen_config: bool,
+
+    /// With --gen-config: overwrite an existing config file.
+    #[arg(long, requires = "gen_config")]
+    force: bool,
 }
 
 /// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
@@ -114,10 +173,11 @@ struct AttachArgs {
 
     /// Render pipeline: `passthrough` (the default — pane bytes to the
     /// host terminal verbatim, Phase A) or `render` (the Phase B pane
-    /// renderer with the input router: mode-aware key re-encoding, mouse
-    /// routing, wheel scrollback).
-    #[arg(long = "mode", value_name = "MODE", default_value = "passthrough")]
-    mode: String,
+    /// renderer with the input router: mode-aware key re-encode, mouse
+    /// routing, wheel scrollback). Absent = the `[client] mode` from the
+    /// config file, else passthrough.
+    #[arg(long = "mode", value_name = "MODE")]
+    mode: Option<String>,
 
     /// Named default socket path. A daemon literally named "attach" must
     /// use --socket instead — the subcommand name shadows this form.
@@ -137,7 +197,12 @@ impl AttachCommand {
                 name: args.name.clone(),
                 target: args.target.clone(),
                 prefix: args.prefix.clone(),
-                mode: parse_mode(&args.mode),
+                reload: None,
+                mode: args
+                    .mode
+                    .as_deref()
+                    .map(parse_mode)
+                    .unwrap_or(par_term_emu_core_rust::mux::attach::AttachMode::Passthrough),
             },
         }
     }
@@ -299,13 +364,44 @@ fn main() -> std::process::ExitCode {
         .ok();
 
     // par-mux attach: subcommand form — run the attach client and exit
-    // with its code. The parsed --mode selects the pipeline (passthrough
-    // default); socket resolution lives in AttachOptions::socket_path
-    // (same precedence as the daemon/--cmd).
+    // with its code. The parsed --mode/--prefix ride above the config
+    // file (flags > file); the mode/prefix/reload defaults come from the
+    // resolved config; socket resolution lives in
+    // AttachOptions::socket_path (same precedence as the daemon/--cmd).
     #[cfg(feature = "attach")]
     if let Some(attach) = cli.attach.as_ref() {
-        let options = attach.options();
+        let mut options = attach.options();
+        let eff = effective(&cli, true);
+        if options.prefix.is_none() {
+            options.prefix = Some(eff.prefix.clone());
+        }
+        if options.reload.is_none() {
+            options.reload = Some(eff.reload.clone());
+        }
+        if options.mode == AttachMode::Passthrough && eff.mode == "render" {
+            // The config file's mode tier: only reachable when the user
+            // did not pass --mode (the flag tier wins over the file).
+            options.mode = AttachMode::Render;
+        }
         return par_term_emu_core_rust::mux::attach::run_with_mode(&options, options.mode);
+    }
+
+    // --gen-config: write the effective config and exit. Resolution uses
+    // the same function serve mode runs, so the generated file IS what
+    // the daemon would resolve (modulo the socket flag tier, which this
+    // path does see).
+    if cli.gen_config {
+        let eff = effective(&cli, true);
+        let Some(path) = config::config_file_path() else {
+            eprintln!("par-mux: no config directory known (set PAR_MUX_CONFIG or XDG_CONFIG_HOME)");
+            return std::process::ExitCode::FAILURE;
+        };
+        if let Err(err) = write_file(&path, &eff, cli.force) {
+            eprintln!("par-mux: {err}");
+            return std::process::ExitCode::FAILURE;
+        }
+        println!("par-mux: wrote {}", path.display());
+        return std::process::ExitCode::SUCCESS;
     }
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
@@ -384,15 +480,20 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // startup. A readable state is REBUILT (D3.5): layout and content are
     // restored, and every pane's process is new — the original processes
     // died with the previous server, which is stated rather than papered
-    // over.
-    let state_path = match cli.state_dir {
-        Some(dir) => par_term_emu_core_rust::mux::persist::state_file_in(&dir, &path),
-        None => par_term_emu_core_rust::mux::persist::state_file_path(&path),
+    // over. The config's `[daemon] state-dir` tier joins the flag tier
+    // here: `effective()` already resolved flags > env-less > file, and
+    // an empty value means the OS default.
+    let eff = effective(&cli, true);
+    let state_path = match eff.state_dir.as_str() {
+        "" => par_term_emu_core_rust::mux::persist::state_file_path(&path),
+        dir => {
+            par_term_emu_core_rust::mux::persist::state_file_in(std::path::Path::new(dir), &path)
+        }
     };
     // ENH-039: --pane-endpoints wires the pane-endpoint channel between the
     // factory (which binds each pane's hook-only socket) and the server
     // (which serves the connections the endpoints accept).
-    let (pane_endpoint_tx, pane_endpoint_rx) = if cli.pane_endpoints {
+    let (pane_endpoint_tx, pane_endpoint_rx) = if eff.pane_endpoints {
         let (tx, rx) = par_term_emu_core_rust::mux::server::pane_endpoint_channel();
         (Some(tx), Some(rx))
     } else {
@@ -407,7 +508,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
             .ok()
             .map(|exe| exe.to_string_lossy().into_owned()),
         pane_endpoint_tx: pane_endpoint_tx.clone(),
-        expose_control_socket: cli.expose_control_socket,
+        expose_control_socket: eff.expose_control_socket,
         ..Default::default()
     };
     let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
@@ -431,17 +532,20 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // loses cleanly instead of stealing the socket.
     let tree = restored
         .unwrap_or_else(|| par_term_emu_core_rust::mux::tree::MuxTree::new(Box::new(factory())));
-    if cli.pane_endpoints {
+    if eff.pane_endpoints {
         // Reclaim crash leftovers before this daemon binds anything, so the
         // endpoint cap counts only live endpoints (ENH-039).
         par_term_emu_core_rust::mux::server::sweep_pane_endpoint_remnants(&path);
     }
-    let server = match pane_endpoint_rx {
+    let mut server = match pane_endpoint_rx {
         Some(rx) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree_and_pane_endpoints(
             &path, tree, rx,
         )?,
         None => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
     };
+    // Publish the applied settings: `reload-config` diffs its re-read
+    // against this copy (restart-required vs unchanged, per setting).
+    server.set_config(std::sync::Arc::new(parking_lot::Mutex::new(eff)));
     log::info!("par-mux listening on {}", path.display());
 
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
@@ -616,16 +720,25 @@ mod attach_cli_tests {
         use par_term_emu_core_rust::mux::attach::AttachMode;
         let cli = Cli::try_parse_from(["par-mux", "attach"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
-        assert_eq!(parse_mode(&attach.mode), AttachMode::Passthrough);
+        assert_eq!(
+            parse_mode(attach.mode.as_deref().unwrap_or("")),
+            AttachMode::Passthrough
+        );
 
         let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "render"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
-        assert_eq!(parse_mode(&attach.mode), AttachMode::Render);
+        assert_eq!(
+            parse_mode(attach.mode.as_deref().unwrap_or("")),
+            AttachMode::Render
+        );
 
         // An unknown value is a passthrough attach, not a parse error.
         let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "wat"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
-        assert_eq!(parse_mode(&attach.mode), AttachMode::Passthrough);
+        assert_eq!(
+            parse_mode(attach.mode.as_deref().unwrap_or("")),
+            AttachMode::Passthrough
+        );
     }
 
     #[test]

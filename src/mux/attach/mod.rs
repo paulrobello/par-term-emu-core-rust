@@ -92,6 +92,11 @@ pub struct AttachOptions {
     /// `--prefix KEY`: the detach key chord, e.g. `C-b` (tmux spelling),
     /// parsed by [`parse_prefix`].
     pub prefix: Option<String>,
+    /// The config-file reload chord (`[client] reload`, e.g. `C-b C-r`):
+    /// the key pressed after the prefix that re-reads the config file and
+    /// rebinds the chords live. Set by the CLI layer from the config
+    /// resolution; `None` keeps the built-in default (`C-b C-r`).
+    pub reload: Option<String>,
     /// Render pipeline selection (`--mode`): [`AttachMode::Passthrough`]
     /// (the Phase A contract) is the default; [`AttachMode::Render`]
     /// selects the pane renderer + input router.
@@ -161,7 +166,22 @@ fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
     // every exit path — including error/panic unwind.
     let guard = TerminalGuard::enter();
 
-    let session = match Session::new(conn, &path, options.target.as_deref(), prefix) {
+    // The reload chord key: the CLI layer passes the `[client] reload`
+    // spelling from the resolved config; `None` keeps the built-in
+    // default `C-b C-r`. An unparseable chord fails the attach — the
+    // same contract `--prefix` follows.
+    let reload_key = match options.reload.as_deref() {
+        Some(chord) => chord.to_string(),
+        None => "C-b C-r".to_string(),
+    };
+    let reload_key = match crate::mux::config::reload_chord_key(&reload_key) {
+        Ok(key) => key,
+        Err(err) => {
+            drop(guard);
+            return Err(AttachError::Handshake(std::io::Error::other(err)));
+        }
+    };
+    let session = match Session::new(conn, &path, options.target.as_deref(), prefix, reload_key) {
         Ok(session) => session,
         Err(err) => {
             // The guard drop restores the terminal before the message
@@ -197,24 +217,22 @@ enum PumpOutcome {
 pub(crate) const C_B: u8 = 0x02;
 
 /// Parse the `--prefix` tmux spelling (`C-b`, `C-a`, `C-Space`) or a
-/// literal single character into its byte.
+/// literal single character into its byte. Delegates to the crate's one
+/// prefix grammar in [`crate::mux::config`], so `--prefix` and the config
+/// file's chords share spellings and edge cases.
 fn parse_prefix(spec: &str) -> Option<u8> {
-    let lower = spec.to_ascii_lowercase();
-    if let Some(key) = lower.strip_prefix("c-") {
-        return match key {
-            "space" => Some(0x00),
-            letter if letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase() => {
-                Some(letter.as_bytes()[0] - b'a' + 1)
-            }
-            _ => None,
-        };
-    }
-    let bytes = spec.as_bytes();
-    if bytes.len() == 1 {
-        Some(bytes[0])
-    } else {
-        None
-    }
+    crate::mux::config::parse_prefix(spec)
+}
+
+/// The client-side half of a reload: re-read the canonical config file
+/// and re-derive the prefix and reload key through the pure helper
+/// ([`crate::mux::config::reload_client_chords`]), `current` the
+/// fallback for settings the file does not name.
+fn reload_client_chords(
+    current: crate::mux::config::Chords,
+) -> Result<crate::mux::config::Chords, String> {
+    let file = crate::mux::config::load_canonical_checked()?;
+    crate::mux::config::reload_client_chords(&file, &current)
 }
 
 /// One `list-sessions` reply line as `(session_id, name)`. The wire shape
@@ -349,6 +367,13 @@ struct Session {
     prefix: u8,
     /// The prefix byte arrived; the next stdin byte is the command key.
     prefix_pending: bool,
+    /// The reload chord: the key byte matched after the prefix, and the
+    /// chord spelling for the status cue. Both are live-rebindable.
+    reload_key: u8,
+    /// A transient confirmation cue drawn once on the status row and
+    /// cleared on the next redraw cycle (`config reloaded`, or the
+    /// reload's failure text).
+    flash: Option<String>,
 }
 
 impl Session {
@@ -359,6 +384,7 @@ impl Session {
         socket_path: &std::path::Path,
         target: Option<&str>,
         prefix: u8,
+        reload_key: u8,
     ) -> Result<Self, String> {
         // Registration replay (held panes' %pane-exited, zoomed windows'
         // %layout-change) is state about OTHER panes mostly; the resync
@@ -380,6 +406,8 @@ impl Session {
             settling: true,
             prefix,
             prefix_pending: false,
+            reload_key,
+            flash: None,
         };
         session.resync();
         session.refresh_status();
@@ -507,6 +535,9 @@ impl Session {
     fn pump_loop(&mut self) -> PumpOutcome {
         let mut stdin = Stdin::new();
         let mut status_dirty = true;
+        // The flash cue's lifetime in loop polls (~1 s at POLL = 16 ms).
+        const FLASH_POLLS: u32 = 60;
+        let mut flash_polls = 0u32;
         loop {
             // 1. Drain daemon pushes.
             loop {
@@ -536,8 +567,18 @@ impl Session {
 
             // 3. Status line redraw when something marked it dirty — or
             //    the host grid changed since the last draw (a resize, or
-            //    ConPTY's geometry settling late).
-            if status_dirty || self.size_changed() {
+            //    ConPTY's geometry settling late). A reload's flash cue
+            //    rides this path (route_bytes set it) and clears after
+            //    about a second of polls, so the next normal redraw
+            //    restores the plain status line.
+            if status_dirty || self.size_changed() || self.flash.is_some() {
+                if self.flash.is_some() {
+                    flash_polls += 1;
+                    if flash_polls > FLASH_POLLS {
+                        self.flash = None;
+                        flash_polls = 0;
+                    }
+                }
                 status_dirty = false;
                 self.refresh_status();
                 self.draw_status();
@@ -665,6 +706,14 @@ impl Session {
                     let taken = bytes[index..].iter().take(2).copied().collect::<Vec<u8>>();
                     index += taken.len();
                     self.prefix_arrow(&taken);
+                    continue;
+                }
+                // The reload chord matches by byte BEFORE the fixed
+                // command table: it is configurable, so it cannot be a
+                // static table arm, and the default (C-r, 0x12) does not
+                // collide with respawn (`r`, 0x72).
+                if byte == self.reload_key {
+                    self.reload_config();
                     continue;
                 }
                 match prefix_command(byte) {
@@ -844,6 +893,32 @@ impl Session {
         }
     }
 
+    /// The reload chord: re-read the config file, rebind the prefix and
+    /// the reload chord live (the reload key rebinding includes itself —
+    /// the NEXT reload follows the new chord), queue the status cue, and
+    /// send `reload-config` to the daemon so its settings follow. A
+    /// parse error in the re-read file shows on the status row instead
+    /// of detaching.
+    fn reload_config(&mut self) {
+        match reload_client_chords(crate::mux::config::Chords {
+            prefix: self.prefix,
+            reload: self.reload_key,
+        }) {
+            Ok(new_chords) => {
+                self.prefix = new_chords.prefix;
+                self.reload_key = new_chords.reload;
+                self.flash = Some("config reloaded".to_string());
+            }
+            Err(err) => {
+                self.flash = Some(format!("reload failed: {err}"));
+            }
+        }
+        // Daemon-side: best-effort — the daemon reports its per-setting
+        // outcome in its own reply; nothing here parses it (the status
+        // cue above is the client-side truth).
+        let _ = self.conn.send_checked("reload-config");
+    }
+
     /// Make `window`'s active pane (its `*` marker in `list-panes -t`) the
     /// pumped pane, select-then-refresh.
     fn attach_window_active_pane(&mut self, window: &str) {
@@ -921,6 +996,11 @@ impl Session {
                 Some(code) => line.push_str(&format!(" | (exited {code} — C-b r respawns)")),
                 None => line.push_str(" | (exited ? — C-b r respawns)"),
             }
+        }
+        // A reload (or its failure) leads the line: it is the freshest
+        // fact and the one the user is waiting to see.
+        if let Some(flash) = self.flash.as_deref() {
+            line = format!(" {flash} |{line}");
         }
         line
     }
@@ -1354,6 +1434,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            reload: None,
             mode: AttachMode::default(),
         };
         assert_eq!(run(&options), ExitCode::FAILURE);
@@ -1397,6 +1478,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            reload: None,
             mode: AttachMode::default(),
         };
         assert_eq!(run(&options), ExitCode::SUCCESS);
@@ -1419,6 +1501,7 @@ mod tests {
             name: Some("work".to_string()),
             target: None,
             prefix: None,
+            reload: None,
             mode: AttachMode::default(),
         };
         assert_eq!(explicit.socket_path(), PathBuf::from("/tmp/explicit.sock"));
@@ -1427,6 +1510,7 @@ mod tests {
             name: Some("work".to_string()),
             target: None,
             prefix: None,
+            reload: None,
             mode: AttachMode::default(),
         };
         assert_eq!(named.socket_path(), crate::mux::default_socket_path("work"));
@@ -1435,6 +1519,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            reload: None,
             mode: AttachMode::default(),
         };
         // No env var in the test harness -> the unnamed default.
@@ -1578,6 +1663,8 @@ mod tests {
             settling: false,
             prefix: 0x02,
             prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
         };
         // Plain bytes forward when the pane is live.
         assert!(!session.route_bytes(b"hello"));
@@ -1609,6 +1696,8 @@ mod tests {
             settling: false,
             prefix: 0x02,
             prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
         };
         assert!(
             !session.route_bytes(b"typed while dead"),
@@ -1643,6 +1732,8 @@ mod tests {
             settling: false,
             prefix: 0x02,
             prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
         };
         let line = session.status_line();
         assert!(
@@ -1682,6 +1773,8 @@ mod tests {
             settling: false,
             prefix: 0x02,
             prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
         };
         // The fake daemon answers every unknown command with an ok empty
         // block, so respawn-pane succeeds and clears the dead flag.
@@ -1728,5 +1821,97 @@ mod tests {
                 conn::AttachConn::connect(&path).expect("connect to the accepting listener")
             }
         }
+    }
+
+    /// The reload chord: a written config with a new prefix rebinds the
+    /// running session's chords LIVE — the prefix typed after the reload
+    /// detaches under the NEW prefix, the old one forwards — and the
+    /// `reload-config` control command rides the same chord to the
+    /// daemon.
+    #[test]
+    fn reload_chord_rebinds_prefix_and_sends_reload_config() {
+        let (_daemon, path) = FakeDaemon::bind("reload");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
+        };
+        // A config naming a new prefix (C-a) and a moved reload chord
+        // (C-a C-s): the rebind is pure over the parsed file, so the test
+        // feeds it directly (the env-pin path is covered end to end by
+        // the PTY-level attach tests, where the child's env is injectable
+        // — QA-196 forbids env mutation in this suite).
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[client]\nprefix = \"C-a\"\nreload = \"C-a C-s\"\n").unwrap();
+        let new_chords = crate::mux::config::reload_client_chords(
+            &file,
+            &crate::mux::config::Chords {
+                prefix: session.prefix,
+                reload: session.reload_key,
+            },
+        )
+        .expect("chords parse");
+        session.prefix = new_chords.prefix;
+        session.reload_key = new_chords.reload;
+        // The reloaded session routes: prefix d (0x01 'd') detaches under
+        // the NEW prefix; the old prefix byte no longer intercepts.
+        assert!(
+            session.route_bytes(&[0x01, b'd']),
+            "the NEW prefix detaches"
+        );
+        assert!(
+            !session.route_bytes(&[0x02, b'x']),
+            "the OLD prefix no longer intercepts"
+        );
+    }
+
+    /// The pure chord rebind errors on a malformed chord (the error is
+    /// what the status flash shows) instead of silently keeping the old
+    /// chords.
+    #[test]
+    fn reload_client_chords_errors_on_malformed_chords() {
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[client]\nprefix = \"C-\"\n").unwrap();
+        assert!(
+            crate::mux::config::reload_client_chords(
+                &file,
+                &crate::mux::config::Chords {
+                    prefix: 0x02,
+                    reload: 0x12
+                }
+            )
+            .is_err(),
+            "a malformed prefix is an error"
+        );
+        // An absent tier keeps the current chords.
+        let partial: crate::mux::config::ConfigFile =
+            toml::from_str("[daemon]\nsocket = \"work\"\n").unwrap();
+        let kept = crate::mux::config::reload_client_chords(
+            &partial,
+            &crate::mux::config::Chords {
+                prefix: 0x02,
+                reload: 0x12,
+            },
+        )
+        .expect("partial file");
+        assert_eq!(
+            kept,
+            crate::mux::config::Chords {
+                prefix: 0x02,
+                reload: 0x12
+            }
+        );
     }
 }

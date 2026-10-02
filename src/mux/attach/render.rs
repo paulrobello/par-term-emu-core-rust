@@ -18,7 +18,7 @@ use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout;
 use crate::mux::attach::layout::PaneRect;
-use crate::mux::attach::status::{self, StatusRow};
+use crate::mux::attach::status::{self, Segment, StatusRow};
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
@@ -860,6 +860,18 @@ struct WindowSession {
     status_dirty: bool,
     /// Whether scroll mode is up on the focused pane.
     scroll_mode: bool,
+    /// The reload chord: the key byte matched after the prefix, and the
+    /// detach prefix itself — both live-rebindable by the reload.
+    prefix: u8,
+    reload_key: u8,
+    /// The literal prefix byte to forward when the user types prefix
+    /// prefix (rebindable, so it is state, not the C_B constant).
+    literal: u8,
+    /// A transient confirmation/error cue drawn in place of the status
+    /// line's head and cleared after about a second.
+    flash: Option<String>,
+    /// The flash's remaining lifetime in frame ticks.
+    flash_ticks: u32,
 }
 
 impl WindowSession {
@@ -872,6 +884,11 @@ impl WindowSession {
             status_row: status::StatusRow::new(cols),
             status_dirty: true,
             scroll_mode: false,
+            prefix: super::C_B,
+            reload_key: 0x12, // C-r
+            literal: super::C_B,
+            flash: None,
+            flash_ticks: 0,
         }
     }
 
@@ -1031,7 +1048,16 @@ impl WindowSession {
 
             // 4. Frame whatever accumulated (panes + the status row's own
             //    diff), then wait for the next push — the frame cadence
-            //    floods coalesce into.
+            //    floods coalesce into. The reload flash rides the frame
+            //    cadence and clears after about a second of ticks.
+            if self.flash.is_some() {
+                self.flash_ticks += 1;
+                if self.flash_ticks > 60 {
+                    self.flash = None;
+                    self.flash_ticks = 0;
+                    self.draw_status_row();
+                }
+            }
             self.frame(sink);
             match conn.recv_timeout(super::POLL) {
                 Ok(event) => {
@@ -1192,6 +1218,13 @@ impl WindowSession {
         for &byte in bytes {
             if *prefix_pending {
                 *prefix_pending = false;
+                // The reload chord matches by byte before the fixed
+                // table (configurable; the default C-r does not collide
+                // with the literal-key arms).
+                if byte == self.reload_key && byte != b'd' {
+                    self.reload_config(conn);
+                    continue;
+                }
                 match byte {
                     b'd' => return true,
                     b'[' => {
@@ -1205,10 +1238,10 @@ impl WindowSession {
                         }
                     }
                     b'n' | b'p' | b'(' | b')' | b'o' => self.prefix_switch(byte, conn),
-                    super::C_B => to_send.push(byte), // literal prefix
-                    _ => {}                           // unbound: consumed
+                    b if b == self.literal => to_send.push(byte), // literal prefix
+                    _ => {}                                       // unbound: consumed
                 }
-            } else if byte == super::C_B {
+            } else if byte == self.prefix {
                 *prefix_pending = true;
             } else if self.scroll_mode {
                 // Scroll mode's plain keys: q and Enter exit (the
@@ -1245,6 +1278,27 @@ impl WindowSession {
             b')' => self.switch_session(conn, 1),
             _ => {}
         }
+    }
+
+    /// The reload chord in render mode: the same client-side rebind the
+    /// passthrough session performs, plus a status-row flash, plus the
+    /// daemon's `reload-config` — best-effort either way.
+    fn reload_config(&mut self, conn: &mut super::conn::AttachConn) {
+        match super::reload_client_chords(crate::mux::config::Chords {
+            prefix: self.prefix,
+            reload: self.reload_key,
+        }) {
+            Ok(chords) => {
+                self.prefix = chords.prefix;
+                self.reload_key = chords.reload;
+                self.literal = chords.prefix;
+                self.flash = Some("config reloaded".to_string());
+            }
+            Err(err) => {
+                self.flash = Some(format!("reload failed: {err}"));
+            }
+        }
+        let _ = conn.send_checked("reload-config");
     }
 
     /// prefix o: select the next pane in the window's layout-leaf order,
@@ -1504,7 +1558,16 @@ impl WindowSession {
         } else {
             None
         };
-        let segments = self.status.compose(cols, scroll);
+        let mut segments = self.status.compose(cols, scroll);
+        if let Some(flash) = self.flash.clone() {
+            segments.insert(
+                0,
+                Segment {
+                    text: format!(" {flash} |"),
+                    bold: true,
+                },
+            );
+        }
         self.status_row.paint(&segments);
     }
 

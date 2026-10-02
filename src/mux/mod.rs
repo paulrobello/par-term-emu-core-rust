@@ -13,6 +13,7 @@ pub mod agent_resume;
 pub mod attach;
 pub mod client;
 pub mod command;
+pub mod config;
 pub mod emit;
 pub(crate) mod foreground;
 pub mod hooks;

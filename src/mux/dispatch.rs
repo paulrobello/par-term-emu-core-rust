@@ -68,6 +68,12 @@ pub(super) struct Ctx<'a> {
     /// The server's shutdown flag, for `kill-server`. `None` for embedders
     /// and tests that dispatch without a running accept loop.
     pub(super) shutdown: Option<&'a std::sync::atomic::AtomicBool>,
+    /// The daemon's applied settings copy, behind its lock — what
+    /// `reload-config` compares a re-read file against and what it would
+    /// update. `None` for embedders and tests that dispatch without a
+    /// configured server: `reload-config` then reports every setting
+    /// restart-required (there is no applied copy to diff or update).
+    pub(super) config: Option<&'a Mutex<crate::mux::config::EffectiveConfig>>,
 }
 
 /// What one handler produced: the reply block plus everything the shared
@@ -227,6 +233,7 @@ pub(super) fn dispatch_command(
         MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
         MuxCommand::Version => cmd_version(ctx),
+        MuxCommand::ReloadConfig => cmd_reload_config(ctx),
     };
 
     for window_id in &outcome.layout_changed {
@@ -1440,6 +1447,47 @@ fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, crate::mux::build_stamp())
 }
 
+/// `reload-config`: re-read the canonical config file and diff its
+/// `[daemon]` section against the applied copy. The file speaks only for
+/// settings it actually states — a setting absent from the file is
+/// `unchanged` (the tier did not move, which is what keeps a daemon
+/// started with `--socket`/`--state-dir` flags quiet: the flag is a
+/// one-shot override the file cannot express, so it never reads back as
+/// a change). Per `[daemon]` setting, one reply line:
+/// - `restart-required: <name>` when the file states a value that
+///   differs from the applied copy — in v1 every daemon setting is
+///   startup-resolved (the socket and the persist path are fixed at
+///   bind; see [`crate::mux::config`]'s module docs), so nothing can be
+///   applied live;
+/// - `unchanged: <name>` otherwise.
+///
+/// A file that fails to load is a `%error` naming the problem — a
+/// silently ignored config change would look exactly like a reload that
+/// did nothing.
+fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
+    use crate::mux::config::{load_file, reload_report};
+    let Some(applied) = ctx.config else {
+        // No applied copy: an embedded server without config support, or
+        // the dispatch test shim. Honest report, not a fake success.
+        return Outcome::err(
+            ctx,
+            "reload-config: this server has no applied config to reload",
+        );
+    };
+    // A PRESENT file that does not parse is an error, not defaults: the
+    // user's edit must surface, not vanish. Absent = nothing changed.
+    let Some(path) = crate::mux::config::config_file_path() else {
+        return Outcome::err(ctx, "reload-config: no config path on this platform");
+    };
+    let file = match load_file(&path) {
+        Ok(Some(file)) => Some(file),
+        Ok(None) => None,
+        Err(err) => return Outcome::err(ctx, &format!("reload-config: {err}")),
+    };
+    let report = reload_report(&applied.lock(), file.as_ref());
+    Outcome::ok(ctx, &report)
+}
+
 /// ENH-037: capability discovery — the sorted command roster with feature
 /// tokens, generated from the same `COMMANDS` table the parser dispatches
 /// from, so a new command is discoverable the moment its row lands.
@@ -1473,6 +1521,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -1533,6 +1582,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         // Two sessions: newest = second. Its active window is what -C hits.
@@ -1615,6 +1665,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let reply = dispatch_command(
             parse_command("refresh-client -C 100x40").unwrap(),
@@ -1642,6 +1693,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -1707,6 +1759,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -1827,5 +1880,85 @@ mod tests {
             roster_row_entry("pi", "working", "hook", None, None, None),
             "pi working hook"
         );
+    }
+
+    /// `reload-config` reports restart-required per changed daemon setting,
+    /// diffing the re-read file against the applied copy the server
+    /// published.
+    #[test]
+    fn reload_config_reports_restart_required_per_changed_setting() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        // The applied copy: what this (fake) daemon started with.
+        let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig {
+            state_dir: "/tmp/old-state".to_string(),
+            ..crate::mux::config::EffectiveConfig::default()
+        }));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: Some(&applied),
+        };
+        // No canonical config file is readable in the test harness (and
+        // QA-196 forbids env mutation to pin one): the dispatch with an
+        // absent file is the all-unchanged reply shape.
+        let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
+        let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
+        assert_eq!(
+            unchanged, 4,
+            "an absent file leaves every setting unchanged: {reply}"
+        );
+        // The pure report over a written file: the moved/flipped settings
+        // are restart-required, the unstated one stays unchanged.
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\n")
+                .unwrap();
+        let report = crate::mux::config::reload_report(&applied.lock(), Some(&file));
+        assert!(
+            report.contains("restart-required: daemon.state-dir"),
+            "the moved state-dir is reported: {report}"
+        );
+        assert!(
+            report.contains("restart-required: daemon.pane-endpoints"),
+            "the flipped bool is reported: {report}"
+        );
+        assert!(
+            report.contains("unchanged: daemon.socket"),
+            "an unstated setting says unchanged: {report}"
+        );
+    }
+
+    /// A server with no applied config (the embedder/test shape) answers
+    /// reload-config with an explicit error, not a fake success.
+    #[test]
+    fn reload_config_without_an_applied_copy_errors() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+        };
+        let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
+        assert!(
+            reply.contains("%error") && reply.contains("no applied config"),
+            "honest refusal: {reply}"
+        );
+    }
+
+    /// reload-config takes no arguments (the reject_positionals rule the
+    /// other no-start-command commands follow).
+    #[test]
+    fn reload_config_rejects_positionals() {
+        assert!(parse_command("reload-config now").is_err());
+        assert!(parse_command("reload-config").is_ok());
     }
 }

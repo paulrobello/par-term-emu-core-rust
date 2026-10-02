@@ -945,3 +945,185 @@ fn pane_env_contract_with_pane_endpoints_alone_refuses_control() {
 
     drop(daemon);
 }
+
+/// `par-mux --cmd reload-config` against a live daemon: the re-read
+/// reaches the running daemon (no restart) and the reply names each
+/// daemon setting. The reply is computed against the DAEMON's process env
+/// (`load_canonical` runs in the daemon), not the CLI child's — the
+/// second half of the test proves that by pointing the child at a file
+/// the daemon cannot see and asserting the daemon still reports
+/// unchanged.
+#[test]
+fn reload_config_command_reaches_a_live_daemon() {
+    let fixture = MuxFixture::new("clireload");
+    let _daemon = daemon_with_session(&fixture, "clireload");
+    let socket = fixture.socket();
+
+    let socket_str = socket.to_str().expect("utf-8 socket");
+    let run = par_mux(&["--socket", socket_str, "--cmd", "reload-config"]);
+    // No canonical config file for either side: every setting unchanged
+    // against the daemon's defaults — the baseline reply shape.
+    assert_eq!(
+        run.code,
+        Some(0),
+        "reload-config succeeds with no file: {}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.stdout.contains("unchanged: daemon.socket"),
+        "the per-setting report: {}",
+        run.stdout
+    );
+
+    // A daemon THAT DID see the config (spawned with PAR_MUX_CONFIG
+    // naming a file written AFTER the daemon started, whose state-dir
+    // differs from what it applied) reports the diff on reload. This is
+    // the live re-read reaching a running daemon, no restart.
+    let fixture2 = MuxFixture::new("clireload2");
+    let socket2 = fixture2.socket();
+    let socket2_str = socket2.to_str().expect("utf-8");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("config.toml");
+    let daemon2 = {
+        use std::process::Stdio;
+        let child = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+            .arg("--socket")
+            .arg(socket2)
+            .arg("--state-dir")
+            .arg(fixture2.state_dir())
+            .env("PAR_MUX_CONFIG", &config)
+            .env_remove("PAR_MUX_ENV")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("daemon spawns");
+        common::DaemonGuard::wrap(child)
+    };
+    wait_listening(socket2);
+    // The file states a state-dir the daemon did NOT start with (the
+    // flag tier named fixture2's own dir; the file names a sibling), so
+    // the reload's diff has something to report.
+    let stated = fixture2.state_dir().join("moved").display().to_string();
+    std::fs::write(&config, format!("[daemon]\nstate-dir = \"{stated}\"\n")).expect("write config");
+    let run = par_mux(&["--socket", socket2_str, "--cmd", "reload-config"]);
+    assert_eq!(run.code, Some(0), "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("restart-required: daemon.state-dir"),
+        "the live re-read reports the moved state-dir: {}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("unchanged: daemon.socket"),
+        "unchanged stays unchanged: {}",
+        run.stdout
+    );
+    drop(daemon2);
+
+    // The CLI child's own env cannot change the daemon's re-read: the
+    // daemon resolves its config in its own process.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .args(["--socket", socket_str, "--cmd", "reload-config"])
+        .env("PAR_MUX_CONFIG", "/nonexistent/nope.toml")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("par-mux spawns");
+    let mut out = String::new();
+    use std::io::Read as _;
+    child
+        .stdout
+        .take()
+        .expect("stdout")
+        .read_to_string(&mut out)
+        .expect("read");
+    let _ = child.wait();
+    assert!(
+        out.contains("unchanged: daemon.socket"),
+        "the daemon's env (not the client's) decides its config: {out}"
+    );
+
+    drop(_daemon);
+}
+
+/// `par-mux --gen-config` writes the effective config; the file parses
+/// back; a second run refuses without --force and succeeds with it.
+#[test]
+fn gen_config_writes_effective_config_and_refuses_overwrite() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("config.toml");
+    let config_str = config.to_str().expect("utf-8 config path");
+
+    // The deterministic shape: PAR_MUX_CONFIG redirects the output path
+    // (the tests never touch the user's real config dir).
+    let run = par_mux_with(&["--gen-config"], &[("PAR_MUX_CONFIG", config_str)]);
+    assert_eq!(run.code, Some(0), "{}{}", run.stdout, run.stderr);
+    let written = std::fs::read_to_string(&config).expect("read generated config");
+    assert!(written.contains("[client]"), "{written}");
+    assert!(written.contains("prefix"), "{written}");
+    assert!(written.contains("[daemon]"), "{written}");
+    assert!(written.contains("socket"), "{written}");
+
+    // A second run refuses to overwrite without --force...
+    let run = par_mux_with(&["--gen-config"], &[("PAR_MUX_CONFIG", config_str)]);
+    assert_eq!(run.code, Some(1), "refusal exits 1: {}", run.stderr);
+    assert!(
+        run.stderr.contains("--force"),
+        "the refusal names the escape hatch: {}",
+        run.stderr
+    );
+    let unchanged = std::fs::read_to_string(&config).expect("still there");
+
+    // ...and --force rewrites.
+    let run = par_mux_with(
+        &["--gen-config", "--force"],
+        &[("PAR_MUX_CONFIG", config_str)],
+    );
+    assert_eq!(run.code, Some(0), "{}{}", run.stdout, run.stderr);
+    let rewritten = std::fs::read_to_string(&config).expect("rewritten");
+    assert_eq!(unchanged, rewritten, "same effective values, same file");
+}
+
+/// [`par_mux`] with extra environment entries for the child.
+fn par_mux_with(args: &[&str], env: &[(&str, &str)]) -> Run {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_par-mux"));
+    command.args(args).stdin(Stdio::null());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("par-mux spawns");
+    let mut out_pipe = child.stdout.take().expect("stdout piped");
+    let mut err_pipe = child.stderr.take().expect("stderr piped");
+    let out = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out_pipe.read_to_string(&mut s);
+        s
+    });
+    let err = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err_pipe.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + CLI_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll par-mux") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("par-mux {args:?} did not exit within {CLI_DEADLINE:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Run {
+        code: status.code(),
+        stdout: out.join().expect("stdout reader"),
+        stderr: err.join().expect("stderr reader"),
+    }
+}

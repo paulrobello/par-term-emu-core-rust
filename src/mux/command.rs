@@ -404,6 +404,12 @@ pub enum MuxCommand {
     /// client can compare the daemon's core build against its own linked
     /// one and surface a stale daemon instead of silently missing fixes.
     Version,
+    /// Re-read the config file and apply what can be applied live. One
+    /// reply line per setting: `applied: <name>` or `restart-required:
+    /// <name>` (see [`crate::mux::config`] for the per-setting semantics).
+    /// Mutates daemon state (the applied copies) without touching the
+    /// tree, so it never triggers a state save.
+    ReloadConfig,
 }
 
 impl MuxCommand {
@@ -452,6 +458,12 @@ impl MuxCommand {
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::SetClientColors { .. }
+            // Reload-config mutates the daemon's in-memory settings
+            // copies, but nothing the persistence format carries — the
+            // config file on disk is the durable record. Like
+            // `set-client-colors` (which mutates pane terminals yet never
+            // saves): no state save, ever.
+            | MuxCommand::ReloadConfig
             | MuxCommand::Version => false,
         }
     }
@@ -1110,6 +1122,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("show-buffer", parse_show_buffer, &[]),
     ("paste-buffer", parse_paste_buffer, &[]),
     ("version", parse_version, &[]),
+    ("reload-config", parse_reload_config, &[]),
 ];
 
 /// The `list-commands` reply body (ENH-037): one `name [feature …]` line
@@ -1735,6 +1748,14 @@ fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_list_commands(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListCommands)
+}
+
+/// `reload-config` takes no arguments — it always re-reads the canonical
+/// config path; keeping it argument-free keeps the daemon's resolution
+/// (env included) the single source of truth.
+fn parse_reload_config(a: &Args<'_>) -> Result<MuxCommand, String> {
+    reject_positionals(a, &[])?;
+    Ok(MuxCommand::ReloadConfig)
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@
 #[cfg(test)]
 use crate::mux::command::parse_command;
 use crate::mux::command::{parse_line, Line};
+use crate::mux::config::EffectiveConfig;
 use crate::mux::dispatch::{dispatch_command, Ctx};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
@@ -137,6 +138,11 @@ pub struct MuxServer {
     /// through [`pane_endpoint_channel`]; drained and served on the accept
     /// loop's idle tick. `None` = the mode is off.
     pane_connections: Option<PaneEndpointRx>,
+    /// The daemon's applied settings (`reload-config` diffs against and
+    /// reports from this copy). `None` when the embedder did not set one —
+    /// `reload-config` then answers with an explicit error rather than a
+    /// fake reload.
+    config: Option<Arc<Mutex<crate::mux::config::EffectiveConfig>>>,
 }
 
 impl MuxServer {
@@ -177,6 +183,7 @@ impl MuxServer {
             clients,
             shutdown: Arc::new(AtomicBool::new(false)),
             pane_connections: None,
+            config: None,
         })
     }
 
@@ -194,6 +201,13 @@ impl MuxServer {
         let mut server = Self::bind_with_tree(path, tree)?;
         server.pane_connections = Some(pane_connections);
         Ok(server)
+    }
+
+    /// Publish the daemon's applied settings for `reload-config`. Call
+    /// once after bind, before `run`/`run_persisting` — the accept loop
+    /// forwards it into every dispatch context.
+    pub fn set_config(&mut self, config: Arc<Mutex<EffectiveConfig>>) {
+        self.config = Some(config);
     }
 
     /// The path this server is listening on.
@@ -310,8 +324,17 @@ impl MuxServer {
                     let clients = Arc::clone(&self.clients);
                     let persist = persist_tx.clone();
                     let shutdown = Arc::clone(&self.shutdown);
+                    let config = self.config.clone();
                     std::thread::spawn(move || {
-                        handle_client(stream, tree, clients, persist, Some(shutdown), abort)
+                        handle_client(
+                            stream,
+                            tree,
+                            clients,
+                            persist,
+                            Some(shutdown),
+                            abort,
+                            config,
+                        )
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -654,6 +677,7 @@ fn handle_client(
     persist: Option<Sender<(SaveOrigin, PersistState)>>,
     shutdown: Option<Arc<AtomicBool>>,
     abort: ConnectionAbort,
+    config: Option<Arc<Mutex<EffectiveConfig>>>,
 ) {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -780,6 +804,7 @@ fn handle_client(
                     clients: &clients,
                     command_number,
                     shutdown: shutdown.as_deref(),
+                    config: config.as_deref(),
                 };
                 let dispatch_started = std::time::Instant::now();
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
@@ -1250,6 +1275,7 @@ fn dispatch_issued(
                 clients,
                 command_number,
                 shutdown: None,
+                config: None,
             };
             dispatch_command(command, &ctx, persist, issuer)
         }
@@ -1639,6 +1665,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let run = |line: &str| {
             dispatch_command(
@@ -1704,6 +1731,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         dispatch_command(
             crate::mux::command::parse_command("new-session -s main").unwrap(),
@@ -3802,7 +3830,9 @@ mod tests {
         let (tree, _) = harness();
         std::thread::spawn(
             move || match crate::mux::ipc::accept_connection(&listener) {
-                Ok((stream, abort)) => handle_client(stream, tree, registry, None, None, abort),
+                Ok((stream, abort)) => {
+                    handle_client(stream, tree, registry, None, None, abort, None)
+                }
                 Err(err) => panic!("accept_connection failed: {err}"),
             },
         );
@@ -3887,6 +3917,7 @@ mod tests {
             clients: &clients,
             command_number: 1,
             shutdown: None,
+            config: None,
         };
         let poisoned = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(poisoned, &ctx, None, None);
@@ -3903,6 +3934,7 @@ mod tests {
             clients: &clients,
             command_number: 2,
             shutdown: None,
+            config: None,
         };
         let healthy = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(healthy, &ctx, None, None);

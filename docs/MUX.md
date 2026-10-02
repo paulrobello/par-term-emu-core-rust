@@ -59,7 +59,12 @@ par-mux [<name>] --restart  Stop, then serve the same socket from a detached pro
 par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
 par-mux --pane-endpoints          Give each pane its own hook-only socket (see Agent Hook Reports)
 par-mux --expose-control-socket   With --pane-endpoints: also export PAR_MUX_CONTROL_SOCKET in panes
+par-mux --gen-config [--force]    Write the config file with the current effective settings
 ```
+
+The `[daemon]` section of `<config dir>/par-mux/config.toml` carries
+defaults for the socket, state dir, and the two endpoint switches — see
+[Configuration file](#configuration-file).
 
 `--socket <path>` is what `MuxClient::connect_or_spawn_at` passes when it starts a daemon. A second daemon on a path a live server already owns is refused with "another server owns <path>"; a stale socket remnant (dead socket file, Windows marker file, or a stray regular file at the path) is reclaimed.
 
@@ -121,7 +126,7 @@ par-mux attach work --prefix C-a    # named daemon, custom prefix
 
 **Startup:** the handshake runs in the client-contract order (`version`, `list-commands`, `set-client-colors`, the `refresh-client -C WxH -p WxH` size report), the target resolves to a pane (`%N` directly; a window/session target narrows through the targeted `list-panes`/`list-windows` queries to the marked pane; no `-t` takes the highest pane id (ids are monotonic, so the max is the newest pane)), and the pane's screen-restore replay goes to your terminal verbatim. The daemon then pushes `%output` for that pane as it arrives, octal-decoded to raw bytes — mouse tracking, bracketed paste, and every graphics protocol work for free in passthrough: the pane's escape bytes flow to the host emulator, and the host's reports flow back on stdin.
 
-**Keys:** stdin bytes are forwarded to the pane in chunked `send-keys -H` (~512 bytes per command). The prefix (default `C-b`, tmux's) is intercepted: `d` detaches; `o` and the arrow keys cycle panes; `n`/`p` move to the next/previous window; `(`/`)` move to the previous/next session; `r` respawns the pane — but only when it is held dead (a live pane restart from a mistyped chord would be destructive, and the daemon refuses `respawn-pane` of a running pane anyway). `C-b C-b` sends a literal `C-b` to the pane. When the focused pane is held dead, plain stdin bytes are dropped instead of forwarded — the daemon answers every `send-keys` to a dead pane with an error and the bytes would only echo into the pane's frozen screen — so the client stays quiet and the status cue explains why; prefix chords keep working. Every switch is daemon-side `select-*` followed by a `refresh-client` resync, so the redraw always shows the daemon's authoritative screen.
+**Keys:** stdin bytes are forwarded to the pane in chunked `send-keys -H` (~512 bytes per command). The prefix (default `C-b`, tmux's; `[client] prefix` in the config file) is intercepted: `d` detaches; `o` and the arrow keys cycle panes; `n`/`p` move to the next/previous window; `(`/`)` move to the previous/next session; `r` respawns the pane — but only when it is held dead (a live pane restart from a mistyped chord would be destructive, and the daemon refuses `respawn-pane` of a running pane anyway). `C-b C-b` sends a literal `C-b` to the pane. The reload chord (default `C-b C-r`, `[client] reload`) re-reads the config file mid-session: prefix and reload rebind live, `config reloaded` (or the error) flashes on the status row, and `reload-config` goes to the daemon — see [Configuration file](#configuration-file). When the focused pane is held dead, plain stdin bytes are dropped instead of forwarded — the daemon answers every `send-keys` to a dead pane with an error and the bytes would only echo into the pane's frozen screen — so the client stays quiet and the status cue explains why; prefix chords keep working. Every switch is daemon-side `select-*` followed by a `refresh-client` resync, so the redraw always shows the daemon's authoritative screen.
 
 **Status line:** the bottom terminal row is reserved with DECSTBM (the scroll region shrinks to rows 1..N-1, so pane output scrolls above it), showing session name, pane title, the pane's agent count, and, over a held-dead pane, an `(exited N — C-b r respawns)` cue naming the restart chord. The whole view runs in the host's alternate screen (`ESC[?1049h` at startup, left on every exit path), so the replay never overwrites the content the terminal was already showing.
 
@@ -140,6 +145,78 @@ par-mux attach work --prefix C-a    # named daemon, custom prefix
 - **Limitations:** forward-only mouse re-encoding (always SGR spelling regardless of the pane's negotiated legacy encoding) and wheel scrollback is view-only (no pane resize probe). A host resize re-fits the render client end to end (the new grid is reported with the content height, the daemon re-divides, panes re-seed, the status row repaints at the new bottom row — pinned by `render_mode_host_resize_refits_window_layout_and_status_row`), and a daemon-side zoom (`resize-pane -Z`) re-renders the visible layout — the zoomed pane alone — with `-Z` again restoring the split (`render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split`); both in `tests/mux_attach.rs`. MANUAL-PASS.md at the repo root carries the human checklist for Ghostty / iTerm2 / Terminal.app / SSH.
 
 ## Socket and State Paths
+
+### Configuration file
+
+`par-mux` reads `<config dir>/par-mux/config.toml` for defaults the CLI
+flags then override — resolution precedence everywhere is **flags > env >
+file > built-in defaults**. The location is `$PAR_MUX_CONFIG` when set,
+else `dirs::config_dir()/par-mux/config.toml` (on macOS
+`~/Library/Application Support/par-mux/config.toml`, on Linux
+`~/.config/par-mux/config.toml`, on Windows `%APPDATA%\par-mux\config.toml`).
+A file that exists but does not parse is a startup WARNING with defaults
+applied (unreadable config never blocks the daemon, the same rule the
+state file follows), and an `%error` on `reload-config` (see below). The
+file is optional — with none, everything behaves exactly as before.
+
+```toml
+[client]
+prefix = "C-b"        # the attach detach prefix (tmux spelling)
+mode = "passthrough"  # default attach mode: passthrough | render
+reload = "C-b C-r"    # the chord that reloads this file mid-attach
+
+[daemon]
+socket = "default"    # named default socket, or an absolute path
+state-dir = ""        # empty = the OS default state directory
+pane-endpoints = false
+expose-control-socket = false
+```
+
+Every setting maps to an existing flag or resolution rule: `[client]` keys
+feed `attach` (`--prefix`, `--mode` — a config `mode` applies only when
+`--mode` is absent, and an unknown value falls back to passthrough); the
+`[daemon] socket` accepts a NAME (as `par-mux <name>` spells it) or an
+absolute path, and sits in the same precedence chain as the env/flag tiers
+of `resolve_socket_path` (`$PAR_MUX_SOCKET` still beats the file; an
+explicit `--socket`/positional still beats the env). Reload semantics per
+setting:
+
+| Setting | Reload behavior |
+|---------|-----------------|
+| `client.prefix` | **Live** — the running attach rebinds its prefix immediately (the old prefix stops intercepting the same keystroke). |
+| `client.reload` | **Live** — it rebinds itself: the NEXT reload follows the new chord. The chord's key is matched by byte, so the default `C-r` (0x12) never collides with prefix `r` (respawn, the literal 0x72). |
+| `client.mode` | Startup-only — changing it needs a re-attach. |
+| `daemon.socket` | Startup-only by definition (the socket is bound at start). |
+| `daemon.pane-endpoints` / `daemon.expose-control-socket` | Startup-only in v1 (reported as restart-required). |
+| `daemon.state-dir` | Startup-only — the daemon resolves the persist path once at startup and the persist worker writes to that fixed path. |
+
+There are three reload entry points:
+
+- **Control command `reload-config`** (no arguments — it always re-reads
+  the canonical path): the daemon re-reads the file and replies one line
+  per `[daemon]` setting, `unchanged: <name>` or
+  `restart-required: <name>`. The file speaks only for settings it
+  actually states — a setting absent from the file is `unchanged`, which
+  is what keeps a daemon started with one-shot `--socket`/`--state-dir`
+  flags quiet. A PRESENT file that fails to parse is a `%error` (the
+  daemon never silently ignores a config edit). A server without an
+  applied config (embedded) answers `%error` too.
+- **Client chord** (default `C-b C-r`, settable as `[client] reload`):
+  the attach client (passthrough AND render mode) re-reads the file,
+  rebinds prefix/reload live, flashes `config reloaded` (or the error) on
+  the status row, and sends `reload-config` to the daemon so the
+  daemon-side report rides the same keypress.
+- **`par-mux --gen-config`** writes the config file with the CURRENT
+  EFFECTIVE values (file if present > env > built-in defaults; startup
+  CLI flags are not introspectable after parse, so they do not appear —
+  except where the generating invocation's flag tier is visible to the
+  resolution, i.e. the socket and the daemon bools of the generating
+  run). Never overwrites an existing file without `--force`. The
+  location follows `$PAR_MUX_CONFIG` / the platform config dir.
+
+`reload-config` mutates nothing — it is the report of what WOULD change
+plus the client-side live rebinds above; a restart (`par-mux --restart`)
+applies restart-required daemon settings.
 
 | Item | Unix | Windows |
 |------|------|---------|
@@ -233,6 +310,7 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t <pane>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
+| `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>`, diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | — |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:
