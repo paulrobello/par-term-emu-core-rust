@@ -581,10 +581,19 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
         stderr.lock().unwrap()
     );
 
-    // Prefix r respawns the pane and resumes forwarding: a typed echo
-    // round-trips through the revived pane.
+    // Prefix r respawns the pane and resumes forwarding: the client wipes
+    // the frozen dead-pane screen (clear + home) before the fresh replay,
+    // then a typed echo round-trips through the revived pane.
     host.to_child.write_all(&[0x02, b'r']).expect("prefix r");
     host.to_child.flush().ok();
+    let wiped = wait_for_output(&host, b"\x1b[2J\x1b[H", Duration::from_secs(10));
+    assert!(
+        wiped.windows(7).any(|w| w == b"\x1b[2J\x1b[H"),
+        "respawn must clear the frozen screen before the resync replay. \
+         stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&wiped)
+    );
     host.to_child
         .write_all(b"echo RESPAWNED-ROUNDTRIP\r")
         .expect("type after respawn");

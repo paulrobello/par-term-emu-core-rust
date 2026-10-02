@@ -831,6 +831,13 @@ impl Session {
             .is_ok_and(|reply| reply.ok)
         {
             self.exited = None;
+            // The dead pane's frozen screen is still on the glass and the
+            // fresh replay only paints what the new grid holds — wipe the
+            // surface first (we are inside the alternate screen) so the
+            // new output does not mix over the corpse.
+            let mut stdout = std::io::stdout().lock();
+            let _ = stdout.write_all(b"\x1b[2J\x1b[H");
+            let _ = stdout.flush();
             self.resync();
             self.refresh_status();
             self.draw_status();
