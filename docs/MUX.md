@@ -186,8 +186,8 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `swap-window` | `-s <window> -t <window>` | empty | `%sessions-changed` |
 | `respawn-pane` | `-t <pane> [-k] [-c dir] [--] [command]` (flags before the command) | empty | `%pane-respawned` |
 | `kill-pane` | `-t <pane>` | empty | `%layout-change`, `%window-pane-changed`; `%window-close` instead when it was the window's last pane, then `%sessions-changed` when that emptied the session |
-| `list-panes` | — | One `%N` line per pane, globally | — |
-| `list-windows` | — | One `@N: name` line per window, globally | — |
+| `list-panes` | `-t <window>` | One `%N <leaf> <marker>` line per pane of that window in layout leaf order (`leaf` is the deterministic index mapping tmux layout-string leaves to pane ids; `*` marks the window's active pane). Bare form: one `%N` line per pane, globally | — |
+| `list-windows` | `-t <session>` | One `@N <marker> <name>` line per window of that session in window order (`*` marks the session's active window; the name is the line remainder, so spaced names survive). Bare form: one `@N: name` line per window, globally | — |
 | `list-sessions` | — | One `$N: name` line per session | — |
 | `list-agents` | — | Roster: one `%N <agent> <state> <source>` line per state-carrying pane (see below) | — |
 | `list-commands` | — | One line per dispatchable command, sorted: `name [feature …]`, plus a trailing daemon-level `features replay-held-state` line (see the capability-discovery bullet below) | — |
