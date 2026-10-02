@@ -777,6 +777,16 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
     // scrollback-only content. (Which history line lands there depends on
     // the pane's prompt/echo lines, so the exact number is pinned by the
     // renderer's unit suite, not asserted here — the routing behavior is.)
+    // The live pane's daemon-side view must not move: scrolling is
+    // client-side only, so the capture is identical before and after the
+    // wheel. (Render mode's size report carries content height — grid
+    // minus the status row — so the visible line count is one fewer than
+    // the host grid; never pin a specific history line here.)
+    let before = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture")
+        .join("\n");
+    assert!(!before.is_empty(), "the pane settled with a live view");
     host.to_child
         .write_all(b"\x1b[<64;10;5M")
         .expect("wheel up");
@@ -786,19 +796,14 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
         !scrolled.is_empty(),
         "the wheel must repaint the pane rect's top rows from scrollback"
     );
-    let capture = client
+    let after = client
         .send(&format!("capture-pane -t {pane}"))
-        .expect("capture");
-    let body = capture.join("\n");
-    // The live pane still shows its bottom lines; scrolling is client-side
-    // only, so the capture is the same view it had before the wheel.
-    assert!(
-        body.contains("HISTLINE-40"),
-        "the pane's live view is intact: {body:?}"
-    );
+        .expect("capture")
+        .join("\n");
+    assert_eq!(after, before, "the pane's live view is intact");
     assert!(
         !body.contains("\x1b[<64"),
-        "no wheel SGR was forwarded to the pane: {body:?}"
+        "no wheel SGR was forwarded to the pane: {after:?}"
     );
     host.killer.kill().ok();
 }
