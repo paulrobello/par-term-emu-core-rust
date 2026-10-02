@@ -15,6 +15,7 @@ pub mod conn;
 pub mod input;
 pub mod layout;
 pub mod render;
+pub mod status;
 
 use crate::mux::resolve_socket_path;
 use crate::tmux_control::TmuxNotification;

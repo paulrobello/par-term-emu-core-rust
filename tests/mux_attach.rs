@@ -855,6 +855,233 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     // The click also focused the pane daemon-side (the single-pane window's
     // marked pane is this pane either way; the select-pane command itself
     // was issued — a two-pane focus assertion lives in the unit suite, and
-    // pane-relative re-encoding across rects is pinned there too).
+    // pane-relative re-encoding during scroll mode is a non-goal (the
+    // viewport is a modal view).
+    host.killer.kill().ok();
+}
+
+/// Reconstruct the screen a render-mode client painted, from its
+/// per-cell diff stream: each flush cell is `CUP row;col` + SGR run +
+/// one symbol. Returns `(final, ever)`: the final `rows` strings of
+/// `cols` symbols, and per-row snapshots of the row text after every
+/// cell write, so a row fact that a later repaint removed (the agent
+/// liveness sweep clearing a test claim) is still observable. Style is
+/// not tracked.
+#[cfg(unix)]
+fn reconstructed_screen(
+    bytes: &[u8],
+    rows: u16,
+    cols: u16,
+) -> (Vec<String>, Vec<std::collections::BTreeSet<String>>) {
+    let mut grid = vec![vec![b' '; cols as usize]; rows as usize];
+    let mut ever: Vec<std::collections::BTreeSet<String>> = (0..rows)
+        .map(|_| std::collections::BTreeSet::new())
+        .collect();
+    let mut i = 0;
+    let text = bytes;
+    while i < text.len() {
+        // CUP: ESC [ row ; col H
+        if text[i] == 0x1b && i + 1 < text.len() && text[i + 1] == b'[' {
+            let mut j = i + 2;
+            let mut row = 0usize;
+            let mut col = 0usize;
+            let mut part = 0; // 0 = row, 1 = col
+            while j < text.len() {
+                match text[j] {
+                    b'0'..=b'9' if part == 0 => row = row * 10 + (text[j] - b'0') as usize,
+                    b'0'..=b'9' => col = col * 10 + (text[j] - b'0') as usize,
+                    b';' => part = 1,
+                    b'H' => {
+                        j += 1;
+                        // Skip the SGR run (ESC[...m sequences), then one
+                        // symbol's UTF-8 bytes land.
+                        while j + 1 < text.len() && text[j] == 0x1b && text[j + 1] == b'[' {
+                            while j < text.len() && text[j] != b'm' {
+                                j += 1;
+                            }
+                            j += 1;
+                        }
+                        if j < text.len() && row > 0 && col > 0 {
+                            // One UTF-8 scalar.
+                            let rest = &text[j..];
+                            if let Ok(s) = std::str::from_utf8(&rest[..rest.len().min(4)]) {
+                                if let Some(ch) = s.chars().next() {
+                                    let (r, c) = (row - 1, col - 1);
+                                    if r < rows as usize && c < cols as usize {
+                                        let mut buf = [0u8; 4];
+                                        grid[r][c] = *ch
+                                            .encode_utf8(&mut buf)
+                                            .as_bytes()
+                                            .first()
+                                            .unwrap_or(&b' ');
+                                        ever[r]
+                                            .insert(String::from_utf8_lossy(&grid[r]).into_owned());
+                                    }
+                                }
+                            }
+                            i = j;
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    let final_grid: Vec<String> = grid
+        .into_iter()
+        .map(|row| String::from_utf8_lossy(&row).into_owned())
+        .collect();
+    (final_grid, ever)
+}
+
+/// One hook report over its own one-line connection — the send-one-JSON,
+/// read-one-reply, close shape herdr's scripts use (`parse_line` routes a
+/// `{` line from any connection to the hook layer). Copied from
+/// tests/mux_agents.rs; a test-binary-local helper.
+#[cfg(unix)]
+fn hook_report(path: &std::path::Path, json: &str) -> String {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let mut stream = std::os::unix::net::UnixStream::connect(path).expect("hook connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout installs");
+    writeln!(stream, "{json}").expect("write report");
+    stream.flush().expect("flush");
+    let mut reply = String::new();
+    BufReader::new(stream.try_clone().expect("clone"))
+        .read_line(&mut reply)
+        .expect("one reply line");
+    reply
+}
+
+/// Acceptance criterion 1 (render mode, PTY level): the status bar. The
+/// client's output carries a bottom-row draw containing the session name,
+/// and an agent state change broadcast (%agent-state-changed) triggers the
+/// throttled re-query — the roster chip appears/updates on the row.
+#[cfg(unix)]
+#[test]
+fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
+    let (fixture, _daemon, mut client) = fixture_with_session("statusbar");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    // Settle: alt-screen enter + first frame.
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+
+    // Agent churn: a hook report claims the pane; %agent-state-changed
+    // marks the status stale and the throttled re-query pulls the chip
+    // onto the row.
+    let reply = hook_report(
+        fixture.socket(),
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"kimi","state":"blocked","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "claim accepted: {reply}"
+    );
+    // The refresh runs at the next pump pass (16 ms cadence); give it a
+    // generous beat, then reconstruct the row from everything received.
+    std::thread::sleep(Duration::from_secs(2));
+    let mut all = Vec::new();
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        all.extend_from_slice(&bytes);
+    }
+    let (_final, ever) = reconstructed_screen(&all, 24, 80);
+    let ever_row: String = ever[23].iter().map(|r| format!("{r:?}\n")).collect();
+    assert!(
+        ever[23].iter().any(|r| r.contains("$0:att")),
+        "the status bar must show the shown session on row 24. snapshots:\n{ever_row}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        ever[23].iter().any(|r| r.contains("kimi:blocked")),
+        "the roster chip must appear on %agent-state-changed (a later liveness-sweep \
+         repaint may remove the test claim again). snapshots:\n{ever_row}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// Acceptance criterion 2 (render mode, PTY level): prefix-[ enters the
+/// scroll viewport — the pane rect's top rows repaint from scrollback —
+/// and q exits cleanly (live view restored, keys reach the pane again).
+#[cfg(unix)]
+#[test]
+fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
+    let (fixture, _daemon, mut client) = fixture_with_session("scrollmode");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // Fill history: 40 numbered lines through the 24-row pane.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 40); do echo HISTLINE-$i; done'"
+        ))
+        .expect("fill");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(800));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"HISTLINE-40", Duration::from_secs(10));
+    while host.output_rx.try_recv().is_ok() {}
+
+    // prefix [ (C-b then '['). The viewport jumps one viewport up and the
+    // pane rect's top rows repaint from scrollback.
+    host.to_child.write_all(&[0x02, b'[']).expect("prefix [");
+    host.to_child.flush().ok();
+    let scrolled = wait_for_output(&host, b"scroll", Duration::from_secs(10));
+    assert!(
+        !scrolled.is_empty(),
+        "prefix [ must repaint the pane rect from scrollback (the [scroll +N] \
+         status cue or the history rows). stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&scrolled)
+    );
+
+    // q exits: the live view returns (HISTLINE-40 repaints) and keys reach
+    // the pane again.
+    host.to_child.write_all(b"q").expect("q");
+    host.to_child.flush().ok();
+    let restored = wait_for_output(&host, b"HISTLINE-40", Duration::from_secs(10));
+    assert!(
+        !restored.is_empty(),
+        "q must snap the view back to live (HISTLINE-40 repaints): {:?}",
+        String::from_utf8_lossy(&restored)
+    );
+
+    // Keys reach the pane again: an `echo` runs, the marker lands.
+    host.to_child
+        .write_all(b"echo POST-SCROLL-MARKER\r")
+        .expect("type after exit");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"POST-SCROLL-MARKER", Duration::from_secs(10));
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture");
+    let body = capture.join("\n");
+    assert!(
+        body.contains("POST-SCROLL-MARKER"),
+        "keys must reach the pane after exiting scroll mode: {body:?}"
+    );
     host.killer.kill().ok();
 }

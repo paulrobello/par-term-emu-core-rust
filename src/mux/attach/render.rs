@@ -13,10 +13,12 @@
 
 use crate::cell::CellFlags;
 use crate::color::{Color as CoreColor, NamedColor};
+use crate::keyboard::TermKeyEvent;
 use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout;
 use crate::mux::attach::layout::PaneRect;
+use crate::mux::attach::status::{self, StatusRow};
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
@@ -75,6 +77,11 @@ pub struct PaneEmulator {
     /// Driven by the wheel when the pane does not own mouse mode; every
     /// keystroke forwarded to the pane snaps it back to live.
     scroll: usize,
+    /// Scroll-mode hold: pane output does not snap the view back to live
+    /// while held (the prefix-[ keyboard scroll viewport). The offset is
+    /// clamped to the new scrollback extent instead, so the view stays
+    /// put relative to the BOTTOM of history as lines push in.
+    hold_scroll: bool,
 }
 
 impl PaneEmulator {
@@ -84,6 +91,7 @@ impl PaneEmulator {
             pane_id,
             term: Terminal::new(cols as usize, rows as usize),
             scroll: 0,
+            hold_scroll: false,
         }
     }
 
@@ -118,10 +126,17 @@ impl PaneEmulator {
     /// Feed the pane's byte stream — a `refresh-client` replay body or a
     /// `%output` chunk — through the emulator. Any fed byte resets the
     /// pane's client scroll to live: the pane wrote, so the view snaps
-    /// to the bottom.
+    /// to the bottom. While scroll hold is set ([`Self::set_scroll_hold`],
+    /// the prefix-[ viewport), the offset survives and clamps to the new
+    /// scrollback extent instead.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.term.process(bytes);
-        self.scroll = 0;
+        if self.hold_scroll {
+            let max = self.term.active_grid().scrollback_len();
+            self.scroll = self.scroll.min(max);
+        } else {
+            self.scroll = 0;
+        }
     }
 
     /// Scroll this pane's client-side view by `delta` lines (positive =
@@ -132,6 +147,18 @@ impl PaneEmulator {
         let current = self.scroll as isize;
         self.scroll = (current + delta).clamp(0, max as isize) as usize;
         self.scroll
+    }
+
+    /// Set the scroll-mode hold. Entering the prefix-[ viewport holds;
+    /// leaving clears it (clearing does NOT snap — the caller snaps
+    /// explicitly with [`Self::scroll_to_live`]).
+    pub fn set_scroll_hold(&mut self, hold: bool) {
+        self.hold_scroll = hold;
+    }
+
+    /// Snap the client view back to the live bottom.
+    pub fn scroll_to_live(&mut self) {
+        self.scroll = 0;
     }
 
     /// Re-fit to a new geometry (`refresh-client -C` re-division).
@@ -288,6 +315,71 @@ impl PaneRenderer {
                 emulator.scroll_by(-(emulator.scroll_offset() as isize));
                 self.dirty = true;
             }
+        }
+    }
+
+    /// Enter the keyboard scroll viewport on `pane`: hold the offset
+    /// against pane output, jump the view one viewport (the pane's row
+    /// count) up from live — the reading position a wheel-up would have
+    /// reached — and repaint. `false` when the pane is unknown or has no
+    /// scrollback (nothing to scroll).
+    pub fn enter_scroll_mode(&mut self, pane: u32) -> bool {
+        let rows = {
+            let Some(emulator) = self.emulators.get(&pane) else {
+                return false;
+            };
+            if emulator.terminal().active_grid().scrollback_len() == 0 {
+                return false;
+            }
+            emulator.terminal().active_grid().rows().max(1)
+        };
+        let Some(emulator) = self.emulators.get_mut(&pane) else {
+            return false;
+        };
+        emulator.set_scroll_hold(true);
+        emulator.scroll_by(rows as isize);
+        self.dirty = true;
+        true
+    }
+
+    /// Whether `pane`'s scroll viewport is currently held (in scroll
+    /// mode). Unknown pane → false.
+    pub fn scroll_mode_active(&self, pane: u32) -> bool {
+        self.emulators
+            .get(&pane)
+            .is_some_and(|e| e.scroll_offset() > 0 || e.hold_scroll)
+    }
+
+    /// `pane`'s client scroll offset (0 for an unknown pane).
+    pub fn scroll_offset_of(&self, pane: u32) -> usize {
+        self.emulators
+            .get(&pane)
+            .map(|e| e.scroll_offset())
+            .unwrap_or(0)
+    }
+
+    /// Drive the scroll viewport on `pane` by `delta` lines (positive =
+    /// up into history). Returns the resulting offset; 0 for an unknown
+    /// pane.
+    pub fn scroll_viewport(&mut self, pane: u32, delta: isize) -> usize {
+        let Some(emulator) = self.emulators.get_mut(&pane) else {
+            return 0;
+        };
+        let after = emulator.scroll_by(delta);
+        self.dirty = true;
+        after
+    }
+    /// Leave scroll mode on `pane`: clear the hold and snap to live.
+    /// Repaints when anything changes.
+    pub fn exit_scroll_mode(&mut self, pane: u32) {
+        let Some(emulator) = self.emulators.get_mut(&pane) else {
+            return;
+        };
+        let was_held = emulator.hold_scroll;
+        emulator.set_scroll_hold(false);
+        if was_held || emulator.scroll_offset() != 0 {
+            emulator.scroll_to_live();
+            self.dirty = true;
         }
     }
 
@@ -751,23 +843,35 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
 }
 
 /// One render-mode session's live state: the window being mirrored, its
-/// renderer, and any layout change waiting to be applied (applying one
-/// needs the connection for the re-seeding replays, so the event handler
-/// parks it for the pump).
+/// renderer, the status row, and any layout change waiting to be applied
+/// (applying one needs the connection for the re-seeding replays, so the
+/// event handler parks it for the pump).
 struct WindowSession {
     /// The window id this session mirrors, `@N`.
     window: String,
     renderer: PaneRenderer,
     /// A `%layout-change` whose re-fit + replay the pump still owes.
     pending_layout: Option<Vec<PaneRect>>,
+    /// The bottom row: queried state + paint/diff pair.
+    status: status::StatusState,
+    status_row: status::StatusRow,
+    /// Whether the status state is stale and needs a re-query before the
+    /// next paint (the throttled re-query on agent/sessions churn).
+    status_dirty: bool,
+    /// Whether scroll mode is up on the focused pane.
+    scroll_mode: bool,
 }
 
 impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
         Self {
             window: String::new(),
-            renderer: PaneRenderer::new(cols, rows, Glyphs::Unicode),
+            renderer: PaneRenderer::new(cols, rows.saturating_sub(1), Glyphs::Unicode),
             pending_layout: None,
+            status: status::StatusState::default(),
+            status_row: status::StatusRow::new(cols),
+            status_dirty: true,
+            scroll_mode: false,
         }
     }
 
@@ -836,6 +940,15 @@ impl WindowSession {
         // scrollback, cursor, and input modes ride the screen-restore
         // byte stream, the same stream passthrough writes to the host.
         self.replay_all_panes(conn);
+        // The status bar seeds with the view.
+        let focused = self.renderer.focused().unwrap_or(0);
+        if let Err(status::StatusError::SessionGone) =
+            self.status.refresh(conn, &self.window, focused)
+        {
+            return Err("the target's session is gone".to_string());
+        }
+        self.status_row.invalidate();
+        self.draw_status_row();
         // First frame: clear + full paint.
         sink.repaint_all();
         self.frame(sink);
@@ -880,21 +993,45 @@ impl WindowSession {
                 self.replay_all_panes(conn);
             }
 
-            // 2. Stdin: prefix d detaches; everything else forwards to
-            //    the focused pane in chunked send-keys -H.
+            // 2. Stdin: prefix routing (d detaches, [ enters scroll mode,
+            //    n/p/(/) switch windows/sessions), then keys/mouse to the
+            //    focused pane.
             if self.pump_stdin(conn, &mut stdin, &mut prefix_pending) {
                 return Ok(());
             }
 
-            // 3. Host resize (SIGWINCH): report the new grid, re-fit.
-            let size = super::conn::terminal_grid();
-            if size != current_size {
-                current_size = size;
-                self.resize_to(conn, size.0, size.1, sink)?;
+            // 3. Host resize (SIGWINCH): report the new grid, re-fit. The
+            //    daemon's window renders into the rows above the status
+            //    bar, so the size report carries the content height.
+            let (host_cols, host_rows) = super::conn::terminal_grid();
+            let content = (host_cols, host_rows.saturating_sub(1));
+            if content != current_size {
+                current_size = content;
+                self.resize_to(conn, content.0, content.1, sink)?;
+                // A resize wiped the screen; the row repaints whole.
+                self.status_row.invalidate();
+                self.draw_status_row();
             }
 
-            // 4. Frame whatever accumulated, then wait for the next push
-            //    — the frame cadence floods coalesce into.
+            // 3b. Status: the throttled re-query. Any %agent-state-changed
+            //     / %agent-telemetry-changed / %sessions-changed (and
+            //     renames) marked the state stale; one re-query per burst
+            //     serves them all. The shown session being gone ends the
+            //     view (docs/MUX.md's %sessions-changed client contract).
+            if self.status_dirty {
+                self.status_dirty = false;
+                let focused = self.renderer.focused().unwrap_or(0);
+                match self.status.refresh(conn, &self.window, focused) {
+                    Ok(()) => {}
+                    Err(status::StatusError::SessionGone) => return Ok(()),
+                    Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
+                }
+                self.draw_status_row();
+            }
+
+            // 4. Frame whatever accumulated (panes + the status row's own
+            //    diff), then wait for the next push — the frame cadence
+            //    floods coalesce into.
             self.frame(sink);
             match conn.recv_timeout(super::POLL) {
                 Ok(event) => {
@@ -944,8 +1081,22 @@ impl WindowSession {
                 EventOutcome::Continue
             }
             TmuxNotification::Exit => EventOutcome::End,
-            // Everything else — lifecycle elsewhere, agent churn, paste
-            // buffers — is not this window renderer's concern yet.
+            // The status facts: agent churn, session churn, and renames
+            // all re-query (the contract's throttled re-query; one burst
+            // of events collapses into one refresh in the pump's step 3b).
+            TmuxNotification::AgentStateChanged { .. }
+            | TmuxNotification::AgentReleased { .. }
+            | TmuxNotification::AgentTelemetryChanged { .. }
+            | TmuxNotification::SessionsChanged
+            | TmuxNotification::WindowRenamed { .. }
+            | TmuxNotification::SessionRenamed { .. }
+            | TmuxNotification::WindowPaneChanged { .. }
+            | TmuxNotification::SessionWindowChanged { .. } => {
+                self.status_dirty = true;
+                EventOutcome::Continue
+            }
+            // Everything else — lifecycle elsewhere, paste buffers — is
+            // not this window renderer's concern yet.
             _ => EventOutcome::Continue,
         }
     }
@@ -1002,6 +1153,10 @@ impl WindowSession {
                                     // key: unbound in Phase B — consumed.
                                     continue;
                                 }
+                                if self.scroll_mode {
+                                    self.scroll_mode_key(&ev);
+                                    continue;
+                                }
                                 let focused = self.focused_pane();
                                 let bytes = self
                                     .renderer
@@ -1037,16 +1192,31 @@ impl WindowSession {
         for &byte in bytes {
             if *prefix_pending {
                 *prefix_pending = false;
-                if byte == b'd' {
-                    return true;
+                match byte {
+                    b'd' => return true,
+                    b'[' => {
+                        // prefix [ — the scroll viewport on the focused
+                        // pane. No scrollback means nothing to scroll;
+                        // the key is consumed either way.
+                        if let Some(id) = self.renderer.focused() {
+                            if self.renderer.enter_scroll_mode(id) {
+                                self.scroll_mode = true;
+                            }
+                        }
+                    }
+                    b'n' | b'p' | b'(' | b')' | b'o' => self.prefix_switch(byte, conn),
+                    super::C_B => to_send.push(byte), // literal prefix
+                    _ => {}                           // unbound: consumed
                 }
-                if byte == super::C_B {
-                    to_send.push(byte); // literal prefix
-                }
-                // Other Phase B prefix commands land with their cards;
-                // unbound keys are consumed.
             } else if byte == super::C_B {
                 *prefix_pending = true;
+            } else if self.scroll_mode {
+                // Scroll mode's plain keys: q and Enter exit (the
+                // viewport is a modal view — keys do not leak into the
+                // pane).
+                if byte == b'q' || byte == b'\r' {
+                    self.leave_scroll_mode();
+                }
             } else {
                 to_send.push(byte);
             }
@@ -1059,6 +1229,302 @@ impl WindowSession {
             super::forward_chunked(conn, self.focused_pane(), &to_send);
         }
         false
+    }
+
+    /// The prefix commands that move the view through the daemon's tree:
+    /// `o` cycles panes of the window, `n`/`p` next/prev window, `(`/`)`
+    /// prev/next session — every switch is select-then-refresh, the
+    /// daemon-side select + resync passthrough dispatches, with the
+    /// renderer rebuilding from the fresh replays.
+    fn prefix_switch(&mut self, key: u8, conn: &mut super::conn::AttachConn) {
+        match key {
+            b'o' => self.cycle_pane(conn),
+            b'n' => self.switch_window(conn, 1),
+            b'p' => self.switch_window(conn, -1),
+            b'(' => self.switch_session(conn, -1),
+            b')' => self.switch_session(conn, 1),
+            _ => {}
+        }
+    }
+
+    /// prefix o: select the next pane in the window's layout-leaf order,
+    /// daemon-side, then re-seed — the render-mode spelling of
+    /// select-then-refresh.
+    fn cycle_pane(&mut self, conn: &mut super::conn::AttachConn) {
+        let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+        if order.len() < 2 {
+            return;
+        }
+        let current = self
+            .renderer
+            .focused()
+            .and_then(|f| order.iter().position(|p| *p == f))
+            .unwrap_or(0);
+        let next = order[(current + 1) % order.len()];
+        self.renderer.focus(next);
+        let _ = conn.send_checked(&format!("select-pane -t %{next}"));
+    }
+
+    /// prefix n/p: move to the next/previous window of the shown session
+    /// and mirror it (daemon-side select-window, then re-seed from fresh
+    /// replays).
+    fn switch_window(&mut self, conn: &mut super::conn::AttachConn, direction: i32) {
+        // The status state knows the shown session's windows.
+        if self.status.session_id.is_none() {
+            return;
+        }
+        // Re-query for the fresh order: the status state may be stale.
+        let Ok(reply) = conn.send_checked(&format!(
+            "list-windows -t {}",
+            self.status.session_id.clone().unwrap_or_default()
+        )) else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let windows: Vec<String> = reply
+            .body
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|w| w.starts_with('@'))
+            .map(str::to_string)
+            .collect();
+        let Some(position) = windows.iter().position(|w| *w == self.window) else {
+            return;
+        };
+        let next = windows[(position as i32 + direction).rem_euclid(windows.len() as i32) as usize]
+            .clone();
+        if !conn
+            .send_checked(&format!("select-window -t {next}"))
+            .is_ok_and(|reply| reply.ok)
+        {
+            return;
+        }
+        self.reseed_window(conn, &next);
+    }
+
+    /// prefix ( / ): the previous/next session in list-sessions order;
+    /// mirror its active window.
+    fn switch_session(&mut self, conn: &mut super::conn::AttachConn, direction: i32) {
+        let Ok(reply) = conn.send_checked("list-sessions") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let sessions: Vec<String> = reply
+            .body
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|s| s.starts_with('$'))
+            .map(str::to_string)
+            .collect();
+        // Which session owns the shown window right now?
+        let Ok(windows) = conn.send_checked(&format!(
+            "list-windows -t {}",
+            self.status.session_id.clone().unwrap_or_default()
+        )) else {
+            return;
+        };
+        let owns_window = windows
+            .body
+            .iter()
+            .any(|l| l.split_whitespace().next() == Some(self.window.as_str()));
+        let current = if owns_window {
+            sessions
+                .iter()
+                .position(|s| Some(s.as_str()) == self.status.session_id.as_deref())
+        } else {
+            // Stale state: fall back to the head so a direction still
+            // moves somewhere deterministic.
+            Some(0)
+        };
+        let Some(current) = current else {
+            return;
+        };
+        let next = sessions
+            [(current as i32 + direction).rem_euclid(sessions.len() as i32) as usize]
+            .clone();
+        let Ok(windows) = conn.send_checked(&format!("list-windows -t {next}")) else {
+            return;
+        };
+        if !windows.ok {
+            return;
+        }
+        let window = windows
+            .body
+            .iter()
+            .find(|l| l.split_whitespace().nth(1) == Some("*"))
+            .or_else(|| windows.body.first())
+            .and_then(|l| l.split_whitespace().next());
+        let Some(window) = window else {
+            return;
+        };
+        let _ = conn.send_checked(&format!("select-window -t {window}"));
+        self.reseed_window(conn, window);
+    }
+
+    /// Point the whole view at `window`: daemon-side select already done
+    /// (or the window is in the same session), re-fit the renderer from a
+    /// fresh layout report, replay every pane, and mark everything dirty
+    /// — the render-mode resync.
+    fn reseed_window(&mut self, conn: &mut super::conn::AttachConn, window: &str) {
+        let (cols, rows) = self.renderer.window_size();
+        let pane = self.focused_pane_or_first(conn, window);
+        if conn
+            .send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
+            .is_err()
+        {
+            return;
+        }
+        self.window = window.to_string();
+        self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
+        self.scroll_mode = false;
+        if let Some((l, v, f)) =
+            conn.drain_pending_events()
+                .into_iter()
+                .find_map(|event| match event {
+                    TmuxNotification::LayoutChange {
+                        window_id,
+                        window_layout,
+                        window_visible_layout,
+                        window_raw_flags,
+                    } if window_id == window => {
+                        Some((window_layout, window_visible_layout, window_raw_flags))
+                    }
+                    _ => None,
+                })
+        {
+            if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
+                self.renderer.apply_layout(layout);
+            }
+        }
+        self.replay_all_panes(conn);
+        // Fresh facts for the new view; a session gone mid-switch ends
+        // the view through the pump's normal path on the next mark.
+        let focused = self.renderer.focused().unwrap_or(0);
+        self.status_dirty = true;
+        if matches!(
+            self.status.refresh(conn, window, focused),
+            Err(status::StatusError::SessionGone)
+        ) {
+            // The window vanished between the select and the query: leave
+            // the view rendering its last frame; the next %sessions-changed
+            // (or this switch's own burst) re-evaluates.
+            return;
+        }
+        self.status_row.invalidate();
+        self.draw_status_row();
+    }
+
+    /// A pane id of `window` to hang the size report on: the focused pane
+    /// when it still belongs there, else the window's first pane.
+    fn focused_pane_or_first(&self, conn: &mut super::conn::AttachConn, window: &str) -> String {
+        let focused = self.focused_pane();
+        if let Ok(reply) = conn.send_checked(&format!("list-panes -t {window}")) {
+            if reply.ok {
+                let panes: Vec<String> = reply
+                    .body
+                    .iter()
+                    .filter_map(|l| l.split_whitespace().next())
+                    .filter(|p| p.starts_with('%'))
+                    .map(str::to_string)
+                    .collect();
+                if panes.contains(&focused) {
+                    return focused;
+                }
+                if let Some(first) = panes.first() {
+                    return first.clone();
+                }
+            }
+        }
+        focused
+    }
+
+    /// Leave scroll mode: clear the hold and snap the focused pane to
+    /// live.
+    fn leave_scroll_mode(&mut self) {
+        self.scroll_mode = false;
+        if let Some(id) = self.renderer.focused() {
+            self.renderer.exit_scroll_mode(id);
+        }
+    }
+
+    /// One functional key while scroll mode is up: arrows line-scroll,
+    /// PgUp/PgDn page by the pane's height, Home jumps to the top of
+    /// history, End and q and Enter exit. Keys never reach the pane
+    /// while the viewport is up.
+    fn scroll_mode_key(&mut self, ev: &TermKeyEvent) {
+        use crate::keyboard::TermKey;
+        let Some(id) = self.renderer.focused() else {
+            return;
+        };
+        let rows = self
+            .renderer
+            .pane_terminal(id)
+            .map(|t| t.active_grid().rows().max(1) as isize)
+            .unwrap_or(1);
+        match (ev.key(), ev.modifiers) {
+            (TermKey::Up, 0) => {
+                self.renderer.scroll_viewport(id, 1);
+            }
+            (TermKey::Down, 0) => {
+                self.renderer.scroll_viewport(id, -1);
+            }
+            (TermKey::PageUp, 0) => {
+                self.renderer.scroll_viewport(id, rows);
+            }
+            (TermKey::PageDown, 0) => {
+                self.renderer.scroll_viewport(id, -rows);
+            }
+            (TermKey::Home, 0) => {
+                let max = self
+                    .renderer
+                    .pane_terminal(id)
+                    .map(|t| t.active_grid().scrollback_len() as isize)
+                    .unwrap_or(0);
+                self.renderer.scroll_viewport(id, max);
+            }
+            (TermKey::End, 0) => self.leave_scroll_mode(),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'q') => self.leave_scroll_mode(),
+            _ => {}
+        }
+    }
+
+    /// Draw the status row: fresh state composed and painted into the row
+    /// buffer (the pump flushes the diff with the next frame).
+    fn draw_status_row(&mut self) {
+        let (cols, _rows) = super::conn::terminal_grid();
+        if self.status_row.cols() != cols {
+            self.status_row = StatusRow::new(cols);
+        }
+        let scroll = if self.scroll_mode {
+            self.renderer
+                .focused()
+                .map(|id| self.renderer.scroll_offset_of(id))
+        } else {
+            None
+        };
+        let segments = self.status.compose(cols, scroll);
+        self.status_row.paint(&segments);
+    }
+
+    /// Flush the status row's changed cells to the host's bottom row.
+    fn flush_status_row(&mut self, sink: &mut dyn FlushSink) {
+        let (_cols, rows) = super::conn::terminal_grid();
+        let bottom = rows.saturating_sub(1);
+        let diff = self.status_row.diff();
+        if diff.is_empty() {
+            return;
+        }
+        // Rebase the row-relative cells to the host's bottom row and
+        // reuse the sink's per-cell spelling.
+        let rebased: Vec<(u16, u16, RtCell)> = diff
+            .into_iter()
+            .map(|(x, _y, cell)| (x, bottom, cell))
+            .collect();
+        sink.flush(&rebased);
     }
 
     /// One host mouse report: clicks focus the pane under the pointer
@@ -1191,6 +1657,7 @@ impl WindowSession {
                 sink.flush(&diff);
             }
         }
+        self.flush_status_row(sink);
     }
 }
 
@@ -1685,5 +2152,99 @@ mod tests {
             encode_key(&TermKeyEvent::functional(TermKey::Up, 0), term),
             b"\x1bOA"
         );
+    }
+
+    // ---- Phase B part 3: the prefix-[ keyboard scroll viewport.
+
+    /// Criterion 2: entering scroll mode holds the view one viewport up
+    /// from live and holds it against pane output; arrows move the
+    /// viewport; exiting snaps to live. q/Enter are the session's
+    /// business (routed in `route_plain`); the renderer only models the
+    /// offset.
+    #[test]
+    fn scroll_mode_holds_view_against_output_and_snaps_on_exit() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        // 30 numbered lines through the 24-row pane: 6+ in scrollback.
+        for i in 0..30 {
+            renderer.feed_output(1, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        renderer.render_frame();
+
+        // A pane with no scrollback refuses scroll mode.
+        assert!(!renderer.enter_scroll_mode(2), "pane 2 has no history");
+        assert!(renderer.enter_scroll_mode(1), "pane 1 has history");
+        let history = renderer
+            .pane_terminal(1)
+            .map(|t| t.active_grid().scrollback_len())
+            .unwrap_or(0);
+        let viewport = renderer.scroll_offset_of(1);
+        assert_eq!(
+            viewport,
+            24usize.min(history),
+            "one viewport up, clamped to the history extent"
+        );
+        assert!(renderer.scroll_mode_active(1));
+
+        // Pane output while held does NOT snap to live — the view holds.
+        renderer.feed_output(1, b"NEW-LINE\r\n");
+        assert_eq!(
+            renderer.scroll_offset_of(1),
+            viewport,
+            "the hold survives pane output"
+        );
+        // The offset clamps when history shrinks relative to the view.
+        renderer.scroll_viewport(1, 1);
+        assert_eq!(renderer.scroll_offset_of(1), viewport + 1);
+
+        // Arrows-equivalent: viewport down past live clamps to the max
+        // (live is reached at offset 0 only via exit).
+        renderer.scroll_viewport(1, -(viewport as isize + 10));
+        assert_eq!(renderer.scroll_offset_of(1), 0, "clamped at live");
+
+        // Exit: the hold clears and the view is live; fresh output is
+        // the pane's business again.
+        renderer.exit_scroll_mode(1);
+        assert!(!renderer.scroll_mode_active(1));
+        renderer.feed_output(1, b"x");
+        assert_eq!(renderer.scroll_offset_of(1), 0);
+    }
+
+    /// Scroll mode on an unknown pane is a no-op.
+    #[test]
+    fn scroll_mode_ignores_unknown_panes() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        assert!(!renderer.enter_scroll_mode(99));
+        assert!(!renderer.scroll_mode_active(99));
+        renderer.exit_scroll_mode(99);
+        renderer.scroll_viewport(99, 5);
+        assert_eq!(renderer.scroll_offset_of(99), 0);
+    }
+
+    /// While the scroll viewport is up, painted rows come from history:
+    /// the rect's top row shows a scrollback line, not live row 0.
+    #[test]
+    fn scroll_viewport_paints_history_rows() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        for i in 0..30 {
+            renderer.feed_output(1, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        renderer.render_frame();
+        let grid = renderer.pane_terminal(1).unwrap().active_grid().clone();
+
+        assert!(renderer.enter_scroll_mode(1));
+        renderer.render_frame();
+        let offset = renderer.scroll_offset_of(1);
+        let expected = grid
+            .scrollback_line(grid.scrollback_len() - offset)
+            .expect("history line");
+        let expected: String = expected.iter().take(8).map(|c| c.c().to_string()).collect();
+        let top: String = (0..8).map(|c| renderer.buffer[(c, 0)].symbol()).collect();
+        assert_eq!(top, expected, "the viewport paints from history");
     }
 }
