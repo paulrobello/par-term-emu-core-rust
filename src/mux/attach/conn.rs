@@ -232,6 +232,6 @@ fn cell_pixels() -> (u16, u16) {
 
 /// The host terminal's character-cell grid size, `(cols, rows)`, falling
 /// back to 80x24 when stdin is not a tty (tests, pipes).
-fn terminal_grid() -> (u16, u16) {
+pub(crate) fn terminal_grid() -> (u16, u16) {
     crossterm::terminal::size().unwrap_or((80, 24))
 }

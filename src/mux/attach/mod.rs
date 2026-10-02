@@ -4,14 +4,75 @@
 //! client is a byte pump + key pump + minimal status line: pane replay and
 //! `%output` bytes flow to stdout verbatim, stdin bytes flow to the pane as
 //! chunked `send-keys -H`, and a bottom status row is reserved with DECSTBM.
+//!
+//! Phase B adds the layout parser and pane renderer ([`layout`],
+//! [`render`]) and the [`AttachMode`] seam: [`run`] stays passthrough (the
+//! Phase A contract), and [`run_with_mode`] selects the renderer, which
+//! mirrors every visible pane in its own core emulator and paints the
+//! window through ratatui.
 
 pub mod conn;
+pub mod layout;
+pub mod render;
 
 use crate::mux::resolve_socket_path;
 use crate::tmux_control::TmuxNotification;
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::time::Duration;
+
+/// Which rendering pipeline the attach client drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttachMode {
+    /// The Phase A contract: pane bytes flow to the host terminal
+    /// verbatim, which is the VT emulator. The default — the renderer is
+    /// opt-in until later Phase B cards land the full TUI chrome.
+    #[default]
+    Passthrough,
+    /// The Phase B renderer: per-pane core emulators fed by replay +
+    /// `%output`, painted into layout rects through ratatui, dividers
+    /// drawn between them. The host terminal only ever sees this client's
+    /// own draws.
+    Render,
+}
+
+/// Attach entry point. Returns the process exit code.
+///
+/// Standing client-mode contract: a failed connect is reported as
+/// "no daemon running on <path>" and exits 1 — attach never starts a
+/// daemon, matching `--cmd`/`--stop` (docs/MUX.md Client Mode).
+pub fn run(options: &AttachOptions) -> ExitCode {
+    run_with_mode(options, AttachMode::default())
+}
+
+/// Attach entry point with an explicit mode — the seam later Phase B
+/// cards (and any embedder) select through. [`run`] is this with
+/// [`AttachMode::Passthrough`].
+pub fn run_with_mode(options: &AttachOptions, mode: AttachMode) -> ExitCode {
+    match mode {
+        AttachMode::Passthrough => run_passthrough(options),
+        AttachMode::Render => render::run_render_session(options),
+    }
+}
+
+/// The Phase A passthrough entry, unchanged.
+fn run_passthrough(options: &AttachOptions) -> ExitCode {
+    match run_inner(options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(AttachError::NoDaemon(path)) => {
+            eprintln!(
+                "par-mux: no daemon running on {} — start one with `par-mux --socket {}`",
+                path.display(),
+                path.display()
+            );
+            ExitCode::FAILURE
+        }
+        Err(AttachError::Handshake(err)) => {
+            eprintln!("par-mux: attach failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 /// Everything `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]`
 /// parsed.
@@ -52,29 +113,6 @@ pub enum AttachError {
     /// The socket is served but the handshake failed mid-way (or a
     /// client-side argument, e.g. `--prefix`, did not parse).
     Handshake(std::io::Error),
-}
-
-/// Attach entry point. Returns the process exit code.
-///
-/// Standing client-mode contract: a failed connect is reported as
-/// "no daemon running on <path>" and exits 1 — attach never starts a
-/// daemon, matching `--cmd`/`--stop` (docs/MUX.md Client Mode).
-pub fn run(options: &AttachOptions) -> ExitCode {
-    match run_inner(options) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(AttachError::NoDaemon(path)) => {
-            eprintln!(
-                "par-mux: no daemon running on {} — start one with `par-mux --socket {}`",
-                path.display(),
-                path.display()
-            );
-            ExitCode::FAILURE
-        }
-        Err(AttachError::Handshake(err)) => {
-            eprintln!("par-mux: attach failed: {err}");
-            ExitCode::FAILURE
-        }
-    }
 }
 
 /// How many bytes one chunked `send-keys -H` carries. The wire is
@@ -150,7 +188,7 @@ enum PumpOutcome {
 }
 
 /// tmux's default prefix, C-b.
-const C_B: u8 = 0x02;
+pub(crate) const C_B: u8 = 0x02;
 
 /// Parse the `--prefix` tmux spelling (`C-b`, `C-a`, `C-Space`) or a
 /// literal single character into its byte.
@@ -849,6 +887,25 @@ impl Session {
     }
 }
 
+/// Forward bytes to `pane` in ~512-byte `send-keys -H` chunks — the
+/// shared spelling of `Session::send_chunked`, for the render session's
+/// stdin path.
+pub(crate) fn forward_chunked(conn: &mut conn::AttachConn, pane: String, bytes: &[u8]) {
+    for chunk in bytes.chunks(CHUNK) {
+        let mut hex = String::with_capacity(chunk.len() * 2);
+        for byte in chunk {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+        }
+        if conn
+            .send_checked(&format!("send-keys -t {} -H {}", pane, hex))
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
 /// What a non-prefix command byte maps to.
 enum PrefixKey {
     /// `d` — detach.
@@ -897,7 +954,7 @@ fn prefix_command(key: u8) -> PrefixKey {
 /// non-blocking drain and its bounded notification wait are what observe
 /// the disconnect. Byte order is preserved (one reader, FIFO channel);
 /// Unix behavior is unchanged beyond who performs the same read.
-struct Stdin {
+pub(crate) struct Stdin {
     rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
@@ -953,7 +1010,7 @@ impl Stdin {
 /// RAII raw-mode guard: enters raw mode on construction, restores on drop —
 /// including on error/panic unwind, so a failed attach never leaves the
 /// host terminal in raw mode.
-struct TerminalGuard {
+pub(crate) struct TerminalGuard {
     entered: bool,
 }
 

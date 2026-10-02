@@ -519,3 +519,139 @@ fn target_resolution_and_clean_failure() {
         "the failure names the target problem: {err}"
     );
 }
+
+/// Phase B criteria 1+2, driven against the REAL daemon in-process: a
+/// 2-pane split's `%layout-change` parses to rects matching the daemon's
+/// own geometry, and each pane's replay-fed emulator reproduces what
+/// `capture-pane` ground truth says the pane holds — the same cell
+/// content the renderer paints at those rects. (Criterion 3's frame
+/// coalescing is pinned by `output_flood_coalesces_at_frame_cadence` in
+/// `src/mux/attach/render.rs` — a pure-renderer property.)
+///
+/// The renderer runs headless (no sink): the frames stay in the
+/// [`PaneRenderer::buffer`] the assertions read.
+#[test]
+fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
+    let (fixture, _daemon, mut client) = fixture_with_session("render");
+
+    // The initial session's pane, then a vertical split; distinct content
+    // per pane through the shell.
+    let pane0 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("split-window -t {pane0} -h"))
+        .expect("split");
+    client
+        .send(&format!("send-keys -t {pane0} -l 'echo LEFT-MARKER'"))
+        .expect("keys left");
+    client
+        .send(&format!("send-keys -t {pane0} Enter"))
+        .expect("enter left");
+    let pane1 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("\n")
+        .lines()
+        .find(|l| l.split_whitespace().next() != Some(pane0.as_str()))
+        .and_then(|l| l.split_whitespace().next())
+        .expect("the split's pane")
+        .to_string();
+    client
+        .send(&format!("send-keys -t {pane1} -l 'echo RIGHT-MARKER'"))
+        .expect("keys right");
+    client
+        .send(&format!("send-keys -t {pane1} Enter"))
+        .expect("enter right");
+    // Let the echoes land on the pane screens BEFORE the replay: the
+    // assertion is about the replay seeding, not a race with %output.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // The render client: the documented handshake, then the size report
+    // that pulls the current layout triple.
+    let mut conn = par_term_emu_core_rust::mux::attach::conn::AttachConn::connect(fixture.socket())
+        .expect("render client connect");
+    let _replay = conn.drain_pending_events();
+    conn.send_checked(&format!("refresh-client -t {pane0} -C 80x24"))
+        .expect("size report");
+    let layout_event = conn
+        .drain_pending_events()
+        .into_iter()
+        .find_map(|event| match event {
+            par_term_emu_core_rust::tmux_control::TmuxNotification::LayoutChange {
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+                ..
+            } => Some((window_layout, window_visible_layout, window_raw_flags)),
+            _ => None,
+        })
+        .expect("the size report broadcast a layout change");
+    let rects = par_term_emu_core_rust::mux::attach::layout::parse_layout_triple(
+        &layout_event.0,
+        &layout_event.1,
+        &layout_event.2,
+    )
+    .expect("the daemon's own layout string parses");
+    assert_eq!(rects.len(), 2, "the split's two leaves");
+    assert_eq!(rects[0].x, 0, "left pane starts at col 0");
+    assert_eq!(rects[1].x, rects[0].width, "right pane abuts the left");
+    assert_eq!(
+        rects[0].height, rects[1].height,
+        "a vertical split shares the height"
+    );
+
+    // Renderer over the daemon's layout, replays per pane.
+    let mut renderer = par_term_emu_core_rust::mux::attach::render::PaneRenderer::new(
+        80,
+        24,
+        par_term_emu_core_rust::mux::attach::render::Glyphs::Unicode,
+    );
+    renderer.apply_layout(rects.clone());
+    for rect in &rects {
+        let pane = format!("%{}", rect.pane);
+        let reply = conn
+            .send_checked(&format!("refresh-client -t {pane}"))
+            .expect("replay request");
+        assert!(reply.ok, "replay of {pane}");
+        let mut bytes = reply.body.join("\n").into_bytes();
+        bytes.push(b'\n');
+        renderer.feed_output(rect.pane, &bytes);
+    }
+    renderer.render_frame();
+
+    // Ground truth per pane: the daemon's own capture of what each pane
+    // shows must appear at that pane's layout rect of the rendered buffer.
+    for (marker, rect) in [("LEFT-MARKER", &rects[0]), ("RIGHT-MARKER", &rects[1])] {
+        let rendered: String = (0..rect.height)
+            .map(|row| {
+                (0..rect.width)
+                    .map(|col| {
+                        renderer
+                            .cell(rect.x + col, rect.y + row)
+                            .map(|c| c.symbol())
+                            .unwrap_or(" ")
+                    })
+                    .collect::<String>()
+            })
+            .collect::<String>();
+        assert!(
+            rendered.contains(marker),
+            "the pane's rect must render its capture-pane content ({marker}); got {rendered:?}"
+        );
+        // And the daemon agrees the pane itself shows it.
+        let capture = client
+            .send(&format!("capture-pane -t %{}", rect.pane))
+            .expect("capture");
+        assert!(
+            capture.join("\n").contains(marker),
+            "daemon ground truth for %{} shows {marker}: {capture:?}",
+            rect.pane
+        );
+    }
+}
