@@ -324,6 +324,16 @@ struct Session {
     /// Held-dead cue: `Some(code)`/`Some(None)` once the pane is held
     /// (`(exited N)` on the status line), `None` while running.
     exited: Option<Option<i32>>,
+    /// The host grid the status row was last drawn at. A resize (or a
+    /// ConPTY geometry settling late) changes it, and the status row must
+    /// follow.
+    drawn_size: Option<(u16, u16)>,
+    /// A startup repaint flood (the daemon's re-fit repaint after the
+    /// handshake's size report lands, amplified by ConPTY) can wipe the
+    /// one-shot startup status draw. Redraw once after the first `%output`
+    /// burst since session start — output flowing again is what proved
+    /// the flood passed.
+    settling: bool,
     /// The detach prefix byte.
     prefix: u8,
     /// The prefix byte arrived; the next stdin byte is the command key.
@@ -355,6 +365,8 @@ impl Session {
             pane_title: String::new(),
             agents: 0,
             exited: None,
+            drawn_size: None,
+            settling: true,
             prefix,
             prefix_pending: false,
         };
@@ -512,8 +524,10 @@ impl Session {
                 return PumpOutcome::Detached;
             }
 
-            // 3. Status line redraw when something marked it dirty.
-            if status_dirty {
+            // 3. Status line redraw when something marked it dirty — or
+            //    the host grid changed since the last draw (a resize, or
+            //    ConPTY's geometry settling late).
+            if status_dirty || self.size_changed() {
                 status_dirty = false;
                 self.refresh_status();
                 self.draw_status();
@@ -562,6 +576,15 @@ impl Session {
                 let mut stdout = std::io::stdout().lock();
                 let _ = stdout.write_all(data);
                 let _ = stdout.flush();
+                // The startup repaint flood (the daemon's re-fit repaint
+                // after the handshake's size report lands, amplified by
+                // ConPTY) can wipe the one-shot startup status draw. Output
+                // flowing again after the session started means the flood
+                // has passed — mark the settle redraw.
+                if self.settling {
+                    self.settling = false;
+                    *status_dirty = true;
+                }
             }
             TmuxNotification::Exit => return false,
             TmuxNotification::PaneExited { pane_id, exit_code } if *pane_id == self.pane => {
@@ -841,11 +864,21 @@ impl Session {
         }
     }
 
+    /// Whether the host grid changed since the last status draw. The
+    /// first call sees `drawn_size == None` and reports true; the draw
+    /// then records the size.
+    fn size_changed(&mut self) -> bool {
+        let size = conn::terminal_grid();
+        let changed = self.drawn_size != Some(size);
+        self.drawn_size = Some(size);
+        changed
+    }
+
     /// The status line: reserve the bottom row with DECSTBM, draw
     /// `session | title [| N agents] [| (exited N)]` inverse-video, and
     /// restore the scroll region and cursor.
     fn draw_status(&mut self) {
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (cols, rows) = conn::terminal_grid();
         if rows < 2 || cols < 2 {
             return; // nowhere to put a status row
         }
@@ -1476,6 +1509,8 @@ mod tests {
             pane_title: String::new(),
             agents: 0,
             exited: None,
+            drawn_size: None,
+            settling: false,
             prefix: 0x02,
             prefix_pending: false,
         };
