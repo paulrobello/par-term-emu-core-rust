@@ -31,7 +31,8 @@ struct AttachHost {
     to_child: SharedWriter,
     /// Reader-thread output, raw bytes.
     output_rx: Receiver<Vec<u8>>,
-    _master: Box<dyn MasterPty + Send>,
+    /// The master, kept for mid-session host-side resizes.
+    master: Box<dyn MasterPty + Send>,
 }
 
 /// Spawn `par-mux attach --socket <path> [-t target]` under a fresh PTY and
@@ -119,7 +120,7 @@ fn spawn_attach(
         killer,
         to_child,
         output_rx: rx,
-        _master: pair.master,
+        master: pair.master,
     };
     (host, stderr)
 }
@@ -1016,6 +1017,279 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
          repaint may remove the test claim again). snapshots:\n{ever_row}\nstderr: {}",
         stderr.lock().unwrap()
     );
+    host.killer.kill().ok();
+}
+
+/// Acceptance criterion (render mode, PTY level): a host resize re-fits
+/// the whole client. Resizing the harness master PTY (the host terminal's
+/// SIGWINCH shape) makes the pump report the new grid (content height,
+/// minus the status row), the daemon re-divides the window and
+/// re-broadcasts the layout, `resize_to` re-fits and re-seeds every pane
+/// synchronously, and the status row repaints at the host's new bottom
+/// row — the settle-redraw discipline means a repaint flood cannot leave
+/// it blank.
+#[cfg(unix)]
+#[test]
+fn render_mode_host_resize_refits_window_layout_and_status_row() {
+    let (fixture, _daemon, mut client) = fixture_with_session("resize");
+    let pane0 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("split-window -t {pane0} -h"))
+        .expect("split");
+    let pane1 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("\n")
+        .lines()
+        .find(|l| l.split_whitespace().next() != Some(pane0.as_str()))
+        .and_then(|l| l.split_whitespace().next())
+        .expect("the split's pane")
+        .to_string();
+    client
+        .send(&format!("send-keys -t {pane0} -l 'echo LEFT-MARKER'"))
+        .expect("keys left");
+    client
+        .send(&format!("send-keys -t {pane0} Enter"))
+        .expect("enter left");
+    client
+        .send(&format!("send-keys -t {pane1} -l 'echo RIGHT-MARKER'"))
+        .expect("keys right");
+    client
+        .send(&format!("send-keys -t {pane1} Enter"))
+        .expect("enter right");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane0]);
+    // Settle: mouse capture + first frame with both panes painted.
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"LEFT-MARKER", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"RIGHT-MARKER", Duration::from_secs(10));
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Resize the host terminal: 24x80 -> 30x100. Everything the host
+    // receives past this point is resize-attributable.
+    host.master
+        .resize(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("host resize");
+
+    // The status row repaints at the host's NEW bottom row (row 30) — a
+    // CUP to row 30 cannot come from the 24-row geometry.
+    let got = wait_for_output(&host, b"\x1b[30;", Duration::from_secs(10));
+    assert!(
+        !got.is_empty(),
+        "the resize must re-fit and repaint (status row CUP to the new bottom \
+         row). stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+
+    // The daemon re-divided to the reported content grid (100x29): each
+    // pane re-fit to half of 100 columns. Give the broadcast/refit a beat,
+    // then read pane-info ground truth.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut fitted = false;
+    while Instant::now() < deadline {
+        let info = client
+            .send(&format!("pane-info -t {pane0}"))
+            .expect("pane-info");
+        if info.join(" ").contains("50x29") {
+            fitted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        fitted,
+        "the size report must re-fit the daemon's panes to the content grid \
+         (100x29, half = 50 wide): {:?}",
+        client
+            .send(&format!("pane-info -t {pane0}"))
+            .expect("pane-info")
+    );
+
+    // Reconstruct the painted screen at the new geometry: both panes
+    // re-seeded, each in its half, and the status row carrying the shown
+    // session on row 30. The repaint may straddle the needle read, so the
+    // reconstruction joins the needle-read bytes with what followed; give
+    // the re-seed + repaint a beat to finish flowing before draining.
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut all = got;
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        all.extend_from_slice(&bytes);
+    }
+    let capture_left = client
+        .send(&format!("capture-pane -t {pane0}"))
+        .expect("capture left");
+    let (final_grid, ever) = reconstructed_screen(&all, 30, 100);
+    assert!(
+        final_grid.iter().any(|row| row.contains("LEFT-MARKER"))
+            || ever
+                .iter()
+                .any(|rows| rows.iter().any(|r| r.contains("LEFT-MARKER"))),
+        "the left pane must repaint after the resize re-fit: {final_grid:?}\n\
+         daemon capture: {:?}\nbytes received after resize: {} bytes, first 400: {:?}",
+        capture_left.join("\n"),
+        all.len(),
+        String::from_utf8_lossy(&all[..all.len().min(400)])
+    );
+    assert!(
+        final_grid.iter().any(|row| row.contains("RIGHT-MARKER")),
+        "the right pane must repaint after the resize re-fit: {final_grid:?}"
+    );
+    let left_mark = final_grid
+        .iter()
+        .filter_map(|row| row.find("LEFT-MARKER"))
+        .next();
+    if let Some(col) = left_mark {
+        assert!(
+            col < 50,
+            "the left pane's marker must sit in the re-divided left half \
+             (cols 0..50): col {col}"
+        );
+    }
+    let right_mark = final_grid
+        .iter()
+        .filter_map(|row| row.find("RIGHT-MARKER"))
+        .next();
+    if let Some(col) = right_mark {
+        assert!(
+            (50..100).contains(&col),
+            "the right pane's marker must sit in the re-divided right half \
+             (cols 50..100): col {col}"
+        );
+    }
+    let ever_row: String = ever[29].iter().map(|r| format!("{r:?}\n")).collect();
+    assert!(
+        ever[29].iter().any(|r| r.contains("$0:att")),
+        "the status row must survive the repaint flood at the new bottom row \
+         (row 30). snapshots:\n{ever_row}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// Acceptance criterion (render mode, PTY level): a daemon-side zoom
+/// (`resize-pane -t <pane> -Z`, tmux semantics) re-renders the VISIBLE
+/// layout — the zoomed pane alone at full window extent — and a second
+/// `-Z` unzooms, restoring the split. On the wire the true layout keeps
+/// both panes while `window_visible_layout` carries the zoomed one and
+/// the flags carry `Z`; the layout parser renders the visible form.
+#[cfg(unix)]
+#[test]
+fn render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split() {
+    let (fixture, _daemon, mut client) = fixture_with_session("zoom");
+    let pane0 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("split-window -t {pane0} -h"))
+        .expect("split");
+    let pane1 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("\n")
+        .lines()
+        .find(|l| l.split_whitespace().next() != Some(pane0.as_str()))
+        .and_then(|l| l.split_whitespace().next())
+        .expect("the split's pane")
+        .to_string();
+    client
+        .send(&format!("send-keys -t {pane0} -l 'echo LEFT-MARKER'"))
+        .expect("keys left");
+    client
+        .send(&format!("send-keys -t {pane0} Enter"))
+        .expect("enter left");
+    client
+        .send(&format!("send-keys -t {pane1} -l 'echo RIGHT-MARKER'"))
+        .expect("keys right");
+    client
+        .send(&format!("send-keys -t {pane1} Enter"))
+        .expect("enter right");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane0]);
+    // Settle: the split view with both panes painted.
+    let settle = {
+        let a = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+        let b = wait_for_output(&host, b"LEFT-MARKER", Duration::from_secs(10));
+        let c = wait_for_output(&host, b"RIGHT-MARKER", Duration::from_secs(10));
+        let _ = (a, b);
+        c
+    };
+    let _ = settle;
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Zoom pane1. The %layout-change (flags carry Z) parks the visible
+    // layout — pane1 alone at 80x23 — and the pump re-seeds it, so the
+    // zoom repaint carries RIGHT-MARKER past the drain.
+    client
+        .send(&format!("resize-pane -t {pane1} -Z"))
+        .expect("zoom");
+    let zoomed = wait_for_output(&host, b"RIGHT-MARKER", Duration::from_secs(10));
+    assert!(
+        !zoomed.is_empty(),
+        "the zoom must re-render the visible layout with the zoomed pane's \
+         content. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&zoomed)
+    );
+    // The daemon kept the true layout: both panes still exist under the
+    // window (zoom is view state, not structure). @0 is the session's
+    // only window (the fixture seeds one session with one pane; the split
+    // stayed in it).
+    let roster = client.send("list-panes -t @0").expect("window roster");
+    let roster_text = roster.join("\n");
+    let ids: Vec<&str> = roster_text
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert!(
+        ids.contains(&pane0.as_str()) && ids.contains(&pane1.as_str()),
+        "the zoom must keep the true layout (both panes): {ids:?}"
+    );
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Unzoom: -Z again on the zoomed pane restores the exact split, and
+    // the restore repaint re-seeds pane0 — its marker lands past the drain.
+    client
+        .send(&format!("resize-pane -t {pane1} -Z"))
+        .expect("unzoom");
+    let restored = wait_for_output(&host, b"LEFT-MARKER", Duration::from_secs(10));
+    assert!(
+        !restored.is_empty(),
+        "unzooming must restore the split view (the hidden pane repaints). \
+         stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&restored)
+    );
+    // Ground truth both ways: the panes kept their screens through the
+    // zoom round-trip.
+    for (marker, pane) in [("LEFT-MARKER", &pane0), ("RIGHT-MARKER", &pane1)] {
+        let capture = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture");
+        assert!(
+            capture.join("\n").contains(marker),
+            "{pane} must still show {marker} after the zoom round-trip: {capture:?}"
+        );
+    }
     host.killer.kill().ok();
 }
 
