@@ -149,6 +149,9 @@ impl Drop for TerminalGuard {
 mod tests {
     use super::*;
     use crate::mux::{emit_block, MuxServer};
+    // The Listener trait supplies `.accept()` on unix; the Windows named-pipe
+    // listener accepts via its own inherent impl, so this import is unused there.
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{BufRead, BufReader};
     use std::path::PathBuf;
