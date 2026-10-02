@@ -231,7 +231,13 @@ fn cell_pixels() -> (u16, u16) {
 }
 
 /// The host terminal's character-cell grid size, `(cols, rows)`, falling
-/// back to 80x24 when stdin is not a tty (tests, pipes).
+/// back to 80x24 when stdin is not a tty (tests, pipes). A tty can still
+/// report a zero axis before its first resize event (ConPTY does until the
+/// init query is answered), which the daemon's size grammar rejects — the
+/// fallback covers that too.
 pub(crate) fn terminal_grid() -> (u16, u16) {
-    crossterm::terminal::size().unwrap_or((80, 24))
+    match crossterm::terminal::size() {
+        Ok((cols, rows)) if cols > 0 && rows > 0 => (cols, rows),
+        _ => (80, 24),
+    }
 }

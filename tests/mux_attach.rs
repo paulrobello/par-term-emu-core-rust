@@ -655,3 +655,206 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
         );
     }
 }
+
+/// Spawn the render-mode attach client under a PTY (the shared harness
+/// shape, plus `--mode render`).
+#[cfg(unix)]
+fn spawn_attach_render(
+    fixture: &MuxFixture,
+    extra: &[&str],
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach(
+        fixture,
+        &["--mode", "render"]
+            .iter()
+            .chain(extra.iter())
+            .copied()
+            .collect::<Vec<&str>>(),
+    )
+}
+
+/// Acceptance criterion 1 (render mode, PTY level): the pane's DECCKM
+/// state re-encodes arrow keys. The pane's shell enables application
+/// cursor keys by emitting DECCKM through `printf`, the render client
+/// parses the host arrow key from stdin and re-encodes it against the
+/// pane's tracked state, and the pane's `cat -v` prints the received
+/// spelling onto its screen — which the daemon's capture-pane verifies.
+/// An app reading arrow keys sees `ESC O A` (application) or `ESC [ A`
+/// (normal), not whatever the host terminal sent.
+#[cfg(unix)]
+#[test]
+fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
+    let (fixture, _daemon, mut client) = fixture_with_session("renderkeys");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    // The pane: enable DECCKM, then echo every received byte visibly.
+    // `cat -v` shows ESC as `^[`.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"\\033[?1h\"; cat -v'"
+        ))
+        .expect("start key reader");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    // Let the pane print its DECCKM so the replay carries it before the
+    // client mirrors the pane.
+    std::thread::sleep(Duration::from_millis(700));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    // Settle: the renderer's first frame paints (alt-screen enter). Then
+    // send an Up arrow (the harness's stdin is the client's host stdin).
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    host.to_child.write_all(b"\x1b[A").expect("arrow up");
+    host.to_child.flush().ok();
+
+    // `cat -v` renders ESC O A as `^[[O A`? No — `ESC O A` prints as
+    // `^[OA`. Wait for it on the capture via the client's own screen
+    // paint; the capture assertion below is the authority.
+    let _ = wait_for_output(&host, b"OA", Duration::from_secs(10));
+
+    // The authority: the pane itself received the SS3 spelling.
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture");
+    let body = capture.join("\n");
+    assert!(
+        body.contains("^[OA"),
+        "the pane must receive the application-cursor spelling ESC O A for Up \
+         (DECCKM on): {body:?}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !body.contains("0;11;6"),
+        "sanity: no stray mouse SGR reached the pane: {body:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// Acceptance criterion 3 (render mode, PTY level): the wheel scrolls the
+/// CLIENT's scrollback when the pane does not own mouse mode — the
+/// renderer repaints the pane rect from its scrollback, and the pane
+/// itself receives nothing.
+#[cfg(unix)]
+#[test]
+fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wheelscroll");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // Fill the pane's history: 40 numbered lines through the 24-row pane.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 40); do echo HISTLINE-$i; done'"
+        ))
+        .expect("fill");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(800));
+
+    let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    // Settle on the live paint.
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"HISTLINE-40", Duration::from_secs(10));
+    // Drain the settle paint so the post-wheel read is wheel-attributable.
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Wheel up over the pane: SGR wheel-up at (10, 5), 1-based. The view
+    // shifts up 3 lines, so the pane rect's TOP view row repaints with
+    // scrollback-only content. (Which history line lands there depends on
+    // the pane's prompt/echo lines, so the exact number is pinned by the
+    // renderer's unit suite, not asserted here — the routing behavior is.)
+    host.to_child
+        .write_all(b"\x1b[<64;10;5M")
+        .expect("wheel up");
+    host.to_child.flush().ok();
+    let scrolled = wait_for_output(&host, b"\x1b[1;", Duration::from_secs(5));
+    assert!(
+        !scrolled.is_empty(),
+        "the wheel must repaint the pane rect's top rows from scrollback"
+    );
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture");
+    let body = capture.join("\n");
+    // The live pane still shows its bottom lines; scrolling is client-side
+    // only, so the capture is the same view it had before the wheel.
+    assert!(
+        body.contains("HISTLINE-40"),
+        "the pane's live view is intact: {body:?}"
+    );
+    assert!(
+        !body.contains("\x1b[<64"),
+        "no wheel SGR was forwarded to the pane: {body:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// Acceptance criterion 2+3 (forward side): a pane that owns mouse mode
+/// receives pane-relative SGR mouse reports through the render client, and
+/// a click on a rendered pane issues the daemon-side select-pane. The pane
+/// enables SGR mouse mode (DECSET 1000 + 1006) via its own output; the
+/// harness sends a left press at window (10, 5); the pane's `cat -v`
+/// prints the re-encoded report.
+#[cfg(unix)]
+#[test]
+fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
+    let (fixture, _daemon, mut client) = fixture_with_session("mousefwd");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"\\033[?1000h\\033[?1006h\"; cat -v'"
+        ))
+        .expect("enable mouse + reader");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(700));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+
+    // Left press at window-relative col 10 row 5 (1-based): the single
+    // pane's rect starts at (0,0), so pane-relative is (9, 4) 0-based and
+    // the wire spelling is ESC[<0;10;5M.
+    host.to_child.write_all(b"\x1b[<0;10;5M").expect("click");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"0;10;5", Duration::from_secs(10));
+
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture");
+    let body = capture.join("\n");
+    assert!(
+        body.contains("^[[<0;10;5M"),
+        "the owning pane must receive the pane-relative SGR click: {body:?}\n\
+         stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // The click also focused the pane daemon-side (the single-pane window's
+    // marked pane is this pane either way; the select-pane command itself
+    // was issued — a two-pane focus assertion lives in the unit suite, and
+    // pane-relative re-encoding across rects is pinned there too).
+    host.killer.kill().ok();
+}

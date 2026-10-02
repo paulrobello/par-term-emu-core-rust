@@ -13,6 +13,8 @@
 
 use crate::cell::CellFlags;
 use crate::color::{Color as CoreColor, NamedColor};
+use crate::mouse::MouseMode;
+use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout;
 use crate::mux::attach::layout::PaneRect;
 use crate::terminal::Terminal;
@@ -69,6 +71,10 @@ pub struct PaneEmulator {
     /// The pane id this emulator mirrors, the layout string's leaf number.
     pub pane_id: u32,
     term: Terminal,
+    /// Client-side scroll offset into the pane's scrollback (0 = live).
+    /// Driven by the wheel when the pane does not own mouse mode; every
+    /// keystroke forwarded to the pane snaps it back to live.
+    scroll: usize,
 }
 
 impl PaneEmulator {
@@ -77,6 +83,7 @@ impl PaneEmulator {
         Self {
             pane_id,
             term: Terminal::new(cols as usize, rows as usize),
+            scroll: 0,
         }
     }
 
@@ -85,10 +92,46 @@ impl PaneEmulator {
         &self.term
     }
 
+    /// The client-side scroll offset (0 = live bottom).
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll
+    }
+
+    /// Whether the pane owns mouse tracking (its emulator has a mouse mode
+    /// other than off — tracked from the pane's own DECSET 1000/1002/1003
+    /// and replay bytes).
+    pub fn owns_mouse(&self) -> bool {
+        self.term.mouse_mode() != MouseMode::Off
+    }
+
+    /// The pane's mouse encoding (its negotiated 1005/1006/1015), for the
+    /// router's forward decision.
+    pub fn mouse_encoding(&self) -> crate::mouse::MouseEncoding {
+        self.term.mouse_encoding()
+    }
+
+    /// The pane's DECCKM application-cursor mode, for the key re-encoder.
+    pub fn application_cursor(&self) -> bool {
+        self.term.application_cursor()
+    }
+
     /// Feed the pane's byte stream — a `refresh-client` replay body or a
-    /// `%output` chunk — through the emulator.
+    /// `%output` chunk — through the emulator. Any fed byte resets the
+    /// pane's client scroll to live: the pane wrote, so the view snaps
+    /// to the bottom.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.term.process(bytes);
+        self.scroll = 0;
+    }
+
+    /// Scroll this pane's client-side view by `delta` lines (positive =
+    /// up into history). Clamped to the scrollback extent; returns the
+    /// resulting offset. Pane output ([`Self::feed`]) resets to live.
+    pub fn scroll_by(&mut self, delta: isize) -> usize {
+        let max = self.term.active_grid().scrollback_len();
+        let current = self.scroll as isize;
+        self.scroll = (current + delta).clamp(0, max as isize) as usize;
+        self.scroll
     }
 
     /// Re-fit to a new geometry (`refresh-client -C` re-division).
@@ -222,6 +265,57 @@ impl PaneRenderer {
         self.dirty
     }
 
+    /// The pane rect containing window-relative `(x, y)`, else `None`
+    /// (dividers belong to no pane).
+    pub fn pane_at(&self, x: u16, y: u16) -> Option<&PaneRect> {
+        self.layout
+            .iter()
+            .find(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+    }
+
+    /// A pane's tracked input-mode state (its emulator's terminal), by
+    /// pane id — what the input router reads to re-encode keys and decide
+    /// mouse ownership. Unknown pane id → `None`.
+    pub fn pane_terminal(&self, pane: u32) -> Option<&Terminal> {
+        self.emulators.get(&pane).map(|e| e.terminal())
+    }
+
+    /// Reset a pane's client-side scroll offset to live (0). Typing
+    /// forwards, so the view snaps back to the bottom.
+    pub fn snap_to_live(&mut self, pane: u32) {
+        if let Some(emulator) = self.emulators.get_mut(&pane) {
+            if emulator.scroll_offset() != 0 {
+                emulator.scroll_by(-(emulator.scroll_offset() as isize));
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Wheel-scroll the pane under `(x, y)` client-side by `delta` lines
+    /// (positive = up into history). Returns `false` when the point is in
+    /// no pane or that pane OWNS mouse tracking (its wheel is the pane's
+    /// to consume, so the router forwards the event instead).
+    pub fn wheel_scroll(&mut self, x: u16, y: u16, delta: isize) -> bool {
+        let rect = self.pane_at(x, y).cloned();
+        let pane_id = rect.as_ref().map(|r| r.pane);
+        let Some(pane_id) = pane_id else {
+            return false;
+        };
+        let Some(emulator) = self.emulators.get_mut(&pane_id) else {
+            return false;
+        };
+        if emulator.owns_mouse() {
+            return false;
+        }
+        let before = emulator.scroll_offset();
+        let after = emulator.scroll_by(delta);
+        let moved = after != before;
+        if moved {
+            self.dirty = true;
+        }
+        moved
+    }
+
     /// Force the next `render_frame` to repaint everything (terminal
     /// restore after suspend, host resize without a layout change).
     pub fn mark_all_dirty(&mut self) {
@@ -259,16 +353,40 @@ impl PaneRenderer {
         diff
     }
 
-    /// Copy one pane's visible grid into the buffer at its rect.
+    /// Copy one pane's visible grid into the buffer at its rect. A pane
+    /// scrolled client-side (the wheel path) paints its scrollback: with
+    /// offset S, the view shifts up S lines — the rect's TOP S rows show
+    /// the newest S scrollback lines (logical index oldest-first:
+    /// `len - S + row`), and live grid row `row - S` fills below. The
+    /// emulator's grid is the rect's size, so the index math stays exact.
     fn paint_pane(&mut self, rect: &PaneRect) {
         let Some(emulator) = self.emulators.get(&rect.pane) else {
             return;
         };
         let grid = emulator.terminal().active_grid();
+        let scroll = emulator.scroll_offset();
+        let scrollback_len = grid.scrollback_len() as isize;
         for row in 0..rect.height.min(grid.rows() as u16) {
+            // View row r: live grid row r - S when r >= S; otherwise the
+            // scrollback line S_len - S + r (newest history first).
+            let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
+            let in_history = (row as usize) < scroll;
             for col in 0..rect.width.min(grid.cols() as u16) {
-                let Some(core_cell) = grid.get(col as usize, row as usize) else {
-                    continue;
+                let core_cell: &crate::cell::Cell = if in_history {
+                    let logical = scrollback_row.max(0) as usize;
+                    match grid.scrollback_line(logical) {
+                        Some(line) if usize::from(col) < line.len() => &line[col as usize],
+                        _ => continue,
+                    }
+                } else {
+                    let grid_row = row as isize - scroll as isize;
+                    if grid_row < 0 {
+                        continue;
+                    }
+                    match grid.get(col as usize, grid_row as usize) {
+                        Some(cell) => cell,
+                        None => continue,
+                    }
                 };
                 let (x, y) = (rect.x + col, rect.y + row);
                 // The wide base already marked this spacer skip; painting
@@ -604,18 +722,27 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
 
     // The host grid — the renderer's window extent (the window-size
     // policy resizes the daemon's window to it). Raw mode + alternate
-    // screen: unlike passthrough, the renderer owns the whole screen.
+    // screen + mouse capture: unlike passthrough, the renderer owns the
+    // whole screen and routes mouse events itself. SGR+motion capture
+    // (1002 + 1006) is what the host can report; panes that negotiate
+    // any-event tracking get drags through the same path. Restored on
+    // every exit path below.
     let (cols, rows) = super::conn::terminal_grid();
     let _guard = super::TerminalGuard::enter();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    );
 
     let mut session = WindowSession::new(cols, rows);
     let outcome = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
 
-    // Restore: leave the alt screen, show the cursor. The TerminalGuard
-    // (raw mode) drops after.
+    // Restore: leave the alt screen, release the mouse, show the cursor.
+    // The TerminalGuard (raw mode) drops after.
     let _ = crossterm::execute!(
         std::io::stdout(),
+        crossterm::event::DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::cursor::Show
     );
@@ -844,47 +971,157 @@ impl WindowSession {
         }
     }
 
-    /// Stdin pump: prefix routing (d detaches), chunked forward to the
-    /// focused pane. Returns true to end the session.
+    /// Stdin pump: parse tokens, route the prefix (d detaches, C-b C-b
+    /// sends the literal), re-encode keys against the focused pane's
+    /// input modes, and route mouse reports (click focus, wheel
+    /// scrollback, pane-relative forwarding). Returns true to end the
+    /// session.
     fn pump_stdin(
         &mut self,
         conn: &mut super::conn::AttachConn,
         stdin: &mut super::Stdin,
         prefix_pending: &mut bool,
     ) -> bool {
+        let mut parser = InputParser::default();
         loop {
             match stdin.read_available() {
                 None => return false,
                 Some(Ok(bytes)) if bytes.is_empty() => return true, // EOF
                 Some(Ok(bytes)) => {
-                    let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
-                    let mut detach = false;
-                    for byte in bytes {
-                        if *prefix_pending {
-                            *prefix_pending = false;
-                            if byte == b'd' {
-                                detach = true;
-                            } else if byte == super::C_B {
-                                to_send.push(byte); // literal prefix
+                    for token in parser.feed(&bytes) {
+                        match token {
+                            Token::Bytes(run) => {
+                                if self.route_plain(&run, conn, prefix_pending) {
+                                    return true;
+                                }
                             }
-                            // Other Phase B prefix commands land with
-                            // their cards; unbound keys are consumed.
-                        } else if byte == super::C_B {
-                            *prefix_pending = true;
-                        } else {
-                            to_send.push(byte);
+                            Token::Key(ev) => {
+                                if *prefix_pending {
+                                    *prefix_pending = false;
+                                    // A prefix chord on a functional
+                                    // key: unbound in Phase B — consumed.
+                                    continue;
+                                }
+                                let focused = self.focused_pane();
+                                let bytes = self
+                                    .renderer
+                                    .focused()
+                                    .and_then(|id| self.renderer.pane_terminal(id))
+                                    .map(|term| crate::keyboard::encode_key(&ev, term))
+                                    .unwrap_or_default();
+                                if !bytes.is_empty() && !focused.is_empty() {
+                                    super::forward_chunked(conn, focused, &bytes);
+                                }
+                            }
+                            Token::Mouse(mouse) => {
+                                self.route_mouse(conn, mouse);
+                            }
                         }
-                    }
-                    if detach {
-                        return true;
-                    }
-                    if !to_send.is_empty() {
-                        super::forward_chunked(conn, self.focused_pane(), &to_send);
                     }
                 }
                 Some(Err(_)) => return true,
             }
         }
+    }
+
+    /// A run of plain bytes through the prefix scanner; non-prefix bytes
+    /// forward to the focused pane verbatim (the host already encoded
+    /// them). Returns true on detach.
+    fn route_plain(
+        &mut self,
+        bytes: &[u8],
+        conn: &mut super::conn::AttachConn,
+        prefix_pending: &mut bool,
+    ) -> bool {
+        let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
+        for &byte in bytes {
+            if *prefix_pending {
+                *prefix_pending = false;
+                if byte == b'd' {
+                    return true;
+                }
+                if byte == super::C_B {
+                    to_send.push(byte); // literal prefix
+                }
+                // Other Phase B prefix commands land with their cards;
+                // unbound keys are consumed.
+            } else if byte == super::C_B {
+                *prefix_pending = true;
+            } else {
+                to_send.push(byte);
+            }
+        }
+        // Typing snaps this pane's client scroll back to live.
+        if !to_send.is_empty() {
+            if let Some(id) = self.renderer.focused() {
+                self.renderer.snap_to_live(id);
+            }
+            super::forward_chunked(conn, self.focused_pane(), &to_send);
+        }
+        false
+    }
+
+    /// One host mouse report: clicks focus the pane under the pointer
+    /// (select-pane daemon-side, so the daemon's own active-pane state
+    /// follows); events forward pane-relative SGR when the pane owns
+    /// mouse tracking; the wheel scrolls the client's scrollback when it
+    /// does not.
+    fn route_mouse(&mut self, conn: &mut super::conn::AttachConn, mouse: SgrMouse) {
+        // Window-relative, 0-based.
+        let Some(x) = mouse.col.checked_sub(1) else {
+            return;
+        };
+        let Some(y) = mouse.row.checked_sub(1) else {
+            return;
+        };
+        let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+            return; // a divider or outside the window
+        };
+        let owns = self
+            .renderer
+            .pane_terminal(rect.pane)
+            .is_some_and(|t| t.mouse_mode() != crate::mouse::MouseMode::Off);
+
+        if mouse.is_wheel_up() || mouse.is_wheel_down() {
+            let delta: isize = if mouse.is_wheel_up() { 3 } else { -3 };
+            if !owns && self.renderer.wheel_scroll(x, y, delta) {
+                return; // consumed client-side
+            }
+            if owns {
+                self.forward_mouse(conn, &rect, &mouse);
+            }
+            return;
+        }
+
+        if mouse.release || mouse.is_motion() {
+            // Drag/release only matter to a pane that owns the mouse;
+            // focus follows press only.
+            if owns {
+                self.forward_mouse(conn, &rect, &mouse);
+            }
+            return;
+        }
+
+        // A press: focus the pane (locally and daemon-side), then forward
+        // when it owns mouse tracking.
+        self.renderer.focus(rect.pane);
+        let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
+        if owns {
+            self.forward_mouse(conn, &rect, &mouse);
+        }
+    }
+
+    /// Re-encode one host mouse report pane-relative and send it.
+    fn forward_mouse(
+        &mut self,
+        conn: &mut super::conn::AttachConn,
+        rect: &PaneRect,
+        mouse: &SgrMouse,
+    ) {
+        let rel_col = mouse.col.saturating_sub(1).saturating_sub(rect.x);
+        let rel_row = mouse.row.saturating_sub(1).saturating_sub(rect.y);
+        let bytes = mouse.reencode_sgr(rel_col, rel_row);
+        super::forward_chunked(conn, format!("%{}", rect.pane), &bytes);
     }
 
     fn focused_pane(&self) -> String {
@@ -1309,5 +1546,144 @@ mod tests {
         renderer.render_frame();
         assert_eq!(renderer.buffer[(0, 0)].symbol(), "\u{e9}");
         assert_eq!(renderer.buffer[(1, 0)].symbol(), "x");
+    }
+
+    // ---- Phase B part 2: the input router (scrollback paint, pane
+    // ownership, rect lookup). The parser's own suite lives in
+    // `attach::input`.
+
+    /// Criterion 3 (client side): a wheel-up over a pane that does NOT own
+    /// the mouse scrolls the pane's client view into its scrollback — the
+    /// rect's top rows show the newest history lines, and the live screen
+    /// shifts down. A pane that DOES own the mouse leaves the scroll at 0
+    /// (its wheel is forwarded instead).
+    #[test]
+    fn wheel_scrolls_client_scrollback_when_pane_has_no_mouse_mode() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.render_frame(); // settle
+
+        // Pane 1 floods 30 lines through its 24-row pane: the overflow
+        // lands in scrollback, the rest stays on screen.
+        for i in 0..30 {
+            renderer.feed_output(1, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        renderer.render_frame();
+
+        // The view's authority BEFORE scrolling: a snapshot of the grid.
+        let grid = renderer.pane_terminal(1).unwrap().active_grid().clone();
+        let len = grid.scrollback_len();
+        let offset = 3usize;
+        let line_text = |cells: &[crate::cell::Cell]| -> String {
+            cells
+                .iter()
+                .take(8)
+                .map(|c| c.c().to_string())
+                .collect::<String>()
+        };
+        let expected_top = line_text(grid.scrollback_line(len - offset).expect("history"));
+
+        // Wheel up 3 over pane 1 (any point of its rect): offset 3.
+        assert!(renderer.wheel_scroll(10, 5, 3));
+        renderer.render_frame();
+        // View row 0 now shows the newest unscrolled-back history line.
+        let top: String = (0..8)
+            .map(|c| renderer.buffer[(c, 0)].symbol())
+            .collect::<String>();
+        assert_eq!(top, expected_top, "the top row scrolled into history");
+
+        // Wheel down returns to the live view: row 0 shows live row 0.
+        assert!(renderer.wheel_scroll(10, 5, -3));
+        renderer.render_frame();
+        let painted: String = (0..8)
+            .map(|c| renderer.buffer[(c, 0)].symbol())
+            .collect::<String>();
+        let live = line_text(grid.row(0).expect("live row"));
+        assert_eq!(painted, live, "back at the live view");
+    }
+
+    /// A pane that owns mouse tracking never scrolls client-side: the
+    /// wheel is the pane's.
+    #[test]
+    fn wheel_does_not_scroll_a_pane_that_owns_the_mouse() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.render_frame();
+        for i in 0..30 {
+            renderer.feed_output(1, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        // Pane 1 enables normal mouse tracking (DECSET 1000) through the
+        // same %output path the app would use.
+        renderer.feed_output(1, b"\x1b[?1000h");
+        renderer.render_frame();
+
+        assert!(!renderer.wheel_scroll(10, 5, 3), "owning pane consumes");
+    }
+
+    /// pane_at: the rect containing a window-relative point. The daemon's
+    /// gap-free tiling means a divider OVERLAYS a content column of one
+    /// pane's rect, so a point on the divider resolves to the pane whose
+    /// column it is (pane 1 owns cols 0..40 here, divider included);
+    /// outside-the-window points find nothing.
+    #[test]
+    fn pane_at_maps_points_to_their_rects() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        assert_eq!(renderer.pane_at(0, 0).map(|r| r.pane), Some(1));
+        assert_eq!(renderer.pane_at(39, 12).map(|r| r.pane), Some(1));
+        assert_eq!(renderer.pane_at(40, 12).map(|r| r.pane), Some(2));
+        assert_eq!(renderer.pane_at(79, 23).map(|r| r.pane), Some(2));
+        assert_eq!(renderer.pane_at(80, 0), None, "outside the window");
+        assert_eq!(renderer.pane_at(0, 24), None, "below the window");
+    }
+
+    /// Emulator input-mode tracking: DECCKM and mouse mode arrive through
+    /// the pane's own output bytes (replay or %output — same stream), and
+    /// feed resets the client scroll to live.
+    #[test]
+    fn emulator_tracks_input_modes_and_feed_resets_scroll() {
+        let mut emulator = PaneEmulator::new(7, 80, 24);
+        assert!(!emulator.application_cursor());
+        assert!(!emulator.owns_mouse());
+        emulator.feed(b"\x1b[?1h\x1b[?1000h");
+        assert!(emulator.application_cursor());
+        assert!(emulator.owns_mouse());
+        assert_eq!(
+            emulator.mouse_encoding(),
+            crate::mouse::MouseEncoding::Default
+        );
+        emulator.feed(b"\x1b[?1006h");
+        assert_eq!(emulator.mouse_encoding(), crate::mouse::MouseEncoding::Sgr);
+        // Scroll needs actual history to move into (the offset clamps to
+        // the scrollback extent), so overflow the 24-row pane first;
+        // feed output afterwards — the output snaps the view back to
+        // live.
+        for i in 0..30 {
+            emulator.feed(format!("line-{i}\r\n").as_bytes());
+        }
+        assert_eq!(emulator.scroll_by(2), 2);
+        emulator.feed(b"x");
+        assert_eq!(emulator.scroll_offset(), 0);
+    }
+
+    /// The mode-aware key re-encode through the renderer's pane terminal:
+    /// the pane's DECCKM state decides the arrow spelling (criterion 1's
+    /// unit-level pin; the parser-level one is in `attach::input`).
+    #[test]
+    fn key_reencode_reads_the_panes_tracked_decckm() {
+        use crate::keyboard::{encode_key, TermKey, TermKeyEvent};
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.feed_output(1, b"\x1b[?1h"); // DECCKM on
+        let term = renderer.pane_terminal(1).expect("pane 1");
+        assert!(term.application_cursor());
+        assert_eq!(
+            encode_key(&TermKeyEvent::functional(TermKey::Up, 0), term),
+            b"\x1bOA"
+        );
     }
 }

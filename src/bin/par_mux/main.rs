@@ -112,6 +112,13 @@ struct AttachArgs {
     #[arg(long = "prefix", value_name = "KEY")]
     prefix: Option<String>,
 
+    /// Render pipeline: `passthrough` (the default — pane bytes to the
+    /// host terminal verbatim, Phase A) or `render` (the Phase B pane
+    /// renderer with the input router: mode-aware key re-encoding, mouse
+    /// routing, wheel scrollback).
+    #[arg(long = "mode", value_name = "MODE", default_value = "passthrough")]
+    mode: String,
+
     /// Named default socket path. A daemon literally named "attach" must
     /// use --socket instead — the subcommand name shadows this form.
     name: Option<String>,
@@ -130,8 +137,22 @@ impl AttachCommand {
                 name: args.name.clone(),
                 target: args.target.clone(),
                 prefix: args.prefix.clone(),
+                mode: parse_mode(&args.mode),
             },
         }
+    }
+}
+
+/// The `--mode` spelling: `render` selects the Phase B renderer; anything
+/// else (including the default `passthrough`) stays Phase A. An unknown
+/// value falls back to passthrough rather than failing the attach — the
+/// mode is an enhancement, not a requirement.
+#[cfg(feature = "attach")]
+fn parse_mode(value: &str) -> par_term_emu_core_rust::mux::attach::AttachMode {
+    if value.eq_ignore_ascii_case("render") {
+        par_term_emu_core_rust::mux::attach::AttachMode::Render
+    } else {
+        par_term_emu_core_rust::mux::attach::AttachMode::Passthrough
     }
 }
 
@@ -278,11 +299,13 @@ fn main() -> std::process::ExitCode {
         .ok();
 
     // par-mux attach: subcommand form — run the attach client and exit
-    // with its code. Socket resolution lives in AttachOptions::socket_path
+    // with its code. The parsed --mode selects the pipeline (passthrough
+    // default); socket resolution lives in AttachOptions::socket_path
     // (same precedence as the daemon/--cmd).
     #[cfg(feature = "attach")]
     if let Some(attach) = cli.attach.as_ref() {
-        return par_term_emu_core_rust::mux::attach::run(&attach.options());
+        let options = attach.options();
+        return par_term_emu_core_rust::mux::attach::run_with_mode(&options, options.mode);
     }
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
@@ -584,6 +607,25 @@ mod attach_cli_tests {
         let AttachCommand::Attach(attach) = attach;
         assert_eq!(attach.target.as_deref(), Some("%0"));
         assert!(attach.prefix.is_none());
+    }
+
+    /// `--mode` defaults to passthrough; the `render` spelling selects the
+    /// Phase B renderer and an unknown value falls back to passthrough.
+    #[test]
+    fn attach_mode_defaults_to_passthrough_and_parses_render() {
+        use par_term_emu_core_rust::mux::attach::AttachMode;
+        let cli = Cli::try_parse_from(["par-mux", "attach"]).expect("parse");
+        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        assert_eq!(parse_mode(&attach.mode), AttachMode::Passthrough);
+
+        let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "render"]).expect("parse");
+        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        assert_eq!(parse_mode(&attach.mode), AttachMode::Render);
+
+        // An unknown value is a passthrough attach, not a parse error.
+        let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "wat"]).expect("parse");
+        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        assert_eq!(parse_mode(&attach.mode), AttachMode::Passthrough);
     }
 
     #[test]

@@ -12,6 +12,7 @@
 //! window through ratatui.
 
 pub mod conn;
+pub mod input;
 pub mod layout;
 pub mod render;
 
@@ -90,6 +91,10 @@ pub struct AttachOptions {
     /// `--prefix KEY`: the detach key chord, e.g. `C-b` (tmux spelling),
     /// parsed by [`parse_prefix`].
     pub prefix: Option<String>,
+    /// Render pipeline selection (`--mode`): [`AttachMode::Passthrough`]
+    /// (the Phase A contract) is the default; [`AttachMode::Render`]
+    /// selects the pane renderer + input router.
+    pub mode: AttachMode,
 }
 
 impl AttachOptions {
@@ -822,14 +827,13 @@ impl Session {
     /// observes the close.
     fn send_chunked(&mut self, bytes: &[u8]) {
         for chunk in bytes.chunks(CHUNK) {
-            let mut hex = String::with_capacity(chunk.len() * 2);
-            for byte in chunk {
-                use std::fmt::Write as _;
-                let _ = write!(hex, "{byte:02x}");
-            }
             if self
                 .conn
-                .send_checked(&format!("send-keys -t {} -H {}", self.pane, hex))
+                .send_checked(&format!(
+                    "send-keys -t {} -H {}",
+                    self.pane,
+                    hex_byte_list(chunk)
+                ))
                 .is_err()
             {
                 return;
@@ -892,18 +896,30 @@ impl Session {
 /// stdin path.
 pub(crate) fn forward_chunked(conn: &mut conn::AttachConn, pane: String, bytes: &[u8]) {
     for chunk in bytes.chunks(CHUNK) {
-        let mut hex = String::with_capacity(chunk.len() * 2);
-        for byte in chunk {
-            use std::fmt::Write as _;
-            let _ = write!(hex, "{byte:02x}");
-        }
         if conn
-            .send_checked(&format!("send-keys -t {} -H {}", pane, hex))
+            .send_checked(&format!(
+                "send-keys -t {} -H {}",
+                pane,
+                hex_byte_list(chunk)
+            ))
             .is_err()
         {
             return;
         }
     }
+}
+
+/// The `send-keys -H` wire spelling: one space-separated hex byte pair
+/// per byte (`1b 5b 41`), as the daemon's bounded grammar parses — a
+/// single concatenated run (`1b5b41`) is rejected as an invalid byte.
+fn hex_byte_list(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 3);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x} ");
+    }
+    out.pop(); // the trailing space
+    out
 }
 
 /// What a non-prefix command byte maps to.
@@ -1258,6 +1274,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            mode: AttachMode::default(),
         };
         assert_eq!(run(&options), ExitCode::FAILURE);
         // And nothing appeared on the path: no auto-spawn.
@@ -1300,6 +1317,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            mode: AttachMode::default(),
         };
         assert_eq!(run(&options), ExitCode::SUCCESS);
 
@@ -1321,6 +1339,7 @@ mod tests {
             name: Some("work".to_string()),
             target: None,
             prefix: None,
+            mode: AttachMode::default(),
         };
         assert_eq!(explicit.socket_path(), PathBuf::from("/tmp/explicit.sock"));
         let named = AttachOptions {
@@ -1328,6 +1347,7 @@ mod tests {
             name: Some("work".to_string()),
             target: None,
             prefix: None,
+            mode: AttachMode::default(),
         };
         assert_eq!(named.socket_path(), crate::mux::default_socket_path("work"));
         let fallback = AttachOptions {
@@ -1335,6 +1355,7 @@ mod tests {
             name: None,
             target: None,
             prefix: None,
+            mode: AttachMode::default(),
         };
         // No env var in the test harness -> the unnamed default.
         if std::env::var_os("PAR_MUX_SOCKET").is_none() {
