@@ -1483,6 +1483,9 @@ mod tests {
                 // answers nothing, then closes.
                 let listener = crate::mux::bind_local_listener(&path).expect("bind");
                 std::thread::spawn(move || {
+                    // The Listener trait supplies `.accept()` on unix only;
+                    // the Windows named-pipe listener accepts inherently.
+                    #[cfg(unix)]
                     use interprocess::local_socket::traits::Listener as _;
                     let _ = listener.accept();
                 });
