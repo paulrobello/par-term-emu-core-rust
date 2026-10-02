@@ -888,53 +888,64 @@ fn prefix_command(key: u8) -> PrefixKey {
 }
 
 /// Raw stdin byte source. Raw mode (the guard) makes reads byte-wise and
-/// non-echoing; the reader itself is an ordinary blocking fd 0 read that
-/// poll()s for availability so the pump never starves daemon pushes.
+/// non-echoing. A dedicated thread owns the blocking read and feeds a
+/// channel, so `read_available` never blocks the pump: on Windows a
+/// ConPTY-hosted stdin read parks until a key arrives (there is no poll
+/// for console input), and a pump parked in that read would never reach
+/// the daemon-push wait where a daemon death surfaces — the client would
+/// hang forever after the daemon exited. With the channel, the pump's
+/// non-blocking drain and its bounded notification wait are what observe
+/// the disconnect. Byte order is preserved (one reader, FIFO channel);
+/// Unix behavior is unchanged beyond who performs the same read.
 struct Stdin {
-    inner: std::io::Stdin,
+    rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
 impl Stdin {
     fn new() -> Self {
-        Self {
-            inner: std::io::stdin(),
-        }
+        let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(64);
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut handle = std::io::stdin().lock();
+            let mut buf = [0u8; 4096];
+            loop {
+                match handle.read(&mut buf) {
+                    Ok(0) => {
+                        // EOF: the host terminal closed. Tell the pump and
+                        // stop reading.
+                        let _ = tx.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(n) => {
+                        if tx.send(Ok(buf[..n].to_vec())).is_err() {
+                            break; // pump is gone
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                        continue;
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Err(err));
+                        break;
+                    }
+                }
+            }
+        });
+        Self { rx }
     }
 
     /// Read whatever is available, or `Some(Ok(vec![]))` on EOF. `None`
     /// when nothing is pending (would block).
     fn read_available(&mut self) -> Option<std::io::Result<Vec<u8>>> {
-        use std::io::Read as _;
-        // poll(2) on fd 0: readable now, or a hangup (EOF) pending.
-        #[cfg(unix)]
-        {
-            let mut fd = libc::pollfd {
-                fd: 0,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: `fd` is a valid, fully-initialized pollfd for the
-            // whole call, and poll(2) writes only revents.
-            let ready = unsafe { libc::poll(&mut fd, 1, 0) };
-            if ready == 0 {
-                return None;
-            }
-            if ready < 0 {
-                return Some(Err(std::io::Error::last_os_error()));
-            }
-        }
-        let mut buf = [0u8; 4096];
-        let mut handle = self.inner.lock();
-        match handle.read(&mut buf) {
-            Ok(0) => Some(Ok(Vec::new())),
-            Ok(n) => Some(Ok(buf[..n].to_vec())),
-            Err(err)
-                if err.kind() == std::io::ErrorKind::WouldBlock
-                    || err.kind() == std::io::ErrorKind::Interrupted =>
-            {
+        match self.rx.try_recv() {
+            Ok(read) => Some(read),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // The reader thread ended (EOF or error already
+                // delivered). Report idle; the pump treats a delivered
+                // empty read as EOF and detaches.
                 None
             }
-            Err(err) => Some(Err(err)),
         }
     }
 }

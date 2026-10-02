@@ -334,14 +334,32 @@ fn detach_restores_the_terminal_region() {
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
     // Startup: the status-line DECSTBM reserve must appear — wait for the
     // status DRAW (inverse-video bottom row), which is what carries it.
-    let startup = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
-    assert!(
-        startup.windows(7).any(|w| w == b"\x1b[1;23r"),
-        "attach must reserve the status row with DECSTBM (ESC[1;23r on a 24-row \
-         terminal): {:?}\nstderr: {}",
-        String::from_utf8_lossy(&startup),
-        stderr.lock().unwrap()
-    );
+    //
+    // The reserve bytes themselves are asserted on UNIX only. Windows
+    // ConPTY re-encodes the client's output: it INTERPRETS DECSTBM (the
+    // region is applied conhost-side) and does not pass the raw sequence
+    // through to the pty master, so ESC[1;23r never appears in the
+    // capture even though the client emitted it (the re-encoded status
+    // row draw does appear). The client-side emit is pinned by the unix
+    // run; the Windows run asserts the status draw ConPTY preserves.
+    if cfg!(unix) {
+        let startup = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+        assert!(
+            startup.windows(7).any(|w| w == b"\x1b[1;23r"),
+            "attach must reserve the status row with DECSTBM (ESC[1;23r on a 24-row \
+             terminal): {:?}\nstderr: {}",
+            String::from_utf8_lossy(&startup),
+            stderr.lock().unwrap()
+        );
+    } else {
+        let startup = wait_for_output(&host, b"\x1b[24;1H", Duration::from_secs(10));
+        assert!(
+            startup.windows(6).any(|w| w == b"\x1b[24;1H"),
+            "attach must draw the status row (CUP to row 24): {:?}\nstderr: {}",
+            String::from_utf8_lossy(&startup),
+            stderr.lock().unwrap()
+        );
+    }
     let _ = client.send(&format!("send-keys -t {pane} -l x Enter"));
     let _ = wait_for_output(&host, b"x", Duration::from_secs(5));
 
@@ -355,11 +373,16 @@ fn detach_restores_the_terminal_region() {
         tail.extend_from_slice(&bytes);
     }
     // The last thing the client writes before exit is the region restore.
-    // (crossterm's raw-mode disable is a termios call, not bytes.)
-    assert!(
-        tail.windows(3).any(|w| w == b"\x1b[r"),
-        "detach must restore the scroll region (ESC[r): {tail:?}"
-    );
+    // (crossterm's raw-mode disable is a termios call, not bytes.) On
+    // Windows ConPTY likewise absorbs the plain ESC[r reset, so the
+    // restore is asserted through the client's exit code there (already
+    // checked above) — the bytes themselves are pinned on unix.
+    if cfg!(unix) {
+        assert!(
+            tail.windows(3).any(|w| w == b"\x1b[r"),
+            "detach must restore the scroll region (ESC[r): {tail:?}"
+        );
+    }
 }
 
 /// Acceptance criterion 3: prefix pane switching issues a daemon-side
@@ -424,38 +447,24 @@ fn prefix_o_switches_panes_and_resyncs() {
 fn daemon_exit_ends_the_client_cleanly() {
     let (fixture, _daemon, mut client) = fixture_with_session("exit");
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
-    // Settle on the status draw, so %exit is the only pending signal.
-    let startup = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+    // Settle on the status draw, so %exit is the only pending signal. On
+    // Windows the settle keys on the re-encoded status-row draw (ConPTY
+    // absorbs DECSTBM — see detach_restores_the_terminal_region).
+    let settle_needle: &[u8] = if cfg!(unix) {
+        b"\x1b[1;23r"
+    } else {
+        b"\x1b[24;1H"
+    };
+    let startup = wait_for_output(&host, settle_needle, Duration::from_secs(10));
     let _ = startup;
     client.send_checked("kill-server").expect("kill-server");
-    // Give a debug harness time to `sample` the hung child.
-    let code = child_exit(&mut host, Duration::from_secs(35));
-    std::thread::sleep(Duration::from_secs(10));
-    if code != Some(0) {
-        // Diagnostics: what did the client print, and is the daemon's
-        // socket still live?
-        let mut tail = Vec::new();
-        while let Ok(bytes) = host.output_rx.try_recv() {
-            tail.extend_from_slice(&bytes);
-        }
-        let live = par_term_emu_core_rust::mux::connect_local_stream(fixture.socket()).is_ok();
-        let ps = std::process::Command::new("ps")
-            .arg("-axo")
-            .arg("pid,stat,command")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
-        let children: String = ps
-            .lines()
-            .filter(|l| l.contains("par-mux") || l.contains("attach"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!(
-            "exit {code:?}; daemon socket live: {live}; stderr: {}; client tail: {:?}; procs: {children}",
-            stderr.lock().unwrap(),
-            String::from_utf8_lossy(&tail)
-        );
-    }
+    let code = child_exit(&mut host, Duration::from_secs(10));
+    assert_eq!(
+        code,
+        Some(0),
+        "a daemon shutdown must end attach with exit 0. stderr: {}",
+        stderr.lock().unwrap()
+    );
 }
 
 /// The `-t` target forms resolve: a pane id attaches to that pane (its
