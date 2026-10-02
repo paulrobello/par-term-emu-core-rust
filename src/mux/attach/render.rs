@@ -2265,6 +2265,9 @@ mod tests {
     #[test]
     fn target_less_resolution_takes_newest_session_without_colon() {
         use crate::mux::attach::conn;
+        // The Listener trait supplies `.accept()` on unix only; the Windows
+        // named-pipe listener accepts inherently.
+        #[cfg(unix)]
         use interprocess::local_socket::traits::Listener as _;
         use std::io::{BufRead as _, BufReader, Write as _};
 

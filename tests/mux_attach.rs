@@ -31,7 +31,9 @@ struct AttachHost {
     to_child: SharedWriter,
     /// Reader-thread output, raw bytes.
     output_rx: Receiver<Vec<u8>>,
-    /// The master, kept for mid-session host-side resizes.
+    /// The master, kept for mid-session host-side resizes. Only the
+    /// unix PTY tests resize; on Windows nothing reads it.
+    #[cfg_attr(windows, allow(dead_code))]
     master: Box<dyn MasterPty + Send>,
 }
 
