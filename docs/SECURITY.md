@@ -1255,17 +1255,17 @@ sections; the numbers live here.
 | `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:480` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:482` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:484` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:492` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:494` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:496` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:39` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `src/mux/persist.rs:49` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:51` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:76` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:85` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:77` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:86` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |
