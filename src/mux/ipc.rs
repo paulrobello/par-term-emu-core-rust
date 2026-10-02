@@ -284,6 +284,10 @@ impl ConnectionAbort {
 }
 
 #[cfg(windows)]
+/// Windows twin of the unix `ConnectionAbort` (same name, `cfg`-split in
+/// this module): holds a duplicated pipe handle so `cancel_blocked_io` can
+/// `CancelIoEx` a thread parked in `ReadFile`/`WriteFile` (named pipes
+/// reject I/O timeouts), per the contract documented on the unix twin.
 pub struct ConnectionAbort {
     handle: Option<std::os::windows::io::OwnedHandle>,
 }
