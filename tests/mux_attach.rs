@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 struct AttachHost {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    to_child: Box<dyn Write + Send>,
+    to_child: SharedWriter,
     /// Reader-thread output, raw bytes.
     output_rx: Receiver<Vec<u8>>,
     _master: Box<dyn MasterPty + Send>,
@@ -37,6 +37,18 @@ struct AttachHost {
 /// Spawn `par-mux attach --socket <path> [-t target]` under a fresh PTY and
 /// hand back the master side: a writer (the client's stdin) and a reader
 /// channel (the client's stdout). stderr goes to a buffer for diagnostics.
+///
+/// The reader thread doubles as the stand-in host terminal: modern Windows
+/// ConPTY sends `CSI 6n` (cursor position report) during its init handshake
+/// and stalls its byte pump until the attached terminal answers — Windows
+/// Terminal answers, and a bare pty master does not, so on Windows the
+/// captured output would be the lone `\x1b[6n` and nothing else. The reader
+/// therefore answers every `\x1b[6n` it sees with a cursor-position report
+/// (`ESC[24;1R`, a 24-row grid's home column) written into the pane's
+/// INPUT side. The reply flows toward the pane/ConPTY input direction, so
+/// it never lands in the captured stdout the assertions read; on Unix
+/// nothing in the harness emits `6n` spontaneously, so the branch is
+/// inert and one harness shape serves both platforms.
 fn spawn_attach(
     fixture: &MuxFixture,
     extra: &[&str],
@@ -60,15 +72,40 @@ fn spawn_attach(
         .spawn_command(cmd)
         .expect("spawn par-mux attach under the PTY");
     let killer = child.clone_killer();
-    let to_child = pair.master.take_writer().expect("master writer");
+    // One take: portable-pty's ConPTY master hands the writer out exactly
+    // once, so the test's stdin writes and the 6n answers share it behind
+    // a mutex (Unix tolerates a second take; Windows does not).
+    let writer = std::sync::Arc::new(std::sync::Mutex::new(
+        pair.master.take_writer().expect("master writer"),
+    ));
+    let to_child = SharedWriter(writer.clone());
     let mut from_child = pair.master.try_clone_reader().expect("master reader");
+    let answer = SharedWriter(writer);
     let (tx, rx) = channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        let mut pending: Vec<u8> = Vec::new();
         loop {
             match from_child.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // Answer a cursor-position query like a real terminal
+                    // would (see fn doc). Scan the accumulated byte stream
+                    // so a 6n split across reads still matches.
+                    pending.extend_from_slice(&buf[..n]);
+                    while let Some(pos) = pending.windows(4).position(|w| w == b"\x1b[6n") {
+                        let mut w = answer.0.lock().expect("writer lock");
+                        let _ = w.write_all(b"\x1b[24;1R");
+                        let _ = w.flush();
+                        // Drop everything through the query so it is
+                        // answered once per query.
+                        pending.drain(..pos + 4);
+                    }
+                    // Bound the carryover: only a trailing partial query
+                    // prefix (up to 3 bytes) can legitimately wait here.
+                    if pending.len() > 3 {
+                        pending.drain(..pending.len() - 3);
+                    }
                     if tx.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
@@ -85,6 +122,20 @@ fn spawn_attach(
         _master: pair.master,
     };
     (host, stderr)
+}
+
+/// The pty master's writer shared between the test's stdin writes and the
+/// reader thread's cursor-position answers (ConPTY hands the writer out
+/// exactly once; see [`spawn_attach`]).
+struct SharedWriter(std::sync::Arc<std::sync::Mutex<Box<dyn Write + Send>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("writer lock").write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().expect("writer lock").flush()
+    }
 }
 
 /// Collect host output until `needle` appears, the child exits, or the
