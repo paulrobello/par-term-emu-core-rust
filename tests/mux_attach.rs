@@ -802,7 +802,7 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
         .join("\n");
     assert_eq!(after, before, "the pane's live view is intact");
     assert!(
-        !body.contains("\x1b[<64"),
+        !after.contains("\x1b[<64"),
         "no wheel SGR was forwarded to the pane: {after:?}"
     );
     host.killer.kill().ok();
