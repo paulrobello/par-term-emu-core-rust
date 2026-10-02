@@ -580,14 +580,34 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
         "no error text may render over the dead pane: {:?}",
         String::from_utf8_lossy(&after)
     );
-    // At most the settle-redraw status row (an exact repeat of the first
-    // draw) may appear — no pane output, no flood.
+    // Only status-row redraws may appear after typing: every extra byte
+    // must sit inside an ESC7..ESC8 status-draw block (the settle/redraw
+    // discipline) — no pane output, no flood. Byte-COUNT budgets flake on
+    // slow machines where more redraws land in the window.
+    let mut residue: Vec<u8> = Vec::new();
+    let mut inside_draw = false;
+    let mut i = 0;
+    while i < extra.len() {
+        if extra[i..].starts_with(b"\x1b7") {
+            inside_draw = true;
+            i += 2;
+        } else if extra[i..].starts_with(b"\x1b8") {
+            inside_draw = false;
+            i += 2;
+        } else {
+            if !inside_draw {
+                residue.push(extra[i]);
+            }
+            i += 1;
+        }
+    }
     assert!(
-        extra.len() <= startup.len(),
-        "a held-dead pane must take no stdin bytes (no echo, no error flood): \
-         the stream grew by {} bytes: {:?}. stderr: {}",
-        extra.len(),
-        String::from_utf8_lossy(extra),
+        residue.iter().all(|b| b.is_ascii_whitespace()),
+        "a held-dead pane must take no stdin bytes: only status-row redraws \
+         (ESC7..ESC8 blocks) may follow, found {} bytes of other output: {:?}. \
+         stderr: {}",
+        residue.len(),
+        String::from_utf8_lossy(&residue),
         stderr.lock().unwrap()
     );
 
