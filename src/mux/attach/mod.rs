@@ -943,14 +943,15 @@ impl Session {
         }
         // DECSTBM reserves the bottom row: set the region FIRST (rows
         // 1..=bottom-1 scroll; the status row stays fixed), draw on it,
-        // then restore the full-screen region and the cursor position.
-        // ESC 7 / ESC 8 wrap everything so pane output lands with the
-        // cursor exactly where the pane left it.
+        // then ESC 8 restores the cursor exactly where the pane left it.
+        // The content region stays set after the draw — resetting it to
+        // the full screen here would let the next pane scroll carry the
+        // status row away until the next redraw re-reserved it.
         let scroll_region_bottom = rows - 1;
         let mut stdout = std::io::stdout().lock();
         let _ = write!(
             stdout,
-            "\x1b7\x1b[1;{scroll_region_bottom}r\x1b[{bottom};1H\x1b[7m{text}\x1b[0m\x1b[1;{bottom}r\x1b8"
+            "\x1b7\x1b[1;{scroll_region_bottom}r\x1b[{bottom};1H\x1b[7m{text}\x1b[0m\x1b8"
         );
         let _ = stdout.flush();
     }

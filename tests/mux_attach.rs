@@ -367,6 +367,16 @@ fn detach_restores_the_terminal_region() {
             "the alt-screen enter precedes the status draw: {:?}",
             String::from_utf8_lossy(&startup)
         );
+        // The status draw must leave the content region reserved: a
+        // full-screen region reset (ESC[1;24r) after the draw lets the
+        // next pane scroll carry the status row away (the manual-pass
+        // scroll-away bug). Only rows-1 regions may appear.
+        assert!(
+            !startup.windows(9).any(|w| w == b"\x1b[1;24r"),
+            "the status draw must not reset the scroll region to the full \
+             screen: {:?}",
+            String::from_utf8_lossy(&startup)
+        );
     } else {
         let startup = wait_for_output(&host, b"\x1b[24;1H", Duration::from_secs(10));
         assert!(
