@@ -354,7 +354,7 @@ fn detach_restores_the_terminal_region() {
     } else {
         let startup = wait_for_output(&host, b"\x1b[24;1H", Duration::from_secs(10));
         assert!(
-            startup.windows(6).any(|w| w == b"\x1b[24;1H"),
+            startup.windows(7).any(|w| w == b"\x1b[24;1H"),
             "attach must draw the status row (CUP to row 24): {:?}\nstderr: {}",
             String::from_utf8_lossy(&startup),
             stderr.lock().unwrap()
