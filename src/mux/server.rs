@@ -1599,6 +1599,7 @@ pub(crate) fn capture_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mux::ids::WorkspaceId;
 
     /// A fresh `TempDir` for a test's socket or state file: the directory
     /// name carries OS-provided randomness, so no other test run can name the
@@ -3650,9 +3651,11 @@ mod tests {
         let burst: u64 = 50;
         for stamp in 1..=burst {
             let state = PersistState {
+                workspaces: Vec::new(),
+                active_workspace: None,
                 format_version: crate::mux::persist::FORMAT_VERSION,
                 saved_at_unix_ms: stamp,
-                next_ids: (0, 0, 0),
+                next_ids: (0, 0, 0, 0),
                 sessions: Vec::new(),
                 buffers: std::collections::HashMap::new(),
             };
@@ -4096,5 +4099,109 @@ mod tests {
             result.is_err(),
             "an over-long pane socket path must fail the bind"
         );
+    }
+
+    // --- Workspaces (dispatch level) ---
+
+    #[test]
+    fn workspace_commands_dispatch_and_broadcast() {
+        let (tree, clients) = quiet_harness();
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
+
+        // new-workspace replies with the id, selects it, and cues the roster.
+        let reply = dispatch("new-workspace -n dev", 1, &tree, &clients, None);
+        assert!(reply.contains("+0"), "reply carries the id: {reply}");
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%workspaces-changed")),
+            "new-workspace must cue the roster: {lines:?}"
+        );
+
+        // Sessions land in the active workspace; list-sessions carries the
+        // workspace prefix.
+        dispatch("new-session -s svc", 2, &tree, &clients, None);
+        let reply = dispatch("list-sessions", 3, &tree, &clients, None);
+        let body = reply
+            .lines()
+            .find(|l| l.contains("svc") && !l.starts_with('%'))
+            .expect("a session line");
+        assert_eq!(body, "+0: dev: $0: svc", "the documented line shape");
+
+        // The workspace filter restricts the listing; a wrong one errors.
+        dispatch("new-workspace -n other", 4, &tree, &clients, None);
+        dispatch("new-session -t other -s side", 5, &tree, &clients, None);
+        let reply = dispatch("list-sessions -t +0", 6, &tree, &clients, None);
+        assert!(reply.contains("+0: dev: $0: svc"));
+        assert!(!reply.contains("side"), "filtered to workspace +0");
+        let reply = dispatch("list-sessions -t other", 7, &tree, &clients, None);
+        assert!(reply.contains("side"));
+
+        // list-workspaces renders `+N: name` with the active marker.
+        let reply = dispatch("list-workspaces", 8, &tree, &clients, None);
+        assert!(
+            reply.contains("+0: dev") && reply.contains("+1: other active"),
+            "active marker rides the active workspace line: {reply}"
+        );
+
+        // select-workspace cues the roster (selection is daemon state).
+        let reply = dispatch("select-workspace -t +0", 9, &tree, &clients, None);
+        assert!(!reply.contains("%error"));
+        assert_eq!(tree.lock().active_workspace(), Some(WorkspaceId(0)));
+        assert!(drain_broadcasts(&rx)
+            .iter()
+            .any(|l| l.starts_with("%workspaces-changed")));
+
+        // rename-workspace.
+        dispatch("rename-workspace -t +0 prod", 10, &tree, &clients, None);
+        assert_eq!(tree.lock().workspace(WorkspaceId(0)).unwrap().name, "prod");
+        let _ = drain_broadcasts(&rx);
+
+        // kill-workspace takes the sessions' windows with it and cues BOTH
+        // rosters.
+        dispatch("kill-workspace -t prod", 11, &tree, &clients, None);
+        {
+            let guard = tree.lock();
+            assert!(guard.workspace(WorkspaceId(0)).is_none());
+            assert_eq!(guard.sessions().len(), 1, "only 'side' survives");
+        }
+        let lines = drain_broadcasts(&rx);
+        let closes = lines
+            .iter()
+            .filter(|l| l.starts_with("%window-close"))
+            .count();
+        assert!(closes >= 1, "one per killed window: {lines:?}");
+        let sessions = lines
+            .iter()
+            .position(|l| l.starts_with("%sessions-changed"))
+            .expect("session roster cue");
+        let workspaces = lines
+            .iter()
+            .position(|l| l.starts_with("%workspaces-changed"))
+            .expect("workspace roster cue");
+        assert!(sessions < workspaces, "session cue precedes workspace cue");
+
+        // A workspace holding exactly one session, then killing that
+        // session via kill-session removes the emptied workspace — and
+        // cues the workspace roster.
+        dispatch("new-workspace -n transient", 12, &tree, &clients, None);
+        dispatch("new-session -s solo", 13, &tree, &clients, None);
+        let _ = drain_broadcasts(&rx);
+        dispatch("kill-session -t solo", 14, &tree, &clients, None);
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%workspaces-changed")),
+            "a session death that empties its workspace cues the workspace roster: {lines:?}"
+        );
+        {
+            let guard = tree.lock();
+            assert!(guard.workspace(WorkspaceId(2)).is_none());
+            assert_eq!(guard.workspaces().len(), 1, "'other' survives");
+        }
     }
 }

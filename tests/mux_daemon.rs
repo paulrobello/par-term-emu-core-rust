@@ -1753,3 +1753,89 @@ fn pane_exited_replay_with_no_held_panes_is_empty() {
         );
     }
 }
+
+/// The workspace commands over a live daemon socket: create, list, select,
+/// rename, kill, the workspace-filtered list-sessions, and the
+/// `%workspaces-changed` broadcast a second client receives.
+#[test]
+fn workspace_commands_over_the_wire() {
+    let fixture = MuxFixture::new("wswire");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _server = std::thread::spawn(move || server.run());
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        // An observer client, connected before anything happens: everything
+        // it sees is a broadcast. It joins the broadcast set on its first
+        // control command.
+        let mut observer = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+        let _ = observer.send("list-panes");
+
+        let reply = command(&mut writer, &mut reader, "new-workspace -n dev").join("");
+        assert!(
+            reply.lines().any(|l| l.trim() == "+0"),
+            "new-workspace replies with the id: {reply}"
+        );
+
+        let listed = command(&mut writer, &mut reader, "list-workspaces").join("");
+        assert!(
+            listed.lines().any(|l| l.trim() == "+0: dev active"),
+            "the new workspace is active: {listed}"
+        );
+
+        // Sessions land in the active workspace; bare list-sessions carries
+        // the workspace prefix.
+        // The first session lazily creates the default workspace (+1: main)
+        // only when it targets it; a bare new-session targets the ACTIVE
+        // workspace (dev), so no default appears.
+        command(&mut writer, &mut reader, "new-session -s ws-svc");
+        let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        assert!(
+            sessions.lines().any(|l| l.trim() == "+0: dev: $0: ws-svc"),
+            "the workspace prefix rides the session line: {sessions}"
+        );
+
+        // The filter form.
+        let filtered = command(&mut writer, &mut reader, "list-sessions -t dev").join("");
+        assert!(filtered.lines().any(|l| l.contains("ws-svc")));
+
+        // select + rename across two workspaces.
+        command(&mut writer, &mut reader, "new-workspace -n beta");
+        command(&mut writer, &mut reader, "select-workspace -t +0");
+        let listed = command(&mut writer, &mut reader, "list-workspaces").join("");
+        assert!(listed.lines().any(|l| l.trim() == "+0: dev active"));
+        command(&mut writer, &mut reader, "rename-workspace -t +0 prod");
+        let listed = command(&mut writer, &mut reader, "list-workspaces").join("");
+        // prod is the active workspace, so its line carries the marker.
+        assert!(listed.lines().any(|l| l.trim() == "+0: prod active"));
+
+        // kill-workspace takes the workspace's session with it.
+        command(&mut writer, &mut reader, "kill-workspace -t prod");
+        let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        assert!(
+            !sessions.contains("ws-svc"),
+            "the killed workspace's session went with it: {sessions}"
+        );
+
+        // The observer saw the %workspaces-changed broadcasts (new-workspace,
+        // select, rename, and kill all cue the roster).
+        let mut saw = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && saw < 2 {
+            match observer
+                .notifications()
+                .recv_timeout(Duration::from_millis(200))
+            {
+                Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::WorkspacesChanged) => {
+                    saw += 1;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        assert!(saw >= 1, "the observer received %workspaces-changed");
+    }
+}

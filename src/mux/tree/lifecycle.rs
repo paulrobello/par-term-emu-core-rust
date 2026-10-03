@@ -2,15 +2,95 @@
 //! respawn, renames, the session environment, and the kill cascades.
 
 use super::{
-    kill_detached, MuxSession, MuxTree, MuxWindow, RespawnSpawn, SessionSpawn, WindowSpawn,
+    kill_detached, MuxSession, MuxTree, MuxWindow, MuxWorkspace, RespawnSpawn, SessionSpawn,
+    WindowSpawn,
 };
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, MuxPane, SpawnContext};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 impl MuxTree {
+    /// Create a workspace, making it the daemon's active one — the wire
+    /// `new-workspace` (tmux has no workspace concept; this is par-mux's
+    /// own level above sessions). The reply-side caller announces the new
+    /// id; the session set is untouched.
+    pub fn new_workspace(&mut self, name: &str) -> WorkspaceId {
+        let id = self.ids.next_workspace();
+        self.workspaces.insert(
+            id,
+            MuxWorkspace {
+                id,
+                name: name.to_string(),
+                sessions: Vec::new(),
+                active: 0,
+            },
+        );
+        self.active_workspace = Some(id);
+        id
+    }
+
+    /// Rename a workspace.
+    pub fn rename_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        name: &str,
+    ) -> Result<(), MuxError> {
+        let workspace = self
+            .workspaces
+            .get_mut(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?;
+        workspace.name = name.to_string();
+        Ok(())
+    }
+
+    /// Make `workspace_id` the daemon's active workspace. The workspace's
+    /// own active-session index is untouched — `select-workspace` resumes
+    /// whichever session was active there when last selected.
+    pub fn select_workspace(&mut self, workspace_id: WorkspaceId) -> Result<(), MuxError> {
+        if !self.workspaces.contains_key(&workspace_id) {
+            return Err(MuxError::NoSuchWorkspace(workspace_id));
+        }
+        self.active_workspace = Some(workspace_id);
+        Ok(())
+    }
+
+    /// Kill a workspace and every session, window, and pane in it. The Ok
+    /// value lists the killed windows, so the caller can emit one
+    /// `%window-close` per window before the roster cues — the same line
+    /// order `kill-session`'s cascade produces.
+    pub fn kill_workspace(&mut self, workspace_id: WorkspaceId) -> Result<Vec<WindowId>, MuxError> {
+        let workspace = self
+            .workspaces
+            .remove(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?;
+        let mut killed = Vec::new();
+        for session_id in workspace.sessions {
+            let Some(session) = self.sessions.remove(&session_id) else {
+                continue;
+            };
+            self.session_workspace.remove(&session_id);
+            for window_id in session.windows {
+                let Some(window) = self.remove_window(window_id) else {
+                    continue;
+                };
+                for pane_id in window.panes() {
+                    if let Some(pane) = self.panes.remove(&pane_id) {
+                        kill_detached(pane);
+                    }
+                }
+                killed.push(window_id);
+            }
+        }
+        if self.active_workspace == Some(workspace_id) {
+            // Lowest surviving id, not map order, so the fallback is
+            // deterministic.
+            self.active_workspace = self.workspaces.keys().min().copied();
+        }
+        Ok(killed)
+    }
+
     /// Create a session, with one window holding one pane — tmux's shape.
     pub fn new_session(&mut self, name: &str, cols: u16, rows: u16) -> Result<SessionId, MuxError> {
         self.new_session_with_env(name, cols, rows, BTreeMap::new())
@@ -28,15 +108,35 @@ impl MuxTree {
         rows: u16,
         env: BTreeMap<String, String>,
     ) -> Result<SessionId, MuxError> {
-        let plan = self.begin_session(name, cols, rows, &env);
+        let plan = self.begin_session(name, cols, rows, &env, None);
         let pane = self.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
         self.complete_session(plan, pane?)
     }
 
     /// Phase 1 of `new-session` (ARC-022): reserve the ids under the tree
-    /// lock. Infallible — fresh ids depend on no existing state.
+    /// lock. Infallible — fresh ids depend on no existing state. The session
+    /// links to the workspace the explicit `-t` target resolves to, else
+    /// the active workspace, else the lazily created default (`main`).
     pub fn begin_session(
         &mut self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        env: &BTreeMap<String, String>,
+        workspace: Option<crate::mux::ids::Target<WorkspaceId>>,
+    ) -> SessionSpawn {
+        let workspace_id = self
+            .resolve_new_session_workspace(workspace)
+            .unwrap_or_else(|_| self.ensure_default_workspace());
+        self.begin_session_at(workspace_id, name, cols, rows, env)
+    }
+
+    /// [`Self::begin_session`] with the workspace already resolved — the
+    /// dispatcher's form, so an unknown explicit target fails the command
+    /// before any id is reserved.
+    pub fn begin_session_at(
+        &mut self,
+        workspace_id: WorkspaceId,
         name: &str,
         cols: u16,
         rows: u16,
@@ -50,6 +150,7 @@ impl MuxTree {
             rows,
             name: name.to_string(),
             env: env.clone(),
+            workspace_id,
         }
     }
 
@@ -69,6 +170,7 @@ impl MuxTree {
             rows,
             name,
             env,
+            workspace_id,
         } = plan;
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
@@ -94,6 +196,13 @@ impl MuxTree {
                 zoomed: None,
             },
         );
+        // The workspace may have been killed while the pane spawned off the
+        // lock; a session always belongs to exactly one workspace, so the
+        // fallback re-anchors to the lazily created default.
+        if !self.link_session(workspace_id, session_id) {
+            let fallback = self.ensure_default_workspace();
+            self.link_session(fallback, session_id);
+        }
         Ok(session_id)
     }
 
@@ -244,6 +353,10 @@ impl MuxTree {
             .is_some_and(|session| session.windows.is_empty());
         emptied.then(|| {
             self.sessions.remove(&session_id);
+            // A session's death also leaves its workspace — and a workspace
+            // left with no sessions dies with it (the exit-when-empty
+            // contract's workspace-level expression).
+            self.unlink_session(session_id);
             session_id
         })
     }
@@ -443,6 +556,7 @@ impl MuxTree {
             .sessions
             .remove(&session_id)
             .ok_or(MuxError::NoSuchSession(session_id))?;
+        self.unlink_session(session_id);
         let mut killed = Vec::new();
         for window_id in session.windows {
             // The session is already gone, so this only clears the window

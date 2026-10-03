@@ -32,7 +32,7 @@ mod dispatch;
 pub use client::{MuxClient, Reply};
 pub use command::{parse_command, MuxCommand};
 pub use emit::{emit, emit_block, escape_output};
-pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, Target, WindowId};
+pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, Target, WindowId, WorkspaceId};
 pub use ipc::{
     accept_connection, bind_local_listener, connect_local_stream, default_socket_path,
     prepare_socket_path, resolve_socket_path, LocalListener, LocalStream,
@@ -42,7 +42,7 @@ pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
 pub use persist::{PersistError, PersistState, FORMAT_VERSION};
 pub use scrape::{scrape_tick, ScrapeEngine};
 pub use server::MuxServer;
-pub use tree::{MuxSession, MuxTree, MuxWindow};
+pub use tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace};
 
 /// The build identity of THIS crate compilation: the crate version plus the
 /// git sha it was built from (`0.50.0+a02b2b3`, `-dirty` appended when the

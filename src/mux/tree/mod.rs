@@ -6,7 +6,7 @@ mod lifecycle;
 mod tests;
 
 use crate::color::Color;
-use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId};
+use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
@@ -82,6 +82,24 @@ pub struct MuxSession {
     pub env: BTreeMap<String, String>,
 }
 
+/// One workspace: an ordered set of sessions with one of them active —
+/// the level above sessions in the daemon > workspace > session >
+/// window > pane hierarchy. Workspaces are first-class (no migration
+/// from the flat session world): a session belongs to exactly one
+/// workspace for its whole life, and a workspace dies when its last
+/// session dies (`kill-workspace` kills the sessions outright).
+#[derive(Debug)]
+pub struct MuxWorkspace {
+    /// This workspace's identifier.
+    pub id: WorkspaceId,
+    /// Display name.
+    pub name: String,
+    /// Sessions in order.
+    pub sessions: Vec<SessionId>,
+    /// Index into `sessions` of the active session.
+    pub active: usize,
+}
+
 /// A pane spawn reserved under the tree lock but not yet run — the first
 /// phase of two-phase spawning (ARC-022). `begin_*` reserves ids and
 /// geometry; the caller then DROPS the tree lock, spawns through
@@ -102,6 +120,9 @@ pub struct SessionSpawn {
     pub rows: u16,
     name: String,
     env: BTreeMap<String, String>,
+    /// The workspace the session links to in phase 3, resolved at begin
+    /// (explicit target, else active, else the lazily created default).
+    workspace_id: WorkspaceId,
 }
 
 /// A pane restart reserved under the tree lock but not yet run —
@@ -311,6 +332,7 @@ impl SpawnPlan for RespawnSpawn {
 pub struct MuxTree {
     // pub(crate): the persistence conversions (mux::persist) read and rebuild
     // the tree wholesale; the field set IS the save format's source.
+    pub(crate) workspaces: HashMap<WorkspaceId, MuxWorkspace>,
     pub(crate) sessions: HashMap<SessionId, MuxSession>,
     pub(crate) windows: HashMap<WindowId, MuxWindow>,
     pub(crate) panes: HashMap<PaneId, MuxPane>,
@@ -319,6 +341,11 @@ pub struct MuxTree {
     /// Named paste buffers (`set-buffer`/`show-buffer`). A single value per
     /// name, not tmux's numbered stack — the Phase 2 non-goal in par-mux.md D3.
     pub(crate) buffers: HashMap<String, String>,
+    /// The daemon's active workspace — the one a bare `new-session`
+    /// targets, and what `select-workspace` moves. `None` until the
+    /// lazily created default (`main`) or the first explicit
+    /// `new-workspace` exists.
+    pub(crate) active_workspace: Option<WorkspaceId>,
     /// The client's per-cell pixel size (`refresh-client -p`), the one
     /// renderer metric every pane shares. Latest report wins, the same
     /// policy the grid-size report (`-C`) uses — par-mux has no other
@@ -347,12 +374,20 @@ pub struct MuxTree {
     /// that changes which session a window belongs to. Reordering a
     /// session's windows keeps membership and needs no update.
     window_session: HashMap<WindowId, SessionId>,
+    /// Reverse index session → workspace, for
+    /// [`Self::workspace_of_session`]. Maintained only by
+    /// [`Self::link_session`] and [`Self::unlink_session`], the only code
+    /// that changes which workspace a session belongs to — a session is
+    /// immutable in this respect for its whole life.
+    pub(crate) session_workspace: HashMap<SessionId, WorkspaceId>,
 }
 
 impl MuxTree {
     /// Create an empty tree that builds panes with `factory` (seam S1).
     pub fn new(factory: Box<dyn PaneFactory>) -> Self {
         Self {
+            workspaces: HashMap::new(),
+            active_workspace: None,
             sessions: HashMap::new(),
             windows: HashMap::new(),
             panes: HashMap::new(),
@@ -364,6 +399,7 @@ impl MuxTree {
             client_bg: None,
             pane_window: HashMap::new(),
             window_session: HashMap::new(),
+            session_workspace: HashMap::new(),
         }
     }
 
@@ -442,6 +478,16 @@ impl MuxTree {
         assert_eq!(
             self.window_session, window_session,
             "window → session index drifted"
+        );
+        let mut session_workspace = HashMap::new();
+        for (workspace_id, workspace) in &self.workspaces {
+            for session_id in &workspace.sessions {
+                session_workspace.insert(*session_id, *workspace_id);
+            }
+        }
+        assert_eq!(
+            self.session_workspace, session_workspace,
+            "session → workspace index drifted"
         );
     }
 
@@ -559,6 +605,144 @@ impl MuxTree {
     /// (ARC-096).
     pub fn window_of_pane(&self, pane: PaneId) -> Option<WindowId> {
         self.pane_window.get(&pane).copied()
+    }
+
+    /// Every workspace id currently live.
+    pub fn workspaces(&self) -> Vec<WorkspaceId> {
+        self.workspaces.keys().copied().collect()
+    }
+
+    /// Look up a workspace.
+    pub fn workspace(&self, id: WorkspaceId) -> Option<&MuxWorkspace> {
+        self.workspaces.get(&id)
+    }
+
+    /// The daemon's active workspace — the one a bare `new-session`
+    /// targets. `None` when no workspace exists yet.
+    pub fn active_workspace(&self) -> Option<WorkspaceId> {
+        self.active_workspace
+    }
+
+    /// The workspace a session belongs to, if any. A map lookup.
+    pub fn workspace_of_session(&self, session: SessionId) -> Option<WorkspaceId> {
+        self.session_workspace.get(&session).copied()
+    }
+
+    /// The active session of the daemon's active workspace, if any.
+    pub fn active_session(&self) -> Option<SessionId> {
+        let workspace = self.active_workspace()?;
+        let ws = self.workspaces.get(&workspace)?;
+        ws.sessions.get(ws.active).copied()
+    }
+
+    /// Resolve a workspace target: typed `+N` ids pass through; a name
+    /// matches workspace names exactly, across every workspace. Ambiguous
+    /// names error with the candidates.
+    pub fn resolve_workspace_target(
+        &self,
+        target: Target<WorkspaceId>,
+    ) -> Result<WorkspaceId, MuxError> {
+        let name = match target {
+            Target::Id(id) => return Ok(id),
+            Target::Name(name) => name,
+        };
+        match match_name(
+            self.workspaces
+                .iter()
+                .filter_map(|(id, workspace)| (workspace.name == name).then_some(*id)),
+        ) {
+            Match::None => Err(MuxError::NoSuchWorkspaceNamed(name)),
+            Match::One(id) => Ok(id),
+            Match::Many(ids) => Err(MuxError::AmbiguousWorkspaceTarget(name, ids)),
+        }
+    }
+
+    /// Append `session_id` to `workspace_id`'s session list and index the
+    /// membership. `false` when the workspace no longer exists (the
+    /// caller — [`Self::complete_session`]'s phase-3 path — re-anchors to
+    /// the default).
+    pub(crate) fn link_session(
+        &mut self,
+        workspace_id: WorkspaceId,
+        session_id: SessionId,
+    ) -> bool {
+        if !self.workspaces.contains_key(&workspace_id) {
+            return false;
+        }
+        let workspace = self
+            .workspaces
+            .get_mut(&workspace_id)
+            .expect("checked above");
+        workspace.sessions.push(session_id);
+        // The newly created session becomes the workspace's active one —
+        // the same newest-wins rule the flat world applied to bare
+        // new-window targeting.
+        workspace.active = workspace.sessions.len() - 1;
+        self.session_workspace.insert(session_id, workspace_id);
+        true
+    }
+
+    /// Take `session_id` out of its workspace's session list, clamping the
+    /// workspace's active index to the shortened list. A workspace left
+    /// with no sessions is REMOVED entirely (its last session died, so the
+    /// user closed everything in it) — a workspace born empty
+    /// (`new-workspace` before any session joins) is untouched by this
+    /// path, since nothing was unlinked from it.
+    fn unlink_session(&mut self, session_id: SessionId) {
+        let Some(workspace_id) = self.session_workspace.remove(&session_id) else {
+            return;
+        };
+        let Some(workspace) = self.workspaces.get_mut(&workspace_id) else {
+            return;
+        };
+        if let Some(pos) = workspace.sessions.iter().position(|s| *s == session_id) {
+            workspace.sessions.remove(pos);
+        }
+        if workspace.active >= workspace.sessions.len() && !workspace.sessions.is_empty() {
+            workspace.active = workspace.sessions.len() - 1;
+        }
+        if workspace.sessions.is_empty() {
+            self.workspaces.remove(&workspace_id);
+            if self.active_workspace == Some(workspace_id) {
+                // Lowest surviving id, not map order, so the fallback is
+                // deterministic.
+                self.active_workspace = self.workspaces.keys().min().copied();
+            }
+        }
+    }
+
+    /// The workspace a bare `new-session` lands in: the explicit target
+    /// resolved when given, else the active workspace, else a lazily
+    /// created default named `main` (selected on creation). Names the
+    /// workspace the session will link to in phase 3.
+    pub(crate) fn resolve_new_session_workspace(
+        &mut self,
+        target: Option<Target<WorkspaceId>>,
+    ) -> Result<WorkspaceId, MuxError> {
+        match target {
+            Some(target) => self.resolve_workspace_target(target),
+            None => Ok(self.ensure_default_workspace()),
+        }
+    }
+
+    /// The lazily created default workspace: `main` with the next id when
+    /// no workspace exists, else the current active one.
+    pub(crate) fn ensure_default_workspace(&mut self) -> WorkspaceId {
+        if let Some(id) = self.active_workspace {
+            return id;
+        }
+        let id = self.ids.next_workspace();
+        self.workspaces.insert(
+            id,
+            MuxWorkspace {
+                id,
+                name: "main".to_string(),
+                sessions: Vec::new(),
+                active: 0,
+            },
+        );
+        self.active_workspace = Some(id);
+        id
     }
 }
 

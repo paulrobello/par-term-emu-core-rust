@@ -164,6 +164,13 @@ pub enum TmuxNotification {
     /// Sessions changed (created or destroyed)
     SessionsChanged,
 
+    /// Workspace roster or selection changed (par-mux's own notification,
+    /// above tmux's set): a workspace was created, killed, renamed, or
+    /// selected, or a session's death removed its emptied workspace.
+    /// Argument-less by the same convention as `SessionsChanged` — clients
+    /// re-query `list-workspaces` rather than parse a diff.
+    WorkspacesChanged,
+
     /// Session's current window changed
     /// Arguments: session_id, window_id
     SessionWindowChanged {
@@ -347,6 +354,7 @@ impl TmuxNotification {
             Self::ClientSessionChanged { .. } => "client-session-changed",
             Self::SessionRenamed { .. } => "session-renamed",
             Self::SessionsChanged => "sessions-changed",
+            Self::WorkspacesChanged => "workspaces-changed",
             Self::SessionWindowChanged { .. } => "session-window-changed",
             Self::ClientDetached { .. } => "client-detached",
             Self::Exit => "exit",
@@ -565,6 +573,7 @@ impl TmuxControlParser {
             "client-session-changed" => Self::parse_client_session_changed(args),
             "session-renamed" => Self::parse_session_renamed(args),
             "sessions-changed" => Some(TmuxNotification::SessionsChanged),
+            "workspaces-changed" => Some(TmuxNotification::WorkspacesChanged),
             "session-window-changed" => Self::parse_session_window_changed(args),
             "client-detached" => Self::parse_client_detached(args),
             "exit" => Some(TmuxNotification::Exit),

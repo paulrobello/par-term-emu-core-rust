@@ -9,11 +9,11 @@
 
 use crate::cell::Cell;
 use crate::mux::agent_resume::resume_invocation;
-use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
+use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{snapshot_from_parts, PaneSnapshotParts};
 use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
-use crate::mux::tree::{MuxSession, MuxTree, MuxWindow};
+use crate::mux::tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace};
 use crate::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -27,7 +27,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// v2 (Phase 6, task 6.1): `PersistPane` gained the optional
 /// `agent_session` — a compatible serde read, but the bump keeps the
 /// boundary explicit instead of silently partial-reading a v1 file.
-pub const FORMAT_VERSION: u32 = 2;
+///
+/// v3 (workspaces): the hierarchy gained the workspace level above
+/// sessions — `PersistState` carries `workspaces` + `active_workspace`,
+/// and `next_ids` grew the workspace counter. Not backward compatible BY
+/// DESIGN (workspaces are first-class, no migration): a v2 file fails the
+/// version check and is quarantined, and the daemon starts fresh.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Ceiling on the scrollback cells one pane contributes to the state file
 /// — a persistence bound only; the in-memory pane keeps its full history.
@@ -157,13 +163,34 @@ pub struct PersistState {
     pub format_version: u32,
     /// When this state was captured, Unix milliseconds.
     pub saved_at_unix_ms: u64,
-    /// The id allocator's counters at capture — `(session, window, pane)`,
-    /// the next id each kind hands out.
-    pub next_ids: (u32, u32, u32),
+    /// The id allocator's counters at capture — `(workspace, session,
+    /// window, pane)`, the next id each kind hands out.
+    pub next_ids: (u32, u32, u32, u32),
     /// Every live session, in id order.
     pub sessions: Vec<PersistSession>,
+    /// Every live workspace, in id order. A session appears in exactly
+    /// one workspace's `sessions` list; a session id absent from
+    /// `sessions` above is skipped at restore (defensive against a
+    /// hand-edited file, not a migration path).
+    pub workspaces: Vec<PersistWorkspace>,
+    /// The `+N` number of the daemon's active workspace, when one exists.
+    pub active_workspace: Option<u32>,
     /// Named paste buffers (`set-buffer`/`show-buffer`).
     pub buffers: HashMap<String, String>,
+}
+
+/// One persisted workspace: the level above sessions.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PersistWorkspace {
+    /// The workspace's `+N` number.
+    pub id: u32,
+    /// Display name.
+    pub name: String,
+    /// The member sessions' `$N` numbers, in workspace order.
+    pub sessions: Vec<u32>,
+    /// Index into `sessions` of the workspace's active session.
+    pub active_session_index: usize,
 }
 
 /// One persisted session.
@@ -332,9 +359,18 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
 /// per-pane cwd syscalls are the expensive half, and they no longer run
 /// with every client waiting on the tree.
 pub struct PersistCapture {
-    next_ids: (u32, u32, u32),
+    next_ids: (u32, u32, u32, u32),
+    workspaces: Vec<WorkspaceCapture>,
+    active_workspace: Option<WorkspaceId>,
     sessions: Vec<SessionCapture>,
     buffers: HashMap<String, String>,
+}
+
+struct WorkspaceCapture {
+    id: WorkspaceId,
+    name: String,
+    active: usize,
+    sessions: Vec<SessionId>,
 }
 
 struct SessionCapture {
@@ -371,6 +407,21 @@ impl PersistCapture {
     /// [`MuxTree::to_persist_state`] produces — sessions in id order so two
     /// captures of an unchanged tree differ only in their timestamps.
     pub fn capture(self) -> PersistState {
+        let mut workspaces: Vec<PersistWorkspace> = self
+            .workspaces
+            .into_iter()
+            .map(|workspace| PersistWorkspace {
+                id: workspace.id.0,
+                name: workspace.name,
+                active_session_index: workspace.active,
+                sessions: workspace
+                    .sessions
+                    .into_iter()
+                    .map(|session| session.0)
+                    .collect(),
+            })
+            .collect();
+        workspaces.sort_by_key(|workspace| workspace.id);
         let mut sessions: Vec<PersistSession> = self
             .sessions
             .into_iter()
@@ -419,6 +470,8 @@ impl PersistCapture {
             format_version: FORMAT_VERSION,
             saved_at_unix_ms: unix_ms(),
             next_ids: self.next_ids,
+            workspaces,
+            active_workspace: self.active_workspace.map(|id| id.0),
             sessions,
             buffers: self.buffers,
         }
@@ -439,6 +492,17 @@ impl MuxTree {
     pub fn collect_persist_capture(&self) -> PersistCapture {
         PersistCapture {
             next_ids: self.ids.next_ids(),
+            workspaces: self
+                .workspaces
+                .values()
+                .map(|workspace| WorkspaceCapture {
+                    id: workspace.id,
+                    name: workspace.name.clone(),
+                    active: workspace.active,
+                    sessions: workspace.sessions.clone(),
+                })
+                .collect(),
+            active_workspace: self.active_workspace,
             sessions: self
                 .sessions
                 .values()
@@ -731,6 +795,42 @@ impl MuxTree {
                 tree.insert_window(session_id, window);
             }
         }
+        // Workspaces restore after the sessions they reference; a session
+        // id absent from the sessions map (a hand-edited file) is skipped,
+        // and a workspace left referencing nothing still restores as an
+        // empty workspace — the same state `new-workspace` creates.
+        let mut active_workspace = None;
+        for workspace in &state.workspaces {
+            let workspace_id = WorkspaceId(workspace.id);
+            let sessions: Vec<SessionId> = workspace
+                .sessions
+                .iter()
+                .filter(|id| tree.sessions.contains_key(&SessionId(**id)))
+                .map(|id| SessionId(*id))
+                .collect();
+            for session_id in &sessions {
+                tree.session_workspace.insert(*session_id, workspace_id);
+            }
+            let active = workspace
+                .active_session_index
+                .min(sessions.len().saturating_sub(1));
+            tree.workspaces.insert(
+                workspace_id,
+                MuxWorkspace {
+                    id: workspace_id,
+                    name: workspace.name.clone(),
+                    sessions,
+                    active,
+                },
+            );
+            if state.active_workspace == Some(workspace.id) {
+                active_workspace = Some(workspace_id);
+            }
+        }
+        // An active pointer naming a workspace the file never carried
+        // falls back to the first restored one.
+        // Lowest id, not map order, when the file named no live workspace.
+        tree.active_workspace = active_workspace.or_else(|| tree.workspaces.keys().min().copied());
         // Panes were spawned at their window's full extent, but the restored
         // layout divides that extent — re-fit every terminal (and PTY) to
         // its geometry, exactly as a live resize would have, so a restart
@@ -1822,9 +1922,88 @@ mod tests {
         let fresh = restored.new_session("fresh", 80, 24).unwrap();
         assert_eq!(
             fresh,
-            SessionId(state.next_ids.0),
+            SessionId(state.next_ids.1),
             "a restored server's first new session must take the persisted next id"
         );
+    }
+
+    /// Workspaces round-trip: members, order, active pointers, and names
+    /// all travel, and a restored bare `new-session` lands in the
+    /// persisted ACTIVE workspace.
+    #[test]
+    fn workspaces_round_trip_through_persistence() {
+        let mut original = populated_tree();
+        let ws_main = original
+            .resolve_new_session_workspace(None)
+            .expect("populated_tree created its default");
+        let ws_dev = original.new_workspace("dev");
+        original.rename_workspace(ws_main, "prod").unwrap();
+        let expected_main = original.workspace(ws_main).unwrap().sessions.clone();
+        original.select_workspace(ws_dev).unwrap();
+        let s3 = original.new_session("in-dev", 80, 24).unwrap();
+
+        let state = original.to_persist_state();
+        assert_eq!(state.active_workspace, Some(ws_dev.0));
+        assert_eq!(
+            state
+                .workspaces
+                .iter()
+                .find(|w| w.id == ws_main.0)
+                .unwrap()
+                .name,
+            "prod"
+        );
+
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_eq!(restored.workspaces().len(), 2);
+        assert_eq!(restored.active_workspace(), Some(ws_dev));
+        assert_eq!(
+            restored.workspace(ws_main).unwrap().sessions,
+            expected_main,
+            "workspace membership and order travel"
+        );
+        assert_eq!(
+            restored.workspace(ws_dev).unwrap().sessions,
+            vec![s3],
+            "the post-rename session landed in the active workspace"
+        );
+        // A restored bare new-session lands in the persisted active
+        // workspace — not a fresh default.
+        let fresh = restored.new_session("fresh", 80, 24).unwrap();
+        assert_eq!(restored.workspace_of_session(fresh), Some(ws_dev));
+        tree_consistency(&restored);
+    }
+
+    /// A v2-shaped state file (pre-workspaces) fails the version gate and
+    /// is quarantined rather than partially read — the documented
+    /// no-migration policy.
+    #[test]
+    fn a_pre_workspace_state_file_is_quarantined() {
+        let (dir, target) = temp_target("v2-quarantine");
+        let mut value = serde_json::to_value(populated_tree().to_persist_state()).unwrap();
+        value["format_version"] = serde_json::json!(2);
+        value.as_object_mut().unwrap().remove("workspaces");
+        value.as_object_mut().unwrap().remove("active_workspace");
+        let bytes = serde_json::to_vec(&value).unwrap();
+        std::fs::write(&target, &bytes).unwrap();
+
+        match load_or_quarantine(&target) {
+            Loaded::Quarantined { from, .. } => assert_eq!(from, target),
+            other => panic!("a v2 file must quarantine, got {other:?}"),
+        }
+        drop(dir);
+    }
+
+    /// Assert helper: brute-force the reverse indexes on a restored tree.
+    fn tree_consistency(tree: &MuxTree) {
+        tree.assert_indexes_consistent();
+        for session in tree.sessions() {
+            assert!(
+                tree.workspace_of_session(session).is_some(),
+                "every restored session belongs to a workspace"
+            );
+        }
     }
 
     /// SEC-128: a dead pane whose OSC 7 report named a remote host saves and

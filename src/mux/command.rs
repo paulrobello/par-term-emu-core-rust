@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use crate::keyboard::{self, modifiers, TermKey, TermKeyEvent};
-use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
+use crate::mux::ids::{PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
 use crate::terminal::Terminal;
 
@@ -105,6 +105,10 @@ pub enum MuxCommand {
         /// `-e NAME=VALUE` (repeatable): the session's initial environment,
         /// applied to every pane it spawns (tmux 3.x `new-session -e`).
         env: Vec<(String, String)>,
+        /// `-t`: the workspace the session joins (id or name). Absent
+        /// targets the daemon's active workspace, creating the default
+        /// `main` workspace when none exists.
+        workspace: Option<Target<WorkspaceId>>,
     },
     /// List every live pane.
     ListPanes,
@@ -184,8 +188,13 @@ pub enum MuxCommand {
     },
     /// List every window across every session.
     ListWindows,
-    /// List every session.
-    ListSessions,
+    /// List sessions — every workspace's when bare, one workspace's when
+    /// `-t` names one. The reply line shape carries the workspace prefix;
+    /// see `cmd_list_sessions` for the grammar.
+    ListSessions {
+        /// `-t`: restrict the listing to this workspace (id or name).
+        workspace: Option<Target<WorkspaceId>>,
+    },
     /// Shut the daemon down cleanly: the accept loop stops, the final state
     /// save runs, and clients receive `%exit` — the same path SIGTERM takes.
     KillServer,
@@ -376,6 +385,35 @@ pub enum MuxCommand {
         /// Target session.
         session: Target<SessionId>,
     },
+    /// Create a workspace — the level above sessions — and make it the
+    /// daemon's active one. tmux has no workspace concept; this is
+    /// par-mux's own command.
+    NewWorkspace {
+        /// `-n`: the workspace name; a default is chosen when absent.
+        name: Option<String>,
+    },
+    /// List every workspace, one `+N: name` line per workspace, the
+    /// daemon's active one suffixed ` active`.
+    ListWorkspaces,
+    /// Make a workspace the daemon's active one; its previously active
+    /// session resumes as the active session.
+    SelectWorkspace {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+    },
+    /// Rename a workspace (`rename-workspace -t +N <name>`).
+    RenameWorkspace {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+        /// New name.
+        name: String,
+    },
+    /// Kill a workspace and every session, window, and pane in it
+    /// (`kill-workspace -t +N`).
+    KillWorkspace {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+    },
     /// Report the daemon's build stamp — the `version` wire form of
     /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
     /// client can compare the daemon's core build against its own linked
@@ -413,13 +451,18 @@ impl MuxCommand {
             | MuxCommand::SetEnvironment { .. }
             | MuxCommand::RenameSession { .. }
             | MuxCommand::ClearHistory { .. }
-            | MuxCommand::KillSession { .. } => true,
+            | MuxCommand::KillSession { .. }
+            | MuxCommand::NewWorkspace { .. }
+            | MuxCommand::SelectWorkspace { .. }
+            | MuxCommand::RenameWorkspace { .. }
+            | MuxCommand::KillWorkspace { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             MuxCommand::ListPanes
             | MuxCommand::ListAgents
             | MuxCommand::ListCommands
             | MuxCommand::ListWindows
-            | MuxCommand::ListSessions
+            | MuxCommand::ListSessions { .. }
+            | MuxCommand::ListWorkspaces
             | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
@@ -583,6 +626,23 @@ impl Args<'_> {
         match self.quoted_flag(flag_name)? {
             Some(raw) => Ok(Some(
                 Target::parse(&raw).map_err(|_| format!("invalid session target: {raw}"))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// [`Self::pane`] for workspace targets: a `+N`-sigiled value parses
+    /// as the typed id, anything else is a name.
+    fn workspace(&self, flag_name: &str) -> Result<Target<WorkspaceId>, String> {
+        self.workspace_opt(flag_name)?
+            .ok_or_else(|| format!("{} requires {flag_name}", self.name))
+    }
+
+    /// The flag-optional form of [`Self::workspace`].
+    fn workspace_opt(&self, flag_name: &str) -> Result<Option<Target<WorkspaceId>>, String> {
+        match self.quoted_flag(flag_name)? {
+            Some(raw) => Ok(Some(
+                Target::parse(&raw).map_err(|_| format!("invalid workspace target: {raw}"))?,
             )),
             None => Ok(None),
         }
@@ -1051,7 +1111,12 @@ type CommandParser = fn(&Args<'_>) -> Result<MuxCommand, String>;
 /// never removes a token without a CHANGELOG "Removed" entry. Adding a tmux
 /// command is one `parse_<cmd>` function plus one row here.
 const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
-    ("new-session", parse_new_session, &[]),
+    ("new-session", parse_new_session, &["workspace"]),
+    ("new-workspace", parse_new_workspace, &[]),
+    ("list-workspaces", parse_list_workspaces, &[]),
+    ("select-workspace", parse_select_workspace, &[]),
+    ("rename-workspace", parse_rename_workspace, &[]),
+    ("kill-workspace", parse_kill_workspace, &[]),
     ("list-panes", parse_list_panes, &[]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),
@@ -1063,7 +1128,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("kill-window", parse_kill_window, &[]),
     ("rename-window", parse_rename_window, &[]),
     ("list-windows", parse_list_windows, &[]),
-    ("list-sessions", parse_list_sessions, &[]),
+    ("list-sessions", parse_list_sessions, &["workspace"]),
     ("kill-server", parse_kill_server, &[]),
     ("rename-session", parse_rename_session, &[]),
     ("kill-session", parse_kill_session, &[]),
@@ -1209,8 +1274,13 @@ fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     let name = a.quoted_flag("-s")?;
+    let workspace = a.workspace_opt("-t")?;
     reject_positionals(a, NEW_SESSION_VALUE_FLAGS)?;
-    Ok(MuxCommand::NewSession { name, env })
+    Ok(MuxCommand::NewSession {
+        name,
+        env,
+        workspace,
+    })
 }
 
 /// Reject a variable name no environment can hold: empty, or containing
@@ -1341,8 +1411,59 @@ fn parse_list_windows(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListWindows)
 }
 
-fn parse_list_sessions(_a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::ListSessions)
+fn parse_list_sessions(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListSessions {
+        workspace: a.workspace_opt("-t")?,
+    })
+}
+
+/// `new-workspace [-n name]` — create and select a workspace.
+fn parse_new_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let name = a.quoted_flag("-n")?;
+    reject_positionals(a, &["-n"])?;
+    Ok(MuxCommand::NewWorkspace { name })
+}
+
+fn parse_list_workspaces(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListWorkspaces)
+}
+
+fn parse_select_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SelectWorkspace {
+        workspace: a.workspace("-t")?,
+    })
+}
+
+/// `rename-workspace -t +N <name>` — the same single-name grammar
+/// `rename-session` uses (shell_split, exactly one name word).
+fn parse_rename_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let workspace = a.workspace("-t")?;
+    let words = shell_split(a.line);
+    let mut positional = Vec::new();
+    let mut iter = words.iter().skip(1);
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "-t" => {
+                iter.next();
+            }
+            _ => positional.push(word.clone()),
+        }
+    }
+    match positional.len() {
+        0 => Err("rename-workspace requires a new name".to_string()),
+        1 => Ok(MuxCommand::RenameWorkspace {
+            workspace,
+            name: positional.remove(0),
+        }),
+        _ => Err("rename-workspace takes exactly one name".to_string()),
+    }
+}
+
+/// `kill-workspace -t +N`.
+fn parse_kill_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::KillWorkspace {
+        workspace: a.workspace("-t")?,
+    })
 }
 
 fn parse_kill_server(_a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -1782,6 +1903,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some("work".into()),
                 env: vec![],
+                workspace: None,
             }
         );
     }
@@ -1800,6 +1922,7 @@ mod tests {
                     ("C".into(), "x=y".into()),
                     ("D".into(), String::new()),
                 ],
+                workspace: None,
             }
         );
     }
@@ -1871,7 +1994,8 @@ mod tests {
             cmd,
             MuxCommand::NewSession {
                 name: None,
-                env: vec![]
+                env: vec![],
+                workspace: None,
             }
         );
     }
@@ -1890,6 +2014,7 @@ mod tests {
                 MuxCommand::NewSession {
                     name: Some("Par Mux Test".into()),
                     env: vec![],
+                    workspace: None,
                 },
                 "line: {line}"
             );
@@ -1906,6 +2031,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some("Paul's box".into()),
                 env: vec![],
+                workspace: None,
             }
         );
     }
@@ -1920,6 +2046,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some("work".into()),
                 env: vec![],
+                workspace: None,
             }
         );
         assert_eq!(
@@ -1927,13 +2054,15 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some("work".into()),
                 env: vec![],
+                workspace: None,
             }
         );
         assert_eq!(
             parse_command("new-session -s").expect("parses"),
             MuxCommand::NewSession {
                 name: None,
-                env: vec![]
+                env: vec![],
+                workspace: None,
             }
         );
         // An unquoted value keeps the flat scan's verbatim bytes: a bare
@@ -1943,6 +2072,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some(r"a\b".into()),
                 env: vec![],
+                workspace: None,
             }
         );
     }
@@ -1956,6 +2086,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: Some("-n".into()),
                 env: vec![],
+                workspace: None,
             }
         );
         assert_eq!(
@@ -2438,7 +2569,7 @@ mod tests {
         );
         assert_eq!(
             parse_command("list-sessions").unwrap(),
-            MuxCommand::ListSessions
+            MuxCommand::ListSessions { workspace: None }
         );
     }
 
@@ -3123,6 +3254,7 @@ mod tests {
             MuxCommand::NewSession {
                 name: None,
                 env: vec![],
+                workspace: None,
             },
             MuxCommand::KillPane {
                 pane: Target::Id(PaneId(0)),
@@ -3195,7 +3327,7 @@ mod tests {
                 cell_pixels: None,
             },
             MuxCommand::ListWindows,
-            MuxCommand::ListSessions,
+            MuxCommand::ListSessions { workspace: None },
             MuxCommand::CapturePane {
                 pane: Target::Id(PaneId(0)),
                 start_line: None,
@@ -3229,5 +3361,118 @@ mod tests {
             panic!("an unknown command is a parse error");
         };
         assert_eq!(err, "unknown command: frobnicate");
+    }
+
+    // --- Workspaces ---
+
+    #[test]
+    fn parses_workspace_commands() {
+        assert_eq!(
+            parse_command("new-workspace -n dev").unwrap(),
+            MuxCommand::NewWorkspace {
+                name: Some("dev".to_string())
+            }
+        );
+        assert_eq!(
+            parse_command("new-workspace").unwrap(),
+            MuxCommand::NewWorkspace { name: None }
+        );
+        assert_eq!(
+            parse_command("list-workspaces").unwrap(),
+            MuxCommand::ListWorkspaces
+        );
+        assert_eq!(
+            parse_command("select-workspace -t +2").unwrap(),
+            MuxCommand::SelectWorkspace {
+                workspace: Target::Id(WorkspaceId(2))
+            }
+        );
+        assert_eq!(
+            parse_command("select-workspace -t dev").unwrap(),
+            MuxCommand::SelectWorkspace {
+                workspace: Target::Name("dev".to_string())
+            }
+        );
+        assert_eq!(
+            parse_command("rename-workspace -t +1 prod").unwrap(),
+            MuxCommand::RenameWorkspace {
+                workspace: Target::Id(WorkspaceId(1)),
+                name: "prod".to_string()
+            }
+        );
+        assert_eq!(
+            parse_command("kill-workspace -t dev").unwrap(),
+            MuxCommand::KillWorkspace {
+                workspace: Target::Name("dev".to_string())
+            }
+        );
+        // select-workspace requires -t; rename-workspace requires a name.
+        assert!(parse_command("select-workspace").is_err());
+        assert!(parse_command("rename-workspace -t +1").is_err());
+        assert!(parse_command("rename-workspace -t +1 a b").is_err());
+    }
+
+    #[test]
+    fn parses_list_sessions_with_and_without_a_workspace_filter() {
+        assert_eq!(
+            parse_command("list-sessions").unwrap(),
+            MuxCommand::ListSessions { workspace: None }
+        );
+        assert_eq!(
+            parse_command("list-sessions -t +0").unwrap(),
+            MuxCommand::ListSessions {
+                workspace: Some(Target::Id(WorkspaceId(0)))
+            }
+        );
+        assert_eq!(
+            parse_command("list-sessions -t work").unwrap(),
+            MuxCommand::ListSessions {
+                workspace: Some(Target::Name("work".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn parses_new_session_with_a_workspace_target() {
+        assert_eq!(
+            parse_command("new-session -t dev -s build").unwrap(),
+            MuxCommand::NewSession {
+                name: Some("build".to_string()),
+                env: vec![],
+                workspace: Some(Target::Name("dev".to_string()))
+            }
+        );
+        assert_eq!(
+            parse_command("new-session").unwrap(),
+            MuxCommand::NewSession {
+                name: None,
+                env: vec![],
+                workspace: None
+            }
+        );
+    }
+
+    #[test]
+    fn every_workspace_command_row_appears_in_list_commands() {
+        let body = list_commands_body();
+        for name in [
+            "new-workspace",
+            "list-workspaces",
+            "select-workspace",
+            "rename-workspace",
+            "kill-workspace",
+        ] {
+            assert!(
+                body.lines().any(|line| line.starts_with(name)),
+                "{name} must be discoverable via list-commands"
+            );
+        }
+        // The workspace-aware commands carry the feature token.
+        assert!(body
+            .lines()
+            .any(|line| line.starts_with("new-session workspace")));
+        assert!(body
+            .lines()
+            .any(|line| line.starts_with("list-sessions workspace")));
     }
 }
