@@ -272,9 +272,11 @@ macro_rules! debug_trace {
 
 /// Screen switch logging
 pub fn log_screen_switch(to_alt: bool, reason: &str) {
-    if is_enabled(DebugLevel::Info) {
+    // Trace: every alt-screen entry/exit from any pane app lands here; Info
+    // floods stderr sinks (the attach client's is the rendered screen).
+    if is_enabled(DebugLevel::Trace) {
         log(
-            DebugLevel::Info,
+            DebugLevel::Trace,
             "SCREEN_SWITCH",
             &format!(
                 "switched to {} screen ({})",
