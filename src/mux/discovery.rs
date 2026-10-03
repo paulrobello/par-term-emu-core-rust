@@ -477,4 +477,70 @@ mod tests {
             "an explicit socket is labeled by its full path"
         );
     }
+
+    /// A registry full of hostile files — garbage bytes, truncated JSON,
+    /// an array where the object shape is expected, wrong field types, an
+    /// empty file, a 1MB junk file — is skipped wholesale: `enumerate`
+    /// yields no candidates, no panic, and no hostile string reaches its
+    /// output (`live`/`dead` stay empty).
+    #[test]
+    fn enumerate_skips_corrupt_registry_files_without_panicking() {
+        let base = temp_base("corrupt");
+        let dir = registry_dir(base.path());
+        std::fs::create_dir_all(&dir).expect("registry dir");
+        std::fs::write(dir.join("garbage.json"), [0xFF, 0x00, 0xFE, b'{', b'}'])
+            .expect("garbage file");
+        std::fs::write(
+            dir.join("truncated.json"),
+            br#"{"socket":"/tmp/x.sock","pid":12"#,
+        )
+        .expect("truncated file");
+        // An array where the object shape is expected.
+        std::fs::write(dir.join("array.json"), b"[1,2,3]").expect("array file");
+        // Valid JSON, wrong field types.
+        std::fs::write(
+            dir.join("wrong_types.json"),
+            br#"{"socket":1,"pid":"x","started_unix_ms":null,"stamp":[]}"#,
+        )
+        .expect("wrong-type file");
+        std::fs::write(dir.join("empty.json"), b"").expect("empty file");
+        std::fs::write(dir.join("junk.json"), vec![b'x'; 1 << 20]).expect("junk file");
+        // Not a registry entry at all.
+        std::fs::write(dir.join("notes.txt"), b"not a registry file").expect("txt file");
+
+        let found = enumerate(base.path());
+        assert!(found.live.is_empty(), "{:?}", found.live);
+        assert!(found.dead.is_empty(), "{:?}", found.dead);
+    }
+
+    /// An entry whose socket string carries control bytes and a newline
+    /// parses fine, probes dead (nothing listens there), and is pruned —
+    /// the path lands in `dead` exactly once, well-formed as a PathBuf,
+    /// and the registry file is gone afterwards.
+    #[test]
+    fn enumerate_prunes_a_hostile_socket_entry() {
+        let base = temp_base("hostile");
+        let dir = registry_dir(base.path());
+        std::fs::create_dir_all(&dir).expect("registry dir");
+        let hostile = "/no\x1b[31msuch\ndir/par-mux-x.sock\t";
+        let entry = serde_json::json!({
+            "socket": hostile,
+            "pid": 123,
+            "started_unix_ms": 0,
+            "stamp": "0.0.0+test"
+        });
+        std::fs::write(
+            dir.join("par-mux-x.json"),
+            serde_json::to_vec(&entry).expect("json"),
+        )
+        .expect("hostile entry");
+
+        let found = enumerate(base.path());
+        assert!(found.live.is_empty(), "{:?}", found.live);
+        assert_eq!(found.dead, vec![std::path::PathBuf::from(hostile)]);
+        assert!(
+            !dir.join("par-mux-x.json").exists(),
+            "the dead entry's file was pruned"
+        );
+    }
 }

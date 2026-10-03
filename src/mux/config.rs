@@ -1099,4 +1099,98 @@ remain-on-exit = true
         write_file(&path, &changed, true).expect("forced rewrite");
         assert!(std::fs::read_to_string(&path).unwrap().contains("C-z"));
     }
+
+    /// Hostile files never panic the loader: wrong-typed values, unknown
+    /// keys, a 1MB string value, invalid UTF-8 (rejected, not lossily
+    /// decoded), duplicate keys, and a directory-shaped path all come back
+    /// as classified errors or clean parses per the documented contract.
+    #[test]
+    fn load_file_survives_hostile_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = |name: &str| dir.path().join(name);
+
+        // Wrong-typed values: a string field given an integer / bool.
+        std::fs::write(path("wrong_type.toml"), "[client]\nprefix = 5\n").expect("write");
+        assert!(
+            load_file(&path("wrong_type.toml")).is_err(),
+            "int for a string field is a parse error"
+        );
+        std::fs::write(
+            path("wrong_type2.toml"),
+            "[daemon]\npane-endpoints = 'yes'\n",
+        )
+        .expect("write");
+        assert!(
+            load_file(&path("wrong_type2.toml")).is_err(),
+            "string for a bool field is a parse error"
+        );
+
+        // Unknown keys are forward-compat ignored and resolve to defaults.
+        std::fs::write(
+            path("unknown.toml"),
+            "[client]\nbogus = 'x'\n[daemon]\nnope = 1\n",
+        )
+        .expect("write");
+        let file = load_file(&path("unknown.toml"))
+            .expect("no io error")
+            .expect("parses");
+        assert_eq!(
+            resolve(&file, &Overrides::default()),
+            EffectiveConfig::default()
+        );
+
+        // A 1MB string value parses (no size cliff in the reader).
+        let big = format!("[client]\nbogus = '{}'\n", "a".repeat(1 << 20));
+        std::fs::write(path("big.toml"), big).expect("write");
+        assert!(load_file(&path("big.toml")).is_ok());
+
+        // Invalid UTF-8: rejected (read_to_string), never a panic.
+        std::fs::write(path("utf8.toml"), b"[client]\nprefix = '\xff\xfe'\n").expect("write");
+        assert!(load_file(&path("utf8.toml")).is_err(), "rejected");
+
+        // Duplicate keys are a TOML error.
+        std::fs::write(
+            path("dup.toml"),
+            "[client]\nprefix = 'C-b'\nprefix = 'C-a'\n",
+        )
+        .expect("write");
+        assert!(load_file(&path("dup.toml")).is_err(), "duplicate key");
+
+        // A directory where the file should be: an io error naming the
+        // path, not a panic and not Ok(None).
+        let err = load_file(dir.path()).expect_err("directory read fails");
+        assert!(
+            err.contains(dir.path().to_string_lossy().as_ref()),
+            "the error names the path: {err}"
+        );
+    }
+
+    /// gen-config output round-trips: write_file → load_file → resolve
+    /// reproduces the effective config it was generated from, for both
+    /// the defaults and a mutated prefix.
+    #[test]
+    fn gen_config_round_trips_through_load_and_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        write_file(&path, &EffectiveConfig::default(), false).expect("write");
+        let loaded = load_file(&path)
+            .expect("no io error")
+            .expect("written file parses");
+        assert_eq!(
+            resolve(&loaded, &Overrides::default()),
+            EffectiveConfig::default()
+        );
+
+        let mutated = EffectiveConfig {
+            prefix: "C-a".into(),
+            mode: "render".into(),
+            ..EffectiveConfig::default()
+        };
+        let path2 = dir.path().join("mutated.toml");
+        write_file(&path2, &mutated, false).expect("write");
+        let loaded = load_file(&path2)
+            .expect("no io error")
+            .expect("written file parses");
+        assert_eq!(resolve(&loaded, &Overrides::default()), mutated);
+    }
 }

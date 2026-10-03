@@ -25,6 +25,12 @@
 //! re-encoder emits the legacy/kitty-level-1 forms `encode_key` produces
 //! and never negotiates flags on the pane's behalf. Full forwarding is a
 //! later Phase B card (documented in docs/MUX.md).
+//!
+//! Bracketed paste (`ESC[200~` … `ESC[201~`, which a host left in DECSET
+//! 2004 mode by an earlier app sends around every paste) is treated as an
+//! opaque byte run: the body passes through verbatim — embedded prefix
+//! bytes and partial escape fragments included — because it is text the
+//! user meant to insert, not keystrokes to decode.
 
 use crate::keyboard::{modifiers, TermKey, TermKeyEvent};
 use crate::terminal::Terminal;
@@ -107,14 +113,25 @@ impl SgrMouse {
     }
 }
 
+/// The bracketed-paste terminator the opaque body scan hunts for.
+const PASTE_END: &[u8] = b"\x1b[201~";
+/// A paste opened by `ESC[200~` that never sees its terminator stops
+/// holding the stream after this many held bytes — the same give-up shape
+/// the OSC 11 report drop uses, sized for real pastes (megabytes) rather
+/// than the 64-byte report bound.
+const PASTE_HELD_CAP: usize = 1 << 20;
+
 /// Incremental stdin tokenizer: feed raw bytes, take complete tokens. A
 /// partial escape sequence at the end of a burst stays pending until the
 /// next feed completes it; a lone ESC (no following byte this burst) is
 /// emitted as the Escape key at once — the classic interactivity trade,
-/// and what xterm does with no timeout configured.
+/// and what xterm does with no timeout configured. The same trade applies
+/// to a paste whose `ESC[200~` opener arrives as its own lone-ESC burst.
 #[derive(Default)]
 pub struct InputParser {
     pending: Vec<u8>,
+    /// Inside a bracketed paste: everything until `PASTE_END` is opaque.
+    paste: bool,
 }
 
 impl InputParser {
@@ -126,6 +143,29 @@ impl InputParser {
         let data = std::mem::take(&mut self.pending);
         let mut i = 0;
         while i < data.len() {
+            if self.paste {
+                // Opaque scan for the terminator; the body passes through
+                // verbatim as plain bytes. Held-byte accounting: the tail
+                // either stays pending (terminator may still arrive) or
+                // flushes as output at the cap — never both.
+                match find_subslice(&data[i..], PASTE_END) {
+                    Some(rel) => {
+                        plain.extend_from_slice(&data[i..i + rel]);
+                        i += rel + PASTE_END.len();
+                        self.paste = false;
+                    }
+                    None => {
+                        if data.len() - i > PASTE_HELD_CAP {
+                            plain.extend_from_slice(&data[i..]);
+                            self.paste = false;
+                        } else {
+                            self.pending = data[i..].to_vec();
+                        }
+                        i = data.len();
+                    }
+                }
+                continue;
+            }
             if data[i] != 0x1b {
                 plain.push(data[i]);
                 i += 1;
@@ -277,6 +317,14 @@ impl InputParser {
             return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1);
         }
         let param_text = &data[2..params_end];
+        // Bracketed paste start (the host is in DECSET 2004 mode left by
+        // an earlier app): switch the parser into the opaque-body scan.
+        // The markers themselves are consumed — the pane gets the pasted
+        // text, not the framing.
+        if final_byte == b'~' && param_text == b"200" {
+            self.paste = true;
+            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1);
+        }
         let (first, modifier) = split_params(param_text);
         let consumed = i + 1;
         match csi_key(final_byte, first, modifier) {
@@ -374,6 +422,13 @@ fn ss3_key(byte: u8, _mods: u8) -> Option<TermKey> {
 fn xterm_mods(modifier: u32) -> u8 {
     let m = modifier.saturating_sub(1) & 0x7;
     m as u8
+}
+
+/// First index of `needle` in `haystack`, or `None`.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Re-encode one key event against the focused pane's tracked input state
@@ -578,6 +633,265 @@ mod tests {
         assert!(matches!(tokens[0], Token::Bytes(ref b) if b.is_empty()));
         // The parser stays healthy for the next keystroke.
         let tokens = parser.feed(b"x");
-        assert!(matches!(tokens[0], Token::Bytes(ref b) if b == b"x"));
+        resync_health_check(&tokens);
+    }
+
+    /// Hostile-input helpers shared by the adversarial suite below.
+    ///
+    /// The parser's one documented divergence between incremental and
+    /// whole-stream decoding: a burst that ends on a bare ESC emits the
+    /// Escape key immediately (xterm's no-timeout trade). Every other split
+    /// of a stream must decode exactly like the whole-stream feed.
+    const PASTE_START: &[u8] = b"\x1b[200~";
+
+    /// A paste body carrying exactly what decode-as-keystrokes would mangle:
+    /// the prefix byte (C-b, 0x02), a complete CSI key sequence, a partial
+    /// CSI fragment, and a bare ESC.
+    fn hostile_paste_body() -> Vec<u8> {
+        let mut body = b"echo hi".to_vec();
+        body.extend_from_slice(&[0x02]);
+        body.extend_from_slice(b"\x1b[3~");
+        body.extend_from_slice(b"\x1b[1;5");
+        body.push(0x1b);
+        body.extend_from_slice(b" tail");
+        body
+    }
+
+    /// The designed lone-ESC semantics of one-byte bursts: a single-byte feed
+    /// can never complete a sequence, so ESC alone is the Escape key and any
+    /// other byte is its own plain run.
+    fn expected_byte_at_a_time(stream: &[u8]) -> Vec<Token> {
+        stream
+            .iter()
+            .map(|&b| {
+                if b == 0x1b {
+                    Token::Key(TermKeyEvent::functional(TermKey::Escape, 0))
+                } else {
+                    Token::Bytes(vec![b])
+                }
+            })
+            .collect()
+    }
+
+    /// Feed `stream` one byte per burst.
+    fn feed_byte_at_a_time(stream: &[u8]) -> Vec<Token> {
+        let mut parser = InputParser::default();
+        let mut tokens = Vec::new();
+        for b in stream {
+            tokens.extend(parser.feed(std::slice::from_ref(b)));
+        }
+        tokens
+    }
+
+    /// Merge adjacent Bytes tokens so decodes that differ only in where feed
+    /// boundaries flushed plain runs compare equal.
+    fn merge_adjacent_bytes(tokens: Vec<Token>) -> Vec<Token> {
+        let mut out: Vec<Token> = Vec::new();
+        for token in tokens {
+            match (out.last_mut(), token) {
+                (Some(Token::Bytes(last)), Token::Bytes(b)) => last.extend_from_slice(&b),
+                (_, other) => out.push(other),
+            }
+        }
+        out
+    }
+
+    /// Concatenate every Bytes token: the byte-accounting view of a decode.
+    fn bytes_of(tokens: &[Token]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for token in tokens {
+            if let Token::Bytes(b) = token {
+                out.extend_from_slice(b);
+            }
+        }
+        out
+    }
+
+    /// The stream decodes byte-at-a-time exactly per the lone-ESC design, and
+    /// — when it carries no ESC at all — exactly like the whole-stream feed.
+    fn assert_byte_at_a_time_contract(stream: &[u8]) {
+        assert_eq!(
+            feed_byte_at_a_time(stream),
+            expected_byte_at_a_time(stream),
+            "byte-at-a-time decode diverged from the lone-ESC design for {stream:?}"
+        );
+        if !stream.contains(&0x1b) {
+            assert_eq!(
+                bytes_of(&feed_byte_at_a_time(stream)),
+                bytes_of(&InputParser::default().feed(stream)),
+                "a no-ESC stream must decode to identical bytes byte-at-a-time: {stream:?}"
+            );
+        }
+    }
+
+    /// Assert a decode is exactly one plain run equal to `body` (modulo
+    /// empty Bytes tokens, the established drop shape).
+    fn assert_single_plain_run(tokens: &[Token], body: &[u8]) {
+        let runs: Vec<&Vec<u8>> = tokens
+            .iter()
+            .filter_map(|t| match t {
+                Token::Bytes(b) if !b.is_empty() => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(runs.len(), 1, "expected one plain run, got {tokens:?}");
+        assert_eq!(runs[0], &body, "paste body must pass through untouched");
+    }
+
+    /// After any hostile input the parser must still decode a fresh plain
+    /// keystroke normally — no wedged state.
+    fn resync_health_check(tokens: &[Token]) {
+        assert!(matches!(
+            tokens[0],
+            Token::Bytes(ref b) if b == b"x"
+        ));
+    }
+
+    #[test]
+    fn paste_pair_decodes_to_one_opaque_run() {
+        let body = hostile_paste_body();
+        let mut stream = PASTE_START.to_vec();
+        stream.extend_from_slice(&body);
+        stream.extend_from_slice(PASTE_END);
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(&stream);
+        assert_single_plain_run(&tokens, &body);
+        // Trailing input after the paste decodes normally.
+        let tokens = parser.feed(b"x");
+        resync_health_check(&tokens);
+    }
+
+    #[test]
+    fn paste_body_split_across_feeds_reassembles_untouched() {
+        let body = hostile_paste_body();
+        let mut stream = PASTE_START.to_vec();
+        stream.extend_from_slice(&body);
+        stream.extend_from_slice(PASTE_END);
+
+        // Burst every 3 bytes: the marker completes in the first burst, the
+        // terminator may split anywhere. Concatenated Bytes output must equal
+        // the body byte-for-byte (no loss, no mangling).
+        let mut parser = InputParser::default();
+        let mut reassembled = Vec::new();
+        for chunk in stream.chunks(3) {
+            for token in parser.feed(chunk) {
+                if let Token::Bytes(b) = token {
+                    reassembled.extend_from_slice(&b);
+                }
+            }
+        }
+        assert_eq!(reassembled, body, "byte loss or mangling across feeds");
+    }
+
+    /// (a) One byte per burst: the decode follows the lone-ESC design
+    /// exactly, and streams without any ESC match the whole-stream feed.
+    #[test]
+    fn byte_at_a_time_decode_follows_the_design() {
+        assert_byte_at_a_time_contract(b"hello \x03world");
+        assert_byte_at_a_time_contract(&[0x02]); // the prefix chord byte
+        assert_byte_at_a_time_contract(b"\x1b[1;5C");
+        let mut stream = PASTE_START.to_vec();
+        stream.extend_from_slice(&hostile_paste_body());
+        stream.extend_from_slice(PASTE_END);
+        assert_byte_at_a_time_contract(&stream);
+    }
+
+    /// (b) Split reads at every byte boundary of the paste marker. Every
+    /// split except a burst ending on the bare ESC completes the marker and
+    /// decodes the body opaquely; the bare-ESC split is the documented
+    /// lone-ESC divergence and its exact shape is pinned here.
+    #[test]
+    fn paste_marker_splits_at_every_byte_boundary() {
+        let body = b"payload".to_vec();
+        for k in 1..=PASTE_START.len() {
+            let mut parser = InputParser::default();
+            let first = parser.feed(&PASTE_START[..k]);
+            let mut rest = PASTE_START[k..].to_vec();
+            rest.extend_from_slice(&body);
+            rest.extend_from_slice(PASTE_END);
+            let second = parser.feed(&rest);
+            if k == 1 {
+                // Lone ESC: the Escape key fires, the rest of the marker is
+                // plain, and the stream still flows (terminator CSI dropped,
+                // body unbracketed but intact).
+                assert_eq!(
+                    first,
+                    vec![Token::Key(TermKeyEvent::functional(TermKey::Escape, 0))]
+                );
+                assert_eq!(bytes_of(&second), b"[200~payload");
+            } else if k == PASTE_START.len() {
+                // The complete opener as its own burst: the empty
+                // drop-shape token, paste mode armed.
+                assert_eq!(first, vec![Token::Bytes(Vec::new())], "split {k}");
+                assert_single_plain_run(&second, &body);
+            } else {
+                assert!(first.is_empty(), "split {k} held: {first:?}");
+                assert_single_plain_run(&second, &body);
+            }
+        }
+    }
+
+    /// (d) Bursts interleaving a paste, a CSI chord key, and plain runs in
+    /// one feed — the decoded token order matches the wire order.
+    #[test]
+    fn burst_interleaves_paste_chord_and_plain_runs() {
+        let mut stream = b"before ".to_vec();
+        stream.extend_from_slice(PASTE_START);
+        let body = hostile_paste_body();
+        stream.extend_from_slice(&body);
+        stream.extend_from_slice(PASTE_END);
+        stream.extend_from_slice(b"\x1b[1;5C");
+        stream.extend_from_slice(&[0x02]);
+        stream.extend_from_slice(b" after");
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(&stream);
+        // The marker contributes an empty Bytes token (the established drop
+        // shape), so: [Bytes("before "), Bytes(empty), Bytes(body),
+        // Key(Right, ctrl), Bytes(0x02 + " after")].
+        assert_eq!(tokens.len(), 5, "{tokens:?}");
+        assert!(matches!(tokens[0], Token::Bytes(ref b) if b == b"before "));
+        assert!(matches!(tokens[1], Token::Bytes(ref b) if b.is_empty()));
+        assert_single_plain_run(&tokens[1..3], &body);
+        assert!(
+            matches!(tokens[3], Token::Key(ref ev) if ev.key() == TermKey::Right && ev.modifiers == modifiers::CTRL)
+        );
+        assert!(
+            matches!(tokens[4], Token::Bytes(ref b) if b.len() == 7 && b[0] == 0x02 && &b[1..] == b" after")
+        );
+
+        // The same stream in three bursts decodes to the same tokens.
+        let mut parser = InputParser::default();
+        let mut bursted = Vec::new();
+        for chunk in [
+            &stream[..7],
+            &stream[7..stream.len() - 6],
+            &stream[stream.len() - 6..],
+        ] {
+            bursted.extend(parser.feed(chunk));
+        }
+        assert_eq!(merge_adjacent_bytes(bursted), merge_adjacent_bytes(tokens));
+    }
+
+    /// An unterminated paste stops holding the stream at the cap and the
+    /// parser keeps working (the OSC 11 give-up shape, sized for pastes).
+    #[test]
+    fn unterminated_paste_flushes_at_the_cap() {
+        let mut parser = InputParser::default();
+        // The opener alone: consumed, paste mode on, empty drop-shape token.
+        assert_eq!(parser.feed(PASTE_START), vec![Token::Bytes(Vec::new())]);
+        // Under the cap: held pending, nothing decoded.
+        let chunk = vec![b'x'; PASTE_HELD_CAP / 2];
+        assert!(parser.feed(&chunk).is_empty());
+        assert!(parser.feed(&chunk).is_empty());
+        // Crossing the cap flushes the whole held body and exits paste mode.
+        let tokens = parser.feed(&chunk);
+        assert_eq!(
+            bytes_of(&tokens).len(),
+            PASTE_HELD_CAP + PASTE_HELD_CAP / 2,
+            "the entire held body flushed"
+        );
+        // The parser stays healthy.
+        let tokens = parser.feed(b"x");
+        resync_health_check(&tokens);
     }
 }

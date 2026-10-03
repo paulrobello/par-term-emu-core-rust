@@ -1903,6 +1903,32 @@ mod tests {
         encoded_on(line, &Terminal::new(80, 24))
     }
 
+    /// Every fuzz corpus seed runs through the parser without panicking —
+    /// the same driver the `mux_parse_command` fuzz target uses, so the
+    /// corpus is regression-covered even where cargo-fuzz is not run. The
+    /// CI fuzz job picks the seeds up automatically.
+    #[test]
+    fn fuzz_corpus_seeds_parse_without_panicking() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/corpus/mux_parse_command");
+        let mut count = 0;
+        for entry in std::fs::read_dir(&dir).expect("corpus directory exists") {
+            let path = entry.expect("corpus entry").path();
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes);
+            let _ = parse_command(&text);
+            let _ = parse_line(&text);
+            count += 1;
+        }
+        assert!(
+            count >= 30,
+            "corpus seeds went missing: only {count} under {}",
+            dir.display()
+        );
+    }
+
     #[test]
     fn pane_targets_parse_as_names_and_ids() {
         assert_eq!(
