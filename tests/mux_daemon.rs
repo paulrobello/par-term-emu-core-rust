@@ -455,6 +455,106 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     );
 }
 
+/// remain-on-exit off (the daemon config default): a pane whose child exits
+/// is auto-REMOVED through the kill-pane contract — `%pane-exited` queues
+/// ahead of the geometry, the pane leaves `list-panes`, the window (and the
+/// session, emptied) cascade, and `respawn-pane` answers "no such pane"
+/// (the pane is gone, not held).
+#[test]
+fn the_auto_remove_default_deletes_a_dead_pane() {
+    let fixture = MuxFixture::new("autoremove");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let stream = connect_local_stream(fixture.socket()).expect("connect");
+    let mut writer = stream.try_clone().expect("clone for writing");
+    let mut reader = BufReader::new(stream);
+
+    command(&mut writer, &mut reader, "new-session -s auto");
+    // The deterministic death: `-k` replaces the shell with `exit 3`, which
+    // is gone before the next reap pass.
+    command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 3");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = command(&mut writer, &mut reader, "list-panes").join("");
+        if !listed.contains("%0") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the dead pane was never auto-removed: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The cascade: the window went with the pane, and the emptied session
+    // with it.
+    let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+    assert!(
+        !sessions.contains("auto"),
+        "the emptied session cascaded away: {sessions}"
+    );
+    // The pane is gone, not held: respawn answers no-such-pane.
+    let respawn = command(&mut writer, &mut reader, "respawn-pane -t %0").join("");
+    assert!(
+        respawn.contains("no such pane"),
+        "a removed pane is gone, not held: {respawn}"
+    );
+}
+
+/// remain-on-exit is the one LIVE daemon setting: a daemon started with the
+/// hold on honors it, a `reload-config` after the config flips to
+/// auto-remove applies the change at once (the `applied:` report line),
+/// and the NEXT death is auto-removed with no restart.
+#[test]
+fn reload_config_flips_remain_on_exit_live() {
+    let fixture = MuxFixture::new("relivereap");
+    let _daemon = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let stream = connect_local_stream(fixture.socket()).expect("connect");
+    let mut writer = stream.try_clone().expect("clone for writing");
+    let mut reader = BufReader::new(stream);
+
+    command(&mut writer, &mut reader, "new-session -s live");
+    command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 3");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = command(&mut writer, &mut reader, "pane-info -t %0").join("");
+        if info.contains(" exited=3") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the death was never recorded as held: {info}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Flip the config to auto-remove and reload: the report names the
+    // live apply.
+    std::fs::write(fixture.config_path(), "[daemon]\nremain-on-exit = false\n")
+        .expect("rewrite fixture config");
+    let report = command(&mut writer, &mut reader, "reload-config").join("");
+    assert!(
+        report.contains("applied: daemon.remain-on-exit"),
+        "the flip applies live: {report}"
+    );
+
+    // The next death is auto-removed with no restart.
+    command(&mut writer, &mut reader, "respawn-pane -t %0");
+    command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 4");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = command(&mut writer, &mut reader, "list-panes").join("");
+        if !listed.contains("%0") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the post-reload death was never auto-removed: {listed}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// SEC-126: `respawn-pane` flags stop at the first command word, so a
 /// `-k` or `-c` inside the command neither kills a live pane nor becomes
 /// the start directory.

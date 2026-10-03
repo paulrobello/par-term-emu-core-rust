@@ -99,6 +99,23 @@ pub struct ClientSection {
     /// The swap-with-next-pane chord (tmux's `}`).
     #[serde(default, rename = "swap-next", skip_serializing_if = "Option::is_none")]
     pub swap_next: Option<String>,
+    /// The next-workspace chord: the key matched after the prefix that
+    /// selects the next workspace (id order) and lands the view on it.
+    #[serde(
+        default,
+        rename = "workspace-next",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace_next: Option<String>,
+    /// The previous-workspace chord: the key matched after the prefix
+    /// that selects the previous workspace (id order) and lands the view
+    /// on it.
+    #[serde(
+        default,
+        rename = "workspace-prev",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace_prev: Option<String>,
     /// The help chord: the key matched after the prefix that opens the
     /// bindings panel (every chord shown at its effective binding).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,6 +162,16 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub expose_control_socket: Option<bool>,
+    /// Hold a pane whose child exited instead of removing it. `false`
+    /// (the default) auto-removes a dead pane through the kill-pane
+    /// contract at the reaper's next pass; `true` preserves the
+    /// held-dead behavior (`respawn-pane` can restart it in place).
+    #[serde(
+        default,
+        rename = "remain-on-exit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remain_on_exit: Option<bool>,
 }
 
 /// The fully resolved settings after flags > env > file > defaults.
@@ -166,6 +193,11 @@ pub struct EffectiveConfig {
     pub pane_endpoints: bool,
     /// The expose-control-socket default.
     pub expose_control_socket: bool,
+    /// Hold a pane whose child exited instead of removing it. The one
+    /// live daemon setting: `reload-config` applies a changed value at
+    /// once (it takes effect at the next observed death), everything
+    /// else is restart-required.
+    pub remain_on_exit: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -178,6 +210,7 @@ impl Default for EffectiveConfig {
             state_dir: String::new(),
             pane_endpoints: false,
             expose_control_socket: false,
+            remain_on_exit: false,
         }
     }
 }
@@ -241,6 +274,9 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
         .or(file.daemon.expose_control_socket)
     {
         eff.expose_control_socket = v;
+    }
+    if let Some(v) = file.daemon.remain_on_exit {
+        eff.remain_on_exit = v;
     }
     eff
 }
@@ -332,6 +368,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             resize_step: None,
             swap_prev: None,
             swap_next: None,
+            workspace_next: None,
+            workspace_prev: None,
             help: None,
             pane_borders: Some(false),
             show_label_in_border: Some(false),
@@ -341,6 +379,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             state_dir: Some(eff.state_dir.clone()),
             pane_endpoints: Some(eff.pane_endpoints),
             expose_control_socket: Some(eff.expose_control_socket),
+            remain_on_exit: Some(eff.remain_on_exit),
         },
     };
     let mut out = String::from(
@@ -449,6 +488,14 @@ pub struct Management {
     /// Swap the focused pane with the next pane in layout order —
     /// `swap-pane -s <focused> -t <next>`.
     pub swap_next: u8,
+    /// Select the next workspace in id order — `select-workspace -t +N`
+    /// — and land the view on the workspace's session. Prefix `W` by
+    /// default (prefix `w` is reserved for the workspace picker).
+    pub workspace_next: u8,
+    /// Select the previous workspace in id order —
+    /// `select-workspace -t +N` — and land the view on the workspace's
+    /// session. Prefix `C-w` by default.
+    pub workspace_prev: u8,
     /// Open the bindings help panel — every chord at its effective
     /// binding, from the live config.
     pub help: u8,
@@ -464,6 +511,8 @@ impl Default for Management {
             resize: b'R',
             swap_prev: b'{',
             swap_next: b'}',
+            workspace_next: b'W',
+            workspace_prev: 0x17, // C-w
             help: b'?',
         }
     }
@@ -539,6 +588,14 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
             Some(chord) => management_key(chord, "swap-next")?,
             None => current.management.swap_next,
         },
+        workspace_next: match file.client.workspace_next.as_deref() {
+            Some(chord) => management_key(chord, "workspace-next")?,
+            None => current.management.workspace_next,
+        },
+        workspace_prev: match file.client.workspace_prev.as_deref() {
+            Some(chord) => management_key(chord, "workspace-prev")?,
+            None => current.management.workspace_prev,
+        },
         help: match file.client.help.as_deref() {
             Some(chord) => management_key(chord, "help")?,
             None => current.management.help,
@@ -568,16 +625,20 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     })
 }
 
-/// The daemon-side `reload-config` report, PURE over the re-read file and
-/// the applied copy: one `unchanged:`/`restart-required:` line per
+/// The daemon-side `reload-config` report, over the re-read file and the
+/// applied copy: one `unchanged:`/`restart-required:`/`applied:` line per
 /// `[daemon]` setting. The file speaks only for settings it states — a
 /// setting absent from the file is `unchanged`, which is what keeps a
 /// daemon started with one-shot `--socket`/`--state-dir` flags quiet (a
 /// flag is an override the file cannot express, so it never reads back
-/// as a change). In v1 every daemon setting is startup-resolved (the
-/// socket and the persist path are fixed at bind), so nothing applies
-/// live and every stated difference is restart-required.
-pub fn reload_report(applied: &EffectiveConfig, file: Option<&ConfigFile>) -> String {
+/// as a change).
+///
+/// `daemon.remain-on-exit` is the one LIVE setting: a stated difference is
+/// applied to `applied` (the daemon's next observed death honors it) and
+/// reported `applied:`; every other stated difference is
+/// `restart-required:` — the socket and the persist path are fixed at
+/// bind, so nothing else applies live.
+pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -> String {
     let Some(file) = file else {
         // Absent file: nothing changed.
         return [
@@ -585,6 +646,7 @@ pub fn reload_report(applied: &EffectiveConfig, file: Option<&ConfigFile>) -> St
             "unchanged: daemon.state-dir",
             "unchanged: daemon.pane-endpoints",
             "unchanged: daemon.expose-control-socket",
+            "unchanged: daemon.remain-on-exit",
         ]
         .join("\n");
     };
@@ -623,7 +685,24 @@ pub fn reload_report(applied: &EffectiveConfig, file: Option<&ConfigFile>) -> St
             _ => format!("unchanged: {name}"),
         });
     }
+    lines.push(match file.daemon.remain_on_exit {
+        Some(v) if v != applied.remain_on_exit => {
+            applied.remain_on_exit = v;
+            "applied: daemon.remain-on-exit".to_string()
+        }
+        _ => "unchanged: daemon.remain-on-exit".to_string(),
+    });
     lines.join("\n")
+}
+
+/// The daemon's resolved `remain-on-exit` from the canonical config file
+/// (file tier only — the setting has no flag or env tier). `false` when
+/// the file is absent, unreadable, or silent: the auto-remove default.
+/// The restore path reads this — it runs before the server exists to
+/// publish an applied copy.
+#[must_use]
+pub fn daemon_remain_on_exit() -> bool {
+    resolve(&load_canonical(), &Overrides::default()).remain_on_exit
 }
 
 /// Parse the tmux prefix spelling (`C-b`, `C-a`, `C-Space`) or a literal
@@ -666,6 +745,7 @@ socket = "/tmp/par-mux-test.sock"
 state-dir = "/tmp/par-mux-state"
 pane-endpoints = true
 expose-control-socket = true
+remain-on-exit = true
 "#,
         )
         .expect("parse");
@@ -678,6 +758,7 @@ expose-control-socket = true
         );
         assert_eq!(file.daemon.pane_endpoints, Some(true));
         assert_eq!(file.daemon.expose_control_socket, Some(true));
+        assert_eq!(file.daemon.remain_on_exit, Some(true));
     }
 
     /// Unknown keys and missing sections are tolerated — the file is
@@ -777,9 +858,46 @@ expose-control-socket = true
             state_dir: "/tmp/rt-state".into(),
             pane_endpoints: true,
             expose_control_socket: true,
+            remain_on_exit: true,
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);
+    }
+
+    /// remain-on-exit is the one LIVE daemon setting: a stated difference is
+    /// applied to the applied copy and reported `applied:`; the same value
+    /// or an absent key stays `unchanged:`.
+    #[test]
+    fn reload_applies_remain_on_exit_live() {
+        let mut applied = EffectiveConfig::default();
+        let file: ConfigFile = toml::from_str("[daemon]\nremain-on-exit = true").unwrap();
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("applied: daemon.remain-on-exit"),
+            "a stated difference applies live: {report}"
+        );
+        assert!(applied.remain_on_exit, "the applied copy moved");
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("unchanged: daemon.remain-on-exit"),
+            "the same value is unchanged: {report}"
+        );
+        let file: ConfigFile = toml::from_str("[daemon]\nremain-on-exit = false").unwrap();
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("applied: daemon.remain-on-exit"),
+            "flipping back applies too: {report}"
+        );
+        assert!(!applied.remain_on_exit, "the applied copy moved back");
+    }
+
+    /// The product default: remain-on-exit is OFF (auto-remove) — both the
+    /// built-in default and a file silent on the key.
+    #[test]
+    fn remain_on_exit_defaults_to_auto_remove() {
+        assert!(!EffectiveConfig::default().remain_on_exit);
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert!(!eff.remain_on_exit);
     }
 
     /// The default rendering carries every key a user can start from.
@@ -842,6 +960,8 @@ expose-control-socket = true
                 resize: b'R',
                 swap_prev: b'{',
                 swap_next: b'}',
+                workspace_next: b'W',
+                workspace_prev: 0x17,
                 help: b'?',
             }
         );
@@ -862,6 +982,18 @@ expose-control-socket = true
             .management;
         assert_eq!(m.split_right, b'%', "unstated keeps the current/default");
         assert_eq!(m.new_window, b'n');
+        // The workspace chords parse through the same grammar; unstated
+        // keeps the defaults (W / C-w).
+        let file: ConfigFile =
+            toml::from_str("[client]\nworkspace-next = \"C-n\"\nworkspace-prev = \"C-p\"\n")
+                .unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.workspace_next, 0x0e, "C-n overrides the W default");
+        assert_eq!(m.workspace_prev, 0x10, "C-p overrides the C-w default");
+        let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
+        let m = reload_client_chords(&empty, &defaults).unwrap().management;
+        assert_eq!(m.workspace_next, b'W');
+        assert_eq!(m.workspace_prev, 0x17, "C-w");
         // Malformed spellings error, naming the key.
         for (key, spec) in [
             ("split-right", "C-"),

@@ -1489,7 +1489,7 @@ fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome 
 /// Snapshot the workspace roster for [`workspace_roster_changed`]: the
 /// sorted id set plus the active pointer, enough to tell "the workspace
 /// set (or its selection) changed" from "it did not".
-fn workspace_roster_fingerprint(
+pub(crate) fn workspace_roster_fingerprint(
     tree: &Arc<Mutex<MuxTree>>,
 ) -> (Vec<WorkspaceId>, Option<WorkspaceId>) {
     let guard = tree.lock();
@@ -1501,7 +1501,7 @@ fn workspace_roster_fingerprint(
 /// True when the workspace roster's fingerprint changed across a kill
 /// cascade — a session's death can empty and remove its workspace, and
 /// that removal is the workspace-roster cue clients re-query on.
-fn workspace_roster_changed(
+pub(crate) fn workspace_roster_changed(
     tree: &Arc<Mutex<MuxTree>>,
     before: &(Vec<WorkspaceId>, Option<WorkspaceId>),
 ) -> bool {
@@ -1676,7 +1676,7 @@ fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
         Ok(None) => None,
         Err(err) => return Outcome::err(ctx, &format!("reload-config: {err}")),
     };
-    let report = reload_report(&applied.lock(), file.as_ref());
+    let report = reload_report(&mut applied.lock(), file.as_ref());
     Outcome::ok(ctx, &report)
 }
 
@@ -2101,7 +2101,7 @@ mod tests {
         let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
         let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
         assert_eq!(
-            unchanged, 4,
+            unchanged, 5,
             "an absent file leaves every setting unchanged: {reply}"
         );
         // The pure report over a written file: the moved/flipped settings
@@ -2109,7 +2109,8 @@ mod tests {
         let file: crate::mux::config::ConfigFile =
             toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\n")
                 .unwrap();
-        let report = crate::mux::config::reload_report(&applied.lock(), Some(&file));
+        let mut applied_copy = applied.lock().clone();
+        let report = crate::mux::config::reload_report(&mut applied_copy, Some(&file));
         assert!(
             report.contains("restart-required: daemon.state-dir"),
             "the moved state-dir is reported: {report}"
@@ -2152,5 +2153,28 @@ mod tests {
     fn reload_config_rejects_positionals() {
         assert!(parse_command("reload-config now").is_err());
         assert!(parse_command("reload-config").is_ok());
+    }
+
+    /// remain-on-exit is the one LIVE daemon setting: a reload-config
+    /// dispatch whose file states a different value applies it to the
+    /// server's applied copy on the spot — the next observed death honors
+    /// the new value with no restart.
+    #[test]
+    fn reload_config_applies_remain_on_exit_to_the_applied_copy() {
+        let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig::default()));
+        // No canonical config file is readable in the harness (QA-196
+        // forbids env mutation to pin one), so the live-apply is driven
+        // through the pure report the dispatch calls.
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[daemon]\nremain-on-exit = true").unwrap();
+        let report = crate::mux::config::reload_report(&mut applied.lock(), Some(&file));
+        assert!(
+            report.contains("applied: daemon.remain-on-exit"),
+            "the live setting applies: {report}"
+        );
+        assert!(
+            applied.lock().remain_on_exit,
+            "the applied copy now holds the dead panes"
+        );
     }
 }

@@ -286,6 +286,21 @@ pub(crate) fn parse_session_line(line: &str) -> Option<(String, String)> {
     Some((format!("${id}"), name.to_string()))
 }
 
+/// One `list-workspaces` reply line as `(id, name, active)`. The wire
+/// shape is `+N: name`, with the daemon's active workspace's line
+/// ending in ` active`.
+pub(crate) fn parse_workspace_line(line: &str) -> Option<(String, String, bool)> {
+    let (id, rest) = line.split_once(": ")?;
+    if id.is_empty() || !id.starts_with('+') || !id[1..].bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (name, active) = match rest.strip_suffix(" active") {
+        Some(name) => (name, true),
+        None => (rest, false),
+    };
+    Some((id.to_string(), name.to_string(), active))
+}
+
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane
 /// title name) goes straight to the daemon's matcher via `pane-info`; a
 /// window (`@N`/name) or session (`$N`/name) target narrows through the
@@ -396,6 +411,10 @@ struct Session {
     session_id: Option<String>,
     /// The owning session's name (status line).
     session_name: String,
+    /// Every workspace as `(id, name)`, id order, plus the daemon's
+    /// active one (status line's workspaces segment).
+    workspaces: Vec<(String, String)>,
+    active_workspace: Option<String>,
     /// The pane's effective title (status line).
     pane_title: String,
     /// Agents rostered on the target pane (status line).
@@ -462,6 +481,8 @@ impl Session {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -557,6 +578,26 @@ impl Session {
                         }
                     }
                 }
+            }
+        }
+        // The workspace roster for the status line's workspaces segment.
+        // Ids sort as `+N` strings here; the daemon already lists in id
+        // order, so the reply order IS id order.
+        if let Ok(reply) = self.conn.send_checked("list-workspaces") {
+            if reply.ok {
+                let rows: Vec<(String, String, bool)> = reply
+                    .body
+                    .iter()
+                    .filter_map(|l| parse_workspace_line(l))
+                    .collect();
+                self.workspaces = rows
+                    .iter()
+                    .map(|(id, name, _)| (id.clone(), name.clone()))
+                    .collect();
+                self.active_workspace = rows
+                    .iter()
+                    .find(|(_, _, active)| *active)
+                    .map(|(id, _, _)| id.clone());
             }
         }
         if let Some(title) = self
@@ -726,6 +767,7 @@ impl Session {
             | TmuxNotification::WindowRenamed { .. }
             | TmuxNotification::SessionRenamed { .. }
             | TmuxNotification::SessionsChanged
+            | TmuxNotification::WorkspacesChanged
             | TmuxNotification::AgentStateChanged { .. }
             | TmuxNotification::AgentReleased { .. } => {
                 // Geometry/roster/name changes can move the status facts;
@@ -805,6 +847,8 @@ impl Session {
                     Some(ManagementKey::NewWindow) => self.new_window_in_session(),
                     Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
+                    Some(ManagementKey::WorkspaceNext) => self.switch_workspace(1),
+                    Some(ManagementKey::WorkspacePrev) => self.switch_workspace(-1),
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
                         // the focused pane's edges until Enter/Escape/q.
@@ -1080,6 +1124,85 @@ impl Session {
         self.attach_window_active_pane(window);
     }
 
+    /// prefix W / C-w: the next/previous workspace in id order —
+    /// `select-workspace -t +N`, then land the view on the workspace's
+    /// session (its active window's active pane) through the same
+    /// select-then-refresh contract every switch follows. A workspace
+    /// with no sessions cannot be landed on: the selection still moves
+    /// and the status refresh carries the new active marker.
+    fn switch_workspace(&mut self, direction: i32) {
+        let Ok(reply) = self.conn.send_checked("list-workspaces") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let rows: Vec<(String, String, bool)> = reply
+            .body
+            .iter()
+            .filter_map(|l| parse_workspace_line(l))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let Some(current) = rows.iter().position(|(_, _, active)| *active) else {
+            return;
+        };
+        let next = (current as i32 + direction).rem_euclid(rows.len() as i32) as usize;
+        let (ws_id, _, _) = &rows[next];
+        let _ = self
+            .conn
+            .send_checked(&format!("select-workspace -t {ws_id}"));
+        self.land_in_workspace(ws_id);
+    }
+
+    /// After a workspace select, land the pump on the workspace's
+    /// session: its first listed session's active window's active pane.
+    /// A workspace with no sessions cannot be landed on — the status
+    /// refresh carries the moved active marker instead.
+    fn land_in_workspace(&mut self, ws_id: &str) {
+        let Ok(reply) = self.conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let Some((session, _)) = reply
+            .body
+            .iter()
+            .filter_map(|l| parse_session_line(l))
+            .next()
+        else {
+            self.refresh_status();
+            self.draw_status();
+            return;
+        };
+        let Ok(windows) = self
+            .conn
+            .send_checked(&format!("list-windows -t {session}"))
+        else {
+            return;
+        };
+        if !windows.ok {
+            return;
+        }
+        let window = windows
+            .body
+            .iter()
+            .find(|l| l.split_whitespace().nth(1) == Some("*"))
+            .or_else(|| windows.body.first())
+            .and_then(|l| l.split_whitespace().next());
+        let Some(window) = window else {
+            return;
+        };
+        let _ = self
+            .conn
+            .send_checked(&format!("select-window -t {window}"));
+        self.window = window.to_string();
+        self.session_id = Some(session);
+        self.attach_window_active_pane(window);
+    }
+
     /// Prefix r: `respawn-pane` — but ONLY when the pane is held dead
     /// (the card's "respawn-pane when held dead"); a live pane restart is
     /// not a Phase A affordance (the daemon itself refuses without -k, and
@@ -1119,6 +1242,8 @@ impl Session {
             k if k == m.new_window => Some(ManagementKey::NewWindow),
             k if k == m.swap_prev => Some(ManagementKey::SwapPrev),
             k if k == m.swap_next => Some(ManagementKey::SwapNext),
+            k if k == m.workspace_next => Some(ManagementKey::WorkspaceNext),
+            k if k == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
             _ => None,
         }
     }
@@ -1313,7 +1438,27 @@ impl Session {
         } else {
             &self.pane_title
         };
-        let mut line = format!(" {session} | {title}");
+        // The workspaces segment leads the line: every workspace's name
+        // in id order, the daemon's active one bracketed (passthrough has
+        // no styling surface inside the inverse-video row).
+        let mut line = String::new();
+        if !self.workspaces.is_empty() {
+            line.push(' ');
+            for (index, (id, name)) in self.workspaces.iter().enumerate() {
+                if index > 0 {
+                    line.push(' ');
+                }
+                if Some(id) == self.active_workspace.as_ref() {
+                    line.push('[');
+                    line.push_str(name);
+                    line.push(']');
+                } else {
+                    line.push_str(name);
+                }
+            }
+            line.push_str(" |");
+        }
+        line.push_str(&format!(" {session} | {title}"));
         if self.agents > 0 {
             line.push_str(&format!(" | {} agent(s)", self.agents));
         }
@@ -1470,6 +1615,12 @@ pub(crate) enum ManagementKey {
     /// Swap the focused pane with the next pane in layout order
     /// (`swap-pane`).
     SwapNext,
+    /// Select the next workspace in id order (`select-workspace -t +N`)
+    /// and land the view on the workspace's session.
+    WorkspaceNext,
+    /// Select the previous workspace in id order (`select-workspace
+    /// -t +N`) and land the view on the workspace's session.
+    WorkspacePrev,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1574,6 +1725,20 @@ pub(crate) fn help_rows(
             ),
             (format!("{p} n / p"), "next / previous window".to_string()),
             (format!("{p} ( / )"), "previous / next session".to_string()),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "workspaces",
+        vec![
+            (
+                format!("{p} {}", spell_key(m.workspace_next)),
+                "next workspace".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.workspace_prev)),
+                "previous workspace".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -2201,6 +2366,27 @@ mod tests {
         assert_eq!(parse_session_line(""), None);
     }
 
+    /// One `list-workspaces` line parses into id, name, and the active
+    /// marker; a line without the `+N:` shape does not parse.
+    #[test]
+    fn parse_workspace_line_splits_the_id_name_and_active_marker() {
+        assert_eq!(
+            parse_workspace_line("+0: main active"),
+            Some(("+0".to_string(), "main".to_string(), true))
+        );
+        assert_eq!(
+            parse_workspace_line("+1: lab"),
+            Some(("+1".to_string(), "lab".to_string(), false))
+        );
+        assert_eq!(
+            parse_workspace_line("+2: spaced name"),
+            Some(("+2".to_string(), "spaced name".to_string(), false))
+        );
+        assert_eq!(parse_workspace_line("0: x"), None, "no + sigil, no parse");
+        assert_eq!(parse_workspace_line("+2"), None, "no colon-space, no parse");
+        assert_eq!(parse_workspace_line(""), None);
+    }
+
     /// `-t` with a pane id passes through; a window target resolves to the
     /// window's marked pane via the targeted list-panes query.
     #[test]
@@ -2275,6 +2461,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -2312,6 +2500,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: Some(Some(0)),
@@ -2352,6 +2542,11 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: "work".to_string(),
+            workspaces: vec![
+                ("+0".to_string(), "main".to_string()),
+                ("+1".to_string(), "lab".to_string()),
+            ],
+            active_workspace: Some("+0".to_string()),
             pane_title: "bash".to_string(),
             agents: 0,
             exited: Some(Some(7)),
@@ -2403,6 +2598,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -2480,6 +2677,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: Some(Some(0)),
@@ -2526,6 +2725,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: Some(Some(0)),
@@ -2637,6 +2838,8 @@ mod tests {
             window: "@0".to_string(),
             session_id: Some("$0".to_string()),
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -2815,6 +3018,8 @@ mod tests {
             window: "@0".to_string(),
             session_id: Some("$0".to_string()),
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -3205,6 +3410,8 @@ mod tests {
             window: String::new(),
             session_id: None,
             session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -3286,6 +3493,8 @@ mod tests {
                     resize: b'R',
                     swap_prev: b'{',
                     swap_next: b'}',
+                    workspace_next: b'N',
+                    workspace_prev: b'P',
                     help: b'?',
                 },
                 resize_step: 1,
@@ -3306,6 +3515,8 @@ mod tests {
                     resize: b'R',
                     swap_prev: b'{',
                     swap_next: b'}',
+                    workspace_next: b'N',
+                    workspace_prev: b'P',
                     help: b'?',
                 },
                 resize_step: 1,

@@ -2041,3 +2041,219 @@ fn render_mode_tab_click_switches_the_active_window() {
     );
     host.killer.kill().ok();
 }
+
+/// The first pane of `session` through its window — `list-panes -t`
+/// takes a window or pane target, not a session id.
+#[cfg(unix)]
+fn session_first_pane(
+    client: &mut par_term_emu_core_rust::mux::MuxClient,
+    session: &str,
+) -> String {
+    let window = client
+        .send(&format!("list-windows -t {session}"))
+        .expect("list-windows")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next())
+        .find(|t| t.starts_with('@'))
+        .expect("a window")
+        .to_string();
+    client
+        .send(&format!("list-panes -t {window}"))
+        .expect("list-panes")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next())
+        .find(|t| t.starts_with('%'))
+        .expect("a pane")
+        .to_string()
+}
+
+/// prefix W (render mode): the chord sends `select-workspace` and lands
+/// the view on the target workspace's session — the daemon's active-
+/// workspace marker moves, and the target pane's seeded content re-seeds
+/// into the frame (the select+resync contract's redraw half).
+#[cfg(unix)]
+#[test]
+fn render_mode_workspace_chord_selects_and_lands() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wschord");
+    // A second workspace with its own session; `new-workspace` makes it
+    // the daemon's active one. Back to `main` first, so prefix W has one
+    // deterministic next: lab.
+    client.send("new-workspace -n lab").expect("new-workspace");
+    client
+        .send("new-session -s work -t lab")
+        .expect("session in lab");
+    client
+        .send("select-workspace -t main")
+        .expect("select main");
+    std::thread::sleep(Duration::from_millis(300));
+
+    // The rosters: `list-panes -t` takes a window or pane target, not a
+    // session, so each pane is reached through its window.
+    let pane_a = session_first_pane(&mut client, "$0");
+    let pane_work = session_first_pane(&mut client, "$1");
+    // The landing evidence, seeded before the chord: the lab pane's
+    // screen carries the marker, and the post-chord re-seed must bring
+    // it into the frame.
+    client
+        .send(&format!("send-keys -t {pane_work} -l 'echo WS-LAB-MARKER'"))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane_work} Enter"))
+        .expect("Enter");
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"main", Duration::from_secs(10));
+    // Drain the settle paint so the post-chord reads are attributable.
+    while host.output_rx.try_recv().is_ok() {}
+
+    // prefix W: next workspace (main -> lab).
+    host.to_child.write_all(&[0x02, b'W']).expect("prefix W");
+    host.to_child.flush().ok();
+
+    // The authority: the daemon's active-workspace marker moved to lab.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut selected = false;
+    while std::time::Instant::now() < deadline {
+        let workspaces = client.send("list-workspaces").expect("list-workspaces");
+        if workspaces
+            .iter()
+            .any(|l| l.starts_with("+1:") && l.contains(" active"))
+        {
+            selected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        selected,
+        "prefix W must select the next workspace daemon-side. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // The resync half: the chord-attributable output re-seeds the target
+    // pane, whose seeded marker must appear in the reconstructed frame.
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    let mut all: Vec<u8> = Vec::new();
+    while std::time::Instant::now() < end {
+        match host.output_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(bytes) => all.extend_from_slice(&bytes),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let (final_grid, _ever) = reconstructed_screen(&all, 24, 80);
+    let shown = final_grid.join("\n");
+    assert!(
+        shown.contains("WS-LAB-MARKER"),
+        "the chord must land the view on the new workspace's pane (its \
+         seeded marker re-seeds in). screen:\n{shown}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// %workspaces-changed (render mode): a workspace add broadcast marks
+/// the status stale, and the throttled re-query pulls the new
+/// workspace's name onto the workspaces segment — the same discipline
+/// %agent-state-changed follows for the roster chips.
+#[cfg(unix)]
+#[test]
+fn render_mode_workspaces_changed_refreshes_the_status_segment() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wsstatus");
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"$0:att", Duration::from_secs(10));
+    // Drain the settle paint so the post-broadcast reads are
+    // broadcast-attributable.
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Workspace churn: a new workspace rides %workspaces-changed.
+    client.send("new-workspace -n beta").expect("new-workspace");
+    std::thread::sleep(Duration::from_secs(2));
+    let mut all = Vec::new();
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        all.extend_from_slice(&bytes);
+    }
+    let (_final, ever) = reconstructed_screen(&all, 24, 80);
+    let ever_row: String = ever[23].iter().map(|r| format!("{r:?}\n")).collect();
+    assert!(
+        ever[23].iter().any(|r| r.contains("beta")),
+        "the workspaces segment must show the new workspace after \
+         %workspaces-changed. snapshots:\n{ever_row}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// The passthrough status line gains the workspaces segment: workspace
+/// names in id order, the daemon's active one bracketed.
+#[cfg(unix)]
+#[test]
+fn passthrough_status_line_carries_the_workspaces_segment() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wspass");
+    client.send("new-workspace -n lab").expect("new-workspace");
+    client
+        .send("new-session -s work -t lab")
+        .expect("session in lab");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach(&fixture, &[]);
+    let got = wait_for_output(&host, b"[lab]", Duration::from_secs(15));
+    assert!(
+        got.windows(b"[lab]".len()).any(|w| w == b"[lab]"),
+        "the passthrough status line must carry the workspaces segment \
+         with the active workspace bracketed. bytes: {:?}\nstderr: {}",
+        String::from_utf8_lossy(&got),
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// prefix W (passthrough): the chord sends `select-workspace` and lands
+/// the pump on the target workspace's pane — typing after the chord
+/// reaches the new workspace's pane only.
+#[cfg(unix)]
+#[test]
+fn passthrough_workspace_chord_selects_and_lands() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wspasschord");
+    client.send("new-workspace -n lab").expect("new-workspace");
+    client
+        .send("new-session -s work -t lab")
+        .expect("session in lab");
+    client
+        .send("select-workspace -t main")
+        .expect("select main");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach(&fixture, &[]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+
+    // Prefix W: next workspace (main -> lab). Typing AFTER the chord
+    // reaches the lab session's pane only — the landing evidence.
+    host.to_child.write_all(&[0x02, b'W']).expect("prefix W");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(500));
+    host.to_child
+        .write_all(b"echo WS-LANDED-MARKER\n")
+        .expect("type into the landed pane");
+    host.to_child.flush().ok();
+
+    let got = wait_for_output(&host, b"WS-LANDED-MARKER", Duration::from_secs(15));
+    assert!(
+        got.windows(b"WS-LANDED-MARKER".len())
+            .any(|w| w == b"WS-LANDED-MARKER"),
+        "prefix W must land the pump on the new workspace's pane. \
+         bytes: {:?}\nstderr: {}",
+        String::from_utf8_lossy(&got),
+        stderr.lock().unwrap()
+    );
+    let workspaces = client.send("list-workspaces").expect("list-workspaces");
+    assert!(
+        workspaces
+            .iter()
+            .any(|l| l.starts_with("+1:") && l.contains(" active")),
+        "the chord must move the daemon's active-workspace marker: {workspaces:?}"
+    );
+    host.killer.kill().ok();
+}

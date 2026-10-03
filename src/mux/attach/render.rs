@@ -1826,6 +1826,7 @@ impl WindowSession {
             | TmuxNotification::AgentReleased { .. }
             | TmuxNotification::AgentTelemetryChanged { .. }
             | TmuxNotification::SessionsChanged
+            | TmuxNotification::WorkspacesChanged
             | TmuxNotification::WindowRenamed { .. }
             | TmuxNotification::SessionRenamed { .. }
             | TmuxNotification::WindowPaneChanged { .. }
@@ -1975,6 +1976,8 @@ impl WindowSession {
                     b if b == self.management.new_window => Some(ManagementKey::NewWindow),
                     b if b == self.management.swap_prev => Some(ManagementKey::SwapPrev),
                     b if b == self.management.swap_next => Some(ManagementKey::SwapNext),
+                    b if b == self.management.workspace_next => Some(ManagementKey::WorkspaceNext),
+                    b if b == self.management.workspace_prev => Some(ManagementKey::WorkspacePrev),
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -2329,7 +2332,85 @@ impl WindowSession {
                 let _ = conn.send_checked(&format!("select-window -t {window}"));
                 self.reseed_window(conn, &window);
             }
+            super::ManagementKey::WorkspaceNext | super::ManagementKey::WorkspacePrev => {
+                let direction = if matches!(key, super::ManagementKey::WorkspaceNext) {
+                    1
+                } else {
+                    -1
+                };
+                self.switch_workspace(conn, direction);
+            }
         }
+    }
+
+    /// prefix W / C-w: the next/previous workspace in id order —
+    /// `select-workspace -t +N`, then land the view on the workspace's
+    /// session (its active window, re-seeded from fresh replays) through
+    /// the same select-then-refresh contract every switch follows. A
+    /// workspace with no sessions cannot be landed on: the selection
+    /// still moves and the status refresh carries the new active marker.
+    fn switch_workspace(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        direction: i32,
+    ) {
+        let Ok(reply) = conn.send_checked("list-workspaces") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let rows: Vec<(String, String, bool)> = reply
+            .body
+            .iter()
+            .filter_map(|l| super::parse_workspace_line(l))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let Some(current) = rows.iter().position(|(_, _, active)| *active) else {
+            return;
+        };
+        let next = (current as i32 + direction).rem_euclid(rows.len() as i32) as usize;
+        let (ws_id, _, _) = &rows[next];
+        let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
+        // Land on the workspace's session: its first listed session's
+        // active window, re-seeded (the select+resync contract).
+        let Ok(sessions) = conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
+            return;
+        };
+        if !sessions.ok {
+            return;
+        }
+        let Some((session, _)) = sessions
+            .body
+            .iter()
+            .filter_map(|l| super::parse_session_line(l))
+            .next()
+        else {
+            // Empty workspace: nothing to land on. The %workspaces-changed
+            // the select queued marks the status stale, so the workspaces
+            // segment's active marker moves on the next frame.
+            self.status_dirty = true;
+            return;
+        };
+        let Ok(windows) = conn.send_checked(&format!("list-windows -t {session}")) else {
+            return;
+        };
+        if !windows.ok {
+            return;
+        }
+        let window = windows
+            .body
+            .iter()
+            .find(|l| l.split_whitespace().nth(1) == Some("*"))
+            .or_else(|| windows.body.first())
+            .and_then(|l| l.split_whitespace().next());
+        let Some(window) = window else {
+            return;
+        };
+        let _ = conn.send_checked(&format!("select-window -t {window}"));
+        self.reseed_window(conn, window);
     }
 
     /// The reload chord in render mode: the same client-side rebind the

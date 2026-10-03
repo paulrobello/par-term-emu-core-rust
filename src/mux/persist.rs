@@ -562,11 +562,36 @@ impl MuxTree {
     /// processless pane instead, ARC-114), then restore its terminal from the
     /// snapshot, so process startup bytes never overwrite restored content.
     ///
+    /// Held-dead entries are honored against the daemon's CURRENT
+    /// `remain-on-exit` setting (`crate::mux::config::daemon_remain_on_exit`):
+    /// a daemon with auto-remove on drops them, one with the hold on
+    /// restores them held-dead — `respawn-pane` available. The
+    /// [`Self::from_persist_state_with_policy`] form pins the decision for
+    /// tests.
+    ///
     /// The id allocator resumes from the persisted counters, so restored
     /// panes keep their `%N` identities and new panes do not collide.
     pub fn from_persist_state(
         state: &PersistState,
         factory: Box<dyn PaneFactory>,
+    ) -> Result<MuxTree, PersistError> {
+        Self::from_persist_state_with_policy(
+            state,
+            factory,
+            crate::mux::config::daemon_remain_on_exit(),
+        )
+    }
+
+    /// [`Self::from_persist_state`] with the held-dead policy pinned: with
+    /// `remain_on_exit` false (the product default) every persisted dead
+    /// entry is dropped — through the kill-pane cascade, so a window whose
+    /// last pane was dead closes and an emptied session (and workspace) go
+    /// with it; with it true the entry is restored held-dead exactly as
+    /// ARC-114 defined.
+    pub fn from_persist_state_with_policy(
+        state: &PersistState,
+        factory: Box<dyn PaneFactory>,
+        remain_on_exit: bool,
     ) -> Result<MuxTree, PersistError> {
         if state.format_version != FORMAT_VERSION {
             return Err(PersistError::UnsupportedVersion {
@@ -837,6 +862,25 @@ impl MuxTree {
         // lands in the same state a running server would be in.
         for window_id in tree.windows.keys().copied().collect::<Vec<_>>() {
             tree.sync_pane_sizes(window_id);
+        }
+        // Auto-remove (remain-on-exit = false): a persisted dead entry is
+        // dropped, honoring the CURRENT setting at restore time. The
+        // kill-pane cascade does the pruning — window, session, and
+        // workspace go with a pane that was a window's last — so the
+        // restored tree is exactly what a live daemon with the setting off
+        // would have held. No PTY concern: a dead entry is processless.
+        if !remain_on_exit {
+            let dead_ids: Vec<PaneId> = state
+                .sessions
+                .iter()
+                .flat_map(|s| s.windows.iter())
+                .flat_map(|w| w.panes.iter())
+                .filter(|pane| pane.dead)
+                .map(|pane| PaneId(pane.id))
+                .collect();
+            for pane_id in dead_ids {
+                let _ = tree.kill_pane(pane_id);
+            }
         }
         Ok(tree)
     }
@@ -1820,7 +1864,9 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let state: PersistState = serde_json::from_str(&json).unwrap();
         let factory = RecordingFactory::default();
-        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let restored =
+            MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), true)
+                .unwrap();
 
         assert!(
             factory.command_for(pane_id).is_none() && factory.sizes.lock().unwrap().is_empty(),
@@ -1860,6 +1906,73 @@ mod tests {
         assert!(text.contains("ALT-LINE"), "the frozen content is real");
     }
 
+    /// remain-on-exit off (the default): a persisted dead entry is DROPPED
+    /// at restore, honoring the current setting — and the kill-pane cascade
+    /// takes its window, session, and workspace with it when it was the
+    /// last pane. A live pane in the same save is untouched.
+    #[test]
+    fn auto_remove_restore_drops_dead_entries() {
+        let (mut tree, dead_id) = held_dead_tree(Some(3));
+        let live_id = tree
+            .split_pane(dead_id, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let state = tree.to_persist_state();
+
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            false,
+        )
+        .unwrap();
+        assert!(restored.pane(dead_id).is_none(), "the dead entry is gone");
+        assert!(
+            restored.pane(live_id).is_some(),
+            "the live pane survives the prune"
+        );
+        assert!(
+            !restored.sessions.is_empty(),
+            "the window still has a live pane, so the session stays"
+        );
+        tree_consistency(&restored);
+    }
+
+    /// remain-on-exit off, dead-only save: the whole window, session, and
+    /// workspace cascade — the restored tree is empty, exactly what a live
+    /// daemon with the setting off would have been left holding.
+    #[test]
+    fn auto_remove_restore_of_a_dead_only_save_empties_the_tree() {
+        let (tree, _pane_id) = held_dead_tree(Some(3));
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            false,
+        )
+        .unwrap();
+        assert!(
+            restored.panes.is_empty() && restored.sessions.is_empty(),
+            "the dead-only save restores to nothing"
+        );
+        tree_consistency(&restored);
+    }
+
+    /// remain-on-exit on: the pre-existing ARC-114 behavior — the dead
+    /// entry restores held-dead even though auto-remove is the product
+    /// default (the daemon was configured to hold).
+    #[test]
+    fn hold_restore_keeps_a_dead_entry_held_dead() {
+        let (tree, pane_id) = held_dead_tree(Some(3));
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
+        assert!(restored.pane(pane_id).unwrap().dead());
+        assert_eq!(restored.pane(pane_id).unwrap().exit_code(), Some(3));
+    }
+
     /// A dead pane with an unknown exit code stays dead with `None`, and a
     /// live pane in the same save is respawned as before.
     #[test]
@@ -1870,7 +1983,9 @@ mod tests {
             .unwrap();
         let state = tree.to_persist_state();
         let factory = RecordingFactory::default();
-        let mut restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let mut restored =
+            MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), true)
+                .unwrap();
         assert!(restored.pane(dead_id).unwrap().dead());
         assert_eq!(restored.pane(dead_id).unwrap().exit_code(), None);
         assert!(!restored.pane(live_id).unwrap().dead());
@@ -1893,8 +2008,12 @@ mod tests {
         pane.remove("dead");
         pane.remove("exit_code");
         let state: PersistState = serde_json::from_value(value).expect("old file decodes");
-        let mut restored =
-            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let mut restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
         assert!(!restored.pane(pane_id).unwrap().dead());
         assert_eq!(restored.pane(pane_id).unwrap().exit_code(), None);
         assert!(
@@ -1930,8 +2049,12 @@ mod tests {
             state.sessions[0].windows[0].panes[0].cwd.as_deref(),
             Some("/tmp")
         );
-        let mut restored =
-            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let mut restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
         assert_eq!(
             restored.pane(pane_id).unwrap().persistence_cwd().as_deref(),
             Some(Path::new("/tmp")),
@@ -2057,8 +2180,12 @@ mod tests {
         let saved = &state.sessions[0].windows[0].panes[0];
         assert_eq!(saved.cwd.as_deref(), Some("/some/path"));
         assert_eq!(saved.cwd_host.as_deref(), Some("remote-host"));
-        let restored =
-            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
         let pane = restored.pane(pane_id).unwrap();
         let term = pane.terminal();
         let term = term.read();
@@ -2088,8 +2215,12 @@ mod tests {
         pane.remove("cwd_host");
         let state: PersistState = serde_json::from_value(value).expect("old file decodes");
         assert_eq!(state.sessions[0].windows[0].panes[0].cwd_host, None);
-        let restored =
-            MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
         let pane = restored.pane(pane_id).unwrap();
         let term = pane.terminal();
         let term = term.read();

@@ -10,9 +10,10 @@
 //! one-row ratatui `Buffer` and diffs it, so a status change flushes
 //! only the changed cells of the bottom row.
 //!
-//! Layout, left to right, space-separated: every session (`$N:name`,
-//! the shown one bold), the shown session's windows (`0:name`, the
-//! active one bold and `*`-marked), the focused pane's title, and the
+//! Layout, left to right, space-separated: every workspace (`name`, the
+//! daemon's active one bold), every session (`$N:name`, the shown one
+//! bold), the shown session's windows (`0:name`, the active one bold and
+//! `*`-marked), the focused pane's title, and the
 //! agent roster as `agent:state` chips. When the focused pane is
 //! scrolled client-side, a trailing `[scroll +N]` cue reports the
 //! offset.
@@ -46,6 +47,10 @@ pub(crate) enum StatusError {
 /// The queried status state behind the bottom row.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct StatusState {
+    /// Every workspace as `(id, name)`, id order, plus the daemon's
+    /// active one — the workspaces segment's source.
+    workspaces: Vec<(String, String)>,
+    active_workspace: Option<String>,
     /// Every session as `(id, name)`, in `list-sessions` order.
     sessions: Vec<(String, String)>,
     /// The session this view's window belongs to, `"$N"`.
@@ -79,6 +84,27 @@ impl StatusState {
                 return Err(StatusError::Query);
             }
         };
+
+        // The workspace roster: the status line's leading segment. The
+        // daemon lists in id order and marks the active one, so the reply
+        // order IS the display order and the active pick is one find.
+        if let Ok(reply) = conn.send_checked("list-workspaces") {
+            if reply.ok {
+                let rows: Vec<(String, String, bool)> = reply
+                    .body
+                    .iter()
+                    .filter_map(|l| super::parse_workspace_line(l))
+                    .collect();
+                self.workspaces = rows
+                    .iter()
+                    .map(|(id, name, _)| (id.clone(), name.clone()))
+                    .collect();
+                self.active_workspace = rows
+                    .iter()
+                    .find(|(_, _, active)| *active)
+                    .map(|(id, _, _)| id.clone());
+            }
+        }
         self.sessions = session_rows
             .iter()
             .filter_map(|line| {
@@ -192,6 +218,19 @@ impl StatusState {
             segments.push(Segment { text, bold });
         };
 
+        // The workspaces segment leads the line: every workspace's name
+        // in id order, the active one bold (the "current emphasized"
+        // rule the sessions/windows segments follow).
+        for (index, (id, name)) in self.workspaces.iter().enumerate() {
+            if index > 0 {
+                push(&mut segments, " ".to_string(), false);
+            }
+            let active = self.active_workspace.as_deref() == Some(id.as_str());
+            push(&mut segments, name.clone(), active);
+        }
+        if !self.workspaces.is_empty() {
+            push(&mut segments, " | ".to_string(), false);
+        }
         for (index, (id, name)) in self.sessions.iter().enumerate() {
             if index > 0 {
                 push(&mut segments, " ".to_string(), false);
@@ -330,6 +369,11 @@ mod tests {
 
     fn state() -> StatusState {
         StatusState {
+            workspaces: vec![
+                ("+0".to_string(), "alpha".to_string()),
+                ("+1".to_string(), "beta".to_string()),
+            ],
+            active_workspace: Some("+0".to_string()),
             sessions: vec![
                 ("$0".to_string(), "work".to_string()),
                 ("$1".to_string(), "play".to_string()),
@@ -350,6 +394,39 @@ mod tests {
 
     fn joined(segments: &[Segment]) -> String {
         segments.iter().map(|s| s.text.as_str()).collect::<String>()
+    }
+
+    /// The workspaces segment leads the line: every workspace's name in
+    /// id order, the daemon's active one bold.
+    #[test]
+    fn compose_carries_the_workspaces_segment_in_id_order() {
+        let text = joined(&state().compose(120, None));
+        assert!(
+            text.starts_with("alpha beta | "),
+            "workspaces lead the line: {text}"
+        );
+        assert!(text.contains("alpha beta | $0:work"), "order: {text}");
+    }
+
+    /// The active workspace's name segment is bold; the others are not.
+    #[test]
+    fn compose_bolds_the_active_workspace_only() {
+        let segments = state().compose(120, None);
+        let bold_text = joined(
+            &segments
+                .iter()
+                .filter(|s| s.bold)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            bold_text.contains("alpha"),
+            "active workspace bold: {bold_text}"
+        );
+        assert!(
+            !bold_text.contains("beta"),
+            "other workspace not bold: {bold_text}"
+        );
     }
 
     /// The composed line carries every fact the card lists: sessions,
@@ -445,16 +522,16 @@ mod tests {
     /// erases the previous frame's longer tail.
     #[test]
     fn status_row_pads_and_erases_the_tail() {
-        let mut row = StatusRow::new(20);
+        let mut row = StatusRow::new(60);
         let mut long = state();
         long.pane_title = String::new();
         long.agents.clear();
-        row.paint(&long.compose(20, None));
+        row.paint(&long.compose(60, None));
         row.diff();
         let mut short = long.clone();
         short.pane_title = String::new();
         short.windows.clear();
-        row.paint(&short.compose(20, None));
+        row.paint(&short.compose(60, None));
         let diff = row.diff();
         assert!(
             diff.iter().any(|(_, _, cell)| cell.symbol() == " "),

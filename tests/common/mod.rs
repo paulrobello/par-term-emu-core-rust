@@ -64,6 +64,14 @@ impl MuxFixture {
         self.dir.path().join("state")
     }
 
+    /// The config file this fixture's daemons run under: inside the
+    /// fixture, so the suite never touches (or inherits) the developer's
+    /// real config. Written by [`spawn_daemon`] /
+    /// [`spawn_daemon_auto_remove`] before the daemon starts.
+    pub fn config_path(&self) -> PathBuf {
+        self.dir.path().join("config.toml")
+    }
+
     /// Where a daemon started with [`Self::state_dir`] saves its tree.
     pub fn state_path(&self) -> PathBuf {
         state_file_in(&self.state_dir(), &self.socket)
@@ -193,13 +201,57 @@ impl Drop for DaemonGuard {
 /// fixture's state dir, with null stdio: a daemon that outlives a failed
 /// assertion must not hold the test harness's output pipe open, or
 /// `cargo test` hangs at exit instead of reporting the failure.
+///
+/// The daemon's config pins `remain-on-exit = true` — the held-dead
+/// contract the death-path tests assert against (a dead pane is HELD with
+/// its exit code). The auto-remove default is what
+/// [`spawn_daemon_auto_remove`] is for; a fixture daemon must never read
+/// the developer's real config.
 pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
+    write_fixture_config(fixture, true);
+    spawn_daemon_on(
+        fixture.socket(),
+        Some(&fixture.config_path()),
+        fixture.state_dir(),
+    )
+}
+
+/// [`spawn_daemon`] under the product default: `remain-on-exit = false` —
+/// a pane whose child exits is auto-removed through the kill-pane contract.
+pub fn spawn_daemon_auto_remove(fixture: &MuxFixture) -> DaemonGuard {
+    write_fixture_config(fixture, false);
+    spawn_daemon_on(
+        fixture.socket(),
+        Some(&fixture.config_path()),
+        fixture.state_dir(),
+    )
+}
+
+/// Pin the fixture's config to the given remain-on-exit value.
+fn write_fixture_config(fixture: &MuxFixture, remain_on_exit: bool) {
+    std::fs::write(
+        fixture.config_path(),
+        format!("[daemon]\nremain-on-exit = {remain_on_exit}\n"),
+    )
+    .expect("write fixture config");
+}
+
+/// The spawn the two policy helpers share: `--socket`, `--state-dir`,
+/// `PAR_MUX_CONFIG` when given, null stdio.
+fn spawn_daemon_on(socket: &Path, config: Option<&Path>, state_dir: PathBuf) -> DaemonGuard {
     use std::process::Stdio;
-    let child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"));
+    command
         .arg("--socket")
-        .arg(fixture.socket())
+        .arg(socket)
         .arg("--state-dir")
-        .arg(fixture.state_dir())
+        .arg(state_dir);
+    if let Some(config) = config {
+        command.env("PAR_MUX_CONFIG", config);
+    } else {
+        command.env_remove("PAR_MUX_CONFIG");
+    }
+    let child = command
         // Test daemons are deliberate, not nested: strip the pane marker so
         // the nesting guard does not refuse them when the suite itself runs
         // inside a mux pane.
