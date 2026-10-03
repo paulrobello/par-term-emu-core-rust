@@ -573,6 +573,17 @@ fn main() -> std::process::ExitCode {
 
 /// The daemon modes: --stop, --restart, and serving the socket.
 fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
+    // Resolved before the stop phase so --restart can report, before the
+    // fork, what the fresh daemon will restore — and so the serving half
+    // and the peek see the same resolved config. `effective` is pure:
+    // flags > env > config-file tiers, no I/O beyond the config read.
+    let eff = effective(&cli, true);
+    let state_path = match eff.state_dir.as_str() {
+        "" => par_term_emu_core_rust::mux::persist::state_file_path(&path),
+        dir => {
+            par_term_emu_core_rust::mux::persist::state_file_in(std::path::Path::new(dir), &path)
+        }
+    };
     if cli.stop || cli.restart {
         if stop_daemon(&path)? {
             eprintln!("par-mux: stopped the daemon on {}", path.display());
@@ -582,14 +593,40 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         if cli.stop {
             return Ok(());
         }
+        // Pre-fork, on the still-open terminal: what the detached fresh
+        // daemon will restore. After daemonize its stderr leaves the
+        // terminal, so this is the caller's only window on the handoff.
+        // Mirrors load_or_quarantine's conclusions (last-good fallback
+        // included) without mutating anything.
+        match par_term_emu_core_rust::mux::persist::peek_state(&state_path) {
+            par_term_emu_core_rust::mux::persist::StatePeek::Populated => {}
+            par_term_emu_core_rust::mux::persist::StatePeek::Empty => eprintln!(
+                "par-mux: previous daemon saved an empty tree at {} — the fresh daemon will \
+                 restore nothing and exit (exit-when-empty)",
+                state_path.display()
+            ),
+            par_term_emu_core_rust::mux::persist::StatePeek::Missing => eprintln!(
+                "par-mux: no saved state at {} — the fresh daemon will start empty and exit \
+                 (exit-when-empty)",
+                state_path.display()
+            ),
+            par_term_emu_core_rust::mux::persist::StatePeek::Unreadable => eprintln!(
+                "par-mux: saved state {} is unreadable — the fresh daemon will quarantine it \
+                 and start fresh (details: {})",
+                state_path.display(),
+                daemon_log_path(&state_path).display()
+            ),
+        }
         // --restart falls through and serves the socket from a detached
         // process — the state save the stop just completed is what it
         // restores, and the daemon must outlive the terminal --restart was
-        // typed into (fork + setsid + stdio to /dev/null, tmux's
-        // daemon(1,0) shape), so the invocation returns immediately and no
-        // `&` is needed.
+        // typed into (fork + setsid, tmux's daemon(1,0) shape), so the
+        // invocation returns immediately and no `&` is needed. stderr is
+        // routed to the daemon log beside the state file rather than
+        // /dev/null, so post-fork startup failures (bind, restore,
+        // exit-when-empty) leave evidence instead of vanishing.
         #[cfg(unix)]
-        daemonize()?;
+        daemonize(Some(&daemon_log_path(&state_path)))?;
     }
 
     // Nested-daemon guard, on the path that actually serves: a daemon
@@ -608,16 +645,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // startup. A readable state is REBUILT (D3.5): layout and content are
     // restored, and every pane's process is new — the original processes
     // died with the previous server, which is stated rather than papered
-    // over. The config's `[daemon] state-dir` tier joins the flag tier
-    // here: `effective()` already resolved flags > env-less > file, and
-    // an empty value means the OS default.
-    let eff = effective(&cli, true);
-    let state_path = match eff.state_dir.as_str() {
-        "" => par_term_emu_core_rust::mux::persist::state_file_path(&path),
-        dir => {
-            par_term_emu_core_rust::mux::persist::state_file_in(std::path::Path::new(dir), &path)
-        }
-    };
+    // over.
     // ENH-039: --pane-endpoints wires the pane-endpoint channel between the
     // factory (which binds each pane's hook-only socket) and the server
     // (which serves the connections the endpoints accept).
@@ -660,6 +688,14 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // loses cleanly instead of stealing the socket.
     let tree = restored
         .unwrap_or_else(|| par_term_emu_core_rust::mux::tree::MuxTree::new(Box::new(factory())));
+    // Restart loudness: a fresh daemon that restored nothing used to
+    // exit-when-empty without a trace anywhere. The pre-fork peek (above)
+    // reported the save side on the terminal; this records the restore
+    // side — including a populated save that failed to rebuild — in the
+    // daemon log the fork points stderr at.
+    if cli.restart && tree.sessions().is_empty() {
+        log::warn!("par-mux: restored tree is empty; daemon exiting (exit-when-empty)");
+    }
     if eff.pane_endpoints {
         // Reclaim crash leftovers before this daemon binds anything, so the
         // endpoint cap counts only live endpoints (ENH-039).
@@ -715,16 +751,23 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
 
 /// Detach the serving `--restart` process from the terminal it was typed
 /// into: fork, the parent reports success and exits, the child calls
-/// `setsid` and moves stdio to `/dev/null` before serving (tmux's
-/// `daemon(1,0)` shape). Unfixed, `par-mux --restart NAME &` stayed in the
-/// shell's job, so closing that terminal SIGHUP-killed the daemon and every
-/// pane with no save.
+/// `setsid` and serves with stdin/stdout on `/dev/null` and stderr on
+/// `stderr_log` (tmux's `daemon(1,0)` shape, with stderr kept). Unfixed,
+/// `par-mux --restart NAME &` stayed in the shell's job, so closing that
+/// terminal SIGHUP-killed the daemon and every pane with no save.
 ///
 /// Must run while the process is still single-threaded (fork discipline);
 /// everything before serve mode — argument parsing, the `--stop` half of
 /// `--restart` — qualifies.
+///
+/// stderr goes to `stderr_log` (the daemon log beside the state file)
+/// rather than `/dev/null`: after the fork nothing else carries the fresh
+/// daemon's startup failures (bind, restore, exit-when-empty) anywhere the
+/// caller can find them, and the terminal it was typed into may close at
+/// any moment, so a terminal-attached stderr would risk EIO on every log
+/// line once it does. A log that cannot be opened falls back to /dev/null.
 #[cfg(unix)]
-fn daemonize() -> std::io::Result<()> {
+fn daemonize(stderr_log: Option<&std::path::Path>) -> std::io::Result<()> {
     use nix::unistd::{fork, setsid, ForkResult};
     use std::io::Write as _;
     use std::os::fd::AsRawFd as _;
@@ -737,27 +780,70 @@ fn daemonize() -> std::io::Result<()> {
     match unsafe { fork() }.map_err(std::io::Error::from)? {
         ForkResult::Parent { .. } => std::process::exit(0),
         ForkResult::Child => {
-            // The daemon now leads its own session, no controlling tty. The
-            // old terminal may close at any moment; nothing the daemon
-            // prints is load-bearing (the state file is the durable
-            // record), so stdio lands on /dev/null as daemon() specifies.
+            // The daemon now leads its own session, no controlling tty.
+            // stdin/stdout land on /dev/null; stderr goes to the daemon log
+            // (see the doc comment).
             setsid().map_err(std::io::Error::from)?;
             let null = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open("/dev/null")?;
             let fd = null.as_raw_fd();
-            for target in [0, 1, 2] {
+            for target in [0, 1] {
                 // libc rather than nix::unistd: nix 0.31 no longer ships dup2.
                 // SAFETY: `fd` is the open /dev/null handle `null` owns for
-                // this whole loop, and 0-2 are the standard descriptors.
+                // this whole loop, and 0-1 are the standard descriptors.
                 if unsafe { libc::dup2(fd, target) } == -1 {
                     return Err(std::io::Error::last_os_error());
+                }
+            }
+            // stderr: the daemon log when it can be opened (append, so a
+            // restart appends to the previous daemon's record), else
+            // /dev/null as before. The log's parent (the state dir) may not
+            // exist yet — create it rather than silently losing the log.
+            if let Some(parent) = stderr_log.and_then(std::path::Path::parent) {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let log = stderr_log.and_then(|log_path| {
+                let mut options = std::fs::OpenOptions::new();
+                options.append(true).create(true);
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                options.open(log_path).ok()
+            });
+            match log {
+                Some(file) => {
+                    let log_fd = file.as_raw_fd();
+                    // SAFETY: `log_fd` is the open log file `file` owns for
+                    // this whole statement, and 2 is stderr.
+                    if unsafe { libc::dup2(log_fd, 2) } == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                None => {
+                    // SAFETY: `fd` is the open /dev/null handle `null`
+                    // still owns, and 2 is stderr.
+                    if unsafe { libc::dup2(fd, 2) } == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
             }
             Ok(())
         }
     }
+}
+
+/// The detached daemon's stderr log: beside the state file, so a `--restart`
+/// whose serving half fails (bind, restore) leaves the reason on disk —
+/// after daemonize, the terminal it was typed into may be gone. On Windows
+/// restart serves in-process and keeps the caller's stderr, so the log is
+/// only written on Unix.
+fn daemon_log_path(state_path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = state_path.as_os_str().to_os_string();
+    name.push(".log");
+    std::path::PathBuf::from(name)
 }
 
 /// The running server's per-instance shutdown flag (ARC-016), published for

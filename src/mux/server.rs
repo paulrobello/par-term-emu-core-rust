@@ -221,6 +221,7 @@ impl MuxServer {
     /// [`Self::run_persisting`] instead (D3.3).
     pub fn run(self) {
         let _exit = self.run_with_state_path(None);
+        release_socket_path(&self.path);
     }
 
     /// [`Self::run`] with the whole state atomically saved to `state_path`
@@ -244,6 +245,13 @@ impl MuxServer {
         if let Err(err) = crate::mux::persist::save_off_lock(&self.tree, &state_path, origin) {
             log::error!("par-mux: final state save failed: {err}");
         }
+        // The socket path is released only AFTER the final save is on disk.
+        // `par-mux --stop`/`--restart` waits for the socket to stop
+        // accepting, so an unlink inside the accept-loop teardown made that
+        // wait return before this save ran — the next daemon's restore could
+        // then read a missing or stale state file (the intermittent
+        // "fresh daemon came up empty" handoff bug).
+        release_socket_path(&self.path);
     }
 
     /// A shareable handle to this server's shutdown flag (ARC-016): storing
@@ -388,6 +396,7 @@ impl MuxServer {
                             // takes, recorded as Empty so the save's origin
                             // clears the last-good snapshot.
                             exit = LoopExit::Empty;
+                            log::info!("par-mux: tree empty; daemon exiting (exit-when-empty)");
                             self.shutdown.store(true, Ordering::Relaxed);
                         }
                     }
@@ -437,14 +446,19 @@ impl MuxServer {
                 crate::debug_error!("MUX", "host probe still running at shutdown; detached");
             }
         }
-        // The socket file dies with the listener (on Windows, the marker
-        // file does): remove it so `ls par-mux-*.sock` lists only live
-        // daemons — a `--stop` that leaves the file behind reads as a
-        // daemon that is still there. A crash skips this; the next bind
-        // reclaims the stale remnant (`prepare_socket_path`).
-        let _ = std::fs::remove_file(&self.path);
+        // The socket file is unlinked by the mode's owner — `run` at once,
+        // `run_persisting` only after its final save (see there for why the
+        // order is load-bearing for --stop/--restart).
         exit
     }
+}
+
+/// Unlink the listener's socket file (on Windows, the marker file) so
+/// `ls par-mux-*.sock` lists only live daemons — a `--stop` that leaves
+/// the file behind reads as a daemon that is still there. A crash skips
+/// this; the next bind reclaims the stale remnant (`prepare_socket_path`).
+fn release_socket_path(path: &std::path::Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 /// Join `handle` if it finishes within `bound`, else drop it (detaching the

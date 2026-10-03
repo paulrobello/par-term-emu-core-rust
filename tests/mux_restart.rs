@@ -715,3 +715,292 @@ fn send_keys_to_a_runtime_died_pane_errors_the_same() {
     }
     sigterm_clean(&mut daemon);
 }
+
+// The three tests below drive `par-mux --restart` itself — the CLI
+// handoff: stop the old daemon, wait for its socket to stop accepting,
+// fork the fresh daemon, restore. The handoff used to race: the old
+// daemon unlinked the socket BEFORE its final state save, so the stop's
+// wait could return while the save was still in flight, and the fresh
+// daemon's restore read a missing or stale state file ("fresh daemon came
+// up empty"). The socket now drops only after the save, and these tests
+// hold that contract under repetition.
+
+/// Run `par-mux --restart` on the fixture with both stdio streams
+/// captured, so the pre-fork announcements are assertable.
+fn run_restart_cli(fixture: &MuxFixture) -> std::process::Child {
+    use std::process::{Command, Stdio};
+    Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .arg("--restart")
+        .env_remove("PAR_MUX_ENV")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("--restart spawns")
+}
+
+/// Wait for the `--restart` parent half to exit (bounded — an unfixed
+/// in-process serve would hang the suite here) and return its output.
+fn wait_exited(mut child: std::process::Child, what: &str) -> std::process::Output {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait().expect("--restart is waitable") {
+            Some(_) => break,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{what} never returned; --restart must detach, not serve in-process")
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    child.wait_with_output().expect("--restart pipes drain")
+}
+
+/// `par-mux --stop` on the fixture, then require the socket to go quiet —
+/// the cleanup half of a test whose restarted daemon is a detached
+/// grandchild no `Child` handle exists for.
+fn stop_via_cli(fixture: &MuxFixture) {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let status = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .arg("--stop")
+        .env_remove("PAR_MUX_ENV")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("--stop runs");
+    assert!(status.success(), "--stop exits 0: {status:?}");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while connect_local_stream(fixture.socket()).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the daemon on {} did not stop within 15s",
+            fixture.socket().display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// (a) The CLI handoff restores a populated tree — five trials, because the
+/// race this pins was intermittent: the old daemon's final save (fsync +
+/// rename of a possibly large JSON) now provably lands before the socket
+/// unlinks, so the fresh daemon's restore always reads it.
+#[test]
+fn cli_restart_restores_a_populated_tree_five_trials() {
+    for trial in 0..5 {
+        let fixture = MuxFixture::new("cli-restart");
+        let path = fixture.socket();
+
+        let mut first = spawn_daemon(&fixture);
+        wait_listening(path);
+        let marker = format!("RSTX-MARK-{trial}");
+        {
+            let stream = connect_local_stream(path).expect("first daemon accepts");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut reader = BufReader::new(stream);
+            command(&mut writer, &mut reader, "new-session -s demo");
+            let pane = pane_ids(&command(&mut writer, &mut reader, "list-panes").join(""))
+                .first()
+                .expect("new-session created a pane")
+                .clone();
+            command(
+                &mut writer,
+                &mut reader,
+                &format!("send-keys -t {pane} 'printf RSTX-MARK-{trial}' Enter"),
+            );
+            wait_for(
+                &mut writer,
+                &mut reader,
+                &format!("capture-pane -t {pane}"),
+                &marker,
+            );
+        } // the client drops; the live pane keeps the daemon serving
+
+        let output = wait_exited(run_restart_cli(&fixture), "--restart's parent half");
+        assert!(
+            output.status.success(),
+            "--restart's parent half exits 0: {:?}",
+            output.status
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("stopped the daemon on"),
+            "the restart stopped a live daemon: {stderr}"
+        );
+        assert!(
+            !stderr.contains("saved an empty tree"),
+            "a populated save must not be announced as empty: {stderr}"
+        );
+
+        wait_listening(path);
+        {
+            let stream = connect_local_stream(path).expect("fresh daemon accepts");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut reader = BufReader::new(stream);
+            let listed = command(&mut writer, &mut reader, "list-panes").join("");
+            let pane = pane_ids(&listed)
+                .first()
+                .expect("the pane survived the CLI restart")
+                .clone();
+            wait_for(
+                &mut writer,
+                &mut reader,
+                &format!("capture-pane -t {pane}"),
+                &marker,
+            );
+        }
+
+        stop_via_cli(&fixture);
+        sigterm_clean(&mut first);
+    }
+}
+
+/// (b) A restart after the tree was emptied is LOUD on both sides: the
+/// pre-fork peek tells the caller the previous daemon saved an empty tree,
+/// and the fresh daemon's log records that it restored nothing and is
+/// exiting via exit-when-empty. The outcome matches the documented
+/// behavior — the fresh daemon serves, finds nothing, and exits after the
+/// grace.
+#[test]
+fn cli_restart_after_emptying_announces_the_empty_restore() {
+    use std::time::{Duration, Instant};
+
+    let fixture = MuxFixture::new("cli-empty");
+    let path = fixture.socket();
+
+    // The emptied daemon exits on its own (exit-when-empty); the guard is
+    // the panic backstop that reaps it if the test fails first.
+    // The emptied daemon exits on its own (exit-when-empty); the guard is
+    // the panic backstop that reaps it if the test fails first.
+    let _first = spawn_daemon(&fixture);
+    wait_listening(path);
+    // Build and empty the tree over one direct client, then drop it — no
+    // client stays connected, so nothing holds the emptied daemon alive.
+    // (--cmd cannot be used here: it conflicts with --state-dir.)
+    {
+        let stream = connect_local_stream(path).expect("daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        command(&mut writer, &mut reader, "new-session -s demo");
+        command(&mut writer, &mut reader, "kill-session -t demo");
+    }
+    // Zero sessions and zero clients: after EXIT_EMPTY_GRACE the daemon
+    // exits itself, and its final save lands as an empty tree (which also
+    // clears the last-good snapshot, so the restart cannot resurrect).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while connect_local_stream(path).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the emptied daemon never exited; exit-when-empty is broken"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let output = wait_exited(run_restart_cli(&fixture), "--restart's parent half");
+    assert!(
+        output.status.success(),
+        "--restart's parent half exits 0: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("previous daemon saved an empty tree"),
+        "the pre-fork peek announces the empty save: {stderr}"
+    );
+
+    // The fresh daemon comes up, then exits-when-empty per the docs.
+    wait_listening(path);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while connect_local_stream(path).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the empty-restored fresh daemon never exited"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // The restore side is recorded in the daemon log the fork points
+    // stderr at (unreachable from the terminal once detached).
+    let mut log_path = fixture.state_path().into_os_string();
+    log_path.push(".log");
+    let log = std::fs::read_to_string(std::path::PathBuf::from(log_path))
+        .expect("the fresh daemon wrote its log");
+    assert!(
+        log.contains("restored tree is empty; daemon exiting (exit-when-empty)"),
+        "the daemon log records the empty restore: {log}"
+    );
+}
+
+/// (c) A fresh daemon whose serve fails AFTER the fork (here: a socket
+/// path past the platform Unix-socket address limit, so the bind can never
+/// succeed) leaves the failure visible in the daemon log beside the state
+/// file — pre-fix, that stderr went to /dev/null and the restart failed
+/// silently, which is exactly how the owner lost the daemon with no error
+/// text.
+#[test]
+fn cli_restart_surfaces_a_fresh_daemon_startup_failure() {
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    let fixture = MuxFixture::new("cli-fail");
+    // Every platform's sun_path is 104 (macOS) or 108 (Linux); 200 always
+    // exceeds it.
+    let long_name = format!("long-{}", "x".repeat(200));
+    let socket = fixture.socket().with_file_name(long_name);
+
+    let output = wait_exited(
+        Command::new(env!("CARGO_BIN_EXE_par-mux"))
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--state-dir")
+            .arg(fixture.state_dir())
+            .arg("--restart")
+            .env_remove("PAR_MUX_ENV")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("--restart spawns"),
+        "--restart's parent half",
+    );
+    assert!(
+        output.status.success(),
+        "the parent half succeeds before the detached serve fails: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no daemon running"),
+        "the stop phase reports the absent daemon: {stderr}"
+    );
+
+    // Give the (doomed) fresh daemon its startup window, then confirm it
+    // never bound.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        connect_local_stream(&socket).is_err(),
+        "no daemon can bind a path past the address limit"
+    );
+
+    // The failure is on disk where the caller can find it.
+    let state = par_term_emu_core_rust::mux::persist::state_file_in(&fixture.state_dir(), &socket);
+    let mut log_path = state.into_os_string();
+    log_path.push(".log");
+    let log = std::fs::read_to_string(std::path::PathBuf::from(log_path))
+        .expect("the fresh daemon wrote its log");
+    assert!(
+        log.contains("Error:"),
+        "the bind failure reaches the daemon log: {log}"
+    );
+}

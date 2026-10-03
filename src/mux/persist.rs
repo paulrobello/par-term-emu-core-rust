@@ -1095,6 +1095,46 @@ fn load_lastgood(target: &Path) -> Option<PersistState> {
     (state.format_version == FORMAT_VERSION && state_has_panes(&state)).then_some(state)
 }
 
+/// What a read-only peek at the state file predicts the next daemon start
+/// will restore. Mirrors [`load_or_quarantine`]'s conclusions (including
+/// the last-good fallback) without any of its mutations — the `--restart`
+/// pre-flight uses it to tell the caller, on the still-open terminal, what
+/// the detached fresh daemon is about to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatePeek {
+    /// No state file — the next daemon starts fresh.
+    Missing,
+    /// The state file exists but is not parseable current-version state —
+    /// the next daemon quarantines it aside and starts fresh.
+    Unreadable,
+    /// Parseable but pane-less with no usable last-good snapshot — the next
+    /// daemon restores nothing.
+    Empty,
+    /// Panes would be restored (from the state file itself or the
+    /// last-good snapshot fallback).
+    Populated,
+}
+
+/// The read-only half of [`load_or_quarantine`]: classify the state file
+/// without quarantining or otherwise mutating it. A read or parse failure
+/// here stays a classification, never an error.
+pub fn peek_state(target: &Path) -> StatePeek {
+    let bytes = match fs::read(target) {
+        Ok(bytes) => bytes,
+        Err(_) => return StatePeek::Missing,
+    };
+    match serde_json::from_slice::<PersistState>(&bytes) {
+        Ok(state) if state.format_version == FORMAT_VERSION => {
+            if state_has_panes(&state) || load_lastgood(target).is_some() {
+                StatePeek::Populated
+            } else {
+                StatePeek::Empty
+            }
+        }
+        _ => StatePeek::Unreadable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
