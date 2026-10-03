@@ -346,7 +346,9 @@ pub(crate) fn terminal_grid() -> (u16, u16) {
     }
 }
 
-#[cfg(test)]
+// The only test here exercises the unix-only OSC 11 parse; on Windows the
+// module would be empty and its imports unused.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

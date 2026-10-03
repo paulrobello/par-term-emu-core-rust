@@ -277,7 +277,7 @@ pub(crate) fn parse_session_line(line: &str) -> Option<(String, String)> {
     // shape (a pre-workspaces daemon) parses identically: split at the
     // last `: ` whose left side ends in a `$<digits>` id.
     let idx = line.rfind("$")?;
-    let (before, rest) = line.split_at(idx);
+    let rest = &line[idx..];
     let (id, name) = rest.split_once(": ")?;
     let id = id.strip_prefix('$')?;
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
