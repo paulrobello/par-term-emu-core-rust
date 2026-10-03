@@ -19,6 +19,7 @@ use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
+use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::{layout, HelpRow, ManagementKey};
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
@@ -720,12 +721,21 @@ impl PaneRenderer {
         let grid = emulator.terminal().active_grid();
         let scroll = emulator.scroll_offset();
         let scrollback_len = grid.scrollback_len() as isize;
-        for row in 0..view_h.min(grid.rows() as u16) {
+        // Clamped to the frame: a layout broadcast racing a host shrink
+        // (or a test fixture) can carry rects past the buffer's edge,
+        // and painting would panic on the index.
+        let max_rows = view_h
+            .min(grid.rows() as u16)
+            .min(self.height.saturating_sub(rect.y.saturating_add(inset_y)));
+        let max_cols = view_w
+            .min(grid.cols() as u16)
+            .min(self.width.saturating_sub(rect.x.saturating_add(inset_x)));
+        for row in 0..max_rows {
             // View row r: live grid row r - S when r >= S; otherwise the
             // scrollback line S_len - S + r (newest history first).
             let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
             let in_history = (row as usize) < scroll;
-            for col in 0..view_w.min(grid.cols() as u16) {
+            for col in 0..max_cols {
                 let core_cell: &crate::cell::Cell = if in_history {
                     let logical = scrollback_row.max(0) as usize;
                     match grid.scrollback_line(logical) {
@@ -775,7 +785,7 @@ impl PaneRenderer {
                 cell.set_style(map_flags(core_cell.flags()));
                 // A double-width base marks its right-hand spacer skip so
                 // the diff's flush never draws into it.
-                if core_cell.width() == 2 && col + 1 < view_w {
+                if core_cell.width() == 2 && col + 1 < view_w && x + 1 < self.width {
                     self.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
                 }
             }
@@ -823,6 +833,9 @@ impl PaneRenderer {
             }
         }
         for (x, y, a, b) in &vertical {
+            if *x >= self.width || *y >= self.height {
+                continue; // a stale layout racing a shrink can overflow
+            }
             let cell = &mut self.buffer[(*x, *y)];
             cell.reset();
             if let Some(bg) = self.bg {
@@ -832,6 +845,9 @@ impl PaneRenderer {
             cell.set_style(divider_style(self.focused, self.drag_divider, true, *a, *b));
         }
         for (x, y, a, b) in &horizontal {
+            if *x >= self.width || *y >= self.height {
+                continue; // a stale layout racing a shrink can overflow
+            }
             // A cell that is also a vertical boundary becomes the junction.
             if vertical.iter().any(|(vx, vy, _, _)| vx == x && vy == y) {
                 let cell = &mut self.buffer[(*x, *y)];
@@ -967,6 +983,9 @@ impl PaneRenderer {
                 for x in rect.x..=x1 {
                     if x > rect.x && x < x1 && y > rect.y && y < y1 {
                         continue; // interior: not a border cell
+                    }
+                    if x >= self.width || y >= self.height {
+                        continue; // a stale layout racing a shrink can overflow
                     }
                     let symbol = if x == rect.x && y == rect.y {
                         self.glyphs.corner_top_left()
@@ -1454,6 +1473,8 @@ struct WindowSession {
     /// The bottom row: queried state + paint/diff pair.
     status: status::StatusState,
     status_row: status::StatusRow,
+    /// The top row: the shown session's windows, clickable.
+    tab_strip: TabStrip,
     /// Whether the status state is stale and needs a re-query before the
     /// next paint (the throttled re-query on agent/sessions churn).
     status_dirty: bool,
@@ -1516,10 +1537,11 @@ impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
         Self {
             window: String::new(),
-            renderer: PaneRenderer::new(cols, rows.saturating_sub(1), Glyphs::Unicode),
+            renderer: PaneRenderer::new(cols, rows.saturating_sub(2), Glyphs::Unicode),
             pending_layout: None,
             status: status::StatusState::default(),
             status_row: status::StatusRow::new(cols),
+            tab_strip: TabStrip::new(cols),
             status_dirty: true,
             scroll_mode: false,
             prefix: crate::mux::attach::C_B,
@@ -1642,6 +1664,8 @@ impl WindowSession {
         }
         self.status_row.invalidate();
         self.draw_status_row();
+        self.tab_strip.invalidate();
+        self.draw_tab_strip();
         // First frame: clear + full paint. repaint_all hides the host
         // cursor, so the frame's place_cursor must fire even if the
         // mapped state matches the hidden default.
@@ -1697,16 +1721,19 @@ impl WindowSession {
             }
 
             // 3. Host resize (SIGWINCH): report the new grid, re-fit. The
-            //    daemon's window renders into the rows above the status
-            //    bar, so the size report carries the content height.
+            //    daemon's window renders into the rows between the tab
+            //    strip and the status bar, so the size report carries the
+            //    content height.
             let (host_cols, host_rows) = super::conn::terminal_grid();
-            let content = (host_cols, host_rows.saturating_sub(1));
+            let content = (host_cols, host_rows.saturating_sub(2));
             if content != current_size {
                 current_size = content;
                 self.resize_to(conn, content.0, content.1, sink)?;
-                // A resize wiped the screen; the row repaints whole.
+                // A resize wiped the screen; the rows repaint whole.
                 self.status_row.invalidate();
                 self.draw_status_row();
+                self.tab_strip.invalidate();
+                self.draw_tab_strip();
             }
 
             // 3b. Status: the throttled re-query. Any %agent-state-changed
@@ -1723,6 +1750,9 @@ impl WindowSession {
                     Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
                 }
                 self.draw_status_row();
+                // The strip rides the same queried state: window
+                // add/close/rename refreshes it here.
+                self.draw_tab_strip();
             }
 
             // 4. Frame whatever accumulated (panes + the status row's own
@@ -2511,6 +2541,8 @@ impl WindowSession {
         }
         self.status_row.invalidate();
         self.draw_status_row();
+        self.tab_strip.invalidate();
+        self.draw_tab_strip();
     }
 
     /// A pane id of `window` to hang the size report on: the focused pane
@@ -2638,7 +2670,8 @@ impl WindowSession {
         true
     }
 
-    /// One host mouse report. Clicks focus the pane under the pointer
+    /// One host mouse report. Clicks on the tab strip switch windows;
+    /// clicks in the content area focus the pane under the pointer
     /// (select-pane daemon-side, so the daemon's own active-pane state
     /// follows); events forward pane-relative SGR when the pane owns
     /// mouse tracking; the wheel scrolls the client's scrollback when it
@@ -2648,13 +2681,22 @@ impl WindowSession {
     /// relative `resize-pane`, and release without any motion falls
     /// through as a click (focus, plus the pane's release when owned).
     fn route_mouse(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, mouse: SgrMouse) {
-        // Window-relative, 0-based.
+        // Window-relative, 0-based host coordinates.
         let Some(x) = mouse.col.checked_sub(1) else {
             return;
         };
         let Some(y) = mouse.row.checked_sub(1) else {
             return;
         };
+
+        // A drag in flight continues over motion/release regardless of
+        // where the pointer is (a pointer that wanders onto the strip
+        // row must not strand it); the drag's press stored content
+        // coordinates, so the strip row saturates to content row 0.
+        if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
+            self.drag_event(conn, x, y.saturating_sub(1), mouse.release);
+            return;
+        }
 
         // The help panel is modal for the pointer too: while it is up
         // every mouse event is consumed — wheels scroll the PANEL (the
@@ -2669,16 +2711,35 @@ impl WindowSession {
             return;
         }
 
+        // The tab strip owns the top row: a press hit-tests the tabs
+        // and switches windows through the select+resync contract; no
+        // pane focus, no pane forwarding, and no drag ever starts there.
+        if y == 0 {
+            let is_press = !mouse.release
+                && !mouse.is_motion()
+                && !mouse.is_wheel_up()
+                && !mouse.is_wheel_down();
+            if is_press {
+                self.tab_click(conn, x);
+            }
+            return;
+        }
+        // Below the strip, content coordinates are host rows minus the
+        // strip row.
+        let Some(cy) = y.checked_sub(1) else {
+            return;
+        };
+
         if mouse.is_wheel_up() || mouse.is_wheel_down() {
             if self.drag.is_some() {
                 return; // the held button owns the pointer; wheels wait
             }
-            let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+            let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
                 return;
             };
             let owns = self.pane_owns_mouse(rect.pane);
             let delta: isize = if mouse.is_wheel_up() { 3 } else { -3 };
-            if !owns && self.renderer.wheel_scroll(x, y, delta) {
+            if !owns && self.renderer.wheel_scroll(x, cy, delta) {
                 return; // consumed client-side
             }
             if owns {
@@ -2689,12 +2750,12 @@ impl WindowSession {
 
         if mouse.release || mouse.is_motion() {
             if self.drag.is_some() {
-                self.drag_event(conn, x, y, mouse.release);
+                self.drag_event(conn, x, cy, mouse.release);
                 return;
             }
             // Drag/release only matter to a pane that owns the mouse;
             // focus follows press only.
-            let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+            let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
                 return;
             };
             if self.pane_owns_mouse(rect.pane) {
@@ -2708,13 +2769,13 @@ impl WindowSession {
         // drag handles, herdr's semantics); then it falls through to the
         // focus path below. The plain border segments around a label stay
         // draggable (divider_near still matches the boundary line).
-        if let Some(divider) = self.renderer.divider_near(x, y, 1) {
-            if !self.renderer.label_cell_at(x, y) {
-                self.drag = Some(DragState::Pending { divider, x, y });
+        if let Some(divider) = self.renderer.divider_near(x, cy, 1) {
+            if !self.renderer.label_cell_at(x, cy) {
+                self.drag = Some(DragState::Pending { divider, x, y: cy });
                 return;
             }
         }
-        let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+        let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
             return;
         };
         self.renderer.focus(rect.pane);
@@ -2722,6 +2783,31 @@ impl WindowSession {
         if self.pane_owns_mouse(rect.pane) {
             self.forward_mouse(conn, &rect, &mouse);
         }
+    }
+
+    /// A press on the tab strip: hit-test the clicked column against the
+    /// painted layout and switch to that window through the existing
+    /// select+resync contract (daemon-side `select-window`, then a full
+    /// re-seed). A click on the already-shown window, or on a pad/marker
+    /// column, does nothing. No pane focus, no pane forwarding.
+    fn tab_click(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, x: u16) {
+        let Some(index) = self.tab_strip.hit_test(x) else {
+            return;
+        };
+        let Some((id, _)) = self.status.windows().get(index) else {
+            return;
+        };
+        let id = id.clone();
+        if id == self.window {
+            return; // the shown window: a no-op click
+        }
+        if !conn
+            .send_checked(&format!("select-window -t {id}"))
+            .is_ok_and(|reply| reply.ok)
+        {
+            return;
+        }
+        self.reseed_window(conn, &id);
     }
 
     /// Whether `pane`'s emulator tracks the mouse (the forwarding gate).
@@ -2836,7 +2922,10 @@ impl WindowSession {
         *applied = *pending;
     }
 
-    /// Re-encode one host mouse report pane-relative and send it.
+    /// Re-encode one host mouse report pane-relative and send it. The
+    /// report's row is host 1-based; the pane rects live in content
+    /// coordinates (below the strip row), so the strip comes off
+    /// first.
     fn forward_mouse(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -2844,7 +2933,7 @@ impl WindowSession {
         mouse: &SgrMouse,
     ) {
         let rel_col = mouse.col.saturating_sub(1).saturating_sub(rect.x);
-        let rel_row = mouse.row.saturating_sub(1).saturating_sub(rect.y);
+        let rel_row = mouse.row.saturating_sub(2).saturating_sub(rect.y);
         let bytes = mouse.reencode_sgr(rel_col, rel_row);
         super::forward_chunked(conn, format!("%{}", rect.pane), &bytes);
     }
@@ -2919,34 +3008,70 @@ impl WindowSession {
         Ok(())
     }
 
-    /// Frame the pending output at cadence: panes, the status row, then
-    /// the cursor — positioned at the focused pane's tracked cell (mapped
-    /// through rect origin + scroll offset; hidden when the view is
-    /// scrolled off live or the pane hid its cursor via DECTCEM).
-    /// Frame the pending output at cadence: panes, the status row, then
-    /// the cursor — positioned at the focused pane's tracked cell (mapped
-    /// through rect origin + scroll offset; hidden when the view is
-    /// scrolled off live or the pane hid its cursor via DECTCEM). A
-    /// flushed frame always repositions (the diff's last per-cell CUP
-    /// left the cursor wherever that cell sits); a quiet pump re-emits
-    /// only on a state change.
+    /// Frame the pending output at cadence: panes, the tab strip, the
+    /// status row, then the cursor — positioned at the focused pane's
+    /// tracked cell (mapped through rect origin + scroll offset; hidden
+    /// when the view is scrolled off live or the pane hid its cursor via
+    /// DECTCEM). A flushed frame always repositions (the diff's last
+    /// per-cell CUP left the terminal cursor wherever the last diff cell
+    /// sits), while a quiet pump re-emits only on a state change.
+    ///
+    /// Coordinate spaces: the renderer's frame covers the rows BETWEEN
+    /// the strip and the status row, so its diff and cursor rebase +1
+    /// host row; the strip flushes at host row 0 and the status row at
+    /// the host's bottom row.
     fn frame(&mut self, sink: &mut dyn FlushSink) {
+        const STRIP_ROWS: u16 = 1;
         let mut flushed = false;
         if self.renderer.needs_frame() {
             let diff = self.renderer.render_frame();
             if !diff.is_empty() {
-                sink.flush(&diff);
+                let rebased: Vec<(u16, u16, RtCell)> = diff
+                    .into_iter()
+                    .map(|(x, y, cell)| (x, y + STRIP_ROWS, cell))
+                    .collect();
+                sink.flush(&rebased);
                 flushed = true;
             }
+        }
+        if self.flush_tab_strip(sink) {
+            flushed = true;
         }
         if self.flush_status_row(sink) {
             flushed = true;
         }
-        let cursor = self.renderer.focused_cursor();
+        let cursor = self
+            .renderer
+            .focused_cursor()
+            .map(|(x, y, style)| (x, y + STRIP_ROWS, style));
         if flushed || self.cursor_placed.as_ref() != Some(&cursor) {
             sink.place_cursor(cursor);
             self.cursor_placed = Some(cursor);
         }
+    }
+
+    /// Paint the tab strip from the queried window state (the same
+    /// state the status row composes from): the shown session's windows
+    /// in order, the active one accented.
+    fn draw_tab_strip(&mut self) {
+        let (cols, _rows) = super::conn::terminal_grid();
+        if self.tab_strip.cols() != cols {
+            self.tab_strip = TabStrip::new(cols);
+        }
+        self.tab_strip
+            .paint(self.status.windows(), self.status.active_window.as_deref());
+    }
+
+    /// Flush the tab strip's changed cells to the host's top row.
+    /// Returns whether anything flushed (its per-cell CUPs move the host
+    /// cursor, so the caller must re-place it).
+    fn flush_tab_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
+        let diff = self.tab_strip.diff();
+        if diff.is_empty() {
+            return false;
+        }
+        sink.flush(&diff);
+        true
     }
 }
 
@@ -3860,7 +3985,10 @@ mod tests {
         // hide is simulated by the initial cursor_placed = Some(None)
         // state — a placement must appear regardless, because flushed).
         session.frame(&mut sink);
-        let expected = session.renderer.focused_cursor();
+        let expected = session
+            .renderer
+            .focused_cursor()
+            .map(|(x, y, style)| (x, y + 1, style)); // +1: the strip row
         assert_eq!(sink.placements.len(), 1, "flushed frame places once");
         assert_eq!(sink.placements[0], expected);
 
@@ -3872,10 +4000,13 @@ mod tests {
         // mapped cell did not move (the diff's CUPs moved the host one).
         // The "x" feed moved the tracked cursor to (1, 1); recompute.
         session.renderer.feed_output(1, b"x");
-        let moved = session.renderer.focused_cursor().expect("cursor");
+        let moved = session
+            .renderer
+            .focused_cursor()
+            .map(|(x, y, style)| (x, y + 1, style)); // +1: the strip row
         session.frame(&mut sink);
         assert_eq!(sink.placements.len(), 2, "flush re-places");
-        assert_eq!(sink.placements[1], Some(moved));
+        assert_eq!(sink.placements[1], moved);
 
         // Scroll the focused pane off live: state change to hidden even
         // without a flush. Pane 1 needs scrollback to scroll into first.
@@ -3890,12 +4021,12 @@ mod tests {
         assert_eq!(sink.placements[2], None);
     }
 
-    /// A live `AttachConn` over a recording listener: every command rides
-    /// the wire and gets an ok empty reply, and the recorded (name, line)
-    /// pairs land on the returned receiver. The resize/swap affordance
-    /// tests read the exact wire spellings off it.
-    fn recording_conn(
+    /// `recording_conn` with per-command canned replies: the fake daemon
+    /// answers the exact command line with the body, everything else
+    /// with an ok empty reply.
+    fn scripted_conn(
         tag: &str,
+        replies: std::collections::HashMap<String, String>,
     ) -> (
         std::sync::mpsc::Receiver<(String, String)>,
         crate::mux::attach::conn::AttachConn,
@@ -3930,7 +4061,7 @@ mod tests {
                 let reply = match name.as_str() {
                     "version" => "9.9.9+deadbeef".to_string(),
                     "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
-                    _ => String::new(),
+                    _ => replies.get(trimmed).cloned().unwrap_or_default(),
                 };
                 number += 1;
                 tx.send((name, trimmed.to_owned())).ok();
@@ -3942,6 +4073,19 @@ mod tests {
         });
         let conn = crate::mux::attach::conn::AttachConn::connect(&path).expect("connect");
         (rx, conn)
+    }
+
+    /// A live `AttachConn` over a recording listener: every command rides
+    /// the wire and gets an ok empty reply, and the recorded (name, line)
+    /// pairs land on the returned receiver. The resize/swap affordance
+    /// tests read the exact wire spellings off it.
+    fn recording_conn(
+        tag: &str,
+    ) -> (
+        std::sync::mpsc::Receiver<(String, String)>,
+        crate::mux::attach::conn::AttachConn,
+    ) {
+        scripted_conn(tag, std::collections::HashMap::new())
     }
 
     /// The next recorded line named `name`, bounding the wait.
@@ -3960,6 +4104,133 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A sink recording every flushed cell and cursor placement — the
+    /// frame-path read for the strip and height assertions.
+    #[derive(Default)]
+    struct RecordingSink {
+        cells: Vec<(u16, u16, RtCell)>,
+        placements: Vec<Option<(u16, u16, CursorStyle)>>,
+    }
+
+    impl FlushSink for RecordingSink {
+        fn flush(&mut self, diff: &[(u16, u16, RtCell)]) {
+            self.cells.extend_from_slice(diff);
+        }
+        fn repaint_all(&mut self) {}
+        fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
+            self.placements.push(cursor);
+        }
+    }
+
+    /// The tab strip costs one content row everywhere the status row
+    /// does: the renderer is the host grid minus strip minus status
+    /// (80x25 host → an 80x23 content renderer).
+    #[test]
+    fn session_height_carves_the_strip_and_status_out() {
+        let session = WindowSession::new(80, 25);
+        assert_eq!(session.renderer.window_size(), (80, 23));
+    }
+
+    /// A flushed frame lands the strip at host row 0, rebases the pane
+    /// diff one host row down, and places the cursor one host row below
+    /// its renderer-mapped cell — the strip's height consumers, pinned.
+    /// (`terminal_grid` is 80x24 headless, so the session is built for a
+    /// 24-row host: strip 0, panes 1..=22, status 23.)
+    #[test]
+    fn frame_flushes_the_strip_at_row_zero_and_rebases_the_panes() {
+        let mut session = WindowSession::new(80, 24);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        session.renderer.feed_output(1, b"pane-one\r\n");
+        // Paint the strip and the status row so both rows flush.
+        let windows = vec![
+            ("@0".to_string(), "main".to_string()),
+            ("@1".to_string(), "vim".to_string()),
+        ];
+        session.tab_strip.paint(&windows, Some("@0"));
+        session.draw_status_row();
+
+        let mut sink = RecordingSink::default();
+        session.frame(&mut sink);
+
+        // The strip's text cells flush at the host's top row...
+        let strip_cells: Vec<&(u16, u16, RtCell)> =
+            sink.cells.iter().filter(|(_, y, _)| *y == 0).collect();
+        assert!(!strip_cells.is_empty(), "the strip flushes at row 0");
+        // ...the pane diff lands strictly between the strip and the
+        // status row (rebased one host row down)...
+        assert!(sink.cells.iter().any(|(_, y, _)| (1..=22).contains(y)));
+        // ...and the status row stays at the bottom (23).
+        assert!(sink.cells.iter().any(|(x, y, _)| *y == 23 && *x < 80));
+        // The cursor maps through the strip: renderer row + 1.
+        let expected = session
+            .renderer
+            .focused_cursor()
+            .map(|(x, y, style)| (x, y + 1, style));
+        assert_eq!(sink.placements.last(), Some(&expected));
+    }
+
+    /// A press on a tab switches to that window through the existing
+    /// select+resync contract — the wire carries `select-window` and the
+    /// re-seed's size report (content height = rows - strip - status =
+    /// 23 on an 80x25 host) — and never focuses or forwards into a pane.
+    #[test]
+    fn strip_click_switches_windows_without_forwarding() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("list-sessions".to_string(), "$0: work".to_string());
+        replies.insert(
+            "list-windows -t $0".to_string(),
+            "@0 - main\n@1 * vim".to_string(),
+        );
+        replies.insert("list-panes -t @1".to_string(), "%1".to_string());
+        let (rx, mut conn) = scripted_conn("tabclick", replies);
+        let mut session = WindowSession::new(80, 25);
+        session.window = "@0".to_string();
+
+        // The queried state fills through the real refresh path; the
+        // strip paints from it.
+        session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+        session.draw_tab_strip();
+        // Drain the refresh traffic so the click's wire assertions see
+        // only the click's lines.
+        while rx
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_ok()
+        {}
+
+        // The second tab's cell (" 1:vim ") spans cols 8..15; the click
+        // is a 1-based host col 12 (strip col 11).
+        session.tab_click(&mut conn, 11);
+
+        assert_eq!(session.window, "@1", "the view moved to the clicked tab");
+        assert_eq!(session.status.active_window.as_deref(), Some("@1"));
+        // The wire contract: select-window + re-seed; nothing pane-level.
+        let switch = wait_recorded(&rx, "select-window");
+        assert!(
+            switch.contains("-t @1"),
+            "the click selects the clicked window: {switch}"
+        );
+        let size_report = wait_recorded(&rx, "refresh-client");
+        assert!(
+            size_report.contains("80x23"),
+            "the size report carries content height rows-strip-status: {size_report}"
+        );
+        // No focus, no forwarding: drain the residual resync traffic
+        // (status re-queries) and assert nothing pane-level rode it.
+        while rx
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_ok()
+        {}
+        // (The receiver is dropped with the conn at scope end; the
+        // assertions above ran over every recorded line already.)
+        assert_eq!(
+            session.tab_strip.hit_test(11),
+            Some(1),
+            "the strip layout still maps the clicked column"
+        );
     }
 
     /// The drag affordance, headless end-to-end: a press within one cell
@@ -4486,9 +4757,11 @@ mod tests {
         session.route_mouse(
             &mut conn,
             SgrMouse {
+                // Host row 14 = content row 12 (the strip row shifts the
+                // content down one).
                 cb: 0,
                 col: 3,
-                row: 13,
+                row: 14,
                 release: false,
             },
         );

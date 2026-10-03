@@ -169,6 +169,12 @@ impl StatusState {
         Ok(())
     }
 
+    /// The shown session's windows as `(id, name)`, window order — the
+    /// tab strip's source of truth.
+    pub(crate) fn windows(&self) -> &[(String, String)] {
+        &self.windows
+    }
+
     /// Compose the status line as styled segments, truncated to `cols`
     /// display columns. `scroll` is the focused pane's client scroll
     /// offset when a scroll view is up.

@@ -1236,19 +1236,20 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
     let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
 
-    // Left press at window-relative col 10 row 5 (1-based): the single
-    // pane's rect starts at (0,0), so pane-relative is (9, 4) 0-based and
-    // the wire spelling is ESC[<0;10;5M.
+    // Left press at host col 10 row 5 (1-based): the tab strip shifts the
+    // content down one row, so the single pane's rect (0,0) maps the
+    // click to pane-relative (9, 3) 0-based and the wire spelling is
+    // ESC[<0;10;4M.
     host.to_child.write_all(b"\x1b[<0;10;5M").expect("click");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"0;10;5", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"0;10;4", Duration::from_secs(10));
 
     let capture = client
         .send(&format!("capture-pane -t {pane}"))
         .expect("capture");
     let body = capture.join("\n");
     assert!(
-        body.contains("^[[<0;10;5M"),
+        body.contains("^[[<0;10;4M"),
         "the owning pane must receive the pane-relative SGR click: {body:?}\n\
          stderr: {}",
         stderr.lock().unwrap()
@@ -1515,16 +1516,17 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
         String::from_utf8_lossy(&got)
     );
 
-    // The daemon re-divided to the reported content grid (100x29): each
-    // pane re-fit to half of 100 columns. Give the broadcast/refit a beat,
-    // then read pane-info ground truth.
+    // The daemon re-divided to the reported content grid (100x28 on a
+    // 30-row host: rows minus the tab strip minus the status row): each
+    // pane re-fit to half of 100 columns. Give the broadcast/refit a
+    // beat, then read pane-info ground truth.
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut fitted = false;
     while Instant::now() < deadline {
         let info = client
             .send(&format!("pane-info -t {pane0}"))
             .expect("pane-info");
-        if info.join(" ").contains("50x29") {
+        if info.join(" ").contains("50x28") {
             fitted = true;
             break;
         }
@@ -1533,7 +1535,7 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
     assert!(
         fitted,
         "the size report must re-fit the daemon's panes to the content grid \
-         (100x29, half = 50 wide): {:?}",
+         (100x28, half = 50 wide): {:?}",
         client
             .send(&format!("pane-info -t {pane0}"))
             .expect("pane-info")
@@ -1986,6 +1988,56 @@ fn render_mode_without_target_picks_the_newest_session() {
         !got.windows(13).any(|w| w == b"OLDEST-MARKER"),
         "the first session's content must not be the rendered view: {:?}",
         String::from_utf8_lossy(&got)
+    );
+    host.killer.kill().ok();
+}
+
+/// The tab strip, PTY level: a click on the second tab in the strip row
+/// switches the shown window daemon-side — the client sends
+/// `select-window` and the daemon's active-window marker moves — and no
+/// `send-keys` reaches any pane from a strip click (no forwarding).
+#[cfg(unix)]
+#[test]
+fn render_mode_tab_click_switches_the_active_window() {
+    let (fixture, _daemon, mut client) = fixture_with_session("tabstrip");
+    // Two windows with deterministic names: " 0:one " = 8 cols, so the
+    // second tab's cell spans 1-based host cols 9..15.
+    client.send("new-window -t $0").expect("new-window");
+    client.send("rename-window -t @0 one").expect("rename @0");
+    client.send("rename-window -t @1 two").expect("rename @1");
+    client.send("select-window -t @0").expect("back to @0");
+    std::thread::sleep(Duration::from_millis(400));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", "@0"]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"0:one", Duration::from_secs(10));
+    // Drain the settle paint so the post-click reads are click-attributable.
+    while host.output_rx.try_recv().is_ok() {}
+
+    // A press on the second tab (host row 1 = the strip).
+    host.to_child
+        .write_all(b"\x1b[<0;11;1M")
+        .expect("click press");
+    host.to_child.flush().ok();
+
+    // The authority: the daemon's active-window marker moved to @1.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut activated = false;
+    while std::time::Instant::now() < deadline {
+        let windows = client.send("list-windows -t $0").expect("list-windows");
+        if windows
+            .iter()
+            .any(|l| l.split_whitespace().next() == Some("@1") && l.contains('*'))
+        {
+            activated = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        activated,
+        "the click must activate the clicked window daemon-side. stderr: {}",
+        stderr.lock().unwrap()
     );
     host.killer.kill().ok();
 }
