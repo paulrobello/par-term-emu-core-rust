@@ -287,14 +287,16 @@ pub fn log_screen_switch(to_alt: bool, reason: &str) {
 
 /// Device query logging
 pub fn log_device_query(query: &str, response: &[u8]) {
-    if is_enabled(DebugLevel::Info) {
+    // Trace: device queries arrive in bursts from real apps; Info floods
+    // any stderr sink (the attach client's is the rendered screen).
+    if is_enabled(DebugLevel::Trace) {
         let hex: String = response
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect::<Vec<_>>()
             .join(" ");
         log(
-            DebugLevel::Info,
+            DebugLevel::Trace,
             "DEVICE_QUERY",
             &format!("query='{}' response=[{}]", query, hex),
         );

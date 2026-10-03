@@ -24,7 +24,10 @@ impl Terminal {
                         .copied()
                         .unwrap_or(0) as u8;
                     self.keyboard_state.modify_other_keys_mode = mode.min(2);
-                    crate::debug_info!(
+                    // Per-sequence diagnostic: trace, not info — a chatty
+                    // TUI sets this constantly and would flood any stderr
+                    // sink (the attach client's is the rendered screen).
+                    crate::debug_trace!(
                         "CSI",
                         "modifyOtherKeys mode set to {}",
                         self.keyboard_state.modify_other_keys_mode

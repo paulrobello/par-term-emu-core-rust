@@ -201,7 +201,7 @@ impl PtySession {
                             // (iTerm2 does this, which is why tmux works correctly there)
                             if !was_alt_screen && is_alt_screen {
                                 debug::log(
-                                    debug::DebugLevel::Info,
+                                    debug::DebugLevel::Trace,
                                     "ALT_SCREEN",
                                     "Entered alternate screen - sending SIGWINCH resize pulse",
                                 );

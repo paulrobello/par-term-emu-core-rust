@@ -370,6 +370,10 @@ fn main() -> std::process::ExitCode {
     // AttachOptions::socket_path (same precedence as the daemon/--cmd).
     #[cfg(feature = "attach")]
     if let Some(attach) = cli.attach.as_ref() {
+        // The client caps the facade at Error: its stderr IS the rendered
+        // screen, and the emulator's per-sequence diagnostics (a chatty
+        // TUI emits hundreds) would otherwise flood the display.
+        log::set_max_level(log::LevelFilter::Error);
         let mut options = attach.options();
         let eff = effective(&cli, true);
         if options.prefix.is_none() {
