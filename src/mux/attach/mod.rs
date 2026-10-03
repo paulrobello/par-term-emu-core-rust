@@ -181,7 +181,35 @@ fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
             return Err(AttachError::Handshake(std::io::Error::other(err)));
         }
     };
-    let session = match Session::new(conn, &path, options.target.as_deref(), prefix, reload_key) {
+    // The management chords (split/kill/new-window) come from the config
+    // file — main.rs hands prefix/reload over explicitly, the management
+    // keys resolve here against the same canonical file, the SAME pure
+    // parser the live reload runs (one grammar, one error shape). A
+    // malformed chord fails the attach like a malformed --prefix; a
+    // broken FILE stays the lenient startup rule (warn-and-defaults —
+    // the strict error is the reload's, per docs/MUX.md).
+    let management = match crate::mux::config::reload_client_chords(
+        &crate::mux::config::load_canonical(),
+        &crate::mux::config::Chords {
+            prefix,
+            reload: reload_key,
+            management: crate::mux::config::Management::default(),
+        },
+    ) {
+        Ok(chords) => chords.management,
+        Err(err) => {
+            drop(guard);
+            return Err(AttachError::Handshake(std::io::Error::other(err)));
+        }
+    };
+    let session = match Session::new(
+        conn,
+        &path,
+        options.target.as_deref(),
+        prefix,
+        reload_key,
+        management,
+    ) {
         Ok(session) => session,
         Err(err) => {
             // The guard drop restores the terminal before the message
@@ -321,7 +349,7 @@ fn marked_line(body: &[String], sigil: &str, target: &str) -> Result<String, Str
 
 /// The marked pane id from a `list-panes -t <window>` reply, preferring
 /// the `*`-active pane over the first row.
-fn marked_pane(body: &[String], target: &str) -> Result<String, String> {
+pub(crate) fn marked_pane(body: &[String], target: &str) -> Result<String, String> {
     let active = body
         .iter()
         .find(|l| l.split_whitespace().nth(2) == Some("*"))
@@ -379,6 +407,10 @@ struct Session {
     /// The reload chord: the key byte matched after the prefix, and the
     /// chord spelling for the status cue. Both are live-rebindable.
     reload_key: u8,
+    /// The window/pane management chords (split % / split " / kill x /
+    /// new-window c): the key bytes matched after the prefix, before the
+    /// fixed command table. Live-rebindable by the reload.
+    management: crate::mux::config::Management,
     /// A transient confirmation cue drawn once on the status row and
     /// cleared on the next redraw cycle (`config reloaded`, or the
     /// reload's failure text).
@@ -394,6 +426,7 @@ impl Session {
         target: Option<&str>,
         prefix: u8,
         reload_key: u8,
+        management: crate::mux::config::Management,
     ) -> Result<Self, String> {
         // Registration replay (held panes' %pane-exited, zoomed windows'
         // %layout-change) is state about OTHER panes mostly; the resync
@@ -418,6 +451,7 @@ impl Session {
             prefix,
             prefix_pending: false,
             reload_key,
+            management,
             flash: None,
         };
         session.resync();
@@ -733,15 +767,25 @@ impl Session {
                     self.reload_config();
                     continue;
                 }
-                match prefix_command(byte) {
-                    PrefixKey::Detach => detached = true,
-                    PrefixKey::CyclePane => self.cycle_pane(),
-                    PrefixKey::NextWindow => self.switch_window(1),
-                    PrefixKey::PrevWindow => self.switch_window(-1),
-                    PrefixKey::NextSession => self.switch_session(1),
-                    PrefixKey::PrevSession => self.switch_session(-1),
-                    PrefixKey::Respawn => self.respawn_if_dead(),
-                    PrefixKey::None => {}
+                // The management chords match by byte BEFORE the fixed
+                // command table: they are configurable, so they cannot be
+                // static arms, and the defaults (`%`, `"`, `x`, `c`) are
+                // consumed unbound by the table today.
+                match self.management_command(byte) {
+                    Some(ManagementKey::SplitRight) => self.split_pane(true),
+                    Some(ManagementKey::SplitDown) => self.split_pane(false),
+                    Some(ManagementKey::KillPane) => self.kill_focused_pane(),
+                    Some(ManagementKey::NewWindow) => self.new_window_in_session(),
+                    None => match prefix_command(byte) {
+                        PrefixKey::Detach => detached = true,
+                        PrefixKey::CyclePane => self.cycle_pane(),
+                        PrefixKey::NextWindow => self.switch_window(1),
+                        PrefixKey::PrevWindow => self.switch_window(-1),
+                        PrefixKey::NextSession => self.switch_session(1),
+                        PrefixKey::PrevSession => self.switch_session(-1),
+                        PrefixKey::Respawn => self.respawn_if_dead(),
+                        PrefixKey::None => {}
+                    },
                 }
             } else if byte == self.prefix {
                 self.prefix_pending = true;
@@ -910,6 +954,110 @@ impl Session {
         }
     }
 
+    /// Which management chord (if any) `key` is. Matched by byte BEFORE
+    /// the fixed command table — the chords are configurable, so they
+    /// cannot be static table arms.
+    fn management_command(&self, key: u8) -> Option<ManagementKey> {
+        let m = self.management;
+        match key {
+            k if k == m.split_right => Some(ManagementKey::SplitRight),
+            k if k == m.split_down => Some(ManagementKey::SplitDown),
+            k if k == m.kill_pane => Some(ManagementKey::KillPane),
+            k if k == m.new_window => Some(ManagementKey::NewWindow),
+            _ => None,
+        }
+    }
+
+    /// prefix % / ": `split-window -t <focused> [-h]` — the daemon
+    /// focuses the new pane and replies with its id; land the pump on it
+    /// (the same switch-then-refresh contract `cycle_pane` follows, so
+    /// the redraw is the fresh pane's authoritative screen). tmux lands
+    /// you on the new split; this is the same follow.
+    fn split_pane(&mut self, right: bool) {
+        let flag = if right { " -h" } else { "" };
+        let Ok(reply) = self
+            .conn
+            .send_checked(&format!("split-window -t {}{flag}", self.pane))
+        else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        if let Some(new_pane) = reply.body.first() {
+            self.switch_to_pane(new_pane);
+        }
+    }
+
+    /// prefix x: `kill-pane -t <focused>`. Killing the focused pane
+    /// removes it — the window survives (a survivor is announced via
+    /// %window-pane-changed) or the window itself closes. The pump
+    /// follows the successor: the window's active pane when one remains
+    /// (the same land-on-survivor move the switch chords make), the
+    /// dead-pane cue when the whole window closed is NOT survivable from
+    /// here — that path ends through %sessions-changed's existing
+    /// contract (passthrough: the next pane-info fails, the reconnect
+    /// gate reports the pane gone; the user sees the cue and detaches or
+    /// respawns per the standing contract). Best-effort either way: a
+    /// failed kill (the pane already gone) changes nothing client-side.
+    fn kill_focused_pane(&mut self) {
+        let window = self.window.clone();
+        let Ok(reply) = self
+            .conn
+            .send_checked(&format!("kill-pane -t {}", self.pane))
+        else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        // Does the window survive? Its new active pane is the land site.
+        if let Ok(list) = self.conn.send_checked(&format!("list-panes -t {window}")) {
+            if list.ok {
+                if let Ok(survivor) = marked_pane(&list.body, &window) {
+                    self.switch_to_pane(&survivor);
+                    return;
+                }
+            }
+        }
+        // The window is gone (the focused pane was its last): the pane
+        // this pump was showing no longer exists anywhere. Mirror the
+        // held-dead guard's silence — take no further bytes, show the
+        // exit cue — and let the user detach. `pane-info` on the dead id
+        // fails on the next status refresh, which is fine: the guard
+        // keeps stdin dropped and the chord table live.
+        self.exited = Some(None);
+        self.refresh_status();
+        self.draw_status();
+    }
+
+    /// prefix c: `new-window -t <session>` — the daemon replies with the
+    /// new window's id; select it and attach to its active pane (the
+    /// reply ordering in tmux puts you on the fresh window; this follows).
+    fn new_window_in_session(&mut self) {
+        let Some(session) = self.session_id.clone() else {
+            return;
+        };
+        let Ok(reply) = self.conn.send_checked(&format!("new-window -t {session}")) else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let Some(window) = reply.body.first() else {
+            return;
+        };
+        let window = window.trim();
+        if self
+            .conn
+            .send_checked(&format!("select-window -t {window}"))
+            .is_ok_and(|reply| reply.ok)
+        {
+            self.window = window.to_string();
+            self.attach_window_active_pane(window);
+        }
+    }
+
     /// The reload chord: re-read the config file, rebind the prefix and
     /// the reload chord live (the reload key rebinding includes itself —
     /// the NEXT reload follows the new chord), queue the status cue, and
@@ -920,10 +1068,12 @@ impl Session {
         match reload_client_chords(crate::mux::config::Chords {
             prefix: self.prefix,
             reload: self.reload_key,
+            management: self.management,
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;
                 self.reload_key = new_chords.reload;
+                self.management = new_chords.management;
                 self.flash = Some("config reloaded".to_string());
             }
             Err(err) => {
@@ -1142,6 +1292,21 @@ enum PrefixKey {
     None,
 }
 
+/// Which management chord `key` is (the enum `Session::management_command`
+/// and the render router match on; the four actions live on `Session` as
+/// `split_pane`, `kill_focused_pane`, and `new_window_in_session`, and on
+/// `WindowSession` as `management_chord`).
+pub(crate) enum ManagementKey {
+    /// Split the focused pane right (`split-window -h`).
+    SplitRight,
+    /// Split the focused pane down (`split-window`, default direction).
+    SplitDown,
+    /// Kill the focused pane (`kill-pane`).
+    KillPane,
+    /// New window in the focused pane's session (`new-window`).
+    NewWindow,
+}
+
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
 /// next/prev window; ( ) prev/next session; r respawn-pane when held
 /// dead. An unbound key is consumed silently (tmux drops it too).
@@ -1352,6 +1517,26 @@ mod tests {
             }
         }
         out
+    }
+
+    /// The next recorded line whose command name is `name`, draining any
+    /// interleaved status re-queries first — the robust needle when the
+    /// chord's resync burst has a variable tail.
+    fn wait_for_line(rx: &Receiver<(String, String)>, name: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() > deadline {
+                panic!("no {name} line arrived within the bound");
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok((n, line)) if n == name => return line,
+                Ok(_) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("no {name} line: the daemon side is gone");
+                }
+            }
+        }
     }
 
     /// The daemon answers version and list-commands; the handshake must
@@ -1721,6 +1906,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         // Plain bytes forward when the pane is live.
@@ -1755,6 +1941,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         assert!(
@@ -1792,6 +1979,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         let line = session.status_line();
@@ -1840,6 +2028,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
 
@@ -1914,6 +2103,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         session.emulator.feed(b"\x1b[5;3H");
@@ -1957,6 +2147,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         // The fake daemon answers every unknown command with an ok empty
@@ -1976,6 +2167,385 @@ mod tests {
         assert_eq!(
             lines[5].0, "refresh-client",
             "the respawn resync rode the revived connection: {lines:?}"
+        );
+    }
+
+    /// The scripted-reply daemon the management-chord tests share: like
+    /// [`serve_one`] but with a table covering split-window (reply = new
+    /// pane id), list-panes under both windows, select-pane,
+    /// new-window (reply = window id), and select-window.
+    fn serve_management(
+        stream: crate::mux::LocalStream,
+        tx: std::sync::mpsc::Sender<(String, String)>,
+    ) {
+        use interprocess::TryClone as _;
+        let mut writer = stream.try_clone().expect("clone stream");
+        let mut reader = BufReader::new(stream);
+        let mut number = 0u32;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+            let reply = match trimmed {
+                "version" => "9.9.9+deadbeef".to_string(),
+                "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
+                "list-panes" => "%0\n".to_string(),
+                // The focused pane %0 splits: the new pane %1 arrives.
+                "split-window -t %0 -h" => "%1\n".to_string(),
+                "split-window -t %0" => "%1\n".to_string(),
+                // After the split lands the pump on %1, the window @0
+                // holds both panes with %1 active (the daemon focuses the
+                // fresh split).
+                "list-panes -t @0" => "%0 0 -\n%1 1 *".to_string(),
+                "select-pane -t %1" => String::new(),
+                "select-pane -t %0" => String::new(),
+                // new-window in session $0: the fresh @1.
+                "new-window -t $0" => "@1\n".to_string(),
+                "select-window -t @1" => String::new(),
+                "list-windows -t $0" => "@0 0 -\n@1 1 *".to_string(),
+                // The new window's active pane: %1 (a distinct id keeps
+                // the landing assertion honest — %0 is @0's pane).
+                "list-panes -t @1" => "%1 0 *".to_string(),
+                _ => String::new(),
+            };
+            number += 1;
+            tx.send((name, trimmed.to_owned())).ok();
+            writer
+                .write_all(emit_block(number, &reply, true).as_bytes())
+                .ok();
+            writer.flush().ok();
+        }
+    }
+
+    /// Bind the management fake and build a Session over it, focused on
+    /// %0 in window @0 of session $0.
+    fn management_session(tag: &str) -> (std::sync::mpsc::Receiver<(String, String)>, Session) {
+        let path = test_socket(tag);
+        let _ = std::fs::remove_file(&path);
+        let listener = crate::mux::bind_local_listener(&path).expect("bind");
+        let (tx, rx) = channel();
+        let sender = tx.clone();
+        std::thread::spawn(move || {
+            if let Ok(stream) = listener.accept() {
+                serve_management(stream, sender);
+            }
+        });
+        let conn = conn::AttachConn::connect(&path).expect("connect");
+        drop(tx);
+        let mut session = Session {
+            conn,
+            socket_path: path,
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: "@0".to_string(),
+            session_id: Some("$0".to_string()),
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            flash: None,
+        };
+        // A status draw writes to the process stdout; in tests that is
+        // the captured harness. Idle both flags so route_bytes's tail
+        // has nothing to repaint and the wire sees only the chord.
+        session.drawn_size = Some((80, 24));
+        (rx, session)
+    }
+
+    /// prefix %: `split-window -t %0 -h` rides the wire, and the pump
+    /// lands on the new pane — select-pane %1 plus the switch contract's
+    /// refresh-client resync, with the fresh pane now the Session's
+    /// target (subsequent typing forwards to it).
+    #[test]
+    fn split_right_chord_sends_split_window_and_lands_on_the_new_pane() {
+        let (rx, mut session) = management_session("split-h");
+        assert!(!session.route_bytes(&[0x02, b'%']));
+        let lines = recorded(&rx, 6);
+        let names: Vec<&str> = lines.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "version",
+                "list-commands",
+                "set-client-colors",
+                "refresh-client",
+                "split-window",
+                "select-pane",
+            ],
+            "the chord then the landing: {lines:?}"
+        );
+        assert_eq!(
+            lines[4].1, "split-window -t %0 -h",
+            "the split targets the FOCUSED pane with -h: {lines:?}"
+        );
+        assert_eq!(
+            lines[5].1, "select-pane -t %1",
+            "the pump followed the new pane from the reply: {lines:?}"
+        );
+        // Forwarding follows the landing: the switch contract's resync
+        // burst (refresh-client, the status re-queries) rides first; the
+        // next plain byte lands on the fresh pane %1.
+        assert!(!session.route_bytes(b"q"));
+        let keys = wait_for_line(&rx, "send-keys");
+        assert_eq!(
+            keys, "send-keys -t %1 -H 71",
+            "typing forwards to the landed pane"
+        );
+    }
+
+    /// prefix ": the vertical spelling (`split-window -t %0` with no -h)
+    /// and the same land-on-the-new-pane contract.
+    #[test]
+    fn split_down_chord_sends_the_vertical_split_spelling() {
+        let (rx, mut session) = management_session("split-v");
+        assert!(!session.route_bytes(&[0x02, b'"']));
+        let lines = recorded(&rx, 6);
+        assert_eq!(
+            lines[4].1, "split-window -t %0",
+            "the default direction rides bare (below): {lines:?}"
+        );
+        assert_eq!(lines[5].1, "select-pane -t %1", "lands on the new pane");
+    }
+
+    /// prefix x: `kill-pane -t %0` rides the wire and the pump follows
+    /// the window's surviving active pane.
+    #[test]
+    fn kill_chord_sends_kill_pane_and_lands_on_the_survivor() {
+        let (rx, mut session) = management_session("kill");
+        assert!(!session.route_bytes(&[0x02, b'x']));
+        let lines = recorded(&rx, 7);
+        let names: Vec<&str> = lines.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "version",
+                "list-commands",
+                "set-client-colors",
+                "refresh-client",
+                "kill-pane",
+                "list-panes",
+                "select-pane",
+            ],
+            "kill, survivor lookup, landing: {lines:?}"
+        );
+        assert_eq!(lines[4].1, "kill-pane -t %0");
+        assert_eq!(
+            lines[5].1, "list-panes -t @0",
+            "the survivor query targets the focused pane's window: {lines:?}"
+        );
+        assert_eq!(
+            lines[6].1, "select-pane -t %1",
+            "the *-marked survivor wins the landing: {lines:?}"
+        );
+    }
+
+    /// prefix x on the window's LAST pane: no survivor — the dead guard
+    /// engages (the exited cue shows; typing is dropped, prefix chords
+    /// keep routing) instead of the pump forwarding into a corpse.
+    #[test]
+    fn kill_of_the_last_pane_engages_the_dead_guard() {
+        let path = test_socket("kill-last");
+        let _ = std::fs::remove_file(&path);
+        let listener = crate::mux::bind_local_listener(&path).expect("bind");
+        let (tx, rx) = channel();
+        let sender = tx.clone();
+        std::thread::spawn(move || {
+            if let Ok(stream) = listener.accept() {
+                use interprocess::TryClone as _;
+                let mut writer = stream.try_clone().expect("clone stream");
+                let mut reader = BufReader::new(stream);
+                let mut number = 0u32;
+                let mut line = String::new();
+                let tx = sender;
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+                    let reply = match name.as_str() {
+                        "version" => "9.9.9+deadbeef".to_string(),
+                        "list-commands" => {
+                            "list-commands\nfeatures replay-held-state\n".to_string()
+                        }
+                        "kill-pane -t %0" => String::new(),
+                        _ => String::new(),
+                    };
+                    // The survivor query (list-panes -t @0) is the one
+                    // command this script errors on: an %error block, no
+                    // body, so `marked_pane` fails and the guard engages.
+                    let ok = name != "list-panes";
+                    if !ok {
+                        number += 1;
+                        tx.send((name.clone(), trimmed.to_owned())).ok();
+                        writer
+                            .write_all(
+                                emit_block(number, "can't identify a pane", false).as_bytes(),
+                            )
+                            .ok();
+                        writer.flush().ok();
+                        continue;
+                    }
+                    number += 1;
+                    tx.send((name, trimmed.to_owned())).ok();
+                    writer
+                        .write_all(emit_block(number, &reply, true).as_bytes())
+                        .ok();
+                    writer.flush().ok();
+                }
+            }
+        });
+        let conn = conn::AttachConn::connect(&path).expect("connect");
+        drop(tx);
+        let mut session = Session {
+            conn,
+            socket_path: path,
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: "@0".to_string(),
+            session_id: Some("$0".to_string()),
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            flash: None,
+        };
+        session.drawn_size = Some((80, 24));
+        assert!(!session.route_bytes(&[0x02, b'x']));
+        assert!(
+            session.exited.is_some(),
+            "no survivor -> the dead guard engages"
+        );
+        // The dead guard drops typing but keeps prefix chords live.
+        assert!(!session.route_bytes(b"typing"), "no detach, bytes dropped");
+        assert!(
+            session.route_bytes(&[0x02, b'd']),
+            "prefix d still detaches"
+        );
+        drop(rx);
+    }
+
+    /// prefix c: `new-window -t $0` rides the wire, the fresh window is
+    /// selected, and the pump attaches to its active pane — the same
+    /// follow the window-switch chords make.
+    #[test]
+    fn new_window_chord_follows_the_new_windows_active_pane() {
+        let (rx, mut session) = management_session("newwin");
+        assert!(!session.route_bytes(&[0x02, b'c']));
+        let lines = recorded(&rx, 7);
+        let names: Vec<&str> = lines.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "version",
+                "list-commands",
+                "set-client-colors",
+                "refresh-client",
+                "new-window",
+                "select-window",
+                "list-panes",
+            ],
+            "new-window, select, active-pane lookup: {lines:?}"
+        );
+        assert_eq!(lines[4].1, "new-window -t $0");
+        assert_eq!(
+            lines[5].1, "select-window -t @1",
+            "the fresh window: {lines:?}"
+        );
+        // The active-pane lookup ran against the NEW window (its marked
+        // pane %1 from the scripted table), and the Session's window
+        // tracks it — the next switch_window list-windows query targets
+        // @1 through session_id.
+        assert_eq!(lines[6].1, "list-panes -t @1");
+        assert_eq!(session.window, "@1");
+        // And the pump landed on the new window's active pane.
+        assert_eq!(session.pane, "%1");
+    }
+
+    /// Config: a chord override parses and routes — `%` remapped to `s`
+    /// splits, and the default `%` no longer intercepts (it forwards as
+    /// an ordinary byte through the dead-conn fallback).
+    #[test]
+    fn chord_override_remaps_the_split_chord() {
+        let file: crate::mux::config::ConfigFile = toml::from_str(
+            "[client]\nsplit-right = \"s\"\nsplit-down = \"v\"\nkill-pane = \"K\"\nnew-window = \"w\"\n",
+        )
+        .expect("parse");
+        let (rx, mut session) = management_session("remap");
+        let chords = crate::mux::config::reload_client_chords(
+            &file,
+            &crate::mux::config::Chords {
+                prefix: session.prefix,
+                reload: session.reload_key,
+                management: session.management,
+            },
+        )
+        .expect("chords parse");
+        session.management = chords.management;
+        assert!(
+            !session.route_bytes(&[0x02, b's']),
+            "the REMAPPED key splits"
+        );
+        let split = wait_for_line(&rx, "split-window");
+        assert_eq!(
+            split, "split-window -t %0 -h",
+            "the remap targets %0 with -h"
+        );
+        // The landing burst ends with refresh_status's roster query;
+        // after it drains, the wire is quiet.
+        let _ = wait_for_line(&rx, "list-agents");
+        // The OLD default key `%` no longer intercepts — and being
+        // unbound now, the fixed table consumes it silently (the
+        // unknown-chord rule: ignored), so nothing rides the wire.
+        assert!(!session.route_bytes(&[0x02, b'%']));
+        match rx.recv_timeout(std::time::Duration::from_millis(300)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            other => panic!("the old key must be consumed, not acted on: {other:?}"),
+        }
+    }
+
+    /// A management chord spelling that does not parse is a reload error
+    /// (the flash), not a silent keep-the-old.
+    #[test]
+    fn management_chord_override_errors_on_malformed_spelling() {
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[client]\nsplit-right = \"C-\"\n").expect("parse");
+        assert!(
+            crate::mux::config::reload_client_chords(
+                &file,
+                &crate::mux::config::Chords {
+                    prefix: 0x02,
+                    reload: 0x12,
+                    management: crate::mux::config::Management::default(),
+                },
+            )
+            .is_err(),
+            "a malformed chord is an error"
         );
     }
 
@@ -2030,6 +2600,7 @@ mod tests {
             prefix: 0x02,
             prefix_pending: false,
             reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
             flash: None,
         };
         // A config naming a new prefix (C-a) and a moved reload chord
@@ -2044,11 +2615,13 @@ mod tests {
             &crate::mux::config::Chords {
                 prefix: session.prefix,
                 reload: session.reload_key,
+                management: session.management,
             },
         )
         .expect("chords parse");
         session.prefix = new_chords.prefix;
         session.reload_key = new_chords.reload;
+        session.management = new_chords.management;
         // The reloaded session routes: prefix d (0x01 'd') detaches under
         // the NEW prefix; the old prefix byte no longer intercepts.
         assert!(
@@ -2073,7 +2646,8 @@ mod tests {
                 &file,
                 &crate::mux::config::Chords {
                     prefix: 0x02,
-                    reload: 0x12
+                    reload: 0x12,
+                    management: crate::mux::config::Management::default(),
                 }
             )
             .is_err(),
@@ -2087,6 +2661,12 @@ mod tests {
             &crate::mux::config::Chords {
                 prefix: 0x02,
                 reload: 0x12,
+                management: crate::mux::config::Management {
+                    split_right: b'&',
+                    split_down: b'*',
+                    kill_pane: b'X',
+                    new_window: b'C',
+                },
             },
         )
         .expect("partial file");
@@ -2094,7 +2674,13 @@ mod tests {
             kept,
             crate::mux::config::Chords {
                 prefix: 0x02,
-                reload: 0x12
+                reload: 0x12,
+                management: crate::mux::config::Management {
+                    split_right: b'&',
+                    split_down: b'*',
+                    kill_pane: b'X',
+                    new_window: b'C',
+                },
             }
         );
     }

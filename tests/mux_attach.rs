@@ -473,6 +473,106 @@ fn prefix_o_switches_panes_and_resyncs() {
     host.killer.kill().ok();
 }
 
+/// prefix %: the chord splits the FOCUSED pane and the client lands on
+/// the fresh split — the new pane's distinct marker reaches the client
+/// through the landing resync, and the pane it split from stays alive.
+#[cfg(unix)]
+#[test]
+fn split_chord_lands_the_client_on_the_new_pane() {
+    let (fixture, _daemon, mut client) = fixture_with_session("chordsplit");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+
+    // Prefix % splits right; the client lands on the new pane. The pane
+    // starts a fresh shell, whose prompt is the landing evidence — but
+    // the pane it came from shows one too, so drive the new pane
+    // directly: typing AFTER the chord reaches the fresh pane only.
+    host.to_child.write_all(&[0x02, b'%']).expect("prefix %");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(500));
+    host.to_child
+        .write_all(b"echo SPLIT-LANDED-MARKER\n")
+        .expect("type into the new pane");
+    host.to_child.flush().ok();
+
+    let got = wait_for_output(&host, b"SPLIT-LANDED-MARKER", Duration::from_secs(15));
+    assert!(
+        got.windows(b"SPLIT-LANDED-MARKER".len())
+            .any(|w| w == b"SPLIT-LANDED-MARKER"),
+        "the split chord must land the pump on the fresh pane (its stdin \
+         carries the marker echo). stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    // Two panes now exist under the session.
+    let roster = client.send("list-panes").expect("roster");
+    assert!(
+        roster.len() >= 2,
+        "the split created a second pane: {roster:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// prefix x: the chord kills the focused pane and the pump follows the
+/// window's survivor — the survivor's marker resyncs in.
+#[cfg(unix)]
+#[test]
+fn kill_chord_lands_the_client_on_the_survivor() {
+    let (fixture, _daemon, mut client) = fixture_with_session("chordkill");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    client
+        .send(&format!("send-keys -t {pane_b} -l 'echo SURVIVOR-MARKER'"))
+        .expect("marker B");
+    client
+        .send(&format!("send-keys -t {pane_b} Enter"))
+        .expect("Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+
+    // Prefix x kills pane A; the pump must land on the survivor B and
+    // resync its marker in.
+    host.to_child.write_all(&[0x02, b'x']).expect("prefix x");
+    host.to_child.flush().ok();
+
+    let got = wait_for_output(&host, b"SURVIVOR-MARKER", Duration::from_secs(15));
+    assert!(
+        got.windows(b"SURVIVOR-MARKER".len())
+            .any(|w| w == b"SURVIVOR-MARKER"),
+        "prefix x must land the pump on the surviving pane. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    let roster = client.send("list-panes").expect("roster");
+    assert!(
+        !roster.iter().any(|l| l.starts_with(&pane_a)),
+        "the focused pane is gone from the roster: {roster:?}"
+    );
+    host.killer.kill().ok();
+}
+
 /// The client exits 0 when the daemon shuts down (%exit), restoring the
 /// terminal.
 #[test]
@@ -1681,6 +1781,78 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
     assert!(
         body.contains("POST-SCROLL-MARKER"),
         "keys must reach the pane after exiting scroll mode: {body:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// Render mode's prefix %: the chord splits the focused pane and the
+/// view re-seeds — the split's second pane renders at its rect, and
+/// typing lands in the fresh pane (its shell echoes it into the grid the
+/// next frame paints).
+#[cfg(unix)]
+#[test]
+fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
+    let (fixture, _daemon, mut client) = fixture_with_session("rendersplit");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    while host.output_rx.try_recv().is_ok() {}
+
+    // prefix % splits right; the re-seed paints two panes (a vertical
+    // divider column appears — Unicode `│` or the ACS `|` fallback).
+    host.to_child.write_all(&[0x02, b'%']).expect("prefix %");
+    host.to_child.flush().ok();
+    let divider = wait_for_output(&host, "│".as_bytes(), Duration::from_secs(15));
+    assert!(
+        !divider.is_empty(),
+        "the split chord must re-seed the window with the new pane's \
+         divider. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&divider)
+    );
+    // Two panes exist daemon-side, and the fresh pane renders a prompt.
+    let roster = client.send("list-panes").expect("roster");
+    assert!(
+        roster.len() >= 2,
+        "the split created a second pane: {roster:?}"
+    );
+    // Typing after the chord reaches the FRESH pane: an echo there runs
+    // in the split (asserted daemon-side — render frames paint per-cell
+    // diffs, so the marker never appears as one raw substring in the
+    // host stream).
+    host.to_child
+        .write_all(b"echo RENDER-SPLIT-MARKER\r")
+        .expect("type into the split");
+    host.to_child.flush().ok();
+    let fresh = roster
+        .iter()
+        .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+        .find(|id| *id != pane)
+        .expect("the fresh pane id");
+    let mut capture = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        capture = client
+            .send(&format!("capture-pane -t {fresh}"))
+            .expect("capture")
+            .join("\n");
+        if capture.contains("RENDER-SPLIT-MARKER") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        capture.contains("RENDER-SPLIT-MARKER"),
+        "typing after the chord must reach the fresh pane: {capture:?}"
     );
     host.killer.kill().ok();
 }

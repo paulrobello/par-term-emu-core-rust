@@ -17,9 +17,9 @@ use crate::cursor::CursorStyle;
 use crate::keyboard::TermKeyEvent;
 use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
-use crate::mux::attach::layout;
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
+use crate::mux::attach::{layout, ManagementKey};
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
@@ -934,6 +934,22 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     );
 
     let mut session = WindowSession::new(cols, rows);
+    // The management chords resolve here against the canonical config
+    // file — the SAME pure parser the live reload runs (main.rs hands
+    // prefix/reload over explicitly; the management keys ride the file).
+    // A malformed chord fails the attach like a malformed prefix; a
+    // broken FILE stays the lenient startup rule (warn-and-defaults —
+    // the strict error is the reload's, per docs/MUX.md).
+    session.management = crate::mux::config::reload_client_chords(
+        &crate::mux::config::load_canonical(),
+        &crate::mux::config::Chords {
+            prefix: session.prefix,
+            reload: session.reload_key,
+            management: crate::mux::config::Management::default(),
+        },
+    )
+    .map_err(|err| format!("config: {err}"))?
+    .management;
     let outcome = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
 
     // Restore: leave the alt screen, release the mouse, show the cursor.
@@ -970,6 +986,10 @@ struct WindowSession {
     /// detach prefix itself — both live-rebindable by the reload.
     prefix: u8,
     reload_key: u8,
+    /// The window/pane management chords (split % / split " / kill x /
+    /// new-window c): the key bytes matched after the prefix. Live
+    /// rebindable by the reload.
+    management: super::super::config::Management,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -998,6 +1018,7 @@ impl WindowSession {
             scroll_mode: false,
             prefix: super::C_B,
             reload_key: 0x12, // C-r
+            management: super::super::config::Management::default(),
             literal: super::C_B,
             flash: None,
             flash_ticks: 0,
@@ -1341,6 +1362,20 @@ impl WindowSession {
                     self.reload_config(conn);
                     continue;
                 }
+                // The management chords match by byte before the fixed
+                // table (configurable; the defaults `%`, `"`, `x`, `c`
+                // are consumed unbound by the table today).
+                let management = match byte {
+                    b if b == self.management.split_right => Some(ManagementKey::SplitRight),
+                    b if b == self.management.split_down => Some(ManagementKey::SplitDown),
+                    b if b == self.management.kill_pane => Some(ManagementKey::KillPane),
+                    b if b == self.management.new_window => Some(ManagementKey::NewWindow),
+                    _ => None,
+                };
+                if let Some(key) = management {
+                    self.management_chord(key, conn);
+                    continue;
+                }
                 match byte {
                     b'd' => return true,
                     b'[' => {
@@ -1396,6 +1431,96 @@ impl WindowSession {
         }
     }
 
+    /// The management chords in render mode: issue the daemon command for
+    /// the focused pane/session, then land the view through the same
+    /// re-seed contract `switch_window` follows — split lands on the new
+    /// pane (the reply body IS its id, the daemon focuses it), kill lands
+    /// on the window's survivor, new-window re-seeds the fresh window.
+    fn management_chord(&mut self, key: super::ManagementKey, conn: &mut super::conn::AttachConn) {
+        let focused = self.focused_pane();
+        match key {
+            super::ManagementKey::SplitRight | super::ManagementKey::SplitDown => {
+                let flag = if matches!(key, super::ManagementKey::SplitRight) {
+                    " -h"
+                } else {
+                    ""
+                };
+                let Ok(reply) = conn.send_checked(&format!("split-window -t {focused}{flag}"))
+                else {
+                    return;
+                };
+                if !reply.ok {
+                    return;
+                }
+                // The reply body is the new pane id; re-seed the window
+                // from the fresh layout (the split broadcast rides the
+                // reply), THEN focus the fresh pane — reseed_window
+                // rebuilds the renderer, which resets focus to the first
+                // leaf, so the focus must come after.
+                let new_pane = reply
+                    .body
+                    .first()
+                    .and_then(|id| id.trim().strip_prefix('%'))
+                    .and_then(|n| n.parse::<u32>().ok());
+                let window = self.window.clone();
+                self.reseed_window(conn, &window);
+                if let Some(new_pane) = new_pane {
+                    self.renderer.focus(new_pane);
+                    let _ = conn.send_checked(&format!("select-pane -t %{new_pane}"));
+                }
+            }
+            super::ManagementKey::KillPane => {
+                let Ok(reply) = conn.send_checked(&format!("kill-pane -t {focused}")) else {
+                    return;
+                };
+                if !reply.ok {
+                    return;
+                }
+                // The window survives with a new active pane, or the view
+                // is over (the last pane died; %window-close's session
+                // contract ends the view through the status refresh). The
+                // survivor focus lands AFTER the re-seed (reseed_window
+                // resets focus to the first leaf).
+                let window = self.window.clone();
+                let survivor = conn
+                    .send_checked(&format!("list-panes -t {window}"))
+                    .ok()
+                    .filter(|reply| reply.ok)
+                    .and_then(|reply| super::marked_pane(&reply.body, &window).ok());
+                if let Some(pane) = survivor {
+                    self.reseed_window(conn, &window);
+                    if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
+                        self.renderer.focus(n);
+                        let _ = conn.send_checked(&format!("select-pane -t %{n}"));
+                    }
+                    return;
+                }
+                // No survivor: end the view like %sessions-changed's
+                // contract does — the pump's next status refresh observes
+                // the session gone and exits cleanly. Ending NOW would
+                // skip the terminal restore; flag it and let the pump's
+                // normal path tear down.
+                self.status_dirty = true;
+            }
+            super::ManagementKey::NewWindow => {
+                let Some(session) = self.status.session_id.clone() else {
+                    return;
+                };
+                let Ok(reply) = conn.send_checked(&format!("new-window -t {session}")) else {
+                    return;
+                };
+                if !reply.ok {
+                    return;
+                }
+                let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
+                    return;
+                };
+                let _ = conn.send_checked(&format!("select-window -t {window}"));
+                self.reseed_window(conn, &window);
+            }
+        }
+    }
+
     /// The reload chord in render mode: the same client-side rebind the
     /// passthrough session performs, plus a status-row flash, plus the
     /// daemon's `reload-config` — best-effort either way.
@@ -1403,10 +1528,12 @@ impl WindowSession {
         match super::reload_client_chords(crate::mux::config::Chords {
             prefix: self.prefix,
             reload: self.reload_key,
+            management: self.management,
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
                 self.reload_key = chords.reload;
+                self.management = chords.management;
                 self.literal = chords.prefix;
                 self.flash = Some("config reloaded".to_string());
             }

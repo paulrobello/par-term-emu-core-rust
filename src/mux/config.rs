@@ -52,6 +52,34 @@ pub struct ClientSection {
     /// the chord's documented head and must parse as keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
+    /// The split-right chord (tmux's `%`): the key matched after the
+    /// prefix that splits the focused pane and lands on the new pane.
+    #[serde(
+        default,
+        rename = "split-right",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub split_right: Option<String>,
+    /// The split-down chord (tmux's `"`): the key matched after the
+    /// prefix that splits the focused pane below and lands on the new pane.
+    #[serde(
+        default,
+        rename = "split-down",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub split_down: Option<String>,
+    /// The kill-pane chord (tmux's `x`): the key matched after the prefix
+    /// that kills the focused pane and lands on the successor.
+    #[serde(default, rename = "kill-pane", skip_serializing_if = "Option::is_none")]
+    pub kill_pane: Option<String>,
+    /// The new-window chord (tmux's `c`): the key matched after the prefix
+    /// that opens a window in the focused pane's session and lands on it.
+    #[serde(
+        default,
+        rename = "new-window",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub new_window: Option<String>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -256,6 +284,10 @@ pub fn render(eff: &EffectiveConfig) -> String {
             prefix: Some(eff.prefix.clone()),
             mode: Some(eff.mode.clone()),
             reload: Some(eff.reload.clone()),
+            split_right: None,
+            split_down: None,
+            kill_pane: None,
+            new_window: None,
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -318,13 +350,64 @@ pub struct Chords {
     pub prefix: u8,
     /// The reload chord's key byte.
     pub reload: u8,
+    /// The window/pane management chords (split/kill/new-window).
+    pub management: Management,
+}
+
+/// The window/pane management chords: the keys matched after the prefix
+/// that act on the focused pane/window. Each defaults to its tmux
+/// spelling (`%`, `"`, `x`, `c`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Management {
+    /// Split the focused pane right — `split-window -t <pane> -h`.
+    pub split_right: u8,
+    /// Split the focused pane down — `split-window -t <pane>`.
+    pub split_down: u8,
+    /// Kill the focused pane — `kill-pane -t <pane>`.
+    pub kill_pane: u8,
+    /// New window in the focused pane's session — `new-window -t <session>`.
+    pub new_window: u8,
+}
+
+impl Default for Management {
+    fn default() -> Self {
+        Self {
+            split_right: b'%',
+            split_down: b'"',
+            kill_pane: b'x',
+            new_window: b'c',
+        }
+    }
+}
+
+/// One after-prefix management key: a single token parsed with the shared
+/// prefix parser. A management chord is ONE key matched by byte after the
+/// prefix (the reload chord's multi-token spelling exists for
+/// documentation only; a management chord keeps the single-key shape).
+fn management_key(chord: &str, name: &str) -> Result<u8, String> {
+    let token = chord
+        .split_whitespace()
+        .last()
+        .ok_or_else(|| format!("[client] {name} chord is empty"))?;
+    for token in chord.split_whitespace() {
+        if parse_prefix(token).is_none() {
+            return Err(format!(
+                "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b or a single key)"
+            ));
+        }
+    }
+    parse_prefix(token).ok_or_else(|| {
+        format!(
+            "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b or a single key)"
+        )
+    })
 }
 
 /// The client-side half of a reload, PURE over the parsed file: re-derive
-/// the prefix and reload key from `file`. `current` is the fallback for
-/// settings the (possibly partial) file does not name — a reload only
-/// ever moves a chord when the file actually changed it. Errors on a
-/// malformed chord (the caller surfaces it on the status row).
+/// the prefix, reload key, and management chords from `file`. `current` is
+/// the fallback for settings the (possibly partial) file does not name — a
+/// reload only ever moves a chord when the file actually changed it.
+/// Errors on a malformed chord (the caller surfaces it on the status row).
 pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chords, String> {
     let prefix = match file.client.prefix.as_deref() {
         Some(spec) => parse_prefix(spec).ok_or_else(|| {
@@ -338,7 +421,29 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         Some(chord) => reload_chord_key(chord)?,
         None => current.reload,
     };
-    Ok(Chords { prefix, reload })
+    let management = Management {
+        split_right: match file.client.split_right.as_deref() {
+            Some(chord) => management_key(chord, "split-right")?,
+            None => current.management.split_right,
+        },
+        split_down: match file.client.split_down.as_deref() {
+            Some(chord) => management_key(chord, "split-down")?,
+            None => current.management.split_down,
+        },
+        kill_pane: match file.client.kill_pane.as_deref() {
+            Some(chord) => management_key(chord, "kill-pane")?,
+            None => current.management.kill_pane,
+        },
+        new_window: match file.client.new_window.as_deref() {
+            Some(chord) => management_key(chord, "new-window")?,
+            None => current.management.new_window,
+        },
+    };
+    Ok(Chords {
+        prefix,
+        reload,
+        management,
+    })
 }
 
 /// The daemon-side `reload-config` report, PURE over the re-read file and
@@ -591,6 +696,58 @@ expose-control-socket = true
             socket_value_to_path("/tmp/explicit.sock"),
             PathBuf::from("/tmp/explicit.sock")
         );
+    }
+
+    /// The management chord overrides parse through the same prefix
+    /// grammar and rebind only the stated keys; a malformed spelling
+    /// errors with the key's name in the message.
+    #[test]
+    fn management_chords_parse_route_and_error() {
+        let defaults = Chords {
+            prefix: 0x02,
+            reload: 0x12,
+            management: Management::default(),
+        };
+        // Defaults.
+        let file: ConfigFile = toml::from_str("[client]\n").unwrap();
+        assert_eq!(
+            reload_client_chords(&file, &defaults).unwrap().management,
+            Management {
+                split_right: b'%',
+                split_down: b'"',
+                kill_pane: b'x',
+                new_window: b'c',
+            }
+        );
+        // Full override, tmux spellings and literals alike.
+        let file: ConfigFile = toml::from_str(
+            "[client]\nsplit-right = \"C-s\"\nsplit-down = \"v\"\nkill-pane = \"C-x\"\nnew-window = \"W\"\n",
+        )
+        .unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.split_right, 0x13);
+        assert_eq!(m.split_down, b'v');
+        assert_eq!(m.kill_pane, 0x18);
+        assert_eq!(m.new_window, b'W');
+        // A partial override keeps the untouched keys.
+        let partial: ConfigFile = toml::from_str("[client]\nnew-window = \"n\"\n").unwrap();
+        let m = reload_client_chords(&partial, &defaults)
+            .unwrap()
+            .management;
+        assert_eq!(m.split_right, b'%', "unstated keeps the current/default");
+        assert_eq!(m.new_window, b'n');
+        // Malformed spellings error, naming the key.
+        for (key, spec) in [
+            ("split-right", "C-"),
+            ("split-down", "C-1"),
+            ("kill-pane", "xy"),
+            ("new-window", "C-bb"),
+        ] {
+            let body = format!("[client]\n{key} = \"{spec}\"\n");
+            let file: ConfigFile = toml::from_str(&body).unwrap();
+            let err = reload_client_chords(&file, &defaults).unwrap_err();
+            assert!(err.contains(key), "the error names the key: {err}");
+        }
     }
 
     /// The reload chord resolves through the shared prefix parser: the
