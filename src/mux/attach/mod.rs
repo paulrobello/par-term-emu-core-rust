@@ -340,6 +340,15 @@ struct Session {
     socket_path: std::path::PathBuf,
     /// The pane whose bytes we pump, `%N`.
     pane: String,
+    /// The pane's local shadow emulator, fed the same byte stream
+    /// passthrough forwards to the host terminal (the `refresh-client`
+    /// replay in [`Session::resync`], and every `%output` chunk). Its
+    /// tracked cursor is the pane's truth: after every status draw the
+    /// cursor is placed ABSOLUTELY at the tracked cell, which kills the
+    /// ESC7/ESC8 race where a pane scroll landing between save and
+    /// restore makes the restored position one line off and every later
+    /// output paints over the wrong row.
+    emulator: render::PaneEmulator,
     /// The owning window, `@N` (pane-info's second field).
     window: String,
     /// The owning session's id, `$N` (resolved from the window scan).
@@ -392,10 +401,12 @@ impl Session {
         let _replay = conn.drain_pending_events();
 
         let pane = resolve_target(&mut conn, target)?;
+        let grid = conn::terminal_grid();
         let mut session = Self {
             conn,
             socket_path: socket_path.to_path_buf(),
             pane,
+            emulator: render::PaneEmulator::new(0, grid.0, grid.1),
             window: String::new(),
             session_id: None,
             session_name: String::new(),
@@ -418,7 +429,9 @@ impl Session {
     /// Resync the target pane's screen: the replay body goes to stdout
     /// verbatim. The reply framing is line-based, and the body's own
     /// escape sequences ride those lines intact, so writing each line plus
-    /// its newline reproduces the daemon's screen-restore byte stream.
+    /// its newline reproduces the daemon's screen-restore byte stream. The
+    /// same bytes seed the shadow emulator — its tracked cursor becomes
+    /// the pane's truth the status draw re-places.
     fn resync(&mut self) {
         let reply = match self
             .conn
@@ -435,6 +448,9 @@ impl Session {
                 return;
             }
         };
+        let mut bytes = reply.body.join("\n").into_bytes();
+        bytes.push(b'\n');
+        self.emulator.feed(&bytes);
         let mut stdout = std::io::stdout().lock();
         for line in &reply.body {
             let _ = stdout.write_all(line.as_bytes());
@@ -624,6 +640,7 @@ impl Session {
     fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut bool) -> bool {
         match event {
             TmuxNotification::Output { pane_id, data } if *pane_id == self.pane => {
+                self.emulator.feed(data);
                 let mut stdout = std::io::stdout().lock();
                 let _ = stdout.write_all(data);
                 let _ = stdout.flush();
@@ -1007,13 +1024,33 @@ impl Session {
 
     /// The status line: reserve the bottom row with DECSTBM, draw
     /// `session | title [| N agents] [| (exited N — C-b r respawns)]`
-    /// inverse-video, and restore the scroll region and cursor.
+    /// inverse-video, and re-place the cursor ABSOLUTELY at the pane's
+    /// tracked cell.
+    ///
+    /// The old emission ended with ESC8 (restore saved cursor), which races
+    /// pane output: a scroll landing between ESC7 and ESC8 leaves the saved
+    /// position one line off and every later output paints over the wrong
+    /// row. The draw keeps the ESC7/ESC8 wrap (protects against output
+    /// interleaved WITHIN the draw itself), but the final position is a
+    /// fresh absolute CUP computed from the shadow emulator's tracked cell
+    /// — a scroll landing between the draw and the placement cannot make a
+    /// fresh absolute position wrong.
     fn draw_status(&mut self) {
         let (cols, rows) = conn::terminal_grid();
         if rows < 2 || cols < 2 {
             return; // nowhere to put a status row
         }
-        let bottom = rows; // DECSTBM rows are 1-indexed inclusive
+        let bytes = self.status_draw_bytes(rows, cols);
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(&bytes);
+        let _ = stdout.flush();
+    }
+
+    /// The status draw's byte emission, `(rows, cols)` parameterized so the
+    /// headless suite can assert the cursor contract. The tracked-cell CUP
+    /// closes the byte run.
+    fn status_draw_bytes(&mut self, rows: u16, cols: u16) -> Vec<u8> {
+        let bottom = rows; // DECSTBM + CUP rows are 1-indexed inclusive
         let line = self.status_line();
         let width = (cols as usize).saturating_sub(1);
         let mut text: String = line.chars().take(width).collect();
@@ -1021,19 +1058,38 @@ impl Session {
         if used < width {
             text.push_str(&" ".repeat(width - used));
         }
-        // DECSTBM reserves the bottom row: set the region FIRST (rows
-        // 1..=bottom-1 scroll; the status row stays fixed), draw on it,
-        // then ESC 8 restores the cursor exactly where the pane left it.
-        // The content region stays set after the draw — resetting it to
-        // the full screen here would let the next pane scroll carry the
-        // status row away until the next redraw re-reserved it.
         let scroll_region_bottom = rows - 1;
-        let mut stdout = std::io::stdout().lock();
-        let _ = write!(
-            stdout,
-            "\x1b7\x1b[1;{scroll_region_bottom}r\x1b[{bottom};1H\x1b[7m{text}\x1b[0m\x1b8"
+        let (tracked_col, tracked_row) = self.tracked_cell(rows, cols);
+        let mut out = Vec::with_capacity(text.len() + 48);
+        out.extend_from_slice(
+            format!(
+                "\x1b7\x1b[1;{scroll_region_bottom}r\x1b[{bottom};1H\x1b[7m{text}\x1b[0m\x1b8\x1b[{};{}H",
+                tracked_row + 1,
+                tracked_col + 1
+            )
+            .as_bytes(),
         );
-        let _ = stdout.flush();
+        out
+    }
+
+    /// The pane's tracked cursor cell, `(col, row)`, 0-based, clamped into
+    /// the host grid. The shadow emulator is re-fit to the host grid when
+    /// the host size changed; its tracked cursor is the pane's truth —
+    /// including over a held-dead pane, where the frozen screen's cell is
+    /// the right place to put the cursor.
+    fn tracked_cell(&mut self, rows: u16, cols: u16) -> (u16, u16) {
+        let (ecols, erows) = self.emulator.terminal().size();
+        if (ecols as u16, erows as u16) != (cols, rows) {
+            // Re-fit to the host grid; the tracked cursor survives the
+            // re-fit (the core Terminal clamps it into bounds).
+            self.emulator.resize(cols, rows);
+        }
+        let cursor = self.emulator.terminal().cursor();
+        let (col, row) = (cursor.col as u16, cursor.row as u16);
+        (
+            col.min(cols.saturating_sub(1)),
+            row.min(rows.saturating_sub(1)),
+        )
     }
 }
 
@@ -1653,6 +1709,7 @@ mod tests {
             conn: test_dead_conn(),
             socket_path: PathBuf::from("/nonexistent"),
             pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
             window: String::new(),
             session_id: None,
             session_name: String::new(),
@@ -1686,6 +1743,7 @@ mod tests {
             conn: test_dead_conn(),
             socket_path: PathBuf::from("/nonexistent"),
             pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
             window: String::new(),
             session_id: None,
             session_name: String::new(),
@@ -1722,6 +1780,7 @@ mod tests {
             conn: test_dead_conn(),
             socket_path: PathBuf::from("/nonexistent"),
             pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
             window: String::new(),
             session_id: None,
             session_name: "work".to_string(),
@@ -1754,6 +1813,129 @@ mod tests {
         );
     }
 
+    /// The status draw's cursor placement tracks the shadow emulator: feed
+    /// it a replay that parks the cursor at a known cell, then a %output
+    /// chunk containing a CUP and a line feed; the bytes `draw_status`
+    /// emits must end with an absolute CUP at the EMULATOR's tracked cell,
+    /// not a bare ESC8 restore. A pane scroll landing between the draw and
+    /// the placement cannot make a fresh absolute position wrong — that is
+    /// the manual-pass race this kills (ESC7..ESC8 alone restored a
+    /// position one line off after a scroll).
+    #[test]
+    fn status_draw_places_the_cursor_at_the_tracked_cell() {
+        let (_daemon, path) = FakeDaemon::bind("tracked-cursor");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
+        };
+
+        // Replay that parks the cursor (CUP row 3 col 8), then a %output
+        // chunk that homes, writes "line", and line feeds: the emulator
+        // must end at col 4, row 1 (LF moves down, column preserved).
+        session.emulator.feed(b"\x1b[3;8H");
+        session.emulator.feed(b"\x1b[1;1Hline\n");
+        let cursor = session.emulator.terminal().cursor();
+        assert_eq!(
+            (cursor.col, cursor.row),
+            (4, 1),
+            "the emulator's tracked cursor must follow the scripted stream"
+        );
+
+        // The draw's emission: the placement CUP is the LAST sequence in
+        // the draw and names the tracked cell.
+        let bytes = session.status_draw_bytes(24, 80);
+        let expected = b"\x1b[2;5H"; // row+1 ; col+1, 1-indexed
+        let pos = bytes
+            .windows(expected.len())
+            .rposition(|w| w == expected)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the draw must end with an absolute CUP at the tracked cell \
+                     (row 4, col 8): {:?}",
+                    String::from_utf8_lossy(&bytes)
+                )
+            });
+        // It is the draw's LAST sequence: everything after it is nothing.
+        assert_eq!(
+            pos + expected.len(),
+            bytes.len(),
+            "the tracked-cell CUP must close the draw: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+        // The wrap survives (protects the draw against interleaved output
+        // within itself) but the restore no longer closes it.
+        assert!(
+            bytes.windows(2).any(|w| w == b"\x1b7") && bytes.windows(2).any(|w| w == b"\x1b8"),
+            "the ESC7/ESC8 wrap stays inside the draw: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+        // The DECSTBM reserve semantics are unchanged.
+        assert!(
+            bytes.windows(7).any(|w| w == b"\x1b[1;23r"),
+            "the draw still reserves the content region (rows 1..23): {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// Dead pane: the tracked cell is the frozen screen's cell — feeding
+    /// the emulator the frozen stream is what `resync` does, so the same
+    /// shape holds with `exited` set; the placement does not move to a
+    /// default position when the pane dies.
+    #[test]
+    fn status_draw_tracks_the_frozen_cell_when_the_pane_is_dead() {
+        let (_daemon, path) = FakeDaemon::bind("dead-tracked");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            pane_title: String::new(),
+            agents: 0,
+            exited: Some(Some(0)),
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            flash: None,
+        };
+        session.emulator.feed(b"\x1b[5;3H");
+        let bytes = session.status_draw_bytes(24, 80);
+        let expected = b"\x1b[5;3H";
+        let pos = bytes
+            .windows(expected.len())
+            .rposition(|w| w == expected)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the dead pane's placement CUP names the frozen cell: {:?}",
+                    String::from_utf8_lossy(&bytes)
+                )
+            });
+        assert_eq!(
+            pos + expected.len(),
+            bytes.len(),
+            "the frozen-cell CUP closes the draw: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
     /// Prefix r on a held-dead pane respawns it daemon-side and resumes
     /// forwarding; the plain bytes typed afterwards go to the pane.
     #[test]
@@ -1763,6 +1945,7 @@ mod tests {
             conn: conn::AttachConn::connect(&path).expect("connect"),
             socket_path: path.clone(),
             pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
             window: String::new(),
             session_id: None,
             session_name: String::new(),
@@ -1835,6 +2018,7 @@ mod tests {
             conn: conn::AttachConn::connect(&path).expect("connect"),
             socket_path: path.clone(),
             pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
             window: String::new(),
             session_id: None,
             session_name: String::new(),

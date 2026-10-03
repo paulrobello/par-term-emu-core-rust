@@ -581,19 +581,30 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
         String::from_utf8_lossy(&after)
     );
     // Only status-row redraws may appear after typing: every extra byte
-    // must sit inside an ESC7..ESC8 status-draw block (the settle/redraw
-    // discipline) — no pane output, no flood. Byte-COUNT budgets flake on
-    // slow machines where more redraws land in the window.
+    // must sit inside a status-draw block — the ESC7..ESC8 wrap plus the
+    // absolute tracked-cell CUP (ESC[<r>;<c>H) that closes each draw (the
+    // settle/redraw discipline) — no pane output, no flood. Byte-COUNT
+    // budgets flake on slow machines where more redraws land in the window.
     let mut residue: Vec<u8> = Vec::new();
     let mut inside_draw = false;
+    let mut awaiting_placement_h = false;
     let mut i = 0;
     while i < extra.len() {
         if extra[i..].starts_with(b"\x1b7") {
             inside_draw = true;
             i += 2;
         } else if extra[i..].starts_with(b"\x1b8") {
-            inside_draw = false;
+            // The wrap's restore is immediately followed by the draw's
+            // absolute tracked-cell CUP — still draw bytes until its H.
+            awaiting_placement_h = true;
+            inside_draw = true;
             i += 2;
+        } else if awaiting_placement_h {
+            if extra[i] == b'H' {
+                awaiting_placement_h = false;
+                inside_draw = false;
+            }
+            i += 1;
         } else {
             if !inside_draw {
                 residue.push(extra[i]);
@@ -633,6 +644,119 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
         got.windows(b"RESPAWNED-ROUNDTRIP".len())
             .any(|w| w == b"RESPAWNED-ROUNDTRIP"),
         "prefix r must respawn the pane and resume forwarding. stderr: {}\n\
+         bytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    host.killer.kill().ok();
+}
+
+/// Regression (the manual-pass ESC7/ESC8 race): pane output flowing WHILE a
+/// status draw ran made the ESC8 restore land one line off, and every later
+/// output painted over the wrong row (observed on Terminal.app: a new
+/// prompt overwriting the middle of the previous line). The status draw now
+/// CLOSES with an absolute CUP at the shadow emulator's tracked cell, so a
+/// scroll landing between the draw and the placement cannot make the final
+/// position wrong. The PTY-level proof: flood the pane with scrolling
+/// output while the client's status draws land (the settle-redraw cadence
+/// draws during the flood), assert every draw the client emitted closes
+/// with its absolute tracked-cell CUP (a bare-ESC8 close would be the raced
+/// shape), then drive an echo through the pane — it must round-trip. The
+/// exact tracked cell is pinned headless by
+/// `status_draw_places_the_cursor_at_the_tracked_cell` (`src/mux/attach/mod.rs`).
+#[cfg(unix)]
+#[test]
+fn status_draw_tracks_the_cursor_under_output_flood() {
+    let (fixture, _daemon, mut client) = fixture_with_session("cursorrace");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    // Flood: numbered lines scrolled fast enough that scrolls land while
+    // the client's status redraws are in flight.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 60); do echo FLOOD-LINE-$i; done'"
+        ))
+        .expect("flood");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(600));
+
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
+    let startup = wait_for_output(&host, b"FLOOD-LINE-60", Duration::from_secs(15));
+    assert!(
+        !startup.is_empty(),
+        "the flood must reach the host. stderr: {}",
+        stderr.lock().unwrap()
+    );
+    // The settle-redraw draws AFTER the flood's last line; give it time to
+    // flow, then join what followed so the scan sees whole draw blocks.
+    std::thread::sleep(Duration::from_millis(700));
+    let mut b = startup;
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        b.extend_from_slice(&bytes);
+    }
+
+    // Every draw closes with its absolute tracked-cell CUP: scan the whole
+    // capture for draw blocks and require the placement CUP right after
+    // each restore. (The exact cell at draw time is the emulator's
+    // business — the headless suite pins it; here the structural shape is
+    // the contract.)
+    let mut draws = 0usize;
+    let mut i = 0usize;
+    while i + 1 < b.len() {
+        if b[i] == 0x1b && b[i + 1] == 0x37 {
+            // ESC7: find the ESC8 close, then require ESC[ ... H after it.
+            let mut j = i + 2;
+            while j + 1 < b.len() && !(b[j] == 0x1b && b[j + 1] == 0x38) {
+                j += 1;
+            }
+            assert!(
+                j + 1 < b.len(),
+                "a draw never closed (no ESC8): bytes[{i}..]: {:?}",
+                String::from_utf8_lossy(&b[i..(i + 80).min(b.len())])
+            );
+            j += 2;
+            assert!(
+                j + 1 < b.len() && b[j] == 0x1b && b[j + 1] == b'[',
+                "a draw closed with a bare ESC8 (the raced shape): \
+                 bytes[{j}..]: {:?}",
+                String::from_utf8_lossy(&b[j..(j + 80).min(b.len())])
+            );
+            // The placement CUP's params end at 'H'.
+            while j < b.len() && b[j] != b'H' {
+                j += 1;
+            }
+            assert!(j < b.len(), "the placement CUP never closed");
+            draws += 1;
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    assert!(
+        draws > 0,
+        "at least one status draw must appear in the flood capture. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // With draws landing under live scrolling output, an echo typed now
+    // must round-trip intact through the pane.
+    host.to_child
+        .write_all(b"echo RACED-ROUNDTRIP\r")
+        .expect("type echo");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"RACED-ROUNDTRIP", Duration::from_secs(15));
+    assert!(
+        got.windows(15).any(|w| w == b"RACED-ROUNDTRIP"),
+        "an echo must round-trip intact after draws under a flood. stderr: {}\n\
          bytes: {:?}",
         stderr.lock().unwrap(),
         String::from_utf8_lossy(&got)
