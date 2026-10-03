@@ -791,8 +791,8 @@ fn cap_persisted_scrollback(mut snapshot: TerminalSnapshot) -> TerminalSnapshot 
 /// Keep only the newest `MAX_PERSISTED_SCROLLBACK_CELLS` scrollback cells
 /// of one grid snapshot, dropping the oldest lines. The result is shaped
 /// exactly like a younger grid that scrolled only the retained lines:
-/// contiguous ring (`scrollback_start == 0`, `cells.len() == lines * cols`)
-/// and the original `max_scrollback`, so a restored pane still grows to its
+/// oldest-first contiguous payload (`cells.len() == lines * cols`) and the
+/// original `max_scrollback`, so a restored pane still grows to its
 /// configured depth. Zones are dropped and clamped at the new floor the
 /// same way live eviction does in `push_rows_to_scrollback` — absolute rows
 /// and `total_lines_scrolled` keep their frame.
@@ -805,22 +805,18 @@ fn cap_grid_scrollback(mut grid: GridSnapshot) -> GridSnapshot {
     if keep_lines == grid.scrollback_lines {
         return grid;
     }
-    // The extraction below indexes the ring through the live grid's
-    // invariants (`cells.len() == min(lines, max) * cols`, `wrapped` one
-    // entry per physical line). A snapshot violating that shape is passed
+    // The extraction below indexes the payload through the snapshot
+    // invariants (`cells.len() == lines * cols`, `wrapped` one entry per
+    // line, oldest first). A snapshot violating that shape is passed
     // through untrimmed rather than sliced on a guess.
     let physical_lines = grid.scrollback_cells.len() / cols;
     if physical_lines < grid.scrollback_lines || grid.scrollback_wrapped.len() != physical_lines {
         return grid;
     }
-    let ring_capacity = grid.max_scrollback.max(physical_lines);
     let drop_lines = grid.scrollback_lines - keep_lines;
-    // Same logical→physical mapping as `scrollback_physical_index`,
-    // validated up front so a snapshot with an inconsistent ring is passed
-    // through rather than sliced out of range mid-extraction.
-    let physicals: Vec<usize> = (drop_lines..grid.scrollback_lines)
-        .map(|logical| (grid.scrollback_start + logical) % ring_capacity)
-        .collect();
+    // Lines are stored oldest-first in the flat payload, so dropping the
+    // oldest `drop_lines` is a plain slice of consecutive rows.
+    let physicals: Vec<usize> = (drop_lines..grid.scrollback_lines).collect();
     if physicals.iter().any(|&physical| physical >= physical_lines) {
         return grid;
     }
@@ -833,7 +829,6 @@ fn cap_grid_scrollback(mut grid: GridSnapshot) -> GridSnapshot {
     }
     grid.scrollback_cells = cells;
     grid.scrollback_wrapped = wrapped;
-    grid.scrollback_start = 0;
     grid.scrollback_lines = keep_lines;
     // Zone floor mirrors `evict_zones`: zones wholly below the retained
     // window are gone (a snapshot carries no evicted-zone list), and a
@@ -3148,21 +3143,24 @@ mod serde_tests {
     /// `start` exercises the extraction, and every 3rd logical line is
     /// flagged wrapped.
     fn ring_snapshot(lines: usize, cols: usize, start: usize, max: usize) -> GridSnapshot {
+        // Snapshots carry the flat payload OLDEST-FIRST (one line per
+        // `cols`, `scrollback_start` field removed with the per-line
+        // storage). `start` and `max` are kept in the signature for the
+        // cap-depth math of the callers.
+        let _ = start;
         let physical_lines = lines.min(max);
         let mut cells = vec![crate::cell::Cell::default(); physical_lines * cols];
         let mut wrapped = vec![false; physical_lines];
-        for logical in 0..lines {
-            let physical = (start + logical) % max.max(physical_lines);
+        for logical in 0..lines.min(physical_lines) {
             for c in 0..cols {
-                cells[physical * cols + c] = marker_cell(logical);
+                cells[logical * cols + c] = marker_cell(logical);
             }
-            wrapped[physical] = logical % 3 == 0;
+            wrapped[logical] = logical % 3 == 0;
         }
         GridSnapshot {
             cells: Vec::new(),
             scrollback_cells: cells,
-            scrollback_start: start,
-            scrollback_lines: lines,
+            scrollback_lines: physical_lines,
             max_scrollback: max,
             cols,
             rows: 24,
@@ -3197,7 +3195,6 @@ mod serde_tests {
         let grid = cap_grid_scrollback(ring_snapshot(lines, cols, 0, 10_000));
 
         assert_eq!(grid.scrollback_lines, keep);
-        assert_eq!(grid.scrollback_start, 0);
         assert_eq!(grid.scrollback_cells.len(), keep * cols);
         assert_eq!(grid.scrollback_wrapped.len(), keep);
         assert_eq!(grid.max_scrollback, 10_000, "restored pane keeps its depth");
@@ -3222,7 +3219,6 @@ mod serde_tests {
         let grid = cap_grid_scrollback(ring_snapshot(max, cols, start, max));
 
         assert_eq!(grid.scrollback_lines, keep);
-        assert_eq!(grid.scrollback_start, 0, "the capped ring is contiguous");
         // Every retained slot must carry the marker of its logical line:
         // slot j holds logical line (max - keep + j).
         for (slot, expected_logical) in (max - keep..max).enumerate() {

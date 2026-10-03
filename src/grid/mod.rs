@@ -62,17 +62,19 @@ pub struct Grid {
     pub(in crate::grid) rows: usize,
     /// The actual grid data (row-major order)
     pub(in crate::grid) cells: Vec<Cell>,
-    /// Scrollback buffer (flat Vec, row-major order like main grid)
-    pub(in crate::grid) scrollback_cells: Vec<Cell>,
-    /// Index of oldest line in circular scrollback buffer
-    pub(in crate::grid) scrollback_start: usize,
+    /// Scrollback buffer: one boxed row per retained line, oldest first.
+    /// Each row keeps the column width it scrolled off at, so a grid resize
+    /// only touches the viewport — stored lines are never reallocated or
+    /// copied (they are re-sliced only by an explicit width reflow, which
+    /// this grid no longer performs automatically).
+    pub(in crate::grid) scrollback_rows: Vec<Box<[Cell]>>,
     /// Number of lines currently in scrollback
     pub(in crate::grid) scrollback_lines: usize,
     /// Maximum scrollback lines
     pub(in crate::grid) max_scrollback: usize,
     /// Track which lines are wrapped
     pub(in crate::grid) wrapped: Vec<bool>,
-    /// Track wrapped state for scrollback lines
+    /// Wrapped state for scrollback lines (index 0 = oldest retained line)
     pub(in crate::grid) scrollback_wrapped: Vec<bool>,
     /// Semantic zones tracking logical blocks (Prompt, Command, Output)
     pub(in crate::grid) zones: Vec<Zone>,
@@ -115,8 +117,7 @@ impl Grid {
             cols,
             rows,
             cells,
-            scrollback_cells: Vec::new(),
-            scrollback_start: 0,
+            scrollback_rows: Vec::new(),
             scrollback_lines: 0,
             max_scrollback,
             wrapped: vec![false; rows],
@@ -417,42 +418,14 @@ impl Grid {
         }
     }
 
-    /// Physical index into `scrollback_cells` for a logical scrollback line
-    /// (0 = oldest). Centralized circular-buffer math (ARC-026).
-    #[inline]
-    fn scrollback_physical_index(&self, logical: usize) -> usize {
-        (self.scrollback_start + logical) % self.max_scrollback
-    }
-
-    /// Advance the circular-buffer write head by one (ARC-026).
-    #[inline]
-    fn advance_scrollback_head(&mut self) {
-        self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
-    }
-
     /// Get a line from scrollback by index
     pub fn scrollback_line(&self, index: usize) -> Option<&[Cell]> {
-        if index < self.scrollback_lines {
-            let physical_index = self.scrollback_physical_index(index);
-            let start = physical_index * self.cols;
-            let end = start + self.cols;
-            Some(&self.scrollback_cells[start..end])
-        } else {
-            None
-        }
+        self.scrollback_rows.get(index).map(|row| &**row)
     }
 
     /// Check if a scrollback line is wrapped
     pub fn is_scrollback_wrapped(&self, index: usize) -> bool {
-        if index < self.scrollback_lines {
-            let physical_index = self.scrollback_physical_index(index);
-            self.scrollback_wrapped
-                .get(physical_index)
-                .copied()
-                .unwrap_or(false)
-        } else {
-            false
-        }
+        self.scrollback_wrapped.get(index).copied().unwrap_or(false)
     }
 
     /// Capture a snapshot of this grid's entire state.
@@ -460,8 +433,7 @@ impl Grid {
     pub fn capture_snapshot(&self) -> GridSnapshot {
         GridSnapshot {
             cells: self.cells.clone(),
-            scrollback_cells: self.scrollback_cells.clone(),
-            scrollback_start: self.scrollback_start,
+            scrollback_cells: Self::flatten_scrollback(&self.scrollback_rows, self.cols),
             scrollback_lines: self.scrollback_lines,
             max_scrollback: self.max_scrollback,
             cols: self.cols,
@@ -476,8 +448,8 @@ impl Grid {
     /// Restore this grid's state from a previously captured snapshot.
     pub fn restore_from_snapshot(&mut self, snap: &GridSnapshot) {
         self.cells = snap.cells.clone();
-        self.scrollback_cells = snap.scrollback_cells.clone();
-        self.scrollback_start = snap.scrollback_start;
+        self.scrollback_rows = Self::unflatten_scrollback(&snap.scrollback_cells, snap.cols);
+        self.scrollback_wrapped = snap.scrollback_wrapped.clone();
         self.scrollback_lines = snap.scrollback_lines;
         self.max_scrollback = snap.max_scrollback;
         self.cols = snap.cols;
@@ -496,6 +468,53 @@ impl Grid {
         // A restore replaces the screen wholesale; the scroll log's motion
         // history describes content that no longer exists (ENH-038).
         self.invalidate_scroll_log();
+    }
+
+    /// Append one line to the scrollback buffer, evicting the oldest line
+    /// when the buffer is at capacity. Rows keep their own width — the
+    /// eviction drops one small allocation; nothing is copied.
+    pub(in crate::grid) fn push_scrollback_row(&mut self, row: Box<[Cell]>, wrapped: bool) {
+        if self.max_scrollback == 0 {
+            return;
+        }
+        if self.scrollback_lines >= self.max_scrollback {
+            self.scrollback_rows.remove(0);
+            self.scrollback_wrapped.remove(0);
+        }
+        self.scrollback_rows.push(row);
+        self.scrollback_wrapped.push(wrapped);
+        self.scrollback_lines = self.scrollback_rows.len();
+    }
+
+    /// Serialize the per-line scrollback into the flat snapshot format
+    /// (oldest first, every line padded to `cols`). Byte-compatible with
+    /// the pre-refactor `GridSnapshot.scrollback_cells` payload, minus the
+    /// ring rotation (lines are now always stored oldest-first, so the
+    /// snapshot emits `scrollback_start = 0`).
+    pub(in crate::grid) fn flatten_scrollback(rows: &[Box<[Cell]>], cols: usize) -> Vec<Cell> {
+        let mut flat = Vec::with_capacity(rows.len() * cols);
+        for row in rows {
+            flat.extend_from_slice(row);
+            flat.resize(flat.len() + (cols - row.len()), Cell::default());
+        }
+        flat
+    }
+
+    /// Rebuild per-line rows from a flat snapshot payload. Lines shorter
+    /// than `cols` are right-padded; a trailing run shorter than `cols` is
+    /// kept as its own (shorter) line — this only occurs on hand-built
+    /// snapshots, since [`Grid::flatten_scrollback`] always pads fully.
+    pub(in crate::grid) fn unflatten_scrollback(flat: &[Cell], cols: usize) -> Vec<Box<[Cell]>> {
+        if cols == 0 {
+            return Vec::new();
+        }
+        let mut rows = Vec::with_capacity(flat.len() / cols.max(1));
+        for chunk in flat.chunks(cols) {
+            let mut row = chunk.to_vec();
+            row.resize(cols, Cell::default());
+            rows.push(row.into_boxed_slice());
+        }
+        rows
     }
 }
 

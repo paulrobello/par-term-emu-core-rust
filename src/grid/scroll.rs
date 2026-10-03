@@ -25,22 +25,10 @@ impl Grid {
             let src_start = row * self.cols;
             let src_end = src_start + self.cols;
             let is_wrapped = self.wrapped.get(row).copied().unwrap_or(false);
-
-            if self.scrollback_lines < self.max_scrollback {
-                self.scrollback_cells
-                    .extend_from_slice(&self.cells[src_start..src_end]);
-                self.scrollback_wrapped.push(is_wrapped);
-                self.scrollback_lines += 1;
-            } else {
-                let write_idx = self.scrollback_start;
-                let dst_start = write_idx * self.cols;
-                let dst_end = dst_start + self.cols;
-
-                self.scrollback_cells[dst_start..dst_end]
-                    .clone_from_slice(&self.cells[src_start..src_end]);
-                self.scrollback_wrapped[write_idx] = is_wrapped;
-                self.advance_scrollback_head();
-            }
+            self.push_scrollback_row(
+                self.cells[src_start..src_end].to_vec().into_boxed_slice(),
+                is_wrapped,
+            );
         }
     }
 
@@ -79,10 +67,10 @@ impl Grid {
 
     /// Absorb rows drained out of the main grid into the scrollback buffer.
     ///
-    /// Takes ownership so the filling case is a single `Vec::append` (no
-    /// per-cell clone). Bookkeeping mirrors [`push_rows_to_scrollback`]:
-    /// the total-lines counter, zone eviction, and the ring overwrite once
-    /// scrollback is full.
+    /// Takes ownership per line so each row moves into scrollback by
+    /// ownership (no per-cell clone). Bookkeeping mirrors
+    /// [`push_rows_to_scrollback`]: the total-lines counter, zone eviction,
+    /// and oldest-line eviction when the buffer is full.
     fn absorb_rows_into_scrollback(&mut self, rows: &mut Vec<Cell>, wrapped_flags: &[bool]) {
         let cols = self.cols;
         if cols == 0 || self.max_scrollback == 0 {
@@ -101,35 +89,15 @@ impl Grid {
             self.evict_zones(floor);
         }
 
-        // Whole batch fits while scrollback is still filling: one O(1)
-        // append moves every cell.
-        if self.scrollback_lines + count <= self.max_scrollback && rows.len() == count * cols {
-            self.scrollback_cells.append(rows);
-            self.scrollback_wrapped
-                .extend_from_slice(&wrapped_flags[..count]);
-            self.scrollback_lines += count;
-            return;
-        }
-
         for i in 0..count {
             let is_wrapped = wrapped_flags[i];
-            if self.scrollback_lines < self.max_scrollback {
-                self.scrollback_cells
-                    .extend_from_slice(&rows[i * cols..(i + 1) * cols]);
-                self.scrollback_wrapped.push(is_wrapped);
-                self.scrollback_lines += 1;
-            } else {
-                // Scrollback full: swap the drained row into the ring head —
-                // the displaced row lands in `rows` and is freed by its drop,
-                // so this path clones nothing either.
-                let write_idx = self.scrollback_start;
-                let dst_start = write_idx * cols;
-                self.scrollback_cells[dst_start..dst_start + cols]
-                    .swap_with_slice(&mut rows[i * cols..(i + 1) * cols]);
-                self.scrollback_wrapped[write_idx] = is_wrapped;
-                self.advance_scrollback_head();
-            }
+            let line: Vec<Cell> = rows[i * cols..(i + 1) * cols]
+                .iter_mut()
+                .map(std::mem::take)
+                .collect();
+            self.push_scrollback_row(line.into_boxed_slice(), is_wrapped);
         }
+        rows.clear();
     }
 
     /// Scroll down by n lines
@@ -299,8 +267,10 @@ impl Grid {
     }
 
     /// Resize the visible grid to `cols` × `rows`. A width change reflows the
-    /// screen and its scrollback; a height-only change resizes in place. Every
-    /// row is marked damaged. A no-op when the size is unchanged or either
+    /// visible screen; the scrollback is never rebuilt — stored lines keep
+    /// the width they scrolled off at (renderers handle short lines by
+    /// padding). A height-only change resizes in place. Every visible row is
+    /// marked damaged. A no-op when the size is unchanged or either
     /// dimension is zero.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         if self.cols == cols && self.rows == rows {
@@ -326,54 +296,30 @@ impl Grid {
             return;
         }
 
-        // Width changed: Full reflow
+        // Width changed: reflow the visible screen only. Scrollback lines
+        // keep their original widths — resizing cost is bounded by the
+        // viewport rows, never the scrollback.
         let old_cols = self.cols;
         let old_rows = self.rows;
-
-        if self.max_scrollback > 0 && self.scrollback_lines > 0 {
-            self.reflow_scrollback(old_cols, cols);
-        }
 
         self.reflow_main_grid(old_cols, old_rows, cols, rows);
         self.reset_damage_for_resize();
     }
 
-    fn reflow_scrollback(&mut self, old_cols: usize, new_cols: usize) {
-        let logical_lines = self.extract_scrollback_logical_lines(old_cols);
-        let mut new_sb_cells = Vec::new();
-        let mut new_sb_wrapped = Vec::new();
-
-        for logical_line in logical_lines {
-            let (cells, wrapped_flags) = self.rewrap_logical_line(&logical_line, new_cols);
-
-            if cells.is_empty() {
-                for _ in 0..new_cols {
-                    new_sb_cells.push(Cell::default());
-                }
-                new_sb_wrapped.push(false);
-                continue;
-            }
-
-            for (i, row_cells) in cells.chunks(new_cols).enumerate() {
-                new_sb_cells.extend(row_cells.iter().cloned());
-                while new_sb_cells.len() % new_cols != 0 {
-                    new_sb_cells.push(Cell::default());
-                }
-                new_sb_wrapped.push(wrapped_flags.get(i).copied().unwrap_or(false));
-            }
+    /// Push one reflowed excess line into scrollback (resize path).
+    fn reflow_push_line(&mut self, row_cells: &[Cell], is_wrapped: bool) {
+        if self.scrollback_lines < self.max_scrollback {
+            self.scrollback_rows
+                .push(row_cells.to_vec().into_boxed_slice());
+            self.scrollback_wrapped.push(is_wrapped);
+            self.scrollback_lines += 1;
+        } else {
+            self.scrollback_rows.remove(0);
+            self.scrollback_wrapped.remove(0);
+            self.scrollback_rows
+                .push(row_cells.to_vec().into_boxed_slice());
+            self.scrollback_wrapped.push(is_wrapped);
         }
-
-        if new_sb_wrapped.len() > self.max_scrollback {
-            let excess = new_sb_wrapped.len() - self.max_scrollback;
-            let cells_to_drop = excess * new_cols;
-            new_sb_cells.drain(0..cells_to_drop);
-            new_sb_wrapped.drain(0..excess);
-        }
-
-        self.scrollback_cells = new_sb_cells;
-        self.scrollback_wrapped = new_sb_wrapped;
-        self.scrollback_lines = self.scrollback_wrapped.len();
-        self.scrollback_start = 0;
     }
 
     fn reflow_main_grid(
@@ -428,19 +374,7 @@ impl Grid {
                     let end = start + new_cols;
                     let row_cells = &all_cells[start..end];
                     let is_wrapped = all_wrapped.get(line_idx).copied().unwrap_or(false);
-
-                    if self.scrollback_lines < self.max_scrollback {
-                        self.scrollback_cells.extend(row_cells.iter().cloned());
-                        self.scrollback_wrapped.push(is_wrapped);
-                        self.scrollback_lines += 1;
-                    } else {
-                        let physical_index = self.scrollback_start;
-                        let sb_start = physical_index * new_cols;
-                        self.scrollback_cells[sb_start..sb_start + new_cols]
-                            .clone_from_slice(row_cells);
-                        self.scrollback_wrapped[physical_index] = is_wrapped;
-                        self.advance_scrollback_head();
-                    }
+                    self.reflow_push_line(row_cells, is_wrapped);
                 }
             }
             let keep_start = excess_lines * new_cols;
@@ -486,33 +420,6 @@ impl Grid {
                     current_line.pop();
                 }
                 logical_lines.push(std::mem::take(&mut current_line));
-            }
-        }
-        if !current_line.is_empty() {
-            logical_lines.push(current_line);
-        }
-        logical_lines
-    }
-
-    fn extract_scrollback_logical_lines(&self, _old_cols: usize) -> Vec<Vec<Cell>> {
-        let mut logical_lines = Vec::new();
-        let mut current_line = Vec::new();
-        for i in 0..self.scrollback_lines {
-            if let Some(line) = self.scrollback_line(i) {
-                for cell in line {
-                    if !cell.flags.wide_char_spacer() {
-                        current_line.push(cell.clone());
-                    }
-                }
-                if !self.is_scrollback_wrapped(i) {
-                    while current_line
-                        .last()
-                        .is_some_and(|c| c.c == ' ' && c.is_empty())
-                    {
-                        current_line.pop();
-                    }
-                    logical_lines.push(std::mem::take(&mut current_line));
-                }
             }
         }
         if !current_line.is_empty() {

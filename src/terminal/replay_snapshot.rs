@@ -294,7 +294,6 @@ mod tests {
         GridSnapshot {
             cells: vec![Cell::default(); cols * rows],
             scrollback_cells: Vec::new(),
-            scrollback_start: 0,
             scrollback_lines: 0,
             max_scrollback: 1000,
             cols,

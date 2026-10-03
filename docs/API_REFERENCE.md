@@ -176,7 +176,7 @@ Create a new terminal with specified dimensions.
 #### Terminal State
 - `content() -> str`: Get terminal content as a string
 - `size() -> tuple[int, int]`: Get terminal dimensions (cols, rows)
-- `resize(cols: int, rows: int)`: Resize the terminal. When width changes, main-screen scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved. The alternate screen (if active) is never reflowed — each row is truncated or padded in place instead, matching xterm/tmux behavior, since full-screen apps redraw the alt screen themselves on resize.
+- `resize(cols: int, rows: int)`: Resize the terminal. Only the visible screen is reflowed — scrollback lines keep the width they scrolled off at (renderers pad short history lines). All cell attributes are preserved. The alternate screen (if active) is never reflowed — each row is truncated or padded in place instead, matching xterm/tmux behavior, since full-screen apps redraw the alt screen themselves on resize.
 - `reset()`: Reset terminal to default state (RIS). Clears screen/scrollback/cursor/SGR/modes/graphics/title and marks every row dirty, but embedder configuration survives: security policy (`accept_osc7`, `disable_insecure_sequences`, `max_osc_data_length`), file-media and clipboard policy and limits, graphics limits, answerback string, theme colors (OSC 4 palette drift resets to the configured palette), unicode config, observers, event subscriptions, triggers, macros, notification config, badge format, active recordings, tmux control flags, pixel dimensions, and profiling (ARC-058)
 - `title() -> str`: Get terminal title
 - `set_title(title: str)`: Set terminal title programmatically
@@ -2377,8 +2377,8 @@ Snapshot of a single grid (primary or alternate screen). Defined in `src/termina
 
 **Fields:**
 - `cells` (`Vec<Cell>`): Visible screen cells (row-major, cols * rows)
-- `scrollback_cells` (`Vec<Cell>`): Scrollback buffer cells (linearized circular buffer)
-- `scrollback_start` / `scrollback_lines` / `max_scrollback` (`usize`): Scrollback state
+- `scrollback_cells` (`Vec<Cell>`): Scrollback cells, flattened one line per `cols` cells, oldest first (short lines are right-padded)
+- `scrollback_lines` / `max_scrollback` (`usize`): Scrollback state
 - `cols` / `rows` (`usize`): Grid dimensions
 - `wrapped` / `scrollback_wrapped` (`Vec<bool>`): Line-wrap flags
 - `zones` (`Vec<Zone>`): Semantic zones

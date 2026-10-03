@@ -10,6 +10,125 @@ fn test_grid_creation() {
 }
 
 #[test]
+fn scrollback_storage_is_per_line_rows() {
+    // Acceptance 1: scrollback is a per-line collection (Vec<Box<[Cell]>>),
+    // NOT one flat buffer. Each stored row owns exactly its own cells — one
+    // small allocation per line at its scroll-off width — so a single heap
+    // allocation can no longer scale as max_scrollback × cols × Cell.
+    let mut grid = Grid::new(80, 5, 10_000);
+    assert!(grid.scrollback_rows.is_empty());
+
+    // Scroll enough lines to fill the buffer (and wrap past its cap).
+    for i in 0..30 {
+        for col in 0..grid.cols() {
+            grid.set(col, 0, Cell::new((b'A' + (i % 26) as u8) as char));
+        }
+        grid.scroll_up(1);
+    }
+
+    // The container shape is per-line rows: 10_000 cap holds 30 rows of
+    // 80 cells each — the collection holds rows, not one flat Vec whose
+    // length is lines × cols.
+    assert_eq!(grid.scrollback_rows.len(), 30);
+    assert_eq!(grid.scrollback_lines, 30);
+    for row in &grid.scrollback_rows {
+        assert_eq!(row.len(), 80, "each row carries exactly its own width");
+    }
+    // The per-line collection's total length is bounded by content, and
+    // `scrollback_line` still returns the same slices as before.
+    assert_eq!(grid.scrollback_line(0).unwrap().len(), 80);
+    assert_eq!(grid.scrollback_line(29).unwrap().len(), 80);
+}
+
+#[test]
+fn scroll_eviction_drops_one_row_not_a_buffer_rebuild() {
+    // Acceptance 1 (eviction): when the buffer is full, scrolling off one
+    // more line evicts exactly one row — the per-line container shrinks
+    // back to max_scrollback entries; no wholesale buffer copy occurs.
+    let mut grid = Grid::new(10, 3, 5);
+    for i in 0..12 {
+        grid.set(0, 0, Cell::new((b'A' + i as u8) as char));
+        grid.scroll_up(1);
+    }
+    assert_eq!(grid.scrollback_rows.len(), 5);
+    // Oldest lines ('A'..'G') were evicted; oldest retained is 'H'.
+    assert_eq!(grid.scrollback_line(0).unwrap()[0].c, 'H');
+    assert_eq!(grid.scrollback_line(4).unwrap()[0].c, 'L');
+}
+
+#[test]
+fn snapshot_round_trips_per_line_storage() {
+    // Acceptance 2/3 companion: capture flattens per-line rows into the
+    // flat snapshot payload; restore re-slices it per line. Content and
+    // per-line identity survive the round trip.
+    let mut grid = Grid::new(10, 3, 100);
+    for i in 0..5 {
+        for col in 0..grid.cols() {
+            grid.set(col, 0, Cell::new((b'A' + i as u8) as char));
+        }
+        grid.scroll_up(1);
+    }
+
+    let snap = grid.capture_snapshot();
+    // Flat payload: 5 lines × 10 cols, oldest first.
+    assert_eq!(snap.scrollback_cells.len(), 5 * 10);
+    assert_eq!(snap.scrollback_cells[0].c, 'A');
+    assert_eq!(snap.scrollback_cells[40].c, 'E');
+
+    let mut restored = Grid::new(10, 3, 100);
+    restored.restore_from_snapshot(&snap);
+    assert_eq!(restored.scrollback_len(), 5);
+    for i in 0..5 {
+        let line = restored.scrollback_line(i).unwrap();
+        assert_eq!(line.len(), 10);
+        assert_eq!(line[0].c, (b'A' + i as u8) as char);
+    }
+}
+
+#[test]
+fn resize_with_large_scrollback_preserves_row_allocations() {
+    // Acceptance 3: resize cost is bounded by the viewport. The stored
+    // per-line rows are untouched by a resize (same allocations survive —
+    // asserted via pointer identity), so a resize never rebuilds or copies
+    // the scrollback.
+    let mut grid = Grid::new(80, 5, 500);
+    for i in 0..120 {
+        for col in 0..grid.cols() {
+            grid.set(col, 0, Cell::new((b'A' + (i % 26) as u8) as char));
+        }
+        grid.scroll_up(1);
+    }
+
+    let before: Vec<*const Cell> = grid
+        .scrollback_rows
+        .iter()
+        .map(|row| row.as_ptr())
+        .collect();
+    let lens_before: Vec<usize> = grid.scrollback_rows.iter().map(|r| r.len()).collect();
+
+    // Both resize paths: height-only, then a width change.
+    grid.resize(80, 8);
+    grid.resize(120, 8);
+
+    assert_eq!(grid.scrollback_rows.len(), before.len());
+    for (row, &old_ptr) in grid.scrollback_rows.iter().zip(&before) {
+        assert_eq!(
+            row.as_ptr(),
+            old_ptr,
+            "resize must not reallocate stored scrollback rows"
+        );
+    }
+    let lens_after: Vec<usize> = grid.scrollback_rows.iter().map(|r| r.len()).collect();
+    assert_eq!(lens_after, lens_before, "row widths survive untouched");
+    // Content spot-check: newest and oldest lines intact.
+    assert_eq!(grid.scrollback_line(0).unwrap()[0].c, 'A');
+    assert_eq!(
+        grid.scrollback_line(119).unwrap()[0].c,
+        (b'A' + (119 % 26) as u8) as char
+    );
+}
+
+#[test]
 fn test_grid_set_get() {
     let mut grid = Grid::new(80, 24, 1000);
     let cell = Cell::new('A');
@@ -939,8 +1058,10 @@ fn test_clear_row() {
 // ===== Scrollback Reflow Tests =====
 
 #[test]
-fn test_scrollback_reflow_width_increase_unwraps() {
-    // Test that increasing width unwraps previously wrapped lines
+fn test_scrollback_width_increase_keeps_lines_and_content() {
+    // Per-line scrollback storage: a width change only reflows the visible
+    // screen. Stored lines keep the width they scrolled off at; content
+    // must survive untouched.
     let mut grid = Grid::new(10, 3, 100);
 
     // Create a line that wraps: "ABCDEFGHIJ" (10 chars) + "KLMNO" (5 chars)
@@ -958,24 +1079,27 @@ fn test_scrollback_reflow_width_increase_unwraps() {
     assert_eq!(grid.scrollback_len(), 2);
     assert!(grid.is_scrollback_wrapped(0)); // First line should be wrapped
 
-    // Now resize to wider (20 cols) - should unwrap
+    // Resize to wider (20 cols) - stored lines keep their 10-col width
     grid.resize(20, 3);
 
-    // After reflow, both lines should merge into one (15 chars fits in 20 cols)
-    assert_eq!(grid.scrollback_len(), 1);
-    assert!(!grid.is_scrollback_wrapped(0)); // Should not be wrapped anymore
+    assert_eq!(grid.scrollback_len(), 2);
+    assert!(grid.is_scrollback_wrapped(0)); // Wrap flags unchanged
 
-    // Verify content is preserved
-    let line = grid.scrollback_line(0).unwrap();
-    assert_eq!(line[0].c, 'A');
-    assert_eq!(line[4].c, 'E');
-    assert_eq!(line[10].c, 'K');
-    assert_eq!(line[14].c, 'O');
+    // Both stored lines preserved with their content
+    let line0 = grid.scrollback_line(0).unwrap();
+    let line1 = grid.scrollback_line(1).unwrap();
+    assert_eq!(line0.len(), 10);
+    assert_eq!(line1.len(), 10);
+    assert_eq!(line0[0].c, 'A');
+    assert_eq!(line0[4].c, 'E');
+    assert_eq!(line1[0].c, 'K');
+    assert_eq!(line1[4].c, 'O');
 }
 
 #[test]
-fn test_scrollback_reflow_width_decrease_rewraps() {
-    // Test that decreasing width re-wraps lines
+fn test_scrollback_width_decrease_keeps_lines_and_content() {
+    // Narrowing the grid must not rebuild the scrollback: the stored line
+    // keeps its original (wider) width and its content.
     let mut grid = Grid::new(20, 3, 100);
 
     // Create a single line with 15 characters
@@ -988,21 +1112,18 @@ fn test_scrollback_reflow_width_decrease_rewraps() {
     assert_eq!(grid.scrollback_len(), 1);
     assert!(!grid.is_scrollback_wrapped(0));
 
-    // Now resize to narrower (10 cols) - should re-wrap
+    // Now resize to narrower (10 cols)
     grid.resize(10, 3);
 
-    // After reflow, should be 2 lines (10 + 5 chars)
-    assert_eq!(grid.scrollback_len(), 2);
-    assert!(grid.is_scrollback_wrapped(0)); // First line should be wrapped now
-    assert!(!grid.is_scrollback_wrapped(1)); // Second line not wrapped
+    // The stored line survives at its original width
+    assert_eq!(grid.scrollback_len(), 1);
+    assert!(!grid.is_scrollback_wrapped(0));
 
-    // Verify content
     let line0 = grid.scrollback_line(0).unwrap();
-    let line1 = grid.scrollback_line(1).unwrap();
+    assert_eq!(line0.len(), 20); // original scroll-off width
     assert_eq!(line0[0].c, 'A');
     assert_eq!(line0[9].c, 'J');
-    assert_eq!(line1[0].c, 'K');
-    assert_eq!(line1[4].c, 'O');
+    assert_eq!(line0[14].c, 'O');
 }
 
 #[test]
@@ -1195,8 +1316,9 @@ fn test_scrollback_reflow_circular_buffer() {
 }
 
 #[test]
-fn test_scrollback_reflow_wrapped_chain() {
-    // Test reflow of a chain of wrapped lines that spans multiple rows
+fn test_scrollback_wrapped_chain_survives_resize() {
+    // Per-line storage keeps every wrapped chain row at its original width
+    // through a resize; the chain content must survive untouched.
     let mut grid = Grid::new(5, 5, 100);
 
     // Create a 15-char line that spans 3 rows at width 5
@@ -1213,13 +1335,14 @@ fn test_scrollback_reflow_wrapped_chain() {
     grid.scroll_up(3);
     assert_eq!(grid.scrollback_len(), 3);
 
-    // Resize to 15 cols - should unwrap into single line
+    // Resize to 15 cols - the 3 stored rows keep their 5-col widths
     grid.resize(15, 5);
 
-    assert_eq!(grid.scrollback_len(), 1);
-    let line = grid.scrollback_line(0).unwrap();
-    assert_eq!(line[0].c, 'A');
-    assert_eq!(line[14].c, 'O');
+    assert_eq!(grid.scrollback_len(), 3);
+    let line0 = grid.scrollback_line(0).unwrap();
+    let line2 = grid.scrollback_line(2).unwrap();
+    assert_eq!(line0[0].c, 'A');
+    assert_eq!(line2[4].c, 'O');
 }
 
 #[cfg(test)]

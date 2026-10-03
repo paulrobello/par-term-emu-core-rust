@@ -26,7 +26,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Unicode Support](#unicode-support)
   - [Configurable Unicode Width](#configurable-unicode-width)
 - [Buffer Export](#buffer-export)
-- [Scrollback Reflow](#scrollback-reflow)
+- [Scrollback Storage and Resize](#scrollback-storage-and-resize)
 - [Terminal Notifications](#terminal-notifications)
 - [Session Recording and Replay](#session-recording-and-replay)
 - [Macro Recording and Playback](#macro-recording-and-playback)
@@ -2047,38 +2047,32 @@ Both `Terminal` and `PtyTerminal` classes provide:
 - Styled export only emits escape sequence changes (not redundant)
 - Both methods handle large scrollback buffers efficiently (10K+ lines)
 
-## Scrollback Reflow
+## Scrollback Storage and Resize
 
-**Feature:** Automatic reflow of scrollback content when terminal width changes.
+**Feature:** Per-line scrollback storage — resizing never rebuilds history.
 
 ### Overview
 
-When the terminal is resized, the scrollback buffer is intelligently reflowed to match the new width, similar to behavior in xterm and iTerm2. This preserves scrollback history that would otherwise be lost during width changes.
+Scrollback is stored as one boxed row per line, oldest first. Each line keeps the column width it had when it scrolled off the screen. When the terminal is resized, only the visible screen is reflowed; stored scrollback lines are never reallocated, copied, or re-wrapped — resize cost is bounded by the viewport rows, regardless of scrollback depth (a resize with a full 10k-line scrollback no longer copies 180+ MB).
 
 ### Behavior
 
-**Width Increase (e.g., 80 → 120 columns):**
-- Previously soft-wrapped lines are unwrapped into longer lines
-- Lines that were split across multiple rows are merged back together
-- Results in fewer scrollback lines (more content fits per line)
+**Width Increase (e.g., 80 to 120 columns):**
+- The visible screen is reflowed; stored scrollback lines keep their 80-column width
+- Renderers pad short history lines to the current width when drawing
 
-**Width Decrease (e.g., 120 → 80 columns):**
-- Lines that no longer fit are re-wrapped at the new width
-- Results in more scrollback lines (content spans more rows)
-- Respects `max_scrollback` limit (oldest lines dropped if exceeded)
+**Width Decrease (e.g., 120 to 80 columns):**
+- The visible screen is reflowed; stored scrollback lines keep their wider original width
+- History content survives untouched — no lines are dropped or re-wrapped
 
 **Height-Only Changes:**
-- No reflow is performed (optimization)
 - Scrollback content remains unchanged
 
-### Preserved During Reflow
+### Preserved Always
 
-- All text content
-- Foreground and background colors (named, indexed, RGB)
-- Text attributes (bold, italic, underline, etc.)
-- Underline styles and colors
-- Hyperlink associations
-- Wide character handling (CJK, emoji)
+- All text content, colors, attributes, and hyperlink associations of stored lines
+- Wrap flags of stored lines
+- Oldest-first line ordering and `max_scrollback` eviction semantics (each eviction drops one small allocation)
 
 ### Example
 
@@ -2095,24 +2089,20 @@ term.process_str("A" * 100 + "\n")  # Wraps at 80 cols
 for _ in range(30):
     term.process_str("\n")
 
-# Before resize: 2 scrollback lines (100 chars wrapped at 80)
-print(f"Before: {term.scrollback_len()} lines")
+print(f"Scrollback: {term.scrollback_len()} lines")
 
-# Resize wider - lines unwrap
+# Resize wider - scrollback content is untouched (line count and text unchanged)
 term.resize(120, 24)
-print(f"After resize to 120: {term.scrollback_len()} lines")  # Now 1 line
+print(f"After resize to 120: {term.scrollback_len()} lines")
 
-# Resize narrower - lines re-wrap
-term.resize(50, 24)
-print(f"After resize to 50: {term.scrollback_len()} lines")  # Now 2 lines
+# History lines carry their original 80-col width; the visible screen reflows
 ```
 
 ### Technical Details
 
-- Reflow occurs **before** the grid dimensions are updated
-- The circular buffer is linearized during reflow for simpler processing
-- Wide characters that would be split at line boundaries cause early wrapping
-- Empty trailing cells are trimmed from non-wrapped lines
+- Storage is `Vec<Box<[Cell]>>` (one allocation per line at its own width)
+- The snapshot payload (`GridSnapshot.scrollback_cells`) stays a flat, oldest-first, one-line-per-`cols` serialization for wire compatibility
+- Wide characters are never split: a stored line carries the same cells it had on screen
 
 ## Terminal Notifications
 

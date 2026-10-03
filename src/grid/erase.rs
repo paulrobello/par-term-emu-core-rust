@@ -103,8 +103,8 @@ impl Grid {
 
     /// Clear the scrollback buffer
     pub fn clear_scrollback(&mut self) {
-        self.scrollback_cells.clear();
-        self.scrollback_start = 0;
+        self.scrollback_rows.clear();
+        self.scrollback_rows.shrink_to_fit();
         self.scrollback_lines = 0;
         self.scrollback_wrapped.clear();
         // Reset floor for zones

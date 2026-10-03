@@ -12,10 +12,13 @@ use crate::zone::Zone;
 pub struct GridSnapshot {
     /// Visible screen cells (row-major, cols * rows)
     pub cells: Vec<Cell>,
-    /// Scrollback buffer cells (flat, circular buffer linearized)
+    /// Scrollback cells, flattened: one line per `cols` cells, OLDEST FIRST.
+    /// Lines shorter than `cols` are right-padded with default cells. (The
+    /// storage itself is per-line `Box<[Cell]>` — see `Grid`; this flat form
+    /// keeps the serialized payload compatible with the pre-per-line format,
+    /// except lines are no longer stored as a rotated ring, i.e. the old
+    /// `scrollback_start` field is gone and was always effectively 0.)
     pub scrollback_cells: Vec<Cell>,
-    /// Start index of the circular scrollback buffer
-    pub scrollback_start: usize,
     /// Number of lines currently in scrollback
     pub scrollback_lines: usize,
     /// Maximum scrollback capacity

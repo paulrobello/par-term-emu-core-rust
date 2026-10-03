@@ -125,31 +125,29 @@ Manages the 2D terminal buffer with modular organization:
 
 **Features:**
 - Main screen buffer (cols × rows)
-- Scrollback buffer (configurable size, flat circular buffer)
+- Scrollback buffer (configurable size, one boxed row per line)
 - Scrolling operations
 - Cell access and manipulation
-- Resize handling with scrollback reflow
+- Resize handling (visible screen only — scrollback lines keep their widths)
 - Semantic zone tracking (Prompt, Command, Output)
 
 **Resize Behavior:**
-When terminal width changes, the main screen's scrollback buffer is automatically reflowed:
-- **Width increase**: Previously soft-wrapped lines are unwrapped into longer lines
-- **Width decrease**: Lines are re-wrapped to fit the new width
-- All cell attributes (colors, bold, italic, etc.) are preserved during reflow
-- Wide characters (CJK, emoji) are handled correctly at line boundaries
-- The circular buffer is rebuilt after reflow for simpler indexing
-- Height-only changes do not trigger scrollback reflow (optimization)
+When terminal width changes, only the visible screen is reflowed; scrollback lines are never rebuilt:
+- **Stored lines keep the width they scrolled off at** — a line scrolled off at 200 columns stays 200 cells wide after any resize, and each line's eviction drops one small allocation
+- Renderers pad short lines to the current width when drawing history
+- Wrap flags of stored lines are preserved unchanged
+- Resize cost is bounded by the viewport rows, never the scrollback depth (a resize with a full 10k-line scrollback no longer copies 180+ MB)
+- Height-only changes resize the visible grid in place
 - **The alternate screen is never reflowed** (`Grid::resize_without_reflow`): each row is truncated or padded in place and row positions are kept, matching xterm/tmux. A full-screen TUI (ratatui, curses) redraws the alt screen itself on SIGWINCH, often only the cells it believes changed — reflowing those cells would leave them unrepainted and the layout scrambled.
 
-The grid uses a flat Vec for efficient storage and access:
+The grid uses a flat Vec for the visible screen and one boxed row per scrollback line:
 
 ```rust
 pub struct Grid {
     cols: usize,
     rows: usize,
-    cells: Vec<Cell>,              // Row-major order
-    scrollback_cells: Vec<Cell>,   // Flat circular buffer
-    scrollback_start: usize,       // Circular buffer head
+    cells: Vec<Cell>,              // Row-major order (visible screen)
+    scrollback_rows: Vec<Box<[Cell]>>, // Per-line scrollback, oldest first
     scrollback_lines: usize,       // Current scrollback count
     max_scrollback: usize,
     wrapped: Vec<bool>,            // Line wrap tracking
