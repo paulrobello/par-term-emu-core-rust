@@ -107,6 +107,19 @@ struct Cli {
     )]
     command: Option<String>,
 
+    /// Client mode: list every live par-mux server this user can reach —
+    /// registry entries plus the named-default sockets on disk — one line
+    /// per server (`<name-or-path>  sessions=N  stamp`), pruning registry
+    /// entries whose probe failed. Never starts a daemon. Honors
+    /// `--state-dir`, so tests can point the registry at a fixture; with
+    /// `--socket`/NAME, the named/default resolution is skipped for the
+    /// target socket (discovery is user-wide, not per-socket).
+    #[arg(
+        long,
+        conflicts_with_all = ["stop", "restart", "command", "gen_config"]
+    )]
+    list_servers: bool,
+
     /// Give each pane its own hook-only socket endpoint: `PAR_MUX_SOCKET`
     /// in a pane then names a socket that accepts ONLY hook reports for
     /// that pane, so its child processes cannot drive other panes or stop
@@ -206,6 +219,21 @@ impl AttachCommand {
             },
         }
     }
+
+    /// The `--socket` path as typed, when the user gave one — the
+    /// multi-server ambiguity guard must not override an explicit target.
+    fn explicit_socket(&self) -> Option<&std::path::Path> {
+        match self {
+            AttachCommand::Attach(args) => args.socket.as_deref(),
+        }
+    }
+
+    /// The positional NAME as typed, when the user gave one — same guard.
+    fn explicit_name(&self) -> Option<&str> {
+        match self {
+            AttachCommand::Attach(args) => args.name.as_deref(),
+        }
+    }
 }
 
 /// The `--mode` spelling: `render` selects the Phase B renderer; anything
@@ -270,6 +298,50 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
     }
     let _ = out.flush();
     ExitCode::SUCCESS
+}
+
+/// `par-mux --list-servers`: enumerate and probe every known server under
+/// the resolved state base, print one line per LIVE server, and report the
+/// dead ones. Registry entries whose probe failed are pruned as a side
+/// effect (the enumeration owns cleanup); a `--socket`/NAME argument does
+/// not narrow the list — discovery is user-wide, the flag pair is accepted
+/// only so `par-mux --list-servers` reads uniformly with the other
+/// client-mode flags.
+fn run_list_servers(cli: &Cli) -> std::process::ExitCode {
+    use std::io::Write as _;
+    let base = discovery_base(cli);
+    let found = par_term_emu_core_rust::mux::discovery::enumerate(&base);
+    let mut out = std::io::stdout().lock();
+    for server in &found.live {
+        let label = par_term_emu_core_rust::mux::discovery::display_label(&server.socket);
+        let sessions = server
+            .sessions
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "?".to_owned());
+        let stamp = server.stamp.as_deref().unwrap_or("?");
+        if writeln!(out, "{label}  sessions={sessions}  {stamp}").is_err() {
+            break;
+        }
+    }
+    let mut err = std::io::stderr().lock();
+    for socket in &found.dead {
+        let _ = writeln!(err, "par-mux: pruned a dead entry for {}", socket.display());
+    }
+    let _ = out.flush();
+    if found.live.is_empty() {
+        let _ = writeln!(err, "par-mux: no running par-mux servers");
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+/// The registry base this invocation reads and writes: `--state-dir`'s
+/// value when given (tests), else the platform state base every
+/// default-`--state-dir` daemon registers under.
+fn discovery_base(cli: &Cli) -> std::path::PathBuf {
+    match cli.state_dir.as_deref() {
+        Some(dir) => dir.to_path_buf(),
+        None => par_term_emu_core_rust::mux::discovery::default_registry_base(),
+    }
 }
 
 /// Whether `path` is a pane endpoint that just refused `command` (ENH-039):
@@ -387,6 +459,54 @@ fn main() -> std::process::ExitCode {
             // did not pass --mode (the flag tier wins over the file).
             options.mode = AttachMode::Render;
         }
+
+        // Multi-server ambiguity guard: with NEITHER an explicit socket
+        // NOR a name on the command line, enumerate under the resolved
+        // registry base first. Multiple live servers: print the same
+        // list `--list-servers` prints plus a hint, and refuse to pick
+        // silently. Exactly one: attach there even when the default
+        // resolution would name a different (dead) socket — "attach"
+        // with one server running means that server. Zero or an
+        // explicit target: unchanged behavior (the connect reports no
+        // daemon on the resolved path).
+        let explicit_target = attach
+            .explicit_socket()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                attach.explicit_name().map(|name| {
+                    par_term_emu_core_rust::mux::resolve_socket_path(None, Some(name), None)
+                })
+            });
+        if explicit_target.is_none() {
+            let base = discovery_base(&cli);
+            let found = par_term_emu_core_rust::mux::discovery::enumerate(&base);
+            if found.live.len() > 1 {
+                use std::io::Write as _;
+                let mut err = std::io::stderr().lock();
+                let _ = writeln!(
+                    err,
+                    "par-mux: multiple par-mux servers are running — attach to one with \
+                     `par-mux attach <name|path>`:"
+                );
+                for server in &found.live {
+                    let label =
+                        par_term_emu_core_rust::mux::discovery::display_label(&server.socket);
+                    let sessions = server
+                        .sessions
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "?".to_owned());
+                    let stamp = server.stamp.as_deref().unwrap_or("?");
+                    let _ = writeln!(err, "  {label}  sessions={sessions}  {stamp}");
+                }
+                return std::process::ExitCode::from(1);
+            }
+            if let [single] = found.live.as_slice() {
+                // Pre-resolve the socket so the attach client never needs
+                // its own resolution: AttachOptions carries the explicit
+                // path from here on.
+                options.socket = Some(single.socket.clone());
+            }
+        }
         return par_term_emu_core_rust::mux::attach::run_with_mode(&options, options.mode);
     }
 
@@ -436,6 +556,10 @@ fn main() -> std::process::ExitCode {
 
     if let Some(command) = cli.command.as_deref() {
         return run_command(&path, command);
+    }
+
+    if cli.list_servers {
+        return run_list_servers(&cli);
     }
 
     match run_daemon(cli, path) {
@@ -549,8 +673,20 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     };
     // Publish the applied settings: `reload-config` diffs its re-read
     // against this copy (restart-required vs unchanged, per setting).
-    server.set_config(std::sync::Arc::new(parking_lot::Mutex::new(eff)));
+    server.set_config(std::sync::Arc::new(parking_lot::Mutex::new(eff.clone())));
     log::info!("par-mux listening on {}", path.display());
+
+    // Discovery registry: publish this daemon under the same state base
+    // its state file uses, so `--list-servers` finds it. Best-effort on
+    // both ends — a registry failure must not stop serving, and a failed
+    // unregister must not fail a clean shutdown.
+    let registry_base = match eff.state_dir.as_str() {
+        "" => par_term_emu_core_rust::mux::discovery::default_registry_base(),
+        dir => std::path::PathBuf::from(dir),
+    };
+    if let Err(err) = par_term_emu_core_rust::mux::discovery::register(&registry_base, &path) {
+        log::warn!("par-mux: could not register in the server registry: {err}");
+    }
 
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
     // shutdown with one atomic store (async-signal-safe), the accept loop
@@ -567,6 +703,13 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     }
 
     server.run_persisting(state_path);
+    // Registry entry out only AFTER the serve loop returns (the final save
+    // has landed): a list-servers racing the shutdown must not see the
+    // entry vanish while the socket can still answer. Best-effort — a
+    // failed unlink must not fail a clean shutdown.
+    if let Err(err) = par_term_emu_core_rust::mux::discovery::unregister(&registry_base, &path) {
+        log::warn!("par-mux: could not remove the registry entry: {err}");
+    }
     Ok(())
 }
 

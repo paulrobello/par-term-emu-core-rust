@@ -14,6 +14,7 @@ pub mod attach;
 pub mod client;
 pub mod command;
 pub mod config;
+pub mod discovery;
 pub mod emit;
 pub(crate) mod foreground;
 pub mod hooks;

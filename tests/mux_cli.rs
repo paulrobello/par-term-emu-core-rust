@@ -946,6 +946,273 @@ fn pane_env_contract_with_pane_endpoints_alone_refuses_control() {
     drop(daemon);
 }
 
+// ---------------------------------------------------------------------------
+// --list-servers (daemon discovery)
+// ---------------------------------------------------------------------------
+
+/// `par-mux --list-servers --state-dir <dir>`.
+fn list_servers(state_dir: &Path) -> Run {
+    let dir = state_dir.to_str().expect("utf-8 state dir");
+    par_mux(&["--list-servers", "--state-dir", dir])
+}
+
+/// Both test daemons appear in one list, labeled and counted.
+#[test]
+fn list_servers_shows_both_running_daemons_with_session_counts() {
+    let alpha = MuxFixture::new("clilist-a");
+    let beta = MuxFixture::new("clilist-b");
+    // One SHARED registry base: both daemons register under it, the way
+    // two production daemons share the platform state dir.
+    let registry_base = alpha.state_dir();
+    let spawn_with_shared_base = |fixture: &MuxFixture| -> DaemonGuard {
+        let child = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+            .arg("--socket")
+            .arg(fixture.socket())
+            .arg("--state-dir")
+            .arg(registry_base.clone())
+            .env_remove("PAR_MUX_ENV")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("daemon binary spawns");
+        DaemonGuard::wrap(child)
+    };
+    let da = spawn_with_shared_base(&alpha);
+    let db = spawn_with_shared_base(&beta);
+    wait_listening(alpha.socket());
+    wait_listening(beta.socket());
+    cmd_ok(alpha.socket(), "new-session -s one");
+    cmd_ok(alpha.socket(), "new-session -s two");
+    cmd_ok(beta.socket(), "new-session -s three");
+
+    let run = list_servers(&registry_base);
+    assert_eq!(run.code, Some(0), "list-servers exits 0: {:?}", run.stderr);
+    let mut lines: Vec<&str> = run.stdout.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one line per live server: stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    let alpha_label = alpha.socket().to_str().expect("utf-8 socket");
+    let beta_label = beta.socket().to_str().expect("utf-8 socket");
+    let alpha_line = lines
+        .iter()
+        .find(|l| l.contains(alpha_label))
+        .expect("alpha is listed");
+    let beta_line = lines
+        .iter()
+        .find(|l| l.contains(beta_label))
+        .expect("beta is listed");
+    assert!(
+        alpha_line.contains("sessions=2"),
+        "alpha carries two sessions: {alpha_line}"
+    );
+    assert!(
+        beta_line.contains("sessions=1"),
+        "beta carries one session: {beta_line}"
+    );
+    assert!(
+        beta_line.contains(env!("CARGO_PKG_VERSION")),
+        "the line carries the build stamp: {beta_line}"
+    );
+
+    // A clean shutdown removes the entry.
+    drop(da);
+    let run = list_servers(&alpha.state_dir());
+    assert_eq!(run.code, Some(0), "{:?}", run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only beta remains after alpha stopped: stdout={:?}",
+        run.stdout
+    );
+    assert!(
+        lines[0].contains(beta_label),
+        "the surviving line is beta's: {:?}",
+        run.stdout
+    );
+
+    // SIGKILL (the guard's kill path) leaves a dead entry; the next
+    // list-servers run prunes it and reports the pruning.
+    drop(db);
+    let run = list_servers(&alpha.state_dir());
+    assert_eq!(run.code, Some(0), "{:?}", run.stderr);
+    assert!(
+        run.stdout.trim().is_empty(),
+        "nothing live remains: stdout={:?}",
+        run.stdout
+    );
+    let registry = alpha.state_dir().join("servers");
+    let leftovers = std::fs::read_dir(&registry)
+        .map(|entries| entries.flatten().count())
+        .unwrap_or(0);
+    assert_eq!(
+        leftovers, 0,
+        "the dead entries were pruned from the registry"
+    );
+}
+
+/// Registry hygiene: a hand-staged dead entry with a live daemon on a
+/// different socket is listed as pruned without disturbing the live one,
+/// and a re-registration over the live file leaves it byte-identical.
+#[test]
+fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
+    use par_term_emu_core_rust::mux::discovery;
+
+    let fixture = MuxFixture::new("clilist-hy");
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let base = fixture.state_dir();
+
+    // The daemon registered itself at bind.
+    let entry_file = base.join("servers").join(format!(
+        "{}.json",
+        fixture
+            .socket()
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("utf-8 stem")
+    ));
+    assert!(entry_file.exists(), "the daemon registered at bind");
+    let before = std::fs::read(&entry_file).expect("entry bytes");
+
+    // Re-registering the same live daemon must not rewrite the entry.
+    discovery::register(&base, fixture.socket()).expect("re-register");
+    let after = std::fs::read(&entry_file).expect("entry bytes");
+    assert_eq!(
+        before, after,
+        "a live entry is left byte-for-byte alone by re-registration"
+    );
+
+    // A dead entry (pid gone, socket unreachable) for another stem is
+    // pruned by enumerate, alongside the live one staying listed.
+    let dead_socket = fixture.socket().with_file_name("dead-socket.sock");
+    discovery::register(&base, &dead_socket).expect("stage a registration");
+    let dead_file = base.join("servers").join("dead-socket.json");
+    let mut entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&dead_file).expect("dead entry")).expect("parses");
+    entry["pid"] = serde_json::Value::from(2_147_483_647u32);
+    std::fs::write(&dead_file, serde_json::to_vec(&entry).expect("reserialize"))
+        .expect("stage dead entry");
+
+    let run = list_servers(&base);
+    assert_eq!(run.code, Some(0), "{:?}", run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the live daemon lists: {:?}",
+        run.stdout
+    );
+    assert!(
+        lines[0].contains(fixture.socket().to_str().expect("utf-8")),
+        "the live daemon is the one listed: {}",
+        lines[0]
+    );
+    assert!(
+        run.stderr.contains("dead-socket"),
+        "the pruning is reported: stderr={:?}",
+        run.stderr
+    );
+    assert!(!dead_file.exists(), "the dead entry file was removed");
+
+    // Clean shutdown (kill-server, the path run_persisting returns
+    // through) removes the daemon's own entry. The DaemonGuard backstop
+    // kill would skip it — SIGKILL never runs shutdown code — which is
+    // exactly the stale-entry case enumerate prunes.
+    let _ = cmd_ok(fixture.socket(), "kill-server");
+    let _ = daemon.wait();
+    let leftovers = std::fs::read_dir(base.join("servers"))
+        .map(|entries| entries.flatten().count())
+        .unwrap_or(0);
+    assert_eq!(
+        leftovers, 0,
+        "the daemon's own unregister on clean shutdown cleaned up the rest"
+    );
+}
+
+/// Zero servers: a friendly empty report, exit 0.
+#[test]
+fn list_servers_with_nothing_running_reports_empty() {
+    let fixture = MuxFixture::new("clilist-none");
+    std::fs::create_dir_all(fixture.state_dir()).expect("stage state dir");
+    let run = list_servers(&fixture.state_dir());
+    assert_eq!(run.code, Some(0), "{:?}", run.stderr);
+    assert!(
+        run.stdout.trim().is_empty(),
+        "no lines for no servers: {:?}",
+        run.stdout
+    );
+}
+
+/// `par-mux attach` with no NAME/--socket while MULTIPLE servers are live
+/// refuses with the server list and a hint instead of silently picking one
+/// (the guard runs before the client needs a terminal, so a plain pipe
+/// spawns it). Exactly-one auto-select is exercised by the attach suite's
+/// PTY harness.
+#[cfg(feature = "attach")]
+#[test]
+fn attach_with_multiple_live_servers_refuses_with_a_list() {
+    let alpha = MuxFixture::new("cliatt-a");
+    let beta = MuxFixture::new("cliatt-b");
+    let registry_base = alpha.state_dir();
+    let spawn_with_shared_base = |fixture: &MuxFixture| -> DaemonGuard {
+        let child = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+            .arg("--socket")
+            .arg(fixture.socket())
+            .arg("--state-dir")
+            .arg(registry_base.clone())
+            .env_remove("PAR_MUX_ENV")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("daemon binary spawns");
+        DaemonGuard::wrap(child)
+    };
+    let da = spawn_with_shared_base(&alpha);
+    let db = spawn_with_shared_base(&beta);
+    wait_listening(alpha.socket());
+    wait_listening(beta.socket());
+
+    let dir = registry_base.to_str().expect("utf-8");
+    let run = par_mux(&["--state-dir", dir, "attach"]);
+    assert_eq!(
+        run.code,
+        Some(1),
+        "ambiguity refuses with exit 1: stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("multiple par-mux servers are running"),
+        "the refusal names the ambiguity: {:?}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("par-mux attach <name|path>"),
+        "the refusal carries the hint: {:?}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(alpha.socket().to_str().expect("utf-8"))
+            && run.stderr.contains(beta.socket().to_str().expect("utf-8")),
+        "both servers are listed: {:?}",
+        run.stderr
+    );
+    assert!(
+        run.stdout.is_empty(),
+        "nothing lands on stdout: {:?}",
+        run.stdout
+    );
+
+    drop(da);
+    drop(db);
+}
+
 /// `par-mux --cmd reload-config` against a live daemon: the re-read
 /// reaches the running daemon (no restart) and the reply names each
 /// daemon setting. The reply is computed against the DAEMON's process env

@@ -11,6 +11,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Building and Running](#building-and-running)
 - [Command Line](#command-line)
 - [Client Mode](#client-mode)
+- [Discovering servers](#discovering-servers)
 - [Attaching from a terminal](#attaching-from-a-terminal)
 - [Socket and State Paths](#socket-and-state-paths)
 - [Protocol Overview](#protocol-overview)
@@ -111,6 +112,20 @@ par-mux --cmd list-sessions   # resolves $PAR_MUX_SOCKET before the default sock
 | Target is a pane endpoint (`--pane-endpoints` daemon) | — | `this pane has hook-only access; start the daemon with --expose-control-socket or pass --socket` | 1 |
 
 Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with nothing running fails immediately instead of booting one. The command string follows the daemon's grammar (see the quoting rules under [Command Reference](#command-reference)); wrap it in single quotes in the shell so its inner double quotes reach the daemon intact. One command per invocation — there is no `;` sequencing, interactive attach, or follow mode. Pushed notifications that arrive while the reply is pending are discarded. Stdout writes stop quietly on a closed pipe, so `par-mux --cmd '...' | head -1` does not panic.
+
+### Discovering servers
+
+`par-mux --list-servers` enumerates every par-mux daemon this user can reach and prints one line per LIVE server (`<name-or-path>  sessions=N  <build stamp>`), so `attach` has something to enumerate:
+
+```bash
+par-mux --list-servers
+# work  sessions=2  0.58.1+a1b2c3d
+# /tmp/scratch.sock  sessions=0  0.58.1+a1b2c3d
+```
+
+Each daemon writes one pointer file into its state directory at bind (`<state-base>/servers/<socket-stem>.json`: socket path, pid, start time, build stamp) and removes it on the clean shutdown path (`kill-server`/`--stop`). A crash leaves the file behind; the next list-servers run probes every registered socket with `version` + `list-servers` through the same transport a client uses, prunes the entries whose probe fails (the pruning is reported on stderr), and — when the registry base is the platform default — also sweeps the named-default socket directory, so named daemons an older binary never registered still appear. `--list-servers` honors `--state-dir`, which scopes both the registry and the sweep to that base (what tests and sandboxes use). Registry failure never blocks a daemon from serving; discovery then simply falls back to the directory sweep.
+
+`par-mux attach` with no NAME and no `--socket` while MORE THAN ONE server is live refuses with the same list plus a one-line hint (`attach to one with par-mux attach <name|path>`, exit 1) instead of silently picking one; exactly one live server attaches to it directly.
 
 ## Attaching from a terminal
 
@@ -579,6 +594,7 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `src/mux/pane.rs` | `MuxPane` (PTY + `Terminal`), `PaneFactory`, `ShellPaneFactory`, the env contract |
 | `src/mux/ids.rs` | `SessionId`/`WindowId`/`PaneId` (`$N`/`@N`/`%N`) and id allocation |
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
+| `src/mux/discovery.rs` | Server registry (`<state-base>/servers/<stem>.json`) and `--list-servers` enumeration: register/unregister, the named-default directory sweep, and the `version`/`list-sessions` probe |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
 | `src/mux/host_probe.rs` | The host telemetry probe: disk + git per pane cwd, its 30 s cadence thread, and per-field freshness serving |
 | `src/mux/hooks/` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.report_agent_telemetry`, `pane.release_agent` (`mod.rs` dispatch + shared header/seq/reply helpers, `report.rs` state and session, `telemetry.rs`, `release.rs`) |
