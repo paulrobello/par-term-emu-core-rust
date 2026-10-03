@@ -1007,7 +1007,9 @@ fn hex_byte_token(token: &str) -> Option<u8> {
 ///   `Space` key or live inside a quoted run (exactly how
 ///   `escape_keys_for_tmux` encodes spaces).
 /// - `-l`: everything is literal text (quotes still resolved, no key
-///   interpretation).
+///   interpretation). Tokens also join with NOTHING between them — measured
+///   on tmux 3.7c, `send-keys -l echo LEFT` types `echoLEFT`, so a space
+///   must live inside a quoted run here too.
 /// - `-H`: tokens are hex byte pairs, `0x` prefix optional.
 ///
 /// No terminator is appended in any mode.
@@ -2225,6 +2227,22 @@ mod tests {
     fn send_keys_literal_flag_disables_interpretation() {
         assert_eq!(encoded("send-keys -t %3 -l C-c"), b"C-c".to_vec());
         assert_eq!(encoded("send-keys -t %3 -l Home"), b"Home".to_vec());
+    }
+
+    #[test]
+    fn send_keys_literal_tokens_join_with_nothing_like_tmux() {
+        // Measured on tmux 3.7c: `send-keys -t 0 -l echo LEFT` types
+        // `echoLEFT` — tokens join with NOTHING in -l mode, same as default
+        // mode. A space must live inside a quoted run. Pinned end to end in
+        // tests/mux_send_keys.rs against a live daemon too.
+        assert_eq!(
+            encoded("send-keys -t %3 -l echo LEFT"),
+            b"echoLEFT".to_vec()
+        );
+        assert_eq!(
+            encoded("send-keys -t %3 -l 'echo LEFT'"),
+            b"echo LEFT".to_vec()
+        );
     }
 
     #[test]
