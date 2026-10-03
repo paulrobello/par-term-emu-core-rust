@@ -85,6 +85,7 @@ pub fn emit(notification: &TmuxNotification) -> String {
         // argument-less shape: clients re-query `list-sessions` rather than
         // parsing ids off the line.
         TmuxNotification::SessionsChanged => "%sessions-changed\n".to_string(),
+        TmuxNotification::WorkspacesChanged => "%workspaces-changed\n".to_string(),
         TmuxNotification::LayoutChange {
             window_id,
             window_layout,

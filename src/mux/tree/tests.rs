@@ -1906,3 +1906,143 @@ fn kill_session_removes_every_window_pane_and_the_session() {
         Err(MuxError::NoSuchSession(_))
     ));
 }
+
+// --- Workspaces (first-class level above sessions) ---
+
+#[test]
+fn new_session_lands_in_the_lazily_created_default_workspace() {
+    let mut tree = tree();
+    assert_eq!(tree.active_workspace(), None);
+    let session = tree.new_session("work", 80, 24).unwrap();
+    let ws = tree.active_workspace().expect("default workspace created");
+    assert_eq!(tree.workspace(ws).unwrap().name, "main");
+    assert_eq!(tree.workspace(ws).unwrap().sessions, vec![session]);
+    assert_eq!(tree.workspace_of_session(session), Some(ws));
+    assert_eq!(tree.active_session(), Some(session));
+    tree.assert_indexes_consistent();
+}
+
+#[test]
+fn workspace_crud_and_active_tracking() {
+    let mut tree = tree();
+    let ws_a = tree.new_workspace("alpha");
+    let ws_b = tree.new_workspace("beta");
+    // new-workspace selects the new one.
+    assert_eq!(tree.active_workspace(), Some(ws_b));
+
+    // Sessions land in the ACTIVE workspace.
+    tree.select_workspace(ws_a).unwrap();
+    let s1 = tree.new_session("one", 80, 24).unwrap();
+    let s2 = tree.new_session("two", 80, 24).unwrap();
+    assert_eq!(
+        tree.workspace(ws_a).unwrap().sessions,
+        vec![s1, s2],
+        "sessions join the active workspace in order"
+    );
+    tree.select_workspace(ws_b).unwrap();
+    let s3 = tree.new_session("three", 80, 24).unwrap();
+    assert_eq!(tree.workspace_of_session(s3), Some(ws_b));
+    tree.assert_indexes_consistent();
+
+    // select-workspace switches the active session to the workspace's own
+    // previously-active session.
+    tree.select_workspace(ws_a).unwrap();
+    assert_eq!(tree.active_session(), Some(s2), "last session of ws_a");
+    tree.select_workspace(ws_b).unwrap();
+    assert_eq!(tree.active_session(), Some(s3));
+
+    // Rename.
+    tree.rename_workspace(ws_b, "renamed").unwrap();
+    assert_eq!(tree.workspace(ws_b).unwrap().name, "renamed");
+    assert!(matches!(
+        tree.rename_workspace(WorkspaceId(99), "x"),
+        Err(MuxError::NoSuchWorkspace(_))
+    ));
+
+    // Resolution: typed id and name, with ambiguity errors.
+    assert_eq!(
+        tree.resolve_workspace_target(Target::Id(ws_a)).unwrap(),
+        ws_a
+    );
+    assert_eq!(
+        tree.resolve_workspace_target(Target::Name("alpha".into()))
+            .unwrap(),
+        ws_a
+    );
+    tree.new_workspace("alpha");
+    assert!(matches!(
+        tree.resolve_workspace_target(Target::Name("alpha".into())),
+        Err(MuxError::AmbiguousWorkspaceTarget(_, _))
+    ));
+}
+
+#[test]
+fn killing_a_session_removes_it_and_can_empty_its_workspace_away() {
+    let mut tree = tree();
+    let ws_a = tree.new_workspace("alpha");
+    let ws_b = tree.new_workspace("beta");
+    // alpha is no longer active (beta's creation selected it) — select it
+    // back before creating its sessions.
+    tree.select_workspace(ws_a).unwrap();
+    let s1 = tree.new_session("one", 80, 24).unwrap();
+    let s2 = tree.new_session("two", 80, 24).unwrap();
+    tree.select_workspace(ws_b).unwrap();
+    let s3 = tree.new_session("three", 80, 24).unwrap();
+
+    // Killing s1 leaves ws_a with s2; the workspace active index clamps.
+    tree.kill_session(s1).unwrap();
+    assert_eq!(
+        tree.workspace(ws_a).unwrap().sessions,
+        vec![s2],
+        "the survivor remains"
+    );
+    tree.select_workspace(ws_a).unwrap();
+    assert_eq!(tree.active_session(), Some(s2), "clamped to the survivor");
+
+    // Killing the LAST session of ws_a removes the workspace itself.
+    tree.kill_session(s2).unwrap();
+    assert!(tree.workspace(ws_a).is_none(), "an emptied workspace dies");
+    assert_eq!(tree.workspace_of_session(s2), None);
+    tree.assert_indexes_consistent();
+
+    // The kill-pane cascade (drop_empty_window) reaches the same removal.
+    let s4 = tree.new_session("four", 80, 24).unwrap();
+    let window = tree.session(s4).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    tree.kill_pane(pane).unwrap();
+    assert_eq!(tree.sessions().len(), 1, "only ws_b's session remains");
+    assert_eq!(tree.workspaces().len(), 1);
+    assert_eq!(tree.workspace_of_session(s3), Some(ws_b));
+}
+
+#[test]
+fn kill_workspace_takes_every_session_window_and_pane_with_it() {
+    let mut tree = tree();
+    let ws_a = tree.new_workspace("alpha");
+    let _ws_b = tree.new_workspace("beta");
+    tree.select_workspace(ws_a).unwrap();
+    let s1 = tree.new_session("one", 80, 24).unwrap();
+    let s2 = tree.new_session("two", 80, 24).unwrap();
+    // A second window in s1, so the kill spans windows.
+    let w2 = tree.new_window(s1, "extra", 80, 24).unwrap();
+
+    let killed = tree.kill_workspace(ws_a).unwrap();
+    assert_eq!(killed.len(), 3, "s1's two windows + s2's one");
+    assert!(killed.contains(&w2));
+    assert!(tree.session(s1).is_none() && tree.session(s2).is_none());
+    assert!(tree.workspace(ws_a).is_none());
+    assert!(tree.windows.is_empty(), "every pane went with the sessions");
+    // The active pointer moved off the killed workspace.
+    assert_ne!(tree.active_workspace(), Some(ws_a));
+    tree.assert_indexes_consistent();
+}
+
+#[test]
+fn a_workspace_born_empty_survives_until_a_session_dies_inside_it() {
+    let mut tree = tree();
+    let ws = tree.new_workspace("empty");
+    assert!(tree.workspace(ws).unwrap().sessions.is_empty());
+    assert_eq!(tree.active_workspace(), Some(ws));
+    // No session removal happened, so the empty workspace stays.
+    assert!(tree.workspace(ws).is_some());
+}

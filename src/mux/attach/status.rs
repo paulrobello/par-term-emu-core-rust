@@ -82,9 +82,9 @@ impl StatusState {
         self.sessions = session_rows
             .iter()
             .filter_map(|line| {
-                let (id_part, name) = line.split_once(": ")?;
-                let id = id_part.split_whitespace().next()?;
-                Some((id.to_string(), name.to_string()))
+                // Workspace-aware shape `+W: wname: $N: name` — the shared
+                // parser extracts the session id (the last `$N:` marker).
+                super::parse_session_line(line)
             })
             .collect();
 

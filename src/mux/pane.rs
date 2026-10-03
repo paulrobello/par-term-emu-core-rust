@@ -1,7 +1,7 @@
 //! Panes: PTY ownership, output plumbing, and the factory seam.
 
 use crate::mux::agent_resume::render_surviving;
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::pty_error::PtyError;
 use crate::pty_session::{OutputCallback, PtyInputHandle, PtySession};
 use crate::terminal::replay_snapshot::TerminalSnapshot;
@@ -34,6 +34,12 @@ pub enum MuxError {
     AmbiguousWindowTarget(String, Vec<WindowId>),
     /// A session name matched more than one session.
     AmbiguousSessionTarget(String, Vec<SessionId>),
+    /// The requested workspace does not exist.
+    NoSuchWorkspace(WorkspaceId),
+    /// A workspace name matched no workspace.
+    NoSuchWorkspaceNamed(String),
+    /// A workspace name matched more than one workspace.
+    AmbiguousWorkspaceTarget(String, Vec<WorkspaceId>),
     /// The two panes are not in the same window, so their positions cannot
     /// be exchanged.
     PanesInDifferentWindows(PaneId, PaneId),
@@ -78,6 +84,15 @@ impl std::fmt::Display for MuxError {
                 write!(
                     f,
                     "ambiguous session target: {name} (matching: {})",
+                    join_ids(ids)
+                )
+            }
+            MuxError::NoSuchWorkspace(id) => write!(f, "no such workspace: {id}"),
+            MuxError::NoSuchWorkspaceNamed(name) => write!(f, "no such workspace: {name}"),
+            MuxError::AmbiguousWorkspaceTarget(name, ids) => {
+                write!(
+                    f,
+                    "ambiguous workspace target: {name} (matching: {})",
                     join_ids(ids)
                 )
             }

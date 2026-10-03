@@ -1004,3 +1004,63 @@ fn cli_restart_surfaces_a_fresh_daemon_startup_failure() {
         "the bind failure reaches the daemon log: {log}"
     );
 }
+
+/// Workspaces survive a restart: roster, names, membership, and the active
+/// pointers all come back from the saved state (FORMAT_VERSION 3).
+#[test]
+fn workspaces_survive_a_restart() {
+    let fixture = MuxFixture::new("wsrestart");
+    let path = fixture.socket();
+
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("first daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        // The first session lazily creates the default `main` (+0); the
+        // seed stays alive so workspace ids hold: `dev` is +1.
+        command(&mut writer, &mut reader, "new-session -s seed");
+        command(&mut writer, &mut reader, "new-workspace -n dev");
+        command(&mut writer, &mut reader, "new-session -s in-dev");
+        command(&mut writer, &mut reader, "select-workspace -t +0");
+        command(&mut writer, &mut reader, "new-session -s in-main");
+        command(&mut writer, &mut reader, "select-workspace -t dev");
+    }
+    sigterm_clean(&mut first);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("second daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let listed = command(&mut writer, &mut reader, "list-workspaces").join("");
+        assert!(
+            listed.contains("+0: main") && listed.contains("+1: dev"),
+            "both workspaces survived: {listed}"
+        );
+        assert!(
+            listed.contains("+1: dev active"),
+            "the active pointer survived: {listed}"
+        );
+        let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        assert!(
+            sessions.contains("+0: main: $2: in-main"),
+            "session 2 restored into its workspace: {sessions}"
+        );
+        assert!(
+            sessions.contains("+1: dev: $1: in-dev"),
+            "session 1 restored into its workspace: {sessions}"
+        );
+        // A new session after the restart lands in the restored ACTIVE
+        // workspace.
+        command(&mut writer, &mut reader, "new-session -s fresh");
+        let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        assert!(
+            sessions.contains("+1: dev: $3: fresh"),
+            "a post-restart session joins the restored active workspace: {sessions}"
+        );
+    }
+    sigterm_clean(&mut second);
+}

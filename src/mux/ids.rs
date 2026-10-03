@@ -58,6 +58,9 @@ macro_rules! mux_id {
 mux_id!(SessionId, "$", "session");
 mux_id!(WindowId, "@", "window");
 mux_id!(PaneId, "%", "pane");
+// tmux has no workspace concept, so the sigil is free: `+` marks a typed
+// workspace id on the wire (`+0`), keeping the `$`/`@`/`%` meanings intact.
+mux_id!(WorkspaceId, "+", "workspace");
 
 /// A typed id kind whose wire sigil drives [`Target::parse`] — the prefix
 /// that marks a value as a typed id rather than a name.
@@ -69,6 +72,9 @@ pub trait SigilId: Sized {
 
 /// A command target that may be a typed id or a name, resolved against the
 /// tree daemon-side (the parser has no tree to resolve names against).
+///
+/// Sigils: `$N` session, `@N` window, `%N` pane, `+N` workspace (tmux has
+/// no workspace concept, so `+` is free).
 ///
 /// A `-t` value starting with the kind's sigil must parse as a typed id —
 /// a malformed one (`%abc`) keeps the parser's invalid-target error, and a
@@ -101,6 +107,7 @@ impl<I: SigilId + FromStr<Err = ParseIdError>> Target<I> {
 /// independently the way tmux does.
 #[derive(Debug, Default)]
 pub struct IdAllocator {
+    workspace: AtomicU32,
     session: AtomicU32,
     window: AtomicU32,
     pane: AtomicU32,
@@ -110,6 +117,11 @@ impl IdAllocator {
     /// Create an allocator whose counters all start at zero.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Allocate the next workspace identifier.
+    pub fn next_workspace(&self) -> WorkspaceId {
+        WorkspaceId(self.workspace.fetch_add(1, Ordering::Relaxed))
     }
 
     /// Allocate the next session identifier.
@@ -127,13 +139,14 @@ impl IdAllocator {
         PaneId(self.pane.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// The next identifier each kind will hand out — `(session, window,
-    /// pane)`, in that order.
+    /// The next identifier each kind will hand out — `(workspace, session,
+    /// window, pane)`, in that order.
     ///
     /// The persistence path stores these counters (par-mux.md D3.5) so a
     /// restored server's new panes do not collide with restored ones.
-    pub fn next_ids(&self) -> (u32, u32, u32) {
+    pub fn next_ids(&self) -> (u32, u32, u32, u32) {
         (
+            self.workspace.load(Ordering::Relaxed),
             self.session.load(Ordering::Relaxed),
             self.window.load(Ordering::Relaxed),
             self.pane.load(Ordering::Relaxed),
@@ -142,9 +155,10 @@ impl IdAllocator {
 
     /// Resume an allocator whose counters were captured by
     /// [`Self::next_ids`] — the restore-side counterpart.
-    pub fn resume(next: (u32, u32, u32)) -> Self {
-        let (session, window, pane) = next;
+    pub fn resume(next: (u32, u32, u32, u32)) -> Self {
+        let (workspace, session, window, pane) = next;
         Self {
+            workspace: AtomicU32::new(workspace),
             session: AtomicU32::new(session),
             window: AtomicU32::new(window),
             pane: AtomicU32::new(pane),
@@ -175,6 +189,21 @@ mod tests {
         assert!("@0".parse::<SessionId>().is_err(), "@ is a window sigil");
         assert!("%0".parse::<WindowId>().is_err(), "% is a pane sigil");
         assert!("$0".parse::<PaneId>().is_err(), "$ is a session sigil");
+        assert!(
+            "$0".parse::<WorkspaceId>().is_err(),
+            "$ is a session sigil, not a workspace one"
+        );
+    }
+
+    #[test]
+    fn workspace_ids_display_with_the_plus_sigil() {
+        assert_eq!(WorkspaceId(0).to_string(), "+0");
+        assert_eq!("+7".parse::<WorkspaceId>().unwrap(), WorkspaceId(7));
+        // A foreign sigil is a name, not a malformed id.
+        assert_eq!(
+            Target::<WorkspaceId>::parse("$0").unwrap(),
+            Target::Name("$0".to_string())
+        );
     }
 
     #[test]
@@ -193,6 +222,17 @@ mod tests {
         // Each kind counts independently, as tmux does.
         assert_eq!(alloc.next_window(), WindowId(0));
         assert_eq!(alloc.next_session(), SessionId(0));
+        assert_eq!(alloc.next_workspace(), WorkspaceId(0));
+    }
+
+    #[test]
+    fn next_ids_covers_all_four_kinds_in_order() {
+        let alloc = IdAllocator::new();
+        let _ = alloc.next_workspace();
+        let _ = alloc.next_session();
+        let _ = alloc.next_window();
+        let _ = alloc.next_pane();
+        assert_eq!(alloc.next_ids(), (1, 1, 1, 1));
     }
 
     #[test]

@@ -16,7 +16,7 @@
 use crate::mux::command::{list_commands_body, MuxCommand, ResizeAdjustment, SendKeysPayload};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::foreground::ProcessTable;
-use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
+use crate::mux::ids::{PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
@@ -164,7 +164,11 @@ pub(super) fn dispatch_command(
     }
     let mutates = command.mutates();
     let outcome = match command {
-        MuxCommand::NewSession { name, env } => cmd_new_session(ctx, name, env),
+        MuxCommand::NewSession {
+            name,
+            env,
+            workspace,
+        } => cmd_new_session(ctx, name, env, workspace),
         MuxCommand::ListPanes { window } => cmd_list_panes(ctx, window),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::ListCommands => cmd_list_commands(ctx),
@@ -215,7 +219,14 @@ pub(super) fn dispatch_command(
         MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
         MuxCommand::ListWindows { session } => cmd_list_windows(ctx, session),
-        MuxCommand::ListSessions => cmd_list_sessions(ctx),
+        MuxCommand::ListSessions { workspace } => cmd_list_sessions(ctx, workspace),
+        MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
+        MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
+        MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
+        MuxCommand::RenameWorkspace { workspace, name } => {
+            cmd_rename_workspace(ctx, workspace, name)
+        }
+        MuxCommand::KillWorkspace { workspace } => cmd_kill_workspace(ctx, workspace),
         MuxCommand::KillServer => cmd_kill_server(ctx),
         MuxCommand::CapturePane {
             pane,
@@ -339,17 +350,28 @@ fn window_add_notification(tree: &Arc<Mutex<MuxTree>>, window_id: WindowId) -> T
     }
 }
 
-fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String)>) -> Outcome {
+fn cmd_new_session(
+    ctx: &Ctx<'_>,
+    name: Option<String>,
+    env: Vec<(String, String)>,
+    workspace: Option<Target<WorkspaceId>>,
+) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
     // Two-phase spawn (ARC-022): reserve ids under the lock, run the
     // fork/exec OFF it — a slow spawn must not stall every other client —
     // then re-lock to insert and wire. The in-flight session is invisible
-    // until the insert lands.
+    // until the insert lands. The workspace target resolves here (under
+    // the lock, against the tree): an unknown one fails the command before
+    // anything spawns.
     let (plan, factory) = {
         let mut guard = ctx.tree.lock();
+        let workspace_id = match guard.resolve_new_session_workspace(workspace) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
         (
-            guard.begin_session(&name, DEFAULT_COLS, DEFAULT_ROWS, &env),
+            guard.begin_session_at(workspace_id, &name, DEFAULT_COLS, DEFAULT_ROWS, &env),
             guard.factory(),
         )
     };
@@ -657,6 +679,7 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // pane (and its window membership) is gone and cannot be looked up.
     // The lock guard is let-bound so it is gone before the successor
     // lookup below takes the tree again (parking_lot is not reentrant).
+    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
     let outcome = ctx.tree.lock().kill_pane(pane);
     match outcome {
         Ok((window_id, removed_session)) => {
@@ -665,7 +688,12 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             // clients learn that through %window-close, the same
             // notification kill-window sends. A surviving window keeps
             // an active pane to name, and gets the layout push.
-            if let Some(active) = ctx.tree.lock().window(window_id).map(|w| w.active) {
+            // Let-bound (not an `if let` scrutinee) so the lock guard is
+            // gone before the else branch's workspace re-lock — the
+            // scrutinee temporary would otherwise live through the whole
+            // if/else (parking_lot is not reentrant).
+            let active = ctx.tree.lock().window(window_id).map(|w| w.active);
+            if let Some(active) = active {
                 Outcome::ok(ctx, "").with_layout(window_id).notifying(
                     TmuxNotification::WindowPaneChanged {
                         window_id: window_id.to_string(),
@@ -680,6 +708,9 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
                     // The window's closure emptied the session: the set of
                     // sessions changed, and tmux says so argument-less.
                     outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+                    if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
+                        outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
+                    }
                 }
                 outcome
             }
@@ -982,11 +1013,15 @@ fn cmd_join_pane(
             (Err(err), _) | (_, Err(err)) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    match ctx
+    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
+    // Let-bound so the lock guard drops before the arm's re-lock (the
+    // scrutinee temporary would otherwise live through the match —
+    // parking_lot is not reentrant).
+    let joined = ctx
         .tree
         .lock()
-        .join_pane(source, target, direction, percent as f32 / 100.0)
-    {
+        .join_pane(source, target, direction, percent as f32 / 100.0);
+    match joined {
         Ok((target_window, source_window, source_closed, removed_session)) => {
             // Both windows' layouts changed — the destination grew a pane
             // and the source lost one (or closed outright).
@@ -1001,6 +1036,9 @@ fn cmd_join_pane(
             if removed_session.is_some() {
                 // The same argument-less cue kill-pane's cascade sends.
                 outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+                if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
+                    outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
+                }
             }
             outcome
         }
@@ -1167,7 +1205,9 @@ fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    match ctx.tree.lock().kill_window(window) {
+    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
+    let killed = ctx.tree.lock().kill_window(window);
+    match killed {
         Ok(removed_session) => {
             let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
                 window_id: window.to_string(),
@@ -1176,6 +1216,9 @@ fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
                 // The cascade reached the session — same argument-less
                 // cue kill-pane's cascade sends, so one handler covers both.
                 outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+                if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
+                    outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
+                }
             }
             outcome
         }
@@ -1286,34 +1329,183 @@ fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Outcome {
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    match ctx.tree.lock().kill_session(session) {
+    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
+    let killed = ctx.tree.lock().kill_session(session);
+    match killed {
         Ok(killed_windows) => {
             // The same line order kill-window's cascade produces: one
-            // %window-close per killed window, then the session-set cue.
+            // %window-close per killed window, then the session-set cue —
+            // plus the workspace cue when the session's death emptied its
+            // workspace away.
             let mut outcome = Outcome::ok(ctx, "");
             for window in &killed_windows {
                 outcome = outcome.notifying(TmuxNotification::WindowClose {
                     window_id: window.to_string(),
                 });
             }
-            outcome.notifying(TmuxNotification::SessionsChanged)
+            outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+            if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
+                outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
+            }
+            outcome
         }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
 
-fn cmd_list_sessions(ctx: &Ctx<'_>) -> Outcome {
-    // Wire contract: list-sessions replies one line per session as
-    // `$N: name`.
+fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> Outcome {
+    // Wire contract: bare `list-sessions` lists EVERY workspace's sessions,
+    // one line each, extended from the old `$N: name` shape with a
+    // workspace prefix: `+W: wname: $N: name`. A consumer finds the
+    // session id at the LAST ` $<digits>:` marker; the workspace fields
+    // precede it. `list-sessions -t <workspace>` (id or name) restricts
+    // the listing to that one workspace, same line shape. Sessions are
+    // listed in workspace order, sessions in workspace-list order.
     let guard = ctx.tree.lock();
-    let body = guard
-        .sessions()
+    let workspace_id = match workspace {
+        Some(target) => match guard.resolve_workspace_target(target) {
+            Ok(id) => Some(id),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        },
+        None => None,
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut workspaces = guard.workspaces();
+    workspaces.sort();
+    for ws_id in workspaces {
+        let Some(ws) = guard.workspace(ws_id) else {
+            continue;
+        };
+        if let Some(filter) = workspace_id {
+            if filter != ws_id {
+                continue;
+            }
+        }
+        for session_id in &ws.sessions {
+            let Some(session) = guard.session(*session_id) else {
+                continue;
+            };
+            lines.push(format!(
+                "{}: {}: {}: {}",
+                ws.id, ws.name, session.id, session.name
+            ));
+        }
+    }
+    Outcome::ok(ctx, &lines.join("\n"))
+}
+
+/// `new-workspace [-n name]`: create the workspace, select it, and reply
+/// with its `+N` id. `%workspaces-changed` is the roster cue — one
+/// argument-less broadcast covering add, close, select, and rename, the
+/// same re-query convention `%sessions-changed` set (clients re-run
+/// `list-workspaces` rather than parse a diff).
+fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
+    let name = name.unwrap_or_else(|| "main".to_string());
+    let id = ctx.tree.lock().new_workspace(&name);
+    Outcome::ok(ctx, &id.to_string()).notifying(TmuxNotification::WorkspacesChanged)
+}
+
+fn cmd_list_workspaces(ctx: &Ctx<'_>) -> Outcome {
+    // Wire contract: one `+N: name` line per workspace, in id order; the
+    // daemon's active workspace's line ends with a space and `active`.
+    let guard = ctx.tree.lock();
+    let active = guard.active_workspace();
+    let mut ids = guard.workspaces();
+    ids.sort();
+    let body = ids
         .iter()
-        .filter_map(|s| guard.session(*s))
-        .map(|s| format!("{}: {}", s.id, s.name))
+        .filter_map(|id| guard.workspace(*id))
+        .map(|ws| {
+            if Some(ws.id) == active {
+                format!("{}: {} active", ws.id, ws.name)
+            } else {
+                format!("{}: {}", ws.id, ws.name)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     Outcome::ok(ctx, &body)
+}
+
+fn cmd_select_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {
+    let workspace = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_workspace_target(workspace) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().select_workspace(workspace) {
+        // The active pointer is daemon state every client reads through
+        // list-workspaces; the argument-less cue is the select side of the
+        // same re-query contract.
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_rename_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, name: String) -> Outcome {
+    let workspace = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_workspace_target(workspace) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().rename_workspace(workspace, &name) {
+        // Renames change what list-workspaces renders; same cue.
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {
+    let workspace = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_workspace_target(workspace) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    match ctx.tree.lock().kill_workspace(workspace) {
+        Ok(killed_windows) => {
+            // kill-session's line order, workspace-flavored: one
+            // %window-close per killed window, then the session-set cue,
+            // then the workspace-roster cue.
+            let mut outcome = Outcome::ok(ctx, "");
+            for window in &killed_windows {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
+                    window_id: window.to_string(),
+                });
+            }
+            outcome
+                .notifying(TmuxNotification::SessionsChanged)
+                .notifying(TmuxNotification::WorkspacesChanged)
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+/// Snapshot the workspace roster for [`workspace_roster_changed`]: the
+/// sorted id set plus the active pointer, enough to tell "the workspace
+/// set (or its selection) changed" from "it did not".
+fn workspace_roster_fingerprint(
+    tree: &Arc<Mutex<MuxTree>>,
+) -> (Vec<WorkspaceId>, Option<WorkspaceId>) {
+    let guard = tree.lock();
+    let mut ids = guard.workspaces();
+    ids.sort();
+    (ids, guard.active_workspace())
+}
+
+/// True when the workspace roster's fingerprint changed across a kill
+/// cascade — a session's death can empty and remove its workspace, and
+/// that removal is the workspace-roster cue clients re-query on.
+fn workspace_roster_changed(
+    tree: &Arc<Mutex<MuxTree>>,
+    before: &(Vec<WorkspaceId>, Option<WorkspaceId>),
+) -> bool {
+    &workspace_roster_fingerprint(tree) != before
 }
 
 fn cmd_capture_pane(

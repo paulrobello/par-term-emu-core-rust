@@ -269,6 +269,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 name: Some(name.clone()),
                 ..Self::empty(kind)
             },
+            TmuxNotification::WorkspacesChanged => Self {
+                ..Self::empty(kind)
+            },
             TmuxNotification::SessionsChanged => Self {
                 ..Self::empty(kind)
             },
@@ -760,6 +763,7 @@ mod tests {
                 TmuxNotification::PasteBufferDeleted { .. } => (),
                 TmuxNotification::Unknown { .. } => (),
                 TmuxNotification::TerminalOutput { .. } => (),
+                TmuxNotification::WorkspacesChanged => (),
             }
             let _ = PyTmuxNotification::from(&notif);
         }

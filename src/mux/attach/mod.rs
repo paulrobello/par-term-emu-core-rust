@@ -272,9 +272,18 @@ fn reload_client_chords(
 /// whitespace split keeps it (`$0:`), which the daemon's id parser then
 /// rejects. The window roster's `@N: name` lines parse the same way.
 pub(crate) fn parse_session_line(line: &str) -> Option<(String, String)> {
-    let (id_part, name) = line.split_once(": ")?;
-    let id = id_part.split_whitespace().next()?;
-    Some((id.to_string(), name.to_string()))
+    // Workspace-aware shape: `+W: wname: $N: name` — the session id is the
+    // LAST `$N:` marker, the name is what follows it. The bare `$N: name`
+    // shape (a pre-workspaces daemon) parses identically: split at the
+    // last `: ` whose left side ends in a `$<digits>` id.
+    let idx = line.rfind("$")?;
+    let (before, rest) = line.split_at(idx);
+    let (id, name) = rest.split_once(": ")?;
+    let id = id.strip_prefix('$')?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((format!("${id}"), name.to_string()))
 }
 
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane
