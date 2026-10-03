@@ -10,7 +10,9 @@
 //! `Space` key name; for bytes a shell line cannot express, `send-keys -H`
 //! takes hex byte pairs, the lossless path.
 
-#![cfg(feature = "mux")]
+// The two tests drive real unix-socket daemons; on Windows the imports
+// would sit unused, so the whole surface is unix-scoped.
+#![cfg(all(feature = "mux", unix))]
 
 #[cfg(not(feature = "mux-bin"))]
 compile_error!("this test drives the par-mux binary: build it with --features mux-bin");
