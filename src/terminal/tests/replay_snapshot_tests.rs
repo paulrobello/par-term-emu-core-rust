@@ -59,11 +59,11 @@ fn test_snapshot_color_preservation() {
 
     // 'R' should have Named(Red) foreground
     assert_eq!(snap.grid.cells[0].c, 'R');
-    assert_eq!(snap.grid.cells[0].fg, Color::Named(NamedColor::Red));
+    assert_eq!(snap.grid.cells[0].fg(), Color::Named(NamedColor::Red));
 
     // 'G' should have RGB(0,255,0) foreground
     assert_eq!(snap.grid.cells[3].c, 'G');
-    assert_eq!(snap.grid.cells[3].fg, Color::Rgb(0, 255, 0));
+    assert_eq!(snap.grid.cells[3].fg(), Color::Rgb(0, 255, 0));
 
     // Overwrite and restore
     term.process(b"\x1b[H\x1b[0mXXXXXX");
@@ -71,11 +71,11 @@ fn test_snapshot_color_preservation() {
 
     assert_eq!(term.grid().get(0, 0).unwrap().c, 'R');
     assert_eq!(
-        term.grid().get(0, 0).unwrap().fg,
+        term.grid().get(0, 0).unwrap().fg(),
         Color::Named(NamedColor::Red)
     );
     assert_eq!(term.grid().get(3, 0).unwrap().c, 'G');
-    assert_eq!(term.grid().get(3, 0).unwrap().fg, Color::Rgb(0, 255, 0));
+    assert_eq!(term.grid().get(3, 0).unwrap().fg(), Color::Rgb(0, 255, 0));
 }
 
 #[test]

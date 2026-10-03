@@ -9,11 +9,10 @@
 //! - Character attributes and hyperlinks
 //! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers, regional indicators)
 
-use crate::cell::Cell;
+use crate::cell::{Cell, PackedColor, PackedOptionColor};
 use crate::debug;
 use crate::grapheme;
 use crate::terminal::{Charset, Terminal};
-use smallvec::SmallVec;
 
 impl Terminal {
     /// Write a character to the terminal at the current cursor position
@@ -231,10 +230,10 @@ impl Terminal {
 
         let cell = Cell {
             c,
-            combining: SmallVec::new(),
-            fg: self.fg,
-            bg: self.bg,
-            underline_color: self.underline_color,
+            combining: None,
+            fg: PackedColor::pack(self.fg),
+            bg: PackedColor::pack(self.bg),
+            underline_color: PackedOptionColor::pack(self.underline_color),
             flags: cell_flags,
             width: char_width as u8,
         };
@@ -264,10 +263,10 @@ impl Terminal {
 
             let spacer = Cell {
                 c: ' ', // Spacer character
-                combining: SmallVec::new(),
-                fg: self.fg,
-                bg: self.bg,
-                underline_color: self.underline_color,
+                combining: None,
+                fg: PackedColor::pack(self.fg),
+                bg: PackedColor::pack(self.bg),
+                underline_color: PackedOptionColor::pack(self.underline_color),
                 flags: spacer_flags,
                 width: 1, // Spacers always have width 1
             };
@@ -335,7 +334,7 @@ impl Terminal {
 
             // Add combining character to the target cell
             if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
-                target_cell.combining.push(c);
+                target_cell.combining_push(c);
 
                 // Fast path: Kitty TGP placeholder cells (base char U+10EEEE)
                 // encode an image ID via combining marks, not real text. Skip
@@ -359,7 +358,7 @@ impl Terminal {
                     let mut chars = normalized.chars();
                     if let Some(base) = chars.next() {
                         target_cell.c = base;
-                        target_cell.combining = chars.collect();
+                        target_cell.combining_replace(chars.collect());
                     }
                 }
 
@@ -377,7 +376,7 @@ impl Terminal {
 
                         let spacer = Cell {
                             c: ' ',
-                            combining: SmallVec::new(),
+                            combining: None,
                             fg: target_cell.fg,
                             bg: target_cell.bg,
                             underline_color: target_cell.underline_color,
@@ -430,12 +429,12 @@ impl Terminal {
 
             // Check if target cell has ZWJ in combining chars
             if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
-                if target_cell.combining.contains(&'\u{200D}') {
+                if target_cell.combining_has('\u{200D}') {
                     // Previous cell has ZWJ, add current char as combining
                     if let Some(target_cell_mut) =
                         self.active_grid_mut().get_mut(target_col, target_row)
                     {
-                        target_cell_mut.combining.push(c);
+                        target_cell_mut.combining_push(c);
 
                         // Recalculate width if needed
                         let grapheme = target_cell_mut.get_grapheme();
@@ -451,7 +450,7 @@ impl Terminal {
 
                                 let spacer = Cell {
                                     c: ' ',
-                                    combining: SmallVec::new(),
+                                    combining: None,
                                     fg: target_cell_mut.fg,
                                     bg: target_cell_mut.bg,
                                     underline_color: target_cell_mut.underline_color,
@@ -493,7 +492,7 @@ impl Terminal {
 
         // Check if previous cell is a regional indicator without a pair yet
         let should_combine = if let Some(prev_cell) = self.active_grid().get(prev_col, prev_row) {
-            grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining.is_empty()
+            grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining_is_empty()
         } else {
             false
         };
@@ -511,7 +510,7 @@ impl Terminal {
                     spacer_flags.set_wide_char_spacer(true);
                     Some(Cell {
                         c: ' ',
-                        combining: SmallVec::new(),
+                        combining: None,
                         fg: target_cell.fg,
                         bg: target_cell.bg,
                         underline_color: target_cell.underline_color,
@@ -527,7 +526,7 @@ impl Terminal {
 
             // Previous cell is a lone regional indicator - combine them
             if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
-                target_cell.combining.push(c);
+                target_cell.combining_push(c);
                 target_cell.width = 2;
                 target_cell.flags.set_wide_char(true);
             }
@@ -603,10 +602,10 @@ impl Terminal {
 
         let cell = Cell {
             c,
-            combining: SmallVec::new(),
-            fg: self.fg,
-            bg: self.bg,
-            underline_color: self.underline_color,
+            combining: None,
+            fg: PackedColor::pack(self.fg),
+            bg: PackedColor::pack(self.bg),
+            underline_color: PackedOptionColor::pack(self.underline_color),
             flags: cell_flags,
             width: 1, // Initially width 1, will become 2 when paired
         };
@@ -949,8 +948,8 @@ mod tests {
 
         let cell = term.active_grid().get(0, 0).unwrap();
         assert_eq!(cell.c, 'A');
-        assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
-        assert_eq!(cell.bg, Color::Rgb(0, 255, 0));
+        assert_eq!(cell.fg(), Color::Rgb(255, 0, 0));
+        assert_eq!(cell.bg(), Color::Rgb(0, 255, 0));
         assert!(cell.flags.bold());
         assert!(cell.flags.italic());
     }

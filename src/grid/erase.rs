@@ -4,6 +4,7 @@
 //! cells with the current SGR background color rather than always defaulting
 //! to black. All erase methods accept a `bg` parameter for this purpose.
 
+use crate::cell::PackedColor;
 use crate::color::{Color, NamedColor};
 use crate::grid::Grid;
 
@@ -15,7 +16,7 @@ impl Grid {
     pub fn clear_with_bg(&mut self, bg: Color) {
         for cell in &mut self.cells {
             cell.reset();
-            cell.bg = bg;
+            cell.bg = PackedColor::pack(bg);
         }
         self.zones.clear();
         // Every cell changed, not just moved (ENH-038).
@@ -32,7 +33,7 @@ impl Grid {
         if let Some(row_cells) = self.row_mut(row) {
             for cell in row_cells.iter_mut() {
                 cell.reset();
-                cell.bg = bg;
+                cell.bg = PackedColor::pack(bg);
             }
         }
     }
@@ -48,7 +49,7 @@ impl Grid {
             for c in col..self.cols {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
-                    cell.bg = bg;
+                    cell.bg = PackedColor::pack(bg);
                 }
             }
         }
@@ -60,7 +61,7 @@ impl Grid {
             for c in 0..=col.min(self.cols - 1) {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
-                    cell.bg = bg;
+                    cell.bg = PackedColor::pack(bg);
                 }
             }
         }
@@ -89,7 +90,7 @@ impl Grid {
             for c in col..end {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
-                    cell.bg = bg;
+                    cell.bg = PackedColor::pack(bg);
                 }
             }
         }

@@ -208,11 +208,11 @@ fn placeholder_cells_skip_unicode_normalization() {
     let cell = grid.get(0, 0).unwrap();
     assert_eq!(cell.c, PLACEHOLDER_CHAR, "base char preserved");
     assert_eq!(
-        cell.combining.as_slice(),
+        cell.combining(),
         [row_diac, col_diac, id_diac],
         "combining marks preserved verbatim (no normalization rewrite)"
     );
-    assert_eq!(cell.width, 1, "no width recalc applied");
+    assert_eq!(cell.width(), 1, "no width recalc applied");
 }
 
 #[test]

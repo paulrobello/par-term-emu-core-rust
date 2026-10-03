@@ -39,7 +39,7 @@ fn test_true_color() {
 
     // Check the color was set correctly
     let cell = term.active_grid().get(0, 0).unwrap();
-    assert_eq!(cell.fg, Color::Rgb(255, 128, 64));
+    assert_eq!(cell.fg(), Color::Rgb(255, 128, 64));
 }
 
 #[test]
@@ -668,7 +668,7 @@ fn test_256_color() {
     term.process(b"\x1b[38;5;196mRed"); // Set foreground to color 196
 
     let cell = term.grid().get(0, 0).unwrap();
-    assert_eq!(cell.fg, Color::from_ansi_code(196));
+    assert_eq!(cell.fg(), Color::from_ansi_code(196));
 }
 
 #[test]
@@ -1979,7 +1979,7 @@ fn test_decfra_with_current_attributes() {
             if let Some(cell) = term.grid().get(col, row) {
                 assert_eq!(cell.c, '*');
                 // Foreground should be red (Named color 1)
-                assert!(matches!(cell.fg, Color::Named(NamedColor::Red)));
+                assert!(matches!(cell.fg(), Color::Named(NamedColor::Red)));
             }
         }
     }
@@ -4121,7 +4121,7 @@ fn test_modify_other_keys_sgr_unaffected() {
                                // Write a character to see the color
     term.process(b"X");
     let cell = term.active_grid().get(0, 0).unwrap();
-    assert_eq!(cell.fg, Color::Named(NamedColor::Red));
+    assert_eq!(cell.fg(), Color::Named(NamedColor::Red));
 
     // modifyOtherKeys should still be mode 2
     assert_eq!(term.modify_other_keys_mode(), 2);

@@ -273,13 +273,15 @@ impl Terminal {
     /// flags for the renderer.
     pub fn resolve_cell_colors(&self, cell: &Cell) -> ResolvedCellColors {
         let theme = &self.theme;
-        let default_fg = cell.fg == Color::Named(NamedColor::White) || cell.fg == theme.default_fg;
-        let default_bg = cell.bg == Color::Named(NamedColor::Black) || cell.bg == theme.default_bg;
+        let cell_fg = cell.fg();
+        let cell_bg = cell.bg();
+        let default_fg = cell_fg == Color::Named(NamedColor::White) || cell_fg == theme.default_fg;
+        let default_bg = cell_bg == Color::Named(NamedColor::Black) || cell_bg == theme.default_bg;
 
         let mut fg = if default_fg {
             theme.default_fg
         } else {
-            cell.fg
+            cell_fg
         };
         if self.bold_brightening() && cell.flags.bold() {
             if let Color::Named(named) = fg {
@@ -291,7 +293,7 @@ impl Terminal {
         let bg = if default_bg {
             theme.default_bg
         } else {
-            cell.bg
+            cell_bg
         };
 
         ResolvedCellColors {
@@ -869,7 +871,7 @@ mod tests {
     /// The pre-ARC-101 Python `create_snapshot` resolution: bold-brighten a
     /// `Named` 0-7 foreground, then resolve both colors through the palette.
     fn legacy_snapshot_colors(term: &Terminal, cell: &Cell) -> ((u8, u8, u8), (u8, u8, u8)) {
-        let mut fg = cell.fg;
+        let mut fg = cell.fg();
         if term.bold_brightening() && cell.flags.bold() {
             if let Color::Named(named) = fg {
                 if (named as u8) < 8 {
@@ -877,7 +879,7 @@ mod tests {
                 }
             }
         }
-        (term.resolve_color(&fg), term.resolve_color(&cell.bg))
+        (term.resolve_color(&fg), term.resolve_color(&cell.bg()))
     }
 
     /// Every cell of `row` 0 after feeding `seq` to a fresh terminal.

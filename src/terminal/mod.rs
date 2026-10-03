@@ -2034,7 +2034,7 @@ impl Terminal {
                         .map(|c| {
                             let mut s = String::new();
                             s.push(c.c);
-                            for &combining in &c.combining {
+                            for &combining in c.combining() {
                                 s.push(combining);
                             }
                             s
@@ -2062,7 +2062,7 @@ impl Terminal {
                         .map(|c| {
                             let mut s = String::new();
                             s.push(c.c);
-                            for &combining in &c.combining {
+                            for &combining in c.combining() {
                                 s.push(combining);
                             }
                             s
@@ -3776,9 +3776,7 @@ impl Terminal {
         right: usize,
         ch: char,
     ) {
-        let mut cell = Cell::new(ch);
-        cell.fg = self.fg;
-        cell.bg = self.bg;
+        let cell = Cell::with_colors(ch, self.fg, self.bg);
 
         for row in top..=bottom {
             for col in left..=right {

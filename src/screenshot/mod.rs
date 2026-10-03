@@ -161,7 +161,7 @@ mod tests {
         // Add some test content
         for col in 0..10 {
             let mut cell = Cell::new('H');
-            cell.fg = Color::Named(NamedColor::Red);
+            cell.set_fg(Color::Named(NamedColor::Red));
             grid.set(col, 0, cell);
         }
 

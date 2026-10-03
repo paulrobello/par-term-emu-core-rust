@@ -1,5 +1,6 @@
 //! Erase-related CSI sequence handling
 
+use crate::cell::PackedColor;
 use crate::debug;
 use crate::terminal::Terminal;
 use vte::Params;
@@ -192,7 +193,7 @@ impl Terminal {
         for (col, row) in to_erase {
             if let Some(cells) = self.active_grid_mut().row_mut(row) {
                 cells[col].reset();
-                cells[col].bg = bg;
+                cells[col].bg = PackedColor::pack(bg);
             }
         }
 

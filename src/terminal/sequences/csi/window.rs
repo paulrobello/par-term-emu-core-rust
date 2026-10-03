@@ -37,9 +37,7 @@ impl Terminal {
                     let bottom = pb.saturating_sub(1);
                     let right = pr.saturating_sub(1);
 
-                    let mut fill_cell = crate::cell::Cell::new(pc);
-                    fill_cell.fg = self.fg;
-                    fill_cell.bg = self.bg;
+                    let mut fill_cell = crate::cell::Cell::with_colors(pc, self.fg, self.bg);
                     fill_cell.flags = self.flags;
 
                     self.active_grid_mut()

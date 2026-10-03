@@ -100,8 +100,8 @@ impl From<crate::terminal::replay_snapshot::TerminalSnapshot> for PyScreenSnapsh
             let mut line = Vec::with_capacity(snap.cols);
             for col in 0..snap.cols {
                 if let Some(cell) = active_grid.cells.get(row * snap.cols + col) {
-                    let fg = cell.fg.to_rgb();
-                    let bg = cell.bg.to_rgb();
+                    let fg = cell.fg().to_rgb();
+                    let bg = cell.bg().to_rgb();
                     line.push((cell.get_grapheme(), fg, bg, cell.into()));
                 }
             }

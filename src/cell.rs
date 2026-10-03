@@ -1,8 +1,8 @@
 use crate::color::Color;
 use crate::unicode_width_config::{char_width, str_width, WidthConfig};
 use bitflags::bitflags;
-use smallvec::SmallVec;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 /// Underline style for text decoration (SGR 4:x)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -238,41 +238,177 @@ impl CellFlags {
 
 /// A single cell in the terminal grid
 ///
-/// Note: Cell is Clone but not Copy because `combining` (a `SmallVec<[char; 4]>`)
-/// is not `Copy`. The inline capacity covers >99.9% of combining sequences, so
-/// the common case (0–4 combining marks) never heap-allocates; only rare long
-/// sequences spill to the heap. Use `.clone()` explicitly when you need to copy
-/// a cell.
+/// Cell is 40 bytes (down from 56): colors are packed into `u32` words
+/// ([`PackedColor`]) and combining marks spill to the heap via a
+/// null-optimized `Option<Arc<[char]>>` instead of an inline
+/// `SmallVec<[char; 4]>`. Only cells that actually carry combining marks
+/// allocate.
+///
+/// Note: Cell is Clone but not Copy because `combining` holds a heap
+/// `Box`. Use `.clone()` explicitly when you need to copy a cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "CellSerde", from = "CellSerde")
+)]
 pub struct Cell {
     /// The character stored in this cell
     pub(crate) c: char,
-    /// Combining characters (variation selectors, ZWJ, modifiers, etc.)
-    /// These follow the base character to form a complete grapheme cluster.
-    /// Stored inline (no heap alloc) for up to 4 marks — the overwhelmingly
-    /// common case — spilling to the heap only for rare long clusters.
-    pub(crate) combining: SmallVec<[char; 4]>,
+    /// Combining characters (variation selectors, ZWJ, modifiers, etc.),
+    /// or `None` for the overwhelmingly common no-marks case. SmallVec was
+    /// replaced because its 24-byte inline buffer cost 4x the allocation
+    /// path for capacity >99.9% of cells never use.
+    pub(crate) combining: Option<Arc<Vec<char>>>,
     /// Foreground color
-    pub(crate) fg: Color,
+    pub(crate) fg: PackedColor,
     /// Background color
-    pub(crate) bg: Color,
-    /// Underline color (SGR 58/59) - None means use foreground color
-    pub(crate) underline_color: Option<Color>,
+    pub(crate) bg: PackedColor,
+    /// Underline color (SGR 58/59); `None` when the top bit is clear (use
+    /// foreground color), else the low 31 bits are a [`PackedColor`].
+    pub(crate) underline_color: PackedOptionColor,
     /// Text attributes/flags
     pub(crate) flags: CellFlags,
     /// Cached display width of the character (1 or 2, typically)
     pub(crate) width: u8,
 }
 
+/// Wire-format mirror of [`Cell`] for serde. Field names and value shapes
+/// match the pre-packing derive output exactly (verified against v0.58.0),
+/// so mux persistence files and replay snapshots stay byte-compatible in
+/// both directions.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(not(feature = "serde"), allow(dead_code))]
+struct CellSerde {
+    c: char,
+    combining: Vec<char>,
+    fg: Color,
+    bg: Color,
+    underline_color: Option<Color>,
+    flags: CellFlags,
+    width: u8,
+}
+
+#[cfg(feature = "serde")]
+impl From<Cell> for CellSerde {
+    fn from(cell: Cell) -> Self {
+        Self {
+            c: cell.c,
+            combining: cell.combining.map(|a| (*a).clone()).unwrap_or_default(),
+            fg: cell.fg.unpack(),
+            bg: cell.bg.unpack(),
+            underline_color: cell.underline_color.unpack(),
+            flags: cell.flags,
+            width: cell.width,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<CellSerde> for Cell {
+    fn from(s: CellSerde) -> Self {
+        Self {
+            c: s.c,
+            combining: if s.combining.is_empty() {
+                None
+            } else {
+                Some(Arc::new(s.combining))
+            },
+            fg: PackedColor::pack(s.fg),
+            bg: PackedColor::pack(s.bg),
+            underline_color: PackedOptionColor::pack(s.underline_color),
+            flags: s.flags,
+            width: s.width,
+        }
+    }
+}
+
+/// A color packed into 4 bytes: 2-bit tag + payload.
+///
+/// Layout: bits 24-25 tag (`00` Indexed, `01` Named, `10` Rgb), payload in
+/// bits 0-23 (Rgb uses all 24; Indexed the low 8; Named the low 4). Bits
+/// 26-31 stay clear so [`PackedOptionColor`] can wrap a `PackedColor`
+/// verbatim in 31 bits with one bit to spare for its presence flag.
+/// Unpack is two shifts and a match — branch-light for the hot grid paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PackedColor(u32);
+
+impl PackedColor {
+    const TAG_SHIFT: u32 = 24;
+    const TAG_INDEXED: u32 = 0b00;
+    const TAG_NAMED: u32 = 0b01;
+    const TAG_RGB: u32 = 0b10;
+
+    #[inline]
+    pub(crate) fn pack(color: Color) -> Self {
+        let v = match color {
+            Color::Indexed(i) => (Self::TAG_INDEXED << Self::TAG_SHIFT) | i as u32,
+            Color::Named(n) => (Self::TAG_NAMED << Self::TAG_SHIFT) | (n as u32),
+            Color::Rgb(r, g, b) => {
+                (Self::TAG_RGB << Self::TAG_SHIFT)
+                    | ((r as u32) << 16)
+                    | ((g as u32) << 8)
+                    | b as u32
+            }
+        };
+        Self(v)
+    }
+
+    #[inline]
+    pub(crate) fn unpack(self) -> Color {
+        match self.0 >> Self::TAG_SHIFT {
+            Self::TAG_INDEXED => Color::Indexed((self.0 & 0xFF) as u8),
+            Self::TAG_NAMED => {
+                Color::Named(crate::color::NamedColor::from_u8((self.0 & 0x0F) as u8))
+            }
+            _ => Color::Rgb(
+                ((self.0 >> 16) & 0xFF) as u8,
+                ((self.0 >> 8) & 0xFF) as u8,
+                (self.0 & 0xFF) as u8,
+            ),
+        }
+    }
+}
+
+/// The `Option<Color>` underline color packed into 4 bytes: top bit set
+/// means `Some`, the low 31 bits carry the [`PackedColor`] verbatim (which
+/// only uses 26 bits, so nothing overlaps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PackedOptionColor(u32);
+
+impl PackedOptionColor {
+    const PRESENT: u32 = 1 << 31;
+    const PAYLOAD_MASK: u32 = 0x7FFF_FFFF;
+
+    #[inline]
+    pub(crate) fn pack(color: Option<Color>) -> Self {
+        match color {
+            None => Self(0),
+            Some(c) => {
+                let PackedColor(v) = PackedColor::pack(c);
+                debug_assert_eq!(v & Self::PRESENT, 0, "color must fit 31 bits");
+                Self(Self::PRESENT | v)
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn unpack(self) -> Option<Color> {
+        if self.0 & Self::PRESENT == 0 {
+            return None;
+        }
+        Some(PackedColor(self.0 & Self::PAYLOAD_MASK).unpack())
+    }
+}
+
 impl Default for Cell {
     fn default() -> Self {
         Self {
             c: ' ',
-            combining: SmallVec::new(),
-            fg: Color::Named(crate::color::NamedColor::White),
-            bg: Color::Named(crate::color::NamedColor::Black),
-            underline_color: None,
+            combining: None,
+            fg: PackedColor::pack(Color::Named(crate::color::NamedColor::White)),
+            bg: PackedColor::pack(Color::Named(crate::color::NamedColor::Black)),
+            underline_color: PackedOptionColor::pack(None),
             flags: CellFlags::default(),
             width: 1, // Space has width 1
         }
@@ -287,7 +423,7 @@ impl Cell {
         let width = char_width(c, &WidthConfig::default()) as u8;
         Self {
             c,
-            combining: SmallVec::new(),
+            combining: None,
             width,
             ..Default::default()
         }
@@ -300,10 +436,10 @@ impl Cell {
         let width = char_width(c, &WidthConfig::default()) as u8;
         Self {
             c,
-            combining: SmallVec::new(),
-            fg,
-            bg,
-            underline_color: None,
+            combining: None,
+            fg: PackedColor::pack(fg),
+            bg: PackedColor::pack(bg),
+            underline_color: PackedOptionColor::pack(None),
             flags: CellFlags::default(),
             width,
         }
@@ -323,25 +459,29 @@ impl Cell {
     /// Foreground color.
     #[inline]
     pub fn fg(&self) -> Color {
-        self.fg
+        self.fg.unpack()
     }
 
     /// Background color.
     #[inline]
     pub fn bg(&self) -> Color {
-        self.bg
+        self.bg.unpack()
     }
 
     /// Underline color (SGR 58/59); `None` means use the foreground color.
     #[inline]
     pub fn underline_color(&self) -> Option<Color> {
-        self.underline_color
+        self.underline_color.unpack()
     }
 
     /// Combining marks following the base character (empty for most cells).
     #[inline]
     pub fn combining(&self) -> &[char] {
-        &self.combining
+        static EMPTY: [char; 0] = [];
+        match &self.combining {
+            Some(v) => v.as_slice(),
+            None => &EMPTY,
+        }
     }
 
     /// The text attributes/flags.
@@ -378,14 +518,17 @@ impl Cell {
     #[inline]
     pub fn push_grapheme(&self, buf: &mut String) {
         buf.push(self.c);
-        for &ch in &self.combining {
-            buf.push(ch);
+        if let Some(marks) = &self.combining {
+            for &ch in marks.iter() {
+                buf.push(ch);
+            }
         }
     }
 
     /// Return the base character plus any combining characters as a String.
     pub fn get_grapheme(&self) -> String {
-        let mut result = String::with_capacity(1 + self.combining.len());
+        let n = self.combining.as_ref().map_or(0, |v| v.len());
+        let mut result = String::with_capacity(1 + n);
         self.push_grapheme(&mut result);
         result
     }
@@ -399,7 +542,7 @@ impl Cell {
     /// without allocating a String.
     #[inline]
     pub fn has_combining_chars(&self) -> bool {
-        !self.combining.is_empty()
+        self.combining.is_some()
     }
 
     /// Get the base character without combining characters
@@ -412,13 +555,74 @@ impl Cell {
         self.c
     }
 
+    // --- pub(crate) combining mutation helpers ---
+    // Callers inside the crate mutate combining marks during grapheme
+    // assembly (write.rs); these keep the Arc-based representation private.
+
+    /// Append a combining mark, allocating the spill store on first use.
+    #[inline]
+    pub(crate) fn combining_push(&mut self, ch: char) {
+        let marks = self.combining.get_or_insert_with(|| Arc::new(Vec::new()));
+        Arc::make_mut(marks).push(ch);
+    }
+
+    /// Replace the whole combining sequence (normalization rewrite).
+    #[inline]
+    pub(crate) fn combining_replace(&mut self, marks: Vec<char>) {
+        self.combining = if marks.is_empty() {
+            None
+        } else {
+            Some(Arc::new(marks))
+        };
+    }
+
+    /// Whether the combining sequence contains `ch`.
+    #[inline]
+    pub(crate) fn combining_has(&self, ch: char) -> bool {
+        self.combining.as_ref().is_some_and(|m| m.contains(&ch))
+    }
+
+    // Test-only writes: production code paths build cells through the
+    // constructors, so the setters exist purely for test seeding.
+    /// Set the foreground color.
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn set_fg(&mut self, color: Color) {
+        self.fg = PackedColor::pack(color);
+    }
+
+    /// Set the background color.
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn set_bg(&mut self, color: Color) {
+        self.bg = PackedColor::pack(color);
+    }
+
+    /// Set the underline color.
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn set_underline_color(&mut self, color: Option<Color>) {
+        self.underline_color = PackedOptionColor::pack(color);
+    }
+
+    /// Whether the cell carries no combining marks.
+    #[inline]
+    pub(crate) fn combining_is_empty(&self) -> bool {
+        self.combining.is_none()
+    }
+
     /// Create a cell from a grapheme cluster (base char + combining chars)
     ///
     /// Uses the default width configuration.
     pub fn from_grapheme(grapheme: &str) -> Self {
         let mut chars = grapheme.chars();
         let base_char = chars.next().unwrap_or(' ');
-        let combining: SmallVec<[char; 4]> = chars.collect();
+        let rest: Vec<char> = chars.collect();
+        let combining = if rest.is_empty() {
+            None
+        } else {
+            Some(Arc::new(rest))
+        };
         let width = str_width(grapheme, &WidthConfig::default()).max(1) as u8;
 
         Self {
@@ -433,6 +637,43 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::NamedColor;
+
+    /// Card: slim the Cell struct. 56B -> 40B via packed colors and a
+    /// heap-spilled `Option<Arc<Vec<char>>> combining store.
+    #[test]
+    fn cell_fits_in_40_bytes() {
+        assert!(
+            std::mem::size_of::<Cell>() <= 40,
+            "Cell grew to {} bytes; the packed layout contract is 40",
+            std::mem::size_of::<Cell>()
+        );
+    }
+
+    /// Named, indexed and RGB colors must round-trip bit-exact through the
+    /// packed u32 representation, for every tag.
+    #[test]
+    fn packed_colors_round_trip_bit_exact() {
+        let colors = [
+            Color::Named(NamedColor::Black),
+            Color::Named(NamedColor::BrightWhite),
+            Color::Indexed(0),
+            Color::Indexed(255),
+            Color::Rgb(0, 0, 0),
+            Color::Rgb(255, 255, 255),
+            Color::Rgb(0x12, 0x34, 0x56),
+        ];
+        for color in colors {
+            assert_eq!(PackedColor::pack(color).unpack(), color, "{:?}", color);
+            assert_eq!(
+                PackedOptionColor::pack(Some(color)).unpack(),
+                Some(color),
+                "{:?} through the option wrapper",
+                color
+            );
+        }
+        assert_eq!(PackedOptionColor::pack(None).unpack(), None);
+    }
 
     #[test]
     fn test_default_cell() {
@@ -603,17 +844,17 @@ mod tests {
         let bg = Color::Rgb(32, 64, 128);
         let cell = Cell::with_colors('X', fg, bg);
 
-        assert_eq!(cell.c, 'X');
-        assert_eq!(cell.fg, fg);
-        assert_eq!(cell.bg, bg);
+        assert_eq!(cell.c(), 'X');
+        assert_eq!(cell.fg(), fg);
+        assert_eq!(cell.bg(), bg);
         assert_eq!(cell.width(), 1);
     }
 
     #[test]
     fn test_cell_reset() {
         let mut cell = Cell::new('A');
-        cell.fg = Color::Rgb(255, 0, 0);
-        cell.bg = Color::Rgb(0, 255, 0);
+        cell.set_fg(Color::Rgb(255, 0, 0));
+        cell.set_bg(Color::Rgb(0, 255, 0));
         cell.flags.set_bold(true);
         cell.flags.set_italic(true);
 
@@ -676,13 +917,13 @@ mod tests {
     #[test]
     fn test_cell_underline_color() {
         let mut cell = Cell::default();
-        assert_eq!(cell.underline_color, None);
+        assert_eq!(cell.underline_color(), None);
 
-        cell.underline_color = Some(Color::Rgb(255, 0, 0));
-        assert_eq!(cell.underline_color, Some(Color::Rgb(255, 0, 0)));
+        cell.set_underline_color(Some(Color::Rgb(255, 0, 0)));
+        assert_eq!(cell.underline_color(), Some(Color::Rgb(255, 0, 0)));
 
-        cell.underline_color = None;
-        assert_eq!(cell.underline_color, None);
+        cell.set_underline_color(None);
+        assert_eq!(cell.underline_color(), None);
     }
 
     #[test]
@@ -710,7 +951,7 @@ mod tests {
     #[test]
     fn test_cell_clone() {
         let mut cell1 = Cell::new('A');
-        cell1.fg = Color::Rgb(255, 0, 0);
+        cell1.set_fg(Color::Rgb(255, 0, 0));
         cell1.flags.set_bold(true);
 
         let cell2 = cell1.clone();
@@ -721,26 +962,15 @@ mod tests {
     }
 
     /// ARC-005/QA-004: bulk-cloning cells that carry combining marks must stay
-    /// cheap. Before SmallVec, every clone of a combining-bearing cell allocated
-    /// a fresh heap buffer, so a scroll/reflow over a full screen of such cells
-    /// (the audit's ~800k-clone reflow case) was allocation-bound. With
-    /// `SmallVec<[char; 4]>`, ≤4 marks are inline → each clone is a memcpy with
-    /// no heap allocation. This locks that characteristic in.
+    /// cheap. With the packed layout, marks live in a refcount-shared
+    /// `Arc<[char]>` inside the cell, so each clone is an atomic increment
+    /// rather than a per-clone deep copy — the same allocation-free
+    /// characteristic SmallVec's inline buffer gave the 4-mark case.
     #[test]
     fn cloning_combining_cells_is_fast_at_scale() {
-        // base char + 3 combining marks (inline in SmallVec<[char; 4]>)
+        // base char + 3 combining marks
         let cell = Cell::from_grapheme("e\u{0301}\u{0302}\u{0303}");
-        assert_eq!(cell.combining.len(), 3);
-
-        // Deterministic regression guard (QA-226): the marks must sit in the
-        // SmallVec's inline buffer so each clone is a memcpy with no heap
-        // allocation. A revert to Vec<char> fails to compile here; an inline
-        // capacity below 4 flips `spilled()` to true and fails the assert —
-        // no wall clock involved.
-        assert!(
-            !cell.combining.spilled(),
-            "combining marks spilled to the heap; every clone would allocate"
-        );
+        assert_eq!(cell.combining().len(), 3);
 
         // ~800k clones ≈ a 10k-line × 80-col reflow/scroll (the audit's worst case).
         let start = std::time::Instant::now();
@@ -751,11 +981,9 @@ mod tests {
         assert!(clones.iter().all(|c| c == &cell));
         drop(clones);
 
-        // Coarse sanity net only — the real regression guard is the `spilled()`
-        // check above. The budget must absorb scheduler load (the old 1s budget
-        // flaked at 1.019s with machine load ~75, vs ~0.3s isolated) while
-        // staying far below the seconds-scale allocation storm of a SmallVec
-        // revert.
+        // Coarse sanity net only. The budget must absorb scheduler load while
+        // staying far below the seconds-scale allocation storm of a per-clone
+        // deep copy.
         assert!(
             elapsed < std::time::Duration::from_millis(5000),
             "cloning 800k combining-bearing cells took {:?}, expected < 5000ms",

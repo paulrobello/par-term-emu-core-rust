@@ -8,7 +8,7 @@ fn test_256_color() {
     term.process(b"\x1b[38;5;196mRed");
 
     let cell = term.grid().get(0, 0).unwrap();
-    assert_eq!(cell.fg, Color::from_ansi_code(196));
+    assert_eq!(cell.fg(), Color::from_ansi_code(196));
 }
 
 #[test]

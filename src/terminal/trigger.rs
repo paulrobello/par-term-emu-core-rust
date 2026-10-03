@@ -399,7 +399,7 @@ impl TriggerEngine {
                     },
                     |col| {
                         grid.get(col, r)
-                            .map(|cell| 1 + cell.combining.len())
+                            .map(|cell| 1 + cell.combining().len())
                             .unwrap_or(1)
                     },
                 );

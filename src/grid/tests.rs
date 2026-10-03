@@ -239,8 +239,8 @@ fn test_bce_clear_line_right() {
 
     assert_eq!(grid.get(4, 2).unwrap().c, 'X'); // Preserved
     assert_eq!(grid.get(5, 2).unwrap().c, ' '); // Cleared
-    assert_eq!(grid.get(5, 2).unwrap().bg, bg); // BCE: green bg
-    assert_eq!(grid.get(9, 2).unwrap().bg, bg); // BCE: green bg
+    assert_eq!(grid.get(5, 2).unwrap().bg(), bg); // BCE: green bg
+    assert_eq!(grid.get(9, 2).unwrap().bg(), bg); // BCE: green bg
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn test_bce_clear_line_left() {
 
     for i in 0..=5 {
         assert_eq!(grid.get(i, 2).unwrap().c, ' '); // Cleared
-        assert_eq!(grid.get(i, 2).unwrap().bg, bg); // BCE: blue bg
+        assert_eq!(grid.get(i, 2).unwrap().bg(), bg); // BCE: blue bg
     }
     assert_eq!(grid.get(6, 2).unwrap().c, 'X'); // Preserved
 }
@@ -270,7 +270,7 @@ fn test_bce_clear_row() {
 
     for i in 0..10 {
         assert_eq!(grid.get(i, 2).unwrap().c, ' ');
-        assert_eq!(grid.get(i, 2).unwrap().bg, bg); // BCE: red bg
+        assert_eq!(grid.get(i, 2).unwrap().bg(), bg); // BCE: red bg
     }
 }
 
@@ -287,9 +287,9 @@ fn test_bce_clear_screen_below() {
 
     assert_eq!(grid.get(4, 5).unwrap().c, 'X'); // Before cursor - preserved
     assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared
-    assert_eq!(grid.get(5, 5).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(5, 5).unwrap().bg(), bg); // BCE
     assert_eq!(grid.get(0, 6).unwrap().c, ' '); // Next line - cleared
-    assert_eq!(grid.get(0, 6).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(0, 6).unwrap().bg(), bg); // BCE
     assert_eq!(grid.get(0, 4).unwrap().c, 'X'); // Previous line - preserved
 }
 
@@ -305,9 +305,9 @@ fn test_bce_clear_screen_above() {
     grid.clear_screen_above(5, 5, bg);
 
     assert_eq!(grid.get(0, 4).unwrap().c, ' '); // Previous line - cleared
-    assert_eq!(grid.get(0, 4).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(0, 4).unwrap().bg(), bg); // BCE
     assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared
-    assert_eq!(grid.get(5, 5).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(5, 5).unwrap().bg(), bg); // BCE
     assert_eq!(grid.get(6, 5).unwrap().c, 'X'); // After cursor - preserved
 }
 
@@ -323,7 +323,7 @@ fn test_bce_erase_characters() {
     assert_eq!(grid.get(2, 0).unwrap().c, 'X'); // Preserved
     for i in 3..7 {
         assert_eq!(grid.get(i, 0).unwrap().c, ' '); // Erased
-        assert_eq!(grid.get(i, 0).unwrap().bg, bg); // BCE
+        assert_eq!(grid.get(i, 0).unwrap().bg(), bg); // BCE
     }
     assert_eq!(grid.get(7, 0).unwrap().c, 'X'); // Preserved
 }
@@ -342,7 +342,7 @@ fn test_bce_clear_with_bg() {
     for row in 0..3 {
         for col in 0..10 {
             assert_eq!(grid.get(col, row).unwrap().c, ' ');
-            assert_eq!(grid.get(col, row).unwrap().bg, bg); // BCE
+            assert_eq!(grid.get(col, row).unwrap().bg(), bg); // BCE
         }
     }
 }
@@ -880,18 +880,18 @@ fn test_export_styled_buffer() {
 fn test_styled_exports_golden_bytes() {
     let mut grid = Grid::new(4, 3, 10);
     let mut red_bold = Cell::new('A');
-    red_bold.fg = Color::Named(NamedColor::Red);
+    red_bold.set_fg(Color::Named(NamedColor::Red));
     red_bold.flags.set_bold(true);
     grid.set(0, 0, red_bold);
     grid.set(1, 0, Cell::new('b'));
     grid.set_line_wrapped(0, true);
     let mut red_bold_c = Cell::new('C');
-    red_bold_c.fg = Color::Named(NamedColor::Red);
+    red_bold_c.set_fg(Color::Named(NamedColor::Red));
     red_bold_c.flags.set_bold(true);
     grid.set(0, 1, red_bold_c);
     grid.scroll_up(2);
     let mut green_bg = Cell::new('x');
-    green_bg.bg = Color::Named(NamedColor::Green);
+    green_bg.set_bg(Color::Named(NamedColor::Green));
     grid.set(1, 0, green_bg);
     grid.set(0, 2, Cell::new('z'));
 
@@ -1013,8 +1013,8 @@ fn test_scrollback_reflow_preserves_colors() {
 
     // Create a colored cell
     let mut cell = Cell::new('X');
-    cell.fg = Color::Rgb(255, 0, 0);
-    cell.bg = Color::Rgb(0, 255, 0);
+    cell.set_fg(Color::Rgb(255, 0, 0));
+    cell.set_bg(Color::Rgb(0, 255, 0));
     cell.flags.set_bold(true);
     grid.set(0, 0, cell);
 
@@ -1027,8 +1027,8 @@ fn test_scrollback_reflow_preserves_colors() {
     // Verify colors and attributes preserved
     let line = grid.scrollback_line(0).unwrap();
     assert_eq!(line[0].c, 'X');
-    assert_eq!(line[0].fg, Color::Rgb(255, 0, 0));
-    assert_eq!(line[0].bg, Color::Rgb(0, 255, 0));
+    assert_eq!(line[0].fg(), Color::Rgb(255, 0, 0));
+    assert_eq!(line[0].bg(), Color::Rgb(0, 255, 0));
     assert!(line[0].flags.bold());
 }
 
@@ -1339,7 +1339,7 @@ mod snapshot_tests {
         // Write content
         grid.get_mut(0, 0).unwrap().c = 'A';
         grid.get_mut(1, 0).unwrap().c = 'B';
-        grid.get_mut(2, 0).unwrap().fg = Color::Rgb(255, 0, 0);
+        grid.get_mut(2, 0).unwrap().set_fg(Color::Rgb(255, 0, 0));
         grid.set_line_wrapped(0, true);
 
         // Push a zone
@@ -1350,7 +1350,9 @@ mod snapshot_tests {
         // Modify the grid after snapshot
         grid.get_mut(0, 0).unwrap().c = 'X';
         grid.get_mut(1, 0).unwrap().c = 'Y';
-        grid.get_mut(2, 0).unwrap().fg = Color::Named(NamedColor::White);
+        grid.get_mut(2, 0)
+            .unwrap()
+            .set_fg(Color::Named(NamedColor::White));
         grid.set_line_wrapped(0, false);
         grid.clear_zones();
 
@@ -1362,7 +1364,7 @@ mod snapshot_tests {
 
         assert_eq!(grid.get(0, 0).unwrap().c, 'A');
         assert_eq!(grid.get(1, 0).unwrap().c, 'B');
-        assert_eq!(grid.get(2, 0).unwrap().fg, Color::Rgb(255, 0, 0));
+        assert_eq!(grid.get(2, 0).unwrap().fg(), Color::Rgb(255, 0, 0));
         assert!(grid.is_line_wrapped(0));
         assert_eq!(grid.zones().len(), 1);
         assert_eq!(grid.zones()[0].id, 1);

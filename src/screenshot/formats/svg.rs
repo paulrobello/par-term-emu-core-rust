@@ -49,7 +49,7 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
     // Background - use default black
     let bg_color = grid
         .get(0, 0)
-        .map(|cell| cell.bg.to_rgb())
+        .map(|cell| cell.bg().to_rgb())
         .unwrap_or((0, 0, 0));
 
     svg.push_str(&format!(
@@ -81,14 +81,14 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
             };
 
             // Skip empty cells (spaces with default colors)
-            if cell.c == ' ' && is_default_color(&cell.fg) {
+            if cell.c == ' ' && is_default_color(&cell.fg()) {
                 col += 1;
                 continue;
             }
 
             // Collect run of cells with same attributes
             let mut run_text = String::new();
-            let fg = cell.fg.to_rgb();
+            let fg = cell.fg().to_rgb();
             let start_col = col;
             let bold = cell.flags.bold();
             let italic = cell.flags.italic();
@@ -103,7 +103,7 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
                 };
 
                 // Check if attributes match
-                let current_fg = current.fg.to_rgb();
+                let current_fg = current.fg().to_rgb();
                 if current_fg != fg
                     || current.flags.bold() != bold
                     || current.flags.italic() != italic
@@ -116,7 +116,7 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
 
                 // Output full grapheme cluster (base char + combining chars)
                 run_text.push(current.c);
-                for &combining in &current.combining {
+                for &combining in current.combining() {
                     run_text.push(combining);
                 }
                 col += 1;
@@ -506,7 +506,7 @@ mod tests {
     fn test_svg_with_rgb_color() {
         let mut grid = Grid::new(10, 5, 100);
         let mut cell = Cell::new('C');
-        cell.fg = Color::Rgb(255, 128, 64);
+        cell.set_fg(Color::Rgb(255, 128, 64));
         grid.set(0, 0, cell);
 
         let result = encode(&grid, 14.0, 0);

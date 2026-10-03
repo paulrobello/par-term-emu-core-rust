@@ -189,7 +189,7 @@ impl Renderer {
 
         // Render text decorations
         if cell.flags.underline() {
-            let underline_color = cell.underline_color.map(|c| c.to_rgb()).unwrap_or(fg);
+            let underline_color = cell.underline_color().map(|c| c.to_rgb()).unwrap_or(fg);
             self.render_underline(image, x, y, cell.flags.underline_style, underline_color);
         }
 
@@ -206,8 +206,8 @@ impl Renderer {
 
     /// Resolve effective foreground and background colors
     fn resolve_colors(&self, cell: &Cell) -> ((u8, u8, u8), (u8, u8, u8)) {
-        let mut fg = cell.fg;
-        let mut bg = cell.bg.to_rgb();
+        let mut fg = cell.fg();
+        let mut bg = cell.bg().to_rgb();
 
         // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
         if self.config.bold_brightening && cell.flags.bold() {
@@ -553,7 +553,7 @@ impl Renderer {
             Some(cells) => cells.iter().any(|cell| {
                 matches!(cell.c as u32, 0x1F1E6..=0x1F1FF)
                     || cell
-                        .combining
+                        .combining()
                         .iter()
                         .any(|&c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
             }),
@@ -606,7 +606,7 @@ impl Renderer {
 
                 // Render text decorations (underline, strikethrough, overline)
                 if cell.flags.underline() {
-                    let underline_color = cell.underline_color.map(|c| c.to_rgb()).unwrap_or(fg);
+                    let underline_color = cell.underline_color().map(|c| c.to_rgb()).unwrap_or(fg);
                     self.render_underline(image, x, y, cell.flags.underline_style, underline_color);
                 }
 
@@ -1193,15 +1193,11 @@ mod tests {
         let _config = create_test_config();
         // Can't create Renderer without FontCache, so we'll test the logic separately
 
-        let cell = Cell {
-            fg: Color::Rgb(255, 0, 0), // Red foreground
-            bg: Color::Rgb(0, 0, 255), // Blue background
-            ..Default::default()
-        };
+        let cell = Cell::with_colors('X', Color::Rgb(255, 0, 0), Color::Rgb(0, 0, 255));
 
         // Test that colors are returned as-is for normal cell
         // This would require creating a Renderer instance
-        assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
+        assert_eq!(cell.fg(), Color::Rgb(255, 0, 0));
     }
 
     #[test]
@@ -1209,11 +1205,7 @@ mod tests {
         use crate::cell::Cell;
         use crate::color::Color;
 
-        let mut cell = Cell {
-            fg: Color::Rgb(255, 0, 0), // Red
-            bg: Color::Rgb(0, 0, 255), // Blue
-            ..Default::default()
-        };
+        let mut cell = Cell::with_colors('X', Color::Rgb(255, 0, 0), Color::Rgb(0, 0, 255));
         cell.flags.set_reverse(true);
 
         // When reverse is set, fg and bg should be swapped
@@ -1234,11 +1226,7 @@ mod tests {
         config.faint_text_alpha = 0.5;
         let renderer = Renderer::new(24, 80, config).expect("embedded fonts load");
 
-        let mut cell = Cell {
-            fg: Color::Rgb(200, 100, 50),
-            bg: Color::Rgb(0, 0, 255),
-            ..Default::default()
-        };
+        let mut cell = Cell::with_colors('X', Color::Rgb(200, 100, 50), Color::Rgb(0, 0, 255));
         cell.flags.set_dim(true);
 
         let (fg, bg) = renderer.resolve_colors(&cell);

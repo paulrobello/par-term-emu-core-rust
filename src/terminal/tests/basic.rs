@@ -39,7 +39,7 @@ fn test_true_color() {
 
     // Check the color was set correctly
     let cell = term.active_grid().get(0, 0).unwrap();
-    assert_eq!(cell.fg, Color::Rgb(255, 128, 64));
+    assert_eq!(cell.fg(), Color::Rgb(255, 128, 64));
 }
 
 #[test]

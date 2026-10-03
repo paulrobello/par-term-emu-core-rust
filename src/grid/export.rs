@@ -125,15 +125,17 @@ fn push_styled_cells(
         if col >= last_sig {
             break;
         }
-        if cell.fg != state.fg || cell.bg != state.bg || cell.flags != state.flags {
-            push_sgr_style(result, &cell.fg, &cell.bg, &cell.flags);
-            state.fg = cell.fg;
-            state.bg = cell.bg;
+        let cell_fg = cell.fg();
+        let cell_bg = cell.bg();
+        if cell_fg != state.fg || cell_bg != state.bg || cell.flags != state.flags {
+            push_sgr_style(result, &cell_fg, &cell_bg, &cell.flags);
+            state.fg = cell_fg;
+            state.bg = cell_bg;
             state.flags = cell.flags;
             emitted_sgr = true;
         }
         result.push(cell.c);
-        for &combining in &cell.combining {
+        for &combining in cell.combining() {
             result.push(combining);
         }
     }
@@ -152,7 +154,7 @@ impl Grid {
                 for cell in line {
                     if !cell.flags.wide_char_spacer() {
                         line_text.push(cell.c);
-                        for &combining in &cell.combining {
+                        for &combining in cell.combining() {
                             line_text.push(combining);
                         }
                     }
@@ -173,7 +175,7 @@ impl Grid {
                 for cell in row_cells {
                     if !cell.flags.wide_char_spacer() {
                         line_text.push(cell.c);
-                        for &combining in &cell.combining {
+                        for &combining in cell.combining() {
                             line_text.push(combining);
                         }
                     }
@@ -216,9 +218,9 @@ impl Grid {
             if cell.flags.wide_char_spacer() {
                 continue;
             }
-            let has_content = cell.c != ' ' || !cell.combining.is_empty();
+            let has_content = cell.c != ' ' || cell.has_combining_chars();
             let has_styling =
-                cell.fg != default_fg || cell.bg != default_bg || cell.flags != default_flags;
+                cell.fg() != default_fg || cell.bg() != default_bg || cell.flags != default_flags;
             if has_content || has_styling {
                 last_significant = col + 1;
             }

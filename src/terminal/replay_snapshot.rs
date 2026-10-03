@@ -122,9 +122,10 @@ impl TerminalSnapshot {
     pub fn estimate_size(&self) -> usize {
         let base = std::mem::size_of::<Self>();
 
-        // Grid cells: each Cell owns a Vec<char> for combining chars.
-        // Approximate per-cell overhead as size_of::<Cell>() + 24 bytes for the
-        // Vec header (pointer + len + cap) even when empty.
+        // Grid cells: size_of::<Cell>() covers the packed color words and the
+        // Option pointer for combining marks (most cells carry none, so their
+        // Arc payload is not counted; combining-bearing cells add one small
+        // heap allocation each, which this estimate omits).
         let cell_size = std::mem::size_of::<Cell>();
         let grid_cells = (self.grid.cells.len() + self.grid.scrollback_cells.len()) * cell_size;
         let alt_grid_cells =
@@ -424,11 +425,11 @@ mod tests {
 
         let cloned = snap.clone();
         assert_eq!(cloned.grid.cells[0].c, 'A');
-        assert_eq!(cloned.grid.cells[0].fg, Color::Rgb(255, 0, 0));
-        assert_eq!(cloned.grid.cells[0].bg, Color::Rgb(0, 0, 255));
+        assert_eq!(cloned.grid.cells[0].fg(), Color::Rgb(255, 0, 0));
+        assert_eq!(cloned.grid.cells[0].bg(), Color::Rgb(0, 0, 255));
         assert_eq!(cloned.grid.cells[1].c, 'B');
-        assert_eq!(cloned.grid.cells[1].fg, Color::Indexed(196));
-        assert_eq!(cloned.grid.cells[1].bg, Color::Named(NamedColor::Green));
+        assert_eq!(cloned.grid.cells[1].fg(), Color::Indexed(196));
+        assert_eq!(cloned.grid.cells[1].bg(), Color::Named(NamedColor::Green));
     }
 
     #[test]

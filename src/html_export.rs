@@ -80,7 +80,7 @@ fn export_line_to_html(cells: &[Cell], html: &mut String) {
         }
 
         // Add combining characters (variation selectors, ZWJ, skin tone modifiers, etc.)
-        for &combining in &cell.combining {
+        for &combining in cell.combining() {
             match combining {
                 '<' => html.push_str("&lt;"),
                 '>' => html.push_str("&gt;"),
@@ -101,12 +101,12 @@ fn build_style_string(cell: &Cell) -> String {
     let mut styles = Vec::new();
 
     // Foreground color
-    if let Some((r, g, b)) = cell.fg.to_rgb_opt() {
+    if let Some((r, g, b)) = cell.fg().to_rgb_opt() {
         styles.push(format!("color: rgb({}, {}, {})", r, g, b));
     }
 
     // Background color
-    if let Some((r, g, b)) = cell.bg.to_rgb_opt() {
+    if let Some((r, g, b)) = cell.bg().to_rgb_opt() {
         styles.push(format!("background-color: rgb({}, {}, {})", r, g, b));
     }
 
@@ -144,7 +144,7 @@ fn build_style_string(cell: &Cell) -> String {
     if cell.flags.reverse() {
         // Swap fg and bg
         if let (Some((fg_r, fg_g, fg_b)), Some((bg_r, bg_g, bg_b))) =
-            (cell.fg.to_rgb_opt(), cell.bg.to_rgb_opt())
+            (cell.fg().to_rgb_opt(), cell.bg().to_rgb_opt())
         {
             styles.retain(|s| !s.starts_with("color:") && !s.starts_with("background-color:"));
             styles.push(format!("color: rgb({}, {}, {})", bg_r, bg_g, bg_b));
@@ -285,8 +285,8 @@ mod tests {
     fn test_ansi_colors_render() {
         let mut grid = Grid::new(10, 1, 0);
         let mut cell = Cell::new('R');
-        cell.fg = Color::Named(NamedColor::Red);
-        cell.bg = Color::Named(NamedColor::Blue);
+        cell.set_fg(Color::Named(NamedColor::Red));
+        cell.set_bg(Color::Named(NamedColor::Blue));
         grid.set(0, 0, cell);
 
         let html = export_html(&grid, false);
@@ -299,8 +299,8 @@ mod tests {
     fn test_rgb_colors_render() {
         let mut grid = Grid::new(10, 1, 0);
         let mut cell = Cell::new('C');
-        cell.fg = Color::Rgb(255, 0, 0);
-        cell.bg = Color::Rgb(0, 0, 255);
+        cell.set_fg(Color::Rgb(255, 0, 0));
+        cell.set_bg(Color::Rgb(0, 0, 255));
         grid.set(0, 0, cell);
 
         let html = export_html(&grid, false);
@@ -399,7 +399,7 @@ mod tests {
         cell.flags.set_bold(true);
         cell.flags.set_italic(true);
         cell.flags.set_underline(true);
-        cell.fg = Color::Rgb(255, 128, 0);
+        cell.set_fg(Color::Rgb(255, 128, 0));
         grid.set(0, 0, cell);
 
         let html = export_html(&grid, false);
@@ -425,8 +425,8 @@ mod tests {
     fn test_reverse_video_swaps_colors() {
         let mut grid = Grid::new(10, 1, 0);
         let mut cell = Cell::new('R');
-        cell.fg = Color::Rgb(255, 0, 0);
-        cell.bg = Color::Rgb(0, 255, 0);
+        cell.set_fg(Color::Rgb(255, 0, 0));
+        cell.set_bg(Color::Rgb(0, 255, 0));
         cell.flags.set_reverse(true);
         grid.set(0, 0, cell);
 
