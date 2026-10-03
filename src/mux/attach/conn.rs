@@ -354,6 +354,7 @@ mod tests {
     /// spellings, the BEL terminator, and graceful None on garbage and
     /// on a partial stream (the probe keeps polling until the deadline
     /// when the reply splits across reads).
+    #[cfg(unix)] // parse_osc_color backs the unix-only probe
     #[test]
     fn osc_color_report_parses_and_yields_gracefully() {
         // xterm: rgb:ffff/ffff/ffff -> white.
