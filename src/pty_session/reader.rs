@@ -443,7 +443,9 @@ mod tests {
         let since = session.update_generation();
 
         // A generation-poll observer: bounded-window poll for the flip.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // 30s: under a full parallel suite on the python-test build
+        // (libpython linked), process spawn can outrun a tighter window.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let observed = loop {
             let gen = session.update_generation();
             if gen > since || std::time::Instant::now() >= deadline {
