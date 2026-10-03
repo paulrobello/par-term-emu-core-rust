@@ -177,7 +177,7 @@ lru = "0.18.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
-nix = { version = "0.31.3", features = ["process", "term", "signal"], optional = true }
+nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms

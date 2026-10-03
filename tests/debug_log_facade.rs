@@ -48,23 +48,19 @@ fn core_records_reach_the_installed_logger_at_its_level() {
     assert!(!debug::is_enabled(DebugLevel::Debug));
     par_term_emu_core_rust::debug_error!("CAT", "boom {}", 1);
     par_term_emu_core_rust::debug_log!("CAT", "filtered {}", 2);
+    // SCREEN_SWITCH is a Trace emitter (demoted in 84ef7f8 — every
+    // alt-screen app from any pane floods an Info sink), so the call
+    // records nothing at Info.
     debug::log_screen_switch(true, "test");
 
     let got = records();
     assert_eq!(
         got,
-        vec![
-            (
-                log::Level::Error,
-                debug::LOG_TARGET.to_string(),
-                "[CAT] boom 1".to_string()
-            ),
-            (
-                log::Level::Info,
-                debug::LOG_TARGET.to_string(),
-                "[SCREEN_SWITCH] switched to ALTERNATE screen (test)".to_string()
-            ),
-        ]
+        vec![(
+            log::Level::Error,
+            debug::LOG_TARGET.to_string(),
+            "[CAT] boom 1".to_string()
+        ),]
     );
 
     log::set_max_level(log::LevelFilter::Trace);

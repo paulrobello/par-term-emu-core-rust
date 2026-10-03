@@ -214,13 +214,102 @@ pub(crate) fn parse_feature_tokens(body: &[String]) -> Vec<String> {
     out
 }
 
-/// The host terminal theme as `(fg, bg)` six-hex-digit strings, dark default
-/// per channel (contract: "dark default"). TODO(attach Phase A): probe with
-/// OSC 10/11 (`]10;?BEL` / `]11;?BEL`) in raw mode and parse the
-/// `rgb:RRRR/GGGG/BBBB` replies; the probe needs the same raw-mode stdin
-/// reader Phase A's key pump owns, so it lands with that card.
+/// The host terminal theme as `(fg, bg)` six-hex-digit strings, dark
+/// default per channel (contract: "dark default"). The renderer refines
+/// the background right after raw mode comes up — [`probe_background`]
+/// needs raw mode (a cooked tty line-buffers the OSC reply away), so the
+/// handshake keeps the default and the session setup follows up with a
+/// corrected `set-client-colors`.
 fn host_colors() -> (&'static str, &'static str) {
     ("ffffff", "000000")
+}
+
+/// Probe the host terminal's background color with OSC 11
+/// (`ESC ] 11 ; ? ST`): write the query and wait up to 150 ms for the
+/// `rgb:RRRR/GGGG/BBBB` reply on stdin, poll(2)-based so a silent host
+/// costs only the deadline. Unix only. Must run while raw mode is up and
+/// BEFORE the pump's stdin reader thread starts (the probe is, briefly,
+/// the tty's only reader).
+///
+/// The SECOND tuple element is every stdin byte the probe consumed
+/// without finding the reply — keystrokes that landed inside the probe's
+/// window. The caller MUST prime them back into the pump's stdin stream
+/// (`Stdin::new_with_primer`); dropping them eats the user's first
+/// keystrokes.
+#[cfg(unix)]
+pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
+    use nix::poll;
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::AsFd as _;
+    {
+        let mut out = std::io::stdout().lock();
+        if out.write_all(b"\x1b]11;?\x1b\\").is_err() || out.flush().is_err() {
+            return (None, Vec::new());
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_millis(150);
+    let mut acc: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 32];
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return (None, acc);
+        }
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .min(150) as u16;
+        let mut fds = [poll::PollFd::new(handle.as_fd(), poll::PollFlags::POLLIN)];
+        let Ok(ready) = poll::poll(&mut fds, Some(remaining)) else {
+            return (None, acc);
+        };
+        if ready == 0 {
+            return (None, acc); // deadline hit with nothing to read
+        }
+        let Ok(n) = handle.read(&mut buf) else {
+            return (None, acc);
+        };
+        if n == 0 {
+            return (None, acc); // EOF: not a tty / host closed
+        }
+        acc.extend_from_slice(&buf[..n]);
+        if let Some(color) = parse_osc_color(&acc) {
+            // Bytes landing after the reply in the same read chunk are
+            // dropped — the reply path is the success shape.
+            return (Some(color), Vec::new());
+        }
+        if acc.len() > 128 {
+            return (None, acc); // runaway reply; hand back what arrived
+        }
+    }
+}
+
+/// Parse an OSC 10/11 color report (`ESC ] 11 ; rgb:RR/GG/BB ST` — each
+/// component 1-4 hex digits, scaled to 8 bits) from a raw byte stream.
+#[cfg(unix)]
+fn parse_osc_color(bytes: &[u8]) -> Option<(u8, u8, u8)> {
+    let text = core::str::from_utf8(bytes).ok()?;
+    let rest = text.split_once(";rgb:")?.1;
+    let end = rest.find(['\x1b', '\x07'])?;
+    let body = &rest[..end];
+    let mut parts = body.split('/');
+    let component = |raw: &str| -> Option<u8> {
+        let value = u16::from_str_radix(raw, 16).ok()?;
+        // Scale a 1-4 digit hex component to 8 bits: a component of n
+        // digits has max 0xF..F = 16^n - 1.
+        let max = (1u16 << (4 * raw.len().min(4))) - 1;
+        Some((u32::from(value) * 255 / u32::from(max.max(1))) as u8)
+    };
+    let r = component(parts.next()?)?;
+    let g = component(parts.next()?)?;
+    let b = component(parts.next()?)?;
+    Some((r, g, b))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
+    (None, Vec::new())
 }
 
 /// The host terminal's per-cell pixel size. TODO(attach Phase A): XTWINOPS

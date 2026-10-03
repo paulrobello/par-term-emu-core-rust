@@ -80,6 +80,29 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub new_window: Option<String>,
+    /// The resize chord: the key matched after the prefix that enters the
+    /// sticky resize mode (arrows adjust the focused pane's edges; Enter,
+    /// Escape, and `q` exit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resize: Option<String>,
+    /// Cells per resize step: each arrow press in resize mode (and each
+    /// cell of divider drag) moves the pane's edge this many cells.
+    #[serde(
+        default,
+        rename = "resize-step",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resize_step: Option<u32>,
+    /// The swap-with-previous-pane chord (tmux's `{`).
+    #[serde(default, rename = "swap-prev", skip_serializing_if = "Option::is_none")]
+    pub swap_prev: Option<String>,
+    /// The swap-with-next-pane chord (tmux's `}`).
+    #[serde(default, rename = "swap-next", skip_serializing_if = "Option::is_none")]
+    pub swap_next: Option<String>,
+    /// The help chord: the key matched after the prefix that opens the
+    /// bindings panel (every chord shown at its effective binding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -288,6 +311,11 @@ pub fn render(eff: &EffectiveConfig) -> String {
             split_down: None,
             kill_pane: None,
             new_window: None,
+            resize: None,
+            resize_step: None,
+            swap_prev: None,
+            swap_next: None,
+            help: None,
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -352,11 +380,29 @@ pub struct Chords {
     pub reload: u8,
     /// The window/pane management chords (split/kill/new-window).
     pub management: Management,
+    /// Cells per resize step: each arrow press in resize mode (and each
+    /// cell of a divider drag) moves the pane's edge this many cells.
+    /// A file value below 1 clamps to 1; the built-in default is 1.
+    pub resize_step: u32,
+}
+
+impl Chords {
+    /// The built-in chord set: every default chord at its tmux spelling
+    /// and the 1-cell resize step.
+    pub fn with_defaults() -> Self {
+        Self {
+            prefix: 0x02,
+            reload: 0x12,
+            management: Management::default(),
+            resize_step: 1,
+        }
+    }
 }
 
 /// The window/pane management chords: the keys matched after the prefix
 /// that act on the focused pane/window. Each defaults to its tmux
-/// spelling (`%`, `"`, `x`, `c`).
+/// spelling (`%`, `"`, `x`, `c`); the resize mode's entry key defaults to
+/// `R`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Management {
     /// Split the focused pane right — `split-window -t <pane> -h`.
@@ -367,6 +413,18 @@ pub struct Management {
     pub kill_pane: u8,
     /// New window in the focused pane's session — `new-window -t <session>`.
     pub new_window: u8,
+    /// Enter the sticky resize mode — arrows adjust the focused pane's
+    /// edges by `Chords::resize_step` per press until Enter/Escape/`q`.
+    pub resize: u8,
+    /// Swap the focused pane with the previous pane in layout order —
+    /// `swap-pane -s <focused> -t <prev>`.
+    pub swap_prev: u8,
+    /// Swap the focused pane with the next pane in layout order —
+    /// `swap-pane -s <focused> -t <next>`.
+    pub swap_next: u8,
+    /// Open the bindings help panel — every chord at its effective
+    /// binding, from the live config.
+    pub help: u8,
 }
 
 impl Default for Management {
@@ -376,6 +434,10 @@ impl Default for Management {
             split_down: b'"',
             kill_pane: b'x',
             new_window: b'c',
+            resize: b'R',
+            swap_prev: b'{',
+            swap_next: b'}',
+            help: b'?',
         }
     }
 }
@@ -438,11 +500,35 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
             Some(chord) => management_key(chord, "new-window")?,
             None => current.management.new_window,
         },
+        resize: match file.client.resize.as_deref() {
+            Some(chord) => management_key(chord, "resize")?,
+            None => current.management.resize,
+        },
+        swap_prev: match file.client.swap_prev.as_deref() {
+            Some(chord) => management_key(chord, "swap-prev")?,
+            None => current.management.swap_prev,
+        },
+        swap_next: match file.client.swap_next.as_deref() {
+            Some(chord) => management_key(chord, "swap-next")?,
+            None => current.management.swap_next,
+        },
+        help: match file.client.help.as_deref() {
+            Some(chord) => management_key(chord, "help")?,
+            None => current.management.help,
+        },
     };
+    // A step the file names floors at 1 — a zero/negative step would make
+    // every resize a no-op by construction.
+    let resize_step = file
+        .client
+        .resize_step
+        .map(|step| step.max(1))
+        .unwrap_or(current.resize_step);
     Ok(Chords {
         prefix,
         reload,
         management,
+        resize_step,
     })
 }
 
@@ -707,6 +793,7 @@ expose-control-socket = true
             prefix: 0x02,
             reload: 0x12,
             management: Management::default(),
+            resize_step: 1,
         };
         // Defaults.
         let file: ConfigFile = toml::from_str("[client]\n").unwrap();
@@ -717,6 +804,10 @@ expose-control-socket = true
                 split_down: b'"',
                 kill_pane: b'x',
                 new_window: b'c',
+                resize: b'R',
+                swap_prev: b'{',
+                swap_next: b'}',
+                help: b'?',
             }
         );
         // Full override, tmux spellings and literals alike.
@@ -766,6 +857,34 @@ expose-control-socket = true
             reload_chord_key("C- C-r").is_err(),
             "a bad head is an error too"
         );
+    }
+
+    /// The resize affordances: the resize chord rebinds like the other
+    /// management keys, and the step floors at 1 — a zero step would make
+    /// every resize a no-op by construction.
+    #[test]
+    fn resize_chord_and_step_parse_with_the_step_floored() {
+        let defaults = Chords::with_defaults();
+        // Unstated keys keep their current values.
+        let file: ConfigFile = toml::from_str("[client]\n").unwrap();
+        let chords = reload_client_chords(&file, &defaults).unwrap();
+        assert_eq!(chords.management.resize, b'R');
+        assert_eq!(chords.resize_step, 1);
+        // Full override: the chord through the shared grammar, the step
+        // through the file tier.
+        let file: ConfigFile =
+            toml::from_str("[client]\nresize = \"C-z\"\nresize-step = 3\n").unwrap();
+        let chords = reload_client_chords(&file, &defaults).unwrap();
+        assert_eq!(chords.management.resize, 0x1a);
+        assert_eq!(chords.resize_step, 3);
+        // Zero and unstated-file floors: 0 clamps to 1.
+        let file: ConfigFile = toml::from_str("[client]\nresize-step = 0\n").unwrap();
+        let chords = reload_client_chords(&file, &defaults).unwrap();
+        assert_eq!(chords.resize_step, 1, "a zero step floors at 1");
+        // A malformed resize chord errors naming the key.
+        let file: ConfigFile = toml::from_str("[client]\nresize = \"C-1\"\n").unwrap();
+        let err = reload_client_chords(&file, &defaults).unwrap_err();
+        assert!(err.contains("resize"), "the error names the key: {err}");
     }
 
     /// load_file: absent = None, present parses, garbage errors with the

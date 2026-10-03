@@ -181,22 +181,24 @@ fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
             return Err(AttachError::Handshake(std::io::Error::other(err)));
         }
     };
-    // The management chords (split/kill/new-window) come from the config
+    // The management chords (split/kill/new-window) and the resize
+    // affordances (the resize-mode chord + its step) come from the config
     // file — main.rs hands prefix/reload over explicitly, the management
     // keys resolve here against the same canonical file, the SAME pure
     // parser the live reload runs (one grammar, one error shape). A
     // malformed chord fails the attach like a malformed --prefix; a
     // broken FILE stays the lenient startup rule (warn-and-defaults —
     // the strict error is the reload's, per docs/MUX.md).
-    let management = match crate::mux::config::reload_client_chords(
+    let chords = match crate::mux::config::reload_client_chords(
         &crate::mux::config::load_canonical(),
         &crate::mux::config::Chords {
             prefix,
             reload: reload_key,
             management: crate::mux::config::Management::default(),
+            ..crate::mux::config::Chords::with_defaults()
         },
     ) {
-        Ok(chords) => chords.management,
+        Ok(chords) => chords,
         Err(err) => {
             drop(guard);
             return Err(AttachError::Handshake(std::io::Error::other(err)));
@@ -208,7 +210,8 @@ fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
         options.target.as_deref(),
         prefix,
         reload_key,
-        management,
+        chords.management,
+        chords.resize_step,
     ) {
         Ok(session) => session,
         Err(err) => {
@@ -411,6 +414,11 @@ struct Session {
     /// new-window c): the key bytes matched after the prefix, before the
     /// fixed command table. Live-rebindable by the reload.
     management: crate::mux::config::Management,
+    /// Cells per resize step (config `resize-step`).
+    resize_step: u32,
+    /// Sticky resize mode: arrows adjust the focused pane's edges; any
+    /// other key leaves the mode.
+    resize_mode: bool,
     /// A transient confirmation cue drawn once on the status row and
     /// cleared on the next redraw cycle (`config reloaded`, or the
     /// reload's failure text).
@@ -427,6 +435,7 @@ impl Session {
         prefix: u8,
         reload_key: u8,
         management: crate::mux::config::Management,
+        resize_step: u32,
     ) -> Result<Self, String> {
         // Registration replay (held panes' %pane-exited, zoomed windows'
         // %layout-change) is state about OTHER panes mostly; the resync
@@ -452,6 +461,8 @@ impl Session {
             prefix_pending: false,
             reload_key,
             management,
+            resize_step,
+            resize_mode: false,
             flash: None,
         };
         session.resync();
@@ -738,6 +749,12 @@ impl Session {
     /// Route one stdin burst through the prefix scanner and the chunked
     /// forwarder. Returns true if the burst detached.
     fn route_bytes(&mut self, bytes: &[u8]) -> bool {
+        if self.resize_mode {
+            // Resize mode owns the burst: arrows resize, exits hand the
+            // remainder back to the normal router (the key that cancelled
+            // still does its job).
+            return self.route_resize_bytes(bytes);
+        }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
         let mut detached = false;
         let mut index = 0;
@@ -776,16 +793,33 @@ impl Session {
                     Some(ManagementKey::SplitDown) => self.split_pane(false),
                     Some(ManagementKey::KillPane) => self.kill_focused_pane(),
                     Some(ManagementKey::NewWindow) => self.new_window_in_session(),
-                    None => match prefix_command(byte) {
-                        PrefixKey::Detach => detached = true,
-                        PrefixKey::CyclePane => self.cycle_pane(),
-                        PrefixKey::NextWindow => self.switch_window(1),
-                        PrefixKey::PrevWindow => self.switch_window(-1),
-                        PrefixKey::NextSession => self.switch_session(1),
-                        PrefixKey::PrevSession => self.switch_session(-1),
-                        PrefixKey::Respawn => self.respawn_if_dead(),
-                        PrefixKey::None => {}
-                    },
+                    Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
+                    Some(ManagementKey::SwapNext) => self.swap_pane(1),
+                    None => {
+                        // The resize chord: a sticky mode — arrows adjust
+                        // the focused pane's edges until Enter/Escape/q.
+                        if byte == self.management.resize {
+                            self.enter_resize_mode();
+                            continue;
+                        }
+                        // The help chord: the bindings panel, printed as
+                        // plain text (passthrough has no overlay surface;
+                        // the pane's next output redraws over it).
+                        if byte == self.management.help {
+                            self.show_help();
+                            continue;
+                        }
+                        match prefix_command(byte) {
+                            PrefixKey::Detach => detached = true,
+                            PrefixKey::CyclePane => self.cycle_pane(),
+                            PrefixKey::NextWindow => self.switch_window(1),
+                            PrefixKey::PrevWindow => self.switch_window(-1),
+                            PrefixKey::NextSession => self.switch_session(1),
+                            PrefixKey::PrevSession => self.switch_session(-1),
+                            PrefixKey::Respawn => self.respawn_if_dead(),
+                            PrefixKey::None => {}
+                        }
+                    }
                 }
             } else if byte == self.prefix {
                 self.prefix_pending = true;
@@ -804,6 +838,115 @@ impl Session {
         }
         self.send_chunked(&to_send);
         detached
+    }
+
+    /// Enter the sticky resize mode (the `resize` chord): arrows adjust
+    /// the focused pane's edges until Enter/Escape/`q` — tmux's resize
+    /// step with an explicit mode instead of repeat-time. The flash cue
+    /// rides the pump's flash path so the user can see the mode is up.
+    fn enter_resize_mode(&mut self) {
+        self.resize_mode = true;
+        self.flash = Some(format!(
+            "resize — arrows move the edge by {}, Enter/q exits",
+            self.resize_step
+        ));
+    }
+
+    /// Resize-mode byte routing: arrow CSI sequences (`ESC [ A..D`) send
+    /// one resize step for the focused pane (`resize-pane -t <pane>
+    /// -L|-R|-U|-D <step>`, the wire's relative form); `q`/Enter exit; any
+    /// other byte exits the mode and is reprocessed by the normal router
+    /// (the key that cancelled still does its job). Returns true on
+    /// detach.
+    fn route_resize_bytes(&mut self, bytes: &[u8]) -> bool {
+        let mut index = 0;
+        while index < bytes.len() {
+            match &bytes[index..] {
+                [0x1b, b'[', dir, ..] if (b'A'..=b'D').contains(dir) => {
+                    self.resize_step_cmd(*dir);
+                    index += 3;
+                }
+                _ => {
+                    let exits = matches!(bytes[index], b'q' | b'\r');
+                    self.resize_mode = false;
+                    index += usize::from(exits);
+                    // The remainder — including the cancelling byte unless
+                    // it was a clean exit key — routes normally.
+                    return self.route_bytes(&bytes[index..]);
+                }
+            }
+        }
+        false
+    }
+
+    /// One resize step in the arrow's direction: the wire's relative form
+    /// (`resize-pane -t <pane> -U <step>` etc.). Best-effort — the
+    /// daemon's repaint rides the pane's %output stream either way.
+    fn resize_step_cmd(&mut self, arrow: u8) {
+        let flag = match arrow {
+            b'A' => "-U",
+            b'B' => "-D",
+            b'C' => "-R",
+            _ => "-L",
+        };
+        let _ = self.conn.send_checked(&format!(
+            "resize-pane -t {} {flag} {}",
+            self.pane, self.resize_step
+        ));
+    }
+
+    /// prefix { / }: swap the focused pane with its layout-order neighbor
+    /// (`swap-pane -s <focused> -t <neighbor>`); fewer than two panes is
+    /// a no-op. The daemon's %layout-change / output stream carries the
+    /// visual swap.
+    fn swap_pane(&mut self, direction: i32) {
+        let Ok(reply) = self
+            .conn
+            .send_checked(&format!("list-panes -t {}", self.window))
+        else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let panes: Vec<String> = reply
+            .body
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|p| p.starts_with('%'))
+            .map(str::to_string)
+            .collect();
+        if panes.len() < 2 {
+            return;
+        }
+        let Some(position) = panes.iter().position(|p| *p == self.pane) else {
+            return;
+        };
+        let next = (position as i32 + direction).rem_euclid(panes.len() as i32) as usize;
+        let _ = self
+            .conn
+            .send_checked(&format!("swap-pane -s {} -t {}", self.pane, panes[next]));
+    }
+
+    /// prefix ?: the bindings panel. Passthrough has no overlay surface —
+    /// the pane's own output owns the screen — so the panel prints as
+    /// plain text (the same category rows the render-mode modal composes;
+    /// filter/scroll are modal-only controls) and the pane's next output
+    /// redraws over it (the documented passthrough help shape).
+    fn show_help(&mut self) {
+        let mut out = String::new();
+        for row in help_rows(
+            self.prefix,
+            self.reload_key,
+            self.management,
+            self.resize_step,
+        ) {
+            out.push_str(&row.text);
+            out.push_str("\r\n");
+        }
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
     }
 
     /// prefix + arrow: every arrow cycles panes in Phase A (tmux's o).
@@ -964,6 +1107,8 @@ impl Session {
             k if k == m.split_down => Some(ManagementKey::SplitDown),
             k if k == m.kill_pane => Some(ManagementKey::KillPane),
             k if k == m.new_window => Some(ManagementKey::NewWindow),
+            k if k == m.swap_prev => Some(ManagementKey::SwapPrev),
+            k if k == m.swap_next => Some(ManagementKey::SwapNext),
             _ => None,
         }
     }
@@ -1069,11 +1214,13 @@ impl Session {
             prefix: self.prefix,
             reload: self.reload_key,
             management: self.management,
+            resize_step: self.resize_step,
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;
                 self.reload_key = new_chords.reload;
                 self.management = new_chords.management;
+                self.resize_step = new_chords.resize_step;
                 self.flash = Some("config reloaded".to_string());
             }
             Err(err) => {
@@ -1305,6 +1452,223 @@ pub(crate) enum ManagementKey {
     KillPane,
     /// New window in the focused pane's session (`new-window`).
     NewWindow,
+    /// Swap the focused pane with the previous pane in layout order
+    /// (`swap-pane`).
+    SwapPrev,
+    /// Swap the focused pane with the next pane in layout order
+    /// (`swap-pane`).
+    SwapNext,
+}
+
+/// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
+/// Space spelling), the literal character otherwise.
+pub(crate) fn spell_key(byte: u8) -> String {
+    match byte {
+        0 => "C-Space".to_string(),
+        b if (1..27).contains(&b) => format!("C-{}", (b - 1 + b'a') as char),
+        other => (other as char).to_string(),
+    }
+}
+
+/// One help panel row: the text and whether it renders as an accent row
+/// (category headers). Data for [`help_rows`]/[`compose_help_panel`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HelpRow {
+    pub text: String,
+    pub accent: bool,
+}
+
+/// The bindings help panel's category rows from the LIVE chord state — a
+/// remapped chord shows its remapped key. Render mode composes the modal
+/// panel over these ([`compose_help_panel`]); passthrough prints the same
+/// rows as plain text (the documented shape).
+pub(crate) fn help_rows(
+    prefix: u8,
+    reload: u8,
+    m: crate::mux::config::Management,
+    resize_step: u32,
+) -> Vec<HelpRow> {
+    let p = spell_key(prefix);
+    let mut rows: Vec<HelpRow> = Vec::new();
+    let push_cat = |rows: &mut Vec<HelpRow>, title: &str, entries: Vec<(String, String)>| {
+        rows.push(HelpRow {
+            text: format!(" {title} "),
+            accent: true,
+        });
+        let width = entries
+            .iter()
+            .map(|(k, _)| k.chars().count())
+            .max()
+            .unwrap_or(0);
+        for (key, desc) in entries {
+            rows.push(HelpRow {
+                text: format!(" {:width$}  {}", key, desc, width = width),
+                accent: false,
+            });
+        }
+    };
+    push_cat(
+        &mut rows,
+        "global",
+        vec![
+            (format!("{p} {p}"), "type a literal prefix".to_string()),
+            (format!("{p} d"), "detach".to_string()),
+            (format!("{p} {}", spell_key(m.help)), "keybinds".to_string()),
+            (
+                format!("{p} {}", spell_key(reload)),
+                "reload the config".to_string(),
+            ),
+            (format!("{p} r"), "respawn the held-dead pane".to_string()),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "panes",
+        vec![
+            (
+                format!("{p} {}", spell_key(m.split_right)),
+                "split right".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.split_down)),
+                "split down".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.kill_pane)),
+                "kill the focused pane".to_string(),
+            ),
+            (format!("{p} o"), "cycle panes".to_string()),
+            (
+                format!(
+                    "{p} {} / {}",
+                    spell_key(m.swap_prev),
+                    spell_key(m.swap_next)
+                ),
+                "swap pane prev/next".to_string(),
+            ),
+            (
+                format!("{p} {} arrows", spell_key(m.resize)),
+                format!("resize mode, edge moves by {resize_step}"),
+            ),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "windows/sessions",
+        vec![
+            (
+                format!("{p} {}", spell_key(m.new_window)),
+                "new window".to_string(),
+            ),
+            (format!("{p} n / p"), "next / previous window".to_string()),
+            (format!("{p} ( / )"), "previous / next session".to_string()),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "navigation",
+        vec![
+            (
+                "click".to_string(),
+                "focus the pane under the pointer".to_string(),
+            ),
+            (format!("{p} ["), "scroll the pane's history".to_string()),
+            (
+                "wheel".to_string(),
+                "scrollback; forwarded when the pane owns mouse".to_string(),
+            ),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "mouse",
+        vec![
+            (
+                "click near divider".to_string(),
+                "focuses (a bare click still focuses)".to_string(),
+            ),
+            (
+                "drag divider".to_string(),
+                "resize the adjacent split".to_string(),
+            ),
+        ],
+    );
+    rows
+}
+
+/// The help panel's footer/controls line (render mode).
+pub(crate) const HELP_FOOTER: &str = " search / · scroll j/k/arrows/pgup/pgdn · close esc/enter ";
+
+/// Compose the rendered help panel from the category rows: the bordered,
+/// titled modal (title `keybinds`, `esc close` badge top-right), the
+/// filter box when one is active, the filter's matching rows (headers
+/// hide when nothing beneath them matches) windowed to `visible` rows at
+/// `scroll`, the bottom border, and the footer controls line. Pure over
+/// its inputs — the unit-test surface for the panel.
+pub(crate) fn compose_help_panel(
+    rows: &[HelpRow],
+    filter: &str,
+    visible: usize,
+    scroll: usize,
+) -> Vec<HelpRow> {
+    let lower = filter.to_lowercase();
+    let mut content: Vec<HelpRow> = Vec::new();
+    let mut pending_header: Option<HelpRow> = None;
+    for row in rows {
+        if row.accent {
+            pending_header = Some(row.clone());
+        } else if lower.is_empty() || row.text.to_lowercase().contains(&lower) {
+            if let Some(header) = pending_header.take() {
+                content.push(header);
+            }
+            content.push(row.clone());
+        }
+    }
+    let content_len = content.len();
+    let max_start = content_len.saturating_sub(visible);
+    let start = scroll.min(max_start);
+    let window: Vec<HelpRow> = content[start..(start + visible.min(content_len - start))].to_vec();
+
+    let width = rows
+        .iter()
+        .map(|r| r.text.chars().count())
+        .max()
+        .unwrap_or(HELP_FOOTER.chars().count())
+        .max(HELP_FOOTER.chars().count());
+    let title = " keybinds ";
+    let badge = " esc close ";
+    let mut panel: Vec<HelpRow> = Vec::new();
+    let mut top = format!("╭{title}");
+    top.push_str(
+        &"─".repeat(width.saturating_sub(title.chars().count() + badge.chars().count() - 1)),
+    );
+    top.push_str(badge);
+    top.push('╮');
+    panel.push(HelpRow {
+        text: top,
+        accent: true,
+    });
+    if !filter.is_empty() {
+        panel.push(HelpRow {
+            text: format!(" /{filter}▌"),
+            accent: false,
+        });
+    }
+    for row in window {
+        panel.push(row.clone());
+    }
+    panel.push(HelpRow {
+        text: format!(
+            "╰{}╯",
+            "─".repeat(width + title.chars().count() + badge.chars().count())
+        ),
+        accent: true,
+    });
+    panel.push(HelpRow {
+        text: HELP_FOOTER.to_string(),
+        accent: false,
+    });
+    panel
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
@@ -1343,7 +1707,19 @@ pub(crate) struct Stdin {
 
 impl Stdin {
     fn new() -> Self {
+        Self::new_with_primer(Vec::new())
+    }
+
+    /// Like [`Self::new`], but `primer` bytes are delivered to the pump
+    /// BEFORE anything the tty delivers afterward. The OSC 11 background
+    /// probe consumes stdin bytes during its window (keystrokes that land
+    /// between the query and the deadline); this is how they get back
+    /// into the stream instead of being eaten.
+    fn new_with_primer(primer: Vec<u8>) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(64);
+        if !primer.is_empty() {
+            let _ = tx.send(Ok(primer));
+        }
         std::thread::spawn(move || {
             use std::io::Read as _;
             let mut handle = std::io::stdin().lock();
@@ -1907,6 +2283,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         // Plain bytes forward when the pane is live.
@@ -1942,6 +2320,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         assert!(
@@ -1980,6 +2360,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         let line = session.status_line();
@@ -2029,6 +2411,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
 
@@ -2104,6 +2488,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         session.emulator.feed(b"\x1b[5;3H");
@@ -2148,6 +2534,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         // The fake daemon answers every unknown command with an ok empty
@@ -2257,6 +2645,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         // A status draw writes to the process stdout; in tests that is
@@ -2433,6 +2823,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         session.drawn_size = Some((80, 24));
@@ -2503,6 +2895,7 @@ mod tests {
                 prefix: session.prefix,
                 reload: session.reload_key,
                 management: session.management,
+                ..crate::mux::config::Chords::with_defaults()
             },
         )
         .expect("chords parse");
@@ -2529,6 +2922,212 @@ mod tests {
         }
     }
 
+    /// prefix R (the resize chord) enters the sticky resize mode; each
+    /// arrow sends the wire's relative resize-pane for the FOCUSED pane
+    /// at the configured step; q exits and normal forwarding resumes.
+    #[test]
+    fn resize_chord_arrows_send_resize_pane_and_q_exits() {
+        let (rx, mut session) = management_session("resize-chord");
+        assert!(
+            !session.route_bytes(&[0x02, b'R']),
+            "the resize chord enters the mode"
+        );
+        assert!(session.resize_mode, "the mode is sticky");
+        // Right arrow: the wire's relative form at the default step 1.
+        assert!(!session.route_bytes(b"\x1b[C"));
+        assert_eq!(
+            wait_for_line(&rx, "resize-pane"),
+            "resize-pane -t %0 -R 1",
+            "the right arrow resizes the focused pane's right edge"
+        );
+        // Up arrow: -U at the same step.
+        assert!(!session.route_bytes(b"\x1b[A"));
+        assert_eq!(
+            wait_for_line(&rx, "resize-pane"),
+            "resize-pane -t %0 -U 1",
+            "the up arrow is -U"
+        );
+        // q exits; typing forwards again afterward.
+        assert!(!session.route_bytes(b"q"));
+        assert!(!session.resize_mode);
+        assert!(!session.route_bytes(b"z"));
+        assert_eq!(
+            wait_for_line(&rx, "send-keys"),
+            "send-keys -t %0 -H 7a",
+            "typing forwards after the mode exits"
+        );
+    }
+
+    /// In resize mode, a non-arrow key exits the mode and is REPROCESSED
+    /// by the normal router (the cancelling key still does its job — as
+    /// plain typing, since chords always need the prefix).
+    #[test]
+    fn resize_mode_cancelling_key_reprocesses_normally() {
+        let (rx, mut session) = management_session("resize-cancel");
+        assert!(!session.route_bytes(&[0x02, b'R']));
+        // 'x' exits and reprocesses: a plain byte forwards to the pane.
+        assert!(!session.route_bytes(b"x"));
+        assert!(!session.resize_mode);
+        assert_eq!(
+            wait_for_line(&rx, "send-keys"),
+            "send-keys -t %0 -H 78",
+            "the cancelling key routed through the normal router"
+        );
+    }
+
+    /// Config overrides: a resize-step of 3 rides each arrow, and a
+    /// remapped resize chord (Z) enters the mode while the old default
+    /// key is consumed unbound.
+    #[test]
+    fn resize_chord_and_step_follow_the_config() {
+        let file: crate::mux::config::ConfigFile =
+            toml::from_str("[client]\nresize = \"Z\"\nresize-step = 3\n").expect("parse");
+        let (rx, mut session) = management_session("resize-cfg");
+        let chords = crate::mux::config::reload_client_chords(
+            &file,
+            &crate::mux::config::Chords {
+                prefix: session.prefix,
+                reload: session.reload_key,
+                management: session.management,
+                ..crate::mux::config::Chords::with_defaults()
+            },
+        )
+        .expect("chords parse");
+        session.management = chords.management;
+        session.resize_step = chords.resize_step;
+        assert!(!session.route_bytes(&[0x02, b'Z']));
+        assert!(session.resize_mode, "the REMAPPED key enters the mode");
+        assert!(!session.route_bytes(b"\x1b[C"));
+        assert_eq!(
+            wait_for_line(&rx, "resize-pane"),
+            "resize-pane -t %0 -R 3",
+            "the configured step rides the arrow"
+        );
+        // The old default key R is consumed unbound (nothing rides the
+        // wire); drain the burst first, then require quiet.
+        while rx
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_ok()
+        {}
+        assert!(!session.route_bytes(&[0x02, b'R']));
+        match rx.recv_timeout(std::time::Duration::from_millis(300)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            other => panic!("the old key must be consumed, not acted on: {other:?}"),
+        }
+    }
+
+    /// prefix {: swap with the layout-order neighbor — `swap-pane -s
+    /// <focused> -t <prev>` — from the same list-panes roster cycle_pane
+    /// walks.
+    #[test]
+    fn swap_prev_chord_sends_swap_pane() {
+        let (rx, mut session) = management_session("swap-prev");
+        assert!(!session.route_bytes(&[0x02, b'{']));
+        let line = wait_for_line(&rx, "swap-pane");
+        assert_eq!(
+            line, "swap-pane -s %0 -t %1",
+            "focused %0 swaps with its next-roster neighbor (wraps to %1)"
+        );
+    }
+
+    /// prefix ?: the bindings panel prints as plain text with the LIVE
+    /// chords — a remapped split chord shows its remapped key, and the
+    /// category headers are present.
+    #[test]
+    fn help_rows_carry_effective_bindings_and_categories() {
+        use crate::mux::config::Management;
+        let rows = super::help_rows(
+            0x02,
+            0x12,
+            Management {
+                split_right: b's',
+                ..Management::default()
+            },
+            2,
+        );
+        let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        let joined = text.join("\n");
+        for category in ["global", "panes", "windows/sessions", "navigation", "mouse"] {
+            assert!(
+                text.iter().any(|t| t.contains(category)),
+                "the category header {category} is present: {joined}"
+            );
+        }
+        // Effective bindings: the remapped split shows s, not %.
+        assert!(
+            text.iter()
+                .any(|t| t.starts_with(" C-b s") && t.contains("split right")),
+            "the remapped chord shows its remapped key: {joined}"
+        );
+        assert!(
+            !text.iter().any(|t| t.contains("C-b %")),
+            "the old default spelling is gone: {joined}"
+        );
+        // The resize step surfaces in the resize row.
+        assert!(
+            text.iter().any(|t| t.contains("edge moves by 2")),
+            "the step reflects the live config: {joined}"
+        );
+    }
+
+    /// The help panel compose: bordered modal with title and badge, the
+    /// filter narrows rows live (headers hide when nothing beneath them
+    /// matches), the window scrolls, and the footer line names the
+    /// controls.
+    #[test]
+    fn compose_help_panel_filters_scrolls_and_chromes() {
+        let rows = super::help_rows(0x02, 0x12, Default::default(), 1);
+        // Full panel: title, badge, categories, footer.
+        let panel = super::compose_help_panel(&rows, "", 100, 0);
+        let text: Vec<&str> = panel.iter().map(|r| r.text.as_str()).collect();
+        assert!(
+            text[0].starts_with('╭')
+                && text[0].contains("keybinds")
+                && text[0].contains("esc close"),
+            "the top border carries title and badge: {}",
+            text[0]
+        );
+        assert!(
+            text.last()
+                .copied()
+                .unwrap_or("")
+                .contains("close esc/enter"),
+            "the footer names the controls"
+        );
+        // Filter: "swap" keeps only the swap rows (and their header).
+        let filtered = super::compose_help_panel(&rows, "swap", 100, 0);
+        let ftext: String = filtered
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(ftext.contains("swap"), "the matching rows survive: {ftext}");
+        assert!(
+            ftext.contains("panes"),
+            "the matching rows' header survives"
+        );
+        assert!(!ftext.contains("detach"), "non-matching rows drop: {ftext}");
+        assert!(
+            !ftext.contains(" global "),
+            "a category with no matching rows hides: {ftext}"
+        );
+        // Filter box drawn while active.
+        assert!(
+            ftext.contains("/swap▌"),
+            "the filter box shows the live filter: {ftext}"
+        );
+        // Scroll: a tiny window shows a slice, and scrolling past the end
+        // clamps.
+        let small = super::compose_help_panel(&rows, "", 3, 0);
+        let big = super::compose_help_panel(&rows, "", 3, 10_000);
+        assert_ne!(small[1..4], big[1..4], "scrolling moves the window");
+        assert_eq!(
+            super::compose_help_panel(&rows, "", 3, 10_000).len(),
+            small.len(),
+            "the panel shape is stable under scroll"
+        );
+    }
+
     /// A management chord spelling that does not parse is a reload error
     /// (the flash), not a silent keep-the-old.
     #[test]
@@ -2542,6 +3141,7 @@ mod tests {
                     prefix: 0x02,
                     reload: 0x12,
                     management: crate::mux::config::Management::default(),
+                    resize_step: 1,
                 },
             )
             .is_err(),
@@ -2601,6 +3201,8 @@ mod tests {
             prefix_pending: false,
             reload_key: 0x12,
             management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
             flash: None,
         };
         // A config naming a new prefix (C-a) and a moved reload chord
@@ -2616,6 +3218,7 @@ mod tests {
                 prefix: session.prefix,
                 reload: session.reload_key,
                 management: session.management,
+                ..crate::mux::config::Chords::with_defaults()
             },
         )
         .expect("chords parse");
@@ -2648,6 +3251,7 @@ mod tests {
                     prefix: 0x02,
                     reload: 0x12,
                     management: crate::mux::config::Management::default(),
+                    ..crate::mux::config::Chords::with_defaults()
                 }
             )
             .is_err(),
@@ -2666,7 +3270,12 @@ mod tests {
                     split_down: b'*',
                     kill_pane: b'X',
                     new_window: b'C',
+                    resize: b'R',
+                    swap_prev: b'{',
+                    swap_next: b'}',
+                    help: b'?',
                 },
+                resize_step: 1,
             },
         )
         .expect("partial file");
@@ -2680,7 +3289,12 @@ mod tests {
                     split_down: b'*',
                     kill_pane: b'X',
                     new_window: b'C',
+                    resize: b'R',
+                    swap_prev: b'{',
+                    swap_next: b'}',
+                    help: b'?',
                 },
+                resize_step: 1,
             }
         );
     }

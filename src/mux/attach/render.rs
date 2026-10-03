@@ -168,6 +168,20 @@ impl PaneEmulator {
     }
 }
 
+/// One divider boundary between two adjacent layout rects: the
+/// orientation and the pane ids on the left/above (`a`) and
+/// right/below (`b`). The drag hit-test returns it; the drag state and
+/// the renderer's highlight carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DividerHit {
+    /// A vertical boundary (a left of b)?
+    pub vertical: bool,
+    /// The pane left of (or above) the boundary.
+    pub a: u32,
+    /// The pane right of (or below) the boundary.
+    pub b: u32,
+}
+
 /// The frame renderer: pane emulators + layout rects + the double buffers
 /// the damage diff reads.
 pub struct PaneRenderer {
@@ -185,6 +199,12 @@ pub struct PaneRenderer {
     /// default the ratatui buffer starts at (the light-grey strips a
     /// dark-theme host showed around unpainted areas).
     bg: RtColor,
+    /// The divider currently dragged (orientation + pane ids), drawn
+    /// reversed so the edge being moved stands out.
+    drag_divider: Option<(bool, u32, u32)>,
+    /// The help overlay's lines, painted centered over the frame while
+    /// `Some` (the help chord).
+    overlay: Option<Vec<String>>,
     /// The frame being painted.
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
@@ -204,6 +224,8 @@ impl PaneRenderer {
             height,
             glyphs,
             bg: RtColor::Rgb(0, 0, 0),
+            drag_divider: None,
+            overlay: None,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
             dirty: true,
@@ -294,6 +316,72 @@ impl PaneRenderer {
     /// The focused pane id.
     pub fn focused(&self) -> Option<u32> {
         self.focused
+    }
+
+    /// Mark the divider being dragged (orientation + pane ids) or clear
+    /// the mark. The dragged divider renders reversed while the drag
+    /// lasts.
+    pub fn set_drag_divider(&mut self, divider: Option<(bool, u32, u32)>) {
+        if self.drag_divider != divider {
+            self.drag_divider = divider;
+            self.dirty = true;
+        }
+    }
+
+    /// Set (or clear) the help overlay's lines. The overlay paints
+    /// centered and reverse-video over the frame; clearing it lets the
+    /// next frame's pane repaint restore the covered cells.
+    pub fn set_overlay(&mut self, lines: Option<Vec<String>>) {
+        if self.overlay != lines {
+            self.overlay = lines;
+            self.dirty = true;
+        }
+    }
+
+    /// The divider within `tol` cells of window-relative `(x, y)`, if any
+    /// — the shared edge of the two rects it separates. Dividers draw on
+    /// the left/top pane's last column/row (the daemon's geometry tiles
+    /// exactly), so the test measures against that cell line.
+    pub fn divider_near(&self, x: u16, y: u16, tol: i32) -> Option<DividerHit> {
+        let px = i32::from(x);
+        let py = i32::from(y);
+        for (i, first) in self.layout.iter().enumerate() {
+            for second in self.layout.iter().skip(i + 1) {
+                // Order the pair along each axis; only the side-by-side
+                // (or stacked) case is a boundary.
+                let (l, r) = if first.x <= second.x {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                let (t, b) = if first.y <= second.y {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                if l.x + l.width == r.x && rows_overlap(l, r) {
+                    let div = i32::from(r.x) - 1;
+                    if (px - div).abs() <= tol {
+                        return Some(DividerHit {
+                            vertical: true,
+                            a: l.pane,
+                            b: r.pane,
+                        });
+                    }
+                }
+                if t.y + t.height == b.y && cols_overlap(t, b) {
+                    let div = i32::from(b.y) - 1;
+                    if (py - div).abs() <= tol {
+                        return Some(DividerHit {
+                            vertical: false,
+                            a: t.pane,
+                            b: b.pane,
+                        });
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// The terminal cursor position for the focused pane, mapped through
@@ -484,12 +572,16 @@ impl PaneRenderer {
         self.buffer
             .set_style(RtRect::new(0, 0, self.width, self.height), bg_style);
 
-        // Paint every pane's grid into its rect, then the dividers on top.
+        // Paint every pane's grid into its rect, then the dividers on top,
+        // then the help overlay last (it covers both).
         let layout = self.layout.clone();
         for rect in &layout {
             self.paint_pane(rect);
         }
         self.paint_dividers();
+        if let Some(lines) = self.overlay.clone() {
+            self.paint_overlay(&lines);
+        }
 
         let diff = self
             .prev_buffer
@@ -576,45 +668,47 @@ impl PaneRenderer {
         if self.layout.len() < 2 {
             return;
         }
-        let mut vertical: Vec<(u16, u16)> = Vec::new();
-        let mut horizontal: Vec<(u16, u16)> = Vec::new();
+        // (x, y, left/top pane, right/bottom pane) per boundary cell; the
+        // pane ids drive the focus-side style and the drag highlight.
+        let mut vertical: Vec<(u16, u16, u32, u32)> = Vec::new();
+        let mut horizontal: Vec<(u16, u16, u32, u32)> = Vec::new();
         for (i, a) in self.layout.iter().enumerate() {
             for b in self.layout.iter().skip(i + 1) {
                 // `a` ends where `b` starts along x, with row overlap: a
-                // vertical boundary.
+                // vertical boundary (divider cell in a's last column).
                 if a.x + a.width == b.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((b.x.saturating_sub(1), y));
+                        vertical.push((b.x.saturating_sub(1), y, a.pane, b.pane));
                     }
                 }
                 if b.x + b.width == a.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((a.x.saturating_sub(1), y));
+                        vertical.push((a.x.saturating_sub(1), y, b.pane, a.pane));
                     }
                 }
                 // Same along y for a horizontal boundary.
                 if a.y + a.height == b.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((x, b.y.saturating_sub(1)));
+                        horizontal.push((x, b.y.saturating_sub(1), a.pane, b.pane));
                     }
                 }
                 if b.y + b.height == a.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((x, a.y.saturating_sub(1)));
+                        horizontal.push((x, a.y.saturating_sub(1), b.pane, a.pane));
                     }
                 }
             }
         }
-        for (x, y) in &vertical {
+        for (x, y, a, b) in &vertical {
             let cell = &mut self.buffer[(*x, *y)];
             cell.reset();
             cell.set_bg(self.bg);
             cell.set_symbol(self.glyphs.vertical());
-            cell.set_style(divider_style(self.focused, &self.layout, *x, *y));
+            cell.set_style(divider_style(self.focused, self.drag_divider, true, *a, *b));
         }
-        for (x, y) in &horizontal {
+        for (x, y, a, b) in &horizontal {
             // A cell that is also a vertical boundary becomes the junction.
-            if vertical.contains(&(*x, *y)) {
+            if vertical.iter().any(|(vx, vy, _, _)| vx == x && vy == y) {
                 let cell = &mut self.buffer[(*x, *y)];
                 cell.set_symbol(self.glyphs.cross());
             } else {
@@ -622,36 +716,77 @@ impl PaneRenderer {
                 cell.reset();
                 cell.set_bg(self.bg);
                 cell.set_symbol(self.glyphs.horizontal());
-                cell.set_style(divider_style(self.focused, &self.layout, *x, *y));
+                cell.set_style(divider_style(
+                    self.focused,
+                    self.drag_divider,
+                    false,
+                    *a,
+                    *b,
+                ));
+            }
+        }
+    }
+
+    /// Paint the help overlay: a centered, reverse-video block of the
+    /// binding lines, clamped to the window. It paints last in
+    /// `render_frame`, covering panes and dividers; dismissal lets the
+    /// next frame's pane repaint restore the covered cells.
+    fn paint_overlay(&mut self, lines: &[String]) {
+        let width = lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(self.width.saturating_sub(2) as usize);
+        let height = lines.len().min(self.height.saturating_sub(2) as usize);
+        let x0 = (self.width as usize).saturating_sub(width) / 2;
+        let y0 = (self.height as usize).saturating_sub(height) / 2;
+        let style = RtStyle::default().add_modifier(RtModifier::REVERSED);
+        for (i, line) in lines.iter().take(height).enumerate() {
+            let y = y0 + i;
+            for x in x0..x0 + width {
+                let cell = &mut self.buffer[(x as u16, y as u16)];
+                cell.reset();
+                cell.set_symbol(" ");
+                cell.set_style(style);
+            }
+            for (j, ch) in line.chars().take(width).enumerate() {
+                let cell = &mut self.buffer[((x0 + j) as u16, y as u16)];
+                cell.set_symbol(&ch.to_string());
             }
         }
     }
 }
 
-/// The focused pane's adjacent dividers render bright-cyan (plus bold) so
-/// the focus is visible against any theme — a modifier-only highlight
-/// showed as identical dividers on the owner's terminal. The rest stay
-/// dim with the default fg.
-fn divider_style(focused: Option<u32>, layout: &[PaneRect], x: u16, y: u16) -> RtStyle {
-    let near_focus = focused.is_some_and(|focus| {
-        layout.iter().filter(|r| r.pane == focus).any(|r| {
-            // The divider cell borders the focused rect: within one column
-            // of its x-extent (the boundary sits on either side of the
-            // edge) on a row the rect spans, or the same along y.
-            let right_edge = r.x + r.width;
-            let bottom_edge = r.y + r.height;
-            let x_adjacent = x + 1 >= r.x && x <= right_edge && (r.y..bottom_edge).contains(&y);
-            let y_adjacent = y + 1 >= r.y && y <= bottom_edge && (r.x..right_edge).contains(&x);
-            x_adjacent || y_adjacent
-        })
-    });
-    if near_focus {
-        RtStyle::default()
-            .fg(RtColor::Indexed(14)) // bright cyan: indexed accent, legible on dark and light
-            .add_modifier(RtModifier::BOLD)
-    } else {
-        RtStyle::default().add_modifier(RtModifier::DIM)
+/// A boundary's style. The focus indication must FLIP when focus moves in
+/// a two-pane split — both panes share one divider, so a single accent
+/// color read identically from either side (the owner's manual pass: "the
+/// border still does not change color"). The boundary carries the accent
+/// on the side it names: bright cyan when the focused pane is the
+/// boundary's left/top pane (`a`), bright magenta when it is the
+/// right/bottom pane (`b`), dim when the boundary does not touch the
+/// focus. While a drag is live on the boundary, the style renders
+/// reversed so the edge being moved stands out.
+fn divider_style(
+    focused: Option<u32>,
+    drag: Option<(bool, u32, u32)>,
+    vertical: bool,
+    a: u32,
+    b: u32,
+) -> RtStyle {
+    let mut style = match focused {
+        Some(f) if f == a => RtStyle::default()
+            .fg(RtColor::Indexed(14)) // bright cyan: the a-side accent
+            .add_modifier(RtModifier::BOLD),
+        Some(f) if f == b => RtStyle::default()
+            .fg(RtColor::Indexed(13)) // bright magenta: the b-side accent
+            .add_modifier(RtModifier::BOLD),
+        _ => RtStyle::default().add_modifier(RtModifier::DIM),
+    };
+    if drag == Some((vertical, a, b)) {
+        style = style.add_modifier(RtModifier::REVERSED);
     }
+    style
 }
 
 fn rows_overlap(a: &PaneRect, b: &PaneRect) -> bool {
@@ -912,7 +1047,7 @@ pub(crate) fn run_render_session(options: &super::AttachOptions) -> std::process
 
 fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     let path = options.socket_path();
-    let mut conn = super::conn::AttachConn::connect(&path)
+    let mut conn = crate::mux::attach::conn::AttachConn::connect(&path)
         .map_err(|_| format!("no daemon running on {}", path.display()))?;
     if let Some(warning) = &conn.warnings().stamp_mismatch {
         eprintln!("{warning}");
@@ -940,16 +1075,35 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     // A malformed chord fails the attach like a malformed prefix; a
     // broken FILE stays the lenient startup rule (warn-and-defaults —
     // the strict error is the reload's, per docs/MUX.md).
-    session.management = crate::mux::config::reload_client_chords(
+    let chords = crate::mux::config::reload_client_chords(
         &crate::mux::config::load_canonical(),
         &crate::mux::config::Chords {
             prefix: session.prefix,
             reload: session.reload_key,
             management: crate::mux::config::Management::default(),
+            ..crate::mux::config::Chords::with_defaults()
         },
     )
-    .map_err(|err| format!("config: {err}"))?
-    .management;
+    .map_err(|err| format!("config: {err}"))?;
+    session.management = chords.management;
+    session.resize_step = chords.resize_step;
+
+    // The OSC 11 background probe: raw mode is up and the pump's stdin
+    // reader has not started, so the probe is briefly the tty's only
+    // reader. The probed bg fills every frame cell (black stays the
+    // fallback), and a corrected set-client-colors rides the probe so the
+    // daemon's theme record follows the host.
+    let probe = super::conn::probe_background();
+    if let Some((r, g, b)) = probe.0 {
+        session.renderer.set_background(RtColor::Rgb(r, g, b));
+        let _ = conn.send_checked(&format!(
+            "set-client-colors -f ffffff -b {r:02x}{g:02x}{b:02x}"
+        ));
+    }
+    // Keystrokes the probe consumed get back into the stream instead of
+    // being eaten.
+    session.stdin_primer = probe.1;
+
     let outcome = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
 
     // Restore: leave the alt screen, release the mouse, show the cursor.
@@ -962,6 +1116,26 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     );
     outcome?;
     Ok(())
+}
+
+/// A divider drag in flight. `Pending` is a press near a divider that has
+/// not moved yet — it must not focus or forward (a divider press is not a
+/// click-through); the first motion promotes it to `Active`, which
+/// accumulates the pointer's signed cell delta from the press point for
+/// the pump's frame-cadence application.
+enum DragState {
+    Pending {
+        divider: DividerHit,
+        x: u16,
+        y: u16,
+    },
+    Active {
+        divider: DividerHit,
+        x: u16,
+        y: u16,
+        applied: i32,
+        pending: i32,
+    },
 }
 
 /// One render-mode session's live state: the window being mirrored, its
@@ -990,6 +1164,26 @@ struct WindowSession {
     /// new-window c): the key bytes matched after the prefix. Live
     /// rebindable by the reload.
     management: super::super::config::Management,
+    /// Cells per resize step (config `resize-step`): each arrow press in
+    /// resize mode and each cell of a divider drag.
+    resize_step: u32,
+    /// Sticky resize mode: arrows adjust the focused pane's edges; Enter,
+    /// Escape, and `q` exit; any other key leaves the mode (consumed —
+    /// keys must not leak into the pane during a modal chord).
+    resize_mode: bool,
+    /// The bindings help panel is up (any key dismisses it).
+    help_mode: bool,
+    /// The help panel's filter box state (the `/` control).
+    help_filter: String,
+    /// Whether the filter box is actively typing.
+    help_filtering: bool,
+    /// The help panel's content-window scroll offset.
+    help_scroll: usize,
+    /// The divider drag in flight, if any.
+    drag: Option<DragState>,
+    /// Stdin bytes the OSC 11 background probe consumed before the pump
+    /// started — primed back into the stdin stream on the first pump.
+    stdin_primer: Vec<u8>,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -1016,10 +1210,18 @@ impl WindowSession {
             status_row: status::StatusRow::new(cols),
             status_dirty: true,
             scroll_mode: false,
-            prefix: super::C_B,
+            prefix: crate::mux::attach::C_B,
             reload_key: 0x12, // C-r
             management: super::super::config::Management::default(),
-            literal: super::C_B,
+            resize_step: 1,
+            resize_mode: false,
+            help_mode: false,
+            help_filter: String::new(),
+            help_filtering: false,
+            help_scroll: 0,
+            drag: None,
+            stdin_primer: Vec::new(),
+            literal: crate::mux::attach::C_B,
             flash: None,
             flash_ticks: 0,
             cursor_placed: Some(None),
@@ -1030,7 +1232,7 @@ impl WindowSession {
     /// the frames.
     fn run(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         target: Option<&str>,
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
@@ -1045,7 +1247,7 @@ impl WindowSession {
     /// layout, then replay every pane's screen into its emulator.
     fn seed(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         target: Option<&str>,
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
@@ -1113,10 +1315,10 @@ impl WindowSession {
     /// size (SIGWINCH lands as a size change), frame at cadence.
     fn pump(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
-        let mut stdin = super::Stdin::new();
+        let mut stdin = super::Stdin::new_with_primer(std::mem::take(&mut self.stdin_primer));
         let mut prefix_pending = false;
         let mut current_size = self.renderer.window_size();
         loop {
@@ -1195,6 +1397,9 @@ impl WindowSession {
                     self.draw_status_row();
                 }
             }
+            // 3c. Divider drag: apply the accumulated delta at frame
+            //     cadence — one resize-pane per unapplied cell.
+            self.apply_drag(conn);
             self.frame(sink);
             match conn.recv_timeout(super::POLL) {
                 Ok(event) => {
@@ -1272,7 +1477,7 @@ impl WindowSession {
 
     /// Replay every visible pane's state into its emulator (the seed and
     /// the post-resize re-seed share this).
-    fn replay_all_panes(&mut self, conn: &mut super::conn::AttachConn) {
+    fn replay_all_panes(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         for rect in self.renderer.layout().to_vec() {
             let pane = format!("%{}", rect.pane);
             if let Ok(reply) = conn.send_checked(&format!("refresh-client -t {pane}")) {
@@ -1292,7 +1497,7 @@ impl WindowSession {
     /// session.
     fn pump_stdin(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         stdin: &mut super::Stdin,
         prefix_pending: &mut bool,
     ) -> bool {
@@ -1318,6 +1523,14 @@ impl WindowSession {
                                 }
                                 if self.scroll_mode {
                                     self.scroll_mode_key(&ev);
+                                    continue;
+                                }
+                                if self.help_mode {
+                                    self.help_key(&ev);
+                                    continue;
+                                }
+                                if self.resize_mode {
+                                    self.resize_mode_key(conn, &ev);
                                     continue;
                                 }
                                 let focused = self.focused_pane();
@@ -1348,9 +1561,24 @@ impl WindowSession {
     fn route_plain(
         &mut self,
         bytes: &[u8],
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         prefix_pending: &mut bool,
     ) -> bool {
+        if self.help_mode {
+            for &byte in bytes {
+                if !self.help_byte(byte) {
+                    return false;
+                }
+            }
+            return false;
+        }
+        if self.resize_mode {
+            // Resize mode owns plain runs: the bytes are typed keys that
+            // would leak into the pane, so the run exits the mode and is
+            // consumed whole (arrows arrive as Key tokens, not bytes).
+            self.resize_mode = false;
+            return false;
+        }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if *prefix_pending {
@@ -1370,10 +1598,23 @@ impl WindowSession {
                     b if b == self.management.split_down => Some(ManagementKey::SplitDown),
                     b if b == self.management.kill_pane => Some(ManagementKey::KillPane),
                     b if b == self.management.new_window => Some(ManagementKey::NewWindow),
+                    b if b == self.management.swap_prev => Some(ManagementKey::SwapPrev),
+                    b if b == self.management.swap_next => Some(ManagementKey::SwapNext),
                     _ => None,
                 };
                 if let Some(key) = management {
                     self.management_chord(key, conn);
+                    continue;
+                }
+                // The resize chord: a sticky mode — arrows adjust the
+                // focused pane's edges until Enter/Escape/q.
+                if byte == self.management.resize {
+                    self.enter_resize_mode();
+                    continue;
+                }
+                // The help chord: the bindings overlay over the frame.
+                if byte == self.management.help {
+                    self.enter_help();
                     continue;
                 }
                 match byte {
@@ -1415,12 +1656,174 @@ impl WindowSession {
         false
     }
 
+    /// Enter the sticky resize mode (the `resize` chord): arrows adjust
+    /// the focused pane's edges until Enter/Escape/`q` — tmux's resize
+    /// step with an explicit mode instead of repeat-time. The flash cue
+    /// rides the frame cadence on the status row.
+    fn enter_resize_mode(&mut self) {
+        self.resize_mode = true;
+        self.flash = Some(format!(
+            "resize — arrows move the edge by {}, Enter/q exits",
+            self.resize_step
+        ));
+    }
+
+    /// Open the bindings help panel (the `help` chord): the live chord
+    /// state's categories composed into the bordered modal (title
+    /// `keybinds`, `esc close` badge, footer controls line) painted
+    /// centered over the frame. `/` opens a filter-as-you-type box, j/k
+    /// and pgup/pgdn scroll, esc/Enter/q close and the prior frame
+    /// repaints. Keys never reach the pane while it is up.
+    fn enter_help(&mut self) {
+        self.help_mode = true;
+        self.help_filter.clear();
+        self.help_filtering = false;
+        self.help_scroll = 0;
+        self.refresh_help();
+    }
+
+    /// Dismiss the help panel: the next frame's pane repaint restores the
+    /// covered cells (the frame buffer resets, then panes repaint).
+    fn leave_help(&mut self) {
+        self.help_mode = false;
+        self.renderer.set_overlay(None);
+    }
+
+    /// Re-compose the overlay from the live panel state (filter/scroll).
+    fn refresh_help(&mut self) {
+        let rows = super::help_rows(
+            self.prefix,
+            self.reload_key,
+            self.management,
+            self.resize_step,
+        );
+        let visible = usize::from(self.renderer.window_size().1.saturating_sub(6)).max(1);
+        let lines: Vec<String> =
+            super::compose_help_panel(&rows, &self.help_filter, visible, self.help_scroll)
+                .into_iter()
+                .map(|row| row.text)
+                .collect();
+        self.renderer.set_overlay(Some(lines));
+    }
+
+    /// One key while the help panel is up: `/` opens the filter box
+    /// (typing edits it, Enter commits and keeps the filter, Esc closes
+    /// the panel), j/k/arrows/pgup/pgdn scroll, esc/Enter/q close. Every
+    /// key is consumed — nothing leaks into the pane.
+    fn help_key(&mut self, ev: &TermKeyEvent) {
+        use crate::keyboard::TermKey;
+        if self.help_filtering {
+            match ev.key() {
+                TermKey::Char => {
+                    if let Some(ch) = char::from_u32(ev.codepoint) {
+                        self.help_filter.push(ch);
+                    }
+                }
+                TermKey::Escape => {
+                    self.leave_help();
+                    return;
+                }
+                _ => self.help_filtering = false,
+            }
+            self.refresh_help();
+            return;
+        }
+        match (ev.key(), ev.modifiers) {
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => {
+                self.help_filtering = true;
+                self.refresh_help();
+            }
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'j') => self.help_scroll_by(1),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'k') => self.help_scroll_by(-1),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'q') => self.leave_help(),
+            (TermKey::Up, 0) => self.help_scroll_by(-1),
+            (TermKey::Down, 0) => self.help_scroll_by(1),
+            (TermKey::PageUp, 0) => self.help_scroll_by(-10),
+            (TermKey::PageDown, 0) => self.help_scroll_by(10),
+            // Enter (arrives as a byte via route_plain) and everything
+            // else close the panel.
+            _ => self.leave_help(),
+        }
+    }
+
+    /// Scroll the help panel's content window (clamped by the compose).
+    fn help_scroll_by(&mut self, delta: isize) {
+        self.help_scroll = (self.help_scroll as isize + delta).max(0) as usize;
+        self.refresh_help();
+    }
+
+    /// One plain byte while the help panel is up — the same controls the
+    /// key path takes, for the byte spellings (Backspace pops the filter,
+    /// `/` opens it, Enter commits or closes, `q` closes).
+    fn help_byte(&mut self, byte: u8) -> bool {
+        if self.help_filtering {
+            match byte {
+                0x7f => {
+                    self.help_filter.pop();
+                    self.refresh_help();
+                }
+                b'\r' => self.help_filtering = false,
+                b if byte != 0x1b && (b.is_ascii_graphic() || b == b' ') => {
+                    self.help_filter.push(b as char);
+                    self.refresh_help();
+                }
+                _ => {}
+            }
+            return self.help_mode;
+        }
+        match byte {
+            b'/' => {
+                self.help_filtering = true;
+                self.refresh_help();
+            }
+            b'q' | b'\r' => self.leave_help(),
+            _ => {}
+        }
+        self.help_mode
+    }
+
+    /// One key while resize mode is up: arrows send one resize step for
+    /// the focused pane (`resize-pane -t <pane> -L|-R|-U|-D <step>`, the
+    /// wire's relative form); Escape and `q` exit; every other key exits
+    /// the mode and is consumed (keys must not leak into the pane during
+    /// a modal chord).
+    fn resize_mode_key(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+    ) {
+        use crate::keyboard::TermKey;
+        match ev.key() {
+            TermKey::Up if ev.modifiers == 0 => self.send_resize(conn, "-U"),
+            TermKey::Down if ev.modifiers == 0 => self.send_resize(conn, "-D"),
+            TermKey::Right if ev.modifiers == 0 => self.send_resize(conn, "-R"),
+            TermKey::Left if ev.modifiers == 0 => self.send_resize(conn, "-L"),
+            // Escape, q, Enter (as bytes via route_plain), or anything
+            // else: the mode exits and the key is consumed.
+            _ => self.resize_mode = false,
+        }
+    }
+
+    /// One resize step for the focused pane, the wire's relative form.
+    /// Best-effort — the %layout-change broadcast the resize queues
+    /// re-seeds the window through the pump's pending_layout path.
+    fn send_resize(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, flag: &str) {
+        let focused = self.focused_pane();
+        if focused.is_empty() {
+            return;
+        }
+        let _ = conn.send_checked(&format!(
+            "resize-pane -t {focused} {flag} {}",
+            self.resize_step
+        ));
+    }
+
     /// The prefix commands that move the view through the daemon's tree:
     /// `o` cycles panes of the window, `n`/`p` next/prev window, `(`/`)`
     /// prev/next session — every switch is select-then-refresh, the
     /// daemon-side select + resync passthrough dispatches, with the
     /// renderer rebuilding from the fresh replays.
-    fn prefix_switch(&mut self, key: u8, conn: &mut super::conn::AttachConn) {
+    fn prefix_switch(&mut self, key: u8, conn: &mut crate::mux::attach::conn::AttachConn) {
         match key {
             b'o' => self.cycle_pane(conn),
             b'n' => self.switch_window(conn, 1),
@@ -1436,7 +1839,11 @@ impl WindowSession {
     /// re-seed contract `switch_window` follows — split lands on the new
     /// pane (the reply body IS its id, the daemon focuses it), kill lands
     /// on the window's survivor, new-window re-seeds the fresh window.
-    fn management_chord(&mut self, key: super::ManagementKey, conn: &mut super::conn::AttachConn) {
+    fn management_chord(
+        &mut self,
+        key: super::ManagementKey,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) {
         let focused = self.focused_pane();
         match key {
             super::ManagementKey::SplitRight | super::ManagementKey::SplitDown => {
@@ -1502,6 +1909,31 @@ impl WindowSession {
                 // normal path tear down.
                 self.status_dirty = true;
             }
+            super::ManagementKey::SwapPrev | super::ManagementKey::SwapNext => {
+                // Swap with the layout-order neighbor; the %layout-change
+                // broadcast the swap queues re-seeds the window through
+                // the pump's pending_layout path. Fewer than two panes is
+                // a no-op.
+                let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+                if order.len() < 2 {
+                    return;
+                }
+                let Some(position) = self
+                    .renderer
+                    .focused()
+                    .and_then(|f| order.iter().position(|p| *p == f))
+                else {
+                    return;
+                };
+                let dir = if matches!(key, super::ManagementKey::SwapPrev) {
+                    -1
+                } else {
+                    1
+                };
+                let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
+                let focused = self.focused_pane();
+                let _ = conn.send_checked(&format!("swap-pane -s {focused} -t %{next}"));
+            }
             super::ManagementKey::NewWindow => {
                 let Some(session) = self.status.session_id.clone() else {
                     return;
@@ -1524,16 +1956,18 @@ impl WindowSession {
     /// The reload chord in render mode: the same client-side rebind the
     /// passthrough session performs, plus a status-row flash, plus the
     /// daemon's `reload-config` — best-effort either way.
-    fn reload_config(&mut self, conn: &mut super::conn::AttachConn) {
+    fn reload_config(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         match super::reload_client_chords(crate::mux::config::Chords {
             prefix: self.prefix,
             reload: self.reload_key,
             management: self.management,
+            resize_step: self.resize_step,
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
                 self.reload_key = chords.reload;
                 self.management = chords.management;
+                self.resize_step = chords.resize_step;
                 self.literal = chords.prefix;
                 self.flash = Some("config reloaded".to_string());
             }
@@ -1547,7 +1981,7 @@ impl WindowSession {
     /// prefix o: select the next pane in the window's layout-leaf order,
     /// daemon-side, then re-seed — the render-mode spelling of
     /// select-then-refresh.
-    fn cycle_pane(&mut self, conn: &mut super::conn::AttachConn) {
+    fn cycle_pane(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
         if order.len() < 2 {
             return;
@@ -1565,7 +1999,7 @@ impl WindowSession {
     /// prefix n/p: move to the next/previous window of the shown session
     /// and mirror it (daemon-side select-window, then re-seed from fresh
     /// replays).
-    fn switch_window(&mut self, conn: &mut super::conn::AttachConn, direction: i32) {
+    fn switch_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, direction: i32) {
         // The status state knows the shown session's windows.
         if self.status.session_id.is_none() {
             return;
@@ -1603,7 +2037,7 @@ impl WindowSession {
 
     /// prefix ( / ): the previous/next session in list-sessions order;
     /// mirror its active window.
-    fn switch_session(&mut self, conn: &mut super::conn::AttachConn, direction: i32) {
+    fn switch_session(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, direction: i32) {
         let Ok(reply) = conn.send_checked("list-sessions") else {
             return;
         };
@@ -1664,7 +2098,7 @@ impl WindowSession {
     /// (or the window is in the same session), re-fit the renderer from a
     /// fresh layout report, replay every pane, and mark everything dirty
     /// — the render-mode resync.
-    fn reseed_window(&mut self, conn: &mut super::conn::AttachConn, window: &str) {
+    fn reseed_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, window: &str) {
         let (cols, rows) = self.renderer.window_size();
         let pane = self.focused_pane_or_first(conn, window);
         if conn
@@ -1715,7 +2149,11 @@ impl WindowSession {
 
     /// A pane id of `window` to hang the size report on: the focused pane
     /// when it still belongs there, else the window's first pane.
-    fn focused_pane_or_first(&self, conn: &mut super::conn::AttachConn, window: &str) -> String {
+    fn focused_pane_or_first(
+        &self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+    ) -> String {
         let focused = self.focused_pane();
         if let Ok(reply) = conn.send_checked(&format!("list-panes -t {window}")) {
             if reply.ok {
@@ -1834,12 +2272,16 @@ impl WindowSession {
         true
     }
 
-    /// One host mouse report: clicks focus the pane under the pointer
+    /// One host mouse report. Clicks focus the pane under the pointer
     /// (select-pane daemon-side, so the daemon's own active-pane state
     /// follows); events forward pane-relative SGR when the pane owns
     /// mouse tracking; the wheel scrolls the client's scrollback when it
-    /// does not.
-    fn route_mouse(&mut self, conn: &mut super::conn::AttachConn, mouse: SgrMouse) {
+    /// does not. A press within one cell of a divider starts a drag: it
+    /// must not focus or forward (a drag on a divider is not a
+    /// click-through), motion adjusts the adjacent split via the wire's
+    /// relative `resize-pane`, and release without any motion falls
+    /// through as a click (focus, plus the pane's release when owned).
+    fn route_mouse(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, mouse: SgrMouse) {
         // Window-relative, 0-based.
         let Some(x) = mouse.col.checked_sub(1) else {
             return;
@@ -1847,15 +2289,15 @@ impl WindowSession {
         let Some(y) = mouse.row.checked_sub(1) else {
             return;
         };
-        let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
-            return; // a divider or outside the window
-        };
-        let owns = self
-            .renderer
-            .pane_terminal(rect.pane)
-            .is_some_and(|t| t.mouse_mode() != crate::mouse::MouseMode::Off);
 
         if mouse.is_wheel_up() || mouse.is_wheel_down() {
+            if self.drag.is_some() {
+                return; // the held button owns the pointer; wheels wait
+            }
+            let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+                return;
+            };
+            let owns = self.pane_owns_mouse(rect.pane);
             let delta: isize = if mouse.is_wheel_up() { 3 } else { -3 };
             if !owns && self.renderer.wheel_scroll(x, y, delta) {
                 return; // consumed client-side
@@ -1867,27 +2309,148 @@ impl WindowSession {
         }
 
         if mouse.release || mouse.is_motion() {
+            if self.drag.is_some() {
+                self.drag_event(conn, x, y, mouse.release);
+                return;
+            }
             // Drag/release only matter to a pane that owns the mouse;
             // focus follows press only.
-            if owns {
+            let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+                return;
+            };
+            if self.pane_owns_mouse(rect.pane) {
                 self.forward_mouse(conn, &rect, &mouse);
             }
             return;
         }
 
-        // A press: focus the pane (locally and daemon-side), then forward
-        // when it owns mouse tracking.
+        // A press: a divider hit starts a drag (never a click-through);
+        // otherwise focus the pane (locally and daemon-side), then
+        // forward when it owns mouse tracking.
+        if let Some(divider) = self.renderer.divider_near(x, y, 1) {
+            self.drag = Some(DragState::Pending { divider, x, y });
+            return;
+        }
+        let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
+            return;
+        };
         self.renderer.focus(rect.pane);
         let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
-        if owns {
+        if self.pane_owns_mouse(rect.pane) {
             self.forward_mouse(conn, &rect, &mouse);
         }
+    }
+
+    /// Whether `pane`'s emulator tracks the mouse (the forwarding gate).
+    fn pane_owns_mouse(&self, pane: u32) -> bool {
+        self.renderer
+            .pane_terminal(pane)
+            .is_some_and(|t| t.mouse_mode() != crate::mouse::MouseMode::Off)
+    }
+
+    /// One motion or release while a drag is in flight: motion promotes a
+    /// pending press to an active drag and records the pointer's signed
+    /// delta from the press point (cells along the divider's axis);
+    /// release ends the drag and clears the highlight — a release that
+    /// never moved falls through as a click (focus the pane under the
+    /// pointer, forward the release when the pane owns the mouse).
+    fn drag_event(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        x: u16,
+        y: u16,
+        release: bool,
+    ) {
+        if release {
+            let state = self.drag.take();
+            self.renderer.set_drag_divider(None);
+            if let Some(DragState::Pending { .. }) = state {
+                if let Some(rect) = self.renderer.pane_at(x, y).cloned() {
+                    self.renderer.focus(rect.pane);
+                    let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
+                    let mouse = SgrMouse {
+                        cb: 0,
+                        col: x + 1,
+                        row: y + 1,
+                        release: true,
+                    };
+                    if self.pane_owns_mouse(rect.pane) {
+                        self.forward_mouse(conn, &rect, &mouse);
+                    }
+                }
+            }
+            return;
+        }
+        // Motion.
+        if let Some(DragState::Pending { divider, x, y }) = self.drag.take() {
+            self.drag = Some(DragState::Active {
+                divider,
+                x,
+                y,
+                applied: 0,
+                pending: 0,
+            });
+            self.renderer
+                .set_drag_divider(Some((divider.vertical, divider.a, divider.b)));
+        }
+        if let Some(DragState::Active {
+            divider,
+            x: px,
+            y: py,
+            pending,
+            ..
+        }) = &mut self.drag
+        {
+            *pending = if divider.vertical {
+                i32::from(x) - i32::from(*px)
+            } else {
+                i32::from(y) - i32::from(*py)
+            };
+        }
+    }
+
+    /// The pump's frame-cadence drag application: one relative
+    /// `resize-pane` per unapplied cell of delta, aimed at the boundary's
+    /// left/top pane (the daemon re-divides the neighbor). Best-effort —
+    /// the %layout-change broadcast re-seeds the window through the
+    /// pump's pending_layout path.
+    fn apply_drag(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Some(DragState::Active {
+            divider,
+            pending,
+            applied,
+            ..
+        }) = &mut self.drag
+        else {
+            return;
+        };
+        let step = *pending - *applied;
+        if step == 0 {
+            return;
+        }
+        let flag = if divider.vertical {
+            if step > 0 {
+                "-R"
+            } else {
+                "-L"
+            }
+        } else if step > 0 {
+            "-D"
+        } else {
+            "-U"
+        };
+        let _ = conn.send_checked(&format!(
+            "resize-pane -t %{a} {flag} {n}",
+            a = divider.a,
+            n = step.abs()
+        ));
+        *applied = *pending;
     }
 
     /// Re-encode one host mouse report pane-relative and send it.
     fn forward_mouse(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         rect: &PaneRect,
         mouse: &SgrMouse,
     ) {
@@ -1908,7 +2471,7 @@ impl WindowSession {
     /// re-divides and re-broadcasts the layout), re-fit, repaint all.
     fn resize_to(
         &mut self,
-        conn: &mut super::conn::AttachConn,
+        conn: &mut crate::mux::attach::conn::AttachConn,
         cols: u16,
         rows: u16,
         sink: &mut dyn FlushSink,
@@ -2003,7 +2566,7 @@ enum EventOutcome {
 /// active window's active pane — the same newest stand-in passthrough
 /// uses.
 fn resolve_window_and_pane(
-    conn: &mut super::conn::AttachConn,
+    conn: &mut crate::mux::attach::conn::AttachConn,
     target: Option<&str>,
 ) -> Result<(String, String), String> {
     match target {
@@ -2081,7 +2644,10 @@ fn resolve_window_and_pane(
 }
 
 /// The `*`-marked pane of a window (its active pane), else the first row.
-fn marked_pane_of(conn: &mut super::conn::AttachConn, window: &str) -> Result<String, String> {
+fn marked_pane_of(
+    conn: &mut crate::mux::attach::conn::AttachConn,
+    window: &str,
+) -> Result<String, String> {
     let reply = conn
         .send_checked(&format!("list-panes -t {window}"))
         .map_err(|err| format!("list-panes failed: {err}"))?;
@@ -2098,7 +2664,9 @@ fn marked_pane_of(conn: &mut super::conn::AttachConn, window: &str) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::TermKey;
     use crate::mux::attach::layout::{parse_layout, parse_layout_triple};
+    use std::io::BufRead as _;
 
     /// The daemon's actual render output for a 50/50 vertical split of an
     /// 80x24 window (LayoutTree::render's collapsed N-ary form), matching
@@ -2921,5 +3489,333 @@ mod tests {
         session.frame(&mut sink);
         assert_eq!(sink.placements.len(), 3, "hide emits");
         assert_eq!(sink.placements[2], None);
+    }
+
+    /// A live `AttachConn` over a recording listener: every command rides
+    /// the wire and gets an ok empty reply, and the recorded (name, line)
+    /// pairs land on the returned receiver. The resize/swap affordance
+    /// tests read the exact wire spellings off it.
+    fn recording_conn(
+        tag: &str,
+    ) -> (
+        std::sync::mpsc::Receiver<(String, String)>,
+        crate::mux::attach::conn::AttachConn,
+    ) {
+        let mut path = std::env::temp_dir();
+        path.push(format!("par-mux-render-{tag}-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = crate::mux::bind_local_listener(&path).expect("bind");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            #[cfg(unix)]
+            use interprocess::local_socket::traits::Listener as _;
+            let Ok(stream) = listener.accept() else {
+                return;
+            };
+            use interprocess::TryClone as _;
+            let mut writer = stream.try_clone().expect("clone");
+            let mut reader = std::io::BufReader::new(stream);
+            let mut number = 0u32;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+                let reply = match name.as_str() {
+                    "version" => "9.9.9+deadbeef".to_string(),
+                    "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
+                    _ => String::new(),
+                };
+                number += 1;
+                tx.send((name, trimmed.to_owned())).ok();
+                writer
+                    .write_all(crate::mux::emit_block(number, &reply, true).as_bytes())
+                    .ok();
+                writer.flush().ok();
+            }
+        });
+        let conn = crate::mux::attach::conn::AttachConn::connect(&path).expect("connect");
+        (rx, conn)
+    }
+
+    /// The next recorded line named `name`, bounding the wait.
+    fn wait_recorded(rx: &std::sync::mpsc::Receiver<(String, String)>, name: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() > deadline {
+                panic!("no {name} line arrived within the bound");
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok((n, line)) if n == name => return line,
+                Ok(_) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("no {name} line: the fake daemon is gone");
+                }
+            }
+        }
+    }
+
+    /// The drag affordance, headless end-to-end: a press within one cell
+    /// of the two-pane divider starts a PENDING drag (no focus, no
+    /// forward), motion promotes it and the pump's apply_drag sends one
+    /// relative resize-pane for the boundary's left pane at the full
+    /// delta, the divider highlights while dragging, and release clears
+    /// the state without forwarding anything to either pane.
+    #[test]
+    fn drag_on_divider_resizes_without_clicking_through() {
+        let (rx, mut conn) = recording_conn("drag");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+
+        // Drain the handshake's recorded lines first, so the quiet wire
+        // assertions below see only the drag's traffic.
+        while rx
+            .recv_timeout(std::time::Duration::from_millis(150))
+            .is_ok()
+        {}
+
+        // Press on the divider column (x=39, 1-based col 40): pending,
+        // and the press must NOT focus or forward.
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 40,
+                row: 6,
+                release: false,
+            },
+        );
+        assert!(
+            matches!(session.drag, Some(DragState::Pending { .. })),
+            "the press starts a pending drag"
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "a divider press forwards nothing"
+        );
+
+        // Motion +5 cells: the drag activates and highlights the divider.
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 32,
+                col: 45,
+                row: 6,
+                release: false,
+            },
+        );
+        assert_eq!(
+            session.renderer.drag_divider,
+            Some((true, 1, 2)),
+            "the dragged divider highlights"
+        );
+
+        // The pump's frame-cadence application: one resize-pane at the
+        // full delta, aimed at the boundary's left/top pane.
+        session.apply_drag(&mut conn);
+        assert_eq!(
+            wait_recorded(&rx, "resize-pane"),
+            "resize-pane -t %1 -R 5",
+            "the drag maps to the wire's relative resize for pane 1"
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "a drag forwards no mouse bytes to the pane"
+        );
+
+        // Release: the drag ends, the highlight clears, still no
+        // click-through.
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 45,
+                row: 6,
+                release: true,
+            },
+        );
+        assert!(session.drag.is_none());
+        assert_eq!(session.renderer.drag_divider, None);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the drag's release forwards nothing"
+        );
+    }
+
+    /// A click NEAR a divider without any drag still focuses: press and
+    /// release at the same point land the focus on the pane under the
+    /// pointer (select-pane rides the wire) even though the press itself
+    /// was captured by the drag's pending state.
+    #[test]
+    fn click_near_divider_without_drag_still_focuses() {
+        let (rx, mut conn) = recording_conn("click-div");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        session.renderer.focus(2);
+
+        // Press on the divider, release without motion: the focus flips
+        // to the pane under the pointer (the divider column sits in pane
+        // 1's last column).
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 40,
+                row: 6,
+                release: false,
+            },
+        );
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 40,
+                row: 6,
+                release: true,
+            },
+        );
+        assert_eq!(
+            session.renderer.focused(),
+            Some(1),
+            "the bare click focuses the pane under the pointer"
+        );
+        assert_eq!(
+            wait_recorded(&rx, "select-pane"),
+            "select-pane -t %1",
+            "the focus rides select-pane"
+        );
+    }
+
+    /// The focus indication must FLIP visibly in a two-pane split — both
+    /// panes share one divider, so a single accent read identically from
+    /// either side (the owner's manual pass). The boundary paints cyan
+    /// when the left pane holds the focus and magenta when the right one
+    /// does.
+    #[test]
+    fn focus_flip_changes_the_shared_dividers_color() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+
+        renderer.focus(1);
+        renderer.render_frame();
+        assert_eq!(
+            renderer.buffer[(39, 0)].fg,
+            RtColor::Indexed(14),
+            "pane 1 (left) focused: the shared divider is the a-side accent"
+        );
+        renderer.focus(2);
+        renderer.mark_all_dirty();
+        renderer.render_frame();
+        assert_eq!(
+            renderer.buffer[(39, 0)].fg,
+            RtColor::Indexed(13),
+            "pane 2 (right) focused: the shared divider flips to the b-side accent"
+        );
+    }
+
+    /// Render-mode resize chords: prefix R enters the mode and arrows
+    /// send the relative resize-pane for the FOCUSED pane; a non-arrow
+    /// key leaves the mode with nothing leaked into the pane.
+    #[test]
+    fn render_resize_chord_sends_for_the_focused_pane() {
+        let (rx, conn) = recording_conn("render-resize");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        let mut conn = conn;
+        let mut prefix_pending = false;
+
+        assert!(
+            !session.route_plain(
+                &[crate::mux::attach::C_B, b'R'],
+                &mut conn,
+                &mut prefix_pending
+            ),
+            "the resize chord enters the mode"
+        );
+        assert!(session.resize_mode);
+        session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+        assert_eq!(
+            wait_recorded(&rx, "resize-pane"),
+            "resize-pane -t %1 -R 1",
+            "the arrow resizes the focused pane (the layout's first leaf)"
+        );
+        // Any other key leaves the mode, consumed.
+        session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
+        assert!(!session.resize_mode);
+    }
+
+    /// The help chord: prefix ? opens the panel (categories and effective
+    /// bindings in the overlay), / narrows it, and dismissal (q) restores
+    /// the prior frame — the pane's content cells repaint.
+    #[test]
+    fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
+        let (_rx, conn) = recording_conn("help");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        session.renderer.feed_output(1, b"LEFT\r\n");
+        let mut sink = CursorSink {
+            placements: Vec::new(),
+        };
+        session.frame(&mut sink); // the settled prior frame
+
+        let mut conn = conn;
+        let mut prefix_pending = false;
+        assert!(
+            !session.route_plain(
+                &[crate::mux::attach::C_B, b'?'],
+                &mut conn,
+                &mut prefix_pending
+            ),
+            "the help chord opens the panel"
+        );
+        assert!(session.help_mode);
+        let overlay = session.renderer.overlay.clone().expect("the overlay is up");
+        let joined = overlay.join("\n");
+        assert!(joined.contains("keybinds"), "the modal title: {joined}");
+        assert!(joined.contains(" global "), "a category header: {joined}");
+        assert!(joined.contains("esc close"), "the close badge: {joined}");
+        // The filter: '/' then "swap" narrows; a non-matching row drops.
+        assert!(session.help_byte(b'/'));
+        for byte in b"swap" {
+            assert!(session.help_byte(*byte));
+        }
+        let filtered = session.renderer.overlay.clone().expect("overlay");
+        let ftext = filtered.join("\n");
+        assert!(ftext.contains("swap"), "matching rows survive: {ftext}");
+        assert!(!ftext.contains("detach"), "others drop: {ftext}");
+        // Commit the filter (Enter), then dismiss (q): the prior frame's
+        // cells repaint.
+        assert!(session.help_byte(b'\r'));
+        assert!(
+            !session.help_byte(b'q'),
+            "q closed the panel (the return is still-open)"
+        );
+        assert!(!session.help_mode);
+        assert_eq!(session.renderer.overlay, None);
+        session.frame(&mut sink);
+        let left: String = (0..4)
+            .map(|c| session.renderer.buffer[(c, 0)].symbol())
+            .collect();
+        assert_eq!(left, "LEFT", "the prior frame's cells restore");
     }
 }
