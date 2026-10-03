@@ -13,6 +13,7 @@
 
 use crate::cell::CellFlags;
 use crate::color::{Color as CoreColor, NamedColor};
+use crate::cursor::CursorStyle;
 use crate::keyboard::TermKeyEvent;
 use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
@@ -178,6 +179,12 @@ pub struct PaneRenderer {
     width: u16,
     height: u16,
     glyphs: Glyphs,
+    /// The background every frame cell is filled with before painting —
+    /// the host terminal's resolved background (the OSC 10/11 probe), so
+    /// unwritten cells render in the host's bg instead of the terminal
+    /// default the ratatui buffer starts at (the light-grey strips a
+    /// dark-theme host showed around unpainted areas).
+    bg: RtColor,
     /// The frame being painted.
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
@@ -196,9 +203,22 @@ impl PaneRenderer {
             width,
             height,
             glyphs,
+            bg: RtColor::Rgb(0, 0, 0),
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
             dirty: true,
+        }
+    }
+
+    /// Set the background the next frame fills every cell with — the
+    /// host terminal's resolved background color. The dark default
+    /// (`0,0,0`) matches the handshake's unprobed `host_colors` dark
+    /// default; the OSC 10/11 probe plugs in here once conn.rs reports
+    /// a resolved value.
+    pub fn set_background(&mut self, bg: RtColor) {
+        if self.bg != bg {
+            self.bg = bg;
+            self.dirty = true;
         }
     }
 
@@ -274,6 +294,35 @@ impl PaneRenderer {
     /// The focused pane id.
     pub fn focused(&self) -> Option<u32> {
         self.focused
+    }
+
+    /// The terminal cursor position for the focused pane, mapped through
+    /// its rect origin and the client scroll offset: `Some((x, y, style))`
+    /// where `(x, y)` is the window-relative cell to place the host
+    /// cursor at. `None` — the cursor hides — when nothing is focused,
+    /// the pane's emulator tracks a hidden cursor (DECTCEM), the client
+    /// view is scrolled off live (the wheel/prefix-[ viewport: the live
+    /// cell is not on screen), or the tracked cell is somehow outside
+    /// the pane's rect.
+    ///
+    /// The style is the pane's tracked DECSCUSR shape, for the sink to
+    /// re-emit (`CSI Ps SP q`).
+    pub fn focused_cursor(&self) -> Option<(u16, u16, CursorStyle)> {
+        let focus = self.focused?;
+        let rect = self.layout.iter().find(|r| r.pane == focus)?;
+        let emulator = self.emulators.get(&focus)?;
+        if emulator.scroll_offset() > 0 {
+            return None;
+        }
+        let cursor = emulator.terminal().cursor();
+        if !cursor.visible {
+            return None;
+        }
+        let (col, row) = (cursor.col, cursor.row);
+        if col >= usize::from(rect.width) || row >= usize::from(rect.height) {
+            return None;
+        }
+        Some((rect.x + col as u16, rect.y + row as u16, cursor.style))
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does
@@ -424,6 +473,17 @@ impl PaneRenderer {
         }
         self.dirty = false;
 
+        // Clear the frame to the host background BEFORE painting: every
+        // cell that paint_pane skips (a short history line, the wide-char
+        // spacer, past the grid edge) and every cell no pane rect covers
+        // then carries the resolved bg instead of the ratatui default the
+        // buffer was born with — the grey top/bottom bands the host
+        // showed. Blank cells keep a blank symbol but a real bg.
+        let bg_style = RtStyle::default().bg(self.bg);
+        self.buffer.reset();
+        self.buffer
+            .set_style(RtRect::new(0, 0, self.width, self.height), bg_style);
+
         // Paint every pane's grid into its rect, then the dividers on top.
         let layout = self.layout.clone();
         for rect in &layout {
@@ -488,6 +548,7 @@ impl PaneRenderer {
                 }
                 let cell = &mut self.buffer[(x, y)];
                 cell.reset();
+                cell.set_bg(self.bg);
                 // Grapheme cluster: base char plus combining marks.
                 let mut symbol = String::from(core_cell.c());
                 for comb in core_cell.combining() {
@@ -547,6 +608,7 @@ impl PaneRenderer {
         for (x, y) in &vertical {
             let cell = &mut self.buffer[(*x, *y)];
             cell.reset();
+            cell.set_bg(self.bg);
             cell.set_symbol(self.glyphs.vertical());
             cell.set_style(divider_style(self.focused, &self.layout, *x, *y));
         }
@@ -558,6 +620,7 @@ impl PaneRenderer {
             } else {
                 let cell = &mut self.buffer[(*x, *y)];
                 cell.reset();
+                cell.set_bg(self.bg);
                 cell.set_symbol(self.glyphs.horizontal());
                 cell.set_style(divider_style(self.focused, &self.layout, *x, *y));
             }
@@ -565,8 +628,10 @@ impl PaneRenderer {
     }
 }
 
-/// The focused pane's adjacent dividers render bold; the rest dim — the
-/// focused-pane highlight the card asks for.
+/// The focused pane's adjacent dividers render bright-cyan (plus bold) so
+/// the focus is visible against any theme — a modifier-only highlight
+/// showed as identical dividers on the owner's terminal. The rest stay
+/// dim with the default fg.
 fn divider_style(focused: Option<u32>, layout: &[PaneRect], x: u16, y: u16) -> RtStyle {
     let near_focus = focused.is_some_and(|focus| {
         layout.iter().filter(|r| r.pane == focus).any(|r| {
@@ -581,7 +646,9 @@ fn divider_style(focused: Option<u32>, layout: &[PaneRect], x: u16, y: u16) -> R
         })
     });
     if near_focus {
-        RtStyle::default().add_modifier(RtModifier::BOLD)
+        RtStyle::default()
+            .fg(RtColor::Indexed(14)) // bright cyan: indexed accent, legible on dark and light
+            .add_modifier(RtModifier::BOLD)
     } else {
         RtStyle::default().add_modifier(RtModifier::DIM)
     }
@@ -669,6 +736,13 @@ pub(crate) trait FlushSink {
     /// Bracket a full repaint (first frame, resize re-fit): the real sink
     /// clears the screen and hides the cursor here.
     fn repaint_all(&mut self);
+    /// Position (and shape) the host cursor for the frame just flushed:
+    /// `Some((x, y, style))` places it at the window-relative 0-based
+    /// cell with the DECSCUSR shape, `None` hides it. Default: nothing
+    /// (the cursor state the repaint_all/flush left stands).
+    fn place_cursor(&mut self, _cursor: Option<(u16, u16, CursorStyle)>) {
+        let _ = _cursor;
+    }
 }
 
 /// The stdout sink: absolute CUP + SGR per diff cell — ratatui's diff is
@@ -697,6 +771,38 @@ impl FlushSink for StdoutSink {
         let _ = stdout.write_all(b"\x1b[2J\x1b[H\x1b[?25l");
         let _ = stdout.flush();
     }
+
+    fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
+        let mut out = String::with_capacity(24);
+        match cursor {
+            Some((x, y, style)) => {
+                // 0-based window cell -> 1-based CUP, then the DECSCUSR
+                // shape, then show.
+                let _ = write!(out, "\x1b[{};{}H", y + 1, x + 1);
+                push_cursor_shape(&mut out, style);
+                out.push_str("\x1b[?25h");
+            }
+            None => out.push_str("\x1b[?25l"),
+        }
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
+    }
+}
+
+/// The DECSCUSR spelling for one core cursor shape (`CSI Ps SP q`, xterm
+/// ctlseqs "Set cursor style"), mapped from the pane's tracked DECSCUSR
+/// state. Blink variants keep blinking: the blink rate is the host's.
+fn push_cursor_shape(out: &mut String, style: CursorStyle) {
+    let ps = match style {
+        CursorStyle::BlinkingBlock => 0,
+        CursorStyle::SteadyBlock => 2,
+        CursorStyle::BlinkingUnderline => 3,
+        CursorStyle::SteadyUnderline => 4,
+        CursorStyle::BlinkingBar => 5,
+        CursorStyle::SteadyBar => 6,
+    };
+    let _ = write!(out, "\x1b[{ps} q");
 }
 
 /// One cell's SGR run: reset, then emit only what differs from default.
@@ -872,6 +978,12 @@ struct WindowSession {
     flash: Option<String>,
     /// The flash's remaining lifetime in frame ticks.
     flash_ticks: u32,
+    /// The cursor state the last `place_cursor` reported, `Some(None)`
+    /// initially (repaint_all hides the cursor): the guard that keeps a
+    /// quiet pump from re-emitting identical cursor escapes every frame
+    /// tick, while a flushed frame (whose per-cell CUP left the terminal
+    /// cursor wherever the last diff cell sits) always repositions.
+    cursor_placed: Option<Option<(u16, u16, CursorStyle)>>,
 }
 
 impl WindowSession {
@@ -889,6 +1001,7 @@ impl WindowSession {
             literal: super::C_B,
             flash: None,
             flash_ticks: 0,
+            cursor_placed: Some(None),
         }
     }
 
@@ -966,7 +1079,10 @@ impl WindowSession {
         }
         self.status_row.invalidate();
         self.draw_status_row();
-        // First frame: clear + full paint.
+        // First frame: clear + full paint. repaint_all hides the host
+        // cursor, so the frame's place_cursor must fire even if the
+        // mapped state matches the hidden default.
+        self.cursor_placed = Some(None);
         sink.repaint_all();
         self.frame(sink);
         Ok(())
@@ -1572,12 +1688,14 @@ impl WindowSession {
     }
 
     /// Flush the status row's changed cells to the host's bottom row.
-    fn flush_status_row(&mut self, sink: &mut dyn FlushSink) {
+    /// Returns whether anything flushed (its per-cell CUPs move the host
+    /// cursor, so the caller must re-place it).
+    fn flush_status_row(&mut self, sink: &mut dyn FlushSink) -> bool {
         let (_cols, rows) = super::conn::terminal_grid();
         let bottom = rows.saturating_sub(1);
         let diff = self.status_row.diff();
         if diff.is_empty() {
-            return;
+            return false;
         }
         // Rebase the row-relative cells to the host's bottom row and
         // reuse the sink's per-cell spelling.
@@ -1586,6 +1704,7 @@ impl WindowSession {
             .map(|(x, _y, cell)| (x, bottom, cell))
             .collect();
         sink.flush(&rebased);
+        true
     }
 
     /// One host mouse report: clicks focus the pane under the pointer
@@ -1705,20 +1824,42 @@ impl WindowSession {
                 }
             }
         }
+        // Same as the seed: repaint_all hid the cursor, so force the
+        // next place_cursor.
+        self.cursor_placed = Some(None);
         sink.repaint_all();
         self.frame(sink);
         Ok(())
     }
 
-    /// Frame the pending output at cadence.
+    /// Frame the pending output at cadence: panes, the status row, then
+    /// the cursor — positioned at the focused pane's tracked cell (mapped
+    /// through rect origin + scroll offset; hidden when the view is
+    /// scrolled off live or the pane hid its cursor via DECTCEM).
+    /// Frame the pending output at cadence: panes, the status row, then
+    /// the cursor — positioned at the focused pane's tracked cell (mapped
+    /// through rect origin + scroll offset; hidden when the view is
+    /// scrolled off live or the pane hid its cursor via DECTCEM). A
+    /// flushed frame always repositions (the diff's last per-cell CUP
+    /// left the cursor wherever that cell sits); a quiet pump re-emits
+    /// only on a state change.
     fn frame(&mut self, sink: &mut dyn FlushSink) {
+        let mut flushed = false;
         if self.renderer.needs_frame() {
             let diff = self.renderer.render_frame();
             if !diff.is_empty() {
                 sink.flush(&diff);
+                flushed = true;
             }
         }
-        self.flush_status_row(sink);
+        if self.flush_status_row(sink) {
+            flushed = true;
+        }
+        let cursor = self.renderer.focused_cursor();
+        if flushed || self.cursor_placed.as_ref() != Some(&cursor) {
+            sink.place_cursor(cursor);
+            self.cursor_placed = Some(cursor);
+        }
     }
 }
 
@@ -2387,5 +2528,271 @@ mod tests {
         let (window, pane) = resolve_window_and_pane(&mut conn, None).expect("resolve");
         assert_eq!(window, "@9", "the newest session's active window");
         assert_eq!(pane, "%8", "the active pane of that window");
+    }
+
+    // ---- The manual-pass card: cursor mapping, focus accent, bg fill.
+
+    /// Fix 1 (cursor mapping): the focused pane's tracked cursor cell +
+    /// rect origin maps to the window-relative cell the host cursor is
+    /// placed at. Hidden while the view is scrolled off live, when the
+    /// pane hid its cursor (DECTCEM), and for an absent focus.
+    #[test]
+    fn focused_cursor_maps_cell_plus_origin_and_hides_when_scrolled() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.focus(2);
+
+        // Pane 2's emulator sits at rect (40, 0); move its tracked cursor
+        // to (5, 3) through the same %output path the pane writes.
+        renderer.feed_output(2, b"\r\n\r\n\r\n     ");
+        let tracked = renderer.pane_terminal(2).expect("pane 2").cursor();
+        assert_eq!((tracked.col, tracked.row), (5, 3), "precondition");
+        let origin_x = renderer
+            .layout()
+            .iter()
+            .find(|r| r.pane == 2)
+            .map(|r| r.x)
+            .unwrap_or(0);
+        assert_eq!(
+            renderer.focused_cursor(),
+            Some((origin_x + 5, 3, tracked.style)),
+            "tracked cell + rect origin"
+        );
+
+        // Scroll pane 2's client view off live: the live cell is not on
+        // screen, so the cursor hides. Pane 2 needs scrollback first (the
+        // offset clamps to the history extent); 30 lines through its
+        // 24-row pane leaves 6+ in history and parks the tracked cursor
+        // at the bottom-left of its grid.
+        for i in 0..30 {
+            renderer.feed_output(2, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        assert!(
+            renderer.wheel_scroll(45, 0, 3),
+            "pane 2 scrolls client-side"
+        );
+        assert_eq!(renderer.scroll_offset_of(2), 3, "view off live");
+        assert_eq!(renderer.focused_cursor(), None, "scrolled view hides");
+
+        // Back to live: the cursor reappears at the tracked cell —
+        // bottom-left of pane 2's grid after the history flood.
+        assert!(renderer.wheel_scroll(45, 0, -3));
+        let tracked = renderer.pane_terminal(2).expect("pane 2").cursor();
+        assert_eq!(
+            (tracked.col, tracked.row),
+            (0, 23),
+            "precondition: flood parked it"
+        );
+        assert_eq!(
+            renderer.focused_cursor(),
+            Some((40, 23, tracked.style)),
+            "live again: tracked cell + origin"
+        );
+
+        // DECTCEM hide/show through the pane's own bytes.
+        renderer.feed_output(2, b"\x1b[?25l");
+        assert_eq!(renderer.focused_cursor(), None, "pane hid its cursor");
+        renderer.feed_output(2, b"\x1b[?25h");
+        assert!(renderer.focused_cursor().is_some(), "pane re-showed");
+
+        // A fresh renderer still maps — its emulators' cursors are
+        // visible at the rect origin, which is exactly right for a pane
+        // whose shell sits at home.
+        let mut fresh = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        fresh.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        assert_eq!(
+            fresh.focused_cursor(),
+            Some((0, 0, CursorStyle::default())),
+            "fresh emulator: tracked cell + origin"
+        );
+    }
+    /// The DECSCUSR shape rides `focused_cursor` for the sink to re-emit:
+    /// the pane's `CSI 4 SP q` (steady underline) is tracked and mapped.
+    #[test]
+    fn focused_cursor_carries_the_tracked_decscusr_shape() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.focus(1);
+        renderer.feed_output(1, b"\x1b[4 q");
+        let (x, _y, style) = renderer.focused_cursor().expect("cursor");
+        assert_eq!(x, 0, "pane 1's origin col");
+        assert_eq!(style, CursorStyle::SteadyUnderline, "DECSCUSR 4 tracked");
+    }
+
+    /// Fix 2 (focus accent): the focused pane's boundary dividers carry
+    /// the bright-cyan accent fg (indexed 14) plus bold, clearly
+    /// distinguishable from the unfocused dividers (dim, default fg) —
+    /// the shipped bold/dim-only highlight read as identical dividers.
+    #[test]
+    fn focused_divider_carries_accent_vs_dim_unfocused() {
+        const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
+        let layout = parse_layout(THREE_PANE).expect("parses");
+        let mut renderer = PaneRenderer::new(90, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.focus(1);
+        renderer.render_frame();
+
+        let focused_div = &renderer.buffer[(29, 0)];
+        assert_eq!(
+            focused_div.fg,
+            RtColor::Indexed(14),
+            "accent fg on the focused divider"
+        );
+        assert!(focused_div.modifier.contains(RtModifier::BOLD));
+
+        let unfocused_div = &renderer.buffer[(59, 0)];
+        assert_eq!(
+            unfocused_div.fg,
+            RtColor::Reset,
+            "no accent on the unfocused divider"
+        );
+        assert!(unfocused_div.modifier.contains(RtModifier::DIM));
+    }
+
+    /// Fix 3 (background fill): after a frame, NO cell carries the
+    /// ratatui default (`Reset`) background — every cell the pane grids
+    /// do not cover (and the skipped cells inside them: short history
+    /// lines, wide-char spacers) is filled with the renderer's
+    /// configured background, which `set_background` can point at the
+    /// host's resolved value.
+    #[test]
+    fn frame_fills_every_cell_with_the_configured_background() {
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(RtColor::Rgb(16, 24, 40));
+        renderer.apply_layout(layout);
+        // A short history line leaves the rest of its row unpainted, and
+        // a wide char marks a spacer that painting skips.
+        renderer.feed_output(1, "世\r\n".as_bytes());
+        renderer.render_frame();
+
+        let default_bg_cells = (0..80u16)
+            .flat_map(|x| (0..24u16).map(move |y| (x, y)))
+            .filter(|(x, y)| renderer.cell(*x, *y).map(|c| c.bg == RtColor::Reset) == Some(true))
+            .count();
+        assert_eq!(default_bg_cells, 0, "no Reset-style cell survives a frame");
+
+        // The skipped cells specifically: the wide-char spacer (painting
+        // skipped it, so the fill's bg stands) and an unpainted tail cell.
+        // Painted cells carry the core grid's own bg (Indexed(0) default),
+        // not the fill — the fill only covers what painting does not.
+        assert_eq!(
+            renderer.cell(1, 0).expect("spacer").bg,
+            RtColor::Rgb(16, 24, 40)
+        );
+        assert_eq!(
+            renderer.cell(0, 0).expect("painted").bg,
+            RtColor::Indexed(0),
+            "painted cells keep the core grid's bg"
+        );
+
+        // The grey-band case: rows BELOW the tiled layout (a renderer
+        // taller than the layout rects) are painted by nothing — they
+        // must still carry the fill, not the ratatui default.
+        let mut banded = PaneRenderer::new(80, 30, Glyphs::Unicode);
+        banded.set_background(RtColor::Rgb(16, 24, 40));
+        banded.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        banded.render_frame();
+        for y in 24..30u16 {
+            assert_eq!(
+                banded.cell(10, y).expect("band").bg,
+                RtColor::Rgb(16, 24, 40),
+                "row {y} below the layout carries the fill"
+            );
+        }
+
+        // Changing the background dirties and repaints with the new fill.
+        renderer.set_background(RtColor::Rgb(1, 2, 3));
+        let diff = renderer.render_frame();
+        assert!(!diff.is_empty(), "a bg change repaints");
+        assert_eq!(
+            renderer.cell(1, 0).expect("spacer").bg,
+            RtColor::Rgb(1, 2, 3)
+        );
+    }
+
+    /// The status row's cells carry the frame background too — the
+    /// `REVERSED` style the painter uses means fg/bg swap, so the row's
+    /// recorded bg must be the host bg for the reversed band to read as
+    /// the host's foreground on the host's background.
+    #[test]
+    fn status_row_cells_carry_no_reset_bg_after_paint() {
+        // The status painter sets only a REVERSED modifier, leaving bg at
+        // the buffer default; the sink's write_styled skips a Reset bg, so
+        // the host's own bg shows through the reversed cells' unswapped
+        // half. This is the documented v1 behavior; the assertion pins it
+        // so a future bg-aware status painter updates both sides.
+        let segments = vec![status::Segment {
+            text: "x".to_string(),
+            bold: false,
+        }];
+        let mut row = status::StatusRow::new(4);
+        row.paint(&segments);
+        let diff = row.diff();
+        assert!(diff.iter().all(|(_, _, cell)| cell.bg == RtColor::Reset));
+    }
+
+    /// The cursor-emitting sink: the recorded place_cursor calls.
+    struct CursorSink {
+        placements: Vec<Option<(u16, u16, CursorStyle)>>,
+    }
+
+    impl FlushSink for CursorSink {
+        fn flush(&mut self, _diff: &[(u16, u16, RtCell)]) {}
+        fn repaint_all(&mut self) {}
+        fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
+            self.placements.push(cursor);
+        }
+    }
+
+    /// End-to-end through the session's real frame path: a flushed frame
+    /// always re-places the cursor (the diff's per-cell CUPs moved the
+    /// host cursor), and a quiet pump emits nothing new. The session is
+    /// constructed headless — `WindowSession::new` touches no daemon —
+    /// and its renderer seeded directly.
+    #[test]
+    fn frame_replaces_cursor_after_flush_and_quiets_when_idle() {
+        let mut session = WindowSession::new(80, 25);
+        let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+        session.renderer.apply_layout(layout);
+        session.renderer.feed_output(1, b"hello\r\n");
+
+        let mut sink = CursorSink {
+            placements: Vec::new(),
+        };
+        // First frame: the flush must place the cursor (repaint_all's
+        // hide is simulated by the initial cursor_placed = Some(None)
+        // state — a placement must appear regardless, because flushed).
+        session.frame(&mut sink);
+        let expected = session.renderer.focused_cursor();
+        assert_eq!(sink.placements.len(), 1, "flushed frame places once");
+        assert_eq!(sink.placements[0], expected);
+
+        // A quiet pump: no flush, unchanged cursor state — no emission.
+        session.frame(&mut sink);
+        assert_eq!(sink.placements.len(), 1, "quiet pump emits nothing");
+
+        // Pane output: a flush — the cursor re-places even though the
+        // mapped cell did not move (the diff's CUPs moved the host one).
+        // The "x" feed moved the tracked cursor to (1, 1); recompute.
+        session.renderer.feed_output(1, b"x");
+        let moved = session.renderer.focused_cursor().expect("cursor");
+        session.frame(&mut sink);
+        assert_eq!(sink.placements.len(), 2, "flush re-places");
+        assert_eq!(sink.placements[1], Some(moved));
+
+        // Scroll the focused pane off live: state change to hidden even
+        // without a flush. Pane 1 needs scrollback to scroll into first.
+        for i in 0..30 {
+            session
+                .renderer
+                .feed_output(1, format!("h{i}\r\n").as_bytes());
+        }
+        assert!(session.renderer.wheel_scroll(10, 5, 3));
+        session.frame(&mut sink);
+        assert_eq!(sink.placements.len(), 3, "hide emits");
+        assert_eq!(sink.placements[2], None);
     }
 }

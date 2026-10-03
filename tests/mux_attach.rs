@@ -1195,33 +1195,57 @@ fn reconstructed_screen(
                     b';' => part = 1,
                     b'H' => {
                         j += 1;
-                        // Skip the SGR run (ESC[...m sequences), then one
-                        // symbol's UTF-8 bytes land.
+                        // Skip any CSI sequences between the CUP and the
+                        // symbol — SGR runs (`…m`), but also the cursor
+                        // placements the render client emits per frame:
+                        // DECSCUSR (`CSI Ps SP q`) and DECTCEM (`CSI ?25
+                        // h/l`). Parameter bytes (0x30-0x3F) and
+                        // intermediates (0x20-0x2F, the SP) precede the
+                        // final byte (0x40-0x7E). An `H`-final sequence
+                        // (another CUP — the next cell write) stops the
+                        // skip so the main loop re-parses it.
                         while j + 1 < text.len() && text[j] == 0x1b && text[j + 1] == b'[' {
-                            while j < text.len() && text[j] != b'm' {
-                                j += 1;
+                            let mut k = j + 2;
+                            while k < text.len() && (0x20..0x40).contains(&text[k]) {
+                                k += 1;
                             }
-                            j += 1;
+                            if k >= text.len() {
+                                break;
+                            }
+                            if text[k] == b'H' {
+                                break;
+                            }
+                            j = k + 1;
                         }
                         if j < text.len() && row > 0 && col > 0 {
-                            // One UTF-8 scalar.
-                            let rest = &text[j..];
-                            if let Ok(s) = std::str::from_utf8(&rest[..rest.len().min(4)]) {
-                                if let Some(ch) = s.chars().next() {
-                                    let (r, c) = (row - 1, col - 1);
-                                    if r < rows as usize && c < cols as usize {
-                                        let mut buf = [0u8; 4];
-                                        grid[r][c] = *ch
-                                            .encode_utf8(&mut buf)
-                                            .as_bytes()
-                                            .first()
-                                            .unwrap_or(&b' ');
-                                        ever[r]
-                                            .insert(String::from_utf8_lossy(&grid[r]).into_owned());
+                            if text[j] == 0x1b {
+                                // A CUP with no symbol after the CSI
+                                // runs — the cursor placement's CUP
+                                // (followed by DECSCUSR/DECTCEM, skipped
+                                // above). Resume AT the next sequence:
+                                // the loop's i += 1 lands on its ESC.
+                                i = j.saturating_sub(1);
+                            } else {
+                                // One UTF-8 scalar.
+                                let rest = &text[j..];
+                                if let Ok(s) = std::str::from_utf8(&rest[..rest.len().min(4)]) {
+                                    if let Some(ch) = s.chars().next() {
+                                        let (r, c) = (row - 1, col - 1);
+                                        if r < rows as usize && c < cols as usize {
+                                            let mut buf = [0u8; 4];
+                                            grid[r][c] = *ch
+                                                .encode_utf8(&mut buf)
+                                                .as_bytes()
+                                                .first()
+                                                .unwrap_or(&b' ');
+                                            ever[r].insert(
+                                                String::from_utf8_lossy(&grid[r]).into_owned(),
+                                            );
+                                        }
                                     }
                                 }
+                                i = j;
                             }
-                            i = j;
                         }
                         break;
                     }
