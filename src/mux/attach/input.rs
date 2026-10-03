@@ -183,6 +183,34 @@ impl InputParser {
             // ESC ESC: a standalone Escape key press followed by another
             // sequence (the Alt-self-insert spelling some terminals send).
             0x1b => EscapeScan::Token(Token::Key(TermKeyEvent::functional(TermKey::Escape, 0)), 1),
+            // An OSC 11 color-report reply the probe's 150 ms window
+            // missed: a host slower than the deadline answers while the
+            // pump owns stdin. Drop the report whole (BEL or ST
+            // terminator, bounded so a malformed report cannot hold the
+            // input stream) — fragments of it must never forward to a
+            // pane. A human Alt+] followed by the literal "11;" is not a
+            // real input shape.
+            b']' if data.len() >= 5 && &data[2..5] == b"11;" => {
+                let mut i = 5;
+                while i < data.len() {
+                    match data[i] {
+                        0x07 => return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1),
+                        0x1b if i + 1 < data.len() && data[i + 1] == b'\\' => {
+                            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 2)
+                        }
+                        // A stray ESC without the ST partner ends the
+                        // malformed report; consume through it.
+                        0x1b => return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1),
+                        _ => i += 1,
+                    }
+                }
+                if data.len() > 64 {
+                    // Give up on a report that never terminates; drop the
+                    // prefix so the stream keeps flowing.
+                    return EscapeScan::Token(Token::Bytes(Vec::new()), data.len());
+                }
+                EscapeScan::Incomplete(data.len())
+            }
             // ESC + a printable/other byte: Alt+byte. Re-encode through the
             // key encoder so the pane's option/meta mode applies — an Alt
             // chord is a Key event on the char.
@@ -536,5 +564,20 @@ mod tests {
             reencode_key(&TermKeyEvent::functional(TermKey::Home, 0), &term),
             b"\x1bOH"
         );
+    }
+
+    /// An OSC 11 color-report reply that arrived AFTER the probe's 150 ms
+    /// window (the stdin reader owns the stream now) is dropped WHOLE -
+    /// no fragment of it forwards to a pane. The graceful half of the
+    /// probe-race contract.
+    #[test]
+    fn late_osc11_reply_is_dropped_not_forwarded() {
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\");
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0], Token::Bytes(ref b) if b.is_empty()));
+        // The parser stays healthy for the next keystroke.
+        let tokens = parser.feed(b"x");
+        assert!(matches!(tokens[0], Token::Bytes(ref b) if b == b"x"));
     }
 }

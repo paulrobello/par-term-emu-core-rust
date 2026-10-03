@@ -19,7 +19,7 @@ use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
-use crate::mux::attach::{layout, ManagementKey};
+use crate::mux::attach::{layout, HelpRow, ManagementKey};
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
@@ -63,6 +63,38 @@ impl Glyphs {
     fn cross(self) -> &'static str {
         match self {
             Glyphs::Unicode => "┼",
+            Glyphs::Ascii => "+",
+        }
+    }
+
+    /// The modal border ring's rounded corners (ASCII fallback: `+`).
+    fn corner_top_left(self) -> &'static str {
+        match self {
+            Glyphs::Unicode => "╭",
+            Glyphs::Ascii => "+",
+        }
+    }
+
+    /// The modal border ring's rounded corners (ASCII fallback: `+`).
+    fn corner_top_right(self) -> &'static str {
+        match self {
+            Glyphs::Unicode => "╮",
+            Glyphs::Ascii => "+",
+        }
+    }
+
+    /// The modal border ring's rounded corners (ASCII fallback: `+`).
+    fn corner_bottom_left(self) -> &'static str {
+        match self {
+            Glyphs::Unicode => "╰",
+            Glyphs::Ascii => "+",
+        }
+    }
+
+    /// The modal border ring's rounded corners (ASCII fallback: `+`).
+    fn corner_bottom_right(self) -> &'static str {
+        match self {
+            Glyphs::Unicode => "╯",
             Glyphs::Ascii => "+",
         }
     }
@@ -194,17 +226,24 @@ pub struct PaneRenderer {
     height: u16,
     glyphs: Glyphs,
     /// The background every frame cell is filled with before painting —
-    /// the host terminal's resolved background (the OSC 10/11 probe), so
-    /// unwritten cells render in the host's bg instead of the terminal
-    /// default the ratatui buffer starts at (the light-grey strips a
-    /// dark-theme host showed around unpainted areas).
-    bg: RtColor,
+    /// the host terminal's resolved background (the OSC 10/11 probe). When
+    /// the probe FAILED, `None` leaves bg-fill cells at the terminal
+    /// default (no color painted), so a failed probe can never mismatch
+    /// the theme; black only ever appears when the probe SUCCEEDED with
+    /// black.
+    bg: Option<RtColor>,
     /// The divider currently dragged (orientation + pane ids), drawn
     /// reversed so the edge being moved stands out.
     drag_divider: Option<(bool, u32, u32)>,
-    /// The help overlay's lines, painted centered over the frame while
-    /// `Some` (the help chord).
-    overlay: Option<Vec<String>>,
+    /// The help overlay's rows, painted as the themed modal over the
+    /// frame while `Some` (the help chord). Rows carry their accent flag
+    /// so the painter styles headers/border ring in the accent color.
+    overlay: Option<Vec<HelpRow>>,
+    /// Per-pane border boxes instead of shared dividers (config
+    /// `pane-borders`); `show_label_in_border` embeds the pane's title in
+    /// the top edge. Both default off.
+    pane_borders: bool,
+    show_label_in_border: bool,
     /// The frame being painted.
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
@@ -223,9 +262,11 @@ impl PaneRenderer {
             width,
             height,
             glyphs,
-            bg: RtColor::Rgb(0, 0, 0),
+            bg: None,
             drag_divider: None,
             overlay: None,
+            pane_borders: false,
+            show_label_in_border: false,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
             dirty: true,
@@ -233,15 +274,21 @@ impl PaneRenderer {
     }
 
     /// Set the background the next frame fills every cell with — the
-    /// host terminal's resolved background color. The dark default
-    /// (`0,0,0`) matches the handshake's unprobed `host_colors` dark
-    /// default; the OSC 10/11 probe plugs in here once conn.rs reports
-    /// a resolved value.
-    pub fn set_background(&mut self, bg: RtColor) {
+    /// host terminal's resolved background color. `None` (the probe
+    /// failed) leaves the fill at the terminal default: bg-fill and
+    /// divider cells carry no painted color, so a failed probe can never
+    /// mismatch the theme. `Some` paints the probed value — including
+    /// black, when the host truly is black.
+    pub fn set_background(&mut self, bg: Option<RtColor>) {
         if self.bg != bg {
             self.bg = bg;
             self.dirty = true;
         }
+    }
+
+    /// The renderer's resolved background, if the probe reported one.
+    pub fn background(&self) -> Option<RtColor> {
+        self.bg
     }
 
     /// The current layout rects (window-relative), in leaf order.
@@ -328,12 +375,32 @@ impl PaneRenderer {
         }
     }
 
-    /// Set (or clear) the help overlay's lines. The overlay paints
-    /// centered and reverse-video over the frame; clearing it lets the
-    /// next frame's pane repaint restore the covered cells.
-    pub fn set_overlay(&mut self, lines: Option<Vec<String>>) {
+    /// Set (or clear) the help overlay's rows. The overlay paints as the
+    /// themed modal over the frame; clearing it lets the next frame's
+    /// pane repaint restore the covered cells.
+    pub(crate) fn set_overlay(&mut self, lines: Option<Vec<HelpRow>>) {
         if self.overlay != lines {
             self.overlay = lines;
+            self.dirty = true;
+        }
+    }
+
+    /// The pane-border display mode (config `pane-borders`): each pane
+    /// renders its own complete box with the content inset by the border
+    /// cells, replacing the shared-divider look. Default off.
+    pub(crate) fn set_pane_borders(&mut self, on: bool) {
+        if self.pane_borders != on {
+            self.pane_borders = on;
+            self.dirty = true;
+        }
+    }
+
+    /// The label-in-border display mode (config `show-label-in-border`,
+    /// only meaningful with `pane_borders`): each pane's user title
+    /// renders embedded in its top border edge. Default off.
+    pub(crate) fn set_show_label_in_border(&mut self, on: bool) {
+        if self.show_label_in_border != on {
+            self.show_label_in_border = on;
             self.dirty = true;
         }
     }
@@ -407,10 +474,30 @@ impl PaneRenderer {
             return None;
         }
         let (col, row) = (cursor.col, cursor.row);
-        if col >= usize::from(rect.width) || row >= usize::from(rect.height) {
+        // The placement path shares the paint inset: with the per-pane
+        // border option the cursor maps inside the border ring, hidden
+        // when the tracked cell falls in the cropped perimeter band.
+        let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
+        if col >= usize::from(view_w) || row >= usize::from(view_h) {
             return None;
         }
-        Some((rect.x + col as u16, rect.y + row as u16, cursor.style))
+        Some((
+            rect.x + inset_x + col as u16,
+            rect.y + inset_y + row as u16,
+            cursor.style,
+        ))
+    }
+
+    /// The content view of a pane rect: `(inset_x, inset_y, width,
+    /// height)` — the full rect, or the interior inside the one-cell
+    /// border ring when the per-pane-border option is on (a pane too
+    /// small to carry a ring keeps its full rect).
+    fn content_view(&self, rect: &PaneRect) -> (u16, u16, u16, u16) {
+        if self.pane_borders && rect.width > 2 && rect.height > 2 {
+            (1, 1, rect.width - 2, rect.height - 2)
+        } else {
+            (0, 0, rect.width, rect.height)
+        }
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does
@@ -566,21 +653,34 @@ impl PaneRenderer {
         // spacer, past the grid edge) and every cell no pane rect covers
         // then carries the resolved bg instead of the ratatui default the
         // buffer was born with — the grey top/bottom bands the host
-        // showed. Blank cells keep a blank symbol but a real bg.
-        let bg_style = RtStyle::default().bg(self.bg);
-        self.buffer.reset();
-        self.buffer
-            .set_style(RtRect::new(0, 0, self.width, self.height), bg_style);
+        // showed. When the probe failed (`bg: None`), the fill paints NO
+        // color — cells stay terminal-default — so a failed probe can
+        // never mismatch the host theme. Blank cells keep a blank symbol
+        // but a real bg.
+        if let Some(bg) = self.bg {
+            let bg_style = RtStyle::default().bg(bg);
+            self.buffer.reset();
+            self.buffer
+                .set_style(RtRect::new(0, 0, self.width, self.height), bg_style);
+        } else {
+            self.buffer.reset();
+        }
 
-        // Paint every pane's grid into its rect, then the dividers on top,
-        // then the help overlay last (it covers both).
+        // Paint every pane's grid into its rect, then the chrome on top
+        // (per-pane border boxes when the `pane-borders` option is on,
+        // shared dividers otherwise), then the help overlay last (it
+        // covers both).
         let layout = self.layout.clone();
         for rect in &layout {
             self.paint_pane(rect);
         }
-        self.paint_dividers();
-        if let Some(lines) = self.overlay.clone() {
-            self.paint_overlay(&lines);
+        if self.pane_borders {
+            self.paint_pane_borders();
+        } else {
+            self.paint_dividers();
+        }
+        if let Some(rows) = self.overlay.clone() {
+            self.paint_overlay(&rows);
         }
 
         let diff = self
@@ -607,15 +707,25 @@ impl PaneRenderer {
         let Some(emulator) = self.emulators.get(&rect.pane) else {
             return;
         };
+        // With the per-pane-border option on, the content paints INSIDE
+        // the border ring: the view window is the rect's interior and the
+        // grid's outer columns/rows are cropped (the daemon's pane is the
+        // full rect; the border overlays its perimeter).
+        let (inset_x, inset_y, view_w, view_h) =
+            if self.pane_borders && rect.width > 2 && rect.height > 2 {
+                (1u16, 1u16, rect.width - 2, rect.height - 2)
+            } else {
+                (0u16, 0u16, rect.width, rect.height)
+            };
         let grid = emulator.terminal().active_grid();
         let scroll = emulator.scroll_offset();
         let scrollback_len = grid.scrollback_len() as isize;
-        for row in 0..rect.height.min(grid.rows() as u16) {
+        for row in 0..view_h.min(grid.rows() as u16) {
             // View row r: live grid row r - S when r >= S; otherwise the
             // scrollback line S_len - S + r (newest history first).
             let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
             let in_history = (row as usize) < scroll;
-            for col in 0..rect.width.min(grid.cols() as u16) {
+            for col in 0..view_w.min(grid.cols() as u16) {
                 let core_cell: &crate::cell::Cell = if in_history {
                     let logical = scrollback_row.max(0) as usize;
                     match grid.scrollback_line(logical) {
@@ -632,7 +742,7 @@ impl PaneRenderer {
                         None => continue,
                     }
                 };
-                let (x, y) = (rect.x + col, rect.y + row);
+                let (x, y) = (rect.x + inset_x + col, rect.y + inset_y + row);
                 // The wide base already marked this spacer skip; painting
                 // it would clear the mark (reset() clears diff_option).
                 if core_cell.flags().wide_char_spacer() {
@@ -640,7 +750,9 @@ impl PaneRenderer {
                 }
                 let cell = &mut self.buffer[(x, y)];
                 cell.reset();
-                cell.set_bg(self.bg);
+                if let Some(bg) = self.bg {
+                    cell.set_bg(bg);
+                }
                 // Grapheme cluster: base char plus combining marks.
                 let mut symbol = String::from(core_cell.c());
                 for comb in core_cell.combining() {
@@ -648,11 +760,22 @@ impl PaneRenderer {
                 }
                 cell.set_symbol(&symbol);
                 cell.set_fg(map_color(core_cell.fg()));
-                cell.set_bg(map_color(core_cell.bg()));
+                // Blank-cell background semantics: the core grid marks
+                // unwritten cells bg-black. A blank carries the probed
+                // theme bg when the probe succeeded (the frame fill rule)
+                // and terminal-default when it failed — palette black is
+                // never painted for blank cells.
+                if matches!(core_cell.bg(), CoreColor::Named(NamedColor::Black)) {
+                    if let Some(bg) = self.bg {
+                        cell.set_bg(bg);
+                    }
+                } else {
+                    cell.set_bg(map_color(core_cell.bg()));
+                }
                 cell.set_style(map_flags(core_cell.flags()));
                 // A double-width base marks its right-hand spacer skip so
                 // the diff's flush never draws into it.
-                if core_cell.width() == 2 && col + 1 < rect.width {
+                if core_cell.width() == 2 && col + 1 < view_w {
                     self.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
                 }
             }
@@ -702,7 +825,9 @@ impl PaneRenderer {
         for (x, y, a, b) in &vertical {
             let cell = &mut self.buffer[(*x, *y)];
             cell.reset();
-            cell.set_bg(self.bg);
+            if let Some(bg) = self.bg {
+                cell.set_bg(bg);
+            }
             cell.set_symbol(self.glyphs.vertical());
             cell.set_style(divider_style(self.focused, self.drag_divider, true, *a, *b));
         }
@@ -714,7 +839,9 @@ impl PaneRenderer {
             } else {
                 let cell = &mut self.buffer[(*x, *y)];
                 cell.reset();
-                cell.set_bg(self.bg);
+                if let Some(bg) = self.bg {
+                    cell.set_bg(bg);
+                }
                 cell.set_symbol(self.glyphs.horizontal());
                 cell.set_style(divider_style(
                     self.focused,
@@ -727,34 +854,207 @@ impl PaneRenderer {
         }
     }
 
-    /// Paint the help overlay: a centered, reverse-video block of the
-    /// binding lines, clamped to the window. It paints last in
+    /// Paint the help overlay as the themed modal (the round-3 restyle):
+    /// every cell carries the resolved theme bg — the same rule the frame
+    /// fill applies, so no default-style (light) cell ever shows — ringed
+    /// by a rounded box-drawing border in the accent color, title
+    /// `keybinds` left and `esc close` badge top-right embedded in the
+    /// top border, category headers in the accent, and the footer hints
+    /// line inside the box. Clamped to the window; paints last in
     /// `render_frame`, covering panes and dividers; dismissal lets the
     /// next frame's pane repaint restore the covered cells.
-    fn paint_overlay(&mut self, lines: &[String]) {
-        let width = lines
+    fn paint_overlay(&mut self, rows: &[HelpRow]) {
+        let accent_style = RtStyle::default()
+            .fg(RtColor::Indexed(14))
+            .add_modifier(RtModifier::BOLD);
+        // Inner width: the widest row, clamped so the ring fits.
+        let inner = rows
             .iter()
-            .map(|l| l.chars().count())
+            .map(|r| r.text.chars().count())
             .max()
             .unwrap_or(0)
-            .min(self.width.saturating_sub(2) as usize);
-        let height = lines.len().min(self.height.saturating_sub(2) as usize);
-        let x0 = (self.width as usize).saturating_sub(width) / 2;
-        let y0 = (self.height as usize).saturating_sub(height) / 2;
-        let style = RtStyle::default().add_modifier(RtModifier::REVERSED);
-        for (i, line) in lines.iter().take(height).enumerate() {
-            let y = y0 + i;
-            for x in x0..x0 + width {
+            .min(self.width.saturating_sub(2) as usize)
+            .max(1);
+        let height = rows
+            .len()
+            .min(self.height.saturating_sub(2) as usize)
+            .max(1);
+        let x0 = (self.width as usize).saturating_sub(inner + 2) / 2;
+        let y0 = (self.height as usize).saturating_sub(height + 2) / 2;
+        // Fill every cell of the box with the theme background first.
+        for y in y0..y0 + height + 2 {
+            for x in x0..x0 + inner + 2 {
                 let cell = &mut self.buffer[(x as u16, y as u16)];
                 cell.reset();
-                cell.set_symbol(" ");
-                cell.set_style(style);
-            }
-            for (j, ch) in line.chars().take(width).enumerate() {
-                let cell = &mut self.buffer[((x0 + j) as u16, y as u16)];
-                cell.set_symbol(&ch.to_string());
+                if let Some(bg) = self.bg {
+                    cell.set_bg(bg);
+                }
             }
         }
+        // Border ring in the accent color (ASCII fallback: `+` corners).
+        let mut ring = |x: usize, y: usize, symbol: &str| {
+            let cell = &mut self.buffer[(x as u16, y as u16)];
+            cell.set_symbol(symbol);
+            cell.set_style(accent_style);
+        };
+        for x in x0 + 1..x0 + inner + 1 {
+            ring(x, y0, self.glyphs.horizontal());
+            ring(x, y0 + height + 1, self.glyphs.horizontal());
+        }
+        for y in y0 + 1..y0 + height + 1 {
+            ring(x0, y, self.glyphs.vertical());
+            ring(x0 + inner + 1, y, self.glyphs.vertical());
+        }
+        ring(x0, y0, self.glyphs.corner_top_left());
+        ring(x0 + inner + 1, y0, self.glyphs.corner_top_right());
+        ring(x0, y0 + height + 1, self.glyphs.corner_bottom_left());
+        ring(
+            x0 + inner + 1,
+            y0 + height + 1,
+            self.glyphs.corner_bottom_right(),
+        );
+        // Title and badge embedded in the top border (herdr's label
+        // treatment): `keybinds` after the top-left corner, `esc close`
+        // flush right before the top-right corner. Both accent.
+        let mut embed = |text: &str, start: usize| {
+            for (j, ch) in text.chars().enumerate() {
+                let x = start + j;
+                if x > x0 + inner {
+                    break;
+                }
+                let cell = &mut self.buffer[(x as u16, y0 as u16)];
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(accent_style);
+            }
+        };
+        embed(" keybinds ", x0 + 1);
+        let badge = " esc close ";
+        let badge_start = x0 + 1 + inner - badge.chars().count().min(inner);
+        embed(badge, badge_start);
+        // Content rows: accent rows (category headers) in the accent
+        // color, the rest in the default foreground on the theme bg.
+        for (i, row) in rows.iter().take(height).enumerate() {
+            for (j, ch) in row.text.chars().take(inner).enumerate() {
+                let cell = &mut self.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
+                cell.set_symbol(&ch.to_string());
+                if row.accent {
+                    cell.set_style(accent_style);
+                }
+            }
+        }
+    }
+
+    /// Paint the per-pane border boxes (config `pane-borders`): a full
+    /// ring per rect — the focused pane's border in the accent color, the
+    /// rest dim, herdr's look. When `show-label-in-border` is on, each
+    /// pane's non-empty user title breaks the top edge, space-padded and
+    /// truncated to fit (herdr's exact treatment); label cells are not
+    /// drag handles ([`Self::label_cell_at`]).
+    fn paint_pane_borders(&mut self) {
+        // (x, y, label chars, owning pane) per pane with a label.
+        let mut labels: Vec<(u16, u16, Vec<char>, u32)> = Vec::new();
+        for rect in &self.layout {
+            let style = if Some(rect.pane) == self.focused {
+                RtStyle::default()
+                    .fg(RtColor::Indexed(14))
+                    .add_modifier(RtModifier::BOLD)
+            } else {
+                RtStyle::default().add_modifier(RtModifier::DIM)
+            };
+            let x1 = rect.x + rect.width.saturating_sub(1);
+            let y1 = rect.y + rect.height.saturating_sub(1);
+            for y in rect.y..=y1 {
+                for x in rect.x..=x1 {
+                    if x > rect.x && x < x1 && y > rect.y && y < y1 {
+                        continue; // interior: not a border cell
+                    }
+                    let symbol = if x == rect.x && y == rect.y {
+                        self.glyphs.corner_top_left()
+                    } else if x == x1 && y == rect.y {
+                        self.glyphs.corner_top_right()
+                    } else if x == rect.x && y == y1 {
+                        self.glyphs.corner_bottom_left()
+                    } else if x == x1 && y == y1 {
+                        self.glyphs.corner_bottom_right()
+                    } else if y == rect.y || y == y1 {
+                        self.glyphs.horizontal()
+                    } else {
+                        self.glyphs.vertical()
+                    };
+                    let cell = &mut self.buffer[(x, y)];
+                    cell.reset();
+                    if let Some(bg) = self.bg {
+                        cell.set_bg(bg);
+                    }
+                    cell.set_symbol(symbol);
+                    cell.set_style(style);
+                }
+            }
+            if self.show_label_in_border && rect.width > 4 {
+                let title = self
+                    .emulators
+                    .get(&rect.pane)
+                    .map(|e| e.terminal().title().trim().to_string())
+                    .unwrap_or_default();
+                if !title.is_empty() {
+                    let max = rect.width.saturating_sub(4) as usize;
+                    let chars: Vec<char> =
+                        format!(" {} ", title.chars().take(max).collect::<String>())
+                            .chars()
+                            .collect();
+                    labels.push((rect.x + 1, rect.y, chars, rect.pane));
+                }
+            }
+        }
+        for (x, y, chars, pane) in labels {
+            let style = if Some(pane) == self.focused {
+                RtStyle::default()
+                    .fg(RtColor::Indexed(14))
+                    .add_modifier(RtModifier::BOLD)
+            } else {
+                RtStyle::default().add_modifier(RtModifier::DIM)
+            };
+            for (j, ch) in chars.into_iter().enumerate() {
+                let cell = &mut self.buffer[(x + j as u16, y)];
+                cell.reset();
+                if let Some(bg) = self.bg {
+                    cell.set_bg(bg);
+                }
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(style);
+            }
+        }
+    }
+
+    /// Whether window-relative `(x, y)` sits on a label's text cells (the
+    /// space-padded title embedded in a pane's top border). Label cells
+    /// are not drag handles: a press there must focus, not resize. The
+    /// plain border segments around a label stay draggable.
+    fn label_cell_at(&self, x: u16, y: u16) -> bool {
+        if !self.show_label_in_border || !self.pane_borders {
+            return false;
+        }
+        for rect in &self.layout {
+            if y != rect.y || rect.width <= 4 {
+                continue;
+            }
+            let title = self
+                .emulators
+                .get(&rect.pane)
+                .map(|e| e.terminal().title().trim().to_string())
+                .unwrap_or_default();
+            if title.is_empty() {
+                continue;
+            }
+            let max = rect.width.saturating_sub(4) as usize;
+            let len = format!(" {} ", title.chars().take(max).collect::<String>())
+                .chars()
+                .count();
+            if x > rect.x && x < rect.x + 1 + len as u16 {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -1087,15 +1387,18 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     .map_err(|err| format!("config: {err}"))?;
     session.management = chords.management;
     session.resize_step = chords.resize_step;
+    session.set_pane_borders(chords.pane_borders);
+    session.set_show_label_in_border(chords.show_label_in_border);
 
     // The OSC 11 background probe: raw mode is up and the pump's stdin
     // reader has not started, so the probe is briefly the tty's only
-    // reader. The probed bg fills every frame cell (black stays the
-    // fallback), and a corrected set-client-colors rides the probe so the
-    // daemon's theme record follows the host.
+    // reader. The probed bg fills every frame cell; a probe FAILURE
+    // leaves the fill terminal-default (no assumed color). A corrected
+    // set-client-colors rides the probe so the daemon's theme record
+    // follows the host.
     let probe = super::conn::probe_background();
     if let Some((r, g, b)) = probe.0 {
-        session.renderer.set_background(RtColor::Rgb(r, g, b));
+        session.set_background(Some(RtColor::Rgb(r, g, b)));
         let _ = conn.send_checked(&format!(
             "set-client-colors -f ffffff -b {r:02x}{g:02x}{b:02x}"
         ));
@@ -1181,6 +1484,15 @@ struct WindowSession {
     help_scroll: usize,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
+    /// The session's resolved background (the OSC 11 probe result), kept
+    /// OUTSIDE the renderer so a re-seed or resize re-fit — which rebuild
+    /// the renderer — re-applies it instead of silently dropping back to
+    /// the terminal-default fill (the round-3 prefix n/p black band).
+    bg: Option<RtColor>,
+    /// The session's pane-border display options (config), session-level
+    /// like the background so renderer reconstruction re-applies them.
+    pane_borders: bool,
+    show_label_in_border: bool,
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
@@ -1220,12 +1532,40 @@ impl WindowSession {
             help_filtering: false,
             help_scroll: 0,
             drag: None,
+            bg: None,
+            pane_borders: false,
+            show_label_in_border: false,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
             flash: None,
             flash_ticks: 0,
             cursor_placed: Some(None),
         }
+    }
+
+    /// Record the session's resolved background: the renderer carries it
+    /// AND the session keeps a copy so renderer reconstruction (re-seed,
+    /// resize re-fit) re-applies at the next paint. `None` = the probe
+    /// failed; the fill stays terminal-default.
+    fn set_background(&mut self, bg: Option<RtColor>) {
+        self.bg = bg;
+        self.renderer.set_background(bg);
+    }
+
+    /// The session's pane-border mode (config `pane-borders`): each pane
+    /// renders its own complete box with the content inset by the border
+    /// cells, replacing the shared-divider look. Session-level like the
+    /// background so renderer reconstruction re-applies it.
+    fn set_pane_borders(&mut self, on: bool) {
+        self.pane_borders = on;
+        self.renderer.set_pane_borders(on);
+    }
+
+    /// The session's label-in-border mode (config `show-label-in-border`):
+    /// each pane's user title renders embedded in its top border edge.
+    fn set_show_label_in_border(&mut self, on: bool) {
+        self.show_label_in_border = on;
+        self.renderer.set_show_label_in_border(on);
     }
 
     /// Resolve the initial window, seed it, run the pump. `sink` receives
@@ -1476,14 +1816,19 @@ impl WindowSession {
     }
 
     /// Replay every visible pane's state into its emulator (the seed and
-    /// the post-resize re-seed share this).
+    /// the post-resize re-seed share this). The reply body's lines join
+    /// back EXACTLY: the wire's body lines split on `\n` (BufRead::lines)
+    /// and joining restores the byte stream — appending another `\n`
+    /// would add a line feed the pane's restore stream never contained,
+    /// driving the freshly positioned cursor one row below the tracked
+    /// cell (the round-3 cursor off-by-one) or scrolling the grid when
+    /// the cursor sat on the bottom row.
     fn replay_all_panes(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         for rect in self.renderer.layout().to_vec() {
             let pane = format!("%{}", rect.pane);
             if let Ok(reply) = conn.send_checked(&format!("refresh-client -t {pane}")) {
                 if reply.ok {
-                    let mut bytes = reply.body.join("\n").into_bytes();
-                    bytes.push(b'\n');
+                    let bytes = reply.body.join("\n").into_bytes();
                     self.renderer.feed_output(rect.pane, &bytes);
                 }
             }
@@ -1697,12 +2042,16 @@ impl WindowSession {
             self.management,
             self.resize_step,
         );
-        let visible = usize::from(self.renderer.window_size().1.saturating_sub(6)).max(1);
-        let lines: Vec<String> =
-            super::compose_help_panel(&rows, &self.help_filter, visible, self.help_scroll)
-                .into_iter()
-                .map(|row| row.text)
-                .collect();
+        // The modal's own chrome (2 border rows) plus the always-present
+        // filter line and footer line surround the content window.
+        let visible = usize::from(self.renderer.window_size().1.saturating_sub(4)).max(1);
+        let lines = super::compose_help_panel(
+            &rows,
+            &self.help_filter,
+            self.help_filtering,
+            visible,
+            self.help_scroll,
+        );
         self.renderer.set_overlay(Some(lines));
     }
 
@@ -1962,12 +2311,16 @@ impl WindowSession {
             reload: self.reload_key,
             management: self.management,
             resize_step: self.resize_step,
+            pane_borders: self.pane_borders,
+            show_label_in_border: self.show_label_in_border,
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
                 self.reload_key = chords.reload;
                 self.management = chords.management;
                 self.resize_step = chords.resize_step;
+                self.set_pane_borders(chords.pane_borders);
+                self.set_show_label_in_border(chords.show_label_in_border);
                 self.literal = chords.prefix;
                 self.flash = Some("config reloaded".to_string());
             }
@@ -2109,6 +2462,14 @@ impl WindowSession {
         }
         self.window = window.to_string();
         self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
+        // Renderer reconstruction resets the theme and display options:
+        // re-apply the session's resolved background and pane-border/
+        // label flags so a re-seed does not paint a black band or drop
+        // the border mode (the round-3 prefix n/p defects).
+        self.renderer.set_background(self.bg);
+        self.renderer.set_pane_borders(self.pane_borders);
+        self.renderer
+            .set_show_label_in_border(self.show_label_in_border);
         self.scroll_mode = false;
         if let Some((l, v, f)) =
             conn.drain_pending_events()
@@ -2130,6 +2491,11 @@ impl WindowSession {
             }
         }
         self.replay_all_panes(conn);
+        // The re-seed replaced the renderer's buffers: the next frame's
+        // diff repaints every cell, and the cursor guard must reset so a
+        // changed position/shape re-emits even when the recorded state
+        // coincidentally matches the old window's.
+        self.cursor_placed = Some(None);
         // Fresh facts for the new view; a session gone mid-switch ends
         // the view through the pump's normal path on the next mark.
         let focused = self.renderer.focused().unwrap_or(0);
@@ -2290,6 +2656,19 @@ impl WindowSession {
             return;
         };
 
+        // The help panel is modal for the pointer too: while it is up
+        // every mouse event is consumed — wheels scroll the PANEL (the
+        // round-3 defect: they fell through to the pane scrollback /
+        // pane forwarding), clicks and drags do nothing.
+        if self.help_mode {
+            if mouse.is_wheel_up() {
+                self.help_scroll_by(-3);
+            } else if mouse.is_wheel_down() {
+                self.help_scroll_by(3);
+            }
+            return;
+        }
+
         if mouse.is_wheel_up() || mouse.is_wheel_down() {
             if self.drag.is_some() {
                 return; // the held button owns the pointer; wheels wait
@@ -2324,12 +2703,16 @@ impl WindowSession {
             return;
         }
 
-        // A press: a divider hit starts a drag (never a click-through);
-        // otherwise focus the pane (locally and daemon-side), then
-        // forward when it owns mouse tracking.
+        // A press: a divider hit starts a drag (never a click-through) —
+        // UNLESS the cell is an embedded border label (text cells are not
+        // drag handles, herdr's semantics); then it falls through to the
+        // focus path below. The plain border segments around a label stay
+        // draggable (divider_near still matches the boundary line).
         if let Some(divider) = self.renderer.divider_near(x, y, 1) {
-            self.drag = Some(DragState::Pending { divider, x, y });
-            return;
+            if !self.renderer.label_cell_at(x, y) {
+                self.drag = Some(DragState::Pending { divider, x, y });
+                return;
+            }
         }
         let Some(rect) = self.renderer.pane_at(x, y).cloned() else {
             return;
@@ -2382,16 +2765,22 @@ impl WindowSession {
             return;
         }
         // Motion.
-        if let Some(DragState::Pending { divider, x, y }) = self.drag.take() {
-            self.drag = Some(DragState::Active {
-                divider,
-                x,
-                y,
-                applied: 0,
-                pending: 0,
-            });
-            self.renderer
-                .set_drag_divider(Some((divider.vertical, divider.a, divider.b)));
+        // Promote only a PENDING press: an already-active drag must stay
+        // in place — `take()` here on an Active drag would drop the whole
+        // drag state, starving every resize after the first motion (the
+        // round-3 "highlight engages, drag does not resize" defect).
+        if matches!(&self.drag, Some(DragState::Pending { .. })) {
+            if let Some(DragState::Pending { divider, x, y }) = self.drag.take() {
+                self.drag = Some(DragState::Active {
+                    divider,
+                    x,
+                    y,
+                    applied: 0,
+                    pending: 0,
+                });
+                self.renderer
+                    .set_drag_divider(Some((divider.vertical, divider.a, divider.b)));
+            }
         }
         if let Some(DragState::Active {
             divider,
@@ -2483,6 +2872,12 @@ impl WindowSession {
         conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
             .map_err(|err| format!("resize report failed: {err}"))?;
         self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
+        // Same reconstruction reset as reseed_window: re-apply the theme
+        // and display options the fresh renderer dropped.
+        self.renderer.set_background(self.bg);
+        self.renderer.set_pane_borders(self.pane_borders);
+        self.renderer
+            .set_show_label_in_border(self.show_label_in_border);
         // The layout broadcast the report queued re-seeds the panes; but
         // drain it here directly so the repaint is synchronous.
         let layout_event = conn
@@ -2506,8 +2901,10 @@ impl WindowSession {
                     let pane = format!("%{}", rect.pane);
                     if let Ok(reply) = conn.send_checked(&format!("refresh-client -t {pane}")) {
                         if reply.ok {
-                            let mut bytes = reply.body.join("\n").into_bytes();
-                            bytes.push(b'\n');
+                            // Join only: an extra trailing `\n` here would
+                            // push the replayed cursor one row down (the
+                            // replay_all_panes note).
+                            let bytes = reply.body.join("\n").into_bytes();
                             self.renderer.feed_output(rect.pane, &bytes);
                         }
                     }
@@ -3356,7 +3753,7 @@ mod tests {
     fn frame_fills_every_cell_with_the_configured_background() {
         let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
         let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
-        renderer.set_background(RtColor::Rgb(16, 24, 40));
+        renderer.set_background(Some(RtColor::Rgb(16, 24, 40)));
         renderer.apply_layout(layout);
         // A short history line leaves the rest of its row unpainted, and
         // a wide char marks a spacer that painting skips.
@@ -3371,23 +3768,25 @@ mod tests {
 
         // The skipped cells specifically: the wide-char spacer (painting
         // skipped it, so the fill's bg stands) and an unpainted tail cell.
-        // Painted cells carry the core grid's own bg (Indexed(0) default),
-        // not the fill — the fill only covers what painting does not.
+        // Painted BLANK cells also carry the probed bg (the round-3
+        // contract: the resolved background fills every cell, so a pane
+        // area never shows palette black where the theme bg belongs);
+        // only cells the core painted with a real color keep it.
         assert_eq!(
             renderer.cell(1, 0).expect("spacer").bg,
             RtColor::Rgb(16, 24, 40)
         );
         assert_eq!(
             renderer.cell(0, 0).expect("painted").bg,
-            RtColor::Indexed(0),
-            "painted cells keep the core grid's bg"
+            RtColor::Rgb(16, 24, 40),
+            "blank painted cells carry the probed bg"
         );
 
         // The grey-band case: rows BELOW the tiled layout (a renderer
         // taller than the layout rects) are painted by nothing — they
         // must still carry the fill, not the ratatui default.
         let mut banded = PaneRenderer::new(80, 30, Glyphs::Unicode);
-        banded.set_background(RtColor::Rgb(16, 24, 40));
+        banded.set_background(Some(RtColor::Rgb(16, 24, 40)));
         banded.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
         banded.render_frame();
         for y in 24..30u16 {
@@ -3399,7 +3798,7 @@ mod tests {
         }
 
         // Changing the background dirties and repaints with the new fill.
-        renderer.set_background(RtColor::Rgb(1, 2, 3));
+        renderer.set_background(Some(RtColor::Rgb(1, 2, 3)));
         let diff = renderer.render_frame();
         assert!(!diff.is_empty(), "a bg change repaints");
         assert_eq!(
@@ -3790,17 +4189,34 @@ mod tests {
         );
         assert!(session.help_mode);
         let overlay = session.renderer.overlay.clone().expect("the overlay is up");
-        let joined = overlay.join("\n");
-        assert!(joined.contains("keybinds"), "the modal title: {joined}");
+        let joined = overlay
+            .iter()
+            .map(|r| r.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The compose carries content rows only; the ring/title/badge are
+        // paint_overlay's (asserted in the paint-level tests below). The
+        // filter line is ALWAYS present — the placeholder when inactive.
+        assert!(
+            joined.contains(crate::mux::attach::HELP_FILTER_PLACEHOLDER),
+            "the inactive filter line is visible: {joined}"
+        );
         assert!(joined.contains(" global "), "a category header: {joined}");
-        assert!(joined.contains("esc close"), "the close badge: {joined}");
+        assert!(
+            joined.contains("close esc/enter"),
+            "the footer names the controls: {joined}"
+        );
         // The filter: '/' then "swap" narrows; a non-matching row drops.
         assert!(session.help_byte(b'/'));
         for byte in b"swap" {
             assert!(session.help_byte(*byte));
         }
         let filtered = session.renderer.overlay.clone().expect("overlay");
-        let ftext = filtered.join("\n");
+        let ftext = filtered
+            .iter()
+            .map(|r| r.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(ftext.contains("swap"), "matching rows survive: {ftext}");
         assert!(!ftext.contains("detach"), "others drop: {ftext}");
         // Commit the filter (Enter), then dismiss (q): the prior frame's
@@ -3817,5 +4233,305 @@ mod tests {
             .map(|c| session.renderer.buffer[(c, 0)].symbol())
             .collect();
         assert_eq!(left, "LEFT", "the prior frame's cells restore");
+    }
+    /// Two side-by-side panes (a vertical divider at x=39).
+    const TWO_PANE: &str = "0000,80x24,0,0{40x24,0,0,1,40x24,40,0,2}";
+    /// Two stacked panes (a horizontal divider at y=11).
+    const STACKED: &str = "0000,80x24,0,0{80x12,0,0,1,80x12,0,12,2}";
+
+    /// The probe FAILED (`bg: None`): the frame fill paints NO color -
+    /// every cell stays terminal-default, so a failed probe can never
+    /// mismatch the theme. Default-to-black only appears when the probe
+    /// SUCCEEDS with black.
+    #[test]
+    fn probe_failure_fill_leaves_terminal_default_cells() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        let diff = renderer.render_frame();
+        assert!(!diff.is_empty());
+        assert_eq!(
+            renderer.cell(0, 0).expect("cell").bg,
+            RtColor::Reset,
+            "the fill paints no color"
+        );
+        let mid = renderer.cell(70, 10).expect("in-window cell");
+        assert_eq!(mid.bg, RtColor::Reset);
+
+        // A probe that SUCCEEDS with black still paints black.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(RtColor::Rgb(0, 0, 0)));
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        renderer.render_frame();
+        let cell = renderer.cell(70, 10).expect("in-window cell");
+        assert_eq!(cell.bg, RtColor::Rgb(0, 0, 0));
+    }
+
+    /// The help modal's paint: every cell carries the resolved theme bg,
+    /// the border ring draws the rounded box-drawing glyphs in the accent
+    /// color, and the title/badge sit in the top border.
+    #[test]
+    fn help_modal_paints_theme_bg_accent_ring_and_title() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        let bg = RtColor::Rgb(30, 30, 30);
+        renderer.set_background(Some(bg));
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        let rows = crate::mux::attach::compose_help_panel(
+            &crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1),
+            "",
+            false,
+            6,
+            0,
+        );
+        renderer.set_overlay(Some(rows));
+        renderer.render_frame();
+        // Locate the modal's top-left corner.
+        let mut origin = None;
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if renderer.cell(x, y).expect("cell").symbol() == "\u{256d}" {
+                    origin = Some((x, y));
+                }
+            }
+        }
+        let (x0, y0) = origin.expect("the modal's rounded corner draws");
+        // The title rides the top border (" keybinds " from x0+1).
+        assert_eq!(renderer.cell(x0 + 2, y0).expect("cell").symbol(), "k");
+        // The top edge between title and badge runs in the accent color.
+        let edge = renderer.cell(x0 + 20, y0).expect("cell");
+        assert_eq!(edge.symbol(), "\u{2500}");
+        assert_eq!(edge.fg, RtColor::Indexed(14), "the ring is accent");
+        // Interior cells carry the theme bg (no default/light cells).
+        let inside = renderer.cell(x0 + 5, y0 + 2).expect("cell");
+        assert_eq!(inside.bg, bg, "modal cells carry the theme bg");
+        // The modal's height: rows.len() clamped to the window; with the
+        // composed panel (filter + 6 window rows + footer) the box is 10
+        // rows tall - find the bottom corner on this column.
+        let bottom = (y0..24u16)
+            .map(|y| (y, renderer.cell(x0, y).expect("cell").symbol().to_string()))
+            .find(|(_, sym)| sym == "\u{2570}");
+        assert!(bottom.is_some(), "bottom-left rounded corner draws");
+    }
+
+    /// With the help panel open, wheels scroll the PANEL and reach
+    /// nothing else: the pane's client scrollback does not move and no
+    /// wheel falls through to forwarding.
+    #[test]
+    fn help_open_consumes_wheel_events() {
+        let (_, mut conn) = recording_conn("help-wheel");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        for i in 0..30 {
+            session
+                .renderer
+                .feed_output(1, format!("h{i}\r\n").as_bytes());
+        }
+        session.enter_help();
+        // Wheel down (cb 65) scrolls the panel down three rows; wheel up
+        // (cb 64) back. The events never reach the pane paths.
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 65,
+                col: 10,
+                row: 10,
+                release: false,
+            },
+        );
+        assert_eq!(session.help_scroll, 3, "the wheel scrolls the panel");
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 64,
+                col: 10,
+                row: 10,
+                release: false,
+            },
+        );
+        assert_eq!(session.help_scroll, 0, "wheel up scrolls back");
+        assert_eq!(
+            session.renderer.scroll_offset_of(1),
+            0,
+            "the pane scrollback never moved"
+        );
+    }
+
+    /// A drag survives MOTION WHILE ACTIVE: every additional motion
+    /// extends the delta and the frame-cadence application sends one
+    /// resize per unapplied cell. (The round-3 defect: the second motion
+    /// destroyed the active drag, so only one resize ever fired while the
+    /// highlight stayed up.)
+    #[test]
+    fn drag_survives_active_motion_and_resizes_per_cell() {
+        let (rx, mut conn) = recording_conn("drag-move");
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        while rx
+            .recv_timeout(std::time::Duration::from_millis(120))
+            .is_ok()
+        {}
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 40,
+                row: 6,
+                release: false,
+            },
+        );
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 32,
+                col: 41,
+                row: 6,
+                release: false,
+            },
+        );
+        session.apply_drag(&mut conn);
+        assert_eq!(
+            wait_recorded(&rx, "resize-pane"),
+            "resize-pane -t %1 -R 1",
+            "the first motion resizes one cell"
+        );
+        // A SECOND motion while active must extend the drag, not kill it.
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 32,
+                col: 43,
+                row: 6,
+                release: false,
+            },
+        );
+        session.apply_drag(&mut conn);
+        assert_eq!(
+            wait_recorded(&rx, "resize-pane"),
+            "resize-pane -t %1 -R 2",
+            "the second motion resizes its unapplied delta"
+        );
+    }
+
+    /// `pane-borders = on`: each pane renders a complete ring (corners on
+    /// every rect), the focused pane's border in the accent, the other
+    /// dim - and the option OFF renders no corner glyphs (today's
+    /// shared-divider look, byte for byte the default).
+    #[test]
+    fn pane_borders_option_replaces_dividers_with_full_boxes() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(RtColor::Rgb(0, 0, 0)));
+        renderer.set_pane_borders(true);
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        renderer.focus(2);
+        renderer.render_frame();
+        assert_eq!(renderer.cell(0, 0).expect("c").symbol(), "\u{256d}");
+        assert_eq!(renderer.cell(39, 0).expect("c").symbol(), "\u{256e}");
+        assert_eq!(renderer.cell(40, 0).expect("c").symbol(), "\u{256d}");
+        assert_eq!(renderer.cell(79, 23).expect("c").symbol(), "\u{256f}");
+        // Focused pane 2's right border carries the accent; pane 1's is
+        // dim.
+        let focused = renderer.cell(79, 10).expect("c");
+        assert_eq!(focused.fg, RtColor::Indexed(14));
+        let unfocused = renderer.cell(39, 10).expect("c");
+        assert!(
+            unfocused.modifier.contains(RtModifier::DIM) && unfocused.fg != RtColor::Indexed(14),
+            "the unfocused border is dim"
+        );
+
+        // Option OFF: no corner glyphs anywhere (the default look).
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        renderer.render_frame();
+        assert_ne!(renderer.cell(0, 0).expect("c").symbol(), "\u{256d}");
+    }
+
+    /// `show-label-in-border = on`: the pane's user title embeds in the
+    /// top edge space-padded, the label cells are not drag handles, and
+    /// the option OFF leaves plain borders.
+    #[test]
+    fn label_in_border_embeds_title_and_blocks_drag_on_label_cells() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(RtColor::Rgb(0, 0, 0)));
+        renderer.set_pane_borders(true);
+        renderer.set_show_label_in_border(true);
+        renderer.apply_layout(parse_layout(STACKED).expect("parses"));
+        renderer.feed_output(2, b"\x1b]2;dbug\x1b\\");
+        renderer.render_frame();
+        // The label " dbug " starts one cell in from the rect corner.
+        assert_eq!(renderer.cell(2, 12).expect("c").symbol(), "d");
+        assert_eq!(renderer.cell(1, 12).expect("c").symbol(), " ");
+        assert!(renderer.label_cell_at(2, 12), "a label cell knows itself");
+        assert!(
+            !renderer.label_cell_at(70, 12),
+            "plain border cells stay drag handles"
+        );
+        assert!(
+            !renderer.label_cell_at(2, 13),
+            "interior cells are not label cells"
+        );
+
+        // A press ON the label cell does not start a drag even though the
+        // top border row sits within the divider tolerance.
+        let (_, mut conn) = recording_conn("label-drag");
+        let mut session = WindowSession::new(80, 25);
+        session.renderer.set_pane_borders(true);
+        session.renderer.set_show_label_in_border(true);
+        session
+            .renderer
+            .apply_layout(parse_layout(STACKED).expect("parses"));
+        session.renderer.feed_output(2, b"\x1b]2;dbug\x1b\\");
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 3,
+                row: 13,
+                release: false,
+            },
+        );
+        assert!(
+            session.drag.is_none(),
+            "a label press focuses, it never drags"
+        );
+
+        // Option OFF (the default): the title does not render.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_pane_borders(true);
+        renderer.apply_layout(parse_layout(STACKED).expect("parses"));
+        renderer.feed_output(2, b"\x1b]2;dbug\x1b\\");
+        renderer.render_frame();
+        assert_ne!(renderer.cell(2, 12).expect("c").symbol(), "d");
+    }
+
+    /// The cursor placement path shares the border inset: with the
+    /// per-pane-border option on, the tracked cell maps inside the ring
+    /// (hidden when it falls in the cropped perimeter band); with the
+    /// option off the mapping is the plain rect origin - the round-3
+    /// pin for the cell-to-screen cursor math.
+    #[test]
+    fn focused_cursor_maps_through_the_rect_and_the_border_inset() {
+        // Off: plain rect-origin mapping.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        renderer.feed_output(1, b"hi");
+        assert_eq!(
+            renderer.focused_cursor(),
+            Some((2, 0, CursorStyle::BlinkingBlock)),
+            "plain mapping: rect origin plus the tracked cell"
+        );
+
+        // On: inset by the ring.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_pane_borders(true);
+        renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        renderer.feed_output(1, b"hi");
+        assert_eq!(
+            renderer.focused_cursor(),
+            Some((3, 1, CursorStyle::BlinkingBlock)),
+            "inset mapping: ring offset plus the tracked cell"
+        );
     }
 }

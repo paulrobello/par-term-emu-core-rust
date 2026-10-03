@@ -236,6 +236,18 @@ fn host_colors() -> (&'static str, &'static str) {
 /// window. The caller MUST prime them back into the pump's stdin stream
 /// (`Stdin::new_with_primer`); dropping them eats the user's first
 /// keystrokes.
+///
+/// Race audit (round 3): the probe and the pump's stdin reader never run
+/// concurrently — the reader thread is born in `Stdin::new_with_primer`,
+/// after `probe_background` returned — so the reply cannot be stolen
+/// mid-window. The two shapes that miss the reply are timing, not racing:
+/// a host answering after the 150 ms deadline (the reply bytes then reach
+/// the Stdin reader, whose parser drops unknown OSC/CSI spellings — the
+/// bytes are consumed and discarded, never forwarded to a pane), and a
+/// reply the parser cannot read (non-UTF-8). Both degrade to the `None`
+/// result, whose fallback renders terminal-default cells — see
+/// `PaneRenderer::set_background` — so a missed probe can never paint a
+/// wrong color.
 #[cfg(unix)]
 pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
     use nix::poll;
@@ -295,11 +307,14 @@ fn parse_osc_color(bytes: &[u8]) -> Option<(u8, u8, u8)> {
     let body = &rest[..end];
     let mut parts = body.split('/');
     let component = |raw: &str| -> Option<u8> {
-        let value = u16::from_str_radix(raw, 16).ok()?;
-        // Scale a 1-4 digit hex component to 8 bits: a component of n
-        // digits has max 0xF..F = 16^n - 1.
-        let max = (1u16 << (4 * raw.len().min(4))) - 1;
-        Some((u32::from(value) * 255 / u32::from(max.max(1))) as u8)
+        // Scale a 1-4 hex-digit component to 8 bits. The max must be
+        // computed in u32: a 4-digit component's max is 0xFFFF, and
+        // `1u16 << 16` would shift-overflow — the field defect that
+        // turned Ghostty's 16-bit replies (`rgb:1e1e/…`) into garbage.
+        let value = u32::from_str_radix(raw, 16).ok()?;
+        let digits = raw.len().clamp(1, 4) as u32;
+        let max = (1u32 << (4 * digits)) - 1;
+        Some((value.min(max) * 255 / max) as u8)
     };
     let r = component(parts.next()?)?;
     let g = component(parts.next()?)?;
@@ -328,5 +343,38 @@ pub(crate) fn terminal_grid() -> (u16, u16) {
     match crossterm::terminal::size() {
         Ok((cols, rows)) if cols > 0 && rows > 0 => (cols, rows),
         _ => (80, 24),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The OSC 11 reply parse: xterm's 16-bit and Ghostty's wide
+    /// spellings, the BEL terminator, and graceful None on garbage and
+    /// on a partial stream (the probe keeps polling until the deadline
+    /// when the reply splits across reads).
+    #[test]
+    fn osc_color_report_parses_and_yields_gracefully() {
+        // xterm: rgb:ffff/ffff/ffff -> white.
+        assert_eq!(
+            parse_osc_color(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\"),
+            Some((255, 255, 255))
+        );
+        // Ghostty's 16-bit-per-component reply for #1e1e1e.
+        assert_eq!(
+            parse_osc_color(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"),
+            Some((0x1e, 0x1e, 0x1e))
+        );
+        // BEL-terminated short form.
+        assert_eq!(
+            parse_osc_color(b"\x1b]11;rgb:1e/1e/1e\x07"),
+            Some((0x1e, 0x1e, 0x1e))
+        );
+        // A partial reply (split read) parses to None - the probe's loop
+        // keeps the bytes and polls again.
+        assert_eq!(parse_osc_color(b"\x1b]11;rgb:1e"), None);
+        // Non-reply bytes: graceful None, never a color.
+        assert_eq!(parse_osc_color(b"hello"), None);
     }
 }

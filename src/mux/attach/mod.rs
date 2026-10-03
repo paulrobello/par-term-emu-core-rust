@@ -1215,6 +1215,8 @@ impl Session {
             reload: self.reload_key,
             management: self.management,
             resize_step: self.resize_step,
+            pane_borders: false,
+            show_label_in_border: false,
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;
@@ -1599,18 +1601,26 @@ pub(crate) fn help_rows(
 /// The help panel's footer/controls line (render mode).
 pub(crate) const HELP_FOOTER: &str = " search / · scroll j/k/arrows/pgup/pgdn · close esc/enter ";
 
-/// Compose the rendered help panel from the category rows: the bordered,
-/// titled modal (title `keybinds`, `esc close` badge top-right), the
-/// filter box when one is active, the filter's matching rows (headers
-/// hide when nothing beneath them matches) windowed to `visible` rows at
-/// `scroll`, the bottom border, and the footer controls line. Pure over
-/// its inputs — the unit-test surface for the panel.
+/// The help panel's filter line when no filter is active — the visible
+/// placeholder (herdr's always-visible filter input).
+pub(crate) const HELP_FILTER_PLACEHOLDER: &str = " press / to filter ";
+
+/// Compose the help panel's CONTENT rows: the filter line (always
+/// present — the placeholder when inactive, ` /query▌` once `/` opened
+/// the input or text was typed), the filter's matching rows (headers hide
+/// when nothing beneath them matches) windowed to `visible` rows at
+/// `scroll`, and the footer controls line. The renderer's
+/// `PaneRenderer::paint_overlay` wraps these in the themed border box
+/// (ring, title, badge, background). Pure over its inputs — the
+/// unit-test surface for the panel.
 pub(crate) fn compose_help_panel(
     rows: &[HelpRow],
     filter: &str,
+    filtering: bool,
     visible: usize,
     scroll: usize,
 ) -> Vec<HelpRow> {
+    let _ = filtering; // the cursor glyph rides the filter text below
     let lower = filter.to_lowercase();
     let mut content: Vec<HelpRow> = Vec::new();
     let mut pending_header: Option<HelpRow> = None;
@@ -1629,41 +1639,22 @@ pub(crate) fn compose_help_panel(
     let start = scroll.min(max_start);
     let window: Vec<HelpRow> = content[start..(start + visible.min(content_len - start))].to_vec();
 
-    let width = rows
-        .iter()
-        .map(|r| r.text.chars().count())
-        .max()
-        .unwrap_or(HELP_FOOTER.chars().count())
-        .max(HELP_FOOTER.chars().count());
-    let title = " keybinds ";
-    let badge = " esc close ";
     let mut panel: Vec<HelpRow> = Vec::new();
-    let mut top = format!("╭{title}");
-    top.push_str(
-        &"─".repeat(width.saturating_sub(title.chars().count() + badge.chars().count() - 1)),
-    );
-    top.push_str(badge);
-    top.push('╮');
-    panel.push(HelpRow {
-        text: top,
-        accent: true,
-    });
-    if !filter.is_empty() {
+    // The filter line is ALWAYS visible: placeholder when no filter is
+    // active (the round-3 no-feedback defect — `/` must show the input
+    // immediately), the query with a cursor glyph once it is.
+    if filtering || !filter.is_empty() {
         panel.push(HelpRow {
             text: format!(" /{filter}▌"),
             accent: false,
         });
+    } else {
+        panel.push(HelpRow {
+            text: HELP_FILTER_PLACEHOLDER.to_string(),
+            accent: false,
+        });
     }
-    for row in window {
-        panel.push(row.clone());
-    }
-    panel.push(HelpRow {
-        text: format!(
-            "╰{}╯",
-            "─".repeat(width + title.chars().count() + badge.chars().count())
-        ),
-        accent: true,
-    });
+    panel.extend(window);
     panel.push(HelpRow {
         text: HELP_FOOTER.to_string(),
         accent: false,
@@ -3070,22 +3061,33 @@ mod tests {
         );
     }
 
-    /// The help panel compose: bordered modal with title and badge, the
+    /// The help panel compose: the filter line is ALWAYS present (the
+    /// placeholder when inactive — the round-3 no-feedback fix), the
     /// filter narrows rows live (headers hide when nothing beneath them
     /// matches), the window scrolls, and the footer line names the
-    /// controls.
+    /// controls. The border ring/title/badge are the renderer's
+    /// paint_overlay job, not the compose's.
     #[test]
     fn compose_help_panel_filters_scrolls_and_chromes() {
         let rows = super::help_rows(0x02, 0x12, Default::default(), 1);
-        // Full panel: title, badge, categories, footer.
-        let panel = super::compose_help_panel(&rows, "", 100, 0);
+        // Full panel: the always-visible filter placeholder, the
+        // categories, the footer.
+        let panel = super::compose_help_panel(&rows, "", false, 100, 0);
         let text: Vec<&str> = panel.iter().map(|r| r.text.as_str()).collect();
-        assert!(
-            text[0].starts_with('╭')
-                && text[0].contains("keybinds")
-                && text[0].contains("esc close"),
-            "the top border carries title and badge: {}",
+        assert_eq!(
+            text[0],
+            super::HELP_FILTER_PLACEHOLDER,
+            "the inactive filter line shows the placeholder: {}",
             text[0]
+        );
+        // Entering filter mode (no text yet) swaps in the cursor-input
+        // line immediately — `/` must give visible feedback before any
+        // typing.
+        let active = super::compose_help_panel(&rows, "", true, 100, 0);
+        assert_eq!(
+            active[0].text, " /▌",
+            "the active filter line shows the input cursor: {}",
+            active[0].text
         );
         assert!(
             text.last()
@@ -3095,7 +3097,7 @@ mod tests {
             "the footer names the controls"
         );
         // Filter: "swap" keeps only the swap rows (and their header).
-        let filtered = super::compose_help_panel(&rows, "swap", 100, 0);
+        let filtered = super::compose_help_panel(&rows, "swap", false, 100, 0);
         let ftext: String = filtered
             .iter()
             .map(|r| r.text.as_str())
@@ -3118,11 +3120,11 @@ mod tests {
         );
         // Scroll: a tiny window shows a slice, and scrolling past the end
         // clamps.
-        let small = super::compose_help_panel(&rows, "", 3, 0);
-        let big = super::compose_help_panel(&rows, "", 3, 10_000);
+        let small = super::compose_help_panel(&rows, "", false, 3, 0);
+        let big = super::compose_help_panel(&rows, "", false, 3, 10_000);
         assert_ne!(small[1..4], big[1..4], "scrolling moves the window");
         assert_eq!(
-            super::compose_help_panel(&rows, "", 3, 10_000).len(),
+            super::compose_help_panel(&rows, "", false, 3, 10_000).len(),
             small.len(),
             "the panel shape is stable under scroll"
         );
@@ -3142,6 +3144,7 @@ mod tests {
                     reload: 0x12,
                     management: crate::mux::config::Management::default(),
                     resize_step: 1,
+                    ..crate::mux::config::Chords::with_defaults()
                 },
             )
             .is_err(),
@@ -3276,6 +3279,7 @@ mod tests {
                     help: b'?',
                 },
                 resize_step: 1,
+                ..crate::mux::config::Chords::with_defaults()
             },
         )
         .expect("partial file");
@@ -3295,6 +3299,7 @@ mod tests {
                     help: b'?',
                 },
                 resize_step: 1,
+                ..crate::mux::config::Chords::with_defaults()
             }
         );
     }

@@ -103,6 +103,23 @@ pub struct ClientSection {
     /// bindings panel (every chord shown at its effective binding).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Per-pane border boxes in render mode (herdr's look): each pane
+    /// renders its own complete ring, focused accent vs dim, content
+    /// inset by the border cells. Default off — the shared-divider look.
+    #[serde(
+        default,
+        rename = "pane-borders",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pane_borders: Option<bool>,
+    /// The pane's user title embedded in its top border (only meaningful
+    /// with `pane-borders`). Default off.
+    #[serde(
+        default,
+        rename = "show-label-in-border",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_label_in_border: Option<bool>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -316,6 +333,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             swap_prev: None,
             swap_next: None,
             help: None,
+            pane_borders: Some(false),
+            show_label_in_border: Some(false),
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -384,6 +403,12 @@ pub struct Chords {
     /// cell of a divider drag) moves the pane's edge this many cells.
     /// A file value below 1 clamps to 1; the built-in default is 1.
     pub resize_step: u32,
+    /// Per-pane border boxes in render mode (config `pane-borders`).
+    /// Default off.
+    pub pane_borders: bool,
+    /// The pane's user title embedded in its top border (config
+    /// `show-label-in-border`). Default off.
+    pub show_label_in_border: bool,
 }
 
 impl Chords {
@@ -395,6 +420,8 @@ impl Chords {
             reload: 0x12,
             management: Management::default(),
             resize_step: 1,
+            pane_borders: false,
+            show_label_in_border: false,
         }
     }
 }
@@ -524,11 +551,20 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .resize_step
         .map(|step| step.max(1))
         .unwrap_or(current.resize_step);
+    // Display options: default OFF — absent keys preserve the shared-
+    // divider, label-free look exactly.
+    let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
+    let show_label_in_border = file
+        .client
+        .show_label_in_border
+        .unwrap_or(current.show_label_in_border);
     Ok(Chords {
         prefix,
         reload,
         management,
         resize_step,
+        pane_borders,
+        show_label_in_border,
     })
 }
 
@@ -792,8 +828,7 @@ expose-control-socket = true
         let defaults = Chords {
             prefix: 0x02,
             reload: 0x12,
-            management: Management::default(),
-            resize_step: 1,
+            ..Chords::with_defaults()
         };
         // Defaults.
         let file: ConfigFile = toml::from_str("[client]\n").unwrap();
