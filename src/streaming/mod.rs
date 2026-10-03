@@ -78,7 +78,10 @@ mod roster_watcher;
 pub mod auth_hash;
 
 // Hand-written escape hatches for the PyDictConvert derive (ARC-003).
-#[cfg(all(feature = "streaming", feature = "python"))]
+#[cfg(all(
+    feature = "streaming",
+    any(feature = "python", feature = "python-test")
+))]
 pub mod py_convert;
 
 // Re-export main types

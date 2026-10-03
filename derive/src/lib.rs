@@ -40,7 +40,8 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// exhaustive — a new variant fails compilation (or is picked up
 /// automatically here) instead of being silently missed.
 ///
-/// The generated inherent impl is `#[cfg(feature = "python")]`-gated and
+/// The generated inherent impl is
+/// `#[cfg(any(feature = "python", feature = "python-test"))]`-gated and
 /// provides:
 ///
 /// - `py_type_tag(&self) -> &'static str` — the dict `"type"` value per
@@ -339,7 +340,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
     };
 
     let expanded = quote! {
-        #[cfg(feature = "python")]
+        #[cfg(any(feature = "python", feature = "python-test"))]
         const _: () = {
             // Scope the trait imports the generated method bodies need,
             // independent of the target module's own imports.
