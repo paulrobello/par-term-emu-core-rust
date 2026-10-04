@@ -16,7 +16,7 @@
 use crate::mux::command::{list_commands_body, MuxCommand, ResizeAdjustment, SendKeysPayload};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::foreground::ProcessTable;
-use crate::mux::ids::{PaneId, SessionId, Target, WindowId, WorkspaceId};
+use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
@@ -180,12 +180,19 @@ pub(super) fn dispatch_command(
         } => cmd_refresh_client(ctx, pane, size, cell_pixels),
         MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
         MuxCommand::SplitWindow {
-            pane,
+            target,
             direction,
             percent,
             before,
             start_dir,
-        } => cmd_split_window(ctx, pane, direction, percent, before, start_dir.as_deref()),
+        } => cmd_split_window(
+            ctx,
+            target,
+            direction,
+            percent,
+            before,
+            start_dir.as_deref(),
+        ),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
@@ -209,10 +216,10 @@ pub(super) fn dispatch_command(
             command,
         } => cmd_respawn_pane(ctx, pane, kill, start_dir.as_deref(), command),
         MuxCommand::NewWindow {
-            session,
+            target,
             name,
             start_dir,
-        } => cmd_new_window(ctx, session, name, start_dir.as_deref()),
+        } => cmd_new_window(ctx, target, name, start_dir.as_deref()),
         MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
         MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
         MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
@@ -745,7 +752,7 @@ fn resolve_start_dir(start_dir: Option<&str>) -> (Option<PathBuf>, Option<String
 
 fn cmd_split_window(
     ctx: &Ctx<'_>,
-    pane: Target<PaneId>,
+    target: AnyTarget,
     direction: SplitDirection,
     percent: u32,
     before: bool,
@@ -757,7 +764,9 @@ fn cmd_split_window(
     // while the pane spawned fails the insert (the pane is killed tree-side).
     let (plan, factory) = {
         let mut guard = ctx.tree.lock();
-        let pane = match guard.resolve_pane_target(pane) {
+        // %N splits that pane, @N its window's active pane, $N the
+        // session's active window's active pane, a name the pane-title match.
+        let pane = match guard.resolve_split_target(target) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
@@ -1136,7 +1145,7 @@ fn cmd_swap_windows(ctx: &Ctx<'_>, source: Target<WindowId>, target: Target<Wind
 
 fn cmd_new_window(
     ctx: &Ctx<'_>,
-    session: Option<Target<SessionId>>,
+    target: Option<AnyTarget>,
     name: Option<String>,
     start_dir: Option<&str>,
 ) -> Outcome {
@@ -1150,15 +1159,24 @@ fn cmd_new_window(
         // Bare `new-window` targets the most-recently-created
         // session — ids are monotonic and the registry keeps
         // insertion order, so the last entry is the newest.
-        let Some(session) = session.or_else(|| guard.sessions().last().copied().map(Target::Id))
+        let Some(target) =
+            target.or_else(|| guard.sessions().last().copied().map(AnyTarget::Session))
         else {
             return Outcome::err(ctx, "no sessions exist");
         };
-        let session = match guard.resolve_session_target(session) {
-            Ok(id) => id,
+        // $N (and names) append; @N/%N insert right after that window.
+        let (session, insert_after) = match guard.resolve_new_window_target(target) {
+            Ok(resolved) => resolved,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        match guard.begin_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS, cwd.as_deref()) {
+        match guard.begin_window(
+            session,
+            &name,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            cwd.as_deref(),
+            insert_after,
+        ) {
             Ok(plan) => (plan, guard.factory()),
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }

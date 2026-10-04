@@ -243,7 +243,7 @@ impl MuxTree {
         rows: u16,
         cwd: Option<&Path>,
     ) -> Result<WindowId, MuxError> {
-        let plan = self.begin_window(session_id, name, cols, rows, cwd)?;
+        let plan = self.begin_window(session_id, name, cols, rows, cwd, None)?;
         let pane = self.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
         self.complete_window(plan, pane?)
     }
@@ -256,6 +256,7 @@ impl MuxTree {
         cols: u16,
         rows: u16,
         cwd: Option<&Path>,
+        insert_after: Option<WindowId>,
     ) -> Result<WindowSpawn, MuxError> {
         let session = self
             .sessions
@@ -271,6 +272,7 @@ impl MuxTree {
             session_name: session.name.clone(),
             env: session.env.clone(),
             cwd: cwd.map(Path::to_owned),
+            insert_after,
         })
     }
 
@@ -292,6 +294,7 @@ impl MuxTree {
             session_name: _,
             env: _,
             cwd: _,
+            insert_after,
         } = plan;
         if !self.sessions.contains_key(&session_id) {
             kill_detached(pane);
@@ -311,6 +314,23 @@ impl MuxTree {
                 zoomed: None,
             },
         );
+        // @N/%N `new-window` targets: the new window takes the slot right
+        // after its target instead of appending, the session's active index
+        // following the shift so the same window stays active (par-mux's
+        // new-window never selects the new one). A target window killed
+        // during the off-lock spawn is gone from the list: the append
+        // stands.
+        if let Some(after) = insert_after {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                if let Some(pos) = session.windows.iter().position(|w| *w == after) {
+                    session.windows.remove(session.windows.len() - 1);
+                    session.windows.insert(pos + 1, window_id);
+                    if session.active > pos {
+                        session.active += 1;
+                    }
+                }
+            }
+        }
         Ok(window_id)
     }
 

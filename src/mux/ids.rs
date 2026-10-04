@@ -103,6 +103,45 @@ impl<I: SigilId + FromStr<Err = ParseIdError>> Target<I> {
     }
 }
 
+/// A command target that admits every object sigil — the
+/// `split-window`/`new-window` shape (tmux resolves `$`/`@`/`%` targets
+/// on all three kinds). The leading sigil picks the kind, so a
+/// sigil-prefixed value always means the typed id it spells; a bare value
+/// stays a name with the command's own kind (`split-window` matches pane
+/// user titles, `new-window` matches session names).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnyTarget {
+    /// A typed `$N` session id.
+    Session(SessionId),
+    /// A typed `@N` window id.
+    Window(WindowId),
+    /// A typed `%N` pane id.
+    Pane(PaneId),
+    /// A name, resolved with the command's own kind.
+    Name(String),
+}
+
+impl AnyTarget {
+    /// Classify a raw `-t` value by its leading sigil: `$` a session, `@`
+    /// a window, `%` a pane, anything else a name. A sigil followed by a
+    /// non-number keeps [`Target::parse`]'s invalid-target error.
+    pub fn parse(raw: &str) -> Result<Self, ParseIdError> {
+        let number = |rest: &str| {
+            rest.parse::<u32>()
+                .map_err(|_| ParseIdError(raw.to_string()))
+        };
+        if let Some(rest) = raw.strip_prefix(SessionId::SIGIL) {
+            number(rest).map(|n| Self::Session(SessionId(n)))
+        } else if let Some(rest) = raw.strip_prefix(WindowId::SIGIL) {
+            number(rest).map(|n| Self::Window(WindowId(n)))
+        } else if let Some(rest) = raw.strip_prefix(PaneId::SIGIL) {
+            number(rest).map(|n| Self::Pane(PaneId(n)))
+        } else {
+            Ok(Self::Name(raw.to_string()))
+        }
+    }
+}
+
 /// Hands out monotonically increasing identifiers, counting each kind
 /// independently the way tmux does.
 #[derive(Debug, Default)]
@@ -284,5 +323,30 @@ mod tests {
         // Malformed sigil values keep the invalid-target error shape.
         assert!(Target::<PaneId>::parse("%abc").is_err());
         assert!(Target::<PaneId>::parse("%").is_err());
+    }
+
+    #[test]
+    fn any_target_classifies_each_sigil_and_names() {
+        assert_eq!(
+            AnyTarget::parse("$0").unwrap(),
+            AnyTarget::Session(SessionId(0))
+        );
+        assert_eq!(
+            AnyTarget::parse("@1").unwrap(),
+            AnyTarget::Window(WindowId(1))
+        );
+        assert_eq!(AnyTarget::parse("%3").unwrap(), AnyTarget::Pane(PaneId(3)));
+        assert_eq!(
+            AnyTarget::parse("build").unwrap(),
+            AnyTarget::Name("build".to_string())
+        );
+        // A sigil with no number after it is malformed, and `+N` is the
+        // workspace sigil — not one of the three — so it stays a name.
+        assert!(AnyTarget::parse("$abc").is_err());
+        assert!(AnyTarget::parse("@").is_err());
+        assert_eq!(
+            AnyTarget::parse("+7").unwrap(),
+            AnyTarget::Name("+7".to_string())
+        );
     }
 }

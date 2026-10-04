@@ -6,7 +6,7 @@ mod lifecycle;
 mod tests;
 
 use crate::color::Color;
-use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
+use crate::mux::ids::{AnyTarget, IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
@@ -195,6 +195,10 @@ pub struct WindowSpawn {
     session_name: String,
     env: BTreeMap<String, String>,
     cwd: Option<PathBuf>,
+    /// `new-window -t @N`/`-t %N`: the window the new one sits
+    /// immediately after at completion; `None` (the `$N`/name/bare
+    /// forms) appends.
+    insert_after: Option<WindowId>,
 }
 
 impl WindowSpawn {
@@ -586,6 +590,60 @@ impl MuxTree {
             Match::None => Err(MuxError::NoSuchSessionNamed(name)),
             Match::One(id) => Ok(id),
             Match::Many(ids) => Err(MuxError::AmbiguousSessionTarget(name, ids)),
+        }
+    }
+
+    /// Resolve a `split-window` target to the pane it splits: `%N` is the
+    /// pane itself (whose existence `begin_split` reports), `@N` that
+    /// window's active pane, `$N` the session's active window's active
+    /// pane, and a name falls through to the pane-title match
+    /// [`Self::resolve_pane_target`] does.
+    pub fn resolve_split_target(&self, target: AnyTarget) -> Result<PaneId, MuxError> {
+        match target {
+            AnyTarget::Pane(pane) => Ok(pane),
+            AnyTarget::Window(window) => self
+                .window(window)
+                .map(|w| w.active)
+                .ok_or(MuxError::NoSuchWindow(window)),
+            AnyTarget::Session(session) => {
+                let active = self
+                    .session(session)
+                    .and_then(|s| s.windows.get(s.active))
+                    .copied()
+                    .ok_or(MuxError::NoSuchSession(session))?;
+                self.window(active)
+                    .map(|w| w.active)
+                    .ok_or(MuxError::NoSuchSession(session))
+            }
+            AnyTarget::Name(name) => self.resolve_pane_target(Target::Name(name)),
+        }
+    }
+
+    /// Resolve a `new-window` target to its session and — when the target
+    /// names a window or a pane — the window the new one sits immediately
+    /// after at completion (`$N`, names, and the bare form append). A pane
+    /// target names the window holding it; unknown ids error per kind.
+    pub fn resolve_new_window_target(
+        &self,
+        target: AnyTarget,
+    ) -> Result<(SessionId, Option<WindowId>), MuxError> {
+        match target {
+            AnyTarget::Session(session) => Ok((session, None)),
+            AnyTarget::Window(window) => self
+                .session_of_window(window)
+                .map(|session| (session, Some(window)))
+                .ok_or(MuxError::NoSuchWindow(window)),
+            AnyTarget::Pane(pane) => {
+                let window = self
+                    .window_of_pane(pane)
+                    .ok_or(MuxError::NoSuchPane(pane))?;
+                self.session_of_window(window)
+                    .map(|session| (session, Some(window)))
+                    .ok_or(MuxError::NoSuchPane(pane))
+            }
+            AnyTarget::Name(name) => self
+                .resolve_session_target(Target::Name(name))
+                .map(|session| (session, None)),
         }
     }
 

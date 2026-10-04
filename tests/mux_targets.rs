@@ -29,6 +29,18 @@ fn body_lines(reply: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The reply block's body only: the lines between `%begin` and `%end` —
+/// pushes (`%layout-change`, …) that raced the reply are dropped, which
+/// the `body_lines` prefix filter cannot do (they start with `%` too).
+fn block_lines(reply: &str) -> Vec<&str> {
+    reply
+        .lines()
+        .skip_while(|l| !l.starts_with("%begin"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("%end"))
+        .collect()
+}
+
 /// A pane target that is a user title resolves to the titled pane, and an
 /// unknown name is a reported error, not a silent miss.
 #[test]
@@ -405,6 +417,196 @@ fn typed_ids_win_over_names_shaped_like_ids() {
         !info.contains("%0"),
         "the titled pane must not capture the id target: {info}"
     );
+
+    drop(writer);
+    let _ = handle;
+}
+
+/// tmux parity: `split-window` accepts window (`@N`) and session (`$N`)
+/// targets — `@N` splits that window's active pane, `$N` the session's
+/// active window's active pane — the reply body stays the new pane id, and
+/// unknown ids error per kind.
+#[test]
+fn split_window_accepts_window_and_session_targets() {
+    let fixture = MuxFixture::new("swtgt");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+
+    // alpha: window @0 with panes %0, %1 (split); window @1 ("logs") with
+    // panes %2, %3 (split), active via select-window below.
+    command(&mut writer, &mut reader, "new-session -s alpha");
+    command(&mut writer, &mut reader, "split-window -t %0");
+    command(&mut writer, &mut reader, "new-window -t alpha -n logs");
+    command(&mut writer, &mut reader, "split-window -t %2");
+    command(&mut writer, &mut reader, "select-window -t @0");
+
+    // @0's active pane is %1 — a @N target splits IT, so the new pane
+    // lands in @0.
+    let reply = ask(&mut writer, &mut reader, "split-window -t @0");
+    let pane = block_lines(&reply)
+        .last()
+        .copied()
+        .expect("the reply body is the new pane id")
+        .to_string();
+    assert!(
+        pane.starts_with('%') && block_lines(&reply).len() == 1,
+        "the reply body is exactly the new pane id: {reply}"
+    );
+    let info = ask(&mut writer, &mut reader, &format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(&format!("{pane} @0 ")),
+        "the @N split landed in window @0: {info}"
+    );
+
+    // A $N target splits the session's active window's active pane: alpha
+    // is still on @0, so the same window again.
+    let reply = ask(&mut writer, &mut reader, "split-window -t $0");
+    let pane = block_lines(&reply)
+        .last()
+        .copied()
+        .expect("the reply body is the new pane id")
+        .to_string();
+    let info = ask(&mut writer, &mut reader, &format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(&format!("{pane} @0 ")),
+        "the $N split followed alpha's active window @0: {info}"
+    );
+
+    // Selection moves the session target: with @1 active, a $N split
+    // lands there, not in @0.
+    command(&mut writer, &mut reader, "select-window -t @1");
+    let reply = ask(&mut writer, &mut reader, "split-window -t $0");
+    let pane = block_lines(&reply)
+        .last()
+        .copied()
+        .expect("the reply body is the new pane id")
+        .to_string();
+    let info = ask(&mut writer, &mut reader, &format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(&format!("{pane} @1 ")),
+        "after selecting @1, the $N split follows it: {info}"
+    );
+
+    // Unknown ids error per kind.
+    let reply = ask(&mut writer, &mut reader, "split-window -t @999");
+    assert!(
+        reply.contains("%error") && reply.contains("no such window: @999"),
+        "unknown window target errors: {reply}"
+    );
+    let reply = ask(&mut writer, &mut reader, "split-window -t $999");
+    assert!(
+        reply.contains("%error") && reply.contains("no such session: $999"),
+        "unknown session target errors: {reply}"
+    );
+    let reply = ask(&mut writer, &mut reader, "split-window -t %999");
+    assert!(
+        reply.contains("%error") && reply.contains("no such pane: %999"),
+        "unknown pane target errors: {reply}"
+    );
+
+    drop(writer);
+    let _ = handle;
+}
+
+/// tmux parity: `new-window` accepts window (`@N`) and pane (`%N`)
+/// targets — the new window sits IMMEDIATELY AFTER that window in the
+/// session's order (verified through `list-windows -t`), the reply body
+/// stays the new window id, and unknown ids error per kind.
+#[test]
+fn new_window_window_and_pane_targets_insert_after_their_window() {
+    let fixture = MuxFixture::new("nwtgt");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+
+    // alpha: windows @0 ("alpha"), @1 ("two"), @2 ("three").
+    command(&mut writer, &mut reader, "new-session -s alpha");
+    command(&mut writer, &mut reader, "new-window -t alpha -n two");
+    command(&mut writer, &mut reader, "new-window -t alpha -n three");
+
+    // @N: insert right after window @0.
+    let reply = ask(&mut writer, &mut reader, "new-window -t @0 -n ins");
+    let window = block_lines(&reply)
+        .last()
+        .copied()
+        .expect("the reply body is the new window id")
+        .to_string();
+    assert!(
+        window.starts_with('@') && block_lines(&reply).len() == 1,
+        "the reply body is exactly the new window id: {reply}"
+    );
+    let listed = ask(&mut writer, &mut reader, "list-windows -t alpha");
+    let lines: Vec<&str> = listed
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('%'))
+        .collect();
+    assert_eq!(
+        lines,
+        vec!["@0 * alpha", "@3 - ins", "@1 - two", "@2 - three"],
+        "the new window took @0's next slot in session order: {listed}"
+    );
+
+    // %N: the pane's window is the target, same insertion rule.
+    let reply = ask(&mut writer, &mut reader, "new-window -t %1 -n ins-pane");
+    assert!(
+        block_lines(&reply).last() == Some(&"@4"),
+        "the reply body is the new window id: {reply}"
+    );
+    let listed = ask(&mut writer, &mut reader, "list-windows -t alpha");
+    let lines: Vec<&str> = listed
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('%'))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "@0 * alpha",
+            "@3 - ins",
+            "@1 - two",
+            "@4 - ins-pane",
+            "@2 - three"
+        ],
+        "the pane target inserted after its window @1: {listed}"
+    );
+
+    // The $N form keeps appending (and the active marker stays put —
+    // par-mux's new-window never selects).
+    command(&mut writer, &mut reader, "new-window -t $0 -n appended");
+    let listed = ask(&mut writer, &mut reader, "list-windows -t alpha");
+    let lines: Vec<&str> = listed
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('%'))
+        .collect();
+    assert_eq!(
+        lines.last(),
+        Some(&"@5 - appended"),
+        "append stays last: {listed}"
+    );
+
+    // Unknown ids error per kind, and nothing was inserted.
+    let reply = ask(&mut writer, &mut reader, "new-window -t @999");
+    assert!(
+        reply.contains("%error") && reply.contains("no such window: @999"),
+        "unknown window target errors: {reply}"
+    );
+    let reply = ask(&mut writer, &mut reader, "new-window -t %999");
+    assert!(
+        reply.contains("%error") && reply.contains("no such pane: %999"),
+        "unknown pane target errors: {reply}"
+    );
+    let listed = ask(&mut writer, &mut reader, "list-windows -t alpha");
+    let count = listed
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('%'))
+        .count();
+    assert_eq!(count, 6, "the refused targets inserted nothing: {listed}");
 
     drop(writer);
     let _ = handle;

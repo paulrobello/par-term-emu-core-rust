@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use crate::keyboard::{self, modifiers, TermKey, TermKeyEvent};
-use crate::mux::ids::{PaneId, SessionId, Target, WindowId, WorkspaceId};
+use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
 use crate::terminal::Terminal;
 
@@ -170,11 +170,13 @@ pub enum MuxCommand {
     },
     /// Add a window to a session, optionally named.
     NewWindow {
-        /// Target session; `None` means the most-recently-created one (the
-        /// bare `new-window` tmux clients issue, which tmux resolves against
+        /// Target session (`$N` or name, appending), or window/pane (`@N`
+        /// and `%N`, inserting right after that window) — see [`AnyTarget`].
+        /// `None` means the most-recently-created one (the bare
+        /// `new-window` tmux clients issue, which tmux resolves against
         /// the client's attached session — par-mux has no client-session
         /// attachment, so "newest" is the documented stand-in).
-        session: Option<Target<SessionId>>,
+        target: Option<AnyTarget>,
         /// Window name; a default is chosen when absent.
         name: Option<String>,
         /// `-c`: the new pane's start directory. Absent keeps the
@@ -223,8 +225,10 @@ pub enum MuxCommand {
     KillServer,
     /// Split a pane's area in two, creating and focusing a new pane.
     SplitWindow {
-        /// Target pane to split.
-        pane: Target<PaneId>,
+        /// Target pane (`%N`), window (`@N` — its active pane), or session
+        /// (`$N` — its active window's active pane) to split; a name is a
+        /// pane-title target. See [`AnyTarget`].
+        target: AnyTarget,
         /// Split orientation after tmux's flag mapping: `-h` puts the new
         /// pane beside the target (side by side), `-v`/default below it.
         direction: SplitDirection,
@@ -664,6 +668,26 @@ impl Args<'_> {
             )),
             None => Ok(None),
         }
+    }
+
+    /// [`Self::pane`] for a target of any object kind — the
+    /// `split-window`/`new-window` shape (tmux accepts `$`/`@`/`%` targets
+    /// on both). The sigil picks the id kind; a bare value stays a name
+    /// with the command's own kind. `label` names that kind for the
+    /// malformed-id error, matching the single-kind helpers' wording.
+    fn any_target_opt(&self, flag_name: &str, label: &str) -> Result<Option<AnyTarget>, String> {
+        match self.quoted_flag(flag_name)? {
+            Some(raw) => Ok(Some(
+                AnyTarget::parse(&raw).map_err(|_| format!("invalid {label} target: {raw}"))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// The flag-required form of [`Self::any_target_opt`].
+    fn any_target(&self, flag_name: &str, label: &str) -> Result<AnyTarget, String> {
+        self.any_target_opt(flag_name, label)?
+            .ok_or_else(|| format!("{} requires {flag_name}", self.name))
     }
 
     /// [`Self::pane`] for workspace targets: a `+N`-sigiled value parses
@@ -1437,12 +1461,12 @@ fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let session = a.session("-t")?;
+    let target = a.any_target_opt("-t", "session")?;
     let name = a.quoted_flag("-n")?;
     let start_dir = a.quoted_flag("-c")?;
     reject_positionals(a, NEW_WINDOW_VALUE_FLAGS)?;
     Ok(MuxCommand::NewWindow {
-        session,
+        target,
         name,
         start_dir,
     })
@@ -1602,10 +1626,10 @@ fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32), String> {
 }
 
 fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let pane = a.pane("-t")?;
+    let target = a.any_target("-t", "pane")?;
     let (direction, percent) = parse_split_geometry(a)?;
     Ok(MuxCommand::SplitWindow {
-        pane,
+        target,
         direction,
         percent,
         before: a.has_flag("-b"),
@@ -1974,7 +1998,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t alpha -n logs").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(Target::Name("alpha".to_string())),
+                target: Some(AnyTarget::Name("alpha".to_string())),
                 name: Some("logs".into()),
                 start_dir: None,
             }
@@ -2196,7 +2220,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n '-s'").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: Some("-s".into()),
                 start_dir: None,
             }
@@ -2205,7 +2229,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -n 'two words' -t $0").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: Some("two words".into()),
                 start_dir: None,
             }
@@ -2228,7 +2252,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n 'build and test'").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: Some("build and test".into()),
                 start_dir: None,
             }
@@ -2568,7 +2592,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n build").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: Some("build".into()),
                 start_dir: None,
             }
@@ -2576,7 +2600,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: None,
                 start_dir: None,
             }
@@ -2586,7 +2610,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window").unwrap(),
             MuxCommand::NewWindow {
-                session: None,
+                target: None,
                 name: None,
                 start_dir: None,
             }
@@ -2799,7 +2823,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0").unwrap(),
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
                 before: false,
@@ -2809,7 +2833,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -v").unwrap(),
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
                 before: false,
@@ -2820,7 +2844,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -h -p 25").unwrap(),
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Vertical,
                 percent: 25,
                 before: false,
@@ -2831,7 +2855,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -h -b -p 30").unwrap(),
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Vertical,
                 percent: 30,
                 before: true,
@@ -2846,6 +2870,64 @@ mod tests {
         assert!(parse_command("split-window -t %0 -p 100").is_err());
     }
 
+    /// tmux parity: `split-window`/`new-window` accept all three sigils —
+    /// the sigil picks the kind, and a bare value keeps the command's own
+    /// name form (pane titles for split-window, session names for
+    /// new-window).
+    #[test]
+    fn split_and_new_window_targets_classify_every_sigil() {
+        assert_eq!(
+            parse_command("split-window -t @1").unwrap(),
+            MuxCommand::SplitWindow {
+                target: AnyTarget::Window(WindowId(1)),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+                before: false,
+                start_dir: None,
+            }
+        );
+        assert_eq!(
+            parse_command("split-window -t $0").unwrap(),
+            MuxCommand::SplitWindow {
+                target: AnyTarget::Session(SessionId(0)),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+                before: false,
+                start_dir: None,
+            }
+        );
+        assert_eq!(
+            parse_command("split-window -t build").unwrap(),
+            MuxCommand::SplitWindow {
+                target: AnyTarget::Name("build".to_string()),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+                before: false,
+                start_dir: None,
+            }
+        );
+        assert_eq!(
+            parse_command("new-window -t @2").unwrap(),
+            MuxCommand::NewWindow {
+                target: Some(AnyTarget::Window(WindowId(2))),
+                name: None,
+                start_dir: None,
+            }
+        );
+        assert_eq!(
+            parse_command("new-window -t %1 -n logs").unwrap(),
+            MuxCommand::NewWindow {
+                target: Some(AnyTarget::Pane(PaneId(1))),
+                name: Some("logs".into()),
+                start_dir: None,
+            }
+        );
+        // A malformed sigil value keeps the invalid-target error, the
+        // rule the single-kind helpers set.
+        assert!(parse_command("split-window -t @abc").is_err());
+        assert!(parse_command("new-window -t %abc").is_err());
+    }
+
     /// `-c` names the new pane's start directory on both commands, quoting
     /// included — a path with spaces survives the whitespace split.
     #[test]
@@ -2853,7 +2935,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -c /tmp").unwrap(),
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
                 before: false,
@@ -2863,7 +2945,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n logs -c '/tmp/my dir'").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(Target::Id(SessionId(0))),
+                target: Some(AnyTarget::Session(SessionId(0))),
                 name: Some("logs".into()),
                 start_dir: Some("/tmp/my dir".into())
             }
@@ -3478,7 +3560,7 @@ mod tests {
                 cell_pixels: None,
             },
             MuxCommand::NewWindow {
-                session: None,
+                target: None,
                 name: None,
                 start_dir: None,
             },
@@ -3493,7 +3575,7 @@ mod tests {
                 name: String::new(),
             },
             MuxCommand::SplitWindow {
-                pane: Target::Id(PaneId(0)),
+                target: AnyTarget::Pane(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
                 before: false,

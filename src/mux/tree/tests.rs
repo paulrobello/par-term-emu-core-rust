@@ -1798,6 +1798,136 @@ fn window_and_session_targets_resolve_by_name() {
     );
 }
 
+/// `split-window`'s loose target: `@N` resolves to that window's active
+/// pane and `$N` to the session's active window's active pane, so both
+/// follow selection; unknown window/session ids error per kind (a `%N`
+/// passes through — `begin_split` reports its existence, as before).
+#[test]
+fn split_target_resolves_window_and_session_to_their_active_panes() {
+    let mut tree = named_tree(None, None);
+    // @0's active pane becomes %2, and session $0 grows window @2 whose
+    // active pane is %3; the session's active window stays @0.
+    tree.split_pane(PaneId(0), SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let logs = tree.new_window(SessionId(0), "logs", 80, 24).unwrap();
+    assert_eq!(
+        tree.resolve_split_target(AnyTarget::Window(WindowId(0)))
+            .unwrap(),
+        PaneId(2)
+    );
+    assert_eq!(
+        tree.resolve_split_target(AnyTarget::Window(logs)).unwrap(),
+        PaneId(3)
+    );
+    assert_eq!(
+        tree.resolve_split_target(AnyTarget::Session(SessionId(0)))
+            .unwrap(),
+        PaneId(2),
+        "the session's active window is @0"
+    );
+    tree.select_window(logs).unwrap();
+    assert_eq!(
+        tree.resolve_split_target(AnyTarget::Session(SessionId(0)))
+            .unwrap(),
+        PaneId(3),
+        "selection moves the session target's pane"
+    );
+    // Pane %1 of the OTHER session is reachable only by its own id.
+    assert_eq!(
+        tree.resolve_split_target(AnyTarget::Pane(PaneId(1)))
+            .unwrap(),
+        PaneId(1)
+    );
+    assert!(matches!(
+        tree.resolve_split_target(AnyTarget::Window(WindowId(99))),
+        Err(MuxError::NoSuchWindow(_))
+    ));
+    assert!(matches!(
+        tree.resolve_split_target(AnyTarget::Session(SessionId(99))),
+        Err(MuxError::NoSuchSession(_))
+    ));
+}
+
+/// `new-window`'s loose target: `$N`/names append to the session, while
+/// `@N`/`%N` carry the window the new one sits right after.
+#[test]
+fn new_window_target_resolves_to_session_and_insert_after() {
+    let tree = named_tree(None, None);
+    assert_eq!(
+        tree.resolve_new_window_target(AnyTarget::Session(SessionId(0)))
+            .unwrap(),
+        (SessionId(0), None)
+    );
+    assert_eq!(
+        tree.resolve_new_window_target(AnyTarget::Window(WindowId(1)))
+            .unwrap(),
+        (SessionId(1), Some(WindowId(1)))
+    );
+    assert_eq!(
+        tree.resolve_new_window_target(AnyTarget::Pane(PaneId(0)))
+            .unwrap(),
+        (SessionId(0), Some(WindowId(0)))
+    );
+    assert_eq!(
+        tree.resolve_new_window_target(AnyTarget::Name("beta".to_string()))
+            .unwrap(),
+        (SessionId(1), None),
+        "names keep the session-name match, appending"
+    );
+    assert!(matches!(
+        tree.resolve_new_window_target(AnyTarget::Window(WindowId(99))),
+        Err(MuxError::NoSuchWindow(_))
+    ));
+    assert!(matches!(
+        tree.resolve_new_window_target(AnyTarget::Pane(PaneId(99))),
+        Err(MuxError::NoSuchPane(_))
+    ));
+}
+
+/// Completing an insert-after `begin_window` places the window right
+/// after its target in the session's list, and the session's active index
+/// follows the shift so the same window stays active.
+#[test]
+fn window_insert_after_sits_the_new_window_right_after_its_target() {
+    let mut tree = named_tree(None, None);
+    let second = tree.new_window(SessionId(0), "two", 80, 24).unwrap();
+    let third = tree.new_window(SessionId(0), "three", 80, 24).unwrap();
+    let plan = tree
+        .begin_window(SessionId(0), "inserted", 80, 24, None, Some(WindowId(0)))
+        .unwrap();
+    let pane = tree.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
+    let inserted = tree.complete_window(plan, pane.unwrap()).unwrap();
+    let session = tree.session(SessionId(0)).unwrap();
+    assert_eq!(
+        session.windows,
+        vec![WindowId(0), inserted, second, third],
+        "the new window took @0's next slot, not the end"
+    );
+    assert_eq!(
+        session.windows[session.active],
+        WindowId(0),
+        "the window before the insertion point stays active"
+    );
+
+    // A window AFTER the insertion point shifts: with `third` active, an
+    // insert after @0 moves the active index with it.
+    tree.select_window(third).unwrap();
+    let plan = tree
+        .begin_window(SessionId(0), "another", 80, 24, None, Some(WindowId(0)))
+        .unwrap();
+    let pane = tree.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
+    let another = tree.complete_window(plan, pane.unwrap()).unwrap();
+    let session = tree.session(SessionId(0)).unwrap();
+    assert_eq!(
+        session.windows,
+        vec![WindowId(0), another, inserted, second, third]
+    );
+    assert_eq!(
+        session.windows[session.active], third,
+        "the active index follows the shift"
+    );
+}
+
 #[test]
 fn unknown_names_error_without_touching_the_tree() {
     let tree = named_tree(Some("build"), None);
