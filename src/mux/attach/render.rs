@@ -5661,4 +5661,102 @@ mod tests {
             "inset mapping: ring offset plus the tracked cell"
         );
     }
+
+    /// The btop-exit artifact (kanban card: stale solid-background cells
+    /// after an alt-screen app exits), pinned headlessly. A pane draws an
+    /// alt-screen btop-like frame — rows of solid-background cells, wide
+    /// chars included — the renderer frames it, then the app exits
+    /// (CSI ? 1049 l) back to the primary screen's shell prompt and the
+    /// frame re-renders. The composed frame must show the primary screen
+    /// with NO btop background remnants anywhere: both the live diff
+    /// path (the same renderer fed the exit bytes in a second frame) and
+    /// the re-seed path (a fresh renderer replaying the full scripted
+    /// session, as reseed_window does) are checked.
+    #[test]
+    fn alt_screen_exit_leaves_no_stale_background_at_the_prompt_rows() {
+        let theme_bg = RtColor::Rgb(16, 16, 16);
+        let red = map_color(CoreColor::Named(NamedColor::Red));
+        let blue = map_color(CoreColor::Named(NamedColor::Blue));
+        let green = map_color(CoreColor::Named(NamedColor::Green));
+
+        // The scripted session: alt-screen enter, three btop-like rows
+        // (a red bar, a blue row of double-width chars filling all 80
+        // columns, a green bar), then the app exits to the restored
+        // primary screen and the shell draws its prompt on row 10.
+        let wide_row: String = "\u{6f22}".repeat(40); // 40 wide chars = 80 cols
+        let session = format!(
+            "\x1b[?1049h\x1b[H\x1b[41m{}\x1b[0m\r\n\x1b[44m{}\x1b[0m\r\n\x1b[42m{}\x1b[0m\x1b[?1049l\x1b[10;1H$ ",
+            "R".repeat(80),
+            wide_row,
+            "G".repeat(80),
+        );
+
+        // The exit marker is pure ASCII, so its byte offset is a char
+        // boundary; the session is fed in byte slices around it.
+        let bytes = session.as_bytes();
+        let split = session.find("\x1b[?1049l").expect("exit marker");
+
+        // The alt-screen frame really is on screen when framed alone.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(theme_bg));
+        renderer.apply_layout(parse_layout("0000,80x24,0,0,2").expect("parses"));
+        renderer.feed_output(2, &bytes[..split]);
+        let first = renderer.render_frame();
+        assert!(!first.is_empty(), "the btop frame paints");
+        assert_eq!(renderer.cell(0, 0).expect("c").symbol(), "R");
+        assert_eq!(renderer.cell(0, 0).expect("c").bg, red);
+        assert_eq!(renderer.cell(0, 1).expect("c").bg, blue);
+
+        // Live path: the same renderer, the exit bytes landing in a
+        // second frame.
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(theme_bg));
+        renderer.apply_layout(parse_layout("0000,80x24,0,0,2").expect("parses"));
+        renderer.feed_output(2, &bytes[..split]);
+        renderer.render_frame();
+        renderer.feed_output(2, &bytes[split..]);
+        let second = renderer.render_frame();
+        assert!(!second.is_empty(), "the exit repaints");
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                let cell = renderer.cell(x, y).expect("in-bounds");
+                assert_ne!(
+                    cell.bg,
+                    red,
+                    "stale red bg at ({x},{y}): {:?}",
+                    cell.symbol()
+                );
+                assert_ne!(
+                    cell.bg,
+                    blue,
+                    "stale blue bg at ({x},{y}): {:?}",
+                    cell.symbol()
+                );
+                assert_ne!(
+                    cell.bg,
+                    green,
+                    "stale green bg at ({x},{y}): {:?}",
+                    cell.symbol()
+                );
+            }
+        }
+        // The prompt landed where the app put it.
+        assert_eq!(renderer.cell(0, 9).expect("c").symbol(), "$");
+
+        // Re-seed path: a fresh renderer replaying the session (the
+        // reseed_window reconstruction), framed once.
+        let mut reseeded = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        reseeded.set_background(Some(theme_bg));
+        reseeded.apply_layout(parse_layout("0000,80x24,0,0,2").expect("parses"));
+        reseeded.feed_output(2, session.as_bytes());
+        reseeded.render_frame();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                let cell = reseeded.cell(x, y).expect("in-bounds");
+                assert_ne!(cell.bg, red, "re-seed stale red at ({x},{y})");
+                assert_ne!(cell.bg, blue, "re-seed stale blue at ({x},{y})");
+                assert_ne!(cell.bg, green, "re-seed stale green at ({x},{y})");
+            }
+        }
+    }
 }
