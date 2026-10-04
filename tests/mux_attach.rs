@@ -725,6 +725,81 @@ fn render_mode_zoom_rename_border_chords() {
         got.windows("║".len()).any(|w| w == "║".as_bytes()),
         "the border cycle must repaint the dividers at the new glyphs"
     );
+
+    // Three more cycles land on herdr: every pane draws its own rounded
+    // box; the flash names the style and the repaint carries the corner.
+    for _ in 0..3 {
+        host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
+    }
+    host.to_child.flush().ok();
+    let mut got = wait_for_output(&host, b"border style: herdr", Duration::from_secs(10));
+    got.extend(wait_for_output(&host, b"", Duration::from_millis(700)));
+    assert!(
+        plain_text(&got).contains("border style: herdr"),
+        "cycling to herdr must flash the style. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    assert!(
+        got.windows("╭".len()).any(|w| w == "╭".as_bytes()),
+        "the herdr style must paint per-pane rounded boxes"
+    );
+
+    // prefix l toggles the pane labels; the flash names the new state.
+    host.to_child.write_all(&[0x02, b'l']).expect("prefix l");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("labels on"),
+        "prefix l must flash labels on. stderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.to_child
+        .write_all(&[0x02, b'l'])
+        .expect("prefix l again");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"labels off", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("labels off"),
+        "prefix l again must flash labels off. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // Shift+arrow swaps with the pane in that direction: whichever side
+    // holds focus, one of the two presses hits a neighbor and the roster's
+    // layout order exchanges the two panes.
+    let first_before = client
+        .send("list-panes")
+        .expect("roster")
+        .iter()
+        .find_map(|l| {
+            l.split_whitespace()
+                .next()
+                .filter(|p| p.starts_with('%'))
+                .map(str::to_string)
+        })
+        .expect("a pane id");
+    host.to_child.write_all(&[0x02]).expect("prefix");
+    host.to_child.write_all(b"\x1b[1;2C").expect("shift-right");
+    host.to_child.write_all(&[0x02]).expect("prefix");
+    host.to_child.write_all(b"\x1b[1;2D").expect("shift-left");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(600));
+    let first_after = client
+        .send("list-panes")
+        .expect("roster")
+        .iter()
+        .find_map(|l| {
+            l.split_whitespace()
+                .next()
+                .filter(|p| p.starts_with('%'))
+                .map(str::to_string)
+        })
+        .expect("a pane id");
+    assert_ne!(
+        first_before, first_after,
+        "the shift-arrow swap must exchange the two panes' layout cells"
+    );
     host.killer.kill().ok();
 }
 

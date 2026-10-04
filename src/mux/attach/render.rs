@@ -48,6 +48,9 @@ pub enum Glyphs {
     /// VT100 ACS spelling (`| - +`): the fallback for charset-hostile
     /// terminals.
     Ascii,
+    /// herdr's look: UTF-8 rounded box drawing (`╭ ╮ ╰ ╯`) with every
+    /// pane drawing its own complete box (not the shared dividers).
+    Herdr,
 }
 
 impl Glyphs {
@@ -59,6 +62,7 @@ impl Glyphs {
             Glyphs::Double => "double",
             Glyphs::Heavy => "heavy",
             Glyphs::Ascii => "ascii",
+            Glyphs::Herdr => "herdr",
         }
     }
 
@@ -68,7 +72,8 @@ impl Glyphs {
             Glyphs::Unicode => Glyphs::Double,
             Glyphs::Double => Glyphs::Heavy,
             Glyphs::Heavy => Glyphs::Ascii,
-            Glyphs::Ascii => Glyphs::Unicode,
+            Glyphs::Ascii => Glyphs::Herdr,
+            Glyphs::Herdr => Glyphs::Unicode,
         }
     }
 
@@ -78,6 +83,7 @@ impl Glyphs {
             Glyphs::Double => "║",
             Glyphs::Heavy => "┃",
             Glyphs::Ascii => "|",
+            Glyphs::Herdr => "│",
         }
     }
 
@@ -87,6 +93,7 @@ impl Glyphs {
             Glyphs::Double => "═",
             Glyphs::Heavy => "━",
             Glyphs::Ascii => "-",
+            Glyphs::Herdr => "─",
         }
     }
 
@@ -96,6 +103,7 @@ impl Glyphs {
             Glyphs::Double => "╬",
             Glyphs::Heavy => "╋",
             Glyphs::Ascii => "+",
+            Glyphs::Herdr => "┼",
         }
     }
 
@@ -106,6 +114,7 @@ impl Glyphs {
             Glyphs::Double => "╔",
             Glyphs::Heavy => "┏",
             Glyphs::Ascii => "+",
+            Glyphs::Herdr => "╭",
         }
     }
 
@@ -116,6 +125,7 @@ impl Glyphs {
             Glyphs::Double => "╗",
             Glyphs::Heavy => "┓",
             Glyphs::Ascii => "+",
+            Glyphs::Herdr => "╮",
         }
     }
 
@@ -126,6 +136,7 @@ impl Glyphs {
             Glyphs::Double => "╚",
             Glyphs::Heavy => "┗",
             Glyphs::Ascii => "+",
+            Glyphs::Herdr => "╰",
         }
     }
 
@@ -136,6 +147,7 @@ impl Glyphs {
             Glyphs::Double => "╝",
             Glyphs::Heavy => "┛",
             Glyphs::Ascii => "+",
+            Glyphs::Herdr => "╯",
         }
     }
 }
@@ -1733,17 +1745,20 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     .map_err(|err| format!("config: {err}"))?;
     session.management = chords.management;
     session.resize_step = chords.resize_step;
+    // The border style first, the explicit `pane-borders` flag after it —
+    // the style implies a paint mode (herdr = per-pane boxes), and the
+    // explicit config key still overrides for any glyph set.
+    if !session.set_border_lines(&chords.border_lines) {
+        eprintln!(
+            "par-mux: [client] border-lines {:?} unknown — valid: unicode, double, heavy, ascii, herdr",
+            chords.border_lines
+        );
+    }
     session.set_pane_borders(chords.pane_borders);
     session.set_show_label_in_border(chords.show_label_in_border);
     session.set_pane_gaps(chords.pane_gaps);
     session.set_scrollbar_gutter(chords.scrollbar_gutter);
     session.drag_cursor_shape = chords.drag_cursor_shape;
-    if !session.set_border_lines(&chords.border_lines) {
-        eprintln!(
-            "par-mux: [client] border-lines {:?} unknown — valid: unicode, double, heavy, ascii",
-            chords.border_lines
-        );
-    }
     let eff = crate::mux::config::resolve(
         &crate::mux::config::load_canonical(),
         &crate::mux::config::Overrides::default(),
@@ -1992,10 +2007,16 @@ impl WindowSession {
             "double" => Glyphs::Double,
             "heavy" => Glyphs::Heavy,
             "ascii" => Glyphs::Ascii,
+            "herdr" => Glyphs::Herdr,
             _ => return false,
         };
         self.border_glyphs = glyphs;
         self.renderer.set_glyphs(glyphs);
+        // The style owns the paint mode: herdr draws every pane its own
+        // complete box, the rest the shared dividers. Applied before the
+        // config's explicit `pane-borders` at the init/reload sites, so
+        // that key still overrides for any glyph set.
+        self.set_pane_borders(matches!(glyphs, Glyphs::Herdr));
         true
     }
 
@@ -2343,8 +2364,9 @@ impl WindowSession {
                                     *prefix_pending = false;
                                     // A prefix chord on a functional
                                     // key: the arrows navigate panes
-                                    // directionally; anything else is
-                                    // unbound — consumed either way.
+                                    // directionally, shift+arrows swap
+                                    // with the neighbor; anything else
+                                    // is unbound — consumed either way.
                                     self.prefix_pane_arrow(conn, &ev);
                                     continue;
                                 }
@@ -2461,6 +2483,7 @@ impl WindowSession {
                     b if b == self.management.rename_window => Some(ManagementKey::RenameWindow),
                     b if b == self.management.rename_pane => Some(ManagementKey::RenamePane),
                     b if b == self.management.border_cycle => Some(ManagementKey::BorderCycle),
+                    b if b == self.management.label_toggle => Some(ManagementKey::Labels),
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -3085,6 +3108,28 @@ impl WindowSession {
         ev: &TermKeyEvent,
     ) {
         use crate::keyboard::TermKey;
+        // Shift+arrow: swap with the pane in that direction. tmux's
+        // swap-pane keeps focus following the pane's content, so no
+        // re-select is needed — the %layout-change broadcast re-seeds the
+        // view with the focused pane in the new cell.
+        if ev.modifiers == crate::keyboard::modifiers::SHIFT {
+            let dir = match ev.key() {
+                TermKey::Up => PaneDir::Up,
+                TermKey::Down => PaneDir::Down,
+                TermKey::Left => PaneDir::Left,
+                TermKey::Right => PaneDir::Right,
+                _ => return,
+            };
+            let Some(focused_id) = self.renderer.focused() else {
+                return;
+            };
+            let tree = self.tree_layout();
+            let Some(next) = pane_in_direction(&tree, focused_id, dir) else {
+                return;
+            };
+            let _ = conn.send_checked(&format!("swap-pane -s %{focused_id} -t %{next}"));
+            return;
+        }
         if ev.modifiers != 0 {
             return;
         }
@@ -3258,7 +3303,20 @@ impl WindowSession {
             super::ManagementKey::BorderCycle => {
                 self.border_glyphs = self.border_glyphs.next();
                 self.renderer.set_glyphs(self.border_glyphs);
+                // herdr style: every pane draws its own complete box, not
+                // the shared dividers — the style owns the paint mode.
+                self.renderer
+                    .set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr));
                 self.flash = Some(format!("border style: {}", self.border_glyphs.name()));
+                self.draw_status_row();
+            }
+            super::ManagementKey::Labels => {
+                // Toggle each pane's title in its border: the session's
+                // bool flips, the flash cue confirms the new state, and
+                // the next frame repaints the borders.
+                let on = !self.show_label_in_border;
+                self.set_show_label_in_border(on);
+                self.flash = Some(if on { "labels on" } else { "labels off" }.to_string());
                 self.draw_status_row();
             }
         }
@@ -3355,11 +3413,6 @@ impl WindowSession {
                 self.reload_key = chords.reload;
                 self.management = chords.management;
                 self.resize_step = chords.resize_step;
-                self.set_pane_borders(chords.pane_borders);
-                self.set_pane_gaps(chords.pane_gaps);
-                self.set_scrollbar_gutter(chords.scrollbar_gutter);
-                self.drag_cursor_shape = chords.drag_cursor_shape;
-                self.set_show_label_in_border(chords.show_label_in_border);
                 if !self.set_border_lines(&chords.border_lines) {
                     self.flash = Some(format!(
                         "border-lines {:?} unknown — using {}",
@@ -3367,6 +3420,11 @@ impl WindowSession {
                         self.border_glyphs.name()
                     ));
                 }
+                self.set_pane_borders(chords.pane_borders);
+                self.set_pane_gaps(chords.pane_gaps);
+                self.set_scrollbar_gutter(chords.scrollbar_gutter);
+                self.set_show_label_in_border(chords.show_label_in_border);
+                self.drag_cursor_shape = chords.drag_cursor_shape;
                 let eff = crate::mux::config::resolve(
                     &crate::mux::config::load_canonical(),
                     &crate::mux::config::Overrides::default(),
@@ -3675,6 +3733,8 @@ impl WindowSession {
                 Segment {
                     text: format!(" {flash} |"),
                     bold: true,
+                    dim: false,
+                    shaded: false,
                 },
             );
         }
@@ -3684,6 +3744,8 @@ impl WindowSession {
                 Segment {
                     text: " Z |".to_string(),
                     bold: true,
+                    dim: false,
+                    shaded: false,
                 },
             );
         }
@@ -5090,6 +5152,8 @@ mod tests {
         let segments = vec![status::Segment {
             text: "x".to_string(),
             bold: false,
+            dim: false,
+            shaded: false,
         }];
         let mut row = status::StatusRow::new(4);
         row.paint(&segments);

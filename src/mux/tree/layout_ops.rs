@@ -448,16 +448,18 @@ impl MuxTree {
         Ok(())
     }
 
-    /// Grow or shrink `pane` by `cells` toward `direction` (tmux's
-    /// `-L`/`-R`/`-U`/`-D`), adjusting the ratio of the split it borders —
-    /// from either side of it.
+    /// Grow or shrink `pane` by `cells` (tmux's `-L`/`-R`/`-U`/`-D`): the
+    /// pane's extent along the pressed direction's axis changes by `cells`
+    /// (`-R`/`-D` grow, `-L`/`-U` shrink), absorbed by the innermost
+    /// enclosing split of that orientation — an ancestor at any depth, so
+    /// a pane nested under cross-orientation splits resizes on both axes
+    /// (the manual-pass report: with neighbors on both axes, arrows could
+    /// only resize along one).
     ///
-    /// Only a split of the matching orientation can absorb the adjustment:
-    /// `-L`/`-R` move a side-by-side divider, `-U`/`-D` a stacked one. A
-    /// pane with no such bordering split — a lone pane, or one whose only
-    /// bordering split is the other orientation — is an error, not a no-op.
-    /// Pane terminals are resized to the new geometry. The Ok payload is the
-    /// pane's window — the dispatcher's `%layout-change` target.
+    /// A pane already spanning the pressed axis — a lone pane, or a window
+    /// whose only splits run the other way — is an error, not a no-op.
+    /// Pane terminals are resized to the new geometry. The Ok payload is
+    /// the pane's window — the dispatcher's `%layout-change` target.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,
@@ -468,41 +470,39 @@ impl MuxTree {
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
         self.mutate_layout(window_id, |window| {
-            let Some((split_direction, ratio, target_is_first)) =
-                window.layout.bordering_split(pane)
-            else {
-                return Err(MuxError::PaneNotResizable(pane));
-            };
-            let axis_matches = matches!(
-                (direction, split_direction),
-                (
-                    ResizeDirection::Left | ResizeDirection::Right,
-                    SplitDirection::Vertical
-                ) | (
-                    ResizeDirection::Up | ResizeDirection::Down,
-                    SplitDirection::Horizontal
-                )
-            );
-            if !axis_matches {
-                return Err(MuxError::PaneNotResizable(pane));
-            }
-            let extent = match split_direction {
-                SplitDirection::Vertical => window.cols as f32,
-                SplitDirection::Horizontal => window.rows as f32,
-            };
-            let sign = match direction {
-                ResizeDirection::Right | ResizeDirection::Down => 1.0,
-                ResizeDirection::Left | ResizeDirection::Up => -1.0,
-            };
-            // The pane's own share of the split grows by the adjustment,
-            // whichever side of the divider it sits on; the setter converts
-            // back to the split's first-perspective ratio.
-            let current_share = if target_is_first { ratio } else { 1.0 - ratio };
-            let new_share = current_share + sign * (cells as f32) / extent;
-            window
+            let rects = window
                 .layout
-                .set_bordering_share(pane, new_share)
-                .expect("bordering_split found the split set_bordering_share adjusts");
+                .geometry(0, 0, window.cols as usize, window.rows as usize);
+            let Some(rect) = rects.iter().find(|g| g.pane == pane) else {
+                return Err(MuxError::NoSuchPane(pane));
+            };
+            let (cols, rows) = match direction {
+                ResizeDirection::Left => {
+                    (Some(rect.width.saturating_sub(cells as usize).max(1)), None)
+                }
+                ResizeDirection::Right => (
+                    Some((rect.width + cells as usize).min(window.cols as usize)),
+                    None,
+                ),
+                ResizeDirection::Up => (
+                    None,
+                    Some(rect.height.saturating_sub(cells as usize).max(1)),
+                ),
+                ResizeDirection::Down => (
+                    None,
+                    Some((rect.height + cells as usize).min(window.rows as usize)),
+                ),
+            };
+            let mut next = window.layout.clone();
+            Self::set_leaf_extents(
+                &mut next,
+                pane,
+                cols.map(|value| value as u16),
+                rows.map(|value| value as u16),
+                window.cols as usize,
+                window.rows as usize,
+            )?;
+            window.layout = next;
             Ok(window_id)
         })
     }
@@ -529,25 +529,48 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchPane(pane))?;
         self.mutate_layout(window_id, |window| {
             let mut next = window.layout.clone();
-            let bounds = [
-                (cols, SplitDirection::Vertical, window.cols as usize),
-                (rows, SplitDirection::Horizontal, window.rows as usize),
-            ];
-            for (bound, axis, extent) in bounds {
-                let Some(cells) = bound else { continue };
-                match next
-                    .set_leaf_extent(pane, axis, cells, extent)
-                    .map_err(|_| MuxError::NoSuchPane(pane))?
-                {
-                    crate::mux::layout::ExtentOutcome::Adjusted => {}
-                    crate::mux::layout::ExtentOutcome::SpansAxis => {
-                        return Err(MuxError::PaneNotResizable(pane));
-                    }
-                }
-            }
+            Self::set_leaf_extents(
+                &mut next,
+                pane,
+                cols,
+                rows,
+                window.cols as usize,
+                window.rows as usize,
+            )?;
             window.layout = next;
             Ok(window_id)
         })
+    }
+
+    /// Set `pane`'s extent along one or both axes by walking its
+    /// enclosing splits — the shared body of `resize-pane`'s relative and
+    /// absolute forms. `None` skips that axis. Targets arrive pre-clamped
+    /// to the window extent; the walk maps a pane that spans the axis (no
+    /// divider to move) to `PaneNotResizable` and an absent pane to
+    /// `NoSuchPane`.
+    fn set_leaf_extents(
+        layout: &mut crate::mux::layout::LayoutTree,
+        pane: PaneId,
+        cols: Option<u16>,
+        rows: Option<u16>,
+        window_cols: usize,
+        window_rows: usize,
+    ) -> Result<(), MuxError> {
+        let bounds = [
+            (cols, SplitDirection::Vertical, window_cols),
+            (rows, SplitDirection::Horizontal, window_rows),
+        ];
+        for (bound, axis, extent) in bounds {
+            let Some(cells) = bound else { continue };
+            match layout.set_leaf_extent(pane, axis, cells, extent) {
+                Ok(crate::mux::layout::ExtentOutcome::Adjusted) => {}
+                Ok(crate::mux::layout::ExtentOutcome::SpansAxis) => {
+                    return Err(MuxError::PaneNotResizable(pane));
+                }
+                Err(_) => return Err(MuxError::NoSuchPane(pane)),
+            }
+        }
+        Ok(())
     }
 
     /// Set a window's extent and re-fit every pane terminal to the

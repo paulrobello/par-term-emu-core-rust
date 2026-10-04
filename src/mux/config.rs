@@ -156,6 +156,14 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub border_cycle: Option<String>,
+    /// The pane-labels chord: the key matched after the prefix that
+    /// toggles each pane's title embedded in its border (render mode).
+    #[serde(
+        default,
+        rename = "label-toggle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub label_toggle: Option<String>,
     /// The divider/border line style: `unicode` (default), `double`,
     /// `heavy`, or `ascii`. An unknown value warns and uses the
     /// default.
@@ -506,6 +514,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             rename_window: None,
             rename_pane: None,
             border_cycle: None,
+            label_toggle: None,
             border_lines: Some("unicode".to_string()),
             pane_borders: Some(false),
             show_label_in_border: Some(false),
@@ -670,6 +679,8 @@ pub struct Management {
     pub rename_pane: u8,
     /// Cycle the divider/border glyph set.
     pub border_cycle: u8,
+    /// Toggle pane titles embedded in the pane borders (render mode).
+    pub label_toggle: u8,
 }
 
 impl Default for Management {
@@ -690,6 +701,7 @@ impl Default for Management {
             rename_window: b',',
             rename_pane: b'$',
             border_cycle: b'B',
+            label_toggle: b'l',
         }
     }
 }
@@ -795,6 +807,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         border_cycle: match file.client.border_cycle.as_deref() {
             Some(chord) => management_key(chord, "border-cycle")?,
             None => current.management.border_cycle,
+        },
+        label_toggle: match file.client.label_toggle.as_deref() {
+            Some(chord) => management_key(chord, "label-toggle")?,
+            None => current.management.label_toggle,
         },
     };
     // A step the file names floors at 1 — a zero/negative step would make
@@ -1290,6 +1306,7 @@ remain-on-exit = true
                 rename_window: b',',
                 rename_pane: b'$',
                 border_cycle: b'B',
+                label_toggle: b'l',
             }
         );
         // Full override, tmux spellings and literals alike.

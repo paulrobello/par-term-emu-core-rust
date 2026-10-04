@@ -10,10 +10,10 @@
 //! one-row ratatui `Buffer` and diffs it, so a status change flushes
 //! only the changed cells of the bottom row.
 //!
-//! Layout, left to right, space-separated: every workspace (`name`, the
-//! daemon's active one bold), every session (`$N:name`, the shown one
-//! bold), the shown session's windows (`0:name`, the active one bold and
-//! `*`-marked), the focused pane's title, and the
+//! Layout, left to right: the tab strip (every workspace name, then the
+//! shown session's windows, as herdr-style tabs — `|`-separated, the
+//! active tab a solid shaded block, the rest dim), every session
+//! (`$N:name`, the shown one bold), the focused pane's title, and the
 //! agent roster as `agent:state` chips. When the focused pane is
 //! scrolled client-side, a trailing `[scroll +N]` cue reports the
 //! offset.
@@ -21,15 +21,20 @@
 use super::conn::AttachConn;
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
-use ratatui::style::{Modifier as RtModifier, Style as RtStyle};
+use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
 
 /// One styled run of the composed status line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Segment {
     /// The literal text.
     pub text: String,
-    /// Bold (the shown session, the active window).
+    /// Bold (the shown session, the scroll cue).
     pub bold: bool,
+    /// Dim (an inactive tab).
+    pub dim: bool,
+    /// The herdr tab shading: a solid bright block, the strip's
+    /// REVERSED base dropped (the active tab).
+    pub shaded: bool,
 }
 
 /// Why a status refresh did not produce fresh state.
@@ -211,67 +216,87 @@ impl StatusState {
     /// offset when a scroll view is up.
     pub(crate) fn compose(&self, cols: u16, scroll: Option<usize>) -> Vec<Segment> {
         let mut segments: Vec<Segment> = Vec::new();
-        let push = |segments: &mut Vec<Segment>, text: String, bold: bool| {
-            if let Some(last) = segments.last_mut() {
-                // Merge into the previous run when the style matches so
-                // the line stays a handful of segments.
-                if last.bold == bold {
-                    last.text.push_str(&text);
-                    return;
+        let push =
+            |segments: &mut Vec<Segment>, text: String, bold: bool, dim: bool, shaded: bool| {
+                if let Some(last) = segments.last_mut() {
+                    // Merge into the previous run when the style matches so
+                    // the line stays a handful of segments.
+                    if last.bold == bold && last.dim == dim && last.shaded == shaded {
+                        last.text.push_str(&text);
+                        return;
+                    }
                 }
-            }
-            segments.push(Segment { text, bold });
-        };
+                segments.push(Segment {
+                    text,
+                    bold,
+                    dim,
+                    shaded,
+                });
+            };
 
-        // The workspaces segment leads the line: every workspace's name
-        // in id order, the active one bold (the "current emphasized"
-        // rule the sessions/windows segments follow).
+        // The tab strip leads the line, herdr-style: every workspace and
+        // window as a padded name tab — the active one a solid shaded
+        // block, the rest dim, `|` between tabs (the "current emphasized"
+        // rule the sessions segment still follows with bold).
         for (index, (id, name)) in self.workspaces.iter().enumerate() {
             if index > 0 {
-                push(&mut segments, " ".to_string(), false);
+                push(&mut segments, " | ".to_string(), false, false, false);
             }
             let active = self.active_workspace.as_deref() == Some(id.as_str());
-            push(&mut segments, name.clone(), active);
+            push(&mut segments, format!(" {name} "), false, !active, active);
         }
         if !self.workspaces.is_empty() {
-            push(&mut segments, " | ".to_string(), false);
+            push(&mut segments, " | ".to_string(), false, false, false);
         }
         for (index, (id, name)) in self.sessions.iter().enumerate() {
             if index > 0 {
-                push(&mut segments, " ".to_string(), false);
+                push(&mut segments, " ".to_string(), false, false, false);
             }
             let current = self.session_id.as_deref() == Some(id.as_str());
-            push(&mut segments, format!("{id}:{name}"), current);
+            push(&mut segments, format!("{id}:{name}"), current, false, false);
         }
         if !self.windows.is_empty() {
-            push(&mut segments, " | ".to_string(), false);
+            push(&mut segments, " | ".to_string(), false, false, false);
             for (index, (id, name)) in self.windows.iter().enumerate() {
                 if index > 0 {
-                    push(&mut segments, " ".to_string(), false);
+                    push(&mut segments, " | ".to_string(), false, false, false);
                 }
-                let window = id.trim_start_matches('@');
                 let active = self.active_window.as_deref() == Some(id.as_str());
-                let mut text = format!("{window}:{name}");
-                if active {
-                    text.push('*');
-                }
-                push(&mut segments, text, active);
+                push(&mut segments, format!(" {name} "), false, !active, active);
             }
         }
         if !self.pane_title.is_empty() {
-            push(&mut segments, format!(" | {}", self.pane_title), false);
+            push(
+                &mut segments,
+                format!(" | {}", self.pane_title),
+                false,
+                false,
+                false,
+            );
         }
         if !self.agents.is_empty() {
-            push(&mut segments, " | ".to_string(), false);
+            push(&mut segments, " | ".to_string(), false, false, false);
             for (index, (agent, state)) in self.agents.iter().enumerate() {
                 if index > 0 {
-                    push(&mut segments, " ".to_string(), false);
+                    push(&mut segments, " ".to_string(), false, false, false);
                 }
-                push(&mut segments, format!("{agent}:{state}"), false);
+                push(
+                    &mut segments,
+                    format!("{agent}:{state}"),
+                    false,
+                    false,
+                    false,
+                );
             }
         }
         if let Some(offset) = scroll.filter(|offset| *offset > 0) {
-            push(&mut segments, format!(" | [scroll +{offset}]"), true);
+            push(
+                &mut segments,
+                format!(" | [scroll +{offset}]"),
+                true,
+                false,
+                false,
+            );
         }
 
         // Truncate to the row width.
@@ -334,7 +359,19 @@ impl StatusRow {
         }
         let mut x = 0u16;
         for segment in segments {
-            let style = if segment.bold {
+            // The herdr tab shading: the active tab drops the strip's
+            // REVERSED base for a solid bright block (dark on bright
+            // blue); inactive tabs dim, the rest the base.
+            let style = if segment.shaded {
+                RtStyle::default()
+                    .fg(RtColor::Indexed(0))
+                    .bg(RtColor::Indexed(12))
+                    .add_modifier(RtModifier::BOLD)
+            } else if segment.dim {
+                RtStyle::default()
+                    .add_modifier(RtModifier::REVERSED)
+                    .add_modifier(RtModifier::DIM)
+            } else if segment.bold {
                 RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
                     .add_modifier(RtModifier::BOLD)
@@ -401,37 +438,42 @@ mod tests {
         segments.iter().map(|s| s.text.as_str()).collect::<String>()
     }
 
-    /// The workspaces segment leads the line: every workspace's name in
-    /// id order, the daemon's active one bold.
+    /// The workspaces segment leads the line: every workspace's name as
+    /// a padded tab in id order, then the sessions segment.
     #[test]
     fn compose_carries_the_workspaces_segment_in_id_order() {
         let text = joined(&state().compose(120, None));
         assert!(
-            text.starts_with("alpha beta | "),
+            text.starts_with(" alpha  |  beta  | "),
             "workspaces lead the line: {text}"
         );
-        assert!(text.contains("alpha beta | $0:work"), "order: {text}");
+        assert!(text.contains("| $0:work"), "order: {text}");
     }
 
-    /// The active workspace's name segment is bold; the others are not.
+    /// The active workspace's tab is the shaded block; the others dim.
     #[test]
-    fn compose_bolds_the_active_workspace_only() {
+    fn compose_shades_the_active_workspace_only() {
         let segments = state().compose(120, None);
-        let bold_text = joined(
+        let shaded = joined(
             &segments
                 .iter()
-                .filter(|s| s.bold)
+                .filter(|s| s.shaded)
                 .cloned()
                 .collect::<Vec<_>>(),
         );
         assert!(
-            bold_text.contains("alpha"),
-            "active workspace bold: {bold_text}"
+            shaded.contains(" alpha "),
+            "active workspace shaded: {shaded}"
         );
-        assert!(
-            !bold_text.contains("beta"),
-            "other workspace not bold: {bold_text}"
+        assert!(!shaded.contains(" beta "), "other not shaded: {shaded}");
+        let dim = joined(
+            &segments
+                .iter()
+                .filter(|s| s.dim)
+                .cloned()
+                .collect::<Vec<_>>(),
         );
+        assert!(dim.contains(" beta "), "inactive tab dim: {dim}");
     }
 
     /// The composed line carries every fact the card lists: sessions,
@@ -443,17 +485,17 @@ mod tests {
         let text = joined(&segments);
         assert!(text.contains("$0:work"), "sessions: {text}");
         assert!(text.contains("$1:play"), "sessions: {text}");
-        assert!(text.contains("0:main*"), "windows, active marked: {text}");
-        assert!(text.contains("1:vim"), "windows: {text}");
+        assert!(text.contains(" main "), "windows, active tab: {text}");
+        assert!(text.contains(" vim "), "windows: {text}");
         assert!(text.contains("~/src"), "pane title: {text}");
         assert!(text.contains("claude:working"), "agent chips: {text}");
         assert!(text.contains("kimi:blocked"), "agent chips: {text}");
     }
 
-    /// The shown session's segment and the active window's segment are
-    /// bold; a non-shown session and inactive window are not.
+    /// The shown session's segment is bold; the active window's tab is
+    /// shaded, an inactive tab dim. A non-shown session is neither.
     #[test]
-    fn compose_bolds_the_current_session_and_active_window() {
+    fn compose_bolds_the_current_session_and_shades_the_active_window() {
         let segments = state().compose(120, None);
         let bold_text = joined(
             &segments
@@ -470,14 +512,23 @@ mod tests {
             !bold_text.contains("$1:play"),
             "other session not bold: {bold_text}"
         );
-        assert!(
-            bold_text.contains("0:main*"),
-            "active window bold: {bold_text}"
+        let shaded = joined(
+            &segments
+                .iter()
+                .filter(|s| s.shaded)
+                .cloned()
+                .collect::<Vec<_>>(),
         );
-        assert!(
-            !bold_text.contains("1:vim"),
-            "inactive window not bold: {bold_text}"
+        assert!(shaded.contains(" main "), "active window shaded: {shaded}");
+        assert!(!shaded.contains(" vim "), "inactive not shaded: {shaded}");
+        let dim = joined(
+            &segments
+                .iter()
+                .filter(|s| s.dim)
+                .cloned()
+                .collect::<Vec<_>>(),
         );
+        assert!(dim.contains(" vim "), "inactive window dim: {dim}");
     }
 
     /// A scroll offset over 0 appends a bold `[scroll +N]` cue; offset 0

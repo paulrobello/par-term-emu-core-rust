@@ -43,8 +43,9 @@ Per terminal, in passthrough then render mode, check:
 - **Scroll**: render mode — wheel scrolls the client's scrollback view when the
   pane does not own mouse mode; prefix `[` scrolls, `q` snaps back to live, and
   keys reach the pane afterwards. Passthrough — wheel reaches the pane.
-- **Status bar** (render): `$0:demo`, the window list with `*` on the active
-  window, the focused pane's title, agent chips when an agent is rostered.
+- **Status bar** (render): `$0:demo`, the herdr-shaded tab strip — the active
+  workspace/window a solid block, the rest dim with `|` separators — the
+  focused pane's title, agent chips when an agent is rostered.
 - **Zoom** (render): prefix `z` zooms the focused pane to the full window —
   the pane's prompt re-lays-out at the full width (the child resized), the
   status row carries a bold ` Z ` cue; prefix `z` again restores the split,
@@ -55,12 +56,20 @@ Per terminal, in passthrough then render mode, check:
   status bar pick the new name up; Escape cancels. Prefix `$` is the same for
   the focused pane's title (check with `pane-title -t %N` from another
   terminal that Escape did NOT commit).
-- **Border style** (render): prefix `B` cycles the dividers
-  unicode → double (`║`) → heavy (`┃`) → ascii (`|`), repaint at once; set
-  `[client] border-lines = "double"` and reload (`C-b C-r`) to check the
-  config path.
+- **Border style** (render): prefix `B` cycles
+  unicode → double (`║`) → heavy (`┃`) → ascii (`|`) → herdr — every pane
+  drawing its own rounded box — repaint at once; set
+  `[client] border-lines = "herdr"` (or `"double"`) and reload (`C-b C-r`)
+  to check the config path.
+- **Labels** (render): prefix `l` toggles each pane's title in its border
+  (label cells need the per-pane-box modes: `pane-borders` or herdr); the
+  flash names on/off, and a rename (prefix `$`) shows up in the label.
 - **Arrow navigation** (render): prefix+arrows move focus to the pane in
-  that direction (side-by-side and stacked splits); at an edge nothing moves.
+  that direction (side-by-side and stacked splits); at an edge nothing
+  moves. Shift+arrows swap with the pane in that direction — the two
+  panes exchange cells, focus following the content — and resize mode
+  (prefix `R`) reaches a divider on BOTH axes for panes nested under
+  cross-orientation splits.
 - **Detach cleanliness**: prefix `d` in both modes; the prompt returns intact,
   colors and cursor normal, no leftover alt-screen or hidden cursor.
 - **SSH**: from another machine, `ssh <host>` then run the same attach

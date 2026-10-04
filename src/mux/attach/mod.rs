@@ -899,7 +899,8 @@ impl Session {
                         ManagementKey::Zoom
                         | ManagementKey::RenameWindow
                         | ManagementKey::RenamePane
-                        | ManagementKey::BorderCycle,
+                        | ManagementKey::BorderCycle
+                        | ManagementKey::Labels,
                     ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
@@ -1694,6 +1695,8 @@ pub(crate) enum ManagementKey {
     RenamePane,
     /// Cycle the divider/border glyph set.
     BorderCycle,
+    /// Toggle pane titles embedded in the pane borders (render mode).
+    Labels,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1799,6 +1802,10 @@ pub(crate) fn help_rows(
                 "swap pane prev/next".to_string(),
             ),
             (
+                format!("{p} S-arrows"),
+                "swap with the pane in that direction".to_string(),
+            ),
+            (
                 format!("{p} {} arrows", spell_key(m.resize)),
                 format!("resize mode, edge moves by {resize_step}"),
             ),
@@ -1808,7 +1815,11 @@ pub(crate) fn help_rows(
             ),
             (
                 format!("{p} {}", spell_key(m.border_cycle)),
-                "cycle the border line style".to_string(),
+                "cycle the border style (herdr = per-pane boxes)".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.label_toggle)),
+                "toggle pane labels".to_string(),
             ),
             (
                 format!("{p} {}", spell_key(m.rename_pane)),
@@ -1818,13 +1829,16 @@ pub(crate) fn help_rows(
     );
     push_cat(
         &mut rows,
-        "windows/sessions",
+        "tabs / windows / sessions",
         vec![
             (
                 format!("{p} {}", spell_key(m.new_window)),
-                "new window".to_string(),
+                "new tab (window)".to_string(),
             ),
-            (format!("{p} n / p"), "next / previous window".to_string()),
+            (
+                format!("{p} n / p"),
+                "next / previous tab (window)".to_string(),
+            ),
             (format!("{p} ( / )"), "previous / next session".to_string()),
             (
                 format!("{p} {}", spell_key(m.picker)),
@@ -1832,7 +1846,7 @@ pub(crate) fn help_rows(
             ),
             (
                 format!("{p} {}", spell_key(m.rename_window)),
-                "rename the window".to_string(),
+                "rename the tab (window)".to_string(),
             ),
         ],
     );
@@ -3674,7 +3688,13 @@ mod tests {
         );
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let joined = text.join("\n");
-        for category in ["global", "panes", "windows/sessions", "navigation", "mouse"] {
+        for category in [
+            "global",
+            "panes",
+            "tabs / windows / sessions",
+            "navigation",
+            "mouse",
+        ] {
             assert!(
                 text.iter().any(|t| t.contains(category)),
                 "the category header {category} is present: {joined}"
@@ -4125,6 +4145,7 @@ mod tests {
                     rename_window: b',',
                     rename_pane: b'$',
                     border_cycle: b'B',
+                    label_toggle: b'l',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -4152,6 +4173,7 @@ mod tests {
                     rename_window: b',',
                     rename_pane: b'$',
                     border_cycle: b'B',
+                    label_toggle: b'l',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()

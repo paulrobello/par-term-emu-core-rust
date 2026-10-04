@@ -550,6 +550,49 @@ fn resize_pane_on_the_wrong_axis_is_an_error() {
 }
 
 #[test]
+fn resize_pane_reaches_a_cross_orientation_ancestor() {
+    // The manual-pass report: a pane nested under a stacked split inside
+    // a side-by-side root could only resize along its own split's axis.
+    // tmux semantics — the nearest same-axis ancestor at any depth moves.
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let window_id = tree.session(session_id).unwrap().windows[0];
+    let left = tree.window(window_id).unwrap().panes()[0];
+    tree.split_pane(left, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let right_top = tree.window(window_id).unwrap().panes()[1];
+    tree.split_pane(right_top, SplitDirection::Horizontal, 0.5, None)
+        .unwrap();
+
+    // The top-right pane's own split is stacked; -R must reach the root's
+    // side-by-side divider (widths 40/40 -> 30/50 — the right stack grows
+    // into the left pane's space).
+    tree.resize_pane(right_top, ResizeDirection::Right, 10)
+        .expect("the cross-orientation ancestor absorbs the growth");
+    let window = tree.window(window_id).unwrap();
+    let geo = window
+        .layout
+        .geometry(0, 0, window.cols as usize, window.rows as usize);
+    let rect = |pane| geo.iter().find(|g| g.pane == pane).unwrap();
+    assert_eq!(rect(left).width, 30);
+    assert_eq!(rect(right_top).width, 50);
+    let right_bottom = tree.window(window_id).unwrap().panes()[2];
+    assert_eq!(rect(right_bottom).width, 50);
+    assert_eq!(rect(right_top).height, 12);
+
+    // Its own stacked split still handles the height axis: -U 2 shrinks
+    // the top pane (heights 12/12 -> 10/14).
+    tree.resize_pane(right_top, ResizeDirection::Up, 2).unwrap();
+    let window = tree.window(window_id).unwrap();
+    let geo = window
+        .layout
+        .geometry(0, 0, window.cols as usize, window.rows as usize);
+    let rect = |pane| geo.iter().find(|g| g.pane == pane).unwrap();
+    assert_eq!(rect(right_top).height, 10);
+    assert_eq!(rect(right_bottom).height, 14);
+}
+
+#[test]
 fn resize_pane_on_a_lone_pane_is_an_error() {
     let mut tree = tree();
     let session_id = tree.new_session("main", 80, 24).unwrap();
