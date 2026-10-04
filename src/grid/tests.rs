@@ -995,6 +995,9 @@ fn test_export_styled_buffer() {
 /// cell loop): SGR diffing within a row, the reset at unwrapped row ends,
 /// SGR state carried across a wrapped scrollback row, trailing-blank
 /// trimming, skipped empty rows, and the per-row framing each path adds.
+/// The DEFAULT colors (fg White, bg Black) are omitted from every SGR run —
+/// a replaying host paints them with its own defaults (the grey-band
+/// contract, `probe_osc133_prompt_bg_source` over in terminal_tests.rs).
 #[test]
 fn test_styled_exports_golden_bytes() {
     let mut grid = Grid::new(4, 3, 10);
@@ -1016,23 +1019,23 @@ fn test_styled_exports_golden_bytes() {
 
     assert_eq!(
         grid.export_styled_buffer(),
-        "\x1b[0;31;40;1mA\x1b[0;37;40mb\x1b[0;31;40;1mC\x1b[0m\n \x1b[0;37;42mx\x1b[0m\n\x1b[0m\nz\x1b[0m\n"
+        "\x1b[0;31;1mA\x1b[0mb\x1b[0;31;1mC\x1b[0m\n \x1b[0;42mx\x1b[0m\n\x1b[0m\nz\x1b[0m\n"
     );
     assert_eq!(
         grid.export_scrollback_styled(None),
-        "\x1b[0;31;40;1mC\x1b[0m\n\x1b[0;31;40;1mA\x1b[0;37;40mb"
+        "\x1b[0;31;1mC\x1b[0m\n\x1b[0;31;1mA\x1b[0mb"
     );
     assert_eq!(
         grid.export_visible_screen_styled(),
-        "\x1b[H\x1b[1;1H \x1b[0;37;42mx\x1b[0m\x1b[3;1Hz\x1b[0m"
+        "\x1b[H\x1b[1;1H \x1b[0;42mx\x1b[0m\x1b[3;1Hz\x1b[0m"
     );
     assert_eq!(
         grid.export_visible_screen_styled_lines(),
-        " \x1b[0;37;42mx\x1b[0m\n\nz\n"
+        " \x1b[0;42mx\x1b[0m\n\nz\n"
     );
     assert_eq!(
         grid.export_row_styled(grid.row(0).unwrap()),
-        " \x1b[0;37;42mx\x1b[0m"
+        " \x1b[0;42mx\x1b[0m"
     );
     assert_eq!(grid.export_row_styled(grid.row(1).unwrap()), "");
 }

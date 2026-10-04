@@ -9,9 +9,19 @@ use crate::grid::Grid;
 /// Emits `\x1b[0` followed by the foreground, background, and attribute codes,
 /// terminating with `m`. Used by the styled export paths so the SGR-building
 /// logic lives in exactly one place.
+///
+/// The crate-wide DEFAULT colors — fg `Named(White)`, bg `Named(Black)`, the
+/// `Cell::default()` values — are OMITTED: a replaying host paints them with
+/// its own default colors, which is what the pane's own host did for every
+/// cell the pane never explicitly styled. Emitting them instead (`37`/`40`,
+/// palette entries) replays through the HOST's palette and paints visible
+/// bands around default-colored text whose true appearance was the host
+/// default (the manual-pass grey-prompt-band bug). The cost is a documented
+/// conflation: an EXPLICIT `ESC[37m`/`ESC[40m` also exports as default.
 fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags) {
     result.push_str("\x1b[0");
     match fg {
+        Color::Named(NamedColor::White) => {}
         Color::Named(nc) => {
             let code = match nc {
                 NamedColor::Black => 30,
@@ -37,9 +47,10 @@ fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::ce
         Color::Rgb(r, g, b) => result.push_str(&format!(";38;2;{};{};{}", r, g, b)),
     }
     match bg {
+        Color::Named(NamedColor::Black) => {}
         Color::Named(nc) => {
             let code = match nc {
-                NamedColor::Black => 40,
+                NamedColor::Black => unreachable!("handled by the default-omission guard"),
                 NamedColor::Red => 41,
                 NamedColor::Green => 42,
                 NamedColor::Yellow => 43,

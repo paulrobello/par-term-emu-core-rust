@@ -223,11 +223,11 @@ fn a_reattached_client_receives_a_seed_that_replays_state_and_survives_output() 
          bold), not just its text — a plain-text seed fails here"
     );
     assert!(
-        live_styled.contains("\x1b[0;37;44"),
+        live_styled.contains("\x1b[0;44;1"),
         "the seed row keeps its blue-background run: {live_styled:?}"
     );
     assert!(
-        live_styled.contains("\x1b[0;37;42"),
+        live_styled.contains("\x1b[0;42;1"),
         "the late row keeps its green-background run: {live_styled:?}"
     );
 }

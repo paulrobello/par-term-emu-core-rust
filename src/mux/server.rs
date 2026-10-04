@@ -3641,11 +3641,12 @@ mod tests {
             "plain capture carries no ESC byte: {plain:?}"
         );
 
-        // With -e the styled row carries its SGR run inline (reset, fg,
-        // bg — push_sgr_style's fixed order) and a reset before the
-        // line break; the unstyled row stays plain text.
+        // With -e the styled row carries its SGR run inline (reset, fg —
+        // default White omitted — bg, per push_sgr_style's fixed order)
+        // and a reset before the line break; the unstyled row stays
+        // plain text.
         assert!(
-            escaped.contains("\x1b[0;37;44") && escaped.contains("TAG\x1b[0m\n"),
+            escaped.contains("\x1b[0;44;1") && escaped.contains("TAG\x1b[0m\n"),
             "-e capture carries the styled run inline, reset before the \
              line break: {escaped:?}"
         );

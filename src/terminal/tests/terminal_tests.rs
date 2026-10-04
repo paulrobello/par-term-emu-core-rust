@@ -4522,3 +4522,33 @@ fn wide_char_wrap_scroll_keeps_pending_rows() {
     assert_eq!(matches.len(), 1, "the wrapped row is still pending");
     assert_eq!(matches[0].row, 3, "the row the wrap scroll moved it to");
 }
+
+#[test]
+fn styled_export_omits_default_colors() {
+    // The exact byte shape bash+starship+shell-integration emits at the pty
+    // for one prompt draw (captured raw via `script`): OSC 133 D/A marks,
+    // fg-only starship styles, CRLF, the character segment. The styled
+    // export must omit the DEFAULT colors (fg White, bg Black — never
+    // explicitly set), so a replaying host paints them with its own
+    // defaults; emitting palette `37`/`40` instead painted visible grey
+    // bands around replayed prompts on hosts whose palette-0 is not black.
+    let mut src = Terminal::new(80, 24);
+    src.process(b"prev \x1b[0moutput\r\n");
+    src.process(b"\x1b]133;D;0\x07\x1b]133;A\x07");
+    src.process(b"\x1b[1;31mprobello\x1b[33m@\x1b[32mMacDaddy\x1b[0m:\x1b[1;36m~\x1b[0m\r\n");
+    src.process(b"\x1b[1;32m\xe2\x9d\xaf\x1b[0m");
+    let restore = src.export_screen_restore_sequence();
+    assert!(
+        restore.contains("\x1b[0;31;1mprobello"),
+        "default bg must not ride along with an explicit fg: {restore:?}"
+    );
+    assert!(
+        !restore.contains("40m") && !restore.contains(";40;"),
+        "no palette-black background may appear anywhere in the replay: {restore:?}"
+    );
+    // Explicit colors survive: the Yellow `@` and Cyan `~` keep their codes.
+    assert!(
+        restore.contains("\x1b[0;33;1m@") && restore.contains("\x1b[0;36;1m~"),
+        "explicit fg colors must still be emitted: {restore:?}"
+    );
+}
