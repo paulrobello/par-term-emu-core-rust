@@ -503,11 +503,12 @@ impl Session {
     }
 
     /// Resync the target pane's screen: the replay body goes to stdout
-    /// verbatim. The reply framing is line-based, and the body's own
-    /// escape sequences ride those lines intact, so writing each line plus
-    /// its newline reproduces the daemon's screen-restore byte stream. The
-    /// same bytes seed the shadow emulator — its tracked cursor becomes
-    /// the pane's truth the status draw re-places.
+    /// verbatim (each reply line plus its newline — the draw's absolute
+    /// CUP re-places the host cursor, so the write side's final newline
+    /// is immaterial). The reply body — the daemon's screen-restore byte
+    /// stream, ending with the pane's real cursor CUP — seeds the shadow
+    /// emulator verbatim; its tracked cursor becomes the pane's truth the
+    /// status draw re-places.
     fn resync(&mut self) {
         let reply = match self
             .conn
@@ -524,8 +525,14 @@ impl Session {
                 return;
             }
         };
-        let mut bytes = reply.body.join("\n").into_bytes();
-        bytes.push(b'\n');
+        // The restore stream ends with the pane's real cursor CUP, so the
+        // shadow — which must track the PANE, not the host's post-write
+        // drift — feeds it verbatim. A trailing newline appended here
+        // parked the shadow one row below the prompt, and every status
+        // draw's absolute placement with it (manual-pass cursor bug). The
+        // host write below keeps its per-line newlines; the draw's
+        // absolute CUP re-places the host cursor regardless.
+        let bytes = reply.body.join("\n").into_bytes();
         self.emulator.feed(&bytes);
         let mut stdout = std::io::stdout().lock();
         for line in &reply.body {
@@ -2207,6 +2214,13 @@ mod tests {
                 "version" => "9.9.9+deadbeef".to_string(),
                 "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
                 "list-panes" => "%0\n".to_string(),
+                // The resync's scripted restore body: absolute row
+                // addressing like the real encoder's, ending with the
+                // pane's real cursor CUP (row 2, col 9 — right after
+                // "prompt> "). No trailing newline, like the real stream.
+                "refresh-client" if trimmed.contains("-t %0") => {
+                    "\x1b[1;1Hfirst\x1b[2;1Hprompt> \x1b[2;9H".to_string()
+                }
                 _ => String::new(),
             };
             number += 1;
@@ -2750,6 +2764,49 @@ mod tests {
 
     /// The status draw's cursor placement tracks the shadow emulator: feed
     /// it a replay that parks the cursor at a known cell, then a %output
+    /// The resync seeds the shadow with the daemon's screen-restore byte
+    /// stream VERBATIM: the stream ends with the pane's real cursor CUP,
+    /// so the shadow's tracked cursor is the pane's truth. A trailing
+    /// newline appended after that CUP parks the shadow — and with it
+    /// every status draw's absolute placement — one row below the prompt,
+    /// and only the shell's next repaint papers over it (the manual-pass
+    /// cursor bug).
+    #[test]
+    fn resync_feeds_the_shadow_the_restore_stream_verbatim() {
+        let (_daemon, path) = FakeDaemon::bind("resync-cursor");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
+            flash: None,
+        };
+        session.resync();
+        let cursor = session.emulator.terminal().cursor();
+        assert_eq!(
+            (cursor.col, cursor.row),
+            (8, 1),
+            "the shadow cursor must sit exactly where the restore stream's final CUP put it \
+             (right after `prompt> `), not one row below"
+        );
+    }
+
     /// chunk containing a CUP and a line feed; the bytes `draw_status`
     /// emits must end with an absolute CUP at the EMULATOR's tracked cell,
     /// not a bare ESC8 restore. A pane scroll landing between the draw and
