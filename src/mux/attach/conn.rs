@@ -231,9 +231,11 @@ fn host_colors() -> (&'static str, &'static str) {
 /// BEFORE the pump's stdin reader thread starts (the probe is, briefly,
 /// the tty's only reader).
 ///
-/// The SECOND tuple element is every stdin byte the probe consumed
-/// without finding the reply — keystrokes that landed inside the probe's
-/// window. The caller MUST prime them back into the pump's stdin stream
+/// The SECOND tuple element is every stdin byte the probe consumed that
+/// is not the reply itself, in stream order — keystrokes that landed
+/// inside the probe's window and, on the success path, the bytes before
+/// and after the reply in the same accumulated chunk. The caller MUST
+/// prime them back into the pump's stdin stream
 /// (`Stdin::new_with_primer`); dropping them eats the user's first
 /// keystrokes.
 ///
@@ -286,10 +288,8 @@ pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
             return (None, acc); // EOF: not a tty / host closed
         }
         acc.extend_from_slice(&buf[..n]);
-        if let Some(color) = parse_osc_color(&acc) {
-            // Bytes landing after the reply in the same read chunk are
-            // dropped — the reply path is the success shape.
-            return (Some(color), Vec::new());
+        if let Some((color, leftover)) = split_around_reply(&acc) {
+            return (Some(color), leftover);
         }
         if acc.len() > 128 {
             return (None, acc); // runaway reply; hand back what arrived
@@ -297,14 +297,20 @@ pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
     }
 }
 
-/// Parse an OSC 10/11 color report (`ESC ] 11 ; rgb:RR/GG/BB ST` — each
-/// component 1-4 hex digits, scaled to 8 bits) from a raw byte stream.
+/// Locate a complete OSC 11 color report in a raw byte stream and return
+/// its color plus the byte span (start..end, end exclusive) covering the
+/// whole reply — introducer through terminator — so the caller can split
+/// around it and re-prime the surrounding bytes.
+///
+/// `None` while the reply is incomplete (split across reads): the probe
+/// keeps the bytes and polls again.
 #[cfg(unix)]
-fn parse_osc_color(bytes: &[u8]) -> Option<(u8, u8, u8)> {
+fn find_osc_color_reply(bytes: &[u8]) -> Option<((u8, u8, u8), core::ops::Range<usize>)> {
     let text = core::str::from_utf8(bytes).ok()?;
-    let rest = text.split_once(";rgb:")?.1;
-    let end = rest.find(['\x1b', '\x07'])?;
-    let body = &rest[..end];
+    let start = text.find("\x1b]11;")?;
+    let value = text[start + "\x1b]11;".len()..].strip_prefix("rgb:")?;
+    let end = value.find(['\x1b', '\x07'])?;
+    let body = &value[..end];
     let mut parts = body.split('/');
     let component = |raw: &str| -> Option<u8> {
         // Scale a 1-4 hex-digit component to 8 bits. The max must be
@@ -319,7 +325,32 @@ fn parse_osc_color(bytes: &[u8]) -> Option<(u8, u8, u8)> {
     let r = component(parts.next()?)?;
     let g = component(parts.next()?)?;
     let b = component(parts.next()?)?;
-    Some((r, g, b))
+    // ST is the two-byte ESC \ ; BEL is one byte. When the ESC here is a
+    // bare introducer of the NEXT escape sequence rather than an ST, stop
+    // the span at the ESC so that sequence stays intact for the primer.
+    let tail = &value.as_bytes()[end..];
+    let terminator_len = match tail {
+        [b'\x07', ..] => 1,
+        [b'\x1b', b'\\', ..] => 2,
+        _ => 1,
+    };
+    let reply_end = start + "\x1b]11;".len() + "rgb:".len() + end + terminator_len;
+    Some(((r, g, b), start..reply_end))
+}
+
+/// The probe's success shape: when `acc` holds a complete reply, return
+/// the color and every byte around it (keystrokes before the reply plus
+/// bytes trailing it) in stream order — the caller re-primes this
+/// remainder through `Stdin::new_with_primer` so keystrokes that landed
+/// inside the probe window still reach their consumer. `None` keeps the
+/// probe polling (reply absent or split across reads).
+#[cfg(unix)]
+fn split_around_reply(acc: &[u8]) -> Option<((u8, u8, u8), Vec<u8>)> {
+    let (color, span) = find_osc_color_reply(acc)?;
+    let mut leftover = Vec::with_capacity(acc.len() - span.len());
+    leftover.extend_from_slice(&acc[..span.start]);
+    leftover.extend_from_slice(&acc[span.end..]);
+    Some((color, leftover))
 }
 
 #[cfg(not(unix))]
@@ -346,8 +377,8 @@ pub(crate) fn terminal_grid() -> (u16, u16) {
     }
 }
 
-// The only test here exercises the unix-only OSC 11 parse; on Windows the
-// module would be empty and its imports unused.
+// The parse/probe-seam tests exercise the unix-only OSC 11 machinery; on
+// Windows the module would be empty and its imports unused.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -356,28 +387,83 @@ mod tests {
     /// spellings, the BEL terminator, and graceful None on garbage and
     /// on a partial stream (the probe keeps polling until the deadline
     /// when the reply splits across reads).
-    #[cfg(unix)] // parse_osc_color backs the unix-only probe
+    #[cfg(unix)] // the locator backs the unix-only probe
     #[test]
     fn osc_color_report_parses_and_yields_gracefully() {
         // xterm: rgb:ffff/ffff/ffff -> white.
         assert_eq!(
-            parse_osc_color(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\"),
-            Some((255, 255, 255))
+            find_osc_color_reply(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\"),
+            Some(((255, 255, 255), 0..25))
         );
         // Ghostty's 16-bit-per-component reply for #1e1e1e.
         assert_eq!(
-            parse_osc_color(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"),
-            Some((0x1e, 0x1e, 0x1e))
+            find_osc_color_reply(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"),
+            Some(((0x1e, 0x1e, 0x1e), 0..25))
         );
         // BEL-terminated short form.
         assert_eq!(
-            parse_osc_color(b"\x1b]11;rgb:1e/1e/1e\x07"),
-            Some((0x1e, 0x1e, 0x1e))
+            find_osc_color_reply(b"\x1b]11;rgb:1e/1e/1e\x07"),
+            Some(((0x1e, 0x1e, 0x1e), 0..18))
         );
         // A partial reply (split read) parses to None - the probe's loop
         // keeps the bytes and polls again.
-        assert_eq!(parse_osc_color(b"\x1b]11;rgb:1e"), None);
+        assert_eq!(find_osc_color_reply(b"\x1b]11;rgb:1e"), None);
         // Non-reply bytes: graceful None, never a color.
-        assert_eq!(parse_osc_color(b"hello"), None);
+        assert_eq!(find_osc_color_reply(b"hello"), None);
+    }
+
+    /// Card: the probe's success path must not eat keystrokes that share
+    /// a read chunk with the OSC 11 reply. `split_around_reply` is the
+    /// pure seam the probe loop uses — same extraction the success return
+    /// performs.
+    #[test]
+    fn same_chunk_keystrokes_are_re_primed_around_the_reply() {
+        // [keystrokes][OSC 11 reply, ST-terminated][more keystrokes]:
+        // the bg is configured AND both keystroke runs come back in
+        // stream order for the Stdin primer.
+        let acc = b"ls\x1b]11;rgb:1e/1e/1e\x1b\\ -la\r";
+        let (color, leftover) = split_around_reply(acc).expect("reply in the chunk");
+        assert_eq!(color, (0x1e, 0x1e, 0x1e));
+        // Stream order: pre-reply keystrokes, then the trailing ones.
+        assert_eq!(leftover, b"ls -la\r");
+        // BEL-terminated reply: terminator stays inside the span.
+        let (color, leftover) =
+            split_around_reply(b"\x07\x1b]11;rgb:ff/ff/ff\x07j").expect("bel reply");
+        assert_eq!(color, (255, 255, 255));
+        assert_eq!(leftover, b"\x07j");
+        // A trailing ESC that opens the NEXT sequence is not consumed:
+        // the span ends at the reply's terminator ESC.
+        let (_, leftover) =
+            split_around_reply(b"\x1b]11;rgb:00/00/00\x1b\\\x1b[A").expect("st reply");
+        assert_eq!(leftover, b"\x1b[A");
+    }
+
+    /// The reply split across reads still resolves: the probe's
+    /// accumulate-then-check loop keeps polling until the locator sees a
+    /// complete reply, exactly as before.
+    #[test]
+    fn reply_split_across_reads_still_resolves() {
+        let mut acc: Vec<u8> = Vec::new();
+        // Read 1: keystroke + partial reply — the probe keeps polling.
+        acc.extend_from_slice(b"k\x1b]11;rgb:ab");
+        assert!(split_around_reply(&acc).is_none());
+        // Read 2 completes the reply.
+        acc.extend_from_slice(b"/cd/ef\x07");
+        let (color, leftover) = split_around_reply(&acc).expect("complete after split");
+        assert_eq!(color, (0xab, 0xcd, 0xef));
+        assert_eq!(leftover, b"k");
+    }
+
+    /// No reply in the window: the probe's fallback shapes — the locator
+    /// stays None so the loop rides to the deadline (or the 128-byte
+    /// runaway cap) and hands every consumed byte back as the primer.
+    #[test]
+    fn reply_absent_keeps_polling_and_hands_back_every_byte() {
+        // Keystroke-only traffic never resolves — graceful fallback.
+        assert!(split_around_reply(b"normal typing \x1b[A\x1b[B").is_none());
+        // A keystroke stream longer than the runaway cap likewise: the
+        // probe gives up with (None, acc) and the caller primes it all.
+        let long = vec![b'x'; 129];
+        assert!(split_around_reply(&long).is_none());
     }
 }
