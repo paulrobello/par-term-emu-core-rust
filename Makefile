@@ -236,7 +236,7 @@ test-rust:
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
 	cargo test --lib --no-default-features --features rust-only,serde
 	@echo "Running the full mux suite (lib unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
-	cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
+	cargo test --no-default-features --features rust-only,mux-bin,serde,attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 

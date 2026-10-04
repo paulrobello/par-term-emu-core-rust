@@ -125,6 +125,46 @@ pub struct ClientSection {
     /// the current one emphasized, keyboard and mouse navigable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picker: Option<String>,
+    /// The zoom chord (tmux's `z`): the key matched after the prefix
+    /// that toggles the focused pane between its layout rect and the
+    /// full window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<String>,
+    /// The rename-window chord (tmux's `,`): the key matched after the
+    /// prefix that opens the rename prompt for the shown window.
+    #[serde(
+        default,
+        rename = "rename-window",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rename_window: Option<String>,
+    /// The rename-pane chord (tmux's `$`): the key matched after the
+    /// prefix that opens the rename prompt for the focused pane's user
+    /// title.
+    #[serde(
+        default,
+        rename = "rename-pane",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rename_pane: Option<String>,
+    /// The border-style chord: the key matched after the prefix that
+    /// cycles the divider/border glyph set (unicode → double → heavy →
+    /// ascii).
+    #[serde(
+        default,
+        rename = "border-cycle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_cycle: Option<String>,
+    /// The divider/border line style: `unicode` (default), `double`,
+    /// `heavy`, or `ascii`. An unknown value warns and uses the
+    /// default.
+    #[serde(
+        default,
+        rename = "border-lines",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_lines: Option<String>,
     /// Per-pane border boxes in render mode (herdr's look): each pane
     /// renders its own complete ring, focused accent vs dim, content
     /// inset by the border cells. Default off — the shared-divider look.
@@ -462,6 +502,11 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_prev: None,
             help: None,
             picker: Some("w".to_string()),
+            zoom: None,
+            rename_window: None,
+            rename_pane: None,
+            border_cycle: None,
+            border_lines: Some("unicode".to_string()),
             pane_borders: Some(false),
             show_label_in_border: Some(false),
             pane_gaps: Some(0),
@@ -554,6 +599,9 @@ pub struct Chords {
     /// The drag cursor shaping (config `drag-cursor-shape`). Default
     /// off.
     pub drag_cursor_shape: bool,
+    /// The divider/border glyph set (config `border-lines`): `unicode`,
+    /// `double`, `heavy`, or `ascii`. Default `unicode`.
+    pub border_lines: String,
 }
 
 impl Chords {
@@ -570,6 +618,7 @@ impl Chords {
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
+            border_lines: "unicode".to_string(),
         }
     }
 }
@@ -612,6 +661,15 @@ pub struct Management {
     /// windows nested, the current one emphasized, keyboard and mouse
     /// navigable.
     pub picker: u8,
+    /// Toggle the focused pane between its layout rect and the full
+    /// window — tmux's zoom.
+    pub zoom: u8,
+    /// Open the rename prompt for the shown window (its `name`).
+    pub rename_window: u8,
+    /// Open the rename prompt for the focused pane's user title.
+    pub rename_pane: u8,
+    /// Cycle the divider/border glyph set.
+    pub border_cycle: u8,
 }
 
 impl Default for Management {
@@ -628,6 +686,10 @@ impl Default for Management {
             workspace_prev: 0x17, // C-w
             help: b'?',
             picker: b'w',
+            zoom: b'z',
+            rename_window: b',',
+            rename_pane: b'$',
+            border_cycle: b'B',
         }
     }
 }
@@ -718,6 +780,22 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
             Some(chord) => management_key(chord, "picker")?,
             None => current.management.picker,
         },
+        zoom: match file.client.zoom.as_deref() {
+            Some(chord) => management_key(chord, "zoom")?,
+            None => current.management.zoom,
+        },
+        rename_window: match file.client.rename_window.as_deref() {
+            Some(chord) => management_key(chord, "rename-window")?,
+            None => current.management.rename_window,
+        },
+        rename_pane: match file.client.rename_pane.as_deref() {
+            Some(chord) => management_key(chord, "rename-pane")?,
+            None => current.management.rename_pane,
+        },
+        border_cycle: match file.client.border_cycle.as_deref() {
+            Some(chord) => management_key(chord, "border-cycle")?,
+            None => current.management.border_cycle,
+        },
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -744,6 +822,14 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .drag_cursor_shape
         .unwrap_or(current.drag_cursor_shape);
+    // The border line style rides as its spelling; an unknown value is
+    // the renderer's warn-and-default (the file philosophy), not a
+    // reload error.
+    let border_lines = file
+        .client
+        .border_lines
+        .clone()
+        .unwrap_or_else(|| current.border_lines.clone());
     Ok(Chords {
         prefix,
         reload,
@@ -754,6 +840,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         pane_gaps,
         scrollbar_gutter,
         drag_cursor_shape,
+        border_lines,
     })
 }
 
@@ -1199,6 +1286,10 @@ remain-on-exit = true
                 workspace_prev: 0x17,
                 help: b'?',
                 picker: b'w',
+                zoom: b'z',
+                rename_window: b',',
+                rename_pane: b'$',
+                border_cycle: b'B',
             }
         );
         // Full override, tmux spellings and literals alike.

@@ -892,6 +892,15 @@ impl Session {
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
                     Some(ManagementKey::WorkspaceNext) => self.switch_workspace(1),
                     Some(ManagementKey::WorkspacePrev) => self.switch_workspace(-1),
+                    // Render-mode-only chords: passthrough has no zoom,
+                    // no overlay surface for the rename prompt, and no
+                    // divider glyphs to cycle. Consumed, not forwarded.
+                    Some(
+                        ManagementKey::Zoom
+                        | ManagementKey::RenameWindow
+                        | ManagementKey::RenamePane
+                        | ManagementKey::BorderCycle,
+                    ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
                         // the focused pane's edges until Enter/Escape/q.
@@ -1406,6 +1415,7 @@ impl Session {
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
+            border_lines: "unicode".to_string(),
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;
@@ -1675,6 +1685,15 @@ pub(crate) enum ManagementKey {
     /// Select the previous workspace in id order (`select-workspace
     /// -t +N`) and land the view on the workspace's session.
     WorkspacePrev,
+    /// Toggle the focused pane between its layout rect and the full
+    /// window (tmux's zoom).
+    Zoom,
+    /// Open the rename prompt for the shown window.
+    RenameWindow,
+    /// Open the rename prompt for the focused pane's user title.
+    RenamePane,
+    /// Cycle the divider/border glyph set.
+    BorderCycle,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1783,6 +1802,18 @@ pub(crate) fn help_rows(
                 format!("{p} {} arrows", spell_key(m.resize)),
                 format!("resize mode, edge moves by {resize_step}"),
             ),
+            (
+                format!("{p} {}", spell_key(m.zoom)),
+                "zoom the focused pane (toggle)".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.border_cycle)),
+                "cycle the border line style".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.rename_pane)),
+                "rename the focused pane".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -1798,6 +1829,10 @@ pub(crate) fn help_rows(
             (
                 format!("{p} {}", spell_key(m.picker)),
                 "session/window picker".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.rename_window)),
+                "rename the window".to_string(),
             ),
         ],
     );
@@ -1822,6 +1857,10 @@ pub(crate) fn help_rows(
             (
                 "click".to_string(),
                 "focus the pane under the pointer".to_string(),
+            ),
+            (
+                format!("{p} arrows"),
+                "select the pane in that direction".to_string(),
             ),
             (format!("{p} ["), "scroll the pane's history".to_string()),
             (
@@ -1856,6 +1895,36 @@ pub(crate) const HELP_OVERLAY_TITLE: &str = " keybinds ";
 
 /// The modal overlay's title for the session/window picker.
 pub(crate) const PICKER_OVERLAY_TITLE: &str = " picker ";
+
+/// The modal overlay's title for the rename-window prompt.
+pub(crate) const PROMPT_WINDOW_OVERLAY_TITLE: &str = " rename window ";
+
+/// The modal overlay's title in the border for the rename-pane prompt.
+pub(crate) const PROMPT_PANE_OVERLAY_TITLE: &str = " rename pane ";
+
+/// The rename prompt's footer controls line.
+pub(crate) const PROMPT_FOOTER: &str = " enter rename · esc cancel ";
+
+/// The rename prompt's content rows: the input line (`> text▌`, the ▌
+/// is the insert point — the frame hides the host cursor under the
+/// overlay), a spacer, and the footer controls line. Pure over its
+/// input — the unit-test surface.
+pub(crate) fn compose_prompt_panel(text: &str) -> Vec<HelpRow> {
+    vec![
+        HelpRow {
+            text: format!(" > {text}▌"),
+            accent: true,
+        },
+        HelpRow {
+            text: String::new(),
+            accent: false,
+        },
+        HelpRow {
+            text: PROMPT_FOOTER.to_string(),
+            accent: false,
+        },
+    ]
+}
 
 /// The help panel's filter line when no filter is active — the visible
 /// placeholder (herdr's always-visible filter input).
@@ -4048,6 +4117,10 @@ mod tests {
                     workspace_prev: b'P',
                     help: b'?',
                     picker: b'w',
+                    zoom: b'z',
+                    rename_window: b',',
+                    rename_pane: b'$',
+                    border_cycle: b'B',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -4071,6 +4144,10 @@ mod tests {
                     workspace_prev: b'P',
                     help: b'?',
                     picker: b'w',
+                    zoom: b'z',
+                    rename_window: b',',
+                    rename_pane: b'$',
+                    border_cycle: b'B',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()

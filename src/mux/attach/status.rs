@@ -201,6 +201,11 @@ impl StatusState {
         &self.windows
     }
 
+    /// The focused pane's user title (the rename-pane prompt's seed).
+    pub(crate) fn pane_title(&self) -> &str {
+        &self.pane_title
+    }
+
     /// Compose the status line as styled segments, truncated to `cols`
     /// display columns. `scroll` is the focused pane's client scroll
     /// offset when a scroll view is up.

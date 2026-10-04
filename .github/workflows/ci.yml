@@ -163,13 +163,17 @@ jobs:
           exit 1
         fi
 
-    - name: Run mux tests (lib + e2e + daemon + reattach)
+    - name: Run mux tests (lib + e2e + daemon + reattach + attach client)
       # nextest with the ci profile (.config/nextest.toml): the profile
       # keeps the suite serial — the PTY spawns contend under parallel test
       # threads, card 01a0c64fc43e7913b474c038db0635d5 — and bounds every
       # test, 30s slow mark and killed at 4x (QA-185), where the plain
       # cargo-test run hung until the job's own timeout ceiling.
-      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde
+      # `attach` rides here (not in the mux-bin closure): without it the
+      # attach module — client lib tests and the mux_attach PTY suite —
+      # compiles nowhere in CI (the horizontal-divider regression shipped
+      # through every green gate that way).
+      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
 
     - name: Run mux-backed streaming tests (MuxSessionFactory)
       # The only run with streaming and mux together; without it these
@@ -206,7 +210,9 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+      # `attach` rides too: the attach module compiles only under its
+      # feature, and clippy is CI's only pass over it.
+      run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

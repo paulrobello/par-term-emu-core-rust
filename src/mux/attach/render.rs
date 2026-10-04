@@ -41,15 +41,42 @@ pub enum Glyphs {
     /// UTF-8 box drawing (`│ ─ ┼`): the default for any terminal that
     /// accepts UTF-8.
     Unicode,
+    /// UTF-8 double-line box drawing (`║ ═ ╬`, corners ╔ ╗ ╚ ╝).
+    Double,
+    /// UTF-8 heavy-line box drawing (`┃ ━ ╋`, corners ┏ ┓ ┗ ┛).
+    Heavy,
     /// VT100 ACS spelling (`| - +`): the fallback for charset-hostile
     /// terminals.
     Ascii,
 }
 
 impl Glyphs {
+    /// The config spelling of the set (the `border-lines` value it
+    /// round-trips as).
+    fn name(self) -> &'static str {
+        match self {
+            Glyphs::Unicode => "unicode",
+            Glyphs::Double => "double",
+            Glyphs::Heavy => "heavy",
+            Glyphs::Ascii => "ascii",
+        }
+    }
+
+    /// The next set in the border-cycle chord's rotation.
+    fn next(self) -> Glyphs {
+        match self {
+            Glyphs::Unicode => Glyphs::Double,
+            Glyphs::Double => Glyphs::Heavy,
+            Glyphs::Heavy => Glyphs::Ascii,
+            Glyphs::Ascii => Glyphs::Unicode,
+        }
+    }
+
     fn vertical(self) -> &'static str {
         match self {
             Glyphs::Unicode => "│",
+            Glyphs::Double => "║",
+            Glyphs::Heavy => "┃",
             Glyphs::Ascii => "|",
         }
     }
@@ -57,6 +84,8 @@ impl Glyphs {
     fn horizontal(self) -> &'static str {
         match self {
             Glyphs::Unicode => "─",
+            Glyphs::Double => "═",
+            Glyphs::Heavy => "━",
             Glyphs::Ascii => "-",
         }
     }
@@ -64,6 +93,8 @@ impl Glyphs {
     fn cross(self) -> &'static str {
         match self {
             Glyphs::Unicode => "┼",
+            Glyphs::Double => "╬",
+            Glyphs::Heavy => "╋",
             Glyphs::Ascii => "+",
         }
     }
@@ -72,6 +103,8 @@ impl Glyphs {
     fn corner_top_left(self) -> &'static str {
         match self {
             Glyphs::Unicode => "╭",
+            Glyphs::Double => "╔",
+            Glyphs::Heavy => "┏",
             Glyphs::Ascii => "+",
         }
     }
@@ -80,6 +113,8 @@ impl Glyphs {
     fn corner_top_right(self) -> &'static str {
         match self {
             Glyphs::Unicode => "╮",
+            Glyphs::Double => "╗",
+            Glyphs::Heavy => "┓",
             Glyphs::Ascii => "+",
         }
     }
@@ -88,6 +123,8 @@ impl Glyphs {
     fn corner_bottom_left(self) -> &'static str {
         match self {
             Glyphs::Unicode => "╰",
+            Glyphs::Double => "╚",
+            Glyphs::Heavy => "┗",
             Glyphs::Ascii => "+",
         }
     }
@@ -96,6 +133,8 @@ impl Glyphs {
     fn corner_bottom_right(self) -> &'static str {
         match self {
             Glyphs::Unicode => "╯",
+            Glyphs::Double => "╝",
+            Glyphs::Heavy => "┛",
             Glyphs::Ascii => "+",
         }
     }
@@ -455,6 +494,16 @@ impl PaneRenderer {
         };
         if !same {
             self.overlay = overlay;
+            self.dirty = true;
+        }
+    }
+
+    /// Swap the divider/border glyph set (the border-cycle chord and
+    /// the `border-lines` config): the frame marks dirty so the
+    /// dividers and pane boxes repaint at the new glyphs.
+    pub(crate) fn set_glyphs(&mut self, glyphs: Glyphs) {
+        if self.glyphs != glyphs {
+            self.glyphs = glyphs;
             self.dirty = true;
         }
     }
@@ -959,15 +1008,17 @@ impl PaneRenderer {
                         vertical.push((a.x.saturating_sub(1), y, b.pane, a.pane));
                     }
                 }
-                // Same along y for a horizontal boundary.
+                // Same along y for a horizontal boundary. (boundary, along)
+                // — the same order vertical pushes, so the grouping below
+                // keys on the boundary coordinate for both.
                 if a.y + a.height == b.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((x, b.y.saturating_sub(1), a.pane, b.pane));
+                        horizontal.push((b.y.saturating_sub(1), x, a.pane, b.pane));
                     }
                 }
                 if b.y + b.height == a.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((x, a.y.saturating_sub(1), b.pane, a.pane));
+                        horizontal.push((a.y.saturating_sub(1), x, b.pane, a.pane));
                     }
                 }
             }
@@ -975,8 +1026,10 @@ impl PaneRenderer {
         // Group the flat boundary cells per divider so each cell knows its
         // position along the divider's length — the tmux half rule (the
         // active pane's half of the shared divider carries the highlight).
-        let group = |cells: &Vec<(u16, u16, u32, u32)>| -> Vec<(u16, Vec<(u16, u32, u32)>)> {
-            let mut groups: Vec<(u16, Vec<(u16, u32, u32)>)> = Vec::new();
+        type BoundaryCell = (u16, u16, u32, u32);
+        type BoundaryGroup = (u16, Vec<(u16, u32, u32)>);
+        let group = |cells: &[BoundaryCell]| -> Vec<BoundaryGroup> {
+            let mut groups: Vec<BoundaryGroup> = Vec::new();
             for (coord, along, a, b) in cells {
                 match groups.iter_mut().find(|(k, _)| *k == *coord) {
                     Some((_, entries)) => entries.push((*along, *a, *b)),
@@ -1309,9 +1362,11 @@ fn plain_border_style(plain: Option<RtColor>) -> RtStyle {
 /// carries the highlight. A vertical divider (panes `a`|`b` side by
 /// side) highlights its TOP half while `a` (left) is focused and its
 /// BOTTOM half while `b` (right) is; a horizontal divider mirrors it
-/// (left half for the top pane, right half for the bottom pane). The
-/// rest renders in the plain border look; a live drag on the boundary
-/// renders reversed so the edge being moved stands out.
+/// (left half for the top pane, right half for the bottom pane).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the tmux half rule reads as a flat (focus, drag, side, pair, half, colors) tuple"
+)]
 fn divider_style(
     focused: Option<u32>,
     drag: Option<(bool, u32, u32)>,
@@ -1336,6 +1391,52 @@ fn divider_style(
 
 fn rows_overlap(a: &PaneRect, b: &PaneRect) -> bool {
     a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/// The prefix+arrow pane navigation's directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// The nearest pane to `focused` in `dir` (the prefix+arrow chord):
+/// candidates must lie strictly in the direction from the focused
+/// pane's center; the nearest center wins. `None` at an edge.
+#[must_use]
+fn pane_in_direction(rects: &[PaneRect], focused: u32, dir: PaneDir) -> Option<u32> {
+    let from = rects.iter().find(|r| r.pane == focused)?;
+    let fc = (
+        i32::from(from.x) + i32::from(from.width) / 2,
+        i32::from(from.y) + i32::from(from.height) / 2,
+    );
+    let mut best: Option<(u32, i64)> = None;
+    for r in rects {
+        if r.pane == focused {
+            continue;
+        }
+        let c = (
+            i32::from(r.x) + i32::from(r.width) / 2,
+            i32::from(r.y) + i32::from(r.height) / 2,
+        );
+        let (dx, dy) = (c.0 - fc.0, c.1 - fc.1);
+        let in_dir = match dir {
+            PaneDir::Up => dy < 0,
+            PaneDir::Down => dy > 0,
+            PaneDir::Left => dx < 0,
+            PaneDir::Right => dx > 0,
+        };
+        if !in_dir {
+            continue;
+        }
+        let dist = i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy);
+        if best.is_none() || dist < best.map(|(_, d)| d).unwrap_or(i64::MAX) {
+            best = Some((r.pane, dist));
+        }
+    }
+    best.map(|(pane, _)| pane)
 }
 
 fn cols_overlap(a: &PaneRect, b: &PaneRect) -> bool {
@@ -1637,6 +1738,12 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     session.set_pane_gaps(chords.pane_gaps);
     session.set_scrollbar_gutter(chords.scrollbar_gutter);
     session.drag_cursor_shape = chords.drag_cursor_shape;
+    if !session.set_border_lines(&chords.border_lines) {
+        eprintln!(
+            "par-mux: [client] border-lines {:?} unknown — valid: unicode, double, heavy, ascii",
+            chords.border_lines
+        );
+    }
     let eff = crate::mux::config::resolve(
         &crate::mux::config::load_canonical(),
         &crate::mux::config::Overrides::default(),
@@ -1781,6 +1888,24 @@ struct WindowSession {
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     drag_cursor_shape: bool,
+    /// The divider/border glyph set (config `border-lines`, cycled live
+    /// by the border chord), session-level like the background so
+    /// renderer reconstruction re-applies it.
+    border_glyphs: Glyphs,
+    /// The zoom cue (the daemon's `resize-pane -Z` state, as the chord
+    /// last saw it) — bolds a ` Z |` head on the status row. The daemon
+    /// holds the truth; a window switch resets the cue.
+    zoomed: bool,
+    /// The daemon's last known (unzoomed) tree layout, so the
+    /// prefix+arrow navigation can aim through a zoom.
+    daemon_layout: Vec<PaneRect>,
+    /// The rename prompt is up (the modal input overlay).
+    prompt_mode: bool,
+    /// The rename prompt's edit buffer.
+    prompt_text: String,
+    /// The rename prompt targets the focused pane (false = the shown
+    /// window).
+    prompt_pane: bool,
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
@@ -1835,6 +1960,12 @@ impl WindowSession {
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
+            border_glyphs: Glyphs::Unicode,
+            zoomed: false,
+            daemon_layout: Vec::new(),
+            prompt_mode: false,
+            prompt_text: String::new(),
+            prompt_pane: false,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
             flash: None,
@@ -1850,6 +1981,22 @@ impl WindowSession {
     fn set_background(&mut self, bg: Option<RtColor>) {
         self.bg = bg;
         self.renderer.set_background(bg);
+    }
+
+    /// Apply the config `border-lines` spelling to the session's glyph
+    /// set; reports whether the spelling was recognized (an unknown
+    /// value keeps the current set — the caller warns).
+    fn set_border_lines(&mut self, spec: &str) -> bool {
+        let glyphs = match spec {
+            "" | "unicode" => Glyphs::Unicode,
+            "double" => Glyphs::Double,
+            "heavy" => Glyphs::Heavy,
+            "ascii" => Glyphs::Ascii,
+            _ => return false,
+        };
+        self.border_glyphs = glyphs;
+        self.renderer.set_glyphs(glyphs);
+        true
     }
 
     /// The session's pane-border mode (config `pane-borders`): each pane
@@ -2009,6 +2156,7 @@ impl WindowSession {
             // 1b. Apply a parked layout change: re-fit the emulators and
             //     re-seed them from fresh daemon replays.
             if let Some(layout) = self.pending_layout.take() {
+                self.daemon_layout = layout.clone();
                 self.renderer.apply_layout(layout);
                 self.replay_all_panes(conn);
             }
@@ -2194,11 +2342,18 @@ impl WindowSession {
                                 if *prefix_pending {
                                     *prefix_pending = false;
                                     // A prefix chord on a functional
-                                    // key: unbound in Phase B — consumed.
+                                    // key: the arrows navigate panes
+                                    // directionally; anything else is
+                                    // unbound — consumed either way.
+                                    self.prefix_pane_arrow(conn, &ev);
                                     continue;
                                 }
                                 if self.scroll_mode {
                                     self.scroll_mode_key(&ev);
+                                    continue;
+                                }
+                                if self.prompt_mode {
+                                    self.prompt_key(conn, &ev);
                                     continue;
                                 }
                                 if self.help_mode {
@@ -2244,6 +2399,18 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         prefix_pending: &mut bool,
     ) -> bool {
+        if self.prompt_mode {
+            // The prompt owns the run whole: every byte feeds the input
+            // line until Enter commits or Escape cancels; the closing
+            // byte and everything after in the run is dropped (the
+            // picker's modal-run shape).
+            for &byte in bytes {
+                if !self.prompt_byte(conn, byte) {
+                    return false;
+                }
+            }
+            return false;
+        }
         if self.help_mode {
             for &byte in bytes {
                 if !self.help_byte(byte) {
@@ -2290,6 +2457,10 @@ impl WindowSession {
                     b if b == self.management.swap_next => Some(ManagementKey::SwapNext),
                     b if b == self.management.workspace_next => Some(ManagementKey::WorkspaceNext),
                     b if b == self.management.workspace_prev => Some(ManagementKey::WorkspacePrev),
+                    b if b == self.management.zoom => Some(ManagementKey::Zoom),
+                    b if b == self.management.rename_window => Some(ManagementKey::RenameWindow),
+                    b if b == self.management.rename_pane => Some(ManagementKey::RenamePane),
+                    b if b == self.management.border_cycle => Some(ManagementKey::BorderCycle),
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -2558,6 +2729,126 @@ impl WindowSession {
         self.renderer.set_overlay(None);
     }
 
+    /// Open the rename prompt (the rename-window / rename-pane chords):
+    /// the modal input overlay seeded with the target's current name —
+    /// the window's `name`, or the pane's sticky user title.
+    fn enter_prompt(&mut self, rename_pane: bool) {
+        let seed = if rename_pane {
+            self.status.pane_title().to_string()
+        } else {
+            self.status
+                .active_window
+                .as_deref()
+                .and_then(|id| {
+                    self.status
+                        .windows()
+                        .iter()
+                        .find(|(wid, _)| wid == id)
+                        .map(|(_, name)| name.clone())
+                })
+                .unwrap_or_default()
+        };
+        self.prompt_pane = rename_pane;
+        self.prompt_text = seed;
+        self.prompt_mode = true;
+        self.refresh_prompt();
+    }
+
+    /// Dismiss the prompt: the next frame's pane repaint restores the
+    /// covered cells.
+    fn leave_prompt(&mut self) {
+        self.prompt_mode = false;
+        self.renderer.set_overlay(None);
+    }
+
+    /// Re-compose the prompt overlay from the edit buffer.
+    fn refresh_prompt(&mut self) {
+        self.renderer.set_overlay(Some((
+            if self.prompt_pane {
+                super::PROMPT_PANE_OVERLAY_TITLE
+            } else {
+                super::PROMPT_WINDOW_OVERLAY_TITLE
+            },
+            super::compose_prompt_panel(&self.prompt_text),
+        )));
+    }
+
+    /// One plain byte while the prompt is up: printable bytes and
+    /// spaces append, Backspace pops, Enter commits (the daemon command
+    /// below), Escape cancels. Returns whether the mode is still up.
+    fn prompt_byte(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, byte: u8) -> bool {
+        match byte {
+            0x1b => self.leave_prompt(),
+            b'\r' => self.commit_prompt(conn),
+            0x7f => {
+                self.prompt_text.pop();
+                self.refresh_prompt();
+            }
+            b if b.is_ascii_graphic() || b == b' ' => {
+                self.prompt_text.push(b as char);
+                self.refresh_prompt();
+            }
+            _ => {}
+        }
+        self.prompt_mode
+    }
+
+    /// One key event while the prompt is up: characters append, Escape
+    /// cancels, everything else is consumed (the byte path carries the
+    /// controls).
+    fn prompt_key(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ev: &TermKeyEvent) {
+        let _ = conn;
+        use crate::keyboard::TermKey;
+        match ev.key() {
+            TermKey::Char => {
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.prompt_text.push(ch);
+                }
+            }
+            TermKey::Escape => {
+                self.leave_prompt();
+                return;
+            }
+            _ => {}
+        }
+        if self.prompt_mode {
+            self.refresh_prompt();
+        }
+    }
+
+    /// Commit the prompt: the pane spelling sets the sticky user title
+    /// (`select-pane -T`), the window spelling renames the window
+    /// (`rename-window`); an empty input cancels (an empty name is not
+    /// expressible on the wire — the parses require one).
+    fn commit_prompt(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let text = self.prompt_text.trim();
+        if text.is_empty() {
+            self.leave_prompt();
+            return;
+        }
+        let cmd = if self.prompt_pane {
+            format!("select-pane -t {} -T {text}", self.focused_pane())
+        } else {
+            format!("rename-window -t {} {text}", self.window)
+        };
+        let _ = conn.send_checked(&cmd);
+        self.leave_prompt();
+        self.status_dirty = true;
+    }
+
+    /// The zoom state's effective layout — the daemon's zoom re-lays the
+    /// window itself, so the client applies what the broadcast carries;
+    /// the cache of the unzoomed tree geometry exists only so the
+    /// prefix+arrow navigation can leave a zoom (the daemon unzooms on
+    /// the select it issues).
+    fn tree_layout(&self) -> Vec<PaneRect> {
+        if self.zoomed && !self.daemon_layout.is_empty() {
+            self.daemon_layout.clone()
+        } else {
+            self.renderer.layout().to_vec()
+        }
+    }
+
     /// Re-compose the picker overlay from the live state (filter,
     /// selection, pan).
     fn refresh_picker(&mut self) {
@@ -2782,6 +3073,43 @@ impl WindowSession {
         }
     }
 
+    /// prefix + arrow: select the nearest pane in the arrow's direction
+    /// (tmux's directional pane navigation). While zoomed the geometry
+    /// is the cached daemon layout, so the arrow can leave the zoom the
+    /// way tmux's does — unzoom, then land on the neighbor. A fixed
+    /// binding (no config key): the management chords are byte-matched,
+    /// and arrows arrive as key events.
+    fn prefix_pane_arrow(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+    ) {
+        use crate::keyboard::TermKey;
+        if ev.modifiers != 0 {
+            return;
+        }
+        let dir = match ev.key() {
+            TermKey::Up => PaneDir::Up,
+            TermKey::Down => PaneDir::Down,
+            TermKey::Left => PaneDir::Left,
+            TermKey::Right => PaneDir::Right,
+            _ => return,
+        };
+        let Some(focused) = self.renderer.focused() else {
+            return;
+        };
+        // The full tree geometry: while zoomed, the renderer only holds
+        // the zoomed pane's expanded rect.
+        let tree = self.tree_layout();
+        let Some(next) = pane_in_direction(&tree, focused, dir) else {
+            return;
+        };
+        // The daemon unzooms on the select of a different pane; the
+        // broadcast re-seeds the view.
+        self.renderer.focus(next);
+        let _ = conn.send_checked(&format!("select-pane -t %{next}"));
+    }
+
     /// The management chords in render mode: issue the daemon command for
     /// the focused pane/session, then land the view through the same
     /// re-seed contract `switch_window` follows — split lands on the new
@@ -2906,6 +3234,33 @@ impl WindowSession {
                 };
                 self.switch_workspace(conn, direction);
             }
+            super::ManagementKey::Zoom => {
+                // tmux's zoom: the daemon's `resize-pane -Z` toggle. The
+                // daemon re-lays the window to the single pane full-grid
+                // (children resize), selects away unzooms, and any layout
+                // mutation ends the zoom — the %layout-change broadcast
+                // re-seeds this client through the pump's pending path.
+                // The bool only drives the status row's Z cue; the daemon
+                // holds the truth.
+                let Ok(reply) = conn.send_checked(&format!("resize-pane -t {focused} -Z")) else {
+                    return;
+                };
+                if !reply.ok {
+                    return;
+                }
+                self.zoomed = !self.zoomed;
+                self.flash = Some(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
+                self.draw_status_row();
+            }
+            super::ManagementKey::RenameWindow | super::ManagementKey::RenamePane => {
+                self.enter_prompt(matches!(key, super::ManagementKey::RenamePane));
+            }
+            super::ManagementKey::BorderCycle => {
+                self.border_glyphs = self.border_glyphs.next();
+                self.renderer.set_glyphs(self.border_glyphs);
+                self.flash = Some(format!("border style: {}", self.border_glyphs.name()));
+                self.draw_status_row();
+            }
         }
     }
 
@@ -2993,6 +3348,7 @@ impl WindowSession {
             pane_gaps: self.pane_gaps,
             scrollbar_gutter: self.scrollbar_gutter,
             drag_cursor_shape: self.drag_cursor_shape,
+            border_lines: self.border_glyphs.name().to_string(),
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
@@ -3004,6 +3360,13 @@ impl WindowSession {
                 self.set_scrollbar_gutter(chords.scrollbar_gutter);
                 self.drag_cursor_shape = chords.drag_cursor_shape;
                 self.set_show_label_in_border(chords.show_label_in_border);
+                if !self.set_border_lines(&chords.border_lines) {
+                    self.flash = Some(format!(
+                        "border-lines {:?} unknown — using {}",
+                        chords.border_lines,
+                        self.border_glyphs.name()
+                    ));
+                }
                 let eff = crate::mux::config::resolve(
                     &crate::mux::config::load_canonical(),
                     &crate::mux::config::Overrides::default(),
@@ -3154,6 +3517,9 @@ impl WindowSession {
             return;
         }
         self.window = window.to_string();
+        // A view rebuild unzooms the cue (the daemon unzooms on layout
+        // mutations and select-away; a fresh window starts unzoomed).
+        self.zoomed = false;
         self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
         // Renderer reconstruction resets the theme and display options:
         // re-apply the session's resolved background and pane-border/
@@ -3312,6 +3678,15 @@ impl WindowSession {
                 },
             );
         }
+        if self.zoomed {
+            segments.insert(
+                0,
+                Segment {
+                    text: " Z |".to_string(),
+                    bold: true,
+                },
+            );
+        }
         self.status_row.paint(&segments);
     }
 
@@ -3360,6 +3735,12 @@ impl WindowSession {
         // coordinates, so the strip row saturates to content row 0.
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
             self.drag_event(conn, x, y.saturating_sub(1), mouse.release);
+            return;
+        }
+
+        // The rename prompt is modal for the pointer too: every event is
+        // consumed while it is up.
+        if self.prompt_mode {
             return;
         }
 
@@ -3653,7 +4034,7 @@ impl WindowSession {
         }
         conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
             .map_err(|err| format!("resize report failed: {err}"))?;
-        self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
+        self.renderer = PaneRenderer::new(cols, rows, self.border_glyphs);
         // Same reconstruction reset as reseed_window: re-apply the theme
         // and display options the fresh renderer dropped.
         self.renderer.set_background(self.bg);
@@ -3680,6 +4061,7 @@ impl WindowSession {
             });
         if let Some((l, v, f)) = layout_event {
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
+                self.daemon_layout = layout.clone();
                 self.renderer.apply_layout(layout);
                 for rect in self.renderer.layout().to_vec() {
                     let pane = format!("%{}", rect.pane);
@@ -4081,6 +4463,49 @@ mod tests {
     /// dim; focusing an absent pane changes nothing. The 3-pane N-ary
     /// layout has two boundaries — at cols 29 and 59 — so the unfocused
     /// one is observable.
+    /// The stacked-split regression: a horizontal boundary paints the
+    /// horizontal glyph along the overlap (the halves wave grouped
+    /// horizontal cells by the along-axis and the bounds check then
+    /// skipped them — the manual-pass report).
+    #[test]
+    fn horizontal_dividers_paint_on_stacked_splits() {
+        const STACKED: &str = "0000,80x24,0,0[80x12,0,0,1,80x12,0,12,2]";
+        let layout = parse_layout(STACKED).expect("parses");
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.apply_layout(layout);
+        renderer.render_frame();
+        let y = 11u16; // the top pane's last row — the boundary cell
+        for x in (0..80u16).step_by(7) {
+            assert_eq!(
+                renderer.buffer[(x, y)].symbol(),
+                "─",
+                "the stacked split's horizontal divider paints at column {x}"
+            );
+        }
+        // And nothing transposed: a mid-pane column keeps its content.
+        assert_ne!(
+            renderer.buffer[(11, 3)].symbol(),
+            "─",
+            "no transposed vertical streak at the boundary row's coordinate"
+        );
+    }
+
+    /// The prefix+arrow navigation: the nearest pane strictly in the
+    /// direction wins; an edge is `None`.
+    #[test]
+    fn pane_in_direction_picks_the_nearest_pane_in_the_direction() {
+        const MIXED: &str = "0000,90x24,0,0{30x24,0,0,1,60x24,30,0[60x12,30,0,2,60x12,30,12,3]}";
+        let rects = parse_layout(MIXED).expect("parses");
+        assert_eq!(pane_in_direction(&rects, 1, PaneDir::Right), Some(2));
+        assert_eq!(pane_in_direction(&rects, 3, PaneDir::Up), Some(2));
+        assert_eq!(pane_in_direction(&rects, 2, PaneDir::Down), Some(3));
+        assert_eq!(pane_in_direction(&rects, 2, PaneDir::Left), Some(1));
+        assert_eq!(pane_in_direction(&rects, 1, PaneDir::Left), None);
+    }
+
+    /// The tmux half rule across a three-pane side-by-side row: the
+    /// shared divider's half nearer the focus highlights, the other
+    /// stays dim.
     #[test]
     fn focus_highlights_adjacent_dividers() {
         const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";

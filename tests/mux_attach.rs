@@ -56,6 +56,23 @@ fn spawn_attach(
     fixture: &MuxFixture,
     extra: &[&str],
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach_mode(fixture, extra, "passthrough")
+}
+
+/// The render-mode spawn: the same PTY harness with the pipeline the
+/// render chords run under.
+fn spawn_attach_render(
+    fixture: &MuxFixture,
+    extra: &[&str],
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach_mode(fixture, extra, "render")
+}
+
+fn spawn_attach_mode(
+    fixture: &MuxFixture,
+    extra: &[&str],
+    mode: &str,
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -70,10 +87,9 @@ fn spawn_attach(
     cmd.arg("--socket");
     cmd.arg(fixture.socket());
     // The suite's byte-shape assertions are passthrough's contract; the
-    // product default is render, so the helper pins the mode explicitly.
-    // (spawn_attach_render passes --mode render through `extra`.)
+    // product default is render, so both modes pin explicitly.
     cmd.arg("--mode");
-    cmd.arg("passthrough");
+    cmd.arg(mode);
     cmd.args(extra);
     let child = pair
         .slave
@@ -168,6 +184,45 @@ fn wait_for_output(host: &AttachHost, needle: &[u8], deadline: Duration) -> Vec<
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return collected,
         }
     }
+}
+
+/// The visible text of a captured byte stream (ESC sequences stripped):
+/// the status row and modal overlays flush per-cell (one CUP+SGR run per
+/// cell), so multi-character matches must run over the plain text, not
+/// the wire bytes.
+fn plain_text(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    let mut iter = bytes.iter().copied();
+    while let Some(b) = iter.next() {
+        if b != 0x1b {
+            out.push(b as char);
+            continue;
+        }
+        match iter.next() {
+            Some(b'[') => {
+                // CSI: swallow through the final byte (@-~).
+                for c in iter.by_ref() {
+                    if (0x40..=0x7e).contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(b']') => {
+                // OSC: swallow through BEL or ST (ESC \).
+                for c in iter.by_ref() {
+                    if c == 0x07 {
+                        break;
+                    }
+                    if c == 0x1b {
+                        iter.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The attach child's exit code once it terminates, polled with a deadline.
@@ -530,6 +585,145 @@ fn split_chord_lands_the_client_on_the_new_pane() {
     assert!(
         roster.len() >= 2,
         "the split created a second pane: {roster:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// The render-mode chords against a live daemon: prefix z rides the
+/// daemon's `resize-pane -Z` (the zoomed pane's child re-fits to the
+/// full grid; the Z cue and the unzoom flash paint), prefix , commits
+/// the window-rename prompt as a `rename-window` control line, prefix $
+/// prompts for the pane title and Escape cancels without committing,
+/// and prefix B repaints the dividers at the next glyph set.
+#[cfg(unix)]
+#[test]
+fn render_mode_zoom_rename_border_chords() {
+    let (fixture, _daemon, mut client) = fixture_with_session("renderchords");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    assert!(pane_b.starts_with('%'), "split returned a pane id");
+    client
+        .send(&format!("send-keys -t {pane_b} -l 'echo PANE-B-CHORD'"))
+        .expect("marker B");
+    client
+        .send(&format!("send-keys -t {pane_b} Enter"))
+        .expect("Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let boot = wait_for_output(&host, b"PANE-B-CHORD", Duration::from_secs(10));
+    let early = child_exit(&mut host, Duration::from_millis(200));
+    assert!(
+        early.is_none(),
+        "render attach exited {early:?} before the chords: stderr: {} boot: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&boot)
+    );
+
+    // prefix z: the zoomed re-layout re-seeds the view and the Z cue
+    // paints on the status row.
+    host.to_child.write_all(&[0x02, b'z']).expect("prefix z");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b" Z |", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains(" Z |"),
+        "prefix z must paint the zoom cue. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+
+    // prefix z again: the unzoom flash names itself.
+    host.to_child
+        .write_all(&[0x02, b'z'])
+        .expect("prefix z again");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"unzoomed", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("unzoomed"),
+        "the second prefix z must flash unzoomed. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // prefix , opens the window-rename prompt.
+    host.to_child.write_all(&[0x02, b',']).expect("prefix ,");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"rename window", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("rename window"),
+        "prefix , must open the rename prompt. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+
+    // Typing + Enter commits as a rename-window control line.
+    host.to_child.write_all(b"rewin").expect("type name");
+    host.to_child.flush().ok();
+    host.to_child.write_all(b"\r").expect("commit");
+    host.to_child.flush().ok();
+    let mut renamed = false;
+    for _ in 0..50 {
+        if let Ok(lines) = client.send("list-windows") {
+            if lines.join(" ").contains("rewin") {
+                renamed = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(renamed, "prefix , must commit as rename-window");
+
+    // prefix $ opens the pane-title prompt; Escape cancels untouched.
+    host.to_child.write_all(&[0x02, b'$']).expect("prefix $");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"rename pane", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("rename pane"),
+        "prefix $ must open the pane prompt. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    host.to_child.write_all(b"nope-title").expect("type title");
+    host.to_child.flush().ok();
+    host.to_child.write_all(&[0x1b]).expect("escape");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(400));
+    let title = client
+        .send(&format!("pane-title -t {pane_a}"))
+        .expect("pane-title")
+        .join(" ");
+    assert!(
+        !title.contains("nope-title"),
+        "Escape must cancel the prompt without committing: {title:?}"
+    );
+
+    // prefix B cycles the border glyphs: the flash names the new style
+    // and the same repaint carries the double-line vertical.
+    host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
+    host.to_child.flush().ok();
+    let mut got = wait_for_output(&host, b"border style", Duration::from_secs(10));
+    // Accumulate the burst's tail (the dividers repaint in the same
+    // frame the flash paints).
+    got.extend(wait_for_output(&host, b"", Duration::from_millis(700)));
+    assert!(
+        plain_text(&got).contains("border style: double"),
+        "prefix B must flash the new border style. stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+    assert!(
+        got.windows("║".len()).any(|w| w == "║".as_bytes()),
+        "the border cycle must repaint the dividers at the new glyphs"
     );
     host.killer.kill().ok();
 }
@@ -1063,23 +1257,6 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
             rect.pane
         );
     }
-}
-
-/// Spawn the render-mode attach client under a PTY (the shared harness
-/// shape, plus `--mode render`).
-#[cfg(unix)]
-fn spawn_attach_render(
-    fixture: &MuxFixture,
-    extra: &[&str],
-) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
-    spawn_attach(
-        fixture,
-        &["--mode", "render"]
-            .iter()
-            .chain(extra.iter())
-            .copied()
-            .collect::<Vec<&str>>(),
-    )
 }
 
 /// Acceptance criterion 1 (render mode, PTY level): the pane's DECCKM
