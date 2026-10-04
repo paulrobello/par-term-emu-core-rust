@@ -574,12 +574,12 @@ fn connect_unix_bounded(
 /// with no error to retry on — a hung daemon fills its backlog and wedges
 /// every later connect (the roster watcher's redial among them). The bounded
 /// form retries the transient `EAGAIN` until `deadline`, then fails with
-/// `TimedOut`. Windows named-pipe connects are NOT unbounded-safe to reuse
-/// here: interprocess's connect spin loop waits in
+/// `TimedOut`. Windows named-pipe connects run through
+/// [`connect_windows_bounded`]: interprocess's connect spin loop waits in
 /// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` once every pipe instance is busy,
-/// so the deadline cannot be honored by the plain connect — it stays unused
-/// on Windows, and the bounded probe in [`prepare_socket_path`] is where
-/// the bound lives instead.
+/// so the wait is performed first — bounded by the time remaining to
+/// `deadline` — and the plain connect runs only once an instance is
+/// available, failing with `TimedOut` when the deadline passes first.
 ///
 /// The server-identity check matches [`connect_local_stream`].
 pub fn connect_local_stream_bounded(
@@ -604,8 +604,14 @@ pub fn connect_local_stream_bounded(
 
     #[cfg(windows)]
     {
-        let _ = deadline;
-        connect_local_stream(path)
+        let stream = connect_windows_bounded(path, deadline)?;
+        if !peer_is_current_user(&stream) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("par-mux: {} is served by another user", path.display()),
+            ));
+        }
+        Ok(stream)
     }
 }
 
@@ -752,6 +758,14 @@ mod wait_named_pipe {
 /// the conservative arm is the only safe one.
 #[cfg(windows)]
 fn pipe_server_alive_bounded(path: &Path) -> io::Result<bool> {
+    pipe_server_alive_wait(path, PIPE_PROBE_TIMEOUT_MS)
+}
+
+/// [`pipe_server_alive_bounded`] with an explicit `WaitNamedPipeW` timeout,
+/// so a caller can bound the wait by its own remaining time instead of the
+/// probe's fixed ceiling.
+#[cfg(windows)]
+fn pipe_server_alive_wait(path: &Path, timeout_ms: u32) -> io::Result<bool> {
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const ERROR_PATH_NOT_FOUND: i32 = 3;
     const ERROR_SEM_TIMEOUT: i32 = 121;
@@ -759,7 +773,7 @@ fn pipe_server_alive_bounded(path: &Path) -> io::Result<bool> {
     let name = pipe_full_name(path);
     // SAFETY: `name` is a nul-terminated wide string alive for the whole
     // call; WaitNamedPipeW reads it and nothing else.
-    let rc = unsafe { wait_named_pipe::WaitNamedPipeW(name.as_ptr(), PIPE_PROBE_TIMEOUT_MS) };
+    let rc = unsafe { wait_named_pipe::WaitNamedPipeW(name.as_ptr(), timeout_ms) };
     if rc != 0 {
         return Ok(true);
     }
@@ -768,6 +782,60 @@ fn pipe_server_alive_bounded(path: &Path) -> io::Result<bool> {
         ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(false),
         ERROR_SEM_TIMEOUT => Ok(true),
         _ => Err(err),
+    }
+}
+
+/// The Win32 error a plain pipe connect reports when another client took
+/// the last free instance between this function's wait and its connect.
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Connect to the named pipe at `path`, giving up at `deadline`.
+///
+/// interprocess's connect spin loop waits in
+/// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` once every pipe instance is busy —
+/// a wedge no deadline can reach from outside — so the wait is done here
+/// first, bounded by the time remaining to `deadline`, and the plain connect
+/// runs only once the wait reports an available instance. The deadline then
+/// surfaces as `TimedOut`, matching the Unix arm's error shape.
+///
+/// The one retryable failure is `ERROR_PIPE_BUSY`: another client can take
+/// the freed instance between the wait and the connect, and the next round's
+/// wait is what re-arms the attempt. A pipe whose object is gone (`false`
+/// from the wait) cannot re-arm, so it fails immediately with `NotFound`,
+/// the same prompt outcome a plain connect to an absent server produces.
+#[cfg(windows)]
+fn connect_windows_bounded(path: &Path, deadline: std::time::Instant) -> io::Result<LocalStream> {
+    use interprocess::local_socket::{prelude::*, GenericNamespaced};
+
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("par-mux: timed out connecting to {}", path.display()),
+            ));
+        }
+        // `WaitNamedPipeW` reads 0 as "use the server's default wait", not
+        // "do not wait", so a sub-millisecond remainder still asks for 1 ms.
+        let remaining_ms = u32::try_from((deadline - now).as_millis())
+            .unwrap_or(u32::MAX)
+            .max(1);
+        if !pipe_server_alive_wait(path, remaining_ms)? {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("par-mux: no server at {}", path.display()),
+            ));
+        }
+        let name = path
+            .to_string_lossy()
+            .to_string()
+            .to_ns_name::<GenericNamespaced>()?;
+        match LocalStream::connect(name) {
+            Ok(stream) => return Ok(stream),
+            Err(err) if err.raw_os_error() == Some(ERROR_PIPE_BUSY) => {}
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -1144,6 +1212,33 @@ mod tests {
             start.elapsed()
                 < std::time::Duration::from_millis(u64::from(PIPE_PROBE_TIMEOUT_MS) + 2_000),
             "a vanished pipe must be classified immediately, not by waiting out the bound"
+        );
+    }
+
+    #[test]
+    fn bounded_connect_reaches_a_live_server() {
+        let socket = temp_socket("bounded-live");
+        let _listener = bind_local_listener(socket.path()).expect("bind succeeds");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+        let _stream = connect_local_stream_bounded(socket.path(), deadline)
+            .expect("bounded connect to a live server succeeds");
+    }
+
+    #[test]
+    fn bounded_connect_to_an_absent_server_fails_promptly() {
+        let socket = temp_socket("bounded-absent");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+        let start = std::time::Instant::now();
+        let err = connect_local_stream_bounded(socket.path(), deadline)
+            .expect_err("no server answers at the path");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::NotFound,
+            "an absent server is not a timeout: the deadline must stay free for a busy one"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(1_000),
+            "the failure must return well before the deadline, not wait it out"
         );
     }
 
