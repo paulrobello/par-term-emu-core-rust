@@ -510,6 +510,22 @@ impl Session {
     /// emulator verbatim; its tracked cursor becomes the pane's truth the
     /// status draw re-places.
     fn resync(&mut self) {
+        // Size report against the target pane's window, BEFORE the replay:
+        // the handshake's target-less -C sizes only the newest session's
+        // active window, and every switch re-enters here — a window
+        // restored at another size never re-fit, and the pane's child ran
+        // at the stale height (the manual-pass htop report; render mode's
+        // switch path has always reported). rows-1: the status row stays
+        // reserved below the content region.
+        let (cols, rows) = conn::terminal_grid();
+        if rows >= 2 && cols >= 2 {
+            let _ = self.conn.send_checked(&format!(
+                "refresh-client -t {} -C {}x{}",
+                self.pane,
+                cols,
+                rows - 1
+            ));
+        }
         let reply = match self
             .conn
             .send_checked(&format!("refresh-client -t {}", self.pane))
@@ -993,21 +1009,29 @@ impl Session {
     /// the pane's own output owns the screen — so the panel prints as
     /// plain text (the same category rows the render-mode modal composes;
     /// filter/scroll are modal-only controls) and the pane's next output
-    /// redraws over it (the documented passthrough help shape).
+    /// redraws over it (the documented passthrough help shape). The dump
+    /// leads with a blank line and bolds the category headers — printing
+    /// from the cursor's current row put the first header on the prompt
+    /// line (manual pass).
     fn show_help(&mut self) {
-        let mut out = String::new();
-        for row in help_rows(
+        let rows = help_rows(
             self.prefix,
             self.reload_key,
             self.management,
             self.resize_step,
-        ) {
-            out.push_str(&row.text);
-            out.push_str("\r\n");
-        }
+        );
         let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.write_all(help_dump_text(&rows).as_bytes());
         let _ = stdout.flush();
+        // Advance the pane past the dump: the pane's cursor is still on
+        // the prompt row, so every later keystroke painted over the help
+        // (the manual-pass mix). One Enter at a shell prompt runs an empty
+        // command line and a fresh prompt — ~2 rows each — so half the
+        // dump's row count lands the shell below the text; the help stays
+        // in the pane's scrollback either way.
+        let enters = rows.len() / 2 + 1;
+        let bytes = vec![b'\r'; enters];
+        forward_chunked(&mut self.conn, self.pane.clone(), &bytes);
     }
 
     /// prefix + arrow: every arrow cycles panes in Phase A (tmux's o).
@@ -1649,6 +1673,22 @@ pub(crate) fn spell_key(byte: u8) -> String {
 pub(crate) struct HelpRow {
     pub text: String,
     pub accent: bool,
+}
+
+/// The passthrough help dump's byte payload: a leading blank line so the
+/// first header never prints on the cursor's current line (it used to land
+/// on the prompt row), bold category headers, one CRLF per row.
+pub(crate) fn help_dump_text(rows: &[HelpRow]) -> String {
+    let mut out = String::from("\r\n");
+    for row in rows {
+        if row.accent {
+            out.push_str(&format!("\x1b[1m{}\x1b[0m", row.text));
+        } else {
+            out.push_str(row.text.as_str());
+        }
+        out.push_str("\r\n");
+    }
+    out
 }
 
 /// The bindings help panel's category rows from the LIVE chord state — a
@@ -2807,6 +2847,65 @@ mod tests {
         );
     }
 
+    /// Every pane-show re-fits the target window BEFORE the replay: the
+    /// handshake's target-less -C sizes only the newest session's active
+    /// window, so a window restored at another size never resized and its
+    /// child ran at the stale height (the manual-pass htop report; render
+    /// mode's switch path has always reported). The report precedes the
+    /// replay — the replay must encode the post-resize screen.
+    #[test]
+    fn resync_size_reports_the_target_window_before_the_replay() {
+        let (_daemon, path) = FakeDaemon::bind("resync-size");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
+            flash: None,
+        };
+        session.resync();
+        // The connect-time handshake sends its own target-less size report
+        // (refresh-client -C WxH -p); the resync's targeted report is the
+        // first refresh-client naming the pane.
+        let report = loop {
+            match _daemon
+                .received
+                .recv_timeout(std::time::Duration::from_secs(5))
+            {
+                Ok((name, line)) if name == "refresh-client" && line.contains("-t %0") => {
+                    break line;
+                }
+                Ok(_) => continue,
+                Err(_) => panic!("no targeted size report arrived"),
+            }
+        };
+        assert!(
+            report.contains("-C 80x23"),
+            "the size report names the pane at the content region: {report}"
+        );
+        let second = wait_for_line(&_daemon.received, "refresh-client");
+        assert!(
+            second.contains("-t %0") && !second.contains("-C"),
+            "the replay follows without a size: {second}"
+        );
+    }
+
     /// chunk containing a CUP and a line feed; the bytes `draw_status`
     /// emits must end with an absolute CUP at the EMULATOR's tracked cell,
     /// not a bare ESC8 restore. A pane scroll landing between the draw and
@@ -3499,6 +3598,73 @@ mod tests {
         assert!(
             text.iter().any(|t| t.contains("edge moves by 2")),
             "the step reflects the live config: {joined}"
+        );
+    }
+
+    /// The passthrough dump leads with a blank line (the first header used
+    /// to print on the cursor's current line — the prompt's) and bolds the
+    /// category headers; plain rows stay unstyled.
+    #[test]
+    fn passthrough_help_dump_leads_with_a_blank_line_and_bolds_headers() {
+        let rows = super::help_rows(0x02, 0x12, Default::default(), 1);
+        let dump = super::help_dump_text(&rows);
+        assert!(
+            dump.starts_with("\r\n"),
+            "the dump must start on a fresh line: {dump:?}"
+        );
+        let accent_count = rows.iter().filter(|r| r.accent).count();
+        assert_eq!(
+            dump.matches("\x1b[1m").count(),
+            accent_count,
+            "every category header is bold, nothing else: {dump:?}"
+        );
+        assert!(
+            dump.contains("\x1b[1m global \x1b[0m\r\n"),
+            "the global header is bold: {dump:?}"
+        );
+        // The first entry row is plain: no SGR anywhere outside headers.
+        assert!(
+            dump.contains("\r\n C-b C-b  type a literal prefix\r\n"),
+            "entry rows stay plain: {dump:?}"
+        );
+    }
+
+    /// The passthrough help chord advances the pane past the dump — empty
+    /// Enters (one command line + fresh prompt each, ~2 rows) land the
+    /// shell below the text so later keystrokes do not paint over it.
+    #[test]
+    fn help_chord_advances_the_pane_past_the_dump() {
+        let (_daemon, path) = FakeDaemon::bind("help-advance");
+        let mut session = Session {
+            conn: conn::AttachConn::connect(&path).expect("connect"),
+            socket_path: path.clone(),
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: String::new(),
+            session_id: None,
+            session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: None,
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
+            flash: None,
+        };
+        let expected = super::help_rows(0x02, 0x12, Default::default(), 1).len() / 2 + 1;
+        session.show_help();
+        let line = wait_for_line(&_daemon.received, "send-keys");
+        let sent = line.matches("0d").count();
+        assert_eq!(
+            sent, expected,
+            "one Enter per ~2 dump rows advances the pane past the help: {line}"
         );
     }
 

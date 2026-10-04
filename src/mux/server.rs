@@ -55,11 +55,13 @@ const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250)
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
 
-/// How long a persisting daemon tolerates holding zero sessions and zero
-/// clients before exiting — tmux's `exit-empty`, with a grace so the two
-/// races it could lose are won instead: a client that disconnects from an
-/// emptied daemon and immediately reconnects (or creates a session) resets
-/// the clock, and a logout's SIGTERM — which follows pane deaths within
+/// How long a persisting daemon tolerates an empty tree — zero sessions,
+/// or only dead panes — before exiting, CONNECTED CLIENTS NOTWITHSTANDING
+/// (tmux's `exit-empty`: the last session dying under an attached client
+/// still ends the server, and the client learns through the broadcast
+/// %exit). The grace keeps the two races it could lose won instead: a
+/// session created (or a pane respawned) within the window resets the
+/// clock, and a logout's SIGTERM — which follows pane deaths within
 /// moments — beats the grace, so the reboot-race resurrection
 /// ([`SaveOrigin::Shutdown`]) stays intact. `daemon.exit-empty = false`
 /// (the live config) holds the daemon past the grace however long it sits
@@ -123,8 +125,8 @@ enum LoopExit {
     Requested,
     /// A listener fault ended the loop.
     Fault,
-    /// Zero sessions and zero clients, held past [`EXIT_EMPTY_GRACE`] —
-    /// tmux's exit-empty.
+    /// An empty tree — zero sessions, or only dead panes — held past
+    /// [`EXIT_EMPTY_GRACE`]: tmux's exit-empty. Clients do not hold it.
     Empty,
 }
 
@@ -312,10 +314,12 @@ impl MuxServer {
         );
         let mut last_scrape = std::time::Instant::now();
         let mut last_reap = std::time::Instant::now();
-        // When the daemon (persisting only) first observed zero sessions AND
-        // zero clients — reset to None the moment either returns. Held past
-        // EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty] (when
-        // `daemon.exit-empty` is on, the default; off, it never fires).
+        // When the daemon (persisting only) first observed an empty tree —
+        // zero sessions, or only dead panes; clients do not hold it —
+        // reset to None the moment a session (or live pane) returns. Held
+        // past EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty]
+        // (when `daemon.exit-empty` is on, the default; off, it never
+        // fires).
         let mut empty_since: Option<std::time::Instant> = None;
         let mut exit = LoopExit::Requested;
 
@@ -383,11 +387,15 @@ impl MuxServer {
                     }
                     // Exit-when-empty, the persisting daemon only: an
                     // embedded `run()` server serves until stopped, whatever
-                    // it holds. Both locks are taken and released one at a
-                    // time — never nested. `daemon.exit-empty = false` (the
-                    // live applied config) skips the check entirely; a
-                    // server without an applied config keeps the built-in
-                    // on default.
+                    // it holds. Clients do NOT hold an empty daemon — the
+                    // last session dying under an attached client exits it
+                    // after the grace, and the client learns through the
+                    // %exit every shutdown broadcasts (tmux exit-empty
+                    // semantics; the manual-pass report). Both locks are
+                    // taken and released one at a time — never nested.
+                    // `daemon.exit-empty = false` (the live applied config)
+                    // skips the check entirely; a server without an
+                    // applied config keeps the built-in on default.
                     if state_path.is_some()
                         && self
                             .config
@@ -396,13 +404,11 @@ impl MuxServer {
                     {
                         // "Empty" counts a tree whose every pane is dead
                         // too: held panes (remain-on-exit) are for clients
-                        // that might come back — with nobody connected and
-                        // nothing alive anywhere, the daemon collects
-                        // itself instead of lingering on frozen screens.
-                        let no_clients = self.clients.lock().is_empty();
-                        let idle_empty = no_clients
-                            && (self.tree.lock().sessions().is_empty()
-                                || self.tree.lock().all_panes_dead());
+                        // that might come back — with nothing alive
+                        // anywhere, the daemon collects itself instead of
+                        // lingering on frozen screens.
+                        let idle_empty = self.tree.lock().sessions().is_empty()
+                            || self.tree.lock().all_panes_dead();
                         empty_since = match (idle_empty, empty_since) {
                             (true, Some(since)) => Some(since),
                             (true, None) => Some(std::time::Instant::now()),
@@ -2222,17 +2228,19 @@ mod tests {
         );
     }
 
-    /// The other half of exit-when-empty: a connected client is a reason to
-    /// stay. An empty daemon with a registered client outlives the grace,
-    /// answers commands, and only exits once the client disconnects.
+    /// tmux exit-empty semantics: a connected client does NOT hold an
+    /// empty daemon. The last session dying under an attached client ends
+    /// the server after the grace, and the client receives the %exit every
+    /// shutdown broadcasts. (`daemon.exit-empty = false` is what holds it;
+    /// see the test below.)
     #[cfg(unix)]
     #[test]
-    fn a_connected_client_keeps_an_empty_persisting_server_alive() {
+    fn a_connected_client_receives_exit_when_the_tree_empties() {
         use crate::mux::ipc::connect_local_stream;
         use std::io::{BufRead, BufReader, Write};
 
         let dir = temp_dir();
-        let path = dir.path().join("kept-alive.sock");
+        let path = dir.path().join("empty-under-client.sock");
         let state_path = dir.path().join("state.json");
         let server = MuxServer::bind(&path).expect("bind");
         let (done_tx, done_rx) = channel();
@@ -2266,39 +2274,50 @@ mod tests {
         };
 
         // Registration proof: a completed round trip means the client's
-        // sender is in the registry, so the empty-check sees it.
+        // sender is in the registry, so the shutdown reaches it.
         let reply = round_trip(&mut writer, "list-sessions");
         assert!(reply.contains("%end"), "first reply arrives: {reply}");
 
-        // Outlive the grace (test grace is 300 ms; 900 ms triples it).
-        std::thread::sleep(std::time::Duration::from_millis(900));
-        let reply = round_trip(&mut writer, "list-sessions");
-        assert!(
-            reply.contains("%end"),
-            "a connected client keeps the empty daemon serving: {reply}"
-        );
-
-        // Disconnect: the daemon notices (≤ one idle tick), holds the empty
-        // state through the grace, then exits.
-        drop(writer);
-        drop(stream);
-        // 30 s starvation bound, not a timing assertion: after the drop the
-        // exit needs one idle tick plus the 300 ms test grace, and that
-        // path can be starved past 5 s under full-suite gate load
-        // (observed 2026-09-27, 1/2243 under make test-rust; same fix
-        // shape as the generation-test deadlines, 44d4212).
+        // The daemon exits under the client: one idle tick plus the grace
+        // (300 ms test value). 30 s starvation bound, not a timing
+        // assertion — the exit path can be starved past 5 s under
+        // full-suite gate load (observed 2026-09-27, 1/2243; 44d4212).
         done_rx
             .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("the daemon exits after its last client leaves");
+            .expect("the empty daemon exits even though a client is attached");
+
+        // And the client learns through the broadcast %exit (ordering per
+        // the graceful-shutdown contract: the notification precedes the
+        // socket close).
+        let mut reader = BufReader::new(stream);
+        let mut saw_exit = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if line.starts_with("%exit") => {
+                    saw_exit = true;
+                    break;
+                }
+                Ok(_) => continue,
+            }
+        }
+        assert!(saw_exit, "the attached client receives %exit");
     }
 
     /// `daemon.exit-empty = false` (the live applied config) holds an empty
-    /// persisting daemon past the grace: it must not exit where the default
-    /// does — the exit test above runs the same shape without a published
-    /// config.
+    /// persisting daemon past the grace — WITH a connected client, the
+    /// shape the default-config flip test above now covers from the other
+    /// side: clients do not hold an empty daemon, only the knob does. It
+    /// must not exit where the default does (the exit test above runs the
+    /// same shape without a published config).
     #[cfg(unix)]
     #[test]
     fn exit_empty_false_keeps_an_empty_persisting_server_alive() {
+        use crate::mux::ipc::connect_local_stream;
+        use std::io::{BufRead, BufReader, Write};
+
         let dir = temp_dir();
         let path = dir.path().join("exit-empty-off.sock");
         let state_path = dir.path().join("state.json");
@@ -2314,8 +2333,23 @@ mod tests {
             let _ = done_tx.send(());
         });
 
+        // A registered client — under the old policy this was what held an
+        // empty daemon; now only the knob does.
+        let stream = connect_local_stream(&path).expect("connect");
+        let mut writer = stream.try_clone().expect("clone");
+        writeln!(writer, "list-sessions").expect("write");
+        writer.flush().expect("flush");
+        let mut reader = BufReader::new(writer.try_clone().expect("clone"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("first reply line");
+        assert!(
+            line.starts_with("%begin"),
+            "registration round trip: {line}"
+        );
+
         // Triple the grace (test value: 300 ms): a default-config daemon
-        // exits within it, so the knob is what holds this one up.
+        // exits within it even with the client attached, so the knob is
+        // what holds this one up.
         done_rx
             .recv_timeout(std::time::Duration::from_millis(900))
             .expect_err("exit-empty=false holds the empty daemon past the grace");
