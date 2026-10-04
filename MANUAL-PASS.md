@@ -7,10 +7,9 @@ gate's manual integration criterion. Build (from the repo root) and seed:
 make mux-manual-seed
 ```
 
-The target builds the attach daemon, restarts the seed daemon on
-`/tmp/manual-mux` deterministically (`--stop` on the way in), creates the
-`demo` session, splits it, and prints the first pane's id — ids resume from
-saved counters, so never assume `%0`.
+The target builds the attach daemon, wipes the socket's saved tree (stop +
+state-file removal — no stale sessions from earlier runs), creates the
+`demo` session, splits it, and prints the first pane's id.
 
 Client control commands ride `--cmd` (the daemon's clap layer does not take
 them bare). Prefer typing into the panes interactively once attached — that

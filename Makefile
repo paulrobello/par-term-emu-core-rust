@@ -407,13 +407,18 @@ mux-docs-check:
 
 # Seed the MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
-# restart the seed (a --stop on the way in makes it deterministic); pane
-# ids resume from saved counters, so the split targets the pane id
-# `list-panes` reports, never a hardcoded %0.
+# WIPE the socket's saved tree (stop, then remove the state file and its
+# last-good snapshot — a plain restart would restore every stale session
+# from previous runs), so the seed is always a clean single-session tree.
+# Pane ids restart at %0 on a wiped tree; the split still targets the pane
+# id `list-panes` reports rather than assuming one.
 mux-manual-seed:
 	@cargo build --release --bin par-mux --no-default-features --features mux-bin,attach && \
 	P=target/release/par-mux; \
 	$$P --socket /tmp/manual-mux --stop >/dev/null 2>&1 || true; \
+	STATE_DIR="$$HOME/.local/state/par-mux"; \
+	[ -d "$$HOME/Library/Application Support/par-mux" ] && STATE_DIR="$$HOME/Library/Application Support/par-mux"; \
+	rm -f "$$STATE_DIR"/manual-mux.state.json*; \
 	($$P --socket /tmp/manual-mux >/tmp/manual-mux.log 2>&1 &); \
 	sleep 0.5; \
 	$$P --socket /tmp/manual-mux --cmd "new-session -s demo" && \
