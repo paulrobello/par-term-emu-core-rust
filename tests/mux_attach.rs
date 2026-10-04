@@ -781,6 +781,34 @@ fn render_mode_zoom_rename_border_chords() {
     host.to_child.flush().ok();
     std::thread::sleep(Duration::from_millis(300));
 
+    // prefix s toggles the side panel: the strip paints the workspaces
+    // section and the panes re-divide around it; toggling off restores.
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    // The strip's cells precede the status row in the same frame diff, so
+    // the flash and the section text arrive together.
+    let got = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("sidebar on") && plain_text(&got).contains("workspaces"),
+        "prefix s must flash and paint the workspaces section. stderr: {} tail: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+            .chars()
+            .rev()
+            .take(600)
+            .collect::<String>()
+    );
+    host.to_child
+        .write_all(&[0x02, b's'])
+        .expect("prefix s again");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"sidebar off", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("sidebar off"),
+        "prefix s again must flash sidebar off. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
     // Shift+arrow swaps with the pane in that direction: whichever side
     // holds focus, one of the two presses hits a neighbor and the roster's
     // layout order exchanges the two panes.
@@ -2684,6 +2712,69 @@ fn passthrough_workspace_chord_selects_and_lands() {
             .iter()
             .any(|l| l.starts_with("+1:") && l.contains(" active")),
         "the chord must move the daemon's active-workspace marker: {workspaces:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// The sidebar chord in isolation: boot, attach, settle, toggle on and
+/// off — bisecting the full-chain test's sidebar failure.
+#[cfg(unix)]
+#[test]
+fn render_mode_sidebar_toggle_minimal() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sidebarmini");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    client
+        .send(&format!(
+            "send-keys -t {pane_b} -l 'echo SIDEBAR-MINI-MARK'"
+        ))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane_b} Enter"))
+        .expect("Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"SIDEBAR-MINI-MARK", Duration::from_secs(10));
+
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    // The strip and the flash paint in the SAME frame (the strip's cells
+    // precede the status row in the diff), so one wait covers both.
+    let got = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("sidebar on") && plain_text(&got).contains("workspaces"),
+        "the toggle must flash and paint the workspaces section. tail: {:?}",
+        String::from_utf8_lossy(&got)
+            .chars()
+            .rev()
+            .take(500)
+            .collect::<String>()
+    );
+    host.to_child
+        .write_all(&[0x02, b's'])
+        .expect("prefix s again");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"sidebar off", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("sidebar off"),
+        "the second toggle must flash off. tail: {:?}",
+        String::from_utf8_lossy(&got)
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
     );
     host.killer.kill().ok();
 }

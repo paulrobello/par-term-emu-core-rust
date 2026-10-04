@@ -302,6 +302,14 @@ pub struct PaneRenderer {
     /// cells per side; the band cells stay at the frame's theme-bg fill.
     /// Default 0 — today's edge-to-edge tiling.
     pane_gaps: u16,
+    /// The workspace side panel's width in columns (0 = hidden). The
+    /// daemon's layout is the REDUCED grid (window_size reports the
+    /// width minus this); every layout x paints offset right by it, and
+    /// the strip columns hold the panel.
+    sidebar_w: u16,
+    /// The panel's sections (queried workspace roster, more to come) —
+    /// `None` while hidden or before the first refresh.
+    sidebar_sections: Option<Vec<super::SidebarSection>>,
     /// Reserve a right-edge gutter column in each pane rect (config
     /// `scrollbar-gutter`): content narrows by one; the gutter renders a
     /// minimal position indicator while the pane's client scroll offset
@@ -329,6 +337,8 @@ impl PaneRenderer {
             focused: None,
             width,
             height,
+            sidebar_w: 0,
+            sidebar_sections: None,
             glyphs,
             bg: None,
             drag_divider: None,
@@ -378,9 +388,11 @@ impl PaneRenderer {
         &self.layout
     }
 
-    /// The window extent the renderer paints.
+    /// The window extent the daemon divides: the renderer's full width
+    /// less the side panel's strip (the panel is a client-only overlay —
+    /// the daemon never learns of it), full height.
     pub fn window_size(&self) -> (u16, u16) {
-        (self.width, self.height)
+        (self.width.saturating_sub(self.sidebar_w), self.height)
     }
 
     /// One painted cell of the last frame — the test/introspection read
@@ -617,7 +629,7 @@ impl PaneRenderer {
             return None;
         }
         Some((
-            rect.x + inset_x + col as u16,
+            rect.x + self.sidebar_w + inset_x + col as u16,
             rect.y + inset_y + row as u16,
             cursor.style,
         ))
@@ -633,7 +645,7 @@ impl PaneRenderer {
             .min(rect.width.saturating_sub(1) / 2)
             .min(rect.height.saturating_sub(1) / 2);
         let mut r = *rect;
-        r.x += gap;
+        r.x += gap + self.sidebar_w;
         r.y += gap;
         r.width = r.width.saturating_sub(2 * gap);
         r.height = r.height.saturating_sub(2 * gap);
@@ -678,6 +690,45 @@ impl PaneRenderer {
             self.scrollbar_gutter = on;
             self.dirty = true;
         }
+    }
+
+    /// The side panel's width (0 = hidden).
+    pub(crate) fn sidebar_width(&self) -> u16 {
+        self.sidebar_w
+    }
+
+    /// Show the side panel at `width` columns (0 hides it). The daemon
+    /// never learns of the strip — window_size reports the reduced grid,
+    /// and the next refresh-client report re-divides the panes around it.
+    pub(crate) fn set_sidebar_width(&mut self, width: u16) {
+        if self.sidebar_w != width {
+            self.sidebar_w = width;
+            self.sidebar_sections = None;
+            self.dirty = true;
+        }
+    }
+
+    /// Replace the panel's sections (the workspace roster query's result)
+    /// and mark dirty.
+    pub(crate) fn set_sidebar_sections(&mut self, sections: Option<Vec<super::SidebarSection>>) {
+        if self.sidebar_sections != sections {
+            self.sidebar_sections = sections;
+            self.dirty = true;
+        }
+    }
+
+    /// The workspace id under the strip-relative host cell `(x, y)`, if a
+    /// clickable row sits there.
+    pub(crate) fn sidebar_row_at(&self, x: u16, y: u16) -> Option<String> {
+        if x >= self.sidebar_w {
+            return None;
+        }
+        let sections = self.sidebar_sections.as_ref()?;
+        let lines = super::compose_sidebar(sections, self.sidebar_w, self.height);
+        lines
+            .into_iter()
+            .find(|line| line.y == y && line.id.is_some())
+            .and_then(|line| line.id)
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does
@@ -859,6 +910,7 @@ impl PaneRenderer {
         } else {
             self.paint_dividers();
         }
+        self.paint_sidebar();
         if let Some((title, rows)) = self.overlay.clone() {
             self.paint_overlay(title, &rows);
         }
@@ -902,9 +954,12 @@ impl PaneRenderer {
         let max_rows = view_h
             .min(grid.rows() as u16)
             .min(self.height.saturating_sub(rect.y.saturating_add(inset_y)));
+        // The clamp counts the side panel's offset: a layout broadcast
+        // racing the toggle still carries full-width rects, and painting
+        // them offset would run past the buffer's right edge.
         let max_cols = view_w
             .min(grid.cols() as u16)
-            .min(self.width.saturating_sub(rect.x.saturating_add(inset_x)));
+            .min(self.width.saturating_sub(rect.x + self.sidebar_w + inset_x));
         for row in 0..max_rows {
             // View row r: live grid row r - S when r >= S; otherwise the
             // scrollback line S_len - S + r (newest history first).
@@ -927,7 +982,10 @@ impl PaneRenderer {
                         None => continue,
                     }
                 };
-                let (x, y) = (rect.x + inset_x + col, rect.y + inset_y + row);
+                let (x, y) = (
+                    rect.x + self.sidebar_w + inset_x + col,
+                    rect.y + inset_y + row,
+                );
                 // The wide base already marked this spacer skip; painting
                 // it would clear the mark (reset() clears diff_option).
                 if core_cell.flags().wide_char_spacer() {
@@ -1012,12 +1070,12 @@ impl PaneRenderer {
                 // vertical boundary (divider cell in a's last column).
                 if a.x + a.width == b.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((b.x.saturating_sub(1), y, a.pane, b.pane));
+                        vertical.push((b.x.saturating_sub(1) + self.sidebar_w, y, a.pane, b.pane));
                     }
                 }
                 if b.x + b.width == a.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((a.x.saturating_sub(1), y, b.pane, a.pane));
+                        vertical.push((a.x.saturating_sub(1) + self.sidebar_w, y, b.pane, a.pane));
                     }
                 }
                 // Same along y for a horizontal boundary. (boundary, along)
@@ -1025,12 +1083,22 @@ impl PaneRenderer {
                 // keys on the boundary coordinate for both.
                 if a.y + a.height == b.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((b.y.saturating_sub(1), x, a.pane, b.pane));
+                        horizontal.push((
+                            b.y.saturating_sub(1),
+                            x + self.sidebar_w,
+                            a.pane,
+                            b.pane,
+                        ));
                     }
                 }
                 if b.y + b.height == a.y && cols_overlap(a, b) {
                     for x in col_overlap(a, b) {
-                        horizontal.push((a.y.saturating_sub(1), x, b.pane, a.pane));
+                        horizontal.push((
+                            a.y.saturating_sub(1),
+                            x + self.sidebar_w,
+                            b.pane,
+                            a.pane,
+                        ));
                     }
                 }
             }
@@ -1231,6 +1299,56 @@ impl PaneRenderer {
                     let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
                     cell.set_style(band);
                 }
+            }
+        }
+    }
+
+    /// Paint the workspace side panel over the strip columns: theme-bg
+    /// fill, a dim divider on the strip's right edge, then the sections —
+    /// each header in the accent, its rows dim (the active workspace
+    /// accent + bold, herdr's emphasis). Clipped to the strip; composed
+    /// by [`super::compose_sidebar`].
+    fn paint_sidebar(&mut self) {
+        let w = self.sidebar_w;
+        if w == 0 {
+            return;
+        }
+        let dim = RtStyle::default().add_modifier(RtModifier::DIM);
+        let active = RtStyle::default()
+            .fg(RtColor::Indexed(14))
+            .add_modifier(RtModifier::BOLD);
+        let accent = RtStyle::default().fg(RtColor::Indexed(14));
+        for y in 0..self.height {
+            for x in 0..w {
+                let cell = &mut self.buffer[(x, y)];
+                cell.reset();
+                if let Some(bg) = self.bg {
+                    cell.set_bg(bg);
+                }
+                if x + 1 == w {
+                    cell.set_symbol(self.glyphs.vertical());
+                    cell.set_style(dim);
+                }
+            }
+        }
+        let Some(sections) = self.sidebar_sections.clone() else {
+            return;
+        };
+        for line in super::compose_sidebar(&sections, w, self.height) {
+            let style = if line.header {
+                accent
+            } else if line.text.contains('▸') {
+                active
+            } else {
+                dim
+            };
+            for (j, ch) in line.text.chars().enumerate() {
+                if j as u16 >= w - 1 {
+                    break;
+                }
+                let cell = &mut self.buffer[(j as u16, line.y)];
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(style);
             }
         }
     }
@@ -1758,6 +1876,7 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     .map_err(|err| format!("config: {err}"))?;
     session.management = chords.management;
     session.resize_step = chords.resize_step;
+    session.sidebar_width = chords.sidebar_width;
     // The border style first, the explicit `pane-borders` flag after it —
     // the style implies a paint mode (herdr = per-pane boxes), and the
     // explicit config key still overrides for any glyph set.
@@ -1917,6 +2036,11 @@ struct WindowSession {
     /// background so renderer reconstruction re-applies them.
     pane_gaps: u16,
     scrollbar_gutter: bool,
+    /// The side panel's state (config `sidebar-width`, toggled by the
+    /// `sidebar` chord), session-level like the background so renderer
+    /// reconstruction re-applies it.
+    sidebar_on: bool,
+    sidebar_width: u16,
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     drag_cursor_shape: bool,
@@ -1992,6 +2116,8 @@ impl WindowSession {
             show_label_in_border: false,
             pane_gaps: 0,
             scrollbar_gutter: false,
+            sidebar_on: false,
+            sidebar_width: 20,
             drag_cursor_shape: false,
             border_glyphs: Glyphs::Unicode,
             zoomed: false,
@@ -2232,7 +2358,11 @@ impl WindowSession {
                 self.status_dirty = false;
                 let focused = self.renderer.focused().unwrap_or(0);
                 match self.status.refresh(conn, &self.window, focused) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        if self.sidebar_on {
+                            self.refresh_sidebar(conn);
+                        }
+                    }
                     Err(status::StatusError::SessionGone) => return Ok(()),
                     Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
                 }
@@ -2505,6 +2635,7 @@ impl WindowSession {
                     b if b == self.management.workspace_picker => {
                         Some(ManagementKey::WorkspacePicker)
                     }
+                    b if b == self.management.sidebar => Some(ManagementKey::Sidebar),
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -3025,21 +3156,6 @@ impl WindowSession {
         self.reseed_window(conn, &window);
     }
 
-    /// Activate the workspace picker's selected row: dismiss, then land
-    /// on the workspace through the same select-then-resync.
-    fn ws_picker_land(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, index: usize) {
-        let Some(workspaces) = self.picker_workspaces.clone() else {
-            return;
-        };
-        let Some((id, _, _)) = workspaces.get(index) else {
-            self.leave_picker();
-            return;
-        };
-        let id = id.clone();
-        self.leave_picker();
-        self.land_on_workspace(conn, &id);
-    }
-
     /// Compose the workspace picker's overlay: one row per workspace
     /// (`>`- and `*`-marked when active), through the same filter,
     /// cursor, windowing, and footer machinery as the session picker.
@@ -3453,6 +3569,9 @@ impl WindowSession {
             super::ManagementKey::WorkspacePicker => {
                 self.enter_ws_picker(conn);
             }
+            super::ManagementKey::Sidebar => {
+                self.toggle_sidebar(conn);
+            }
             super::ManagementKey::Labels => {
                 // Toggle each pane's title in its border: the session's
                 // bool flips, the flash cue confirms the new state, and
@@ -3504,6 +3623,71 @@ impl WindowSession {
     /// follows). An empty workspace only marks the status stale — the
     /// %workspaces-changed the select queued moves the strip's active
     /// marker on the next frame.
+    /// Toggle the side panel: flip the strip width on the renderer, then
+    /// report the REDUCED/RESTORED grid — `refresh-client -C` — so the
+    /// daemon re-divides the panes around it; the `%layout-change`
+    /// re-seed repaints. Opening queries the workspace roster for the
+    /// section rows.
+    fn toggle_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        self.sidebar_on = !self.sidebar_on;
+        let width = if self.sidebar_on {
+            self.sidebar_width
+        } else {
+            0
+        };
+        self.renderer.set_sidebar_width(width);
+        let pane = self.focused_pane();
+        if pane.is_empty() {
+            return;
+        }
+        let (cols, rows) = self.renderer.window_size();
+        let _ = conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"));
+        if self.sidebar_on {
+            self.refresh_sidebar(conn);
+        }
+        self.flash = Some(
+            if self.sidebar_on {
+                "sidebar on"
+            } else {
+                "sidebar off"
+            }
+            .to_string(),
+        );
+        self.draw_status_row();
+    }
+
+    /// Re-query the workspace roster into the panel's sections — on
+    /// open, and on every status refresh while the panel is up (the
+    /// `%workspaces-changed` mark rides the same throttle).
+    fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let probe = conn.send_checked("list-workspaces");
+        eprintln!(
+            "SIDEBAR-PROBE ok={:?}",
+            probe.as_ref().map(|r| (r.ok, r.body.clone()))
+        );
+        let mut workspaces: Vec<(String, String, bool)> = probe
+            .ok()
+            .filter(|reply| reply.ok)
+            .map(|reply| {
+                reply
+                    .body
+                    .iter()
+                    .filter_map(|l| super::parse_workspace_line(l))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if workspaces.is_empty() {
+            self.renderer.set_sidebar_sections(None);
+            return;
+        }
+        workspaces.sort_by(|a, b| a.0.cmp(&b.0));
+        self.renderer
+            .set_sidebar_sections(Some(vec![super::SidebarSection {
+                title: "workspaces".to_string(),
+                rows: workspaces,
+            }]));
+    }
+
     fn land_on_workspace(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ws_id: &str) {
         let Ok(sessions) = conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
             return;
@@ -3554,6 +3738,7 @@ impl WindowSession {
             scrollbar_gutter: self.scrollbar_gutter,
             drag_cursor_shape: self.drag_cursor_shape,
             border_lines: self.border_glyphs.name().to_string(),
+            sidebar_width: self.sidebar_width,
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
@@ -3938,6 +4123,23 @@ impl WindowSession {
             return;
         };
 
+        // The side panel owns its strip: a press on a workspace row lands
+        // on it (the select+resync every switch follows), and every other
+        // event in the strip is consumed — no pane, divider, or drag
+        // lives in the panel.
+        let strip = self.renderer.sidebar_width();
+        if strip > 0 && x < strip {
+            if !mouse.release && !mouse.is_motion() {
+                if let Some(id) = self.renderer.sidebar_row_at(x, y) {
+                    self.land_on_workspace(conn, &id);
+                }
+            }
+            return;
+        }
+        // Pane coordinates are layout coordinates: the host x less the
+        // side panel's strip width.
+        let x = x.saturating_sub(strip);
+
         // A drag in flight continues over motion/release regardless of
         // where the pointer is (a pointer that wanders onto the strip
         // row must not strand it); the drag's press stored content
@@ -4241,8 +4443,9 @@ impl WindowSession {
         if pane.is_empty() {
             return Ok(());
         }
-        conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
-            .map_err(|err| format!("resize report failed: {err}"))?;
+        // Reconstruct FIRST: the report below reads the fresh renderer's
+        // window_size (the new host grid less the side panel), and the
+        // reconstruction re-applies the panel width it depends on.
         self.renderer = PaneRenderer::new(cols, rows, self.border_glyphs);
         // Same reconstruction reset as reseed_window: re-apply the theme
         // and display options the fresh renderer dropped.
@@ -4252,6 +4455,16 @@ impl WindowSession {
             .set_show_label_in_border(self.show_label_in_border);
         self.renderer.set_pane_gaps(self.pane_gaps);
         self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
+        self.renderer.set_sidebar_width(if self.sidebar_on {
+            self.sidebar_width
+        } else {
+            0
+        });
+        let (report_cols, report_rows) = self.renderer.window_size();
+        conn.send_checked(&format!(
+            "refresh-client -t {pane} -C {report_cols}x{report_rows}"
+        ))
+        .map_err(|err| format!("resize report failed: {err}"))?;
         // The layout broadcast the report queued re-seeds the panes; but
         // drain it here directly so the repaint is synchronous.
         let layout_event = conn

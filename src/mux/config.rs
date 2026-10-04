@@ -172,6 +172,17 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub workspace_picker: Option<String>,
+    /// The sidebar chord: the key matched after the prefix that toggles
+    /// the workspace side panel (render mode).
+    #[serde(default, rename = "sidebar", skip_serializing_if = "Option::is_none")]
+    pub sidebar: Option<String>,
+    /// The side panel's width in columns (render mode; clamped 6..=60).
+    #[serde(
+        default,
+        rename = "sidebar-width",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sidebar_width: Option<u16>,
     /// The divider/border line style: `unicode` (default), `double`,
     /// `heavy`, or `ascii`. An unknown value warns and uses the
     /// default.
@@ -524,6 +535,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             border_cycle: None,
             label_toggle: None,
             workspace_picker: None,
+            sidebar: None,
+            sidebar_width: Some(20),
             border_lines: Some("unicode".to_string()),
             pane_borders: Some(false),
             show_label_in_border: Some(true),
@@ -620,6 +633,8 @@ pub struct Chords {
     /// The divider/border glyph set (config `border-lines`): `unicode`,
     /// `double`, `heavy`, or `ascii`. Default `unicode`.
     pub border_lines: String,
+    /// The workspace side panel's width in columns when shown.
+    pub sidebar_width: u16,
 }
 
 impl Chords {
@@ -637,6 +652,7 @@ impl Chords {
             scrollbar_gutter: false,
             drag_cursor_shape: false,
             border_lines: "unicode".to_string(),
+            sidebar_width: 20,
         }
     }
 }
@@ -694,6 +710,9 @@ pub struct Management {
     /// workspace sibling: the daemon's workspace roster, the current one
     /// marked, keyboard and mouse navigable, Enter lands on it.
     pub workspace_picker: u8,
+    /// Toggle the workspace side panel (render mode): a left strip with
+    /// the workspace list, click-to-land; more sections will follow.
+    pub sidebar: u8,
 }
 
 impl Default for Management {
@@ -716,6 +735,7 @@ impl Default for Management {
             border_cycle: b'B',
             label_toggle: b'l',
             workspace_picker: b'g',
+            sidebar: b's',
         }
     }
 }
@@ -830,6 +850,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
             Some(chord) => management_key(chord, "workspace-picker")?,
             None => current.management.workspace_picker,
         },
+        sidebar: match file.client.sidebar.as_deref() {
+            Some(chord) => management_key(chord, "sidebar")?,
+            None => current.management.sidebar,
+        },
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -838,6 +862,11 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .resize_step
         .map(|step| step.max(1))
         .unwrap_or(current.resize_step);
+    let sidebar_width = file
+        .client
+        .sidebar_width
+        .map(|width| width.clamp(6, 60))
+        .unwrap_or(current.sidebar_width);
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -875,6 +904,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         scrollbar_gutter,
         drag_cursor_shape,
         border_lines,
+        sidebar_width,
     })
 }
 
@@ -1326,6 +1356,7 @@ remain-on-exit = true
                 border_cycle: b'B',
                 label_toggle: b'l',
                 workspace_picker: b'g',
+                sidebar: b's',
             }
         );
         // Full override, tmux spellings and literals alike.

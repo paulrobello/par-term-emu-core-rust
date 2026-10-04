@@ -901,7 +901,8 @@ impl Session {
                         | ManagementKey::RenamePane
                         | ManagementKey::BorderCycle
                         | ManagementKey::Labels
-                        | ManagementKey::WorkspacePicker,
+                        | ManagementKey::WorkspacePicker
+                        | ManagementKey::Sidebar,
                     ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
@@ -1416,6 +1417,7 @@ impl Session {
             show_label_in_border: false,
             pane_gaps: 0,
             scrollbar_gutter: false,
+            sidebar_width: 20,
             drag_cursor_shape: false,
             border_lines: "unicode".to_string(),
         }) {
@@ -1701,6 +1703,8 @@ pub(crate) enum ManagementKey {
     /// Open the workspace picker modal (the session/window picker's
     /// workspace sibling).
     WorkspacePicker,
+    /// Toggle the workspace side panel (render mode).
+    Sidebar,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1874,6 +1878,10 @@ pub(crate) fn help_rows(
             (
                 format!("{p} {}", spell_key(m.workspace_picker)),
                 "workspace picker".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.sidebar)),
+                "toggle the workspace side panel".to_string(),
             ),
         ],
     );
@@ -2184,6 +2192,75 @@ pub(crate) fn compose_picker_panel(
         footer: true,
     });
     (panel, content_refs, start)
+}
+
+/// One section of the workspace side panel: a title row and its entries.
+/// The panel renders sections top-down — workspaces first; more sections
+/// (agent rosters, workspace detail) slot in after.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidebarSection {
+    pub title: String,
+    /// `(id, label, active)` per row; `id` is what a click lands on.
+    pub rows: Vec<(String, String, bool)>,
+}
+
+/// One composed sidebar line: buffer-row-relative `y`, the text, whether
+/// it is a section header, and the id a click activates (`None` for
+/// headers and filler).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidebarLine {
+    pub y: u16,
+    pub text: String,
+    pub header: bool,
+    pub id: Option<String>,
+}
+
+/// Compose the side panel's lines from its sections: each section's
+/// header row, then its rows (`>`- and `*`-marked when active), a blank
+/// line between sections, everything clipped to `width - 1` columns (the
+/// divider column owns the strip's right edge) and `height` rows. Pure —
+/// the unit-test surface.
+pub(crate) fn compose_sidebar(
+    sections: &[SidebarSection],
+    width: u16,
+    height: u16,
+) -> Vec<SidebarLine> {
+    let mut lines: Vec<SidebarLine> = Vec::new();
+    let max = usize::from(height);
+    let text_width = usize::from(width.saturating_sub(1));
+    let push =
+        |lines: &mut Vec<SidebarLine>, y: u16, text: String, header: bool, id: Option<String>| {
+            if lines.len() >= max {
+                return;
+            }
+            let text: String = text.chars().take(text_width).collect();
+            lines.push(SidebarLine {
+                y,
+                text,
+                header,
+                id,
+            });
+        };
+    let mut y = 0u16;
+    for (si, section) in sections.iter().enumerate() {
+        push(&mut lines, y, format!(" {} ", section.title), true, None);
+        y += 1;
+        for (id, label, active) in &section.rows {
+            let marker = if *active { "▸" } else { " " };
+            push(
+                &mut lines,
+                y,
+                format!(" {marker} {label}"),
+                false,
+                Some(id.clone()),
+            );
+            y += 1;
+        }
+        if si + 1 < sections.len() {
+            y += 1; // blank line between sections
+        }
+    }
+    lines
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
@@ -3817,6 +3894,35 @@ mod tests {
     /// The help panel compose: the filter line is ALWAYS present (the
     /// placeholder when inactive — the round-3 no-feedback fix), the
     /// filter narrows rows live (headers hide when nothing beneath them
+    #[test]
+    fn compose_sidebar_renders_sections_and_marks_active() {
+        let sections = vec![
+            super::SidebarSection {
+                title: "workspaces".to_string(),
+                rows: vec![
+                    ("+0".to_string(), "main".to_string(), true),
+                    ("+1".to_string(), "dev".to_string(), false),
+                ],
+            },
+            super::SidebarSection {
+                title: "agents".to_string(),
+                rows: vec![("a0".to_string(), "claude".to_string(), false)],
+            },
+        ];
+        let lines = super::compose_sidebar(&sections, 20, 12);
+        assert_eq!(lines[0].text, " workspaces ");
+        assert!(lines[0].header);
+        assert_eq!(lines[1].text, " \u{25b8} main");
+        assert_eq!(lines[1].id.as_deref(), Some("+0"));
+        assert_eq!(lines[2].text, "   dev");
+        let agents = lines.iter().find(|l| l.header && l.text == " agents ");
+        assert!(agents.is_some(), "second section header present");
+        assert!(
+            lines.iter().any(|l| l.id.as_deref() == Some("a0")),
+            "the second section's rows carry their ids"
+        );
+    }
+
     /// matches), the window scrolls, and the footer line names the
     /// controls. The border ring/title/badge are the renderer's
     /// paint_overlay job, not the compose's.
@@ -4177,6 +4283,7 @@ mod tests {
                     border_cycle: b'B',
                     label_toggle: b'l',
                     workspace_picker: b'g',
+                    sidebar: b's',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -4206,6 +4313,7 @@ mod tests {
                     border_cycle: b'B',
                     label_toggle: b'l',
                     workspace_picker: b'g',
+                    sidebar: b's',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
