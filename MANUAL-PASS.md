@@ -6,10 +6,14 @@ gate's manual integration criterion. Build (from the repo root) and seed:
 ```sh
 cargo build --release --bin par-mux --no-default-features --features mux-bin,attach
 P=target/release/par-mux
-$P --socket /tmp/manual-mux &                  # start a daemon
-$P --socket /tmp/manual-mux --cmd "new-session -s demo"
+$P --socket /tmp/manual-mux --cmd "new-session -s demo"   # first command auto-spawns the daemon
 $P --socket /tmp/manual-mux --cmd "split-window -t %0 -h"
 ```
+
+Do not pre-launch the daemon bare (`$P --socket … &`): a daemon holding zero
+sessions and zero clients exits after 5 s (tmux-style exit-empty). Spawning
+it yourself just adds a race — the first client command auto-spawns and
+seeds it in one step.
 
 Client control commands ride `--cmd` (the daemon's clap layer does not take
 them bare). Prefer typing into the panes interactively once attached — that
