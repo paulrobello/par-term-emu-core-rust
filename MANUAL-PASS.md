@@ -27,8 +27,8 @@ LEFT` types `echoLEFT`); use the hex form for text with spaces (`-H` takes
 space-separated hex byte pairs):
 
 ```sh
-$P --socket /tmp/manual-mux --cmd "send-keys -t %0 -H 65 63 68 6f 20 4c 45 46 54"   # "echo LEFT"
-$P --socket /tmp/manual-mux --cmd "send-keys -t %0 Enter"
+$P --socket /tmp/manual-mux --cmd "send-keys -t $PANE -H 65 63 68 6f 20 4c 45 46 54"   # "echo LEFT"
+$P --socket /tmp/manual-mux --cmd "send-keys -t $PANE Enter"
 ```
 
 Then attach from the terminal under test:
