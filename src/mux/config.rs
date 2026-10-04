@@ -1035,6 +1035,8 @@ remain-on-exit = true
             "state-dir",
             "pane-endpoints",
             "expose-control-socket",
+            "remain-on-exit",
+            "exit-empty",
         ] {
             assert!(text.contains(key), "default render names {key}: {text}");
         }

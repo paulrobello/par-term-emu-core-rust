@@ -6,14 +6,18 @@ gate's manual integration criterion. Build (from the repo root) and seed:
 ```sh
 cargo build --release --bin par-mux --no-default-features --features mux-bin,attach
 P=target/release/par-mux
-$P --socket /tmp/manual-mux --cmd "new-session -s demo"   # first command auto-spawns the daemon
-$P --socket /tmp/manual-mux --cmd "split-window -t %0 -h"
+($P --socket /tmp/manual-mux >/tmp/manual-mux.log 2>&1 &)
+sleep 0.5
+$P --socket /tmp/manual-mux --cmd "new-session -s demo"
+PANE=$($P --socket /tmp/manual-mux --cmd list-panes | head -1)
+$P --socket /tmp/manual-mux --cmd "split-window -t $PANE -h"
 ```
 
-Do not pre-launch the daemon bare (`$P --socket … &`): a daemon holding zero
-sessions and zero clients exits after 5 s (tmux-style exit-empty). Spawning
-it yourself just adds a race — the first client command auto-spawns and
-seeds it in one step.
+`--cmd` never starts a daemon, so launch it first and seed promptly — a
+daemon holding zero sessions and zero clients exits after 5 s (tmux-style
+exit-empty). Do not assume the first pane is `%0`: id counters resume from
+the saved state, so a socket that has run before starts its ids where the
+last run left off — discover the live id with `list-panes`.
 
 Client control commands ride `--cmd` (the daemon's clap layer does not take
 them bare). Prefer typing into the panes interactively once attached — that
