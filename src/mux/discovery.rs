@@ -285,6 +285,16 @@ fn probe(socket: &Path) -> Option<ServerInfo> {
     })
 }
 
+/// Whether `entry`, as read from registry file `file`, honors the
+/// stem-keyed contract: the file name's stem equals the recorded socket's
+/// stem. A mismatch means the entry is corrupt — the socket's own entry
+/// lives (or would live) at a different file, so this one can never be
+/// pruned through [`unregister`] and would re-probe its dead path on
+/// every enumerate.
+fn stems_match(file: &Path, entry: &RegistryEntry) -> bool {
+    file.file_stem() == Path::new(&entry.socket).file_stem()
+}
+
 /// Enumerate the par-mux servers known under state base `base`: every
 /// registry entry, plus — only when `base` IS the platform default — every
 /// named-default socket the directory scan turns up. Deduplicated, probed,
@@ -302,7 +312,11 @@ fn probe(socket: &Path) -> Option<ServerInfo> {
 /// `dead` and their files pruned here, so one list-servers run cleans up
 /// after a crashed daemon. A dead entry for a socket a NEW daemon has
 /// since bound is impossible (the new daemon's probe answers), so pruning
-/// never eats a live server's entry.
+/// never eats a live server's entry. A stem-mismatched entry (file
+/// `abc.json` naming a socket with a different stem) is corrupt and its
+/// file is pruned at scan time instead — `unregister` could only ever
+/// target the socket's own stem file, so the mismatched file would
+/// otherwise linger forever.
 pub fn enumerate(base: &Path) -> Enumeration {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(registry_dir(base)) {
@@ -311,9 +325,25 @@ pub fn enumerate(base: &Path) -> Enumeration {
             if path.extension().is_some_and(|ext| ext == "json") {
                 if let Ok(bytes) = std::fs::read(&path) {
                     if let Ok(parsed) = serde_json::from_slice::<RegistryEntry>(&bytes) {
-                        let socket = PathBuf::from(&parsed.socket);
-                        if !candidates.contains(&socket) {
-                            candidates.push(socket);
+                        if stems_match(&path, &parsed) {
+                            let socket = PathBuf::from(&parsed.socket);
+                            if !candidates.contains(&socket) {
+                                candidates.push(socket);
+                            }
+                        } else {
+                            // Corrupt by the stem-keyed contract. Prune
+                            // through a re-read: a daemon that has
+                            // re-registered the stem between our two reads
+                            // wrote a matching entry, which must survive.
+                            let stale = std::fs::read(&path)
+                                .ok()
+                                .and_then(|bytes| {
+                                    serde_json::from_slice::<RegistryEntry>(&bytes).ok()
+                                })
+                                .is_some_and(|entry| !stems_match(&path, &entry));
+                            if stale {
+                                let _ = std::fs::remove_file(&path);
+                            }
                         }
                     }
                 }
@@ -542,5 +572,75 @@ mod tests {
             !dir.join("par-mux-x.json").exists(),
             "the dead entry's file was pruned"
         );
+    }
+
+    /// A stem-mismatched entry — file `abc.json` naming a socket whose
+    /// stem is different — is corrupt by the stem-keyed contract: its
+    /// socket's dead-path prune (through `unregister`) targets the
+    /// socket's own stem file, never `abc.json`, so the file would linger
+    /// and re-probe its dead path on every enumerate. `enumerate` prunes
+    /// the file at scan time, the socket appears in neither `live` nor
+    /// `dead`, and a valid stem-matching entry next to it flows through
+    /// the unchanged probe/prune path.
+    #[test]
+    fn enumerate_prunes_a_stem_mismatched_entry() {
+        let base = temp_base("stem");
+        let dir = registry_dir(base.path());
+        std::fs::create_dir_all(&dir).expect("registry dir");
+
+        // The corrupt case: filename stem `abc`, recorded socket stem
+        // `par-mux-ghost`.
+        let ghost = "/no/such/dir/par-mux-ghost.sock";
+        let mismatched = serde_json::json!({
+            "socket": ghost,
+            "pid": 123,
+            "started_unix_ms": 0,
+            "stamp": "0.0.0+test"
+        });
+        std::fs::write(
+            dir.join("abc.json"),
+            serde_json::to_vec(&mismatched).expect("json"),
+        )
+        .expect("mismatched entry");
+
+        // A valid stem-matching dead entry, to pin the unchanged path.
+        let real = "/no/such/dir/par-mux-real.sock";
+        let valid = serde_json::json!({
+            "socket": real,
+            "pid": 123,
+            "started_unix_ms": 0,
+            "stamp": "0.0.0+test"
+        });
+        std::fs::write(
+            dir.join("par-mux-real.json"),
+            serde_json::to_vec(&valid).expect("json"),
+        )
+        .expect("valid entry");
+
+        let found = enumerate(base.path());
+        assert!(
+            !found
+                .live
+                .iter()
+                .any(|info| info.socket == std::path::Path::new(ghost)),
+            "the mismatched socket must not be listed as live: {:?}",
+            found.live
+        );
+        assert!(
+            !found
+                .dead
+                .iter()
+                .any(|path| path == std::path::Path::new(ghost)),
+            "the mismatched socket must not be listed as dead: {:?}",
+            found.dead
+        );
+        assert!(
+            !dir.join("abc.json").exists(),
+            "the stem-mismatched file was pruned"
+        );
+        // The valid entry still flowed through the unchanged
+        // probe-then-unregister path: listed dead, file pruned.
+        assert_eq!(found.dead, vec![std::path::PathBuf::from(real)]);
+        assert!(!dir.join("par-mux-real.json").exists());
     }
 }
