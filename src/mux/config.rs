@@ -120,6 +120,11 @@ pub struct ClientSection {
     /// bindings panel (every chord shown at its effective binding).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// The picker chord: the key matched after the prefix that opens the
+    /// session/window picker modal (sessions with their windows nested,
+    /// the current one emphasized, keyboard and mouse navigable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picker: Option<String>,
     /// Per-pane border boxes in render mode (herdr's look): each pane
     /// renders its own complete ring, focused accent vs dim, content
     /// inset by the border cells. Default off — the shared-divider look.
@@ -137,6 +142,28 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub show_label_in_border: Option<bool>,
+    /// Visible gap bands between panes in render mode (herdr's look):
+    /// each pane's rect insets by this many cells per side and the band
+    /// fills with the theme background. Default 0.
+    #[serde(default, rename = "pane-gaps", skip_serializing_if = "Option::is_none")]
+    pub pane_gaps: Option<u16>,
+    /// Reserve a right-edge gutter column in every render-mode pane rect
+    /// (content narrows by one; the gutter shows a minimal scroll
+    /// position indicator while the pane is scrolled). Default off.
+    #[serde(
+        default,
+        rename = "scrollbar-gutter",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scrollbar_gutter: Option<bool>,
+    /// While a divider drag is live, shape the host cursor to the resize
+    /// shape (best-effort DECSCUSR; restored on drag end). Default off.
+    #[serde(
+        default,
+        rename = "drag-cursor-shape",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub drag_cursor_shape: Option<bool>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -371,8 +398,12 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_next: None,
             workspace_prev: None,
             help: None,
+            picker: Some("w".to_string()),
             pane_borders: Some(false),
             show_label_in_border: Some(false),
+            pane_gaps: Some(0),
+            scrollbar_gutter: Some(false),
+            drag_cursor_shape: Some(false),
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -448,6 +479,15 @@ pub struct Chords {
     /// The pane's user title embedded in its top border (config
     /// `show-label-in-border`). Default off.
     pub show_label_in_border: bool,
+    /// Visible gap bands between panes in render mode (config
+    /// `pane-gaps`). Default 0.
+    pub pane_gaps: u16,
+    /// The reserved right-edge gutter column (config
+    /// `scrollbar-gutter`). Default off.
+    pub scrollbar_gutter: bool,
+    /// The drag cursor shaping (config `drag-cursor-shape`). Default
+    /// off.
+    pub drag_cursor_shape: bool,
 }
 
 impl Chords {
@@ -461,6 +501,9 @@ impl Chords {
             resize_step: 1,
             pane_borders: false,
             show_label_in_border: false,
+            pane_gaps: 0,
+            scrollbar_gutter: false,
+            drag_cursor_shape: false,
         }
     }
 }
@@ -499,6 +542,10 @@ pub struct Management {
     /// Open the bindings help panel — every chord at its effective
     /// binding, from the live config.
     pub help: u8,
+    /// Open the session/window picker modal — sessions with their
+    /// windows nested, the current one emphasized, keyboard and mouse
+    /// navigable.
+    pub picker: u8,
 }
 
 impl Default for Management {
@@ -514,6 +561,7 @@ impl Default for Management {
             workspace_next: b'W',
             workspace_prev: 0x17, // C-w
             help: b'?',
+            picker: b'w',
         }
     }
 }
@@ -600,6 +648,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
             Some(chord) => management_key(chord, "help")?,
             None => current.management.help,
         },
+        picker: match file.client.picker.as_deref() {
+            Some(chord) => management_key(chord, "picker")?,
+            None => current.management.picker,
+        },
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -615,6 +667,17 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .show_label_in_border
         .unwrap_or(current.show_label_in_border);
+    // Herdr-parity display options: default OFF/0 — absent keys preserve
+    // today's edge-to-edge, gutter-free, drag-inert look exactly.
+    let pane_gaps = file.client.pane_gaps.unwrap_or(current.pane_gaps);
+    let scrollbar_gutter = file
+        .client
+        .scrollbar_gutter
+        .unwrap_or(current.scrollbar_gutter);
+    let drag_cursor_shape = file
+        .client
+        .drag_cursor_shape
+        .unwrap_or(current.drag_cursor_shape);
     Ok(Chords {
         prefix,
         reload,
@@ -622,6 +685,9 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         resize_step,
         pane_borders,
         show_label_in_border,
+        pane_gaps,
+        scrollbar_gutter,
+        drag_cursor_shape,
     })
 }
 
@@ -941,6 +1007,53 @@ remain-on-exit = true
     /// The management chord overrides parse through the same prefix
     /// grammar and rebind only the stated keys; a malformed spelling
     /// errors with the key's name in the message.
+    /// The herdr-parity display options: absent keys keep the defaults
+    /// (all OFF — the byte-identical contract), stated keys resolve, and
+    /// gen-config emits all three at their defaults.
+    #[test]
+    fn herdr_parity_display_options_resolve_and_gen_config_emits() {
+        let defaults = Chords::with_defaults();
+        let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
+        let kept = reload_client_chords(&empty, &defaults).unwrap();
+        assert_eq!(
+            (
+                kept.pane_gaps,
+                kept.scrollbar_gutter,
+                kept.drag_cursor_shape
+            ),
+            (0, false, false),
+            "absent keys keep the defaults off"
+        );
+        let file: ConfigFile = toml::from_str(
+            "[client]\npane-gaps = 2\nscrollbar-gutter = true\ndrag-cursor-shape = true\n",
+        )
+        .unwrap();
+        let moved = reload_client_chords(&file, &defaults).unwrap();
+        assert_eq!(
+            (
+                moved.pane_gaps,
+                moved.scrollbar_gutter,
+                moved.drag_cursor_shape
+            ),
+            (2, true, true),
+            "stated keys resolve"
+        );
+        // gen-config emits all three; the output parses back.
+        let text = render(&EffectiveConfig::default());
+        let file: ConfigFile = toml::from_str(&text).unwrap();
+        assert_eq!(file.client.pane_gaps, Some(0), "gen-config emits pane-gaps");
+        assert_eq!(
+            file.client.scrollbar_gutter,
+            Some(false),
+            "gen-config emits scrollbar-gutter"
+        );
+        assert_eq!(
+            file.client.drag_cursor_shape,
+            Some(false),
+            "gen-config emits drag-cursor-shape"
+        );
+    }
+
     #[test]
     fn management_chords_parse_route_and_error() {
         let defaults = Chords {
@@ -963,6 +1076,7 @@ remain-on-exit = true
                 workspace_next: b'W',
                 workspace_prev: 0x17,
                 help: b'?',
+                picker: b'w',
             }
         );
         // Full override, tmux spellings and literals alike.

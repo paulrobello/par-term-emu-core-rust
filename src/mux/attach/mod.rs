@@ -1352,6 +1352,9 @@ impl Session {
             resize_step: self.resize_step,
             pane_borders: false,
             show_label_in_border: false,
+            pane_gaps: 0,
+            scrollbar_gutter: false,
+            drag_cursor_shape: false,
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;
@@ -1725,6 +1728,10 @@ pub(crate) fn help_rows(
             ),
             (format!("{p} n / p"), "next / previous window".to_string()),
             (format!("{p} ( / )"), "previous / next session".to_string()),
+            (
+                format!("{p} {}", spell_key(m.picker)),
+                "session/window picker".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -1775,6 +1782,13 @@ pub(crate) fn help_rows(
 
 /// The help panel's footer/controls line (render mode).
 pub(crate) const HELP_FOOTER: &str = " search / · scroll j/k/arrows/pgup/pgdn · close esc/enter ";
+
+/// The modal overlay's title for the bindings panel (the render-mode
+/// chrome embeds it in the top border, left-aligned).
+pub(crate) const HELP_OVERLAY_TITLE: &str = " keybinds ";
+
+/// The modal overlay's title for the session/window picker.
+pub(crate) const PICKER_OVERLAY_TITLE: &str = " picker ";
 
 /// The help panel's filter line when no filter is active — the visible
 /// placeholder (herdr's always-visible filter input).
@@ -1835,6 +1849,161 @@ pub(crate) fn compose_help_panel(
         accent: false,
     });
     panel
+}
+
+/// The session/window picker's footer/controls line (render mode).
+pub(crate) const PICKER_FOOTER: &str =
+    " navigate arrows/j/k · select enter/click · filter / · close esc/q ";
+
+/// One session in the picker's queried state: its windows as
+/// `(window_id, name)` in window order, the session's active window id,
+/// and whether the session is the one the view currently shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PickerEntry {
+    pub session_id: String,
+    pub session_name: String,
+    pub windows: Vec<(String, String)>,
+    pub active_window: Option<String>,
+    pub current: bool,
+}
+
+/// Where one picker display row came from: a session (its header row) or
+/// one of its windows. The compose returns these parallel to the
+/// filtered rows so a selection or a click maps back to a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PickerRef {
+    Session(usize),
+    Window(usize, usize),
+}
+
+/// The picker's display rows from the queried entries: one accent
+/// header per session (` $N: name`, `>`-marked when the session is the
+/// one the view shows), its windows nested beneath it as `   @N: name`
+/// rows (`>`-marked for the shown window, `*` suffixed for the
+/// session's active window). The parallel refs list maps each row to
+/// its selection target.
+pub(crate) fn picker_rows(
+    entries: &[PickerEntry],
+    current_window: Option<&str>,
+) -> (Vec<HelpRow>, Vec<PickerRef>) {
+    let mut rows: Vec<HelpRow> = Vec::new();
+    let mut refs: Vec<PickerRef> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let marker = if entry.current { ">" } else { " " };
+        rows.push(HelpRow {
+            text: format!(" {marker}{0}: {1}", entry.session_id, entry.session_name),
+            accent: true,
+        });
+        refs.push(PickerRef::Session(i));
+        for (w, (window_id, name)) in entry.windows.iter().enumerate() {
+            let marker = if current_window == Some(window_id.as_str()) {
+                ">"
+            } else {
+                " "
+            };
+            let active = entry.active_window.as_deref() == Some(window_id.as_str());
+            let star = if active { " *" } else { "" };
+            rows.push(HelpRow {
+                text: format!(" {marker}  {window_id}: {name}{star}"),
+                accent: false,
+            });
+            refs.push(PickerRef::Window(i, w));
+        }
+    }
+    (rows, refs)
+}
+
+/// One row of an edit's filtering: `true` keeps the row.
+fn picker_row_matches(row: &HelpRow, lower: &str) -> bool {
+    lower.is_empty() || row.text.to_lowercase().contains(lower)
+}
+
+/// The listbox panning rule the picker's content window uses: `start`
+/// moves only when `selected` leaves the visible window `[start,
+/// start+visible)`. Pure — the session keeps the running `start` and
+/// passes it back each compose.
+pub(crate) fn listbox_scroll(start: usize, selected: usize, visible: usize) -> usize {
+    if visible == 0 {
+        return 0;
+    }
+    if selected < start {
+        selected
+    } else if selected >= start + visible {
+        selected + 1 - visible
+    } else {
+        start
+    }
+}
+
+/// Compose the picker panel's CONTENT rows: the always-visible filter
+/// line (the same shape [`compose_help_panel`] draws — placeholder when
+/// inactive, ` /query▌` while typing), the filter's matching rows with
+/// headers hiding when nothing beneath them matches, the selection
+/// cursor `▸` prefixed to the selected row (clamped into range), the
+/// content windowed to `visible` rows at the panned `start`, and the
+/// footer controls line. Returns the panel rows, the FILTERED refs (the
+/// selection/click target for each content row, in content order), and
+/// the window's content start index, so a click at composed row `i`
+/// maps to content row `start + i - 1`. Pure over its inputs — the
+/// unit-test surface for the picker.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_picker_panel(
+    rows: &[HelpRow],
+    refs: &[PickerRef],
+    filter: &str,
+    filtering: bool,
+    selected: usize,
+    visible: usize,
+    start: usize,
+) -> (Vec<HelpRow>, Vec<PickerRef>, usize) {
+    let lower = filter.to_lowercase();
+    let mut content: Vec<HelpRow> = Vec::new();
+    let mut content_refs: Vec<PickerRef> = Vec::new();
+    let mut pending: Option<(HelpRow, PickerRef)> = None;
+    for (row, r#ref) in rows.iter().zip(refs.iter()) {
+        if row.accent {
+            pending = Some((row.clone(), *r#ref));
+        } else if picker_row_matches(row, &lower) {
+            if let Some((header, header_ref)) = pending.take() {
+                content.push(header);
+                content_refs.push(header_ref);
+            }
+            content.push(row.clone());
+            content_refs.push(*r#ref);
+        }
+    }
+    // The selection cursor clamps into the filtered range (a narrowed
+    // filter can shrink the list under the cursor).
+    let selected = selected.min(content.len().saturating_sub(1));
+    let start = start.min(selected);
+    let start = listbox_scroll(start, selected, visible);
+    for (i, row) in content.iter_mut().enumerate() {
+        if i == selected {
+            row.text = format!("▸{}", row.text);
+        }
+    }
+    let content_len = content.len();
+    let end = (start + visible).min(content_len);
+    let window: Vec<HelpRow> = content[start..end].to_vec();
+
+    let mut panel: Vec<HelpRow> = Vec::new();
+    if filtering || !filter.is_empty() {
+        panel.push(HelpRow {
+            text: format!(" /{filter}▌"),
+            accent: false,
+        });
+    } else {
+        panel.push(HelpRow {
+            text: HELP_FILTER_PLACEHOLDER.to_string(),
+            accent: false,
+        });
+    }
+    panel.extend(window);
+    panel.push(HelpRow {
+        text: PICKER_FOOTER.to_string(),
+        accent: false,
+    });
+    (panel, content_refs, start)
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
@@ -3345,6 +3514,142 @@ mod tests {
         );
     }
 
+    /// The picker's rows: one accent header per session with its windows
+    /// nested beneath, the current session and the shown window
+    /// `>`-marked, the session's active window `*`-suffixed, and the
+    /// parallel refs mapping each row to its selection target.
+    #[test]
+    fn picker_rows_nest_windows_and_mark_current() {
+        let entries = vec![
+            super::PickerEntry {
+                session_id: "$0".to_string(),
+                session_name: "work".to_string(),
+                windows: vec![
+                    ("@0".to_string(), "main".to_string()),
+                    ("@1".to_string(), "vim".to_string()),
+                ],
+                active_window: Some("@1".to_string()),
+                current: true,
+            },
+            super::PickerEntry {
+                session_id: "$1".to_string(),
+                session_name: "build".to_string(),
+                windows: vec![("@2".to_string(), "logs".to_string())],
+                active_window: Some("@2".to_string()),
+                current: false,
+            },
+        ];
+        let (rows, refs) = super::picker_rows(&entries, Some("@0"));
+        let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(text.len(), 5, "two headers + three windows: {text:?}");
+        assert_eq!(
+            text[0], " >$0: work",
+            "the current session's header is >-marked"
+        );
+        assert!(rows[0].accent, "session headers are accent rows");
+        assert_eq!(text[1], " >  @0: main", "the shown window is >-marked");
+        assert_eq!(text[2], "    @1: vim *", "the active window carries *");
+        assert_eq!(text[3], "  $1: build", "a non-current header is unmarked");
+        assert!(rows[3].accent, "every session header is an accent row");
+        assert!(!rows[1].accent, "window rows are not accent rows");
+        assert_eq!(refs[0], super::PickerRef::Session(0));
+        assert_eq!(refs[1], super::PickerRef::Window(0, 0));
+        assert_eq!(refs[2], super::PickerRef::Window(0, 1));
+        assert_eq!(refs[3], super::PickerRef::Session(1));
+        assert_eq!(refs[4], super::PickerRef::Window(1, 0));
+    }
+
+    /// The picker compose: the filter line, the filtered content with
+    /// headers hiding when nothing beneath them matches, the `▸` cursor
+    /// on the selected row, the footer, and the refs/start return that
+    /// maps a click at composed row `i` to content row `start + i - 1`.
+    #[test]
+    fn compose_picker_panel_filters_marks_and_maps_clicks() {
+        let entries = vec![
+            super::PickerEntry {
+                session_id: "$0".to_string(),
+                session_name: "work".to_string(),
+                windows: vec![("@0".to_string(), "main".to_string())],
+                active_window: Some("@0".to_string()),
+                current: true,
+            },
+            super::PickerEntry {
+                session_id: "$1".to_string(),
+                session_name: "build".to_string(),
+                windows: vec![("@1".to_string(), "vim".to_string())],
+                active_window: Some("@1".to_string()),
+                current: false,
+            },
+        ];
+        let (rows, refs) = super::picker_rows(&entries, Some("@0"));
+        // Full panel: filter placeholder + 4 content rows + footer.
+        let (panel, refs2, start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0);
+        assert_eq!(panel.len(), 6, "filter + content + footer: {panel:?}");
+        assert_eq!(start, 0);
+        assert_eq!(refs2.len(), 4);
+        assert_eq!(
+            panel.last().map(|r| r.text.as_str()),
+            Some(super::PICKER_FOOTER)
+        );
+        // Filter "vim" keeps only that window row and its header; the
+        // other session's header hides with no matching children.
+        let (filtered, frefs, fstart) =
+            super::compose_picker_panel(&rows, &refs, "vim", false, 0, 100, 0);
+        let ftext = filtered
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(ftext.contains("vim"), "the matching row survives: {ftext}");
+        assert!(
+            ftext.contains("build"),
+            "the matching row's header survives"
+        );
+        assert!(
+            !ftext.contains("work"),
+            "an emptied session's header hides: {ftext}"
+        );
+        assert_eq!(
+            frefs,
+            vec![super::PickerRef::Session(1), super::PickerRef::Window(1, 0)]
+        );
+        assert_eq!(fstart, 0);
+        // The selection cursor: selected=2 marks the third content row.
+        let (marked, _, _) = super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0);
+        assert!(
+            marked[3].text.starts_with('▸'),
+            "the selected row carries the cursor glyph: {}",
+            marked[3].text
+        );
+        assert!(
+            !marked[1].text.starts_with('▸'),
+            "only the selected row carries it"
+        );
+        // Click mapping: composed row 2 (content row 1) maps to content
+        // index start + 1.
+        let (small, _, small_start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 2, 0);
+        assert_eq!(small.len(), 4, "filter + 2 visible + footer");
+        assert_eq!(small_start, 0);
+        // Panning: a selected row below the window moves `start`.
+        let (_panned, _, panned_start) =
+            super::compose_picker_panel(&rows, &refs, "", false, 3, 2, 0);
+        assert_eq!(
+            panned_start, 2,
+            "the window pans to keep the cursor visible"
+        );
+    }
+
+    /// The listbox panning rule: `start` moves only when `selected`
+    /// leaves the visible window.
+    #[test]
+    fn listbox_scroll_pans_only_at_the_edges() {
+        assert_eq!(super::listbox_scroll(0, 0, 3), 0);
+        assert_eq!(super::listbox_scroll(0, 2, 3), 0, "inside the window");
+        assert_eq!(super::listbox_scroll(0, 3, 3), 1, "one past the end");
+        assert_eq!(super::listbox_scroll(1, 0, 3), 0, "above the window");
+        assert_eq!(super::listbox_scroll(0, 0, 0), 0, "an empty window is safe");
+    }
+
     /// A management chord spelling that does not parse is a reload error
     /// (the flash), not a silent keep-the-old.
     #[test]
@@ -3496,6 +3801,7 @@ mod tests {
                     workspace_next: b'N',
                     workspace_prev: b'P',
                     help: b'?',
+                    picker: b'w',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -3518,6 +3824,7 @@ mod tests {
                     workspace_next: b'N',
                     workspace_prev: b'P',
                     help: b'?',
+                    picker: b'w',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()

@@ -236,15 +236,26 @@ pub struct PaneRenderer {
     /// The divider currently dragged (orientation + pane ids), drawn
     /// reversed so the edge being moved stands out.
     drag_divider: Option<(bool, u32, u32)>,
-    /// The help overlay's rows, painted as the themed modal over the
-    /// frame while `Some` (the help chord). Rows carry their accent flag
-    /// so the painter styles headers/border ring in the accent color.
-    overlay: Option<Vec<HelpRow>>,
+    /// The help/picker overlay's title and rows, painted as the themed
+    /// modal over the frame while `Some` (the help or picker chord). Rows
+    /// carry their accent flag so the painter styles headers/border ring
+    /// in the accent color.
+    overlay: Option<(&'static str, Vec<HelpRow>)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
     pane_borders: bool,
     show_label_in_border: bool,
+    /// Visible gap bands between panes (config `pane-gaps`): every
+    /// pane's chrome and content paint into the rect inset by this many
+    /// cells per side; the band cells stay at the frame's theme-bg fill.
+    /// Default 0 — today's edge-to-edge tiling.
+    pane_gaps: u16,
+    /// Reserve a right-edge gutter column in each pane rect (config
+    /// `scrollbar-gutter`): content narrows by one; the gutter renders a
+    /// minimal position indicator while the pane's client scroll offset
+    /// is > 0. Default off.
+    scrollbar_gutter: bool,
     /// The frame being painted.
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
@@ -268,6 +279,8 @@ impl PaneRenderer {
             overlay: None,
             pane_borders: false,
             show_label_in_border: false,
+            pane_gaps: 0,
+            scrollbar_gutter: false,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
             dirty: true,
@@ -376,12 +389,55 @@ impl PaneRenderer {
         }
     }
 
-    /// Set (or clear) the help overlay's rows. The overlay paints as the
-    /// themed modal over the frame; clearing it lets the next frame's
-    /// pane repaint restore the covered cells.
-    pub(crate) fn set_overlay(&mut self, lines: Option<Vec<HelpRow>>) {
-        if self.overlay != lines {
-            self.overlay = lines;
+    /// The painted overlay's geometry (the same math `paint_overlay`
+    /// runs): `(x0, y0, inner_width, height)` while one is up — the read
+    /// the picker's click hit-test makes.
+    pub(crate) fn overlay_geometry(&self) -> Option<(usize, usize, usize, usize)> {
+        let rows = &self.overlay.as_ref()?.1;
+        let inner = rows
+            .iter()
+            .map(|r| r.text.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(self.width.saturating_sub(2) as usize)
+            .max(1);
+        let height = rows
+            .len()
+            .min(self.height.saturating_sub(2) as usize)
+            .max(1);
+        let x0 = (self.width as usize).saturating_sub(inner + 2) / 2;
+        let y0 = (self.height as usize).saturating_sub(height + 2) / 2;
+        Some((x0, y0, inner, height))
+    }
+
+    /// The overlay's composed panel row (index into the panel's rows:
+    /// 0 is the filter line, the last the footer) at window-relative
+    /// `(x, y)`, or `None` when no overlay is up or the point is off the
+    /// box.
+    pub(crate) fn overlay_row_at(&self, x: u16, y: u16) -> Option<usize> {
+        let (x0, y0, inner, height) = self.overlay_geometry()?;
+        let x = usize::from(x);
+        let y = usize::from(y);
+        if x < x0 + 1 || x > x0 + inner {
+            return None;
+        }
+        if y < y0 + 1 || y > y0 + height {
+            return None;
+        }
+        Some(y - y0 - 1)
+    }
+
+    /// Set (or clear) the modal overlay's title and rows. The overlay
+    /// paints as the themed modal over the frame; clearing it lets the
+    /// next frame's pane repaint restore the covered cells.
+    pub(crate) fn set_overlay(&mut self, overlay: Option<(&'static str, Vec<HelpRow>)>) {
+        let same = match (&self.overlay, &overlay) {
+            (Some((a, ra)), Some((b, rb))) => a == b && ra == rb,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.overlay = overlay;
             self.dirty = true;
         }
     }
@@ -489,15 +545,60 @@ impl PaneRenderer {
         ))
     }
 
+    /// The rect the pane's chrome and content paint into: the layout
+    /// rect inset by the `pane_gaps` band per side (clamped so at least
+    /// one cell of edge survives). The band cells keep the frame's
+    /// theme-bg fill.
+    fn display_rect(&self, rect: &PaneRect) -> PaneRect {
+        let gap = self
+            .pane_gaps
+            .min(rect.width.saturating_sub(1) / 2)
+            .min(rect.height.saturating_sub(1) / 2);
+        let mut r = *rect;
+        r.x += gap;
+        r.y += gap;
+        r.width = r.width.saturating_sub(2 * gap);
+        r.height = r.height.saturating_sub(2 * gap);
+        r
+    }
+
     /// The content view of a pane rect: `(inset_x, inset_y, width,
-    /// height)` — the full rect, or the interior inside the one-cell
-    /// border ring when the per-pane-border option is on (a pane too
-    /// small to carry a ring keeps its full rect).
+    /// height)` — the display rect's full area, or the interior inside
+    /// the one-cell border ring when the per-pane-border option is on (a
+    /// pane too small to carry a ring keeps its full rect), narrowed by
+    /// one more column when the scrollbar gutter is reserved.
     fn content_view(&self, rect: &PaneRect) -> (u16, u16, u16, u16) {
-        if self.pane_borders && rect.width > 2 && rect.height > 2 {
-            (1, 1, rect.width - 2, rect.height - 2)
+        let d = self.display_rect(rect);
+        let (inset_x, inset_y, mut w, h) = if self.pane_borders && d.width > 2 && d.height > 2 {
+            (1, 1, d.width - 2, d.height - 2)
         } else {
-            (0, 0, rect.width, rect.height)
+            (0, 0, d.width, d.height)
+        };
+        if self.scrollbar_gutter {
+            w = w.saturating_sub(1);
+        }
+        // Rect-RELATIVE insets: the callers add rect.x/rect.y themselves.
+        (d.x - rect.x + inset_x, d.y - rect.y + inset_y, w, h)
+    }
+
+    /// The gap-band mode (config `pane-gaps`): every pane's chrome and
+    /// content paint into the rect inset per side, leaving theme-bg gap
+    /// bands between panes. Default 0.
+    pub(crate) fn set_pane_gaps(&mut self, gaps: u16) {
+        if self.pane_gaps != gaps {
+            self.pane_gaps = gaps;
+            self.dirty = true;
+        }
+    }
+
+    /// The scrollbar-gutter mode (config `scrollbar-gutter`): a
+    /// right-edge gutter column is reserved in every pane rect; it
+    /// renders a position indicator while the pane's client scroll
+    /// offset is > 0. Default off.
+    pub(crate) fn set_scrollbar_gutter(&mut self, on: bool) {
+        if self.scrollbar_gutter != on {
+            self.scrollbar_gutter = on;
+            self.dirty = true;
         }
     }
 
@@ -680,8 +781,8 @@ impl PaneRenderer {
         } else {
             self.paint_dividers();
         }
-        if let Some(rows) = self.overlay.clone() {
-            self.paint_overlay(&rows);
+        if let Some((title, rows)) = self.overlay.clone() {
+            self.paint_overlay(title, &rows);
         }
 
         let diff = self
@@ -708,16 +809,12 @@ impl PaneRenderer {
         let Some(emulator) = self.emulators.get(&rect.pane) else {
             return;
         };
-        // With the per-pane-border option on, the content paints INSIDE
-        // the border ring: the view window is the rect's interior and the
-        // grid's outer columns/rows are cropped (the daemon's pane is the
-        // full rect; the border overlays its perimeter).
-        let (inset_x, inset_y, view_w, view_h) =
-            if self.pane_borders && rect.width > 2 && rect.height > 2 {
-                (1u16, 1u16, rect.width - 2, rect.height - 2)
-            } else {
-                (0u16, 0u16, rect.width, rect.height)
-            };
+        // The content paints into the content view: inside the border
+        // ring when the per-pane-border option is on (the grid's outer
+        // columns/rows are cropped — the daemon's pane is the full rect;
+        // the border overlays its perimeter), inside the gap band, and
+        // beside the reserved gutter column.
+        let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
         let grid = emulator.terminal().active_grid();
         let scroll = emulator.scroll_offset();
         let scrollback_len = grid.scrollback_len() as isize;
@@ -790,6 +887,32 @@ impl PaneRenderer {
                 }
             }
         }
+        // The reserved gutter column (config `scrollbar-gutter`): theme-bg
+        // fill, with a minimal position indicator while the pane's client
+        // scroll offset is > 0 — one `▐` at the view top's proportional
+        // depth into the history.
+        if self.scrollbar_gutter && view_h > 0 {
+            let gx = rect.x + inset_x + view_w;
+            if gx < self.width {
+                let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
+                    / (scroll.min(u16::MAX as usize) as u32 + u32::from(view_h));
+                for gy in 0..view_h {
+                    let y = rect.y + inset_y + gy;
+                    if y >= self.height {
+                        break;
+                    }
+                    let cell = &mut self.buffer[(gx, y)];
+                    cell.reset();
+                    if let Some(bg) = self.bg {
+                        cell.set_bg(bg);
+                    }
+                    if scroll > 0 && u32::from(gy) == indicator_row {
+                        cell.set_symbol("\u{2590}");
+                        cell.set_fg(RtColor::Indexed(14));
+                    }
+                }
+            }
+        }
     }
 
     /// Draw the dividers between adjacent layout rects. The daemon's
@@ -836,6 +959,19 @@ impl PaneRenderer {
             if *x >= self.width || *y >= self.height {
                 continue; // a stale layout racing a shrink can overflow
             }
+            // The scrollbar gutter owns the left/top pane's last column
+            // when reserved (config `scrollbar-gutter`): the boundary
+            // divider yields the cell so the gutter's indicator stays
+            // visible. The boundary stays a drag handle (`divider_near`
+            // reads the layout geometry, not the paint).
+            if self.scrollbar_gutter
+                && self
+                    .layout
+                    .iter()
+                    .any(|r| r.pane == *a && *x == r.x + r.width - 1)
+            {
+                continue;
+            }
             let cell = &mut self.buffer[(*x, *y)];
             cell.reset();
             if let Some(bg) = self.bg {
@@ -847,6 +983,15 @@ impl PaneRenderer {
         for (x, y, a, b) in &horizontal {
             if *x >= self.width || *y >= self.height {
                 continue; // a stale layout racing a shrink can overflow
+            }
+            // Same yield for the top pane's last ROW.
+            if self.scrollbar_gutter
+                && self
+                    .layout
+                    .iter()
+                    .any(|r| r.pane == *a && *y == r.y + r.height - 1)
+            {
+                continue;
             }
             // A cell that is also a vertical boundary becomes the junction.
             if vertical.iter().any(|(vx, vy, _, _)| vx == x && vy == y) {
@@ -879,7 +1024,7 @@ impl PaneRenderer {
     /// line inside the box. Clamped to the window; paints last in
     /// `render_frame`, covering panes and dividers; dismissal lets the
     /// next frame's pane repaint restore the covered cells.
-    fn paint_overlay(&mut self, rows: &[HelpRow]) {
+    fn paint_overlay(&mut self, title: &str, rows: &[HelpRow]) {
         let accent_style = RtStyle::default()
             .fg(RtColor::Indexed(14))
             .add_modifier(RtModifier::BOLD);
@@ -943,7 +1088,7 @@ impl PaneRenderer {
                 cell.set_style(accent_style);
             }
         };
-        embed(" keybinds ", x0 + 1);
+        embed(title, x0 + 1);
         let badge = " esc close ";
         let badge_start = x0 + 1 + inner - badge.chars().count().min(inner);
         embed(badge, badge_start);
@@ -969,7 +1114,8 @@ impl PaneRenderer {
     fn paint_pane_borders(&mut self) {
         // (x, y, label chars, owning pane) per pane with a label.
         let mut labels: Vec<(u16, u16, Vec<char>, u32)> = Vec::new();
-        for rect in &self.layout {
+        for layout_rect in &self.layout {
+            let rect = self.display_rect(layout_rect);
             let style = if Some(rect.pane) == self.focused {
                 RtStyle::default()
                     .fg(RtColor::Indexed(14))
@@ -1053,7 +1199,8 @@ impl PaneRenderer {
         if !self.show_label_in_border || !self.pane_borders {
             return false;
         }
-        for rect in &self.layout {
+        for layout_rect in &self.layout {
+            let rect = self.display_rect(layout_rect);
             if y != rect.y || rect.width <= 4 {
                 continue;
             }
@@ -1408,6 +1555,9 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     session.resize_step = chords.resize_step;
     session.set_pane_borders(chords.pane_borders);
     session.set_show_label_in_border(chords.show_label_in_border);
+    session.set_pane_gaps(chords.pane_gaps);
+    session.set_scrollbar_gutter(chords.scrollbar_gutter);
+    session.drag_cursor_shape = chords.drag_cursor_shape;
 
     // The OSC 11 background probe: raw mode is up and the pump's stdin
     // reader has not started, so the probe is briefly the tty's only
@@ -1503,6 +1653,27 @@ struct WindowSession {
     help_filtering: bool,
     /// The help panel's content-window scroll offset.
     help_scroll: usize,
+    /// The session/window picker is up (the `picker` chord). The same
+    /// modal chrome as the help panel; selection-driven instead of
+    /// scroll-driven.
+    picker_mode: bool,
+    /// The picker's filter box state (the `/` control).
+    picker_filter: String,
+    /// Whether the picker's filter box is actively typing.
+    picker_filtering: bool,
+    /// The picker's selection cursor, over the FILTERED content rows.
+    picker_selected: usize,
+    /// The picker's content-window start (the listbox panning state).
+    picker_start: usize,
+    /// The queried picker state (sessions + their windows, as opened).
+    picker_entries: Vec<super::PickerEntry>,
+    /// The picker's current composed content refs (one per filtered
+    /// content row, in content order) — the selection/click target map.
+    picker_refs: Vec<super::PickerRef>,
+    /// The picker's composed panel length (filter + content + footer) —
+    /// the click hit-test's boundary between content rows and the
+    /// footer.
+    picker_panel_len: usize,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's resolved background (the OSC 11 probe result), kept
@@ -1514,6 +1685,13 @@ struct WindowSession {
     /// like the background so renderer reconstruction re-applies them.
     pane_borders: bool,
     show_label_in_border: bool,
+    /// The herdr-parity display options (config), session-level like the
+    /// background so renderer reconstruction re-applies them.
+    pane_gaps: u16,
+    scrollbar_gutter: bool,
+    /// While a divider drag is live, the host cursor carries the resize
+    /// shape (best-effort DECSCUSR steady block; restored on drag end).
+    drag_cursor_shape: bool,
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
@@ -1553,10 +1731,21 @@ impl WindowSession {
             help_filter: String::new(),
             help_filtering: false,
             help_scroll: 0,
+            picker_mode: false,
+            picker_filter: String::new(),
+            picker_filtering: false,
+            picker_selected: 0,
+            picker_start: 0,
+            picker_entries: Vec::new(),
+            picker_refs: Vec::new(),
+            picker_panel_len: 0,
             drag: None,
             bg: None,
             pane_borders: false,
             show_label_in_border: false,
+            pane_gaps: 0,
+            scrollbar_gutter: false,
+            drag_cursor_shape: false,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
             flash: None,
@@ -1588,6 +1777,20 @@ impl WindowSession {
     fn set_show_label_in_border(&mut self, on: bool) {
         self.show_label_in_border = on;
         self.renderer.set_show_label_in_border(on);
+    }
+
+    /// The session's gap-band mode (config `pane-gaps`): theme-bg gap
+    /// bands between panes, the renderer insetting each pane's rect.
+    fn set_pane_gaps(&mut self, gaps: u16) {
+        self.pane_gaps = gaps;
+        self.renderer.set_pane_gaps(gaps);
+    }
+
+    /// The session's scrollbar-gutter mode (config `scrollbar-gutter`):
+    /// a right-edge gutter column reserved in every pane rect.
+    fn set_scrollbar_gutter(&mut self, on: bool) {
+        self.scrollbar_gutter = on;
+        self.renderer.set_scrollbar_gutter(on);
     }
 
     /// Resolve the initial window, seed it, run the pump. `sink` receives
@@ -1905,6 +2108,10 @@ impl WindowSession {
                                     self.help_key(&ev);
                                     continue;
                                 }
+                                if self.picker_mode {
+                                    self.picker_key(conn, &ev);
+                                    continue;
+                                }
                                 if self.resize_mode {
                                     self.resize_mode_key(conn, &ev);
                                     continue;
@@ -1943,6 +2150,14 @@ impl WindowSession {
         if self.help_mode {
             for &byte in bytes {
                 if !self.help_byte(byte) {
+                    return false;
+                }
+            }
+            return false;
+        }
+        if self.picker_mode {
+            for &byte in bytes {
+                if !self.picker_byte(conn, byte) {
                     return false;
                 }
             }
@@ -1993,6 +2208,12 @@ impl WindowSession {
                 // The help chord: the bindings overlay over the frame.
                 if byte == self.management.help {
                     self.enter_help();
+                    continue;
+                }
+                // The picker chord: the session/window modal over the
+                // frame.
+                if byte == self.management.picker {
+                    self.enter_picker(conn);
                     continue;
                 }
                 match byte {
@@ -2085,7 +2306,8 @@ impl WindowSession {
             visible,
             self.help_scroll,
         );
-        self.renderer.set_overlay(Some(lines));
+        self.renderer
+            .set_overlay(Some((super::HELP_OVERLAY_TITLE, lines)));
     }
 
     /// One key while the help panel is up: `/` opens the filter box
@@ -2162,6 +2384,226 @@ impl WindowSession {
             _ => {}
         }
         self.help_mode
+    }
+
+    /// Open the session/window picker (the `picker` chord): the daemon\'s
+    /// session roster with each session\'s windows nested, composed into
+    /// the same themed modal the help panel uses (title `picker`, `esc
+    /// close` badge, footer controls line), the current session/window
+    /// `>`-marked. `/` opens the filter box; arrows/j/k move the
+    /// selection; Enter selects through [`Self::picker_activate`];
+    /// esc/q dismiss and the prior frame repaints. Keys and the mouse
+    /// never reach the pane while it is up.
+    fn enter_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Ok(reply) = conn.send_checked("list-sessions") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let mut entries: Vec<super::PickerEntry> = Vec::new();
+        for line in &reply.body {
+            let Some((sid, name)) = super::parse_session_line(line) else {
+                continue;
+            };
+            let mut windows: Vec<(String, String)> = Vec::new();
+            let mut active_window: Option<String> = None;
+            if let Ok(r) = conn.send_checked(&format!("list-windows -t {sid}")) {
+                if r.ok {
+                    for wl in &r.body {
+                        let mut fields = wl.split_whitespace();
+                        let Some(id) = fields.next().filter(|id| id.starts_with('@')) else {
+                            continue;
+                        };
+                        let marker = fields.next().unwrap_or("-");
+                        let rest = fields.collect::<Vec<_>>().join(" ");
+                        let wname = if rest.is_empty() { id } else { &rest };
+                        if marker == "*" {
+                            active_window = Some(id.to_string());
+                        }
+                        windows.push((id.to_string(), wname.to_string()));
+                    }
+                }
+            }
+            let current = self.status.session_id.as_deref() == Some(sid.as_str());
+            entries.push(super::PickerEntry {
+                session_id: sid,
+                session_name: name,
+                windows,
+                active_window,
+                current,
+            });
+        }
+        if entries.is_empty() {
+            return;
+        }
+        self.picker_entries = entries;
+        self.picker_filter.clear();
+        self.picker_filtering = false;
+        self.picker_start = 0;
+        self.picker_mode = true;
+        // The selection opens on the current session\'s header row (or the
+        // first row when the view\'s session is unknown to the roster).
+        let (_rows, refs) = super::picker_rows(&self.picker_entries, Some(&self.window));
+        self.picker_selected = refs
+            .iter()
+            .position(
+                |r| matches!(r, super::PickerRef::Session(i) if self.picker_entries[*i].current),
+            )
+            .unwrap_or(0);
+        self.refresh_picker();
+    }
+
+    /// Dismiss the picker: the next frame\'s pane repaint restores the
+    /// covered cells.
+    fn leave_picker(&mut self) {
+        self.picker_mode = false;
+        self.renderer.set_overlay(None);
+    }
+
+    /// Re-compose the picker overlay from the live state (filter,
+    /// selection, pan).
+    fn refresh_picker(&mut self) {
+        let (rows, refs) = super::picker_rows(&self.picker_entries, Some(&self.window));
+        let visible = self.picker_visible();
+        let (lines, filtered_refs, start) = super::compose_picker_panel(
+            &rows,
+            &refs,
+            &self.picker_filter,
+            self.picker_filtering,
+            self.picker_selected,
+            visible,
+            self.picker_start,
+        );
+        self.picker_refs = filtered_refs;
+        self.picker_start = start;
+        self.picker_panel_len = lines.len();
+        self.renderer
+            .set_overlay(Some((super::PICKER_OVERLAY_TITLE, lines)));
+    }
+
+    /// The picker\'s visible content-row count (the same window the
+    /// compose uses).
+    fn picker_visible(&self) -> usize {
+        usize::from(self.renderer.window_size().1.saturating_sub(4)).max(1)
+    }
+
+    /// Move the picker\'s selection cursor by `delta` content rows (the
+    /// cursor wraps at the ends of the filtered list) and re-compose.
+    fn picker_move(&mut self, delta: isize) {
+        let count = self.picker_refs.len();
+        if count == 0 {
+            return;
+        }
+        self.picker_selected =
+            (self.picker_selected as isize + delta).rem_euclid(count as isize) as usize;
+        self.refresh_picker();
+    }
+
+    /// Activate the selected picker row: a session header lands on the
+    /// session\'s active window (the select-session-equivalent), a window
+    /// row lands on that window — daemon-side `select-window`, then the
+    /// select+resync re-seed every switch follows.
+    fn picker_activate(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let idx = self
+            .picker_selected
+            .min(self.picker_refs.len().saturating_sub(1));
+        let Some(item) = self.picker_refs.get(idx).copied() else {
+            return;
+        };
+        let entry_index = match item {
+            super::PickerRef::Session(i) | super::PickerRef::Window(i, _) => i,
+        };
+        let entry = &self.picker_entries[entry_index];
+        let window = match item {
+            super::PickerRef::Session(_) => entry
+                .active_window
+                .clone()
+                .or_else(|| entry.windows.first().map(|(id, _)| id.clone())),
+            super::PickerRef::Window(_, w) => entry.windows.get(w).map(|(id, _)| id.clone()),
+        };
+        let Some(window) = window else {
+            // A session with no windows: nothing to land on; dismiss.
+            self.leave_picker();
+            return;
+        };
+        self.leave_picker();
+        let _ = conn.send_checked(&format!("select-window -t {window}"));
+        self.reseed_window(conn, &window);
+    }
+
+    /// One key while the picker is up: the same modal-key shape the help
+    /// panel runs, plus the selection cursor. Every key is consumed —
+    /// nothing leaks into the pane.
+    fn picker_key(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ev: &TermKeyEvent) {
+        let _ = conn;
+        use crate::keyboard::TermKey;
+        if self.picker_filtering {
+            match ev.key() {
+                TermKey::Char => {
+                    if let Some(ch) = char::from_u32(ev.codepoint) {
+                        self.picker_filter.push(ch);
+                    }
+                }
+                TermKey::Escape => {
+                    self.leave_picker();
+                    return;
+                }
+                _ => self.picker_filtering = false,
+            }
+            if self.picker_mode {
+                self.refresh_picker();
+            }
+            return;
+        }
+        match (ev.key(), ev.modifiers) {
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => {
+                self.picker_filtering = true;
+                self.refresh_picker();
+            }
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'j') => self.picker_move(1),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'k') => self.picker_move(-1),
+            (TermKey::Up, 0) => self.picker_move(-1),
+            (TermKey::Down, 0) => self.picker_move(1),
+            _ => self.leave_picker(),
+        }
+    }
+
+    /// One plain byte while the picker is up — the byte spellings of the
+    /// same controls (Backspace pops the filter, `/` opens it, Enter
+    /// selects, `q`/Escape close).
+    fn picker_byte(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, byte: u8) -> bool {
+        if self.picker_filtering {
+            match byte {
+                0x7f => {
+                    self.picker_filter.pop();
+                    self.refresh_picker();
+                }
+                0x1b => {
+                    self.leave_picker();
+                    return false;
+                }
+                b'\r' => self.picker_filtering = false,
+                b if b.is_ascii_graphic() || b == b' ' => {
+                    self.picker_filter.push(b as char);
+                    self.refresh_picker();
+                }
+                _ => {}
+            }
+            return self.picker_mode;
+        }
+        match byte {
+            b'/' => {
+                self.picker_filtering = true;
+                self.refresh_picker();
+            }
+            b'j' => self.picker_move(1),
+            b'k' => self.picker_move(-1),
+            b'\r' => self.picker_activate(conn),
+            b'q' | 0x1b => self.leave_picker(),
+            _ => {}
+        }
+        self.picker_mode
     }
 
     /// One key while resize mode is up: arrows send one resize step for
@@ -2424,6 +2866,9 @@ impl WindowSession {
             resize_step: self.resize_step,
             pane_borders: self.pane_borders,
             show_label_in_border: self.show_label_in_border,
+            pane_gaps: self.pane_gaps,
+            scrollbar_gutter: self.scrollbar_gutter,
+            drag_cursor_shape: self.drag_cursor_shape,
         }) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
@@ -2431,6 +2876,9 @@ impl WindowSession {
                 self.management = chords.management;
                 self.resize_step = chords.resize_step;
                 self.set_pane_borders(chords.pane_borders);
+                self.set_pane_gaps(chords.pane_gaps);
+                self.set_scrollbar_gutter(chords.scrollbar_gutter);
+                self.drag_cursor_shape = chords.drag_cursor_shape;
                 self.set_show_label_in_border(chords.show_label_in_border);
                 self.literal = chords.prefix;
                 self.flash = Some("config reloaded".to_string());
@@ -2581,6 +3029,8 @@ impl WindowSession {
         self.renderer.set_pane_borders(self.pane_borders);
         self.renderer
             .set_show_label_in_border(self.show_label_in_border);
+        self.renderer.set_pane_gaps(self.pane_gaps);
+        self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
         self.scroll_mode = false;
         if let Some((l, v, f)) =
             conn.drain_pending_events()
@@ -2776,6 +3226,34 @@ impl WindowSession {
         // coordinates, so the strip row saturates to content row 0.
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
             self.drag_event(conn, x, y.saturating_sub(1), mouse.release);
+            return;
+        }
+
+        // The picker is modal for the pointer too: wheels move the
+        // selection, a click on a content row selects AND activates it
+        // (switch through the select+resync), a click on the filter line
+        // opens the filter box, and everything else is consumed.
+        if self.picker_mode {
+            if mouse.is_wheel_up() {
+                self.picker_move(-1);
+            } else if mouse.is_wheel_down() {
+                self.picker_move(1);
+            } else if mouse.release || mouse.is_motion() {
+                // Drags do nothing in the modal; only a press click.
+            } else if let Some(row) = self.renderer.overlay_row_at(x, y) {
+                if row == 0 {
+                    self.picker_filtering = true;
+                    self.refresh_picker();
+                } else if row + 1 < self.picker_panel_len {
+                    // A content row: move the cursor there and activate.
+                    // row-1 is the windowed content index; +start maps to
+                    // the filtered list. The footer (last row) does
+                    // nothing.
+                    self.picker_selected = self.picker_start + row - 1;
+                    self.refresh_picker();
+                    self.picker_activate(conn);
+                }
+            }
             return;
         }
 
@@ -3048,6 +3526,8 @@ impl WindowSession {
         self.renderer.set_pane_borders(self.pane_borders);
         self.renderer
             .set_show_label_in_border(self.show_label_in_border);
+        self.renderer.set_pane_gaps(self.pane_gaps);
+        self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
         // The layout broadcast the report queued re-seeds the panes; but
         // drain it here directly so the repaint is synchronous.
         let layout_event = conn
@@ -3121,10 +3601,18 @@ impl WindowSession {
         if self.flush_status_row(sink) {
             flushed = true;
         }
-        let cursor = self
+        let mut cursor = self
             .renderer
             .focused_cursor()
             .map(|(x, y, style)| (x, y + STRIP_ROWS, style));
+        // The drag cursor shape (config `drag-cursor-shape`): while a
+        // divider drag is live the host cursor carries the resize shape
+        // (best-effort DECSCUSR steady block — DECSCUSR has no
+        // column-resize value; every drag-end path clears `drag`, so the
+        // next frame restores the pane's own shape).
+        if self.drag_cursor_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
+            cursor = cursor.map(|(x, y, _)| (x, y, CursorStyle::SteadyBlock));
+        }
         if flushed || self.cursor_placed.as_ref() != Some(&cursor) {
             sink.place_cursor(cursor);
             self.cursor_placed = Some(cursor);
@@ -4542,6 +5030,7 @@ mod tests {
         assert!(session.help_mode);
         let overlay = session.renderer.overlay.clone().expect("the overlay is up");
         let joined = overlay
+            .1
             .iter()
             .map(|r| r.text.clone())
             .collect::<Vec<_>>()
@@ -4565,6 +5054,7 @@ mod tests {
         }
         let filtered = session.renderer.overlay.clone().expect("overlay");
         let ftext = filtered
+            .1
             .iter()
             .map(|r| r.text.clone())
             .collect::<Vec<_>>()
@@ -4586,6 +5076,289 @@ mod tests {
             .collect();
         assert_eq!(left, "LEFT", "the prior frame's cells restore");
     }
+
+    /// The picker chord: prefix w opens the modal (sessions with nested
+    /// windows, the current one emphasized), j moves the cursor, Enter
+    /// activates — the select+resync contract's select-window rides the
+    /// wire — and `q` dismisses without selecting.
+    #[test]
+    fn picker_chord_opens_navigates_and_selects_with_resync() {
+        let replies = std::collections::HashMap::from([
+            (
+                "list-sessions".to_string(),
+                "+0: main: $0: work\n+1: lab: $1: build\n".to_string(),
+            ),
+            (
+                "list-windows -t $0".to_string(),
+                "@0 - main\n@1 * vim\n".to_string(),
+            ),
+            ("list-windows -t $1".to_string(), "@2 * logs\n".to_string()),
+        ]);
+        let (rx, conn) = scripted_conn("picker", replies);
+        let mut conn = conn;
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        // The view shows $0's window @0.
+        session.status.session_id = Some("$0".to_string());
+        session.window = "@0".to_string();
+
+        let mut prefix_pending = false;
+        assert!(
+            !session.route_plain(
+                &[crate::mux::attach::C_B, b'w'],
+                &mut conn,
+                &mut prefix_pending
+            ),
+            "the picker chord opens the modal"
+        );
+        assert!(session.picker_mode);
+        let (overlay, _) = session.renderer.overlay.clone().expect("the overlay is up");
+        assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
+        let joined = overlay_text(&session).join("\n");
+        assert!(
+            joined.contains(">$0: work"),
+            "the current session is >-marked: {joined}"
+        );
+        assert!(
+            joined.contains("@1: vim *"),
+            "the active window carries *: {joined}"
+        );
+
+        // j j moves the cursor to the second window row; Enter activates
+        // — the wire sees the select-window and the re-seed's queries
+        // (the resync).
+        session.picker_byte(&mut conn, b'j');
+        session.picker_byte(&mut conn, b'j');
+        session.picker_byte(&mut conn, b'\r');
+        assert!(!session.picker_mode, "activation dismisses the modal");
+        assert_eq!(
+            wait_recorded(&rx, "select-window"),
+            "select-window -t @1",
+            "the session header's active window is the landing target"
+        );
+        let _ = wait_recorded(&rx, "list-panes");
+        let _ = wait_recorded(&rx, "refresh-client");
+        assert_eq!(session.window, "@1", "the view re-seeded onto @1");
+
+        // Re-open and dismiss with q: no select goes out.
+        assert!(!session.route_plain(
+            &[crate::mux::attach::C_B, b'w'],
+            &mut conn,
+            &mut prefix_pending
+        ));
+        assert!(session.picker_mode);
+        assert!(!session.picker_byte(&mut conn, b'q'));
+        assert!(!session.picker_mode);
+    }
+
+    /// The overlay's rows joined (the test-side read of the modal's
+    /// content).
+    fn overlay_text(session: &WindowSession) -> Vec<String> {
+        session
+            .renderer
+            .overlay
+            .as_ref()
+            .expect("the overlay is up")
+            .1
+            .iter()
+            .map(|r| r.text.clone())
+            .collect()
+    }
+
+    /// The `pane-gaps` option: each pane's content insets by the gap and
+    /// the band cells carry the theme background — pane A's first content
+    /// column moves to x=1 and the band at x=0 keeps the fill.
+    #[test]
+    fn pane_gaps_option_insets_pane_content_and_fills_the_band() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(RtColor::Rgb(16, 24, 40)));
+        renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        renderer.feed_output(1, b"LEFT\r\n");
+        renderer.feed_output(2, b"RIGHT\r\n");
+        renderer.set_pane_gaps(1);
+        renderer.render_frame();
+
+        let bg = RtColor::Rgb(16, 24, 40);
+        // The band rows/cols carry no content and keep the fill; the
+        // content starts one cell in on each axis.
+        for x in [0u16, 40] {
+            let band = renderer.cell(x, 0).expect("band cell");
+            assert_eq!(band.symbol(), " ", "the band cell carries no content");
+            assert_eq!(band.bg, bg, "the band cell carries the theme bg");
+        }
+        let a1 = renderer.cell(1, 1).expect("content cell");
+        assert_eq!(a1.symbol(), "L", "pane A's content starts inside the gap");
+        let b1 = renderer.cell(41, 1).expect("right content cell");
+        assert_eq!(b1.symbol(), "R", "pane B's content starts inside the gap");
+        // The cursor maps through the same inset (content_view drives
+        // the placement path too): the feed's trailing newline left the
+        // pane cursor at content col 0 / row 1.
+        let cursor = renderer.focused_cursor().expect("cursor");
+        assert_eq!(cursor.0, 1, "the cursor maps inside the left band");
+        assert_eq!(cursor.1, 2, "the cursor maps below the top band");
+    }
+
+    /// Options OFF render identical to a default renderer: the
+    /// pins-the-default contract for pane-gaps / scrollbar-gutter.
+    #[test]
+    fn display_options_off_render_identical_to_defaults() {
+        let build = |gaps: u16, gutter: bool| {
+            let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+            renderer.set_background(Some(RtColor::Rgb(16, 24, 40)));
+            renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+            renderer.feed_output(1, b"LEFT\r\nsecond\r\n");
+            renderer.feed_output(2, b"RIGHT\r\n");
+            renderer.set_pane_gaps(gaps);
+            renderer.set_scrollbar_gutter(gutter);
+            renderer.render_frame();
+            renderer
+        };
+        let baseline = build(0, false);
+        let explicit = build(0, false);
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                let (a, b) = (
+                    baseline.cell(x, y).expect("cell"),
+                    explicit.cell(x, y).expect("cell"),
+                );
+                assert_eq!(a.symbol(), b.symbol(), "symbol differs at {x},{y}");
+                assert_eq!(a.bg, b.bg, "bg differs at {x},{y}");
+                assert_eq!(a.fg, b.fg, "fg differs at {x},{y}");
+            }
+        }
+    }
+
+    /// The `scrollbar-gutter` option: the content narrows by one column,
+    /// the gutter fills with the theme bg, and a scrolled pane shows the
+    /// position indicator; an unscrolled pane's gutter stays blank and
+    /// gutter OFF paints no indicator at all.
+    #[test]
+    fn scrollbar_gutter_option_reserves_a_column_and_indicates() {
+        let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        renderer.set_background(Some(RtColor::Rgb(16, 24, 40)));
+        renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        // 40 lines of scrollback on pane 1.
+        let mut flood = Vec::new();
+        for i in 0..40 {
+            flood.extend(format!("line{i:02}\r\n").as_bytes());
+        }
+        renderer.feed_output(1, &flood);
+        renderer.feed_output(2, b"R\r\n");
+        renderer.set_scrollbar_gutter(true);
+        renderer.render_frame();
+
+        // Unscrolled: the gutter column is theme-bg blank; the content
+        // beside it is the pane's line (the last full line — the feed's
+        // trailing newline scrolled one more row).
+        let gutter = renderer.cell(39, 23).expect("gutter cell");
+        assert_eq!(gutter.symbol(), " ", "an unscrolled gutter stays blank");
+        let content = renderer.cell(0, 22).expect("narrowed content");
+        assert_eq!(
+            content.symbol(),
+            "l",
+            "content paints through the narrowed view"
+        );
+
+        renderer.scroll_viewport(1, 10);
+        renderer.render_frame();
+        // The indicator sits at the view top's proportional depth:
+        // 10 * 24 / (10 + 24) = row 7.
+        let indicator = renderer.cell(39, 7).expect("indicator cell");
+        assert_eq!(
+            indicator.symbol(),
+            "\u{2590}",
+            "the scrolled pane shows the indicator"
+        );
+        assert_eq!(
+            indicator.fg,
+            RtColor::Indexed(14),
+            "the indicator is accent"
+        );
+
+        // Gutter OFF: no indicator paints at the pane's edge.
+        let mut plain = PaneRenderer::new(80, 24, Glyphs::Unicode);
+        plain.set_background(Some(RtColor::Rgb(16, 24, 40)));
+        plain.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        plain.feed_output(1, &flood);
+        plain.render_frame();
+        plain.scroll_viewport(1, 10);
+        plain.render_frame();
+        assert_ne!(
+            plain.cell(39, 0).expect("plain").symbol(),
+            "\u{2590}",
+            "gutter off paints no indicator"
+        );
+    }
+
+    /// The `drag-cursor-shape` option: while a divider drag is live the
+    /// frame's cursor placement carries the resize shape (steady block),
+    /// overriding the pane's tracked DECSCUSR shape; option off (and
+    /// drag end) keeps the pane's own shape.
+    #[test]
+    fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
+        let mut session = WindowSession::new(80, 24);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        // A distinctive tracked shape: the pane set DECSCUSR blinking bar.
+        session.renderer.feed_output(1, b"hi\x1b[5 q\r\n");
+        let divider = DividerHit {
+            vertical: true,
+            a: 1,
+            b: 2,
+        };
+        session.drag = Some(DragState::Active {
+            divider,
+            x: 39,
+            y: 0,
+            applied: 0,
+            pending: 0,
+        });
+
+        // Option off: the pane's tracked shape survives a drag frame.
+        let mut sink = RecordingSink::default();
+        session.frame(&mut sink);
+        let last = sink
+            .placements
+            .last()
+            .copied()
+            .flatten()
+            .expect("placement");
+        assert_eq!(
+            last.2,
+            CursorStyle::BlinkingBar,
+            "off keeps the pane's shape"
+        );
+
+        // Option on: the drag frame shapes the cursor.
+        session.drag_cursor_shape = true;
+        session.renderer.mark_all_dirty();
+        let mut sink = RecordingSink::default();
+        session.frame(&mut sink);
+        let last = sink
+            .placements
+            .last()
+            .copied()
+            .flatten()
+            .expect("placement");
+        assert_eq!(last.2, CursorStyle::SteadyBlock, "on shapes the cursor");
+
+        // Drag end restores: the next frame carries the pane's shape.
+        session.drag = None;
+        session.renderer.mark_all_dirty();
+        let mut sink = RecordingSink::default();
+        session.frame(&mut sink);
+        let last = sink
+            .placements
+            .last()
+            .copied()
+            .flatten()
+            .expect("placement");
+        assert_eq!(last.2, CursorStyle::BlinkingBar, "drag end restores");
+    }
+
     /// Two side-by-side panes (a vertical divider at x=39).
     const TWO_PANE: &str = "0000,80x24,0,0{40x24,0,0,1,40x24,40,0,2}";
     /// Two stacked panes (a horizontal divider at y=11).
@@ -4634,7 +5407,7 @@ mod tests {
             6,
             0,
         );
-        renderer.set_overlay(Some(rows));
+        renderer.set_overlay(Some((crate::mux::attach::HELP_OVERLAY_TITLE, rows)));
         renderer.render_frame();
         // Locate the modal's top-left corner.
         let mut origin = None;
