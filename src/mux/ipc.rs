@@ -283,6 +283,10 @@ impl ConnectionAbort {
     pub fn cancel_blocked_io(&self) {}
 }
 
+/// The Windows half of [`ConnectionAbort`]: holds a duplicate of the served
+/// pipe instance's handle so [`ConnectionAbort::cancel_blocked_io`] can
+/// `CancelIoEx` the connection's blocked reads and writes (see the Unix
+/// variant's doc comment for the full contract).
 #[cfg(windows)]
 /// Windows twin of the unix `ConnectionAbort` (same name, `cfg`-split in
 /// this module): holds a duplicated pipe handle so `cancel_blocked_io` can
@@ -570,9 +574,12 @@ fn connect_unix_bounded(
 /// with no error to retry on — a hung daemon fills its backlog and wedges
 /// every later connect (the roster watcher's redial among them). The bounded
 /// form retries the transient `EAGAIN` until `deadline`, then fails with
-/// `TimedOut`. Windows named-pipe connects fail immediately when no pipe
-/// instance is available (no `WaitNamedPipe` in the connect path), so the
-/// plain connect is used and the deadline is unused there.
+/// `TimedOut`. Windows named-pipe connects are NOT unbounded-safe to reuse
+/// here: interprocess's connect spin loop waits in
+/// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` once every pipe instance is busy,
+/// so the deadline cannot be honored by the plain connect — it stays unused
+/// on Windows, and the bounded probe in [`prepare_socket_path`] is where
+/// the bound lives instead.
 ///
 /// The server-identity check matches [`connect_local_stream`].
 pub fn connect_local_stream_bounded(
@@ -615,6 +622,12 @@ pub fn connect_local_stream_bounded(
 /// dying socket (observed on macOS with no process holding the file —
 /// QA-223), so the probe is repeated briefly; a real server answers every
 /// attempt, while a teardown ghost stops answering within milliseconds.
+///
+/// Windows probes differently: the pipe *name* is the liveness signal. A
+/// probe connect would run interprocess's spin loop, whose
+/// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` blocks indefinitely once every
+/// instance is busy — the live-socket prepare test hung forever there — so
+/// [`pipe_server_alive_bounded`] decides on the name alone, bounded.
 pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     guard_fallback_socket_dir(path)?;
@@ -641,6 +654,7 @@ pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
         }
     }
 
+    #[cfg(unix)]
     match connect_local_stream(path) {
         Ok(_) => {
             // A just-closed listener can still complete one connect while the
@@ -671,7 +685,90 @@ pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
         Err(err) => return Err(err),
     }
 
+    #[cfg(windows)]
+    match pipe_server_alive_bounded(path) {
+        Ok(true) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("another server owns {}", path.display()),
+            ));
+        }
+        // No pipe at the name: the marker file outlived its server. Nothing
+        // on Windows holds a kernel object a reclaim could clobber.
+        Ok(false) => {}
+        Err(err) => return Err(err),
+    }
+
     remove_remnant(path)
+}
+
+/// How long [`pipe_server_alive_bounded`] waits for a pipe instance before
+/// concluding. Generous for a localhost name — a healthy accepting server
+/// re-arms a listening instance in microseconds — and the hard upper bound
+/// the old unbounded probe lacked.
+#[cfg(windows)]
+const PIPE_PROBE_TIMEOUT_MS: u32 = 2_000;
+
+/// The full `\\.\pipe\` path a namespaced name resolves to: interprocess
+/// prepends `\\.\pipe\` to the string as-is when converting a
+/// `GenericNamespaced` name, so the probe targets the same object a connect
+/// would open.
+#[cfg(windows)]
+fn pipe_full_name(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let mut name: Vec<u16> = r"\\.\pipe\".encode_utf16().collect();
+    name.extend(path.as_os_str().encode_wide());
+    name.push(0);
+    name
+}
+
+#[cfg(windows)]
+mod wait_named_pipe {
+    // windows-sys gates `WaitNamedPipeW` behind the Win32_Storage_FileSystem
+    // feature, which this crate's windows-sys dependency does not enable;
+    // declared directly, as `cancel_io_ex` above does for CancelIoEx.
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub(super) fn WaitNamedPipeW(lpNamedPipeName: *const u16, nTimeOut: u32) -> i32;
+    }
+}
+
+/// Whether a server process still holds the named pipe behind `path`'s name.
+///
+/// `WaitNamedPipeW` with a bounded timeout replaces the unbounded
+/// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` inside interprocess's connect spin
+/// loop — the wedge this module's probe used to inherit (reproduced 2026-09:
+/// the live-socket prepare test hung forever on Windows once the probe
+/// connect had consumed the listener's sole instance). `true` = live, refuse;
+/// `false` = no pipe at the name, a stale marker file.
+///
+/// A wait timeout (`ERROR_SEM_TIMEOUT`) still reads as live, not stale: it
+/// means the name exists but no instance is reachable — a fully busy server,
+/// or instances no client can connect to. Either way a live process holds
+/// the pipe object, and reclaiming the name under it would strand that
+/// server's clients and fail the following bind anyway (`reclaim_name(false)`).
+/// Nothing observable distinguishes that state from a "wedged" server, so
+/// the conservative arm is the only safe one.
+#[cfg(windows)]
+fn pipe_server_alive_bounded(path: &Path) -> io::Result<bool> {
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_SEM_TIMEOUT: i32 = 121;
+
+    let name = pipe_full_name(path);
+    // SAFETY: `name` is a nul-terminated wide string alive for the whole
+    // call; WaitNamedPipeW reads it and nothing else.
+    let rc = unsafe { wait_named_pipe::WaitNamedPipeW(name.as_ptr(), PIPE_PROBE_TIMEOUT_MS) };
+    if rc != 0 {
+        return Ok(true);
+    }
+    let err = io::Error::last_os_error();
+    match err.raw_os_error().unwrap_or(0) {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(false),
+        ERROR_SEM_TIMEOUT => Ok(true),
+        _ => Err(err),
+    }
 }
 
 /// Remove the remnant at `path`, tolerating a concurrent removal.
@@ -846,11 +943,17 @@ fn ensure_owned_socket_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// Whether a connect error means "nothing live owns this path".
+///
+/// Unix-only since the Windows probe stopped connecting at all: on Windows,
+/// pipe-name existence is the liveness signal (see
+/// [`pipe_server_alive_bounded`]) and the connect's own error kinds are
+/// never consulted.
+#[cfg(unix)]
 fn stale_socket_connect_error(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
         io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound | io::ErrorKind::TimedOut
-    ) || (cfg!(windows) && kind == io::ErrorKind::WouldBlock)
+    )
 }
 
 /// Marker file contents: enough to identify the owning server process.
@@ -1007,6 +1110,41 @@ mod tests {
         unsafe {
             CloseHandle(token);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_probe_is_bounded_and_classifies_liveness() {
+        // Held: a live server's pipe name. The probe must conclude within
+        // its bound — the old path waited FOREVER here once the sole
+        // instance was busy, which is the hang this test pins.
+        let socket = temp_socket("probe-held");
+        let listener = bind_local_listener(socket.path()).expect("bind succeeds");
+        let start = std::time::Instant::now();
+        assert!(
+            pipe_server_alive_bounded(socket.path()).expect("probe the held pipe"),
+            "a held pipe name is live"
+        );
+        assert!(
+            start.elapsed()
+                < std::time::Duration::from_millis(u64::from(PIPE_PROBE_TIMEOUT_MS) + 2_000),
+            "the probe must conclude within its bound plus scheduling slack"
+        );
+        drop(listener);
+
+        // Dropped server: the pipe name is gone (the kernel object dies with
+        // the last server handle) while the marker file remains — stale, and
+        // classified without waiting out the bound.
+        let start = std::time::Instant::now();
+        assert!(
+            !pipe_server_alive_bounded(socket.path()).expect("probe the dropped pipe"),
+            "no pipe at the name is stale"
+        );
+        assert!(
+            start.elapsed()
+                < std::time::Duration::from_millis(u64::from(PIPE_PROBE_TIMEOUT_MS) + 2_000),
+            "a vanished pipe must be classified immediately, not by waiting out the bound"
+        );
     }
 
     #[cfg(unix)]
