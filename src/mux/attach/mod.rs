@@ -551,6 +551,11 @@ impl Session {
         let bytes = reply.body.join("\n").into_bytes();
         self.emulator.feed(&bytes);
         let mut stdout = std::io::stdout().lock();
+        // Clear before the replay: a switch lands here too, and the new
+        // pane's screen must not mix with the previous pane's leftovers
+        // (rows the last pane never wrote). The guard cleared at attach;
+        // this re-clears per pane-show.
+        let _ = stdout.write_all(b"\x1b[2J\x1b[H");
         for line in &reply.body {
             let _ = stdout.write_all(line.as_bytes());
             let _ = stdout.write_all(b"\n");
@@ -2160,17 +2165,19 @@ impl TerminalGuard {
         // Raw mode needs a tty; under a test harness (no tty) this is a
         // no-op so the scaffolding stays exercisable headless.
         let entered = crossterm::terminal::enable_raw_mode().is_ok();
-        // The alternate screen: the replay must not overwrite whatever the
-        // host terminal was showing before attach. Entered right after raw
-        // mode (only when it entered — the alt-screen write is worthless on
-        // a non-tty) and left before raw mode is dropped, so every exit
-        // path (detach, %exit, socket close, error, panic unwind) restores
-        // the host's screen. Render mode enters its own alt screen for its
-        // mouse-capture pairing; LeaveAlternateScreen is idempotent, so the
-        // guard's leave after the session's own is harmless.
+        // NO alternate screen here: a pane app's own 1049h/1049l pair (htop,
+        // vim, …) would be the SECOND entry, and its leave pops the host
+        // back to its main screen — the app-exit screen replaces the pane,
+        // every later client draw (status bar) paints the host main, and
+        // detach leaves it all behind (the manual-pass htop report). tmux
+        // control mode does not enter the host alt either. The replay
+        // instead clears the screen first (the prior content stays in the
+        // host's scrollback), and detach clears again so nothing we or the
+        // pane apps painted outlives the session.
         if entered {
-            let _ =
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+            let _ = std::io::stdout()
+                .write_all(b"\x1b[2J\x1b[H")
+                .and_then(|()| std::io::stdout().flush());
         }
         Self { entered }
     }
@@ -2179,8 +2186,9 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered {
-            let _ =
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+            let _ = std::io::stdout()
+                .write_all(b"\x1b[2J\x1b[H")
+                .and_then(|()| std::io::stdout().flush());
             let _ = crossterm::terminal::disable_raw_mode();
         }
     }

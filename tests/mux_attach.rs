@@ -335,7 +335,7 @@ fn detach_restores_the_terminal_region() {
         .to_string();
 
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
-    // Startup: the alternate screen enter must come before anything else
+    // Startup: the screen clear must come before anything else
     // the client draws — the replay must not overwrite the host's prior
     // content — and the status-line DECSTBM reserve must appear. Both are
     // asserted on UNIX only. Windows ConPTY re-encodes the client's
@@ -348,9 +348,16 @@ fn detach_restores_the_terminal_region() {
     if cfg!(unix) {
         let startup = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
         assert!(
-            startup.windows(8).any(|w| w == b"\x1b[?1049h"),
-            "attach must enter the alternate screen at startup, before the \
-             replay: {:?}\nstderr: {}",
+            startup.windows(4).any(|w| w == b"\x1b[2J"),
+            "attach must clear the screen before the replay: {:?}\nstderr: {}",
+            String::from_utf8_lossy(&startup),
+            stderr.lock().unwrap()
+        );
+        assert!(
+            !startup.windows(8).any(|w| w == b"\x1b[?1049h"),
+            "attach must NOT enter the alternate screen (a pane app's own 1049 \
+             pair would pop it and strand later draws on the host main): \
+             {:?}\nstderr: {}",
             String::from_utf8_lossy(&startup),
             stderr.lock().unwrap()
         );
@@ -362,9 +369,9 @@ fn detach_restores_the_terminal_region() {
             stderr.lock().unwrap()
         );
         assert!(
-            startup.windows(8).position(|w| w == b"\x1b[?1049h")
+            startup.windows(4).position(|w| w == b"\x1b[2J")
                 < startup.windows(7).position(|w| w == b"\x1b[1;23r"),
-            "the alt-screen enter precedes the status draw: {:?}",
+            "the clear precedes the status draw: {:?}",
             String::from_utf8_lossy(&startup)
         );
         // The status draw must leave the content region reserved: a
@@ -399,20 +406,20 @@ fn detach_restores_the_terminal_region() {
         tail.extend_from_slice(&bytes);
     }
     // The last things the client writes before exit are the region restore
-    // and the alternate-screen leave. (crossterm's raw-mode disable is a
-    // termios call, not bytes.) On Windows ConPTY likewise absorbs ESC[r
-    // and the 1049 switch, so the restore is asserted through the client's
-    // exit code there (already checked above) — the bytes are pinned on
-    // unix.
+    // and the final screen clear (no alt screen to leave — a pane app's
+    // own 1049 pair would pop the client's). (crossterm's raw-mode disable
+    // is a termios call, not bytes.) On Windows ConPTY likewise absorbs
+    // ESC[r and erase-display, so the restore is asserted through the
+    // client's exit code there (already checked above) — the bytes are
+    // pinned on unix.
     if cfg!(unix) {
         assert!(
             tail.windows(3).any(|w| w == b"\x1b[r"),
             "detach must restore the scroll region (ESC[r): {tail:?}"
         );
         assert!(
-            tail.windows(8).any(|w| w == b"\x1b[?1049l"),
-            "detach must leave the alternate screen (ESC[?1049l): {:?}",
-            String::from_utf8_lossy(&tail)
+            tail.windows(4).any(|w| w == b"\x1b[2J"),
+            "detach must clear the screen (no alt screen to leave): {tail:?}"
         );
     }
 }
