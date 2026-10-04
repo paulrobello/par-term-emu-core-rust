@@ -2213,6 +2213,8 @@ pub(crate) struct SidebarLine {
     pub text: String,
     pub header: bool,
     pub id: Option<String>,
+    /// The active entry: painted as herdr's full-width inverted block.
+    pub active: bool,
 }
 
 /// Compose the side panel's lines from its sections: each section's
@@ -2228,22 +2230,34 @@ pub(crate) fn compose_sidebar(
     let mut lines: Vec<SidebarLine> = Vec::new();
     let max = usize::from(height);
     let text_width = usize::from(width.saturating_sub(1));
-    let push =
-        |lines: &mut Vec<SidebarLine>, y: u16, text: String, header: bool, id: Option<String>| {
-            if lines.len() >= max {
-                return;
-            }
-            let text: String = text.chars().take(text_width).collect();
-            lines.push(SidebarLine {
-                y,
-                text,
-                header,
-                id,
-            });
-        };
+    let push = |lines: &mut Vec<SidebarLine>,
+                y: u16,
+                text: String,
+                header: bool,
+                id: Option<String>,
+                active: bool| {
+        if lines.len() >= max {
+            return;
+        }
+        let text: String = text.chars().take(text_width).collect();
+        lines.push(SidebarLine {
+            y,
+            text,
+            header,
+            id,
+            active,
+        });
+    };
     let mut y = 0u16;
     for (si, section) in sections.iter().enumerate() {
-        push(&mut lines, y, format!(" {} ", section.title), true, None);
+        push(
+            &mut lines,
+            y,
+            format!(" {} ", section.title),
+            true,
+            None,
+            false,
+        );
         y += 1;
         for (id, label, active) in &section.rows {
             let marker = if *active { "▸" } else { " " };
@@ -2253,6 +2267,7 @@ pub(crate) fn compose_sidebar(
                 format!(" {marker} {label}"),
                 false,
                 Some(id.clone()),
+                *active,
             );
             y += 1;
         }
@@ -3921,6 +3936,11 @@ mod tests {
             lines.iter().any(|l| l.id.as_deref() == Some("a0")),
             "the second section's rows carry their ids"
         );
+        let active = lines
+            .iter()
+            .find(|l| l.active)
+            .expect("the active row is flagged");
+        assert_eq!(active.id.as_deref(), Some("+0"));
     }
 
     /// matches), the window scrolls, and the footer line names the

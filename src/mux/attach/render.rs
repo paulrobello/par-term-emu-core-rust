@@ -1314,9 +1314,6 @@ impl PaneRenderer {
             return;
         }
         let dim = RtStyle::default().add_modifier(RtModifier::DIM);
-        let active = RtStyle::default()
-            .fg(RtColor::Indexed(14))
-            .add_modifier(RtModifier::BOLD);
         let accent = RtStyle::default().fg(RtColor::Indexed(14));
         for y in 0..self.height {
             for x in 0..w {
@@ -1335,10 +1332,27 @@ impl PaneRenderer {
             return;
         };
         for line in super::compose_sidebar(&sections, w, self.height) {
+            // herdr's active treatment: the row is a full-width inverted
+            // block, not just a brighter glyph run.
+            if line.active {
+                let block = RtStyle::default()
+                    .add_modifier(RtModifier::REVERSED)
+                    .add_modifier(RtModifier::BOLD);
+                for x in 0..w - 1 {
+                    let cell = &mut self.buffer[(x, line.y)];
+                    cell.reset();
+                    if let Some(bg) = self.bg {
+                        cell.set_bg(bg);
+                    }
+                    cell.set_style(block);
+                }
+            }
             let style = if line.header {
                 accent
-            } else if line.text.contains('▸') {
-                active
+            } else if line.active {
+                RtStyle::default()
+                    .add_modifier(RtModifier::REVERSED)
+                    .add_modifier(RtModifier::BOLD)
             } else {
                 dim
             };
@@ -3677,10 +3691,44 @@ impl WindowSession {
             return;
         }
         workspaces.sort_by(|a, b| a.0.cmp(&b.0));
+        // herdr's nesting: each workspace followed by its sessions'
+        // windows, dim beneath the workspace row. Row ids are prefixed
+        // for the click dispatch (`ws:` lands, `win:` selects the
+        // window).
+        let mut rows: Vec<(String, String, bool)> = Vec::new();
+        for (ws_id, ws_name, ws_active) in &workspaces {
+            rows.push((format!("ws:{ws_id}"), ws_name.clone(), *ws_active));
+            let sessions = conn.send_checked(&format!("list-sessions -t {ws_id}"));
+            if let Some(session_ids) = sessions.ok().filter(|r| r.ok).map(|r| {
+                r.body
+                    .iter()
+                    .filter_map(|l| super::parse_session_line(l).map(|(sid, _)| sid))
+                    .collect::<Vec<_>>()
+            }) {
+                let mut session_ids = session_ids;
+                session_ids.sort();
+                for sid in session_ids {
+                    let windows = conn.send_checked(&format!("list-windows -t {sid}"));
+                    if let Some(windows) = windows.ok().filter(|r| r.ok).map(|r| r.body) {
+                        for line in &windows {
+                            let mut fields = line.split_whitespace();
+                            let Some(wid) = fields.next().filter(|w| w.starts_with('@')) else {
+                                continue;
+                            };
+                            let _marker = fields.next().unwrap_or("-");
+                            let rest = fields.collect::<Vec<_>>().join(" ");
+                            let name = if rest.is_empty() { wid } else { rest.as_str() };
+                            let active = wid == self.window;
+                            rows.push((format!("win:{wid}"), name.to_string(), active));
+                        }
+                    }
+                }
+            }
+        }
         self.renderer
             .set_sidebar_sections(Some(vec![super::SidebarSection {
                 title: "workspaces".to_string(),
-                rows: workspaces,
+                rows,
             }]));
     }
 
@@ -4054,7 +4102,7 @@ impl WindowSession {
         } else {
             None
         };
-        let mut segments = self.status.compose(cols, scroll);
+        let mut segments = self.status.compose(cols, scroll, self.sidebar_on);
         if let Some(flash) = self.flash.clone() {
             segments.insert(
                 0,
@@ -4127,7 +4175,15 @@ impl WindowSession {
         if strip > 0 && x < strip {
             if !mouse.release && !mouse.is_motion() {
                 if let Some(id) = self.renderer.sidebar_row_at(x, y) {
-                    self.land_on_workspace(conn, &id);
+                    if let Some(wid) = id.strip_prefix("win:@") {
+                        // A nested window row: land on that window (the
+                        // select+resync every switch follows).
+                        let window = format!("@{wid}");
+                        let _ = conn.send_checked(&format!("select-window -t {window}"));
+                        self.reseed_window(conn, &window);
+                    } else if let Some(ws_id) = id.strip_prefix("ws:") {
+                        self.land_on_workspace(conn, ws_id);
+                    }
                 }
             }
             return;

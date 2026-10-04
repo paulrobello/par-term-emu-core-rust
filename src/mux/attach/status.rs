@@ -213,8 +213,11 @@ impl StatusState {
 
     /// Compose the status line as styled segments, truncated to `cols`
     /// display columns. `scroll` is the focused pane's client scroll
-    /// offset when a scroll view is up.
-    pub(crate) fn compose(&self, cols: u16, scroll: Option<usize>) -> Vec<Segment> {
+    /// offset when a scroll view is up. With the side panel open
+    /// (`sidebar`), the strip's roster replaces the all-workspaces and
+    /// sessions segments: the line leads with the ACTIVE workspace's
+    /// label, then the shown session's tabs — herdr's top bar.
+    pub(crate) fn compose(&self, cols: u16, scroll: Option<usize>, sidebar: bool) -> Vec<Segment> {
         let mut segments: Vec<Segment> = Vec::new();
         let push =
             |segments: &mut Vec<Segment>, text: String, bold: bool, dim: bool, shaded: bool| {
@@ -237,23 +240,36 @@ impl StatusState {
         // The tab strip leads the line, herdr-style: every workspace and
         // window as a padded name tab — the active one a solid shaded
         // block, the rest dim, `|` between tabs (the "current emphasized"
-        // rule the sessions segment still follows with bold).
-        for (index, (id, name)) in self.workspaces.iter().enumerate() {
-            if index > 0 {
+        // rule the sessions segment still follows with bold). With the
+        // side panel up the roster lives in the strip, so the line leads
+        // with just the ACTIVE workspace's label before the tabs.
+        if sidebar {
+            if let Some(name) = self
+                .workspaces
+                .iter()
+                .find(|(id, _)| Some(id.as_str()) == self.active_workspace.as_deref())
+                .map(|(_, name)| name)
+            {
+                push(&mut segments, format!(" {name} "), true, false, false);
+            }
+        } else {
+            for (index, (id, name)) in self.workspaces.iter().enumerate() {
+                if index > 0 {
+                    push(&mut segments, " | ".to_string(), false, false, false);
+                }
+                let active = self.active_workspace.as_deref() == Some(id.as_str());
+                push(&mut segments, format!(" {name} "), false, !active, active);
+            }
+            if !self.workspaces.is_empty() {
                 push(&mut segments, " | ".to_string(), false, false, false);
             }
-            let active = self.active_workspace.as_deref() == Some(id.as_str());
-            push(&mut segments, format!(" {name} "), false, !active, active);
-        }
-        if !self.workspaces.is_empty() {
-            push(&mut segments, " | ".to_string(), false, false, false);
-        }
-        for (index, (id, name)) in self.sessions.iter().enumerate() {
-            if index > 0 {
-                push(&mut segments, " ".to_string(), false, false, false);
+            for (index, (id, name)) in self.sessions.iter().enumerate() {
+                if index > 0 {
+                    push(&mut segments, " ".to_string(), false, false, false);
+                }
+                let current = self.session_id.as_deref() == Some(id.as_str());
+                push(&mut segments, format!("{id}:{name}"), current, false, false);
             }
-            let current = self.session_id.as_deref() == Some(id.as_str());
-            push(&mut segments, format!("{id}:{name}"), current, false, false);
         }
         if !self.windows.is_empty() {
             push(&mut segments, " | ".to_string(), false, false, false);
@@ -442,7 +458,7 @@ mod tests {
     /// a padded tab in id order, then the sessions segment.
     #[test]
     fn compose_carries_the_workspaces_segment_in_id_order() {
-        let text = joined(&state().compose(120, None));
+        let text = joined(&state().compose(120, None, false));
         assert!(
             text.starts_with(" alpha  |  beta  | "),
             "workspaces lead the line: {text}"
@@ -453,7 +469,7 @@ mod tests {
     /// The active workspace's tab is the shaded block; the others dim.
     #[test]
     fn compose_shades_the_active_workspace_only() {
-        let segments = state().compose(120, None);
+        let segments = state().compose(120, None, false);
         let shaded = joined(
             &segments
                 .iter()
@@ -481,7 +497,7 @@ mod tests {
     /// and the agent chips in `agent:state` spelling.
     #[test]
     fn compose_carries_sessions_windows_title_and_chips() {
-        let segments = state().compose(120, None);
+        let segments = state().compose(120, None, false);
         let text = joined(&segments);
         assert!(text.contains("$0:work"), "sessions: {text}");
         assert!(text.contains("$1:play"), "sessions: {text}");
@@ -496,7 +512,7 @@ mod tests {
     /// shaded, an inactive tab dim. A non-shown session is neither.
     #[test]
     fn compose_bolds_the_current_session_and_shades_the_active_window() {
-        let segments = state().compose(120, None);
+        let segments = state().compose(120, None, false);
         let bold_text = joined(
             &segments
                 .iter()
@@ -531,13 +547,25 @@ mod tests {
         assert!(dim.contains(" vim "), "inactive window dim: {dim}");
     }
 
+    /// With the side panel up, the line leads with the ACTIVE
+    /// workspace's label and drops the all-workspaces/sessions rosters
+    /// (they live in the strip).
+    #[test]
+    fn compose_sidebar_mode_leads_with_the_active_workspace() {
+        let segments = state().compose(120, None, true);
+        let text = joined(&segments);
+        assert!(text.starts_with(" alpha "), "label leads: {text}");
+        assert!(!text.contains("$1:play"), "sessions dropped: {text}");
+        assert!(text.contains(" main "), "tabs remain: {text}");
+    }
+
     /// A scroll offset over 0 appends a bold `[scroll +N]` cue; offset 0
     /// appends none.
     #[test]
     fn compose_appends_the_scroll_cue_when_offset() {
-        let text = joined(&state().compose(120, Some(7)));
+        let text = joined(&state().compose(120, Some(7), false));
         assert!(text.contains("[scroll +7]"), "cue: {text}");
-        let text = joined(&state().compose(120, Some(0)));
+        let text = joined(&state().compose(120, Some(0), false));
         assert!(!text.contains("scroll"), "no cue at live: {text}");
     }
 
@@ -547,7 +575,7 @@ mod tests {
     fn compose_truncates_to_the_row_width() {
         let mut wide = state();
         wide.pane_title = "x".repeat(200);
-        let segments = wide.compose(40, None);
+        let segments = wide.compose(40, None, false);
         assert_eq!(joined(&segments).chars().count(), 40);
     }
 
@@ -556,7 +584,7 @@ mod tests {
     /// changed cells.
     #[test]
     fn status_row_diffs_only_changes() {
-        let segments = state().compose(80, None);
+        let segments = state().compose(80, None, false);
         let mut row = StatusRow::new(80);
         row.paint(&segments);
         let first = row.diff();
@@ -568,7 +596,7 @@ mod tests {
         // One agent state change: only that chip's cells move.
         let mut next = state();
         next.agents = vec![("claude".to_string(), "blocked".to_string())];
-        row.paint(&next.compose(80, None));
+        row.paint(&next.compose(80, None, false));
         let diff = row.diff();
         assert!(!diff.is_empty());
         assert!(diff.len() < 80, "a chip change must not repaint the row");
@@ -582,12 +610,12 @@ mod tests {
         let mut long = state();
         long.pane_title = String::new();
         long.agents.clear();
-        row.paint(&long.compose(60, None));
+        row.paint(&long.compose(60, None, false));
         row.diff();
         let mut short = long.clone();
         short.pane_title = String::new();
         short.windows.clear();
-        row.paint(&short.compose(60, None));
+        row.paint(&short.compose(60, None, false));
         let diff = row.diff();
         assert!(
             diff.iter().any(|(_, _, cell)| cell.symbol() == " "),

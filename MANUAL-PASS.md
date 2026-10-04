@@ -74,11 +74,13 @@ Per terminal, in passthrough then render mode, check:
   one row per workspace, the active one marked; `/` filters, j/k and arrows
   move, Enter lands on the workspace (its session's window re-seeds), a row
   click activates, esc/q dismisses.
-- **Side panel** (render): prefix `s` toggles a left strip with the workspace
-  list (`▸` on the active one, accent header) — panes re-divide narrower
-  around it, clicking a row lands on that workspace, and toggling off
-  restores the full width. Rename a window or switch workspaces from another
-  terminal and the strip's rows follow on the next refresh.
+- **Side panel** (render): prefix `s` toggles a left strip — each workspace
+  with its windows nested dim beneath, the active workspace a full-width
+  inverted block; clicking a workspace row lands on it, clicking a nested
+  window row selects that window, and panes re-divide narrower around the
+  strip (toggling off restores). While up, the top row shows the active
+  workspace's label + the tabs. Rename a window or switch workspaces from
+  another terminal and the strip's rows follow on the next refresh.
 - **Detach cleanliness**: prefix `d` in both modes; the prompt returns intact,
   colors and cursor normal, no leftover alt-screen or hidden cursor.
 - **SSH**: from another machine, `ssh <host>` then run the same attach
