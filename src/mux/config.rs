@@ -164,6 +164,22 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub drag_cursor_shape: Option<bool>,
+    /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
+    /// = the built-in accent (bright cyan).
+    #[serde(
+        default,
+        rename = "border-active-color",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_active_color: Option<String>,
+    /// Unfocused border/divider color, `#rrggbb` hex. Empty = the
+    /// built-in dim look.
+    #[serde(
+        default,
+        rename = "border-color",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_color: Option<String>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -218,7 +234,9 @@ pub struct DaemonSection {
 pub struct EffectiveConfig {
     /// The attach detach prefix, tmux spelling.
     pub prefix: String,
-    /// The default attach mode: `passthrough` or `render`.
+    /// The default attach mode: `render` (the pane renderer) or
+    /// `passthrough` (the byte pump). RENDER IS THE DEFAULT — passthrough
+    /// is the opt-out.
     pub mode: String,
     /// The client reload chord, prefix + key (e.g. `C-b C-r`).
     pub reload: String,
@@ -240,13 +258,19 @@ pub struct EffectiveConfig {
     /// loop re-reads the applied copy every tick, so `reload-config`
     /// applies a changed value without a restart.
     pub exit_empty: bool,
+    /// The focused pane's border/divider highlight, `#rrggbb` hex;
+    /// empty = the built-in accent (bright cyan).
+    pub border_active_color: String,
+    /// Unfocused border/divider color, `#rrggbb` hex; empty = the
+    /// built-in dim look.
+    pub border_color: String,
 }
 
 impl Default for EffectiveConfig {
     fn default() -> Self {
         Self {
             prefix: "C-b".to_string(),
-            mode: "passthrough".to_string(),
+            mode: "render".to_string(),
             reload: "C-b C-r".to_string(),
             socket: "default".to_string(),
             state_dir: String::new(),
@@ -254,6 +278,8 @@ impl Default for EffectiveConfig {
             expose_control_socket: false,
             remain_on_exit: false,
             exit_empty: true,
+            border_active_color: String::new(),
+            border_color: String::new(),
         }
     }
 }
@@ -279,6 +305,10 @@ pub struct Overrides {
     pub expose_control_socket: Option<bool>,
     /// `$PAR_MUX_SOCKET` (non-empty), the env tier of the socket target.
     pub env_socket: Option<String>,
+    /// `--border-active-color` (attach), the flag tier.
+    pub border_active_color: Option<String>,
+    /// `--border-color` (attach), the flag tier.
+    pub border_color: Option<String>,
 }
 
 /// Merge the tiers: each setting takes the first tier that speaks, ending
@@ -323,6 +353,20 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     }
     if let Some(v) = file.daemon.exit_empty {
         eff.exit_empty = v;
+    }
+    if let Some(v) = o
+        .border_active_color
+        .as_ref()
+        .or(file.client.border_active_color.as_ref())
+    {
+        eff.border_active_color = v.clone();
+    }
+    if let Some(v) = o
+        .border_color
+        .as_ref()
+        .or(file.client.border_color.as_ref())
+    {
+        eff.border_color = v.clone();
     }
     eff
 }
@@ -423,6 +467,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             pane_gaps: Some(0),
             scrollbar_gutter: Some(false),
             drag_cursor_shape: Some(false),
+            border_active_color: Some(eff.border_active_color.clone()),
+            border_color: Some(eff.border_color.clone()),
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -481,7 +527,7 @@ pub fn reload_chord_key(chord: &str) -> Result<u8, String> {
 }
 
 /// The client chords a reload can move.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chords {
     /// The detach prefix byte.
     pub prefix: u8,
@@ -799,6 +845,21 @@ pub fn daemon_remain_on_exit() -> bool {
     resolve(&load_canonical(), &Overrides::default()).remain_on_exit
 }
 
+/// Parse a `#rrggbb` hex color (the border-color config spellings).
+/// `None` for anything else — callers keep their built-in default.
+#[must_use]
+pub fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ))
+}
+
 /// Parse the tmux prefix spelling (`C-b`, `C-a`, `C-Space`) or a literal
 /// single character into its byte. The crate's ONE prefix grammar: the
 /// attach client's `--prefix` and every chord in the config file are
@@ -891,7 +952,7 @@ remain-on-exit = true
         let eff = resolve(&file, &Overrides::default());
         assert_eq!(eff.prefix, "C-a");
         assert!(eff.pane_endpoints);
-        assert_eq!(eff.mode, "passthrough", "unset settings keep the default");
+        assert_eq!(eff.mode, "render", "unset settings keep the default");
 
         // Env beats file (socket only — the one setting with an env tier).
         let eff = resolve(
@@ -954,6 +1015,8 @@ remain-on-exit = true
             expose_control_socket: true,
             remain_on_exit: true,
             exit_empty: true,
+            border_active_color: "#00ff00".into(),
+            border_color: "#202020".into(),
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);

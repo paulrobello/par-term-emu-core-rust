@@ -69,6 +69,11 @@ fn spawn_attach(
     cmd.arg("attach");
     cmd.arg("--socket");
     cmd.arg(fixture.socket());
+    // The suite's byte-shape assertions are passthrough's contract; the
+    // product default is render, so the helper pins the mode explicitly.
+    // (spawn_attach_render passes --mode render through `extra`.)
+    cmd.arg("--mode");
+    cmd.arg("passthrough");
     cmd.args(extra);
     let child = pair
         .slave

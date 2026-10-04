@@ -149,7 +149,7 @@ par-mux attach work --prefix C-a    # named daemon, custom prefix
 
 **Phase B foundation (library API, feature `attach`):** alongside the passthrough client, the attach module now carries the pieces the full TUI later phases build on. The tmux layout-string parser (`mux::attach::layout::parse_layout` / `parse_layout_triple`) maps a `%layout-change` triple to absolute per-pane rects, honoring the `Z` flag by rendering the *visible* layout — the zoomed pane alone — and pinning the same leaf order `list-panes -t` reports and `LayoutTree::render` emits (golden tests over real-tmux strings plus round-trips against the daemon's own renderer). The pane renderer (`mux::attach::render::PaneRenderer`) mirrors every visible pane in its own core `Terminal` fed by the `refresh-client -t` replays and `%output` bytes, maps cells to a ratatui `Buffer` (truecolor passthrough, wide-char spacers, combining marks), draws dividers with a focused-pane highlight (UTF-8 box drawing, ACS fallback), and damage-diffs frames at a 16 ms cadence so an output flood between two frames collapses into one diff. Passthrough stays the default (`run`); `run_with_mode(AttachMode::Render)` selects the renderer seam. The CLI still attaches in passthrough; the TUI wiring is the next Phase B card.
 
-**Phase B render mode (`--mode render`):** `par-mux attach --mode render` selects the pane renderer instead of passthrough (the default stays passthrough; an unknown `--mode` value falls back to it). With no `-t`, the target resolves to the newest session's (highest id — ids are monotonic) active window's active pane — the same default passthrough documents. The client enters the alternate screen, mirrors every visible pane of the window in its own core emulator, and paints the layout at 16 ms frame cadence. The host terminal captures the mouse (SGR + button-event tracking), and stdin is routed rather than forwarded:
+**Phase B render mode (`--mode render`):** `par-mux attach` defaults to the pane renderer; `--mode passthrough` selects the Phase A byte pump instead, and an unknown `--mode` flag value is a loud error naming the valid modes (a silent fallback once ran a typo'd session in the wrong mode). With no `-t`, the target resolves to the newest session's (highest id — ids are monotonic) active window's active pane — the same default passthrough documents. The client enters the alternate screen, mirrors every visible pane of the window in its own core emulator, and paints the layout at 16 ms frame cadence. The host terminal captures the mouse (SGR + button-event tracking), and stdin is routed rather than forwarded:
 
 - **Keys:** an incremental parser tokenizes the raw stdin stream; plain byte runs forward verbatim behind the prefix scan (prefix `d` detaches, `C-b C-b` sends the literal), while escape-sequence keys (arrows, Home/End, tilde function keys, SS3 forms, modifier chords) are decoded and re-encoded against the FOCUSED pane's tracked input state — DECCKM application cursor keys, kitty keyboard flags, modifyOtherKeys — exactly what the pane's replay and `%output` set (the shared `keyboard::encode_key` encoder, the same one the daemon's `send-keys` uses). A pane running vim gets `ESC O A` for Up; a plain shell gets `ESC [ A`. Full kitty keyboard protocol forwarding (negotiating flags on a pane's behalf, CSI u re-encoding) is a later Phase B card.
 - **Mouse:** SGR reports from the host are located in the layout rects. A click on the TAB STRIP (top row) switches to that window (see below); a click in the content area focuses the pane under the pointer — locally (divider highlight) and daemon-side (`select-pane`) — and forwards a pane-relative SGR report when that pane owns mouse tracking (its emulator tracked DECSET 1000/1002/1003 from the pane's own bytes). Drag and release forward the same path; a pane without mouse ownership consumes nothing and its wheel scrolls the client.
@@ -207,6 +207,8 @@ show-label-in-border = false  # with pane-borders: the pane's title embedded in 
 pane-gaps = 0                 # render mode: theme-bg gap bands between panes (cells per side)
 scrollbar-gutter = false      # render mode: reserve a right-edge gutter column (scroll indicator)
 drag-cursor-shape = false     # render mode: shape the host cursor while a divider drag is live
+border-active-color = ""      # render mode: focused boundary half, #rrggbb (default bright cyan)
+border-color = ""             # render mode: unfocused dividers/borders, #rrggbb (default dim)
 
 [daemon]
 socket = "default"    # named default socket, or an absolute path
@@ -219,7 +221,8 @@ exit-empty = true       # exit the daemon after the grace when it holds no sessi
 
 Every setting maps to an existing flag or resolution rule: `[client]` keys
 feed `attach` (`--prefix`, `--mode` — a config `mode` applies only when
-`--mode` is absent, and an unknown value falls back to passthrough); the
+`--mode` is absent, the default is `render`, and an unknown file value
+falls back to `render` with a warning on stderr); the
 `[daemon] socket` accepts a NAME (as `par-mux <name>` spells it) or an
 absolute path, and sits in the same precedence chain as the env/flag tiers
 of `resolve_socket_path` (`$PAR_MUX_SOCKET` still beats the file; an

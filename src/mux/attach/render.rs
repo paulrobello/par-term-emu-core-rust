@@ -260,6 +260,11 @@ pub struct PaneRenderer {
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
     prev_buffer: Buffer,
+    /// Border colors (config `border-active-color` / `border-color`,
+    /// `#rrggbb` hex; `None` = the built-ins — bright-cyan accent for the
+    /// focused boundary half, DIM for unfocused dividers).
+    border_active: Option<RtColor>,
+    border_plain: Option<RtColor>,
     dirty: bool,
 }
 
@@ -283,7 +288,19 @@ impl PaneRenderer {
             scrollbar_gutter: false,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
+            border_active: None,
+            border_plain: None,
             dirty: true,
+        }
+    }
+
+    /// Set the border colors from the resolved config (`#rrggbb` hex;
+    /// `None` keeps the built-ins). A change dirties the frame.
+    pub fn set_border_colors(&mut self, active: Option<RtColor>, plain: Option<RtColor>) {
+        if self.border_active != active || self.border_plain != plain {
+            self.border_active = active;
+            self.border_plain = plain;
+            self.dirty = true;
         }
     }
 
@@ -955,62 +972,97 @@ impl PaneRenderer {
                 }
             }
         }
-        for (x, y, a, b) in &vertical {
-            if *x >= self.width || *y >= self.height {
-                continue; // a stale layout racing a shrink can overflow
+        // Group the flat boundary cells per divider so each cell knows its
+        // position along the divider's length — the tmux half rule (the
+        // active pane's half of the shared divider carries the highlight).
+        let group = |cells: &Vec<(u16, u16, u32, u32)>| -> Vec<(u16, Vec<(u16, u32, u32)>)> {
+            let mut groups: Vec<(u16, Vec<(u16, u32, u32)>)> = Vec::new();
+            for (coord, along, a, b) in cells {
+                match groups.iter_mut().find(|(k, _)| *k == *coord) {
+                    Some((_, entries)) => entries.push((*along, *a, *b)),
+                    None => groups.push((*coord, vec![(*along, *a, *b)])),
+                }
             }
-            // The scrollbar gutter owns the left/top pane's last column
-            // when reserved (config `scrollbar-gutter`): the boundary
-            // divider yields the cell so the gutter's indicator stays
-            // visible. The boundary stays a drag handle (`divider_near`
-            // reads the layout geometry, not the paint).
-            if self.scrollbar_gutter
-                && self
-                    .layout
-                    .iter()
-                    .any(|r| r.pane == *a && *x == r.x + r.width - 1)
-            {
-                continue;
-            }
-            let cell = &mut self.buffer[(*x, *y)];
-            cell.reset();
-            if let Some(bg) = self.bg {
-                cell.set_bg(bg);
-            }
-            cell.set_symbol(self.glyphs.vertical());
-            cell.set_style(divider_style(self.focused, self.drag_divider, true, *a, *b));
-        }
-        for (x, y, a, b) in &horizontal {
-            if *x >= self.width || *y >= self.height {
-                continue; // a stale layout racing a shrink can overflow
-            }
-            // Same yield for the top pane's last ROW.
-            if self.scrollbar_gutter
-                && self
-                    .layout
-                    .iter()
-                    .any(|r| r.pane == *a && *y == r.y + r.height - 1)
-            {
-                continue;
-            }
-            // A cell that is also a vertical boundary becomes the junction.
-            if vertical.iter().any(|(vx, vy, _, _)| vx == x && vy == y) {
-                let cell = &mut self.buffer[(*x, *y)];
-                cell.set_symbol(self.glyphs.cross());
-            } else {
-                let cell = &mut self.buffer[(*x, *y)];
+            groups
+        };
+        for (x, mut cells) in group(&vertical) {
+            cells.sort_by_key(|(y, _, _)| *y);
+            let len = cells.len() as u16;
+            for (index, (y, a, b)) in cells.iter().enumerate() {
+                if x >= self.width || *y >= self.height {
+                    continue; // a stale layout racing a shrink can overflow
+                }
+                // The scrollbar gutter owns the left/top pane's last column
+                // when reserved (config `scrollbar-gutter`): the boundary
+                // divider yields the cell so the gutter's indicator stays
+                // visible. The boundary stays a drag handle (`divider_near`
+                // reads the layout geometry, not the paint).
+                if self.scrollbar_gutter
+                    && self
+                        .layout
+                        .iter()
+                        .any(|r| r.pane == *a && x == r.x + r.width - 1)
+                {
+                    continue;
+                }
+                let cell = &mut self.buffer[(x, *y)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
                 }
-                cell.set_symbol(self.glyphs.horizontal());
+                cell.set_symbol(self.glyphs.vertical());
                 cell.set_style(divider_style(
                     self.focused,
                     self.drag_divider,
-                    false,
+                    true,
                     *a,
                     *b,
+                    index as u16,
+                    len,
+                    self.border_active,
+                    self.border_plain,
                 ));
+            }
+        }
+        for (y, mut cells) in group(&horizontal) {
+            cells.sort_by_key(|(x, _, _)| *x);
+            let len = cells.len() as u16;
+            for (index, (x, a, b)) in cells.iter().enumerate() {
+                if *x >= self.width || y >= self.height {
+                    continue; // a stale layout racing a shrink can overflow
+                }
+                // Same yield for the top pane's last ROW.
+                if self.scrollbar_gutter
+                    && self
+                        .layout
+                        .iter()
+                        .any(|r| r.pane == *a && y == r.y + r.height - 1)
+                {
+                    continue;
+                }
+                // A cell that is also a vertical boundary becomes the junction.
+                if vertical.iter().any(|(vx, vy, _, _)| *vx == *x && *vy == y) {
+                    let cell = &mut self.buffer[(*x, y)];
+                    cell.set_symbol(self.glyphs.cross());
+                } else {
+                    let cell = &mut self.buffer[(*x, y)];
+                    cell.reset();
+                    if let Some(bg) = self.bg {
+                        cell.set_bg(bg);
+                    }
+                    cell.set_symbol(self.glyphs.horizontal());
+                    cell.set_style(divider_style(
+                        self.focused,
+                        self.drag_divider,
+                        false,
+                        *a,
+                        *b,
+                        index as u16,
+                        len,
+                        self.border_active,
+                        self.border_plain,
+                    ));
+                }
             }
         }
     }
@@ -1233,21 +1285,48 @@ impl PaneRenderer {
 /// right/bottom pane (`b`), dim when the boundary does not touch the
 /// focus. While a drag is live on the boundary, the style renders
 /// reversed so the edge being moved stands out.
+/// The focused boundary half's highlight (config `border-active-color`,
+/// `#rrggbb`; default the bright-cyan accent), always bold.
+fn active_border_style(active: Option<RtColor>) -> RtStyle {
+    let style = match active {
+        Some(RtColor::Rgb(r, g, b)) => RtStyle::default().fg(RtColor::Rgb(r, g, b)),
+        _ => RtStyle::default().fg(RtColor::Indexed(14)), // bright cyan
+    };
+    style.add_modifier(RtModifier::BOLD)
+}
+
+/// Unfocused divider/border look (config `border-color`, `#rrggbb`;
+/// default the dim modifier alone).
+fn plain_border_style(plain: Option<RtColor>) -> RtStyle {
+    match plain {
+        Some(RtColor::Rgb(r, g, b)) => RtStyle::default().fg(RtColor::Rgb(r, g, b)),
+        _ => RtStyle::default().add_modifier(RtModifier::DIM),
+    }
+}
+
+/// One divider boundary's style at cell `index` of `len`: the tmux
+/// convention — the HALF of the divider nearer the active pane's side
+/// carries the highlight. A vertical divider (panes `a`|`b` side by
+/// side) highlights its TOP half while `a` (left) is focused and its
+/// BOTTOM half while `b` (right) is; a horizontal divider mirrors it
+/// (left half for the top pane, right half for the bottom pane). The
+/// rest renders in the plain border look; a live drag on the boundary
+/// renders reversed so the edge being moved stands out.
 fn divider_style(
     focused: Option<u32>,
     drag: Option<(bool, u32, u32)>,
     vertical: bool,
     a: u32,
     b: u32,
+    index: u16,
+    len: u16,
+    active: Option<RtColor>,
+    plain: Option<RtColor>,
 ) -> RtStyle {
     let mut style = match focused {
-        Some(f) if f == a => RtStyle::default()
-            .fg(RtColor::Indexed(14)) // bright cyan: the a-side accent
-            .add_modifier(RtModifier::BOLD),
-        Some(f) if f == b => RtStyle::default()
-            .fg(RtColor::Indexed(13)) // bright magenta: the b-side accent
-            .add_modifier(RtModifier::BOLD),
-        _ => RtStyle::default().add_modifier(RtModifier::DIM),
+        Some(f) if f == a && index * 2 < len => active_border_style(active),
+        Some(f) if f == b && index * 2 >= len => active_border_style(active),
+        _ => plain_border_style(plain),
     };
     if drag == Some((vertical, a, b)) {
         style = style.add_modifier(RtModifier::REVERSED);
@@ -1558,6 +1637,16 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     session.set_pane_gaps(chords.pane_gaps);
     session.set_scrollbar_gutter(chords.scrollbar_gutter);
     session.drag_cursor_shape = chords.drag_cursor_shape;
+    let eff = crate::mux::config::resolve(
+        &crate::mux::config::load_canonical(),
+        &crate::mux::config::Overrides::default(),
+    );
+    session.set_border_colors(
+        crate::mux::config::parse_hex_color(&eff.border_active_color)
+            .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+        crate::mux::config::parse_hex_color(&eff.border_color)
+            .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+    );
 
     // The OSC 11 background probe: raw mode is up and the pump's stdin
     // reader has not started, so the probe is briefly the tty's only
@@ -1770,6 +1859,14 @@ impl WindowSession {
     fn set_pane_borders(&mut self, on: bool) {
         self.pane_borders = on;
         self.renderer.set_pane_borders(on);
+    }
+
+    /// The session's border colors (config `border-active-color` /
+    /// `border-color`, `#rrggbb` hex; `None` keeps the built-ins).
+    /// Session-level like the background so renderer reconstruction
+    /// re-applies it.
+    fn set_border_colors(&mut self, active: Option<RtColor>, plain: Option<RtColor>) {
+        self.renderer.set_border_colors(active, plain);
     }
 
     /// The session's label-in-border mode (config `show-label-in-border`):
@@ -2636,6 +2733,33 @@ impl WindowSession {
         if focused.is_empty() {
             return;
         }
+        // Divider-direction semantics: the arrows move the SHARED divider
+        // in the pressed direction regardless of which side is focused
+        // (the manual-pass report — the right pane used to invert). The
+        // wire's resize-pane GROWS the focused pane, so when the focused
+        // pane sits on the far side of its boundary (a neighbor to its
+        // left, or above), the wire direction inverts.
+        let focused_id: u32 = focused[1..].parse().unwrap_or(u32::MAX);
+        let layout = self.renderer.layout();
+        let invert = match layout.iter().find(|r| r.pane == focused_id) {
+            Some(f) => match flag {
+                "-L" | "-R" => layout
+                    .iter()
+                    .any(|r| r.pane != f.pane && r.x + r.width == f.x && rows_overlap(r, f)),
+                "-U" | "-D" => layout
+                    .iter()
+                    .any(|r| r.pane != f.pane && r.y + r.height == f.y && cols_overlap(r, f)),
+                _ => false,
+            },
+            None => false,
+        };
+        let flag = match (flag, invert) {
+            ("-L", true) => "-R",
+            ("-R", true) => "-L",
+            ("-U", true) => "-D",
+            ("-D", true) => "-U",
+            (other, _) => other,
+        };
         let _ = conn.send_checked(&format!(
             "resize-pane -t {focused} {flag} {}",
             self.resize_step
@@ -2880,6 +3004,16 @@ impl WindowSession {
                 self.set_scrollbar_gutter(chords.scrollbar_gutter);
                 self.drag_cursor_shape = chords.drag_cursor_shape;
                 self.set_show_label_in_border(chords.show_label_in_border);
+                let eff = crate::mux::config::resolve(
+                    &crate::mux::config::load_canonical(),
+                    &crate::mux::config::Overrides::default(),
+                );
+                self.set_border_colors(
+                    crate::mux::config::parse_hex_color(&eff.border_active_color)
+                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+                    crate::mux::config::parse_hex_color(&eff.border_color)
+                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+                );
                 self.literal = chords.prefix;
                 self.flash = Some("config reloaded".to_string());
             }
@@ -3613,6 +3747,13 @@ impl WindowSession {
         if self.drag_cursor_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
             cursor = cursor.map(|(x, y, _)| (x, y, CursorStyle::SteadyBlock));
         }
+        // A modal overlay (help, picker) covers the focused pane: placing
+        // the pane's cursor would draw it through the panel (the
+        // manual-pass report). Hide the host cursor while a modal is up;
+        // the next unmodaled frame restores placement.
+        if self.renderer.overlay.is_some() || self.picker_mode {
+            cursor = None;
+        }
         if flushed || self.cursor_placed.as_ref() != Some(&cursor) {
             sink.place_cursor(cursor);
             self.cursor_placed = Some(cursor);
@@ -3960,13 +4101,22 @@ mod tests {
         renderer.focus(2);
         renderer.mark_all_dirty();
         renderer.render_frame();
+        // The middle pane is the RIGHT side of the 1|2 boundary (bottom
+        // half highlights) and the LEFT side of the 2|3 boundary (top
+        // half highlights).
         assert!(
-            renderer.buffer[(29, 0)].modifier.contains(RtModifier::BOLD),
-            "moving focus to pane 2: both its dividers highlight"
+            renderer.buffer[(29, 23)]
+                .modifier
+                .contains(RtModifier::BOLD),
+            "moving focus to pane 2: the 1|2 divider's bottom half highlights"
+        );
+        assert!(
+            renderer.buffer[(29, 0)].modifier.contains(RtModifier::DIM),
+            "moving focus to pane 2: the 1|2 divider's top half stays dim"
         );
         assert!(
             renderer.buffer[(59, 0)].modifier.contains(RtModifier::BOLD),
-            "moving focus to pane 2: both its dividers highlight"
+            "moving focus to pane 2: the 2|3 divider's top half highlights"
         );
 
         // An absent pane is ignored.
@@ -4535,6 +4685,43 @@ mod tests {
         }
     }
 
+    /// A modal overlay (help, picker) covers the focused pane: the frame
+    /// hides the host cursor instead of placing the pane's cell through
+    /// the panel; dismissal restores placement (the manual-pass report —
+    /// the block cursor drew through the help panel).
+    #[test]
+    fn modal_overlay_hides_the_pane_cursor() {
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        session.renderer.feed_output(1, b"hello\r\n");
+
+        let mut sink = CursorSink {
+            placements: Vec::new(),
+        };
+        session.renderer.set_overlay(Some(("keybinds", vec![])));
+        session.frame(&mut sink);
+        assert_eq!(
+            sink.placements.last(),
+            Some(&None),
+            "an open modal hides the host cursor: {:?}",
+            sink.placements
+        );
+
+        session.renderer.set_overlay(None);
+        session.frame(&mut sink);
+        let expected = session
+            .renderer
+            .focused_cursor()
+            .map(|(x, y, style)| (x, y + 1, style)); // +1: the strip row
+        assert_eq!(
+            sink.placements.last(),
+            Some(&expected),
+            "dismissal restores the pane cursor placement"
+        );
+    }
+
     /// End-to-end through the session's real frame path: a flushed frame
     /// always re-places the cursor (the diff's per-cell CUPs moved the
     /// host cursor), and a quiet pump emits nothing new. The session is
@@ -4940,11 +5127,10 @@ mod tests {
         );
     }
 
-    /// The focus indication must FLIP visibly in a two-pane split — both
-    /// panes share one divider, so a single accent read identically from
-    /// either side (the owner's manual pass). The boundary paints cyan
-    /// when the left pane holds the focus and magenta when the right one
-    /// does.
+    /// The tmux divider convention (the owner's manual pass): the HALF of
+    /// the shared divider nearer the active pane carries the highlight —
+    /// a side-by-side split's divider highlights its top half when the
+    /// left pane is focused and its bottom half when the right one is.
     #[test]
     fn focus_flip_changes_the_shared_dividers_color() {
         let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
@@ -4956,15 +5142,23 @@ mod tests {
         assert_eq!(
             renderer.buffer[(39, 0)].fg,
             RtColor::Indexed(14),
-            "pane 1 (left) focused: the shared divider is the a-side accent"
+            "pane 1 (left) focused: the divider's TOP half is the accent"
+        );
+        assert!(
+            renderer.buffer[(39, 23)].modifier.contains(RtModifier::DIM),
+            "pane 1 focused: the divider's bottom half stays dim"
         );
         renderer.focus(2);
         renderer.mark_all_dirty();
         renderer.render_frame();
         assert_eq!(
-            renderer.buffer[(39, 0)].fg,
-            RtColor::Indexed(13),
-            "pane 2 (right) focused: the shared divider flips to the b-side accent"
+            renderer.buffer[(39, 23)].fg,
+            RtColor::Indexed(14),
+            "pane 2 (right) focused: the divider's BOTTOM half is the accent"
+        );
+        assert!(
+            renderer.buffer[(39, 0)].modifier.contains(RtModifier::DIM),
+            "pane 2 focused: the divider's top half stays dim"
         );
     }
 
@@ -4999,6 +5193,26 @@ mod tests {
         // Any other key leaves the mode, consumed.
         session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
         assert!(!session.resize_mode);
+
+        // The RIGHT pane focused: the arrows move the shared divider in
+        // the pressed direction, so the wire direction inverts (the wire
+        // grows the focused pane; growing the right pane would move the
+        // divider left — the manual-pass report).
+        session.renderer.focus(2);
+        assert!(
+            !session.route_plain(
+                &[crate::mux::attach::C_B, b'R'],
+                &mut conn,
+                &mut prefix_pending
+            ),
+            "the resize chord re-enters the mode"
+        );
+        session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+        assert_eq!(
+            wait_recorded(&rx, "resize-pane"),
+            "resize-pane -t %2 -L 1",
+            "Right with the right pane focused shrinks it: the divider moves right"
+        );
     }
 
     /// The help chord: prefix ? opens the panel (categories and effective

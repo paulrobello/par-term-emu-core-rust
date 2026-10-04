@@ -12,9 +12,6 @@ use par_term_emu_core_rust::mux::config::{
     self, load_canonical, resolve, write_file, EffectiveConfig, Overrides,
 };
 
-#[cfg(feature = "attach")]
-use par_term_emu_core_rust::mux::attach::AttachMode;
-
 /// The daemon's one config resolution: the file tier re-read per run, the
 /// env tier read from this process's env, the flag tier from the parsed
 /// CLI. `include_flags` splits the two consumers: `--gen-config` and the
@@ -203,20 +200,19 @@ struct AttachArgs {
 
 #[cfg(feature = "attach")]
 impl AttachCommand {
-    fn options(&self) -> par_term_emu_core_rust::mux::attach::AttachOptions {
+    fn options(&self) -> Result<par_term_emu_core_rust::mux::attach::AttachOptions, String> {
         match self {
-            AttachCommand::Attach(args) => par_term_emu_core_rust::mux::attach::AttachOptions {
-                socket: args.socket.clone(),
-                name: args.name.clone(),
-                target: args.target.clone(),
-                prefix: args.prefix.clone(),
-                reload: None,
-                mode: args
-                    .mode
-                    .as_deref()
-                    .map(parse_mode)
-                    .unwrap_or(par_term_emu_core_rust::mux::attach::AttachMode::Passthrough),
-            },
+            AttachCommand::Attach(args) => {
+                let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+                Ok(par_term_emu_core_rust::mux::attach::AttachOptions {
+                    socket: args.socket.clone(),
+                    name: args.name.clone(),
+                    target: args.target.clone(),
+                    prefix: args.prefix.clone(),
+                    reload: None,
+                    mode,
+                })
+            }
         }
     }
 
@@ -236,16 +232,21 @@ impl AttachCommand {
     }
 }
 
-/// The `--mode` spelling: `render` selects the Phase B renderer; anything
-/// else (including the default `passthrough`) stays Phase A. An unknown
-/// value falls back to passthrough rather than failing the attach — the
-/// mode is an enhancement, not a requirement.
+/// The `--mode` spelling: `render` (the default) selects the Phase B
+/// renderer, `passthrough` the Phase A byte pump. Anything else is a
+/// spelling error and fails the attach loudly — a silent fallback ran the
+/// user's session in the wrong mode (the manual-pass `--mode rendered`
+/// report).
 #[cfg(feature = "attach")]
-fn parse_mode(value: &str) -> par_term_emu_core_rust::mux::attach::AttachMode {
+fn parse_mode(value: &str) -> Result<par_term_emu_core_rust::mux::attach::AttachMode, String> {
     if value.eq_ignore_ascii_case("render") {
-        par_term_emu_core_rust::mux::attach::AttachMode::Render
+        Ok(par_term_emu_core_rust::mux::attach::AttachMode::Render)
+    } else if value.eq_ignore_ascii_case("passthrough") {
+        Ok(par_term_emu_core_rust::mux::attach::AttachMode::Passthrough)
     } else {
-        par_term_emu_core_rust::mux::attach::AttachMode::Passthrough
+        Err(format!(
+            "unknown --mode {value:?} — valid modes: render, passthrough"
+        ))
     }
 }
 
@@ -446,7 +447,17 @@ fn main() -> std::process::ExitCode {
         // screen, and the emulator's per-sequence diagnostics (a chatty
         // TUI emits hundreds) would otherwise flood the display.
         log::set_max_level(log::LevelFilter::Error);
-        let mut options = attach.options();
+        let mut options = match attach.options() {
+            Ok(options) => options,
+            Err(message) => {
+                // An unknown --mode spelling: fail loudly instead of
+                // silently running the wrong mode (the manual-pass
+                // `--mode rendered` report).
+                use std::io::Write as _;
+                let _ = writeln!(std::io::stderr().lock(), "par-mux: {message}");
+                return std::process::ExitCode::from(2);
+            }
+        };
         let eff = effective(&cli, true);
         if options.prefix.is_none() {
             options.prefix = Some(eff.prefix.clone());
@@ -454,11 +465,27 @@ fn main() -> std::process::ExitCode {
         if options.reload.is_none() {
             options.reload = Some(eff.reload.clone());
         }
-        if options.mode == AttachMode::Passthrough && eff.mode == "render" {
-            // The config file's mode tier: only reachable when the user
-            // did not pass --mode (the flag tier wins over the file).
-            options.mode = AttachMode::Render;
-        }
+        let mode = match options.mode {
+            Some(mode) => mode,
+            None => {
+                // The flag did not speak: the config file's mode tier (the
+                // resolution defaults it to render). An unknown FILE value
+                // falls back to the default with a warning — the file is
+                // not a spelling error the user just typed.
+                match eff.mode.to_ascii_lowercase().as_str() {
+                    "render" => par_term_emu_core_rust::mux::attach::AttachMode::Render,
+                    "passthrough" => par_term_emu_core_rust::mux::attach::AttachMode::Passthrough,
+                    other => {
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            std::io::stderr().lock(),
+                            "par-mux: unknown [client] mode {other:?} — using render"
+                        );
+                        par_term_emu_core_rust::mux::attach::AttachMode::Render
+                    }
+                }
+            }
+        };
 
         // Multi-server ambiguity guard: with NEITHER an explicit socket
         // NOR a name on the command line, enumerate under the resolved
@@ -507,7 +534,7 @@ fn main() -> std::process::ExitCode {
                 options.socket = Some(single.socket.clone());
             }
         }
-        return par_term_emu_core_rust::mux::attach::run_with_mode(&options, options.mode);
+        return par_term_emu_core_rust::mux::attach::run_with_mode(&options, mode);
     }
 
     // --gen-config: write the effective config and exit. Resolution uses
@@ -946,32 +973,38 @@ mod attach_cli_tests {
         assert!(attach.prefix.is_none());
     }
 
-    /// `--mode` defaults to passthrough; the `render` spelling selects the
-    /// Phase B renderer and an unknown value falls back to passthrough.
+    /// `--mode` absent leaves the mode to the config tier (render by
+    /// default); `render`/`passthrough` parse and anything else fails
+    /// loudly.
     #[test]
-    fn attach_mode_defaults_to_passthrough_and_parses_render() {
+    fn attach_mode_flag_parses_and_validates() {
         use par_term_emu_core_rust::mux::attach::AttachMode;
         let cli = Cli::try_parse_from(["par-mux", "attach"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
-        assert_eq!(
-            parse_mode(attach.mode.as_deref().unwrap_or("")),
-            AttachMode::Passthrough
+        assert!(
+            attach.mode.is_none(),
+            "no --mode flag: the config tier decides (render by default)"
         );
 
         let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "render"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
         assert_eq!(
             parse_mode(attach.mode.as_deref().unwrap_or("")),
-            AttachMode::Render
+            Ok(AttachMode::Render)
         );
-
-        // An unknown value is a passthrough attach, not a parse error.
-        let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "wat"]).expect("parse");
+        let cli =
+            Cli::try_parse_from(["par-mux", "attach", "--mode", "passthrough"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
         assert_eq!(
             parse_mode(attach.mode.as_deref().unwrap_or("")),
-            AttachMode::Passthrough
+            Ok(AttachMode::Passthrough)
         );
+
+        // An unknown value fails loudly — a silent fallback ran the user's
+        // session in the wrong mode (the manual-pass `--mode rendered`
+        // report).
+        assert!(parse_mode("rendered").is_err());
+        assert!(parse_mode("wat").is_err());
     }
 
     #[test]

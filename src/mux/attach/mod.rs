@@ -27,16 +27,16 @@ use std::time::Duration;
 /// Which rendering pipeline the attach client drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AttachMode {
-    /// The Phase A contract: pane bytes flow to the host terminal
-    /// verbatim, which is the VT emulator. The default — the renderer is
-    /// opt-in until later Phase B cards land the full TUI chrome.
-    #[default]
-    Passthrough,
     /// The Phase B renderer: per-pane core emulators fed by replay +
     /// `%output`, painted into layout rects through ratatui, dividers
     /// drawn between them. The host terminal only ever sees this client's
-    /// own draws.
+    /// own draws. THE DEFAULT — the owner's ruling (2026-10-04);
+    /// passthrough is the opt-out byte pump.
+    #[default]
     Render,
+    /// The Phase A contract: pane bytes flow to the host terminal
+    /// verbatim, which is the VT emulator.
+    Passthrough,
 }
 
 /// Attach entry point. Returns the process exit code.
@@ -98,10 +98,12 @@ pub struct AttachOptions {
     /// rebinds the chords live. Set by the CLI layer from the config
     /// resolution; `None` keeps the built-in default (`C-b C-r`).
     pub reload: Option<String>,
-    /// Render pipeline selection (`--mode`): [`AttachMode::Passthrough`]
-    /// (the Phase A contract) is the default; [`AttachMode::Render`]
-    /// selects the pane renderer + input router.
-    pub mode: AttachMode,
+    /// Render pipeline selection (`--mode`): `None` (no flag) resolves
+    /// from the config file's `[client] mode`, defaulting to
+    /// [`AttachMode::Render`]; an explicit flag wins over the file.
+    /// [`AttachMode::Passthrough`] is the Phase A byte-pump contract;
+    /// [`AttachMode::Render`] is the pane renderer + input router.
+    pub mode: Option<AttachMode>,
 }
 
 impl AttachOptions {
@@ -678,6 +680,12 @@ impl Session {
         // The flash cue's lifetime in loop polls (~1 s at POLL = 16 ms).
         const FLASH_POLLS: u32 = 60;
         let mut flash_polls = 0u32;
+        // Periodic status redraw (~0.5 s): a full-screen pane app can wipe
+        // the reserved bottom row or reset the host's scroll margins (the
+        // manual-pass htop report) — one small absolute-CUP run restores
+        // the bar without tracking the app's terminal writes.
+        const STATUS_REDRAW_POLLS: u32 = 32;
+        let mut status_polls = 0u32;
         loop {
             // 1. Drain daemon pushes.
             loop {
@@ -720,8 +728,15 @@ impl Session {
                     }
                 }
                 status_dirty = false;
+                status_polls = 0;
                 self.refresh_status();
                 self.draw_status();
+            } else {
+                status_polls += 1;
+                if status_polls >= STATUS_REDRAW_POLLS {
+                    status_polls = 0;
+                    self.draw_status();
+                }
             }
 
             // 4. Wait for the next push — and HANDLE it: an event that
@@ -2449,7 +2464,7 @@ mod tests {
             target: None,
             prefix: None,
             reload: None,
-            mode: AttachMode::default(),
+            mode: None,
         };
         assert_eq!(run(&options), ExitCode::FAILURE);
         // And nothing appeared on the path: no auto-spawn.
@@ -2493,7 +2508,7 @@ mod tests {
             target: None,
             prefix: None,
             reload: None,
-            mode: AttachMode::default(),
+            mode: None,
         };
         assert_eq!(run(&options), ExitCode::SUCCESS);
 
@@ -2516,7 +2531,7 @@ mod tests {
             target: None,
             prefix: None,
             reload: None,
-            mode: AttachMode::default(),
+            mode: None,
         };
         assert_eq!(explicit.socket_path(), PathBuf::from("/tmp/explicit.sock"));
         let named = AttachOptions {
@@ -2525,7 +2540,7 @@ mod tests {
             target: None,
             prefix: None,
             reload: None,
-            mode: AttachMode::default(),
+            mode: None,
         };
         assert_eq!(named.socket_path(), crate::mux::default_socket_path("work"));
         let fallback = AttachOptions {
@@ -2534,7 +2549,7 @@ mod tests {
             target: None,
             prefix: None,
             reload: None,
-            mode: AttachMode::default(),
+            mode: None,
         };
         // No env var in the test harness -> the unnamed default.
         if std::env::var_os("PAR_MUX_SOCKET").is_none() {
