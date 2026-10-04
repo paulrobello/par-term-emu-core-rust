@@ -1602,6 +1602,156 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
     host.killer.kill().ok();
 }
 
+/// Acceptance criterion (render mode, PTY level): a host resize to a
+/// TALLER-than-handshake grid re-fits the whole frame. The client settles
+/// at the harness's 24-row default; growing the master to 40 rows (width
+/// kept) must (a) report the content grid on the wire — 40 rows minus
+/// the tab strip minus the status row = 38, (b) wipe the host screen and
+/// repaint the full frame at the new geometry — tab strip on row 1,
+/// status on row 40, pane content between — so no pre-resize content can
+/// remain visible outside the new frame, and (c) keep pane content seeded
+/// before the attach visible through the re-fit (position may shift).
+#[cfg(unix)]
+#[test]
+fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
+    let (fixture, _daemon, mut client) = fixture_with_session("tallresize");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // A deterministic tab name, so the strip row pins exactly.
+    client.send("rename-window -t @0 big").expect("rename");
+    // Pre-attach content: seeded before the client attaches, so the
+    // replay path (not a live %output race) must carry it into the
+    // re-fit frame.
+    client
+        .send(&format!("send-keys -t {pane} -l 'echo SURVIVOR-MARKER'"))
+        .expect("seed marker");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    // Settle on the 24-row handshake grid: mouse capture + the seeded
+    // marker painted.
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"SURVIVOR-MARKER", Duration::from_secs(10));
+    // Drain the settle paint so everything read next is resize-attributable.
+    while host.output_rx.try_recv().is_ok() {}
+
+    // Grow the host 24 -> 40 rows, width kept.
+    host.master
+        .resize(PtySize {
+            rows: 40,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("host resize");
+
+    // The status row repaints at the host's NEW bottom row (row 40) — a
+    // CUP to row 40 cannot come from the 24-row geometry.
+    let got = wait_for_output(&host, b"\x1b[40;", Duration::from_secs(10));
+    assert!(
+        !got.is_empty(),
+        "the taller resize must re-fit and repaint (status CUP to row 40). \
+         stderr: {}\nbytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+    );
+
+    // Give the re-seed + full repaint a beat to finish flowing, then
+    // collect everything the host received after the resize.
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut all = got;
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        all.extend_from_slice(&bytes);
+    }
+
+    // The wire size report re-fit the daemon's window to the content
+    // grid: 40 rows - tab strip - status row = 38 rows, width kept.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut fitted = false;
+    while Instant::now() < deadline {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info");
+        if info.join(" ").contains("80x38") {
+            fitted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        fitted,
+        "the size report must carry the content grid (40 rows minus the tab \
+         strip minus the status row = 38, width kept): {:?}",
+        client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info")
+    );
+
+    // The repaint wipe: resize_to clears the host screen before the
+    // re-fit frame — the discipline that guarantees no pre-resize
+    // content can survive outside the new frame.
+    assert!(
+        all.windows(4).any(|w| w == b"\x1b[2J"),
+        "the re-fit must wipe the host screen (CSI 2J) so pre-resize content \
+         cannot remain visible. bytes: {}",
+        String::from_utf8_lossy(&all[..all.len().min(400)])
+    );
+
+    // Reconstruct the painted screen at the new geometry and pin the
+    // full frame: tab strip on row 1, status on row 40, and the
+    // pre-attach marker re-seeded inside the pane area (1-based rows
+    // 2..39; 0-based 1..=38).
+    let (final_grid, ever) = reconstructed_screen(&all, 40, 80);
+    let ever_row = |r: usize| {
+        ever[r]
+            .iter()
+            .map(|s| format!("{s:?}\n"))
+            .collect::<String>()
+    };
+    assert!(
+        ever[0].iter().any(|r| r.contains("0:big")),
+        "the tab strip must paint row 1 at the taller grid. snapshots:\n{}\n\
+         stderr: {}",
+        ever_row(0),
+        stderr.lock().unwrap()
+    );
+    assert!(
+        ever[39].iter().any(|r| r.contains("$0:att")),
+        "the status row must paint the new bottom row (row 40). snapshots:\n{}\n\
+         stderr: {}",
+        ever_row(39),
+        stderr.lock().unwrap()
+    );
+    let marker_row = final_grid
+        .iter()
+        .position(|row| row.contains("SURVIVOR-MARKER"))
+        .or_else(|| {
+            ever.iter()
+                .position(|rows| rows.iter().any(|r| r.contains("SURVIVOR-MARKER")))
+        });
+    assert!(
+        marker_row.is_some(),
+        "the pre-attach marker must survive the re-fit. final: {final_grid:?}"
+    );
+    if let Some(row) = marker_row {
+        assert!(
+            (1..=38).contains(&row),
+            "the marker must sit inside the pane area (1-based rows 2..39), \
+             not on the strip or status rows: 0-based row {row}"
+        );
+    }
+    host.killer.kill().ok();
+}
+
 /// Acceptance criterion (render mode, PTY level): a daemon-side zoom
 /// (`resize-pane -t <pane> -Z`, tmux semantics) re-renders the VISIBLE
 /// layout — the zoomed pane alone at full window extent — and a second
