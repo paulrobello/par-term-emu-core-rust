@@ -900,7 +900,8 @@ impl Session {
                         | ManagementKey::RenameWindow
                         | ManagementKey::RenamePane
                         | ManagementKey::BorderCycle
-                        | ManagementKey::Labels,
+                        | ManagementKey::Labels
+                        | ManagementKey::WorkspacePicker,
                     ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
@@ -1697,6 +1698,9 @@ pub(crate) enum ManagementKey {
     BorderCycle,
     /// Toggle pane titles embedded in the pane borders (render mode).
     Labels,
+    /// Open the workspace picker modal (the session/window picker's
+    /// workspace sibling).
+    WorkspacePicker,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1715,6 +1719,9 @@ pub(crate) fn spell_key(byte: u8) -> String {
 pub(crate) struct HelpRow {
     pub text: String,
     pub accent: bool,
+    /// The modal's controls band: painted on a dark-grey strip across the
+    /// panel's inner width (the help/picker/prompt footers).
+    pub footer: bool,
 }
 
 /// The passthrough help dump's byte payload: a leading blank line so the
@@ -1749,6 +1756,7 @@ pub(crate) fn help_rows(
         rows.push(HelpRow {
             text: format!(" {title} "),
             accent: true,
+            footer: false,
         });
         let width = entries
             .iter()
@@ -1759,6 +1767,7 @@ pub(crate) fn help_rows(
             rows.push(HelpRow {
                 text: format!(" {:width$}  {}", key, desc, width = width),
                 accent: false,
+                footer: false,
             });
         }
     };
@@ -1862,6 +1871,10 @@ pub(crate) fn help_rows(
                 format!("{p} {}", spell_key(m.workspace_prev)),
                 "previous workspace".to_string(),
             ),
+            (
+                format!("{p} {}", spell_key(m.workspace_picker)),
+                "workspace picker".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -1910,6 +1923,9 @@ pub(crate) const HELP_OVERLAY_TITLE: &str = " keybinds ";
 /// The modal overlay's title for the session/window picker.
 pub(crate) const PICKER_OVERLAY_TITLE: &str = " picker ";
 
+/// The workspace picker modal's title.
+pub(crate) const WORKSPACE_PICKER_OVERLAY_TITLE: &str = " workspaces ";
+
 /// The modal overlay's title for the rename-window prompt.
 pub(crate) const PROMPT_WINDOW_OVERLAY_TITLE: &str = " rename window ";
 
@@ -1928,14 +1944,17 @@ pub(crate) fn compose_prompt_panel(text: &str) -> Vec<HelpRow> {
         HelpRow {
             text: format!(" > {text}▌"),
             accent: true,
+            footer: false,
         },
         HelpRow {
             text: String::new(),
             accent: false,
+            footer: false,
         },
         HelpRow {
             text: PROMPT_FOOTER.to_string(),
             accent: false,
+            footer: true,
         },
     ]
 }
@@ -1986,17 +2005,20 @@ pub(crate) fn compose_help_panel(
         panel.push(HelpRow {
             text: format!(" /{filter}▌"),
             accent: false,
+            footer: false,
         });
     } else {
         panel.push(HelpRow {
             text: HELP_FILTER_PLACEHOLDER.to_string(),
             accent: false,
+            footer: false,
         });
     }
     panel.extend(window);
     panel.push(HelpRow {
         text: HELP_FOOTER.to_string(),
         accent: false,
+        footer: true,
     });
     panel
 }
@@ -2024,6 +2046,9 @@ pub(crate) struct PickerEntry {
 pub(crate) enum PickerRef {
     Session(usize),
     Window(usize, usize),
+    /// One workspace row (the workspace picker): the workspace's index
+    /// into the picker's queried workspace list.
+    Workspace(usize),
 }
 
 /// The picker's display rows from the queried entries: one accent
@@ -2043,6 +2068,7 @@ pub(crate) fn picker_rows(
         rows.push(HelpRow {
             text: format!(" {marker}{0}: {1}", entry.session_id, entry.session_name),
             accent: true,
+            footer: false,
         });
         refs.push(PickerRef::Session(i));
         for (w, (window_id, name)) in entry.windows.iter().enumerate() {
@@ -2056,6 +2082,7 @@ pub(crate) fn picker_rows(
             rows.push(HelpRow {
                 text: format!(" {marker}  {window_id}: {name}{star}"),
                 accent: false,
+                footer: false,
             });
             refs.push(PickerRef::Window(i, w));
         }
@@ -2141,17 +2168,20 @@ pub(crate) fn compose_picker_panel(
         panel.push(HelpRow {
             text: format!(" /{filter}▌"),
             accent: false,
+            footer: false,
         });
     } else {
         panel.push(HelpRow {
             text: HELP_FILTER_PLACEHOLDER.to_string(),
             accent: false,
+            footer: false,
         });
     }
     panel.extend(window);
     panel.push(HelpRow {
         text: PICKER_FOOTER.to_string(),
         accent: false,
+        footer: true,
     });
     (panel, content_refs, start)
 }
@@ -4146,6 +4176,7 @@ mod tests {
                     rename_pane: b'$',
                     border_cycle: b'B',
                     label_toggle: b'l',
+                    workspace_picker: b'g',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -4174,6 +4205,7 @@ mod tests {
                     rename_pane: b'$',
                     border_cycle: b'B',
                     label_toggle: b'l',
+                    workspace_picker: b'g',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()

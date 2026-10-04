@@ -969,7 +969,7 @@ impl PaneRenderer {
         // fill, with a minimal position indicator while the pane's client
         // scroll offset is > 0 — one `▐` at the view top's proportional
         // depth into the history.
-        if self.scrollbar_gutter && view_h > 0 {
+        if (self.scrollbar_gutter || scroll > 0) && view_h > 0 {
             let gx = rect.x + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
@@ -1062,7 +1062,8 @@ impl PaneRenderer {
                 // divider yields the cell so the gutter's indicator stays
                 // visible. The boundary stays a drag handle (`divider_near`
                 // reads the layout geometry, not the paint).
-                if self.scrollbar_gutter
+                let a_scrolled = self.emulators.get(a).is_some_and(|e| e.scroll_offset() > 0);
+                if (self.scrollbar_gutter || a_scrolled)
                     && self
                         .layout
                         .iter()
@@ -1210,13 +1211,25 @@ impl PaneRenderer {
         let badge_start = x0 + 1 + inner - badge.chars().count().min(inner);
         embed(badge, badge_start);
         // Content rows: accent rows (category headers) in the accent
-        // color, the rest in the default foreground on the theme bg.
+        // color, footer rows on a dark-grey band across the inner width,
+        // the rest in the default foreground on the theme bg.
         for (i, row) in rows.iter().take(height).enumerate() {
+            if row.footer {
+                let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
+                for x in x0 + 1..x0 + inner + 1 {
+                    let cell = &mut self.buffer[(x as u16, (y0 + 1 + i) as u16)];
+                    cell.reset();
+                    cell.set_style(band);
+                }
+            }
             for (j, ch) in row.text.chars().take(inner).enumerate() {
                 let cell = &mut self.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
                 cell.set_symbol(&ch.to_string());
                 if row.accent {
                     cell.set_style(accent_style);
+                } else if row.footer {
+                    let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
+                    cell.set_style(band);
                 }
             }
         }
@@ -1885,6 +1898,10 @@ struct WindowSession {
     /// the click hit-test's boundary between content rows and the
     /// footer.
     picker_panel_len: usize,
+    /// When set, the open picker is the WORKSPACE picker: the queried
+    /// `(id, name, active)` roster its rows compose from. `None` = the
+    /// session/window picker (or no picker open).
+    picker_workspaces: Option<Vec<(String, String, bool)>>,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's resolved background (the OSC 11 probe result), kept
@@ -1968,6 +1985,7 @@ impl WindowSession {
             picker_entries: Vec::new(),
             picker_refs: Vec::new(),
             picker_panel_len: 0,
+            picker_workspaces: None,
             drag: None,
             bg: None,
             pane_borders: false,
@@ -2484,6 +2502,9 @@ impl WindowSession {
                     b if b == self.management.rename_pane => Some(ManagementKey::RenamePane),
                     b if b == self.management.border_cycle => Some(ManagementKey::BorderCycle),
                     b if b == self.management.label_toggle => Some(ManagementKey::Labels),
+                    b if b == self.management.workspace_picker => {
+                        Some(ManagementKey::WorkspacePicker)
+                    }
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -2745,10 +2766,41 @@ impl WindowSession {
         self.refresh_picker();
     }
 
+    /// Open the workspace picker (the workspace-picker chord): the
+    /// daemon's workspace roster — id, name, the active one `>`-marked —
+    /// in the same themed modal, filter, cursor, and click handling the
+    /// session/window picker runs. Enter lands on the workspace through
+    /// the same select-then-resync every switch follows.
+    fn enter_ws_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Ok(reply) = conn.send_checked("list-workspaces") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let workspaces: Vec<(String, String, bool)> = reply
+            .body
+            .iter()
+            .filter_map(|l| super::parse_workspace_line(l))
+            .collect();
+        if workspaces.is_empty() {
+            return;
+        }
+        let open_on = workspaces.iter().position(|(_, _, active)| *active);
+        self.picker_workspaces = Some(workspaces);
+        self.picker_filter.clear();
+        self.picker_filtering = false;
+        self.picker_start = 0;
+        self.picker_mode = true;
+        self.picker_selected = open_on.unwrap_or(0);
+        self.refresh_ws_picker();
+    }
+
     /// Dismiss the picker: the next frame\'s pane repaint restores the
     /// covered cells.
     fn leave_picker(&mut self) {
         self.picker_mode = false;
+        self.picker_workspaces = None;
         self.renderer.set_overlay(None);
     }
 
@@ -2873,8 +2925,13 @@ impl WindowSession {
     }
 
     /// Re-compose the picker overlay from the live state (filter,
-    /// selection, pan).
+    /// selection, pan). The workspace picker composes its own rows and
+    /// rides the same filter/window/footer machinery.
     fn refresh_picker(&mut self) {
+        if self.picker_workspaces.is_some() {
+            self.refresh_ws_picker();
+            return;
+        }
         let (rows, refs) = super::picker_rows(&self.picker_entries, Some(&self.window));
         let visible = self.picker_visible();
         let (lines, filtered_refs, start) = super::compose_picker_panel(
@@ -2922,11 +2979,36 @@ impl WindowSession {
         let Some(item) = self.picker_refs.get(idx).copied() else {
             return;
         };
+        let super::PickerRef::Workspace(index) = item else {
+            return self.ws_picker_activate(conn, item);
+        };
+        let Some(workspaces) = self.picker_workspaces.clone() else {
+            return;
+        };
+        let Some((id, _, _)) = workspaces.get(index) else {
+            self.leave_picker();
+            return;
+        };
+        let id = id.clone();
+        self.leave_picker();
+        self.land_on_workspace(conn, &id);
+    }
+
+    /// Activate a session/window picker row: a session header lands on
+    /// the session's active window, a window row on that window.
+    fn ws_picker_activate(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        item: super::PickerRef,
+    ) {
         let entry_index = match item {
             super::PickerRef::Session(i) | super::PickerRef::Window(i, _) => i,
+            super::PickerRef::Workspace(_) => return,
         };
         let entry = &self.picker_entries[entry_index];
         let window = match item {
+            // Unreachable: ws_picker_activate returned early on Workspace.
+            super::PickerRef::Workspace(_) => None,
             super::PickerRef::Session(_) => entry
                 .active_window
                 .clone()
@@ -2941,6 +3023,57 @@ impl WindowSession {
         self.leave_picker();
         let _ = conn.send_checked(&format!("select-window -t {window}"));
         self.reseed_window(conn, &window);
+    }
+
+    /// Activate the workspace picker's selected row: dismiss, then land
+    /// on the workspace through the same select-then-resync.
+    fn ws_picker_land(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, index: usize) {
+        let Some(workspaces) = self.picker_workspaces.clone() else {
+            return;
+        };
+        let Some((id, _, _)) = workspaces.get(index) else {
+            self.leave_picker();
+            return;
+        };
+        let id = id.clone();
+        self.leave_picker();
+        self.land_on_workspace(conn, &id);
+    }
+
+    /// Compose the workspace picker's overlay: one row per workspace
+    /// (`>`- and `*`-marked when active), through the same filter,
+    /// cursor, windowing, and footer machinery as the session picker.
+    fn refresh_ws_picker(&mut self) {
+        let Some(workspaces) = self.picker_workspaces.clone() else {
+            return;
+        };
+        let mut rows: Vec<super::HelpRow> = Vec::new();
+        let mut refs: Vec<super::PickerRef> = Vec::new();
+        for (i, (id, name, active)) in workspaces.iter().enumerate() {
+            let marker = if *active { ">" } else { " " };
+            let star = if *active { " *" } else { "" };
+            rows.push(super::HelpRow {
+                text: format!(" {marker}{id}  {name}{star}"),
+                accent: false,
+                footer: false,
+            });
+            refs.push(super::PickerRef::Workspace(i));
+        }
+        let visible = self.picker_visible();
+        let (lines, filtered_refs, start) = super::compose_picker_panel(
+            &rows,
+            &refs,
+            &self.picker_filter,
+            self.picker_filtering,
+            self.picker_selected,
+            visible,
+            self.picker_start,
+        );
+        self.picker_refs = filtered_refs;
+        self.picker_start = start;
+        self.picker_panel_len = lines.len();
+        self.renderer
+            .set_overlay(Some((super::WORKSPACE_PICKER_OVERLAY_TITLE, lines)));
     }
 
     /// One key while the picker is up: the same modal-key shape the help
@@ -3111,8 +3244,11 @@ impl WindowSession {
         // Shift+arrow: swap with the pane in that direction. tmux's
         // swap-pane keeps focus following the pane's content, so no
         // re-select is needed — the %layout-change broadcast re-seeds the
-        // view with the focused pane in the new cell.
-        if ev.modifiers == crate::keyboard::modifiers::SHIFT {
+        // view with the focused pane in the new cell. The shift bit is
+        // matched loosely (a terminal may co-report other modifiers), and
+        // both outcomes flash on the status row so a no-op at an edge is
+        // never silent (the manual-pass report: the chord felt dead).
+        if ev.modifiers & crate::keyboard::modifiers::SHIFT != 0 {
             let dir = match ev.key() {
                 TermKey::Up => PaneDir::Up,
                 TermKey::Down => PaneDir::Down,
@@ -3125,9 +3261,13 @@ impl WindowSession {
             };
             let tree = self.tree_layout();
             let Some(next) = pane_in_direction(&tree, focused_id, dir) else {
+                self.flash = Some("no pane in that direction".to_string());
+                self.draw_status_row();
                 return;
             };
             let _ = conn.send_checked(&format!("swap-pane -s %{focused_id} -t %{next}"));
+            self.flash = Some(format!("swapped %{focused_id} with %{next}"));
+            self.draw_status_row();
             return;
         }
         if ev.modifiers != 0 {
@@ -3310,6 +3450,9 @@ impl WindowSession {
                 self.flash = Some(format!("border style: {}", self.border_glyphs.name()));
                 self.draw_status_row();
             }
+            super::ManagementKey::WorkspacePicker => {
+                self.enter_ws_picker(conn);
+            }
             super::ManagementKey::Labels => {
                 // Toggle each pane's title in its border: the session's
                 // bool flips, the flash cue confirms the new state, and
@@ -3353,8 +3496,15 @@ impl WindowSession {
         let next = (current as i32 + direction).rem_euclid(rows.len() as i32) as usize;
         let (ws_id, _, _) = &rows[next];
         let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
-        // Land on the workspace's session: its first listed session's
-        // active window, re-seeded (the select+resync contract).
+        self.land_on_workspace(conn, ws_id);
+    }
+
+    /// Land the view on `ws_id`: its first listed session's active
+    /// window, re-seeded (the select+resync contract every switch
+    /// follows). An empty workspace only marks the status stale — the
+    /// %workspaces-changed the select queued moves the strip's active
+    /// marker on the next frame.
+    fn land_on_workspace(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ws_id: &str) {
         let Ok(sessions) = conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
             return;
         };
@@ -3367,9 +3517,6 @@ impl WindowSession {
             .filter_map(|l| super::parse_session_line(l))
             .next()
         else {
-            // Empty workspace: nothing to land on. The %workspaces-changed
-            // the select queued marks the status stale, so the workspaces
-            // segment's active marker moves on the next frame.
             self.status_dirty = true;
             return;
         };

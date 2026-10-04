@@ -65,11 +65,15 @@ Per terminal, in passthrough then render mode, check:
   (label cells need the per-pane-box modes: `pane-borders` or herdr); the
   flash names on/off, and a rename (prefix `$`) shows up in the label.
 - **Arrow navigation** (render): prefix+arrows move focus to the pane in
-  that direction (side-by-side and stacked splits); at an edge nothing
-  moves. Shift+arrows swap with the pane in that direction — the two
-  panes exchange cells, focus following the content — and resize mode
-  (prefix `R`) reaches a divider on BOTH axes for panes nested under
-  cross-orientation splits.
+  that direction (side-by-side and stacked splits); at an edge the status
+  row says so. Shift+arrows swap with the pane in that direction — the two
+  panes exchange cells, focus following the content, a `swapped` flash
+  confirming — and resize mode (prefix `R`) reaches a divider on BOTH axes
+  for panes nested under cross-orientation splits.
+- **Workspace picker** (render): prefix `g` opens the ` workspaces ` modal —
+  one row per workspace, the active one marked; `/` filters, j/k and arrows
+  move, Enter lands on the workspace (its session's window re-seeds), a row
+  click activates, esc/q dismisses.
 - **Detach cleanliness**: prefix `d` in both modes; the prompt returns intact,
   colors and cursor normal, no leftover alt-screen or hidden cursor.
 - **SSH**: from another machine, `ssh <host>` then run the same attach

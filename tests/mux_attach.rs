@@ -746,24 +746,40 @@ fn render_mode_zoom_rename_border_chords() {
     );
 
     // prefix l toggles the pane labels; the flash names the new state.
+    // Labels default ON (the manual-pass ruling: titles show in their
+    // borders), so the first press turns them off.
     host.to_child.write_all(&[0x02, b'l']).expect("prefix l");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
+    let got = wait_for_output(&host, b"labels off", Duration::from_secs(10));
     assert!(
-        plain_text(&got).contains("labels on"),
-        "prefix l must flash labels on. stderr: {}",
+        plain_text(&got).contains("labels off"),
+        "prefix l must flash labels off. stderr: {}",
         stderr.lock().unwrap()
     );
     host.to_child
         .write_all(&[0x02, b'l'])
         .expect("prefix l again");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"labels off", Duration::from_secs(10));
+    let got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
     assert!(
-        plain_text(&got).contains("labels off"),
-        "prefix l again must flash labels off. stderr: {}",
+        plain_text(&got).contains("labels on"),
+        "prefix l again must flash labels on. stderr: {}",
         stderr.lock().unwrap()
     );
+
+    // prefix g opens the workspace picker: the themed modal titles itself
+    // ` workspaces ` with one row per workspace; Escape dismisses.
+    host.to_child.write_all(&[0x02, b'g']).expect("prefix g");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains(" workspaces "),
+        "prefix g must open the workspace picker. stderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.to_child.write_all(&[0x1b]).expect("escape picker");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(300));
 
     // Shift+arrow swaps with the pane in that direction: whichever side
     // holds focus, one of the two presses hits a neighbor and the roster's

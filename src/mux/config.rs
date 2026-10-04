@@ -164,6 +164,14 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub label_toggle: Option<String>,
+    /// The workspace-picker chord: the key matched after the prefix that
+    /// opens the workspace list modal (render mode).
+    #[serde(
+        default,
+        rename = "workspace-picker",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace_picker: Option<String>,
     /// The divider/border line style: `unicode` (default), `double`,
     /// `heavy`, or `ascii`. An unknown value warns and uses the
     /// default.
@@ -183,7 +191,7 @@ pub struct ClientSection {
     )]
     pub pane_borders: Option<bool>,
     /// The pane's user title embedded in its top border (only meaningful
-    /// with `pane-borders`). Default off.
+    /// with `pane-borders`). Default on.
     #[serde(
         default,
         rename = "show-label-in-border",
@@ -515,9 +523,10 @@ pub fn render(eff: &EffectiveConfig) -> String {
             rename_pane: None,
             border_cycle: None,
             label_toggle: None,
+            workspace_picker: None,
             border_lines: Some("unicode".to_string()),
             pane_borders: Some(false),
-            show_label_in_border: Some(false),
+            show_label_in_border: Some(true),
             pane_gaps: Some(0),
             scrollbar_gutter: Some(false),
             drag_cursor_shape: Some(false),
@@ -623,7 +632,7 @@ impl Chords {
             management: Management::default(),
             resize_step: 1,
             pane_borders: false,
-            show_label_in_border: false,
+            show_label_in_border: true,
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
@@ -681,6 +690,10 @@ pub struct Management {
     pub border_cycle: u8,
     /// Toggle pane titles embedded in the pane borders (render mode).
     pub label_toggle: u8,
+    /// Open the workspace picker modal — the session/window picker's
+    /// workspace sibling: the daemon's workspace roster, the current one
+    /// marked, keyboard and mouse navigable, Enter lands on it.
+    pub workspace_picker: u8,
 }
 
 impl Default for Management {
@@ -702,6 +715,7 @@ impl Default for Management {
             rename_pane: b'$',
             border_cycle: b'B',
             label_toggle: b'l',
+            workspace_picker: b'g',
         }
     }
 }
@@ -811,6 +825,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         label_toggle: match file.client.label_toggle.as_deref() {
             Some(chord) => management_key(chord, "label-toggle")?,
             None => current.management.label_toggle,
+        },
+        workspace_picker: match file.client.workspace_picker.as_deref() {
+            Some(chord) => management_key(chord, "workspace-picker")?,
+            None => current.management.workspace_picker,
         },
     };
     // A step the file names floors at 1 — a zero/negative step would make
@@ -1307,6 +1325,7 @@ remain-on-exit = true
                 rename_pane: b'$',
                 border_cycle: b'B',
                 label_toggle: b'l',
+                workspace_picker: b'g',
             }
         );
         // Full override, tmux spellings and literals alike.
