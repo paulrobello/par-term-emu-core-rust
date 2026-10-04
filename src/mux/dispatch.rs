@@ -1815,10 +1815,18 @@ mod tests {
             "the target-less size report must land, not error: {reply}"
         );
         // The resize broadcasts %layout-change to registered clients — here
-        // the one sink the test pushed into the registry.
-        let broadcast = sink_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("the resize broadcast a layout change");
+        // the one sink the test pushed into the registry. A ConPTY pane's
+        // init bytes (the ESC[6n probe, Windows) ride the same queue and
+        // can land first when the spawn is slow; skip anything that is not
+        // the layout change.
+        let broadcast = loop {
+            let item = sink_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the resize broadcast a layout change");
+            if item.starts_with("%layout-change") {
+                break item;
+            }
+        };
         assert!(
             broadcast.contains(&format!("%layout-change {second_window} ")),
             "the resize broadcasts geometry: {broadcast}"
