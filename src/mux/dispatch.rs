@@ -2101,7 +2101,7 @@ mod tests {
         let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
         let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
         assert_eq!(
-            unchanged, 5,
+            unchanged, 6,
             "an absent file leaves every setting unchanged: {reply}"
         );
         // The pure report over a written file: the moved/flipped settings

@@ -1264,8 +1264,8 @@ sections; the numbers live here.
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:79` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:88` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:81` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:90` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |

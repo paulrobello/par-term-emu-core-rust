@@ -61,7 +61,9 @@ const PERSIST_POLL: Duration = Duration::from_millis(200);
 /// emptied daemon and immediately reconnects (or creates a session) resets
 /// the clock, and a logout's SIGTERM — which follows pane deaths within
 /// moments — beats the grace, so the reboot-race resurrection
-/// ([`SaveOrigin::Shutdown`]) stays intact.
+/// ([`SaveOrigin::Shutdown`]) stays intact. `daemon.exit-empty = false`
+/// (the live config) holds the daemon past the grace however long it sits
+/// empty.
 #[cfg(not(test))]
 const EXIT_EMPTY_GRACE: Duration = Duration::from_secs(5);
 
@@ -312,7 +314,8 @@ impl MuxServer {
         let mut last_reap = std::time::Instant::now();
         // When the daemon (persisting only) first observed zero sessions AND
         // zero clients — reset to None the moment either returns. Held past
-        // EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty].
+        // EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty] (when
+        // `daemon.exit-empty` is on, the default; off, it never fires).
         let mut empty_since: Option<std::time::Instant> = None;
         let mut exit = LoopExit::Requested;
 
@@ -381,8 +384,16 @@ impl MuxServer {
                     // Exit-when-empty, the persisting daemon only: an
                     // embedded `run()` server serves until stopped, whatever
                     // it holds. Both locks are taken and released one at a
-                    // time — never nested.
-                    if state_path.is_some() {
+                    // time — never nested. `daemon.exit-empty = false` (the
+                    // live applied config) skips the check entirely; a
+                    // server without an applied config keeps the built-in
+                    // on default.
+                    if state_path.is_some()
+                        && self
+                            .config
+                            .as_ref()
+                            .is_none_or(|config| config.lock().exit_empty)
+                    {
                         // "Empty" counts a tree whose every pane is dead
                         // too: held panes (remain-on-exit) are for clients
                         // that might come back — with nobody connected and
@@ -2279,6 +2290,35 @@ mod tests {
         done_rx
             .recv_timeout(std::time::Duration::from_secs(30))
             .expect("the daemon exits after its last client leaves");
+    }
+
+    /// `daemon.exit-empty = false` (the live applied config) holds an empty
+    /// persisting daemon past the grace: it must not exit where the default
+    /// does — the exit test above runs the same shape without a published
+    /// config.
+    #[cfg(unix)]
+    #[test]
+    fn exit_empty_false_keeps_an_empty_persisting_server_alive() {
+        let dir = temp_dir();
+        let path = dir.path().join("exit-empty-off.sock");
+        let state_path = dir.path().join("state.json");
+        let mut server = MuxServer::bind(&path).expect("bind");
+        let config = EffectiveConfig {
+            exit_empty: false,
+            ..EffectiveConfig::default()
+        };
+        server.set_config(Arc::new(Mutex::new(config)));
+        let (done_tx, done_rx) = channel();
+        std::thread::spawn(move || {
+            server.run_persisting(state_path);
+            let _ = done_tx.send(());
+        });
+
+        // Triple the grace (test value: 300 ms): a default-config daemon
+        // exits within it, so the knob is what holds this one up.
+        done_rx
+            .recv_timeout(std::time::Duration::from_millis(900))
+            .expect_err("exit-empty=false holds the empty daemon past the grace");
     }
 
     /// Card 01a0d9b2fd2c: an inherited 256-descriptor soft limit must not

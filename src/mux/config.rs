@@ -199,6 +199,16 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub remain_on_exit: Option<bool>,
+    /// Exit the daemon when it holds zero sessions and zero clients,
+    /// after a short grace (tmux's `exit-empty`). `true` (the default)
+    /// matches the built-in behavior; `false` keeps a persisting daemon
+    /// alive however long it sits empty.
+    #[serde(
+        default,
+        rename = "exit-empty",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub exit_empty: Option<bool>,
 }
 
 /// The fully resolved settings after flags > env > file > defaults.
@@ -225,6 +235,11 @@ pub struct EffectiveConfig {
     /// once (it takes effect at the next observed death), everything
     /// else is restart-required.
     pub remain_on_exit: bool,
+    /// Exit the daemon when it holds zero sessions and zero clients,
+    /// after a short grace. The second live daemon setting: the accept
+    /// loop re-reads the applied copy every tick, so `reload-config`
+    /// applies a changed value without a restart.
+    pub exit_empty: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -238,6 +253,7 @@ impl Default for EffectiveConfig {
             pane_endpoints: false,
             expose_control_socket: false,
             remain_on_exit: false,
+            exit_empty: true,
         }
     }
 }
@@ -304,6 +320,9 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     }
     if let Some(v) = file.daemon.remain_on_exit {
         eff.remain_on_exit = v;
+    }
+    if let Some(v) = file.daemon.exit_empty {
+        eff.exit_empty = v;
     }
     eff
 }
@@ -411,6 +430,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             pane_endpoints: Some(eff.pane_endpoints),
             expose_control_socket: Some(eff.expose_control_socket),
             remain_on_exit: Some(eff.remain_on_exit),
+            exit_empty: Some(eff.exit_empty),
         },
     };
     let mut out = String::from(
@@ -699,11 +719,11 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
 /// flag is an override the file cannot express, so it never reads back
 /// as a change).
 ///
-/// `daemon.remain-on-exit` is the one LIVE setting: a stated difference is
-/// applied to `applied` (the daemon's next observed death honors it) and
-/// reported `applied:`; every other stated difference is
-/// `restart-required:` — the socket and the persist path are fixed at
-/// bind, so nothing else applies live.
+/// `daemon.remain-on-exit` and `daemon.exit-empty` are the LIVE settings: a
+/// stated difference is applied to `applied` and reported `applied:`;
+/// every other stated difference is `restart-required:` — the socket and
+/// the persist path are fixed at bind, and the boot-tier bools (pane
+/// endpoints, expose-control-socket) decide how the daemon was built.
 pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -> String {
     let Some(file) = file else {
         // Absent file: nothing changed.
@@ -713,6 +733,7 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "unchanged: daemon.pane-endpoints",
             "unchanged: daemon.expose-control-socket",
             "unchanged: daemon.remain-on-exit",
+            "unchanged: daemon.exit-empty",
         ]
         .join("\n");
     };
@@ -757,6 +778,13 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "applied: daemon.remain-on-exit".to_string()
         }
         _ => "unchanged: daemon.remain-on-exit".to_string(),
+    });
+    lines.push(match file.daemon.exit_empty {
+        Some(v) if v != applied.exit_empty => {
+            applied.exit_empty = v;
+            "applied: daemon.exit-empty".to_string()
+        }
+        _ => "unchanged: daemon.exit-empty".to_string(),
     });
     lines.join("\n")
 }
@@ -925,14 +953,15 @@ remain-on-exit = true
             pane_endpoints: true,
             expose_control_socket: true,
             remain_on_exit: true,
+            exit_empty: true,
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);
     }
 
-    /// remain-on-exit is the one LIVE daemon setting: a stated difference is
-    /// applied to the applied copy and reported `applied:`; the same value
-    /// or an absent key stays `unchanged:`.
+    /// remain-on-exit and exit-empty are the LIVE daemon settings: a stated
+    /// difference is applied to the applied copy and reported `applied:`;
+    /// the same value or an absent key stays `unchanged:`.
     #[test]
     fn reload_applies_remain_on_exit_live() {
         let mut applied = EffectiveConfig::default();
@@ -955,6 +984,34 @@ remain-on-exit = true
             "flipping back applies too: {report}"
         );
         assert!(!applied.remain_on_exit, "the applied copy moved back");
+    }
+
+    /// exit-empty behaves identically: a stated difference applies live
+    /// (`applied:`), the same value stays `unchanged:`.
+    #[test]
+    fn reload_applies_exit_empty_live() {
+        let mut applied = EffectiveConfig::default();
+        let file: ConfigFile = toml::from_str("[daemon]\nexit-empty = false").unwrap();
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("applied: daemon.exit-empty"),
+            "a stated difference applies live: {report}"
+        );
+        assert!(!applied.exit_empty, "the applied copy moved");
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("unchanged: daemon.exit-empty"),
+            "the same value is unchanged: {report}"
+        );
+    }
+
+    /// exit-empty's default is ON — exit-when-empty ships enabled, as
+    /// before the knob existed.
+    #[test]
+    fn exit_empty_defaults_to_on() {
+        assert!(EffectiveConfig::default().exit_empty);
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert!(eff.exit_empty);
     }
 
     /// The product default: remain-on-exit is OFF (auto-remove) — both the

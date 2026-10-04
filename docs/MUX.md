@@ -214,6 +214,7 @@ state-dir = ""        # empty = the OS default state directory
 pane-endpoints = false
 expose-control-socket = false
 remain-on-exit = false  # hold a pane whose child exited instead of removing it (the attach respawn cue)
+exit-empty = true       # exit the daemon after the grace when it holds no sessions and no clients
 ```
 
 Every setting maps to an existing flag or resolution rule: `[client]` keys
@@ -233,7 +234,8 @@ setting:
 | `client.resize-step` | **Live** — cells per resize step; a file value below 1 clamps to 1. |
 | `client.mode` | Startup-only — changing it needs a re-attach. |
 | `daemon.socket` | Startup-only by definition (the socket is bound at start). |
-| `daemon.remain-on-exit` | **Live** — the one live daemon setting: a `reload-config` whose file states a different value applies it at once and reports `applied: daemon.remain-on-exit`; the NEXT observed death honors it (the reaper reads the flag at every pass). |
+| `daemon.remain-on-exit` | **Live** — a `reload-config` whose file states a different value applies it at once and reports `applied: daemon.remain-on-exit`; the NEXT observed death honors it (the reaper reads the flag at every pass). |
+| `daemon.exit-empty` | **Live** — a stated difference applies at once (`applied: daemon.exit-empty`); the accept loop re-reads the applied copy every idle tick, so an off daemon holds past the grace without a restart. |
 | `daemon.pane-endpoints` / `daemon.expose-control-socket` | Startup-only in v1 (reported as restart-required). |
 | `daemon.state-dir` | Startup-only — the daemon resolves the persist path once at startup and the persist worker writes to that fixed path. |
 
@@ -242,9 +244,10 @@ There are three reload entry points:
 - **Control command `reload-config`** (no arguments — it always re-reads
   the canonical path): the daemon re-reads the file and replies one line
   per `[daemon]` setting, `unchanged: <name>` or
-  `restart-required: <name>` — except `daemon.remain-on-exit`, the one
-  live setting: a stated difference is applied at once and reported
-  `applied: daemon.remain-on-exit`. The file speaks only for settings it
+  `restart-required: <name>` — except `daemon.remain-on-exit` and
+  `daemon.exit-empty`, the live settings: a stated difference is applied
+  at once and reported `applied: daemon.remain-on-exit` /
+  `applied: daemon.exit-empty`. The file speaks only for settings it
   actually states — a setting absent from the file is `unchanged`, which
   is what keeps a daemon started with one-shot `--socket`/`--state-dir`
   flags quiet. A PRESENT file that fails to parse is a `%error` (the
@@ -263,7 +266,8 @@ There are three reload entry points:
   run). Never overwrites an existing file without `--force`. The
   location follows `$PAR_MUX_CONFIG` / the platform config dir.
 
-`reload-config` mutates nothing except `daemon.remain-on-exit` — it is
+`reload-config` mutates nothing except `daemon.remain-on-exit` and
+`daemon.exit-empty` — it is
 otherwise the report of what WOULD change plus the client-side live
 rebinds above; a restart (`par-mux --restart`) applies restart-required
 daemon settings.
@@ -366,7 +370,7 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t <pane>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
-| `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit` when the file flips remain-on-exit), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | — |
+| `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit`/`applied: daemon.exit-empty` when the file flips either), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | — |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:
@@ -555,7 +559,7 @@ A structurally killed pane is reaped at kill time instead: `PtySession::kill` fo
 ## Shutdown Semantics
 
 - **SIGTERM**: the handler makes one atomic store on the server's per-instance shutdown flag. The accept loop notices on its idle tick, broadcasts `%exit` to every client, and a final save captures content that arrived since the last structural save.
-- **Exit-when-empty** (tmux's `exit-empty`, persisting daemon only): a daemon with zero clients and either zero sessions ACROSS ALL WORKSPACES (an empty workspace alone never keeps it alive — and once a workspace's last session dies the workspace itself is removed, so a bare `new-workspace` in an otherwise empty daemon only postpones the exit by the grace) or only dead panes, continuously for a 5 s grace, exits through the ordinary shutdown path — `%exit`, final save — with no one asking. The grace is what keeps the two races it could lose won instead: a client that reconnects (or creates a session) resets the clock, and a logout's SIGTERM, which follows pane deaths within moments, requests the exit first so the final save keeps `Shutdown` semantics (last-good snapshot preserved for the reboot-race resurrection). An exit-when-empty save carries the `ShutdownEmpty` origin instead. An empty tree clears the snapshot: everything was closed deliberately, so the next start is fresh rather than a resurrection of panes whose processes the user watched exit. An all-dead tree still holds its panes (remain-on-exit on), so the save refreshes the snapshot and the next start restores them held dead (see [Pane Reaping](#pane-reaping)); with remain-on-exit off the dead pane is removed at the reaper before any save, so an emptied tree exits-when-empty and the next start is fresh. A restored all-dead tree with no client exits again after the same grace. Consequences of the semantics: a bare `par-mux <name>` started with nothing to restore exits after the grace, and a one-shot `--cmd` client that finds an empty daemon ends it a grace after disconnecting. An embedded `MuxServer::run()` (no persistence) never exits-when-empty — it serves until stopped.
+- **Exit-when-empty** (tmux's `exit-empty`, persisting daemon only): a daemon with zero clients and either zero sessions ACROSS ALL WORKSPACES (an empty workspace alone never keeps it alive — and once a workspace's last session dies the workspace itself is removed, so a bare `new-workspace` in an otherwise empty daemon only postpones the exit by the grace) or only dead panes, continuously for a 5 s grace, exits through the ordinary shutdown path — `%exit`, final save — with no one asking. The grace is what keeps the two races it could lose won instead: a client that reconnects (or creates a session) resets the clock, and a logout's SIGTERM, which follows pane deaths within moments, requests the exit first so the final save keeps `Shutdown` semantics (last-good snapshot preserved for the reboot-race resurrection). An exit-when-empty save carries the `ShutdownEmpty` origin instead. An empty tree clears the snapshot: everything was closed deliberately, so the next start is fresh rather than a resurrection of panes whose processes the user watched exit. An all-dead tree still holds its panes (remain-on-exit on), so the save refreshes the snapshot and the next start restores them held dead (see [Pane Reaping](#pane-reaping)); with remain-on-exit off the dead pane is removed at the reaper before any save, so an emptied tree exits-when-empty and the next start is fresh. A restored all-dead tree with no client exits again after the same grace. Consequences of the semantics: a bare `par-mux <name>` started with nothing to restore exits after the grace, and a one-shot `--cmd` client that finds an empty daemon ends it a grace after disconnecting. An embedded `MuxServer::run()` (no persistence) never exits-when-empty — it serves until stopped. `[daemon] exit-empty = false` (live via `reload-config`) disables the behavior entirely — the daemon sits empty indefinitely; the 5 s grace and its race protections apply whenever it is on (the default).
 - **`kill-server`**: the client-initiated equivalent of SIGTERM — raises the same shutdown flag, so it takes the identical path (reply out, accept loop exits, final save, `%exit` to clients). `par-mux --stop`/`--restart` (see [Command Line](#command-line)) send this and wait for the socket to stop accepting.
 - **Ignored signals** (Unix): SIGHUP, SIGINT, SIGQUIT, SIGTSTP, and SIGPIPE are installed as ignored while serving, so a terminal hangup or stray Ctrl-C/Ctrl-Z cannot stop a daemon whose panes outlive any one terminal (tmux's server does the same). The auto-spawned daemon additionally starts in its own session with no controlling tty (`setsid` in `spawn_daemon`), so terminal-generated signals never reach it in the first place.
 - **Accept faults**: EMFILE, ENFILE, and ECONNABORTED on accept back off for a second and keep serving (tmux's server pauses on ENFILE/EMFILE the same way), so a burst of connections cannot end the daemon. Any other listener fault is logged and takes the same final-save path as SIGTERM before exiting — an accept error never silently discards unsaved work. The fault raises the shutdown flag just as SIGTERM does, so the exit waits only for the in-flight save to drain (bounded by the persist worker's poll) — never on connected clients, whose handler threads each hold a persist-sender clone a silent client would never drop. Both the fault exit and the SIGTERM exit drain in-flight saves before the process ends.
