@@ -1272,7 +1272,13 @@ fn reload_config_command_reaches_a_live_daemon() {
     // flag tier named fixture2's own dir; the file names a sibling), so
     // the reload's diff has something to report.
     let stated = fixture2.state_dir().join("moved").display().to_string();
-    std::fs::write(&config, format!("[daemon]\nstate-dir = \"{stated}\"\n")).expect("write config");
+    // TOML basic strings escape backslashes; Windows paths are all backslashes.
+    let stated_toml = stated.replace('\\', "\\\\");
+    std::fs::write(
+        &config,
+        format!("[daemon]\nstate-dir = \"{stated_toml}\"\n"),
+    )
+    .expect("write config");
     let run = par_mux(&["--socket", socket2_str, "--cmd", "reload-config"]);
     assert_eq!(run.code, Some(0), "{}{}", run.stdout, run.stderr);
     assert!(
