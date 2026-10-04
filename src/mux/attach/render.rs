@@ -3660,12 +3660,8 @@ impl WindowSession {
     /// open, and on every status refresh while the panel is up (the
     /// `%workspaces-changed` mark rides the same throttle).
     fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let probe = conn.send_checked("list-workspaces");
-        eprintln!(
-            "SIDEBAR-PROBE ok={:?}",
-            probe.as_ref().map(|r| (r.ok, r.body.clone()))
-        );
-        let mut workspaces: Vec<(String, String, bool)> = probe
+        let mut workspaces: Vec<(String, String, bool)> = conn
+            .send_checked("list-workspaces")
             .ok()
             .filter(|reply| reply.ok)
             .map(|reply| {
