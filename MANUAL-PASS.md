@@ -4,20 +4,13 @@ Human pass over the attach client in real terminal emulators — the ship
 gate's manual integration criterion. Build (from the repo root) and seed:
 
 ```sh
-cargo build --release --bin par-mux --no-default-features --features mux-bin,attach
-P=target/release/par-mux
-($P --socket /tmp/manual-mux >/tmp/manual-mux.log 2>&1 &)
-sleep 0.5
-$P --socket /tmp/manual-mux --cmd "new-session -s demo"
-PANE=$($P --socket /tmp/manual-mux --cmd list-panes | head -1)
-$P --socket /tmp/manual-mux --cmd "split-window -t $PANE -h"
+make mux-manual-seed
 ```
 
-`--cmd` never starts a daemon, so launch it first and seed promptly — a
-daemon holding zero sessions and zero clients exits after 5 s (tmux-style
-exit-empty). Do not assume the first pane is `%0`: id counters resume from
-the saved state, so a socket that has run before starts its ids where the
-last run left off — discover the live id with `list-panes`.
+The target builds the attach daemon, restarts the seed daemon on
+`/tmp/manual-mux` deterministically (`--stop` on the way in), creates the
+`demo` session, splits it, and prints the first pane's id — ids resume from
+saved counters, so never assume `%0`.
 
 Client control commands ride `--cmd` (the daemon's clap layer does not take
 them bare). Prefer typing into the panes interactively once attached — that
@@ -27,6 +20,8 @@ LEFT` types `echoLEFT`); use the hex form for text with spaces (`-H` takes
 space-separated hex byte pairs):
 
 ```sh
+P=target/release/par-mux
+PANE=$($P --socket /tmp/manual-mux --cmd list-panes | head -1)
 $P --socket /tmp/manual-mux --cmd "send-keys -t $PANE -H 65 63 68 6f 20 4c 45 46 54"   # "echo LEFT"
 $P --socket /tmp/manual-mux --cmd "send-keys -t $PANE Enter"
 ```

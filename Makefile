@@ -2,6 +2,7 @@
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check doc-links-check release-check audit-deps \
+        mux-manual-seed \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -59,6 +60,7 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
+	@echo "  mux-manual-seed - Build the attach daemon and seed the MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
 	@echo "  audit-deps      - cargo deny + bun audit + pip-audit across Rust, web frontend and Python (needs network; not part of checkall)"
@@ -402,6 +404,22 @@ ffi-surface-check:
 mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
+
+# Seed the MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
+# split demo session, ready to attach from the terminal under test. Re-runs
+# restart the seed (a --stop on the way in makes it deterministic); pane
+# ids resume from saved counters, so the split targets the pane id
+# `list-panes` reports, never a hardcoded %0.
+mux-manual-seed:
+	@cargo build --release --bin par-mux --no-default-features --features mux-bin,attach && \
+	P=target/release/par-mux; \
+	$$P --socket /tmp/manual-mux --stop >/dev/null 2>&1 || true; \
+	($$P --socket /tmp/manual-mux >/tmp/manual-mux.log 2>&1 &); \
+	sleep 0.5; \
+	$$P --socket /tmp/manual-mux --cmd "new-session -s demo" && \
+	PANE=$$($$P --socket /tmp/manual-mux --cmd list-panes | head -1) && \
+	$$P --socket /tmp/manual-mux --cmd "split-window -t $$PANE -h" && \
+	echo "Seeded: target/release/par-mux attach --socket /tmp/manual-mux  (session demo, first pane $$PANE)"
 
 # ENH-035: offline intra-repo link + GitHub-slug anchor check over the
 # shipped docs. External URLs are skipped (--offline). The non-recursive
