@@ -2944,7 +2944,11 @@ mod tests {
     /// window, so a window restored at another size never resized and its
     /// child ran at the stale height (the manual-pass htop report; render
     /// mode's switch path has always reported). The report precedes the
-    /// replay — the replay must encode the post-resize screen.
+    /// replay — the replay must encode the post-resize screen. Unix-only:
+    /// the assert pins `terminal_grid`'s non-tty (80, 24) fallback (an
+    /// interactive Windows console session reports its real grid —
+    /// measured on the Windows VM, 2026-10-04).
+    #[cfg(unix)]
     #[test]
     fn resync_size_reports_the_target_window_before_the_replay() {
         let (_daemon, path) = FakeDaemon::bind("resync-size");

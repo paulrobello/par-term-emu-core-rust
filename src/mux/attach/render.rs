@@ -5318,7 +5318,11 @@ mod tests {
     /// diff one host row down, and places the cursor one host row below
     /// its renderer-mapped cell — the strip's height consumers, pinned.
     /// (`terminal_grid` is 80x24 headless, so the session is built for a
-    /// 24-row host: strip 0, panes 1..=22, status 23.)
+    /// 24-row host: strip 0, panes 1..=22, status 23.) Unix-only: the
+    /// assertion pins the non-tty (80, 24) fallback — an interactive
+    /// Windows console session reports its real grid and the bottom row
+    /// lands elsewhere (measured on the Windows VM, 2026-10-04).
+    #[cfg(unix)]
     #[test]
     fn frame_flushes_the_strip_at_row_zero_and_rebases_the_panes() {
         let mut session = WindowSession::new(80, 24);
