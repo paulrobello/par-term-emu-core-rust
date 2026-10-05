@@ -4342,13 +4342,16 @@ mod tests {
             .lines()
             .find(|l| l.contains("svc") && !l.starts_with('%'))
             .expect("a session line");
-        assert_eq!(body, "+0: dev: $0: svc", "the documented line shape");
+        // new-workspace auto-spawns the workspace's first session ($0,
+        // named after the workspace), so an explicit new-session lands as
+        // $1.
+        assert_eq!(body, "+0: dev: $1: svc", "the documented line shape");
 
         // The workspace filter restricts the listing; a wrong one errors.
         dispatch("new-workspace -n other", 4, &tree, &clients, None);
         dispatch("new-session -t other -s side", 5, &tree, &clients, None);
         let reply = dispatch("list-sessions -t +0", 6, &tree, &clients, None);
-        assert!(reply.contains("+0: dev: $0: svc"));
+        assert!(reply.contains("+0: dev: $1: svc"));
         assert!(!reply.contains("side"), "filtered to workspace +0");
         let reply = dispatch("list-sessions -t other", 7, &tree, &clients, None);
         assert!(reply.contains("side"));
@@ -4379,7 +4382,8 @@ mod tests {
         {
             let guard = tree.lock();
             assert!(guard.workspace(WorkspaceId(0)).is_none());
-            assert_eq!(guard.sessions().len(), 1, "only 'side' survives");
+            // 'other' carries its auto-spawned first session plus 'side'.
+            assert_eq!(guard.sessions().len(), 2, "only 'other' survives");
         }
         let lines = drain_broadcasts(&rx);
         let closes = lines
@@ -4397,13 +4401,13 @@ mod tests {
             .expect("workspace roster cue");
         assert!(sessions < workspaces, "session cue precedes workspace cue");
 
-        // A workspace holding exactly one session, then killing that
-        // session via kill-session removes the emptied workspace — and
-        // cues the workspace roster.
+        // A workspace holding exactly one session — new-workspace's
+        // auto-spawned first session — then killing that session via
+        // kill-session removes the emptied workspace — and cues the
+        // workspace roster.
         dispatch("new-workspace -n transient", 12, &tree, &clients, None);
-        dispatch("new-session -s solo", 13, &tree, &clients, None);
         let _ = drain_broadcasts(&rx);
-        dispatch("kill-session -t solo", 14, &tree, &clients, None);
+        dispatch("kill-session -t transient", 14, &tree, &clients, None);
         let lines = drain_broadcasts(&rx);
         assert!(
             lines.iter().any(|l| l.starts_with("%workspaces-changed")),
