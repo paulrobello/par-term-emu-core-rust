@@ -1962,6 +1962,13 @@ pub(crate) const NEW_PROMPT_FOOTER: &str = " enter save · ^c clear · esc cance
 /// `+` button).
 pub(crate) const PROMPT_NEW_WINDOW_OVERLAY_TITLE: &str = " new tab ";
 
+/// The modal overlay's title for the rename-workspace prompt.
+pub(crate) const PROMPT_WORKSPACE_OVERLAY_TITLE: &str = " rename workspace ";
+
+/// The modal overlay's title for the new-workspace prompt (the panel's
+/// ` new ` chip).
+pub(crate) const PROMPT_NEW_WORKSPACE_OVERLAY_TITLE: &str = " new workspace ";
+
 /// Spell a NAME for the control wire: unconditional single quotes, the
 /// embedded-quote `'\''` idiom — the same bounded quoting grammar the
 /// daemon's parser (`shell_split`) and `agent_resume::render_argv` use,
@@ -1981,6 +1988,25 @@ pub(crate) fn next_window_name(windows: &[(String, String)]) -> String {
     let mut candidate = windows
         .iter()
         .filter_map(|(id, _)| id.trim_start_matches('@').parse::<u32>().ok())
+        .max()
+        .map_or(1, |max| max + 1);
+    while used.contains(candidate.to_string().as_str()) {
+        candidate += 1;
+    }
+    candidate.to_string()
+}
+
+/// The new-workspace prompt's editable default: the roster's next free
+/// index — one past the highest workspace ordinal, bumped past any
+/// workspace NAME that already claims the number (the same
+/// non-conflicting rule [`next_window_name`] runs over the windows).
+/// Pure over the queried workspaces — the unit-test surface.
+pub(crate) fn next_workspace_name(workspaces: &[(String, String)]) -> String {
+    let used: std::collections::HashSet<&str> =
+        workspaces.iter().map(|(_, name)| name.as_str()).collect();
+    let mut candidate = workspaces
+        .iter()
+        .filter_map(|(id, _)| id.trim_start_matches('+').parse::<u32>().ok())
         .max()
         .map_or(1, |max| max + 1);
     while used.contains(candidate.to_string().as_str()) {
@@ -2235,33 +2261,48 @@ pub(crate) fn compose_picker_panel(
     (panel, content_refs, start)
 }
 
-/// One section of the workspace side panel: a title row and its entries.
-/// The panel renders sections top-down — workspaces first; more sections
-/// (agent rosters, workspace detail) slot in after.
+/// One section of the workspace side panel: the entries top-down. The
+/// panel renders sections top-down — workspaces first; more sections
+/// slot in after. The section title moved to the tab strip's lead
+/// segment (round 6), so the section carries only its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarSection {
-    pub title: String,
     /// `(id, label, active)` per row; `id` is what a click lands on.
     pub rows: Vec<(String, String, bool)>,
 }
 
-/// One composed sidebar line: buffer-row-relative `y`, the text, whether
-/// it is a section header, and the id a click activates (`None` for
-/// headers and filler).
+/// One composed sidebar line: buffer-row-relative `y`, the clickable
+/// column span `[span.0, span.1)` within the strip (body rows span the
+/// content width, the footer chips exactly their cells), the text,
+/// whether it paints from a non-zero column, and the id a click
+/// activates (`None` for filler).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarLine {
     pub y: u16,
+    /// The text's leftmost column (0 for body rows, the chips' cells
+    /// for the footer row).
+    pub x: u16,
+    /// The clickable columns `[x, x_end)` — the click hit-test's span.
+    pub x_end: u16,
     pub text: String,
-    pub header: bool,
     pub id: Option<String>,
     /// The active entry: painted as herdr's full-width inverted block.
     pub active: bool,
 }
 
-/// Compose the side panel's lines from its sections: each section's
-/// header row, then its rows (`>`- and `*`-marked when active), a blank
-/// line between sections, everything clipped to `width - 1` columns (the
-/// divider column owns the strip's right edge) and `height` rows. Pure —
+/// The side panel's footer chips: ` new ` opens the new-workspace
+/// prompt, ` menu ` the active workspace's menu. The ids flow through
+/// [`SidebarLine.id`] into the click dispatch.
+pub(crate) const SIDEBAR_NEW_ID: &str = "panel:new";
+pub(crate) const SIDEBAR_MENU_ID: &str = "panel:menu";
+
+/// Compose the side panel's lines from its sections: the rows top-down
+/// (NO section header rows — the title lives in the tab strip's lead
+/// segment since round 6, so workspace rows start at composed row 0 =
+/// host row 1), clipped to `width - 1` columns (the divider column
+/// owns the strip's right edge), plus a footer row pinned to the
+/// panel's LAST row: ` new ` bottom-left and ` menu ` bottom-right
+/// (the mock's panel shape; each chip its own clickable span). Pure —
 /// the unit-test surface.
 pub(crate) fn compose_sidebar(
     sections: &[SidebarSection],
@@ -2270,50 +2311,56 @@ pub(crate) fn compose_sidebar(
 ) -> Vec<SidebarLine> {
     let mut lines: Vec<SidebarLine> = Vec::new();
     let max = usize::from(height);
+    if max == 0 {
+        return lines;
+    }
     let text_width = usize::from(width.saturating_sub(1));
-    let push = |lines: &mut Vec<SidebarLine>,
-                y: u16,
-                text: String,
-                header: bool,
-                id: Option<String>,
-                active: bool| {
-        if lines.len() >= max {
-            return;
-        }
-        let text: String = text.chars().take(text_width).collect();
-        lines.push(SidebarLine {
-            y,
-            text,
-            header,
-            id,
-            active,
-        });
-    };
-    let mut y = 0u16;
-    for (si, section) in sections.iter().enumerate() {
-        push(
-            &mut lines,
-            y,
-            format!(" {} ", section.title),
-            true,
-            None,
-            false,
-        );
-        y += 1;
+    // Body rows fill everything above the footer row.
+    let body_cap = max - 1;
+    for section in sections {
         for (id, label, active) in &section.rows {
+            if lines.len() >= body_cap {
+                break;
+            }
             let marker = if *active { "▸" } else { " " };
-            push(
-                &mut lines,
-                y,
-                format!(" {marker} {label}"),
-                false,
-                Some(id.clone()),
-                *active,
-            );
-            y += 1;
+            let text: String = format!(" {marker} {label}")
+                .chars()
+                .take(text_width)
+                .collect();
+            lines.push(SidebarLine {
+                y: lines.len() as u16,
+                x: 0,
+                x_end: width.saturating_sub(1),
+                text,
+                id: Some(id.clone()),
+                active: *active,
+            });
         }
-        if si + 1 < sections.len() {
-            y += 1; // blank line between sections
+    }
+    // The footer chips pin to the panel's last row; a strip too narrow
+    // for a chip drops it.
+    let footer_y = (max - 1) as u16;
+    let new_chip = " new ";
+    if text_width >= new_chip.len() {
+        lines.push(SidebarLine {
+            y: footer_y,
+            x: 0,
+            x_end: new_chip.len() as u16,
+            text: new_chip.to_string(),
+            id: Some(SIDEBAR_NEW_ID.to_string()),
+            active: false,
+        });
+        let menu_chip = " menu ";
+        if text_width >= new_chip.len() + menu_chip.len() {
+            let mx = text_width - menu_chip.len();
+            lines.push(SidebarLine {
+                y: footer_y,
+                x: mx as u16,
+                x_end: text_width as u16,
+                text: menu_chip.to_string(),
+                id: Some(SIDEBAR_MENU_ID.to_string()),
+                active: false,
+            });
         }
     }
     lines
@@ -3947,43 +3994,101 @@ mod tests {
         );
     }
 
+    /// The sidebar compose after round 6: NO section header rows (the
+    /// title moved to the tab strip's lead segment), workspace rows
+    /// start at composed row 0, and the footer row pins ` new ` to the
+    /// panel's bottom-left and ` menu ` to its bottom-right — each chip
+    /// its own clickable span and id.
+    #[test]
+    fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
+        let sections = vec![super::SidebarSection {
+            rows: vec![
+                ("+0".to_string(), "main".to_string(), true),
+                ("+1".to_string(), "dev".to_string(), false),
+                (
+                    "+2".to_string(),
+                    "a very long workspace name".to_string(),
+                    false,
+                ),
+            ],
+        }];
+        let lines = super::compose_sidebar(&sections, 20, 12);
+        // Row 0 is the first workspace — no header row above it.
+        assert_eq!(lines[0].text, " ▸ main");
+        assert_eq!(lines[0].id.as_deref(), Some("+0"));
+        assert!(lines[0].active, "the active row is flagged");
+        assert_eq!(lines[1].text, "   dev");
+        assert_eq!(lines[1].id.as_deref(), Some("+1"));
+        assert_eq!(lines[2].text, "   a very long work", "clipped to width - 1");
+        // The footer chips pin to the panel's LAST row (footer_y = 11 of
+        // 12 rows), never at a body row's position.
+        let new_chip = lines
+            .iter()
+            .find(|l| l.id.as_deref() == Some(super::SIDEBAR_NEW_ID))
+            .expect("the new chip composes");
+        assert_eq!(new_chip.y, 11);
+        assert_eq!(new_chip.text, " new ");
+        assert_eq!((new_chip.x, new_chip.x_end), (0, 5));
+        let menu_chip = lines
+            .iter()
+            .find(|l| l.id.as_deref() == Some(super::SIDEBAR_MENU_ID))
+            .expect("the menu chip composes");
+        assert_eq!(menu_chip.text, " menu ");
+        assert_eq!(
+            (menu_chip.x, menu_chip.x_end),
+            (13, 19),
+            "bottom-right of the 19-col content"
+        );
+        // A strip too narrow for both chips drops the one that does not
+        // fit; a strip too narrow for either drops both.
+        let narrow = super::compose_sidebar(&sections, 7, 4);
+        assert!(
+            narrow
+                .iter()
+                .any(|l| l.id.as_deref() == Some(super::SIDEBAR_NEW_ID)),
+            "the new chip fits a 6-col content: {narrow:?}"
+        );
+        assert!(
+            !narrow
+                .iter()
+                .any(|l| l.id.as_deref() == Some(super::SIDEBAR_MENU_ID)),
+            "the menu chip does not fit: {narrow:?}"
+        );
+        let tiny = super::compose_sidebar(&sections, 4, 3);
+        assert!(
+            !tiny
+                .iter()
+                .any(|l| l.id.as_deref().is_some_and(|id| id.starts_with("panel:"))),
+            "no chips fit a 3-col content: {tiny:?}"
+        );
+    }
+
+    /// The new-workspace prompt's default bumps past conflicts: one past
+    /// the highest workspace ordinal, and past any workspace NAME that
+    /// already claims the number (the same rule next_window_name runs).
+    #[test]
+    fn next_workspace_name_bumps_past_conflicts() {
+        assert_eq!(super::next_workspace_name(&[]), "1");
+        let roster = vec![
+            ("+1".to_string(), "1".to_string()),
+            ("+2".to_string(), "3".to_string()),
+        ];
+        assert_eq!(
+            super::next_workspace_name(&roster),
+            "4",
+            "one past the max ordinal, bumped past the claimed name '3'"
+        );
+        let claimed = vec![("+1".to_string(), "2".to_string())];
+        assert_eq!(
+            super::next_workspace_name(&claimed),
+            "3",
+            "a claimed default bumps again"
+        );
+    }
+
     /// The help panel compose: the filter line is ALWAYS present (the
     /// placeholder when inactive — the round-3 no-feedback fix), the
     /// filter narrows rows live (headers hide when nothing beneath them
-    #[test]
-    fn compose_sidebar_renders_sections_and_marks_active() {
-        let sections = vec![
-            super::SidebarSection {
-                title: "workspaces".to_string(),
-                rows: vec![
-                    ("+0".to_string(), "main".to_string(), true),
-                    ("+1".to_string(), "dev".to_string(), false),
-                ],
-            },
-            super::SidebarSection {
-                title: "agents".to_string(),
-                rows: vec![("a0".to_string(), "claude".to_string(), false)],
-            },
-        ];
-        let lines = super::compose_sidebar(&sections, 20, 12);
-        assert_eq!(lines[0].text, " workspaces ");
-        assert!(lines[0].header);
-        assert_eq!(lines[1].text, " \u{25b8} main");
-        assert_eq!(lines[1].id.as_deref(), Some("+0"));
-        assert_eq!(lines[2].text, "   dev");
-        let agents = lines.iter().find(|l| l.header && l.text == " agents ");
-        assert!(agents.is_some(), "second section header present");
-        assert!(
-            lines.iter().any(|l| l.id.as_deref() == Some("a0")),
-            "the second section's rows carry their ids"
-        );
-        let active = lines
-            .iter()
-            .find(|l| l.active)
-            .expect("the active row is flagged");
-        assert_eq!(active.id.as_deref(), Some("+0"));
-    }
-
     /// matches), the window scrolls, and the footer line names the
     /// controls. The border ring/title/badge are the renderer's
     /// paint_overlay job, not the compose's.

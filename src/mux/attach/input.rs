@@ -86,6 +86,13 @@ impl SgrMouse {
         self.cb & 0x3
     }
 
+    /// A right-button PRESS (not release/motion/wheel): the context
+    /// menus' trigger. Ghostty spells it `ESC[<2;col;rowM` — button 2,
+    /// no motion bit, `M` terminator.
+    pub fn is_right_press(&self) -> bool {
+        !self.release && !self.is_motion() && self.cb & !0x3 & 0x40 == 0 && self.cb & 0x3 == 2
+    }
+
     /// The modifier bits, in the crate's [`modifiers`] order — the SGR
     /// wire puts them at shift 2 with the same bit values (shift 1, alt 2,
     /// ctrl 4).
@@ -577,6 +584,28 @@ mod tests {
             }
             other => panic!("mouse expected, got {other:?}"),
         }
+    }
+
+    /// The right-button press decodes: button 2, press terminator `M`,
+    /// no motion bit; release, motion, wheels, and other buttons are
+    /// not right presses — the context menus' trigger predicate.
+    #[test]
+    fn right_press_decodes_and_rejects_its_lookalikes() {
+        let press = |cb: u8, release: bool| SgrMouse {
+            cb,
+            col: 7,
+            row: 1,
+            release,
+        };
+        // Ghostty's `ESC[<2;col;rowM` right-press spelling.
+        assert!(press(2, false).is_right_press());
+        assert!(!press(0, false).is_right_press(), "left button");
+        assert!(!press(1, false).is_right_press(), "middle button");
+        assert!(!press(2, true).is_right_press(), "release report");
+        // Right DRAG: the motion bit rides button 2 (cb 34) — not a press.
+        assert!(!press(34, false).is_right_press(), "right drag");
+        // Wheel lookalike: wheel codes carry bit 6 (right wheel = 66).
+        assert!(!press(66, false).is_right_press(), "right wheel");
     }
 
     #[test]

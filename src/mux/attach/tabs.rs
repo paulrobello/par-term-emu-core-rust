@@ -93,13 +93,13 @@ fn tab_text(id: &str, name: &str, budget: Option<usize>) -> String {
     }
 }
 
-/// Lay the tabs out left to right from col 0 with the given texts and
-/// widths. `None` when the widths overflow `cols`.
-fn place(texts: &[String], widths: &[usize], cols: usize) -> Option<Vec<TabCell>> {
-    if widths.iter().sum::<usize>() > cols {
+/// Lay the tabs out left to right from `start` with the given texts and
+/// widths, when their widths fit `budget`. `None` on overflow.
+fn place(texts: &[String], widths: &[usize], start: u16, budget: usize) -> Option<Vec<TabCell>> {
+    if widths.iter().sum::<usize>() > budget {
         return None;
     }
-    let mut col = 0u16;
+    let mut col = start;
     let cells: Vec<TabCell> = texts
         .iter()
         .zip(widths)
@@ -120,7 +120,11 @@ fn place(texts: &[String], widths: &[usize], cols: usize) -> Option<Vec<TabCell>
 
 /// Compose the strip layout for `windows` (the queried `(id, name)`
 /// list, window order; `active` is the active window id) into `cols`
-/// columns.
+/// columns. `lead` is the columns the strip's LEFT segment occupies —
+/// the side panel's title when the panel is up, 0 when it is down: the
+/// tabs lay out from it onward and the ` + ` stays pinned at the
+/// strip's right edge, so a click maps the RAW host column straight
+/// through (the panel-up geometry stays coherent).
 ///
 /// Stage 1: full names, left to right, when they all fit. Stage 2: the
 /// widest shared name budget that fits — names at or under the budget
@@ -132,6 +136,7 @@ pub(crate) fn layout_tabs(
     windows: &[(String, String)],
     active: Option<&str>,
     cols: usize,
+    lead: u16,
 ) -> TabLayout {
     if windows.is_empty() {
         return TabLayout::default();
@@ -140,14 +145,19 @@ pub(crate) fn layout_tabs(
         .iter()
         .position(|(id, _)| Some(id.as_str()) == active)
         .unwrap_or(0);
+    let lead = (lead as usize).min(cols);
 
     // The ` + ` button reserves the strip's last three columns; the tab
-    // stages lay out inside the rest. A strip narrower than the button
-    // plus one tab column cannot host the reservation.
+    // stages lay out between the lead segment and the reservation. A
+    // strip narrower than the button plus one tab column cannot host
+    // the reservation.
     let plus_col = u16::try_from(cols.saturating_sub(3))
         .ok()
-        .filter(|_| cols >= 4);
-    let tab_cols = plus_col.map_or(cols, |p| p as usize);
+        .filter(|_| cols >= 4 && lead + 3 < cols);
+    let tab_cols = plus_col.map_or(cols.saturating_sub(lead), |p| {
+        (p as usize).saturating_sub(lead)
+    });
+    let start = lead as u16;
 
     let texts_widths = |budget: Option<usize>| -> (Vec<String>, Vec<usize>) {
         let texts: Vec<String> = windows
@@ -160,7 +170,7 @@ pub(crate) fn layout_tabs(
 
     // Stage 1.
     let (texts, widths) = texts_widths(None);
-    if let Some(cells) = place(&texts, &widths, tab_cols) {
+    if let Some(cells) = place(&texts, &widths, start, tab_cols) {
         return TabLayout {
             cells,
             left_marker: None,
@@ -178,7 +188,7 @@ pub(crate) fn layout_tabs(
         .max(1);
     for budget in (1..=max_name).rev() {
         let (texts, widths) = texts_widths(Some(budget));
-        if let Some(cells) = place(&texts, &widths, tab_cols) {
+        if let Some(cells) = place(&texts, &widths, start, tab_cols) {
             return TabLayout {
                 cells,
                 left_marker: None,
@@ -218,10 +228,10 @@ pub(crate) fn layout_tabs(
             break;
         }
     }
-    // The run places left-aligned after the (optional) leading marker;
-    // left alignment keeps the hit columns stable for a given window
-    // list.
-    let mut col = u16::from(run[0] > 0);
+    // The run places left-aligned after the lead segment and the
+    // (optional) leading marker; left alignment keeps the hit columns
+    // stable for a given window list.
+    let mut col = start + u16::from(run[0] > 0);
     let cells: Vec<TabCell> = run
         .iter()
         .map(|&index| {
@@ -245,7 +255,7 @@ pub(crate) fn layout_tabs(
     });
     TabLayout {
         cells,
-        left_marker: left_hidden.then_some(0),
+        left_marker: left_hidden.then_some(start),
         right_marker,
         plus: plus_col,
     }
@@ -277,14 +287,38 @@ impl TabStrip {
     }
 
     /// Paint `windows` over the whole row, padding the remainder with
-    /// spaces so the previous frame's tail erases. The active tab is a
-    /// solid highlighted block, inactive tabs dim, edge markers dim.
-    pub(crate) fn paint(&mut self, windows: &[(String, String)], active: Option<&str>) {
-        let layout = layout_tabs(windows, active, self.cols as usize);
+    /// spaces so the previous frame's tail erases. `lead` is the side
+    /// panel's title when the panel is up — `(title, width)`: the title
+    /// paints in the first `width` columns (accent — the panel's
+    /// header, per the mock), the tabs lay out from it onward, and the
+    /// ` + ` stays pinned at the strip's right edge. The active tab is
+    /// a solid highlighted block, inactive tabs dim, edge markers dim.
+    pub(crate) fn paint(
+        &mut self,
+        windows: &[(String, String)],
+        active: Option<&str>,
+        lead: Option<(&str, u16)>,
+    ) {
+        let lead_w = lead.map_or(0, |(_, w)| w);
+        let layout = layout_tabs(windows, active, self.cols as usize, lead_w);
         self.layout = layout.clone();
         for x in 0..self.cols {
             let cell = &mut self.buffer[(x, 0)];
             cell.reset();
+        }
+        // The lead title: the panel's header — accent, clipped to the
+        // lead segment. Clicks on it hit nothing (no cells below).
+        if let Some((title, width)) = lead {
+            let style = RtStyle::default().fg(ACCENT);
+            for (offset, ch) in format!(" {title} ").chars().enumerate() {
+                let x = offset as u16;
+                if x >= width || x >= self.cols {
+                    break;
+                }
+                let cell = &mut self.buffer[(x, 0)];
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(style);
+            }
         }
         // Edge markers, dim.
         for marker in [layout.left_marker, layout.right_marker]
@@ -392,7 +426,7 @@ mod tests {
     #[test]
     fn short_names_place_every_tab_in_order() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80);
+        let layout = layout_tabs(&ws, Some("@1"), 80, 0);
         assert_eq!(layout.cells.len(), 3);
         assert_eq!(layout.left_marker, None);
         assert_eq!(layout.right_marker, None);
@@ -418,7 +452,7 @@ mod tests {
         // The reservation narrows the tab area to 21 (24 - 3): budget 8
         // overflows (13 + 13 = 26 > 21), budget 6 too (11 + 11 = 22),
         // budget 5 fits: ' 0:devel… ' = ' 1:docum… ' = 10 each.
-        let layout = layout_tabs(&ws, Some("@0"), 24);
+        let layout = layout_tabs(&ws, Some("@0"), 24, 0);
         assert_eq!(layout.cells.len(), 2);
         assert_eq!(layout.cells[0].text, "0:devel\u{2026}");
         assert_eq!(layout.cells[1].text, "1:docum\u{2026}");
@@ -438,7 +472,7 @@ mod tests {
             .map(|i| (format!("@{i}"), format!("window{i}")))
             .collect();
         // Budget-1 width per tab: ' Ni:w… ' = 7 cols; 12 * 7 = 84 > 40.
-        let layout = layout_tabs(&ws, Some("@7"), 40);
+        let layout = layout_tabs(&ws, Some("@7"), 40, 0);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&7), "the active tab is visible");
         for pair in visible.windows(2) {
@@ -458,7 +492,7 @@ mod tests {
         let ws: Vec<(String, String)> = (0..12)
             .map(|i| (format!("@{i}"), format!("w{i}")))
             .collect();
-        let layout = layout_tabs(&ws, Some("@11"), 30);
+        let layout = layout_tabs(&ws, Some("@11"), 30, 0);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&11));
         assert_eq!(
@@ -475,7 +509,7 @@ mod tests {
     #[test]
     fn hit_test_maps_columns_to_windows() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80);
+        let layout = layout_tabs(&ws, Some("@1"), 80, 0);
         let mut strip = TabStrip::new(80);
         strip.layout = layout;
         assert_eq!(strip.hit_test(0), Some(0), "pad still owns the cell");
@@ -493,7 +527,7 @@ mod tests {
     #[test]
     fn paint_highlights_the_active_tab_as_a_block_and_dims_the_rest() {
         let mut strip = TabStrip::new(40);
-        strip.paint(&windows(), Some("@1"));
+        strip.paint(&windows(), Some("@1"), None);
         // The active cell's text starts at col 8 + 1 pad.
         for (col, ch) in [(9u16, '1'), (10, ':'), (11, 'v'), (12, 'i'), (13, 'm')] {
             let cell = &strip.buffer[(col, 0)];
@@ -521,7 +555,7 @@ mod tests {
     #[test]
     fn strip_diffs_only_changes() {
         let mut strip = TabStrip::new(40);
-        strip.paint(&windows(), Some("@0"));
+        strip.paint(&windows(), Some("@0"), None);
         let first = strip.diff();
         // Only the painted cells differ from the blank buffer: 18 text
         // cells across the three tabs, the active tab's two pads (the
@@ -532,9 +566,9 @@ mod tests {
             "first paint is the text cells + block pads + plus"
         );
         assert_eq!(first[0].1, 0, "cell y is row-relative 0");
-        strip.paint(&windows(), Some("@0"));
+        strip.paint(&windows(), Some("@0"), None);
         assert!(strip.diff().is_empty(), "identical repaint diffs empty");
-        strip.paint(&windows(), Some("@1"));
+        strip.paint(&windows(), Some("@1"), None);
         let diff = strip.diff();
         assert!(!diff.is_empty());
         assert!(
@@ -547,7 +581,7 @@ mod tests {
     #[test]
     fn empty_windows_paint_blank_and_hit_nothing() {
         let mut strip = TabStrip::new(20);
-        strip.paint(&[], None);
+        strip.paint(&[], None, None);
         assert!(strip.diff().iter().all(|(_, _, cell)| cell.symbol() == " "));
         assert_eq!(strip.hit_test(3), None);
     }
@@ -557,7 +591,7 @@ mod tests {
     #[test]
     fn degenerate_width_keeps_the_active_tab() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@2"), 6);
+        let layout = layout_tabs(&ws, Some("@2"), 6, 0);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&2), "active visible even tiny");
     }
@@ -579,7 +613,7 @@ mod tests {
     fn plus_button_lays_out_paints_and_hits() {
         // ' 0:main ' = 8, ' 1:vim ' = 7, ' 2:build ' = 9 → 24 used, the
         // plus reservation at 37..40 of the 40-col strip.
-        let layout = layout_tabs(&windows(), Some("@0"), 40);
+        let layout = layout_tabs(&windows(), Some("@0"), 40, 0);
         assert_eq!(layout.plus, Some(37), "the plus reserves the right edge");
         let mut strip = TabStrip::new(40);
         strip.layout = layout.clone();
@@ -587,7 +621,7 @@ mod tests {
         assert!(strip.plus_hit(38));
         assert!(strip.plus_hit(39));
         assert!(!strip.plus_hit(36), "the last tab column is not the plus");
-        strip.paint(&windows(), Some("@0"));
+        strip.paint(&windows(), Some("@0"), None);
         assert_eq!(strip.buffer[(38, 0)].symbol(), "+");
         assert!(
             strip.buffer[(38, 0)].modifier.contains(RtModifier::DIM),
@@ -595,7 +629,59 @@ mod tests {
         );
         // Degenerate: a strip narrower than the button plus one tab
         // column cannot host the reservation.
-        let tiny = layout_tabs(&windows(), Some("@0"), 3);
+        let tiny = layout_tabs(&windows(), Some("@0"), 3, 0);
         assert_eq!(tiny.plus, None, "the plus needs 3 spare columns");
+    }
+
+    /// The lead segment (the side panel's title when the panel is up):
+    /// the tabs lay out FROM the lead columns onward, the ` + ` stays
+    /// pinned at the strip's right edge, and a click maps the RAW host
+    /// column straight through — lead columns hit nothing, the first
+    /// tab starts at the lead width, the plus hits at the right edge.
+    /// This is the plus-defect fix's unit half.
+    #[test]
+    fn lead_segment_offsets_the_tabs_and_keeps_the_plus_pinned() {
+        // ' 0:main ' = 8, ' 1:vim ' = 7, ' 2:build ' = 9 → the three
+        // tabs span 20..44 of the 80-col strip, plus reservation 77..80.
+        let ws = windows();
+        let layout = layout_tabs(&ws, Some("@1"), 80, 20);
+        assert_eq!(layout.plus, Some(77), "the plus stays pinned right");
+        assert_eq!(layout.cells[0].col, 20, "tabs start at the lead width");
+        assert_eq!(layout.cells[0].text, "0:main");
+        let mut strip = TabStrip::new(80);
+        strip.layout = layout;
+        assert_eq!(strip.hit_test(0), None, "lead columns hit nothing");
+        assert_eq!(strip.hit_test(19), None);
+        assert_eq!(strip.hit_test(20), Some(0), "the first tab owns its start");
+        assert_eq!(strip.hit_test(27), Some(0));
+        assert_eq!(strip.hit_test(28), Some(1));
+        assert!(strip.plus_hit(78), "the plus hits at the raw right edge");
+        assert!(!strip.plus_hit(10), "the lead column is not the plus");
+    }
+
+    /// The lead title paints accent in the first `width` columns and
+    /// the tabs paint from it onward (the mock's shared row 0).
+    #[test]
+    fn paint_carries_the_lead_title_accent() {
+        let mut strip = TabStrip::new(40);
+        strip.paint(&windows(), Some("@0"), Some(("workspaces", 14)));
+        // " workspaces " = 12 chars paint inside the 14-col lead.
+        assert_eq!(strip.buffer[(0, 0)].symbol(), " ");
+        assert_eq!(strip.buffer[(1, 0)].symbol(), "w");
+        assert_eq!(strip.buffer[(10, 0)].symbol(), "s");
+        assert_eq!(
+            strip.buffer[(12, 0)].symbol(),
+            " ",
+            "the lead's pad column stays blank"
+        );
+        assert_eq!(strip.buffer[(1, 0)].fg, ACCENT);
+        // The first tab's text starts at the lead width (col 14 + 1 pad).
+        assert_eq!(strip.buffer[(15, 0)].symbol(), "0");
+        // No lead: the tabs start at col 0 as before.
+        let mut plain = TabStrip::new(40);
+        plain.paint(&windows(), Some("@0"), None);
+        assert_eq!(plain.buffer[(0, 0)].symbol(), " ", "tab pad");
+        assert_eq!(plain.buffer[(1, 0)].symbol(), "0");
+        assert_ne!(plain.buffer[(1, 0)].fg, ACCENT);
     }
 }

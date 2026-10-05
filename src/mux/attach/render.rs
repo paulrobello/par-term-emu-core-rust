@@ -778,7 +778,7 @@ impl PaneRenderer {
         let lines = super::compose_sidebar(sections, self.sidebar_w, self.height);
         lines
             .into_iter()
-            .find(|line| line.y == y - 1 && line.id.is_some())
+            .find(|line| line.y == y - 1 && line.id.is_some() && x >= line.x && x < line.x_end)
             .and_then(|line| line.id)
     }
 
@@ -1386,7 +1386,6 @@ impl PaneRenderer {
             return;
         }
         let dim = RtStyle::default().add_modifier(RtModifier::DIM);
-        let accent = RtStyle::default().fg(RtColor::Indexed(14));
         for y in 0..self.height {
             for x in 0..w {
                 let cell = &mut self.buffer[(x, y)];
@@ -1405,11 +1404,10 @@ impl PaneRenderer {
         };
         for line in super::compose_sidebar(&sections, w, self.height) {
             // herdr's active treatment: the ACTIVE WORKSPACE's row is a
-            // full-width inverted block; the shown WINDOW's row just
-            // brightens (two blocks read as two actives — the manual-pass
-            // screenshot).
+            // full-width inverted block (the round-6 panel lists only
+            // workspaces). The footer chips paint at their own columns
+            // (line.x), body rows at col 0.
             let workspace_row = line.id.as_deref().is_some_and(|id| id.starts_with("ws:"));
-            let window_row = line.id.as_deref().is_some_and(|id| id.starts_with("win:"));
             if line.active && workspace_row {
                 let block = RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
@@ -1423,24 +1421,19 @@ impl PaneRenderer {
                     cell.set_style(block);
                 }
             }
-            let style = if line.header {
-                accent
-            } else if line.active && workspace_row {
+            let style = if line.active && workspace_row {
                 RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(RtModifier::BOLD)
-            } else if line.active && window_row {
-                RtStyle::default()
-                    .fg(RtColor::Indexed(14))
                     .add_modifier(RtModifier::BOLD)
             } else {
                 dim
             };
             for (j, ch) in line.text.chars().enumerate() {
-                if j as u16 >= w - 1 {
+                let x = line.x + j as u16;
+                if x >= w - 1 {
                     break;
                 }
-                let cell = &mut self.buffer[(j as u16, line.y)];
+                let cell = &mut self.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(style);
             }
@@ -2159,6 +2152,10 @@ struct WindowSession {
     /// What the prompt edits (rename pane/window, or a new window's
     /// name — the tab strip's `+`).
     prompt_target: PromptTarget,
+    /// The context menu's modal state: which window/workspace it
+    /// targets and the action per overlay row. `None` when no menu is
+    /// up.
+    menu: Option<MenuState>,
     /// The status bar's visibility (the `status_bar` chord toggles it;
     /// shown by default).
     status_bar_on: bool,
@@ -2182,16 +2179,101 @@ struct WindowSession {
 }
 
 /// What the modal prompt edits: rename flows seeded from the live name,
-/// and the tab strip's `+` new-window flow seeded with the next free
-/// index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// and the `+`/` new ` chips' create flows seeded with the next free
+/// index. The rename flows carry their target's id (the context menu
+/// renames a window the view may not be showing; the shown-window
+/// paths pass the shown id).
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptTarget {
     /// The focused pane's sticky user title.
     Pane,
-    /// The shown window's name.
-    Window,
+    /// A window's name, by id (`@N`).
+    Window(String),
     /// A new window's name (the daemon creates the window on commit).
     NewWindow,
+    /// A workspace's name, by id (`+N`).
+    Workspace(String),
+    /// A new workspace's name (the daemon creates it on commit).
+    NewWorkspace,
+}
+
+/// Which entity an open context menu targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MenuTarget {
+    /// The tab context menu: the window id (`@N`) the actions run
+    /// against.
+    Tab(String),
+    /// The workspace menu: the workspace id (`+N`) the actions run
+    /// against.
+    Workspace(String),
+}
+
+/// The context menus' action vocabulary: rename/close per target, the
+/// tab menu's add-tab, the workspace menu's new-workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuAction {
+    Rename,
+    Close,
+    AddTab,
+    NewWorkspace,
+}
+
+/// The open menu's state: its target plus the action dispatched per
+/// overlay row (the parallel mapping `compose_menu_panel` returns; row
+/// `None` entries — the header and the footer — consume the click).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuState {
+    target: MenuTarget,
+    actions: Vec<Option<MenuAction>>,
+}
+
+/// The context menus' footer controls line.
+const MENU_FOOTER: &str = " action click · close esc/q ";
+
+/// The context menus' overlay title (the target's name rides the panel's
+/// accent header row).
+const MENU_TITLE: &str = " menu ";
+
+/// Compose the context menu's overlay panel for `target`: the target's
+/// name as the accent header, one row per action, the footer controls
+/// line — [`super::compose_prompt_panel`]'s row/footer shape. Returns
+/// the panel rows AND the action per row (`None` for the header and
+/// footer) — the click dispatch's pure mapping, so what a click
+/// highlights is exactly what painted there.
+fn compose_menu_panel(target: &MenuTarget, name: &str) -> (Vec<HelpRow>, Vec<Option<MenuAction>>) {
+    let actions: &[MenuAction] = match target {
+        MenuTarget::Tab(_) => &[MenuAction::Rename, MenuAction::Close, MenuAction::AddTab],
+        MenuTarget::Workspace(_) => &[
+            MenuAction::Rename,
+            MenuAction::Close,
+            MenuAction::NewWorkspace,
+        ],
+    };
+    let labels: &[&str] = match target {
+        MenuTarget::Tab(_) => &["rename", "close", "add tab"],
+        MenuTarget::Workspace(_) => &["rename", "close", "new"],
+    };
+    let mut rows = vec![HelpRow {
+        text: format!(" {name} "),
+        accent: true,
+        footer: false,
+    }];
+    let mut mapping = vec![None];
+    for (action, label) in actions.iter().zip(labels.iter()) {
+        rows.push(HelpRow {
+            text: format!(" {label} "),
+            accent: false,
+            footer: false,
+        });
+        mapping.push(Some(*action));
+    }
+    rows.push(HelpRow {
+        text: MENU_FOOTER.to_string(),
+        accent: false,
+        footer: true,
+    });
+    mapping.push(None);
+    (rows, mapping)
 }
 
 impl WindowSession {
@@ -2238,7 +2320,8 @@ impl WindowSession {
             daemon_layout: Vec::new(),
             prompt_mode: false,
             prompt_text: String::new(),
-            prompt_target: PromptTarget::Window,
+            prompt_target: PromptTarget::Window(String::new()),
+            menu: None,
             status_bar_on: true,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
@@ -2661,6 +2744,10 @@ impl WindowSession {
                                     self.prompt_key(conn, &ev);
                                     continue;
                                 }
+                                if self.menu.is_some() {
+                                    self.menu_key(&ev);
+                                    continue;
+                                }
                                 if self.help_mode {
                                     self.help_key(&ev);
                                     continue;
@@ -2711,6 +2798,14 @@ impl WindowSession {
             // picker's modal-run shape).
             for &byte in bytes {
                 if !self.prompt_byte(conn, byte) {
+                    return false;
+                }
+            }
+            return false;
+        }
+        if self.menu.is_some() {
+            for &byte in bytes {
+                if !self.menu_byte(byte) {
                     return false;
                 }
             }
@@ -3087,24 +3182,28 @@ impl WindowSession {
     }
 
     /// Open the prompt modal for `target`: the rename flows seed the
-    /// target's current name — the window's `name`, or the pane's sticky
-    /// user title — and the new-window flow seeds the next free index.
+    /// target's current name — the window's or workspace's own name (a
+    /// context menu may target a window/workspace the view is not
+    /// showing) — and the create flows seed the next free index.
     fn enter_prompt(&mut self, target: PromptTarget) {
-        let seed = match target {
+        let seed = match &target {
             PromptTarget::Pane => self.status.pane_title().to_string(),
-            PromptTarget::Window => self
+            PromptTarget::Window(id) => self
                 .status
-                .active_window
-                .as_deref()
-                .and_then(|id| {
-                    self.status
-                        .windows()
-                        .iter()
-                        .find(|(wid, _)| wid == id)
-                        .map(|(_, name)| name.clone())
-                })
+                .windows()
+                .iter()
+                .find(|(wid, _)| wid == id)
+                .map(|(_, name)| name.clone())
                 .unwrap_or_default(),
             PromptTarget::NewWindow => super::next_window_name(self.status.windows()),
+            PromptTarget::Workspace(id) => self
+                .status
+                .workspaces()
+                .iter()
+                .find(|(wsid, _)| wsid == id)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_default(),
+            PromptTarget::NewWorkspace => super::next_workspace_name(self.status.workspaces()),
         };
         self.prompt_target = target;
         self.prompt_text = seed;
@@ -3119,15 +3218,201 @@ impl WindowSession {
         self.renderer.set_overlay(None);
     }
 
+    /// Open the context menu for `target`: the tab menu (right-press on
+    /// a tab) or the workspace menu (the panel's ` menu ` chip, a
+    /// right-press on a workspace row). The overlay rides the same
+    /// modal machinery the picker uses.
+    fn open_menu(&mut self, target: MenuTarget) {
+        let name = match &target {
+            MenuTarget::Tab(id) => self
+                .status
+                .windows()
+                .iter()
+                .find(|(wid, _)| wid == id)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| id.clone()),
+            MenuTarget::Workspace(id) => self
+                .status
+                .workspaces()
+                .iter()
+                .find(|(wsid, _)| wsid == id)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| id.clone()),
+        };
+        let (rows, actions) = compose_menu_panel(&target, &name);
+        self.menu = Some(MenuState { target, actions });
+        self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
+    }
+
+    /// Dismiss the menu: the next frame's pane repaint restores the
+    /// covered cells.
+    fn leave_menu(&mut self) {
+        self.menu = None;
+        self.renderer.set_overlay(None);
+    }
+
+    /// One key while the menu is up: Escape closes, everything else is
+    /// consumed (a modal owns the keyboard).
+    fn menu_key(&mut self, ev: &TermKeyEvent) {
+        use crate::keyboard::TermKey;
+        if ev.key() == TermKey::Escape {
+            self.leave_menu();
+        }
+    }
+
+    /// One plain byte while the menu is up: `q`/Escape close, the rest
+    /// consumed.
+    fn menu_byte(&mut self, byte: u8) -> bool {
+        if byte == b'q' || byte == 0x1b {
+            self.leave_menu();
+        }
+        self.menu.is_some()
+    }
+
+    /// One press click while the menu is up, at overlay row `row` (the
+    /// `overlay_row_at` mapping): an action row dispatches, the header
+    /// and footer consume. The menu closes first so an action's own
+    /// overlay (the rename prompt, the new-tab prompt) replaces it.
+    fn menu_click(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, row: usize) {
+        let Some(state) = self.menu.as_ref() else {
+            return;
+        };
+        let Some(action) = state.actions.get(row).copied().flatten() else {
+            return; // header/footer/off-panel: consumed
+        };
+        let target = state.target.clone();
+        self.leave_menu();
+        match (target, action) {
+            (MenuTarget::Tab(window), MenuAction::Rename) => {
+                self.enter_prompt(PromptTarget::Window(window));
+            }
+            (MenuTarget::Tab(_), MenuAction::AddTab) => {
+                self.enter_prompt(PromptTarget::NewWindow);
+            }
+            (MenuTarget::Tab(window), MenuAction::Close) => {
+                self.close_window_from_menu(conn, &window);
+            }
+            (MenuTarget::Workspace(workspace), MenuAction::Rename) => {
+                self.enter_prompt(PromptTarget::Workspace(workspace));
+            }
+            (MenuTarget::Workspace(_), MenuAction::NewWorkspace) => {
+                self.enter_prompt(PromptTarget::NewWorkspace);
+            }
+            (MenuTarget::Workspace(workspace), MenuAction::Close) => {
+                self.close_workspace_from_menu(conn, &workspace);
+            }
+            // The cross pair never composes (each menu carries only its
+            // own third action).
+            _ => {}
+        }
+    }
+
+    /// The tab menu's close: `kill-window -t {id}`; when the killed
+    /// window is the SHOWN one, land on the session's surviving
+    /// daemon-active (or first) window through the select+resync — a
+    /// session that died with its last window ends the view through the
+    /// next status refresh's SessionGone. Any other target just marks
+    /// the status stale.
+    fn close_window_from_menu(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+    ) {
+        let shown = self.window == window;
+        let _ = conn.send_checked(&format!("kill-window -t {window}"));
+        if !shown {
+            self.status_dirty = true;
+            return;
+        }
+        let Some(session) = self.status.session_id.clone() else {
+            self.status_dirty = true;
+            return;
+        };
+        let Ok(reply) = conn.send_checked(&format!("list-windows -t {session}")) else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let survivor = reply
+            .body
+            .iter()
+            .find(|l| l.split_whitespace().nth(1) == Some("*"))
+            .or_else(|| reply.body.first())
+            .and_then(|l| l.split_whitespace().next())
+            .map(str::to_string);
+        let Some(survivor) = survivor else {
+            // The session died with the window: the next status refresh
+            // reports SessionGone and the view ends cleanly.
+            self.status_dirty = true;
+            return;
+        };
+        let _ = conn.send_checked(&format!("select-window -t {survivor}"));
+        self.reseed_window(conn, &survivor);
+    }
+
+    /// The workspace menu's close: `kill-workspace -t {id}`; when the
+    /// killed workspace was the SHOWN one (the view's session lives in
+    /// it), land on the first surviving workspace through the
+    /// select+land contract — none remaining ends the view cleanly
+    /// (the daemon kills the session, the refresh's SessionGone fires).
+    /// Any other target just marks the status stale.
+    fn close_workspace_from_menu(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        workspace: &str,
+    ) {
+        // Was the view's session inside this workspace?
+        let shown = self.status.session_id.as_ref().is_some_and(|session| {
+            conn.send_checked(&format!("list-sessions -t {workspace}"))
+                .ok()
+                .filter(|reply| reply.ok)
+                .is_some_and(|reply| {
+                    reply
+                        .body
+                        .iter()
+                        .filter_map(|l| super::parse_session_line(l))
+                        .any(|(sid, _)| sid == *session)
+                })
+        });
+        let _ = conn.send_checked(&format!("kill-workspace -t {workspace}"));
+        if !shown {
+            self.status_dirty = true;
+            return;
+        }
+        let Ok(reply) = conn.send_checked("list-workspaces") else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        let survivor = reply
+            .body
+            .iter()
+            .filter_map(|l| super::parse_workspace_line(l))
+            .map(|(id, _, _)| id)
+            .next();
+        let Some(survivor) = survivor else {
+            // No workspace remains: the view ends cleanly through the
+            // next status refresh.
+            self.status_dirty = true;
+            return;
+        };
+        let _ = conn.send_checked(&format!("select-workspace -t {survivor}"));
+        self.land_on_workspace(conn, &survivor);
+    }
+
     /// Re-compose the prompt overlay from the edit buffer.
     fn refresh_prompt(&mut self) {
-        let title = match self.prompt_target {
+        let title = match &self.prompt_target {
             PromptTarget::Pane => super::PROMPT_PANE_OVERLAY_TITLE,
-            PromptTarget::Window => super::PROMPT_WINDOW_OVERLAY_TITLE,
+            PromptTarget::Window(_) => super::PROMPT_WINDOW_OVERLAY_TITLE,
             PromptTarget::NewWindow => super::PROMPT_NEW_WINDOW_OVERLAY_TITLE,
+            PromptTarget::Workspace(_) => super::PROMPT_WORKSPACE_OVERLAY_TITLE,
+            PromptTarget::NewWorkspace => super::PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
         };
         let footer = match self.prompt_target {
-            PromptTarget::NewWindow => super::NEW_PROMPT_FOOTER,
+            PromptTarget::NewWindow | PromptTarget::NewWorkspace => super::NEW_PROMPT_FOOTER,
             _ => super::PROMPT_FOOTER,
         };
         self.renderer.set_overlay(Some((
@@ -3186,26 +3471,41 @@ impl WindowSession {
     }
 
     /// Commit the prompt: the pane spelling sets the sticky user title
-    /// (`select-pane -T`), the window spelling renames the window
-    /// (`rename-window`), the new-window spelling creates the window
-    /// (`new-window -n`) and lands the view on it; an empty input
-    /// cancels (an empty name is not expressible on the wire — the
-    /// parses require one).
+    /// (`select-pane -T`), the window and workspace spellings rename
+    /// their target (`rename-window`/`rename-workspace`, quoted), the
+    /// create flows make the window/workspace and land the view on it;
+    /// an empty input cancels (an empty name is not expressible on the
+    /// wire — the parses require one).
     fn commit_prompt(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let text = self.prompt_text.trim().to_string();
         if text.is_empty() {
             self.leave_prompt();
             return;
         }
-        match self.prompt_target {
+        let target = self.prompt_target.clone();
+        match target {
             PromptTarget::Pane => {
-                let _ =
-                    conn.send_checked(&format!("select-pane -t {} -T {text}", self.focused_pane()));
+                let _ = conn.send_checked(&format!(
+                    "select-pane -t {} -T {}",
+                    self.focused_pane(),
+                    super::wire_quote(&text)
+                ));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
-            PromptTarget::Window => {
-                let _ = conn.send_checked(&format!("rename-window -t {} {text}", self.window));
+            PromptTarget::Window(id) => {
+                let _ = conn.send_checked(&format!(
+                    "rename-window -t {id} {}",
+                    super::wire_quote(&text)
+                ));
+                self.leave_prompt();
+                self.status_dirty = true;
+            }
+            PromptTarget::Workspace(id) => {
+                let _ = conn.send_checked(&format!(
+                    "rename-workspace -t {id} {}",
+                    super::wire_quote(&text)
+                ));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -3228,6 +3528,22 @@ impl WindowSession {
                 if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
                     let _ = conn.send_checked(&format!("select-window -t {window}"));
                     self.reseed_window(conn, &window);
+                }
+            }
+            PromptTarget::NewWorkspace => {
+                let Ok(reply) =
+                    conn.send_checked(&format!("new-workspace -n {}", super::wire_quote(&text)))
+                else {
+                    self.leave_prompt();
+                    return;
+                };
+                self.leave_prompt();
+                if !reply.ok {
+                    return;
+                }
+                if let Some(workspace) = reply.body.first().map(|w| w.trim().to_string()) {
+                    let _ = conn.send_checked(&format!("select-workspace -t {workspace}"));
+                    self.land_on_workspace(conn, &workspace);
                 }
             }
         }
@@ -3757,7 +4073,7 @@ impl WindowSession {
                 self.enter_prompt(if matches!(key, super::ManagementKey::RenamePane) {
                     PromptTarget::Pane
                 } else {
-                    PromptTarget::Window
+                    PromptTarget::Window(self.window.clone())
                 });
             }
             super::ManagementKey::StatusBar => {
@@ -3893,7 +4209,7 @@ impl WindowSession {
     /// open, and on every status refresh while the panel is up (the
     /// `%workspaces-changed` mark rides the same throttle).
     fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let mut workspaces: Vec<(String, String, bool)> = conn
+        let rows: Vec<(String, String, bool)> = conn
             .send_checked("list-workspaces")
             .ok()
             .filter(|reply| reply.ok)
@@ -3902,57 +4218,16 @@ impl WindowSession {
                     .body
                     .iter()
                     .filter_map(|l| super::parse_workspace_line(l))
+                    .map(|(id, name, active)| (format!("ws:{id}"), name, active))
                     .collect()
             })
             .unwrap_or_default();
-        if workspaces.is_empty() {
+        if rows.is_empty() {
             self.renderer.set_sidebar_sections(None);
             return;
         }
-        workspaces.sort_by(|a, b| a.0.cmp(&b.0));
-        // herdr's nesting: each workspace followed by its sessions'
-        // windows, dim beneath the workspace row. Row ids are prefixed
-        // for the click dispatch (`ws:` lands, `win:` selects the
-        // window).
-        let mut rows: Vec<(String, String, bool)> = Vec::new();
-        for (ws_id, ws_name, ws_active) in &workspaces {
-            rows.push((format!("ws:{ws_id}"), ws_name.clone(), *ws_active));
-            let sessions = conn.send_checked(&format!("list-sessions -t {ws_id}"));
-            if let Some(session_ids) = sessions.ok().filter(|r| r.ok).map(|r| {
-                r.body
-                    .iter()
-                    .filter_map(|l| super::parse_session_line(l).map(|(sid, _)| sid))
-                    .collect::<Vec<_>>()
-            }) {
-                let mut session_ids = session_ids;
-                session_ids.sort();
-                for sid in session_ids {
-                    let windows = conn.send_checked(&format!("list-windows -t {sid}"));
-                    if let Some(windows) = windows.ok().filter(|r| r.ok).map(|r| r.body) {
-                        for line in &windows {
-                            let mut fields = line.split_whitespace();
-                            let Some(wid) = fields.next().filter(|w| w.starts_with('@')) else {
-                                continue;
-                            };
-                            let _marker = fields.next().unwrap_or("-");
-                            let rest = fields.collect::<Vec<_>>().join(" ");
-                            let name = if rest.is_empty() { wid } else { rest.as_str() };
-                            let active = wid == self.window;
-                            // Child indent: a nested window row must not
-                            // read as a second workspace row (the
-                            // manual-pass report — the window row was
-                            // clicked as if it were a workspace).
-                            rows.push((format!("win:{wid}"), format!("  {name}"), active));
-                        }
-                    }
-                }
-            }
-        }
         self.renderer
-            .set_sidebar_sections(Some(vec![super::SidebarSection {
-                title: "workspaces".to_string(),
-                rows,
-            }]));
+            .set_sidebar_sections(Some(vec![super::SidebarSection { rows }]));
     }
 
     fn land_on_workspace(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ws_id: &str) {
@@ -4371,9 +4646,12 @@ impl WindowSession {
             None
         };
         // The flash cue and the zoom marker lead the line and the Help
-        // chip ends it; all three reserve their widths up front so the
-        // composed state truncates into what remains — appended after
-        // the truncation, the chip could be clipped off the row.
+        // chip RIGHT-ALIGNS at the row's end: all three reserve their
+        // widths up front so the composed state truncates into what
+        // remains, and the paint clips the content at the chip's left
+        // column — the chip can never be pushed off the row (round 6:
+        // the chip used to ride at the end of the composed segments,
+        // and a full line pushed it off).
         let mut head: Vec<Segment> = Vec::new();
         if self.zoomed {
             head.push(Segment {
@@ -4404,8 +4682,7 @@ impl WindowSession {
         );
         let mut with_head = head;
         with_head.extend(segments);
-        with_head.push(chip);
-        self.status_row.paint(&with_head);
+        self.status_row.paint(&with_head, Some(&chip));
     }
 
     /// Flush the status row's changed cells to the host's bottom row.
@@ -4452,33 +4729,70 @@ impl WindowSession {
         let Some(y) = mouse.row.checked_sub(1) else {
             return;
         };
-
-        // The side panel owns its strip below the tab-strip row: a press
-        // on a workspace row lands on it (the select+resync every switch
-        // follows), and every other event in the strip is consumed — no
-        // pane, divider, or drag lives in the panel. The TOP row stays
-        // the tab strip's (the panel begins under it), so a click there
-        // falls through to the tab strip even inside the strip's width —
-        // the sidebar path used to consume it (the round-5 report).
         let strip = self.renderer.sidebar_width();
+
+        // The context menu is modal for the pointer: a press on an
+        // action row dispatches it, everything else is consumed while
+        // it is up.
+        if self.menu.is_some() {
+            if !mouse.release
+                && !mouse.is_motion()
+                && !mouse.is_wheel_up()
+                && !mouse.is_wheel_down()
+            {
+                let content_x = x.saturating_sub(strip);
+                if let Some(row) = self.renderer.overlay_row_at(content_x, y) {
+                    self.menu_click(conn, row);
+                }
+            }
+            return;
+        }
+
+        // The side panel owns its strip below the tab-strip row: a
+        // press on a workspace row lands on it (the select+resync every
+        // switch follows), a right-press opens the workspace menu, the
+        // footer chips open their prompts/menu, and every other event
+        // in the strip is consumed — no pane, divider, or drag lives in
+        // the panel. The TOP row stays the tab strip's (the panel
+        // begins under it), so a click there falls through to the tab
+        // strip even inside the strip's width — the sidebar path used
+        // to consume it (the round-5 report).
         if strip > 0 && y > 0 && x < strip {
             if !mouse.release && !mouse.is_motion() {
                 if let Some(id) = self.renderer.sidebar_row_at(x, y) {
-                    if let Some(wid) = id.strip_prefix("win:@") {
-                        // A nested window row: land on that window (the
-                        // select+resync every switch follows).
-                        let window = format!("@{wid}");
-                        let _ = conn.send_checked(&format!("select-window -t {window}"));
-                        self.reseed_window(conn, &window);
+                    if id == super::SIDEBAR_NEW_ID {
+                        self.enter_prompt(PromptTarget::NewWorkspace);
+                    } else if id == super::SIDEBAR_MENU_ID {
+                        // The workspace menu for the daemon-active
+                        // workspace (the first when none is marked).
+                        let active = self
+                            .status
+                            .active_workspace()
+                            .map(str::to_string)
+                            .or_else(|| self.status.workspaces().first().map(|(id, _)| id.clone()));
+                        if let Some(ws) = active {
+                            self.open_menu(MenuTarget::Workspace(ws));
+                        }
                     } else if let Some(ws_id) = id.strip_prefix("ws:") {
-                        self.land_on_workspace(conn, ws_id);
+                        if mouse.is_right_press() {
+                            self.open_menu(MenuTarget::Workspace(ws_id.to_string()));
+                        } else {
+                            self.land_on_workspace(conn, ws_id);
+                        }
                     }
                 }
             }
             return;
         }
         // Pane coordinates are layout coordinates: the host x less the
-        // side panel's strip width.
+        // side panel's strip width. The TOP row is exempt — the strip
+        // paints the panel's title at 0..strip when the panel is up and
+        // lays the tabs out from it onward in ABSOLUTE host columns, so
+        // the tab hit-test takes the RAW host column (the round-6 fix:
+        // the rebase used to run before this branch and shift every
+        // panel-up top-row click one panel width left, killing the +
+        // button's clickability).
+        let rx = x;
         let x = x.saturating_sub(strip);
 
         // A drag in flight continues over motion/release regardless of
@@ -4546,16 +4860,27 @@ impl WindowSession {
             return;
         }
 
-        // The tab strip owns the top row: a press hit-tests the tabs
-        // and switches windows through the select+resync contract; no
-        // pane focus, no pane forwarding, and no drag ever starts there.
+        // The tab strip owns the top row: a left press hit-tests the
+        // tabs and switches windows through the select+resync contract;
+        // a RIGHT press on a tab opens that window's context menu; no
+        // pane focus, no pane forwarding, and no drag ever starts
+        // there. The hit-test takes the RAW host column (see above).
         if y == 0 {
             let is_press = !mouse.release
                 && !mouse.is_motion()
                 && !mouse.is_wheel_up()
                 && !mouse.is_wheel_down();
-            if is_press {
-                self.tab_click(conn, x);
+            if mouse.is_right_press() {
+                if let Some((id, _)) = self
+                    .tab_strip
+                    .hit_test(rx)
+                    .and_then(|index| self.status.windows().get(index))
+                {
+                    let id = id.clone();
+                    self.open_menu(MenuTarget::Tab(id));
+                }
+            } else if is_press {
+                self.tab_click(conn, rx);
             }
             return;
         }
@@ -4930,14 +5255,21 @@ impl WindowSession {
 
     /// Paint the tab strip from the queried window state (the same
     /// state the status row composes from): the shown session's windows
-    /// in order, the active one accented.
+    /// in order, the active one accented. With the side panel up the
+    /// strip leads with the panel's title (the lead segment the hit-test
+    /// offsets through).
     fn draw_tab_strip(&mut self) {
         let (cols, _rows) = super::conn::terminal_grid();
         if self.tab_strip.cols() != cols {
             self.tab_strip = TabStrip::new(cols);
         }
-        self.tab_strip
-            .paint(self.status.windows(), self.status.active_window.as_deref());
+        let strip = self.renderer.sidebar_width();
+        let lead = (strip > 0).then_some(("workspaces", strip));
+        self.tab_strip.paint(
+            self.status.windows(),
+            self.status.active_window.as_deref(),
+            lead,
+        );
     }
 
     /// Flush the tab strip's changed cells to the host's top row.
@@ -5880,7 +6212,7 @@ mod tests {
             shaded: false,
         }];
         let mut row = status::StatusRow::new(4);
-        row.paint(&segments);
+        row.paint(&segments, None);
         let diff = row.diff();
         assert!(diff.iter().all(|(_, _, cell)| cell.bg == RtColor::Reset));
     }
@@ -6104,6 +6436,37 @@ mod tests {
         assert_eq!(session.renderer.window_size(), (80, 23));
     }
 
+    /// The context menus' dispatch mapping is pure: each overlay row
+    /// carries exactly one action (or `None` for the header/footer), so
+    /// what a click highlights is exactly what dispatches — and the two
+    /// menus' vocabularies differ in the third action only.
+    #[test]
+    fn compose_menu_panel_maps_rows_to_actions() {
+        let (rows, mapping) = compose_menu_panel(&MenuTarget::Tab("@1".to_string()), "vim");
+        assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
+        assert_eq!(rows[0].text, " vim ", "the header carries the name");
+        assert_eq!(mapping[0], None, "the header consumes its clicks");
+        assert_eq!(mapping[1], Some(MenuAction::Rename));
+        assert_eq!(rows[1].text, " rename ");
+        assert_eq!(mapping[2], Some(MenuAction::Close));
+        assert_eq!(rows[2].text, " close ");
+        assert_eq!(mapping[3], Some(MenuAction::AddTab));
+        assert_eq!(rows[3].text, " add tab ");
+        assert_eq!(mapping[4], None, "the footer consumes its clicks");
+
+        let (_, ws_mapping) = compose_menu_panel(&MenuTarget::Workspace("+0".to_string()), "main");
+        assert_eq!(
+            ws_mapping,
+            vec![
+                None,
+                Some(MenuAction::Rename),
+                Some(MenuAction::Close),
+                Some(MenuAction::NewWorkspace),
+                None
+            ]
+        );
+    }
+
     /// A flushed frame lands the strip at host row 0, rebases the pane
     /// diff one host row down, and places the cursor one host row below
     /// its renderer-mapped cell — the strip's height consumers, pinned.
@@ -6125,7 +6488,7 @@ mod tests {
             ("@0".to_string(), "main".to_string()),
             ("@1".to_string(), "vim".to_string()),
         ];
-        session.tab_strip.paint(&windows, Some("@0"));
+        session.tab_strip.paint(&windows, Some("@0"), None);
         session.draw_status_row();
 
         let mut sink = RecordingSink::default();
@@ -6884,10 +7247,11 @@ mod tests {
         assert!(sink.cells.is_empty());
     }
 
-    /// Side-panel click geometry: the lookup takes the HOST row (row 0
-    /// is the tab strip's — nothing there), shifted one row so a click
-    /// lands on the row as PAINTED — the header at host row 1, the first
-    /// entry at host row 2.
+    /// Side-panel click geometry after round 6: the lookup takes the
+    /// HOST row (row 0 is the tab strip's — nothing there), shifted one
+    /// row so a click lands on the row as painted — the FIRST workspace
+    /// row at host row 1 (no section header above it), the footer chips
+    /// at the panel's last row, each chip only its own cell.
     #[test]
     fn sidebar_clicks_land_on_the_painted_row() {
         let mut session = WindowSession::new(80, 24);
@@ -6895,32 +7259,49 @@ mod tests {
         session
             .renderer
             .set_sidebar_sections(Some(vec![super::super::SidebarSection {
-                title: "workspaces".to_string(),
                 rows: vec![
                     ("ws:+0".to_string(), "alpha".to_string(), true),
                     ("ws:+1".to_string(), "beta".to_string(), false),
-                    ("win:@0".to_string(), "0 demo".to_string(), false),
                 ],
             }]));
         // Host row 0 (the tab strip row): nothing.
         assert_eq!(session.renderer.sidebar_row_at(2, 0), None);
-        // Host row 1: the header — not clickable.
-        assert_eq!(session.renderer.sidebar_row_at(2, 1), None);
-        // Host row 2: the first workspace row, as painted.
+        // Host row 1: the first workspace row, as painted (no header
+        // above it since round 6).
         assert_eq!(
-            session.renderer.sidebar_row_at(2, 2),
+            session.renderer.sidebar_row_at(2, 1),
             Some("ws:+0".to_string()),
             "the click lands on the row as painted"
         );
-        // Host row 3: the second workspace row.
+        // Host row 2: the second workspace row.
         assert_eq!(
-            session.renderer.sidebar_row_at(2, 3),
+            session.renderer.sidebar_row_at(2, 2),
             Some("ws:+1".to_string())
         );
-        // Host row 4: the nested window row.
+        // The footer row (host row = renderer height - 1 + 1 = 24... the
+        // 22-row renderer's LAST row at host row 22): the chips answer
+        // only within their own cells — ` new ` spans cols 0..5, ` menu
+        // ` the content's right edge.
         assert_eq!(
-            session.renderer.sidebar_row_at(2, 4),
-            Some("win:@0".to_string())
+            session.renderer.sidebar_row_at(2, 22),
+            Some("panel:new".to_string()),
+            "the new chip's cell"
+        );
+        assert_eq!(
+            session.renderer.sidebar_row_at(16, 22),
+            Some("panel:menu".to_string()),
+            "the menu chip's cell"
+        );
+        assert_eq!(
+            session.renderer.sidebar_row_at(10, 22),
+            None,
+            "the gap between the chips hits nothing"
+        );
+        // A body row answers across its full content width (the active
+        // row's inverted block is clickable anywhere on it).
+        assert_eq!(
+            session.renderer.sidebar_row_at(17, 1),
+            Some("ws:+0".to_string())
         );
         // Past the strip's width: nothing.
         assert_eq!(session.renderer.sidebar_row_at(20, 2), None);

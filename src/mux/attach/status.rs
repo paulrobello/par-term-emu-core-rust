@@ -207,6 +207,18 @@ impl StatusState {
         &self.windows
     }
 
+    /// The workspace roster as `(id, name)`, id order — the side
+    /// panel's and the workspace prompts'/menus' source of truth.
+    pub(crate) fn workspaces(&self) -> &[(String, String)] {
+        &self.workspaces
+    }
+
+    /// The daemon's active workspace id, `"+N"` — the workspace menu
+    /// chip's target.
+    pub(crate) fn active_workspace(&self) -> Option<&str> {
+        self.active_workspace.as_deref()
+    }
+
     /// The focused pane's user title (the rename-pane prompt's seed).
     pub(crate) fn pane_title(&self) -> &str {
         &self.pane_title
@@ -391,17 +403,23 @@ impl StatusRow {
         self.prev = Buffer::empty(RtRect::new(0, 0, self.cols, 1));
     }
 
-    /// Paint `segments` over the whole row (base reversed, per-segment
+    /// Paint `segments` from the row's left (base reversed, per-segment
     /// bold), padding the remainder with spaces so the previous frame's
-    /// tail erases.
-    pub(crate) fn paint(&mut self, segments: &[Segment]) {
+    /// tail erases. `chip`, when given, paints RIGHT-ALIGNED at the
+    /// row's right edge (the Help chip): the content clips at the
+    /// chip's left column, so the chip can never be pushed off the row.
+    pub(crate) fn paint(&mut self, segments: &[Segment], chip: Option<&Segment>) {
+        // The chip's columns: [cols - chip_width, cols). Content stops
+        // before them.
+        let chip_cols = chip.map(|chip| chip.text.chars().count() as u16);
+        let content_limit = chip_cols.map_or(self.cols, |w| self.cols - w);
         for x in 0..self.cols {
             let cell = &mut self.buffer[(x, 0)];
             cell.reset();
             cell.set_style(RtStyle::default().add_modifier(RtModifier::REVERSED));
         }
         let mut x = 0u16;
-        for segment in segments {
+        'content: for segment in segments {
             // The herdr tab shading: the active tab drops the strip's
             // REVERSED base for a solid bright block (dark on bright
             // blue); inactive tabs dim, the rest the base.
@@ -422,13 +440,47 @@ impl StatusRow {
                 RtStyle::default().add_modifier(RtModifier::REVERSED)
             };
             for ch in segment.text.chars() {
-                if x >= self.cols {
-                    return;
+                if x >= content_limit {
+                    break 'content;
                 }
                 let cell = &mut self.buffer[(x, 0)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(style);
                 x += 1;
+            }
+        }
+        if let Some(chip) = chip {
+            let Some(chip_cols) = chip_cols else {
+                return;
+            };
+            if chip_cols == 0 || chip_cols > self.cols {
+                return;
+            }
+            let start = self.cols - chip_cols;
+            let style = if chip.shaded {
+                RtStyle::default()
+                    .fg(RtColor::Indexed(0))
+                    .bg(RtColor::Indexed(12))
+                    .add_modifier(RtModifier::BOLD)
+            } else {
+                RtStyle::default()
+                    .add_modifier(RtModifier::REVERSED)
+                    .add_modifier(if chip.bold {
+                        RtModifier::BOLD
+                    } else if chip.dim {
+                        RtModifier::DIM
+                    } else {
+                        RtModifier::empty()
+                    })
+            };
+            for (offset, ch) in chip.text.chars().enumerate() {
+                let x = start + offset as u16;
+                if x >= self.cols {
+                    break;
+                }
+                let cell = &mut self.buffer[(x, 0)];
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(style);
             }
         }
     }
@@ -623,17 +675,17 @@ mod tests {
     fn status_row_diffs_only_changes() {
         let segments = state().compose(80, None, false);
         let mut row = StatusRow::new(80);
-        row.paint(&segments);
+        row.paint(&segments, None);
         let first = row.diff();
         assert_eq!(first.len(), 80, "first paint is the whole row");
         assert_eq!(first[0].1, 0, "cell y is row-relative 0");
-        row.paint(&segments);
+        row.paint(&segments, None);
         assert!(row.diff().is_empty(), "identical repaint diffs empty");
 
         // One agent state change: only that chip's cells move.
         let mut next = state();
         next.agents = vec![("claude".to_string(), "blocked".to_string())];
-        row.paint(&next.compose(80, None, false));
+        row.paint(&next.compose(80, None, false), None);
         let diff = row.diff();
         assert!(!diff.is_empty());
         assert!(diff.len() < 80, "a chip change must not repaint the row");
@@ -647,12 +699,12 @@ mod tests {
         let mut long = state();
         long.pane_title = String::new();
         long.agents.clear();
-        row.paint(&long.compose(60, None, false));
+        row.paint(&long.compose(60, None, false), None);
         row.diff();
         let mut short = long.clone();
         short.pane_title = String::new();
         short.windows.clear();
-        row.paint(&short.compose(60, None, false));
+        row.paint(&short.compose(60, None, false), None);
         let diff = row.diff();
         assert!(
             diff.iter().any(|(_, _, cell)| cell.symbol() == " "),
@@ -671,5 +723,47 @@ mod tests {
         assert!(chip.bold);
         let remapped = super::help_chip(0x02, b'h');
         assert_eq!(remapped.text, " C-bh Help ");
+    }
+
+    /// The chip paints RIGHT-ALIGNED at the row's right edge and the
+    /// content clips at the chip's left column, so a long line can never
+    /// push the chip off the row (the reservation's paint half).
+    #[test]
+    fn paint_right_aligns_the_chip_and_clips_content_at_it() {
+        let mut row = StatusRow::new(40);
+        let long = Segment {
+            text: "x".repeat(60),
+            bold: false,
+            dim: false,
+            shaded: false,
+        };
+        let chip = super::help_chip(0x02, b'?'); // " C-b? Help " = 11 cols
+        row.paint(&[long], Some(&chip));
+        row.diff();
+        // The chip's 11 chars end the row: cols 29..40.
+        for (offset, ch) in chip.text.chars().enumerate() {
+            let cell = &row.buffer[(29 + offset as u16, 0)];
+            assert_eq!(cell.symbol(), ch.to_string(), "chip col {}", 29 + offset);
+        }
+        // The content clipped at the chip's left column (40 - 11 = 29).
+        for x in [0u16, 15, 28] {
+            assert_eq!(row.buffer[(x, 0)].symbol(), "x", "content col {x}");
+        }
+        // ...and an identical repaint diffs nothing (the diff baseline
+        // includes the chip).
+        row.paint(
+            &[Segment {
+                text: "y".repeat(60),
+                bold: false,
+                dim: false,
+                shaded: false,
+            }],
+            Some(&chip),
+        );
+        let diff = row.diff();
+        assert!(
+            diff.iter().all(|(x, _, _)| *x < 29),
+            "only the clipped content cells repaint: {diff:?}"
+        );
     }
 }

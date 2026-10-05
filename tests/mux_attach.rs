@@ -3147,6 +3147,90 @@ fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
 /// creates the window and lands on it, Esc cancels without creating.
 #[cfg(unix)]
 #[test]
+fn render_mode_plus_click_works_with_the_panel_up() {
+    let (fixture, _daemon, mut client) = fixture_with_session("pluspanel");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // Panel up (the manual-pass reporter's state): the top row stays a
+    // tab-strip row and the + keeps its reservation.
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(600));
+    let press: &[u8] = b"\x1b[<0;79;1M";
+    host.to_child.write_all(press).expect("plus press");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&flash).contains(" new tab "),
+        "the prompt must open with the panel up. stderr: {} text: {}",
+        stderr.lock().unwrap(),
+        plain_text(&flash)
+    );
+    host.killer.kill().ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn render_mode_plus_click_works_on_a_wide_host() {
+    let (fixture, _daemon, mut client) = fixture_with_session("pluswide");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // A live terminal is much wider than the harness's 80 columns: the
+    // manual-pass report could not click the + there. Widen the host and
+    // click the reserved slot at the new right edge.
+    host.master
+        .resize(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("resize");
+    std::thread::sleep(Duration::from_millis(600));
+    let press: &[u8] = b"\x1b[<0;199;1M";
+    host.to_child.write_all(press).expect("plus press");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&flash).contains(" new tab "),
+        "the prompt must open at the wide host's right edge. stderr: {} text: {}",
+        stderr.lock().unwrap(),
+        plain_text(&flash)
+    );
+    host.killer.kill().ok();
+}
+
+#[cfg(unix)]
+#[test]
 fn render_mode_plus_click_prompts_and_creates_a_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("plusclick");
     let pane_a = client
@@ -3318,18 +3402,18 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
     );
 
     // A press ON the painted workspace row lands on it: 1-based host
-    // rows are 1 = tab strip, 2 = the panel's section header, 3 = the
-    // workspace row (the panel begins under the strip row). The
-    // select+resync re-seed must re-emit the panel's full frame (a
-    // fresh renderer diffs against an empty buffer) with the panes still
-    // offset by the panel's width — and REPEATED clicks must not ratchet
-    // the layout left: the re-seed used to rebuild the renderer at the
-    // REPORTED width (grid less the panel), so each re-seed narrowed the
-    // buffer and each report then shrank again (the manual-pass
-    // click-shrinks-the-panes report).
+    // rows are 1 = tab strip, 2 = the FIRST workspace row (round 6: no
+    // section header above it — the title moved to the strip row; the
+    // panel begins under the strip row). The select+resync re-seed must
+    // re-emit the panel's full frame (a fresh renderer diffs against an
+    // empty buffer) with the panes still offset by the panel's width —
+    // and REPEATED clicks must not ratchet the layout left: the re-seed
+    // used to rebuild the renderer at the REPORTED width (grid less the
+    // panel), so each re-seed narrowed the buffer and each report then
+    // shrank again (the manual-pass click-shrinks-the-panes report).
     for click in 1..=2 {
         host.to_child
-            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'3', b'M'])
+            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
             .expect("panel click");
         host.to_child.flush().ok();
         let mut got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
