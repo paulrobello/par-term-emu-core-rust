@@ -6,7 +6,7 @@ This directory contains the GitHub Actions workflows that build, test, and publi
 
 | Workflow | File | Trigger | Purpose |
 |----------|------|---------|---------|
-| **Build and Deploy** | `deployment.yml` | Manual (`workflow_dispatch`) | Full release: streaming binaries + Python wheels + sdist + web frontend → GitHub Release (Sigstore) → PyPI + crates.io |
+| **Build and Deploy** | `deployment.yml` | Manual (`workflow_dispatch`) | Full release: streaming + par-mux binaries + Python wheels + sdist + web frontend → GitHub Release (Sigstore) → PyPI + crates.io |
 | **Release and Publish** | `release.yml` | Manual (`workflow_dispatch`) | Thin wrapper that dispatches `deployment.yml` on `main` |
 | **CI** | `ci.yml` | Manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
 | **Fuzz** | `fuzz.yml` | Manual (`workflow_dispatch`) + nightly schedule (`17 6 * * *`) | 10-min bounded libFuzzer run per target over the four untrusted-byte parsers; crash artifacts uploaded on failure |
@@ -23,6 +23,7 @@ All release/CI workflows are **manual-dispatch only** — none run on push or PR
 
 ```
 version-check ──┬─► build-streaming-binaries  (5 targets)
+                ├─► build-mux-binaries       (par-mux, 5 targets, native where possible)
                 ├─► linux    (x86_64 + aarch64 × py 3.12/3.13/3.14)
                 ├─► macos    (x86_64 + universal2 × py 3.12/3.13/3.14)
                 ├─► windows  (x86_64 × py 3.12/3.13/3.14)
@@ -36,16 +37,17 @@ version-check ──┬─► build-streaming-binaries  (5 targets)
                   GitHub Release v$VERSION
 ```
 
-**Jobs (8):**
+**Jobs (9):**
 
 1. **Verify Version Consistency** — asserts `Cargo.toml`, `pyproject.toml`, and `__init__.py` agree on the version; exports it for downstream jobs.
 2. **Build streaming binary** (matrix, 5 targets) — builds the standalone `par-term-streamer` server binary for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64 (`--no-default-features --features streaming-bin`). Linux ARM64 cross-compiles with `gcc-aarch64-linux-gnu`; Unix binaries are stripped.
-3. **linux / macos / windows** (matrix × Python 3.12/3.13/3.14) — builds wheels via `PyO3/maturin-action`. Linux ARM64 uses QEMU. x86_64 runners also install the wheel and run `pytest` (PTY/ioctl tests are ignored; Windows uses `-k "not pty"`). macOS builds both x86_64 and universal2 wheels.
-4. **Build source distribution** — `maturin sdist`.
-5. **Package web terminal frontend** — archives the committed `web_term/` directory into `par-term-web-frontend-v$VERSION.tar.gz` and `.zip`.
-6. **Create GitHub Release** — Sigstore-signs the wheels + sdist, creates release `v$VERSION` (`--generate-notes --latest`), and uploads the wheels, streaming binaries, and web-frontend archives.
-7. **Publish to PyPI** — trusted publishing (OIDC), `skip-existing`, environment `pypi`.
-8. **Publish to crates.io** — publishes the `par-term-emu-derive` sub-crate **first** (crates.io strips `path` deps, so the sub-crate must exist on the registry before the main crate can resolve it), then the main crate with `--no-verify` (the PyO3 cdylib can't link libpython standalone at publish time; it is verified via `make dev` + the test suite). Uses `CARGO_REGISTRY_TOKEN`.
+3. **Build par-mux binary** (matrix, 5 targets) — builds the standalone `par-mux` daemon (`--no-default-features --features rust-only,mux-bin,attach`, no Python) and packages `par-mux-v$VERSION-<target>.tar.gz`/`.zip` archives plus per-target sha256 files via `scripts/package_mux_release.py`. Linux x86_64/ARM64 build **natively** (ARM64 on `ubuntu-24.04-arm`, no cross linker); macOS ARM64 is native, macOS x86_64 cross-compiles from the ARM runner; Windows x86_64 is native. Native targets are smoke-tested (`--version`/`--help`); the macOS x86_64 cross build is never executed (Rosetta is not assumed). The release job merges the per-target checksum files into `par-mux-v$VERSION-SHA256SUMS.txt`.
+4. **linux / macos / windows** (matrix × Python 3.12/3.13/3.14) — builds wheels via `PyO3/maturin-action`. Linux ARM64 uses QEMU. x86_64 runners also install the wheel and run `pytest` (PTY/ioctl tests are ignored; Windows uses `-k "not pty"`). macOS builds both x86_64 and universal2 wheels.
+5. **Build source distribution** — `maturin sdist`.
+6. **Package web terminal frontend** — archives the committed `web_term/` directory into `par-term-web-frontend-v$VERSION.tar.gz` and `.zip`.
+7. **Create GitHub Release** — Sigstore-signs the wheels + sdist, creates release `v$VERSION` (`--generate-notes --latest`), and uploads the wheels, streaming binaries, par-mux archives + merged `SHA256SUMS`, and web-frontend archives.
+8. **Publish to PyPI** — trusted publishing (OIDC), `skip-existing`, environment `pypi`.
+9. **Publish to crates.io** — publishes the `par-term-emu-derive` sub-crate **first** (crates.io strips `path` deps, so the sub-crate must exist on the registry before the main crate can resolve it), then the main crate with `--no-verify` (the PyO3 cdylib can't link libpython standalone at publish time; it is verified via `make dev` + the test suite). Uses `CARGO_REGISTRY_TOKEN`.
 
 **Workflow permissions:** `contents: write` (create release + upload assets), `id-token: write` (PyPI trusted publishing + Sigstore signing).
 
@@ -59,6 +61,7 @@ version-check ──┬─► build-streaming-binaries  (5 targets)
 | macOS | universal2 (Intel + Apple Silicon) | 3.12, 3.13, 3.14 | ✅ | ✅ (on x86_64 runner) |
 | Windows | x86_64 | 3.12, 3.13, 3.14 | ✅ | ✅ pytest (`-k "not pty"`) |
 | Streaming binary | linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64 | — | ✅ | ⚠️ build only |
+| par-mux binary | linux x86_64/aarch64 (native), macos x86_64 (cross) / aarch64 (native), windows x86_64 (native) | — | ✅ | ⚠️ smoke (`--version`/`--help`) on native targets |
 
 ## Triggering & verifying a release
 

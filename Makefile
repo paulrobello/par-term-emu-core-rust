@@ -2,7 +2,7 @@
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check doc-links-check release-check audit-deps \
-        mux-manual-seed \
+        mux-manual-seed mux-package-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -405,6 +405,12 @@ mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
 
+# Release packaging for the standalone par-mux binaries (deployment.yml
+# build-mux-binaries). Pure python3 stdlib; --self-test builds a fake binary
+# and verifies archive layout, exec-bit preservation, and checksum integrity.
+mux-package-check:
+	python3 scripts/package_mux_release.py --self-test
+
 # Seed the MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
 # WIPE the socket's saved tree (stop, then remove the state file and its
@@ -463,7 +469,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check mux-docs-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check mux-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

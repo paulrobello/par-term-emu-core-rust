@@ -240,14 +240,20 @@ tar -xzf par-term-web-frontend-v*.tar.gz -C ./web_term
 
 Available binaries: Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (x86_64)
 
+**Pre-built `par-mux` daemon binaries** (standalone: no Python, no par-term
+installation) are attached to the same [GitHub Releases](https://github.com/paulrobello/par-term-emu-core-rust/releases)
+as `par-mux-v<version>-<target>.tar.gz` (Unix) / `.zip` (Windows) archives
+with a `SHA256SUMS` file. Per-platform install steps:
+[docs/MUX.md](docs/MUX.md#standalone-binaries-github-releases).
+
 **Or install from crates.io:**
 ```bash
 # Streaming server (no-default-features is required: the default python feature
 # links libpython and fails at link time for a standalone binary)
 cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer
 
-# Terminal multiplexer daemon + client
-cargo install par-term-emu-core-rust --no-default-features --features mux-bin --bin par-mux
+# Terminal multiplexer daemon + client (add ,attach for the attach TUI client)
+cargo install par-term-emu-core-rust --no-default-features --features mux-bin,attach --bin par-mux
 ```
 
 **Or build from source:**

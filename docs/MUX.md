@@ -44,6 +44,55 @@ cargo run --bin par-mux --no-default-features --features mux-bin
 
 The Python wheel and the default `make dev` build do not include the daemon.
 
+### Standalone binaries (GitHub Releases)
+
+Standalone `par-mux` executables — no Python and no par-term installation
+required, built from the `rust-only,mux-bin,attach` feature set (daemon, CLI
+client, and the `attach` TUI) — are attached to every
+[GitHub Release](https://github.com/paulrobello/par-term-emu-core-rust/releases)
+from the release that introduces them on. Each release carries one archive per platform
+(`par-mux-v<version>-<target>.tar.gz` on Unix, `.zip` on Windows) plus a
+`par-mux-v<version>-SHA256SUMS.txt` covering all of them:
+
+| Platform | Archive |
+|----------|---------|
+| Linux x86_64 | `par-mux-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64 | `par-mux-v<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `par-mux-v<version>-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `par-mux-v<version>-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `par-mux-v<version>-x86_64-pc-windows-msvc.zip` |
+
+Install on Linux/macOS (pick the archive for your target; each archive
+extracts to a `par-mux-v<version>-<target>/` directory containing the
+executable, `LICENSE`, and an install note):
+
+```bash
+curl -LO https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-mux-v<version>-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf par-mux-v<version>-x86_64-unknown-linux-gnu.tar.gz
+install -m 755 par-mux-v<version>-x86_64-unknown-linux-gnu/par-mux ~/.local/bin/par-mux
+```
+
+Ensure `~/.local/bin` is on `PATH`. On Windows, extract the `.zip`, create a
+directory for the executable (e.g. `%LOCALAPPDATA%\Programs\par-mux`), add
+that directory to `PATH`, and copy `par-mux.exe` into it. Verify any download
+against the checksum file from the same release with
+`sha256sum -c par-mux-v<version>-SHA256SUMS.txt` (Windows:
+`certutil -hashfile <archive> SHA256`).
+
+The same feature set builds from source (this is exactly what the release
+binaries are built with):
+
+```bash
+cargo install --path . --locked --no-default-features --features rust-only,mux-bin,attach --bin par-mux
+```
+
+or from crates.io (the `mux-bin,attach` features exist in the published
+crate):
+
+```bash
+cargo install par-term-emu-core-rust --no-default-features --features mux-bin,attach --bin par-mux
+```
+
 At startup the daemon raises its `RLIMIT_NOFILE` soft limit toward the hard limit (Unix), logging the old and new values — an inherited launchd-style limit of 256 descriptors caps the daemon near 60 panes (~4 descriptors each), which the raise removes. An unbounded hard limit is treated as 8192.
 
 ## Command Line

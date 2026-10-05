@@ -209,6 +209,99 @@ jobs:
           path: release-binaries/${{ matrix.asset_name }}
           retention-days: 1
 
+  # Standalone par-mux daemon binaries (feature set `rust-only,mux-bin,attach`):
+  # no Python, no par-term/streaming dependency — the multiplexer alone.
+  # Linux ARM64 builds natively on ubuntu-24.04-arm (no cross linker); macOS
+  # x86_64 cross-compiles from the ARM runner (not smoke-run — Rosetta is not
+  # assumed). Archives are packaged by scripts/package_mux_release.py with a
+  # per-target sha256 file; the github-release job merges them into one
+  # par-mux-v<version>-SHA256SUMS.txt.
+  build-mux-binaries:
+    name: Build par-mux binary - ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: [version-check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            cross: false
+
+          - name: macOS x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            cross: true
+
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build par-mux binary
+        run: cargo build --locked --release --no-default-features --features rust-only,mux-bin,attach --bin par-mux --target ${{ matrix.target }}
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/par-mux
+
+      - name: Smoke test --version/--help (native targets)
+        if: matrix.cross == false
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="target/${{ matrix.target }}/release/par-mux.exe"
+          else
+            BIN="target/${{ matrix.target }}/release/par-mux"
+          fi
+          "$BIN" --version
+          "$BIN" --help > /dev/null
+          echo "smoke OK: $BIN"
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="target/${{ matrix.target }}/release/par-mux.exe"
+            PY=python
+          else
+            BIN="target/${{ matrix.target }}/release/par-mux"
+            PY=python3
+          fi
+          "$PY" scripts/package_mux_release.py \
+            --bin "$BIN" \
+            --version "${{ needs.version-check.outputs.version }}" \
+            --target "${{ matrix.target }}" \
+            --output-dir mux-release
+
+      - name: Upload mux archive artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mux-binaries-${{ matrix.target }}
+          path: mux-release/*
+          retention-days: 1
+
   # iOS xcframework for the C FFI (ParDeck on-device embedding). Built from
   # the headless rust-only profile — the default python feature links the
   # host libpython and cannot produce an iOS artifact.
@@ -483,7 +576,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend, ios-xcframework]
+    needs: [build-streaming-binaries, build-mux-binaries, linux, macos, windows, sdist, package-web-frontend, ios-xcframework]
     permissions:
       contents: write
       id-token: write
@@ -515,6 +608,13 @@ jobs:
         with:
           pattern: binary-*
           path: binaries
+          merge-multiple: true
+
+      - name: Download par-mux archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mux-binaries-*
+          path: mux-release
           merge-multiple: true
 
       - name: Download web frontend artifacts
@@ -570,6 +670,18 @@ jobs:
         run: |
           gh release upload \
           'v${{ steps.get_version.outputs.version }}' binaries/* \
+          --repo '${{ github.repository }}' \
+          --clobber
+
+      - name: Upload par-mux binaries to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Merge the per-target checksum files into the release-level SUMS.
+          cat mux-release/*.sha256 > par-mux-v${{ steps.get_version.outputs.version }}-SHA256SUMS.txt
+          gh release upload \
+          'v${{ steps.get_version.outputs.version }}' mux-release/*.tar.gz mux-release/*.zip \
+          par-mux-v${{ steps.get_version.outputs.version }}-SHA256SUMS.txt \
           --repo '${{ github.repository }}' \
           --clobber
 
