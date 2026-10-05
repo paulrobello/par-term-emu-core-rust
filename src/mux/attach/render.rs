@@ -4740,8 +4740,10 @@ impl WindowSession {
                 && !mouse.is_wheel_up()
                 && !mouse.is_wheel_down()
             {
-                let content_x = x.saturating_sub(strip);
-                if let Some(row) = self.renderer.overlay_row_at(content_x, y) {
+                // The modal centers over the HOST width (the pane layout
+                // already carries the strip offset), so the click maps by
+                // the raw column — the picker's guard does the same.
+                if let Some(row) = self.renderer.overlay_row_at(x, y) {
                     self.menu_click(conn, row);
                 }
             }
@@ -7701,6 +7703,41 @@ mod tests {
                 assert_ne!(cell.bg, green, "re-seed stale green at ({x},{y})");
             }
         }
+    }
+
+    /// The context menu's click mapping takes the RAW host column: the
+    /// modal centers over the host width, so mapping through the panel's
+    /// strip offset lands every click one panel width left (the
+    /// manual-pass round-7 report: menu items unclickable with the
+    /// panel up).
+    #[test]
+    fn panel_up_menu_click_maps_raw_host_columns() {
+        use crate::mux::attach::input::SgrMouse;
+        let (_rx, conn) = recording_conn("menuprobe");
+        let mut conn = conn;
+        let mut session = WindowSession::new(80, 24);
+        session.renderer.set_sidebar_width(20);
+        session.window = "@0".to_string();
+        session.open_menu(super::MenuTarget::Tab("@0".to_string()));
+        let (x0, y0, inner, height) = session.renderer.overlay_geometry().expect("menu up");
+        println!("GEO x0={x0} y0={y0} inner={inner} height={height}");
+        let click = SgrMouse {
+            cb: 0,
+            col: (x0 + 4) as u16,
+            row: (y0 + 3) as u16,
+            release: false,
+        };
+        session.route_mouse(&mut conn, click);
+        println!(
+            "AFTER prompt_mode={} menu={:?} overlay_title={:?}",
+            session.prompt_mode,
+            session.menu.is_some(),
+            session.renderer.overlay.as_ref().map(|o| o.0)
+        );
+        assert!(
+            session.prompt_mode,
+            "the raw-column click must open the rename prompt"
+        );
     }
 
     /// The new-tab prompt's default name: one past the highest window

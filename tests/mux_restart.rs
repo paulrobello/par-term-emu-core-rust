@@ -1045,21 +1045,36 @@ fn workspaces_survive_a_restart() {
             "the active pointer survived: {listed}"
         );
         let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        // new-workspace auto-spawns the workspace's first session, so the
+        // restored roster carries it too (`+1: dev: $1: dev`); the pairing
+        // assertions match workspace + session name, not bare ids (the
+        // extra session shifts the id assignment).
+        let pair = |ws: &str, name: &str| {
+            sessions
+                .lines()
+                .any(|l| l.contains(&format!("{ws}:")) && l.contains(&format!(": {name}")))
+        };
         assert!(
-            sessions.contains("+0: main: $2: in-main"),
-            "session 2 restored into its workspace: {sessions}"
+            pair("+0: main", "in-main"),
+            "session restored into its workspace: {sessions}"
         );
         assert!(
-            sessions.contains("+1: dev: $1: in-dev"),
-            "session 1 restored into its workspace: {sessions}"
+            pair("+1: dev", "in-dev"),
+            "session restored into its workspace: {sessions}"
+        );
+        assert!(
+            pair("+1: dev", "dev"),
+            "the auto-spawned first session survived the restart: {sessions}"
         );
         // A new session after the restart lands in the restored ACTIVE
         // workspace.
         command(&mut writer, &mut reader, "new-session -s fresh");
-        let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
+        let fresh_sessions = command(&mut writer, &mut reader, "list-sessions").join("");
         assert!(
-            sessions.contains("+1: dev: $3: fresh"),
-            "a post-restart session joins the restored active workspace: {sessions}"
+            fresh_sessions
+                .lines()
+                .any(|l| l.contains("+1: dev:") && l.contains(": fresh")),
+            "a post-restart session joins the restored active workspace: {fresh_sessions}"
         );
     }
     sigterm_clean(&mut second);

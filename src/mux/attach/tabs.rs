@@ -596,6 +596,45 @@ mod tests {
         assert!(visible.contains(&2), "active visible even tiny");
     }
 
+    /// The active tab's highlight block covers exactly its own cell (text
+    /// plus both pads) — with and without the panel's lead segment — and
+    /// no other tab's columns carry the accent (the manual-pass round-7
+    /// report of a highlight block bleeding left of the inactive tab).
+    #[test]
+    fn active_block_never_bleeds_into_other_tabs() {
+        let windows: Vec<(String, String)> =
+            vec![("@0".into(), "demo".into()), ("@1".into(), "woot".into())];
+        for lead in [0u16, 20u16] {
+            let mut strip = TabStrip::new(80);
+            strip.paint(
+                &windows,
+                Some("@1"),
+                if lead > 0 {
+                    Some(("workspaces", lead))
+                } else {
+                    None
+                },
+            );
+            let demo_span = lead..lead + 8; // ` 0:demo `
+            let woot_span = lead + 8..lead + 16; // ` 1:woot `
+            for x in 0..80u16 {
+                let bg_is_accent = strip.buffer[(x, 0)].bg == ACCENT;
+                if demo_span.contains(&x) {
+                    assert!(
+                        !bg_is_accent,
+                        "lead={lead}: the inactive tab's col {x} must not carry the accent"
+                    );
+                }
+                if woot_span.contains(&x) {
+                    assert!(
+                        bg_is_accent,
+                        "lead={lead}: the active tab's col {x} must carry the block"
+                    );
+                }
+            }
+        }
+    }
+
     /// `tab_text` at a budget: a name at or under the budget renders
     /// whole; a longer one truncates to the budget and ellipsizes.
     #[test]

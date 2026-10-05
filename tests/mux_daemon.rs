@@ -1886,15 +1886,23 @@ fn workspace_commands_over_the_wire() {
             "the new workspace is active: {listed}"
         );
 
-        // Sessions land in the active workspace; bare list-sessions carries
-        // the workspace prefix.
-        // The first session lazily creates the default workspace (+1: main)
-        // only when it targets it; a bare new-session targets the ACTIVE
-        // workspace (dev), so no default appears.
+        // new-workspace spawns the workspace's FIRST session/window (the
+        // manual-pass report: a created workspace highlighted in the side
+        // panel while the view had nothing to land on), so the workspace
+        // is landable the moment it exists; the session is named after
+        // the workspace.
+        let sessions = command(&mut writer, &mut reader, "list-sessions -t dev").join("");
+        assert!(
+            sessions.lines().any(|l| l.contains("$0: dev")),
+            "the created workspace carries its first session: {sessions}"
+        );
+
+        // A further session lands in the active workspace; bare
+        // list-sessions carries the workspace prefix.
         command(&mut writer, &mut reader, "new-session -s ws-svc");
         let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
         assert!(
-            sessions.lines().any(|l| l.trim() == "+0: dev: $0: ws-svc"),
+            sessions.lines().any(|l| l.trim() == "+0: dev: $1: ws-svc"),
             "the workspace prefix rides the session line: {sessions}"
         );
 

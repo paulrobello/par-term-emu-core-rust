@@ -1795,6 +1795,55 @@ pub(crate) fn help_rows(
     );
     push_cat(
         &mut rows,
+        "workspaces",
+        vec![
+            (
+                format!("{p} {}", spell_key(m.workspace_next)),
+                "next workspace".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.workspace_prev)),
+                "previous workspace".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.workspace_picker)),
+                "workspace picker".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.sidebar)),
+                "toggle the workspace side panel".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.status_bar)),
+                "toggle the status bar".to_string(),
+            ),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "tabs / windows / sessions",
+        vec![
+            (
+                format!("{p} {}", spell_key(m.new_window)),
+                "new tab (window)".to_string(),
+            ),
+            (
+                format!("{p} n / p"),
+                "next / previous tab (window)".to_string(),
+            ),
+            (format!("{p} ( / )"), "previous / next session".to_string()),
+            (
+                format!("{p} {}", spell_key(m.picker)),
+                "session/window picker".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.rename_window)),
+                "rename the tab (window)".to_string(),
+            ),
+        ],
+    );
+    push_cat(
+        &mut rows,
         "panes",
         vec![
             (
@@ -1841,55 +1890,6 @@ pub(crate) fn help_rows(
             (
                 format!("{p} {}", spell_key(m.rename_pane)),
                 "rename the focused pane".to_string(),
-            ),
-        ],
-    );
-    push_cat(
-        &mut rows,
-        "tabs / windows / sessions",
-        vec![
-            (
-                format!("{p} {}", spell_key(m.new_window)),
-                "new tab (window)".to_string(),
-            ),
-            (
-                format!("{p} n / p"),
-                "next / previous tab (window)".to_string(),
-            ),
-            (format!("{p} ( / )"), "previous / next session".to_string()),
-            (
-                format!("{p} {}", spell_key(m.picker)),
-                "session/window picker".to_string(),
-            ),
-            (
-                format!("{p} {}", spell_key(m.rename_window)),
-                "rename the tab (window)".to_string(),
-            ),
-        ],
-    );
-    push_cat(
-        &mut rows,
-        "workspaces",
-        vec![
-            (
-                format!("{p} {}", spell_key(m.workspace_next)),
-                "next workspace".to_string(),
-            ),
-            (
-                format!("{p} {}", spell_key(m.workspace_prev)),
-                "previous workspace".to_string(),
-            ),
-            (
-                format!("{p} {}", spell_key(m.workspace_picker)),
-                "workspace picker".to_string(),
-            ),
-            (
-                format!("{p} {}", spell_key(m.sidebar)),
-                "toggle the workspace side panel".to_string(),
-            ),
-            (
-                format!("{p} {}", spell_key(m.status_bar)),
-                "toggle the status bar".to_string(),
             ),
         ],
     );

@@ -3147,6 +3147,79 @@ fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
 /// creates the window and lands on it, Esc cancels without creating.
 #[cfg(unix)]
 #[test]
+/// The tab context menu must be CLICKABLE with the side panel up: the
+/// modal centers over the HOST width (the pane layout already carries
+/// the strip offset), so its clicks map by the raw host column — the
+/// guard mapped them through `x - strip` and every click landed one
+/// panel width left of the visible items (the manual-pass round-7
+/// report; the same defect class as round 5's unclickable +).
+#[cfg(unix)]
+#[test]
+fn render_mode_tab_menu_actions_click_with_the_panel_up() {
+    let (fixture, _daemon, mut client) = fixture_with_session("menuclick");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // Panel up, then a right-press on the shown window's tab opens the
+    // tab menu.
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(600));
+    // With the panel up the tabs start at the panel's right edge
+    // (strip col 20): the shown window's tab ` 0:demo ` spans host
+    // cols 20-27, so the right press is 1-based col 23.
+    let press: &[u8] = b"\x1b[<2;24;1M";
+    host.to_child.write_all(press).expect("right press");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"rename", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&flash).contains("rename"),
+        "the menu must open on a right press. stderr: {} text: {}",
+        stderr.lock().unwrap(),
+        plain_text(&flash)
+    );
+
+    // Click the RENAME row at its RAW host coordinates (the menu's
+    // painted geometry: the widest row is the 28-char footer, so the
+    // box is 30 wide centered over the 80-col host — x0 = 25; 5 rows
+    // plus the border ring centered over 22 content rows — y0 = 7).
+    let x0 = (80usize.saturating_sub(30)) / 2; // 25
+    let y0 = (22usize.saturating_sub(7)) / 2; // 7
+    let menu_col = x0 + 5; // inside the box, 1-based host col
+    let menu_row = y0 + 3; // panel row 1 (rename), 1-based host row
+    host.to_child
+        .write_all(format!("\x1b[<0;{menu_col};{menu_row}M").as_bytes())
+        .expect("menu click");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"rename window", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&flash).contains("rename window"),
+        "the menu's rename row must open the rename prompt. stderr: {} raw: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&flash)
+    );
+    host.killer.kill().ok();
+}
+
 fn render_mode_plus_click_works_with_the_panel_up() {
     let (fixture, _daemon, mut client) = fixture_with_session("pluspanel");
     let pane_a = client

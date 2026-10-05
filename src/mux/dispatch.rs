@@ -1419,8 +1419,39 @@ fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> O
 /// `list-workspaces` rather than parse a diff).
 fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
     let name = name.unwrap_or_else(|| "main".to_string());
-    let id = ctx.tree.lock().new_workspace(&name);
-    Outcome::ok(ctx, &id.to_string()).notifying(TmuxNotification::WorkspacesChanged)
+    // A workspace with no sessions cannot be landed on — the panel's
+    // ` new ` chip must create a USABLE one: the workspace plus its
+    // first session/window spawning the default shell, so the
+    // select+land the client runs after the create has something to
+    // land on (the manual-pass report: a created workspace highlighted
+    // in the side panel while the view stayed on the old one's tabs).
+    let (id, plan, factory) = {
+        let mut guard = ctx.tree.lock();
+        let id = guard.new_workspace(&name);
+        (
+            id,
+            guard.begin_session_at(id, &name, DEFAULT_COLS, DEFAULT_ROWS, &Default::default()),
+            guard.factory(),
+        )
+    };
+    let window_id = plan.window_id;
+    let outcome = spawn_and_wire(ctx, &*factory, plan, None, None)
+        .map(|session_id| (session_id, vec![window_id]));
+    match outcome {
+        Ok((_session_id, window_ids)) => {
+            // The reply stays the WORKSPACE id (the wire contract the
+            // client's landing parses); the session/window cues ride the
+            // notifications.
+            let mut result = Outcome::ok(ctx, &id.to_string())
+                .notifying(TmuxNotification::WorkspacesChanged)
+                .notifying(TmuxNotification::SessionsChanged);
+            for window in window_ids {
+                result = result.notifying(window_add_notification(ctx.tree, window));
+            }
+            result
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
 }
 
 fn cmd_list_workspaces(ctx: &Ctx<'_>) -> Outcome {
