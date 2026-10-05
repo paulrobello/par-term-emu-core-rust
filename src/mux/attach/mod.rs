@@ -893,8 +893,9 @@ impl Session {
                     Some(ManagementKey::WorkspaceNext) => self.switch_workspace(1),
                     Some(ManagementKey::WorkspacePrev) => self.switch_workspace(-1),
                     // Render-mode-only chords: passthrough has no zoom,
-                    // no overlay surface for the rename prompt, and no
-                    // divider glyphs to cycle. Consumed, not forwarded.
+                    // no overlay surface for the rename prompt, no
+                    // divider glyphs to cycle, and no status bar or
+                    // side panel. Consumed, not forwarded.
                     Some(
                         ManagementKey::Zoom
                         | ManagementKey::RenameWindow
@@ -902,7 +903,8 @@ impl Session {
                         | ManagementKey::BorderCycle
                         | ManagementKey::Labels
                         | ManagementKey::WorkspacePicker
-                        | ManagementKey::Sidebar,
+                        | ManagementKey::Sidebar
+                        | ManagementKey::StatusBar,
                     ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
@@ -1705,6 +1707,8 @@ pub(crate) enum ManagementKey {
     WorkspacePicker,
     /// Toggle the workspace side panel (render mode).
     Sidebar,
+    /// Toggle the status bar (render mode).
+    StatusBar,
 }
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
@@ -1883,6 +1887,10 @@ pub(crate) fn help_rows(
                 format!("{p} {}", spell_key(m.sidebar)),
                 "toggle the workspace side panel".to_string(),
             ),
+            (
+                format!("{p} {}", spell_key(m.status_bar)),
+                "toggle the status bar".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -1916,6 +1924,10 @@ pub(crate) fn help_rows(
                 "drag divider".to_string(),
                 "resize the adjacent split".to_string(),
             ),
+            (
+                "click +".to_string(),
+                "new tab — prompts for its name".to_string(),
+            ),
         ],
     );
     rows
@@ -1943,11 +1955,46 @@ pub(crate) const PROMPT_PANE_OVERLAY_TITLE: &str = " rename pane ";
 /// The rename prompt's footer controls line.
 pub(crate) const PROMPT_FOOTER: &str = " enter rename · esc cancel ";
 
-/// The rename prompt's content rows: the input line (`> text▌`, the ▌
-/// is the insert point — the frame hides the host cursor under the
-/// overlay), a spacer, and the footer controls line. Pure over its
-/// input — the unit-test surface.
-pub(crate) fn compose_prompt_panel(text: &str) -> Vec<HelpRow> {
+/// The new-tab prompt's footer controls line (herdr's chip vocabulary).
+pub(crate) const NEW_PROMPT_FOOTER: &str = " enter save · ^c clear · esc cancel ";
+
+/// The modal overlay's title for the new-window prompt (the tab strip's
+/// `+` button).
+pub(crate) const PROMPT_NEW_WINDOW_OVERLAY_TITLE: &str = " new tab ";
+
+/// Spell a NAME for the control wire: unconditional single quotes, the
+/// embedded-quote `'\''` idiom — the same bounded quoting grammar the
+/// daemon's parser (`shell_split`) and `agent_resume::render_argv` use,
+/// so a name with spaces or quotes survives as one word.
+pub(crate) fn wire_quote(name: &str) -> String {
+    format!("'{}'", name.replace('\'', "'\\''"))
+}
+
+/// The new-window prompt's editable default: the shown session's next
+/// free index — one past the highest window ordinal, bumped past any
+/// window NAME that already claims the number (the manual-pass ask: the
+/// next non-conflicting index). Pure over the queried windows — the
+/// unit-test surface.
+pub(crate) fn next_window_name(windows: &[(String, String)]) -> String {
+    let used: std::collections::HashSet<&str> =
+        windows.iter().map(|(_, name)| name.as_str()).collect();
+    let mut candidate = windows
+        .iter()
+        .filter_map(|(id, _)| id.trim_start_matches('@').parse::<u32>().ok())
+        .max()
+        .map_or(1, |max| max + 1);
+    while used.contains(candidate.to_string().as_str()) {
+        candidate += 1;
+    }
+    candidate.to_string()
+}
+
+/// The prompt's content rows: the input line (`> text▌`, the ▌ is the
+/// insert point — the frame hides the host cursor under the overlay), a
+/// spacer, and the footer controls line — `footer` spells the controls
+/// (the rename and new-tab prompts differ). Pure over its input — the
+/// unit-test surface.
+pub(crate) fn compose_prompt_panel(text: &str, footer: &str) -> Vec<HelpRow> {
     vec![
         HelpRow {
             text: format!(" > {text}▌"),
@@ -1960,33 +2007,17 @@ pub(crate) fn compose_prompt_panel(text: &str) -> Vec<HelpRow> {
             footer: false,
         },
         HelpRow {
-            text: PROMPT_FOOTER.to_string(),
+            text: footer.to_string(),
             accent: false,
             footer: true,
         },
     ]
 }
 
-/// The help panel's filter line when no filter is active — the visible
-/// placeholder (herdr's always-visible filter input).
-pub(crate) const HELP_FILTER_PLACEHOLDER: &str = " press / to filter ";
-
-/// Compose the help panel's CONTENT rows: the filter line (always
-/// present — the placeholder when inactive, ` /query▌` once `/` opened
-/// the input or text was typed), the filter's matching rows (headers hide
-/// when nothing beneath them matches) windowed to `visible` rows at
-/// `scroll`, and the footer controls line. The renderer's
-/// `PaneRenderer::paint_overlay` wraps these in the themed border box
-/// (ring, title, badge, background). Pure over its inputs — the
-/// unit-test surface for the panel.
-pub(crate) fn compose_help_panel(
-    rows: &[HelpRow],
-    filter: &str,
-    filtering: bool,
-    visible: usize,
-    scroll: usize,
-) -> Vec<HelpRow> {
-    let _ = filtering; // the cursor glyph rides the filter text below
+/// The help panel's content rows after the filter: headers hide when
+/// nothing beneath them matches. Shared by the panel composer and the
+/// renderer's scroll-state math.
+pub(crate) fn help_content(rows: &[HelpRow], filter: &str) -> Vec<HelpRow> {
     let lower = filter.to_lowercase();
     let mut content: Vec<HelpRow> = Vec::new();
     let mut pending_header: Option<HelpRow> = None;
@@ -2000,24 +2031,40 @@ pub(crate) fn compose_help_panel(
             content.push(row.clone());
         }
     }
+    content
+}
+
+/// The windowing start the help panel shows: the scroll clamped so the
+/// last `visible` rows fill the panel.
+pub(crate) fn help_window_start(content_len: usize, visible: usize, scroll: usize) -> usize {
+    scroll.min(content_len.saturating_sub(visible))
+}
+
+/// Compose the help panel's CONTENT rows: the filter line when a filter
+/// is open or set (` /query▌`; the footer already advertises `search /`,
+/// so no placeholder when idle — the round-5 report), the filter's
+/// matching rows windowed to `visible` rows at `scroll`, and the footer
+/// controls line. The renderer's `PaneRenderer::paint_overlay` wraps
+/// these in the themed border box (ring, title, badge, background, and
+/// the overflow thumb). Pure over its inputs — the unit-test surface for
+/// the panel.
+pub(crate) fn compose_help_panel(
+    rows: &[HelpRow],
+    filter: &str,
+    filtering: bool,
+    visible: usize,
+    scroll: usize,
+) -> Vec<HelpRow> {
+    let _ = filtering; // the cursor glyph rides the filter text below
+    let content = help_content(rows, filter);
     let content_len = content.len();
-    let max_start = content_len.saturating_sub(visible);
-    let start = scroll.min(max_start);
+    let start = help_window_start(content_len, visible, scroll);
     let window: Vec<HelpRow> = content[start..(start + visible.min(content_len - start))].to_vec();
 
     let mut panel: Vec<HelpRow> = Vec::new();
-    // The filter line is ALWAYS visible: placeholder when no filter is
-    // active (the round-3 no-feedback defect — `/` must show the input
-    // immediately), the query with a cursor glyph once it is.
     if filtering || !filter.is_empty() {
         panel.push(HelpRow {
             text: format!(" /{filter}▌"),
-            accent: false,
-            footer: false,
-        });
-    } else {
-        panel.push(HelpRow {
-            text: HELP_FILTER_PLACEHOLDER.to_string(),
             accent: false,
             footer: false,
         });
@@ -2175,12 +2222,6 @@ pub(crate) fn compose_picker_panel(
     if filtering || !filter.is_empty() {
         panel.push(HelpRow {
             text: format!(" /{filter}▌"),
-            accent: false,
-            footer: false,
-        });
-    } else {
-        panel.push(HelpRow {
-            text: HELP_FILTER_PLACEHOLDER.to_string(),
             accent: false,
             footer: false,
         });
@@ -3949,19 +3990,21 @@ mod tests {
     #[test]
     fn compose_help_panel_filters_scrolls_and_chromes() {
         let rows = super::help_rows(0x02, 0x12, Default::default(), 1);
-        // Full panel: the always-visible filter placeholder, the
-        // categories, the footer.
+        // Full panel: content + footer — no idle placeholder (the footer
+        // already advertises `search /`), and entering filter mode swaps
+        // in the cursor-input line immediately — `/` must give visible
+        // feedback before any typing.
         let panel = super::compose_help_panel(&rows, "", false, 100, 0);
         let text: Vec<&str> = panel.iter().map(|r| r.text.as_str()).collect();
+        assert!(
+            !text.iter().any(|t| t.contains("press / to filter")),
+            "no idle placeholder row: {text:?}"
+        );
         assert_eq!(
-            text[0],
-            super::HELP_FILTER_PLACEHOLDER,
-            "the inactive filter line shows the placeholder: {}",
+            text[0], " global ",
+            "the content leads the idle panel: {}",
             text[0]
         );
-        // Entering filter mode (no text yet) swaps in the cursor-input
-        // line immediately — `/` must give visible feedback before any
-        // typing.
         let active = super::compose_help_panel(&rows, "", true, 100, 0);
         assert_eq!(
             active[0].text, " /▌",
@@ -4077,9 +4120,10 @@ mod tests {
             },
         ];
         let (rows, refs) = super::picker_rows(&entries, Some("@0"));
-        // Full panel: filter placeholder + 4 content rows + footer.
+        // Full panel: 4 content rows + footer — no idle placeholder (the
+        // footer already advertises `filter /`).
         let (panel, refs2, start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0);
-        assert_eq!(panel.len(), 6, "filter + content + footer: {panel:?}");
+        assert_eq!(panel.len(), 5, "content + footer: {panel:?}");
         assert_eq!(start, 0);
         assert_eq!(refs2.len(), 4);
         assert_eq!(
@@ -4112,18 +4156,18 @@ mod tests {
         // The selection cursor: selected=2 marks the third content row.
         let (marked, _, _) = super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0);
         assert!(
-            marked[3].text.starts_with('▸'),
+            marked[2].text.starts_with('▸'),
             "the selected row carries the cursor glyph: {}",
-            marked[3].text
+            marked[2].text
         );
         assert!(
             !marked[1].text.starts_with('▸'),
             "only the selected row carries it"
         );
-        // Click mapping: composed row 2 (content row 1) maps to content
+        // Click mapping: composed row 1 (content row 1) maps to content
         // index start + 1.
         let (small, _, small_start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 2, 0);
-        assert_eq!(small.len(), 4, "filter + 2 visible + footer");
+        assert_eq!(small.len(), 3, "2 visible + footer");
         assert_eq!(small_start, 0);
         // Panning: a selected row below the window moves `start`.
         let (_panned, _, panned_start) =
@@ -4304,6 +4348,7 @@ mod tests {
                     label_toggle: b'l',
                     workspace_picker: b'g',
                     sidebar: b's',
+                    status_bar: b'S',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()
@@ -4334,6 +4379,7 @@ mod tests {
                     label_toggle: b'l',
                     workspace_picker: b'g',
                     sidebar: b's',
+                    status_bar: b'S',
                 },
                 resize_step: 1,
                 ..crate::mux::config::Chords::with_defaults()

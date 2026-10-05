@@ -287,11 +287,13 @@ pub struct PaneRenderer {
     /// The divider currently dragged (orientation + pane ids), drawn
     /// reversed so the edge being moved stands out.
     drag_divider: Option<(bool, u32, u32)>,
-    /// The help/picker overlay's title and rows, painted as the themed
-    /// modal over the frame while `Some` (the help or picker chord). Rows
-    /// carry their accent flag so the painter styles headers/border ring
-    /// in the accent color.
-    overlay: Option<(&'static str, Vec<HelpRow>)>,
+    /// The help/picker overlay's title, rows, and optional scroll state
+    /// `(scrolled-past, visible, total)` — painted as the themed modal
+    /// over the frame while `Some` (the help or picker chord). Rows carry
+    /// their accent flag so the painter styles headers/border ring in the
+    /// accent color; the scroll state draws a border thumb when the
+    /// content overflows.
+    overlay: Option<(&'static str, Vec<HelpRow>, Option<(usize, usize, usize)>)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -520,12 +522,15 @@ impl PaneRenderer {
         Some(y - y0 - 1)
     }
 
-    /// Set (or clear) the modal overlay's title and rows. The overlay
-    /// paints as the themed modal over the frame; clearing it lets the
-    /// next frame's pane repaint restore the covered cells.
-    pub(crate) fn set_overlay(&mut self, overlay: Option<(&'static str, Vec<HelpRow>)>) {
+    /// Set (or clear) the modal overlay's title, rows, and scroll state.
+    /// The overlay paints as the themed modal over the frame; clearing it
+    /// lets the next frame's pane repaint restore the covered cells.
+    pub(crate) fn set_overlay(
+        &mut self,
+        overlay: Option<(&'static str, Vec<HelpRow>, Option<(usize, usize, usize)>)>,
+    ) {
         let same = match (&self.overlay, &overlay) {
-            (Some((a, ra)), Some((b, rb))) => a == b && ra == rb,
+            (Some((a, ra, sa)), Some((b, rb, sb))) => a == b && ra == rb && sa == sb,
             (None, None) => true,
             _ => false,
         };
@@ -760,17 +765,20 @@ impl PaneRenderer {
             .unwrap_or_default()
     }
 
-    /// The workspace id under the strip-relative host cell `(x, y)`, if a
-    /// clickable row sits there.
+    /// The clickable side-panel id under the HOST cell `(x, y)`, if any.
+    /// Host row 0 is the tab-strip row (no panel there), and a panel
+    /// line composed at row `y` paints at HOST row `y + 1` — the frame
+    /// rebases the renderer's rows +1 — so the lookup shifts the host
+    /// row down one before matching.
     pub(crate) fn sidebar_row_at(&self, x: u16, y: u16) -> Option<String> {
-        if x >= self.sidebar_w {
+        if x >= self.sidebar_w || y == 0 {
             return None;
         }
         let sections = self.sidebar_sections.as_ref()?;
         let lines = super::compose_sidebar(sections, self.sidebar_w, self.height);
         lines
             .into_iter()
-            .find(|line| line.y == y && line.id.is_some())
+            .find(|line| line.y == y - 1 && line.id.is_some())
             .and_then(|line| line.id)
     }
 
@@ -954,8 +962,8 @@ impl PaneRenderer {
             self.paint_dividers();
         }
         self.paint_sidebar();
-        if let Some((title, rows)) = self.overlay.clone() {
-            self.paint_overlay(title, &rows);
+        if let Some((title, rows, scroll)) = self.overlay.clone() {
+            self.paint_overlay(title, &rows, scroll);
         }
 
         let diff = self
@@ -1253,7 +1261,12 @@ impl PaneRenderer {
     /// line inside the box. Clamped to the window; paints last in
     /// `render_frame`, covering panes and dividers; dismissal lets the
     /// next frame's pane repaint restore the covered cells.
-    fn paint_overlay(&mut self, title: &str, rows: &[HelpRow]) {
+    fn paint_overlay(
+        &mut self,
+        title: &str,
+        rows: &[HelpRow],
+        scroll: Option<(usize, usize, usize)>,
+    ) {
         let accent_style = RtStyle::default()
             .fg(RtColor::Indexed(14))
             .add_modifier(RtModifier::BOLD);
@@ -1341,6 +1354,22 @@ impl PaneRenderer {
                 } else if row.footer {
                     let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
                     cell.set_style(band);
+                }
+            }
+        }
+        // The overflow scrollbar: a thumb on the ring's right column,
+        // sized and positioned from the panel's scroll state — nothing
+        // painted while the content fits.
+        if let Some((start, visible, total)) = scroll {
+            if total > visible && visible > 0 {
+                let track = height;
+                let thumb_len = (track * visible / total).max(1);
+                let max_start = total.saturating_sub(visible).max(1);
+                let thumb_pos = y0 + 1 + start.min(max_start) * (track - thumb_len) / max_start;
+                for y in thumb_pos..thumb_pos + thumb_len {
+                    let cell = &mut self.buffer[((x0 + inner + 1) as u16, y as u16)];
+                    cell.set_symbol("┃");
+                    cell.set_style(accent_style);
                 }
             }
         }
@@ -1921,8 +1950,9 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     // A malformed chord fails the attach like a malformed prefix; a
     // broken FILE stays the lenient startup rule (warn-and-defaults —
     // the strict error is the reload's, per docs/MUX.md).
+    let file = crate::mux::config::load_canonical();
     let chords = crate::mux::config::reload_client_chords(
-        &crate::mux::config::load_canonical(),
+        &file,
         &crate::mux::config::Chords {
             prefix: session.prefix,
             reload: session.reload_key,
@@ -1943,7 +1973,14 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
             chords.border_lines
         );
     }
-    session.set_pane_borders(chords.pane_borders);
+    // An explicit `pane-borders` key overrides the border style's
+    // implied paint mode; an absent key keeps it (herdr, the default
+    // style, implies per-pane boxes).
+    if let Some(on) = file.client.pane_borders {
+        session.set_pane_borders(on);
+    } else {
+        session.set_pane_borders(matches!(session.border_glyphs, Glyphs::Herdr));
+    }
     session.set_show_label_in_border(chords.show_label_in_border);
     session.set_pane_gaps(chords.pane_gaps);
     session.set_scrollbar_gutter(chords.scrollbar_gutter);
@@ -2117,11 +2154,14 @@ struct WindowSession {
     daemon_layout: Vec<PaneRect>,
     /// The rename prompt is up (the modal input overlay).
     prompt_mode: bool,
-    /// The rename prompt's edit buffer.
+    /// The prompt's edit buffer.
     prompt_text: String,
-    /// The rename prompt targets the focused pane (false = the shown
-    /// window).
-    prompt_pane: bool,
+    /// What the prompt edits (rename pane/window, or a new window's
+    /// name — the tab strip's `+`).
+    prompt_target: PromptTarget,
+    /// The status bar's visibility (the `status_bar` chord toggles it;
+    /// shown by default).
+    status_bar_on: bool,
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
@@ -2139,6 +2179,19 @@ struct WindowSession {
     /// tick, while a flushed frame (whose per-cell CUP left the terminal
     /// cursor wherever the last diff cell sits) always repositions.
     cursor_placed: Option<Option<(u16, u16, CursorStyle)>>,
+}
+
+/// What the modal prompt edits: rename flows seeded from the live name,
+/// and the tab strip's `+` new-window flow seeded with the next free
+/// index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptTarget {
+    /// The focused pane's sticky user title.
+    Pane,
+    /// The shown window's name.
+    Window,
+    /// A new window's name (the daemon creates the window on commit).
+    NewWindow,
 }
 
 impl WindowSession {
@@ -2185,7 +2238,8 @@ impl WindowSession {
             daemon_layout: Vec::new(),
             prompt_mode: false,
             prompt_text: String::new(),
-            prompt_pane: false,
+            prompt_target: PromptTarget::Window,
+            status_bar_on: true,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
             flash: None,
@@ -2400,7 +2454,8 @@ impl WindowSession {
             if self.pending_grid_refit {
                 self.pending_grid_refit = false;
                 let (host_cols, host_rows) = super::conn::terminal_grid();
-                self.resize_to(conn, host_cols, host_rows.saturating_sub(2), sink)?;
+                let content_rows = host_rows.saturating_sub(1 + u16::from(self.status_bar_on));
+                self.resize_to(conn, host_cols, content_rows, sink)?;
                 // The refit reconstructed the renderer, dropping the
                 // strip's sections; re-query so the next frame paints
                 // them (a changed mark rides the same dirty flag).
@@ -2414,7 +2469,10 @@ impl WindowSession {
             //    strip and the status bar, so the size report carries the
             //    content height.
             let (host_cols, host_rows) = super::conn::terminal_grid();
-            let content = (host_cols, host_rows.saturating_sub(2));
+            let content = (
+                host_cols,
+                host_rows.saturating_sub(1 + u16::from(self.status_bar_on)),
+            );
             if content != current_size {
                 current_size = content;
                 self.resize_to(conn, content.0, content.1, sink)?;
@@ -2713,6 +2771,7 @@ impl WindowSession {
                         Some(ManagementKey::WorkspacePicker)
                     }
                     b if b == self.management.sidebar => Some(ManagementKey::Sidebar),
+                    b if b == self.management.status_bar => Some(ManagementKey::StatusBar),
                     _ => None,
                 };
                 if let Some(key) = management {
@@ -2816,9 +2875,21 @@ impl WindowSession {
             self.management,
             self.resize_step,
         );
-        // The modal's own chrome (2 border rows) plus the always-present
-        // filter line and footer line surround the content window.
-        let visible = usize::from(self.renderer.window_size().1.saturating_sub(4)).max(1);
+        // The modal's own chrome (2 border rows) and the footer surround
+        // the content window; the filter line joins them only while a
+        // filter is open or set (the footer already advertises
+        // `search /` — no idle placeholder row).
+        let filtering = self.help_filtering || !self.help_filter.is_empty();
+        let filter_lines = usize::from(filtering);
+        let visible = usize::from(
+            self.renderer
+                .window_size()
+                .1
+                .saturating_sub(3 + filter_lines as u16),
+        )
+        .max(1);
+        let content_len = super::help_content(&rows, &self.help_filter).len();
+        let start = super::help_window_start(content_len, visible, self.help_scroll);
         let lines = super::compose_help_panel(
             &rows,
             &self.help_filter,
@@ -2826,8 +2897,11 @@ impl WindowSession {
             visible,
             self.help_scroll,
         );
-        self.renderer
-            .set_overlay(Some((super::HELP_OVERLAY_TITLE, lines)));
+        self.renderer.set_overlay(Some((
+            super::HELP_OVERLAY_TITLE,
+            lines,
+            Some((start, visible, content_len)),
+        )));
     }
 
     /// One key while the help panel is up: `/` opens the filter box
@@ -3012,14 +3086,14 @@ impl WindowSession {
         self.renderer.set_overlay(None);
     }
 
-    /// Open the rename prompt (the rename-window / rename-pane chords):
-    /// the modal input overlay seeded with the target's current name —
-    /// the window's `name`, or the pane's sticky user title.
-    fn enter_prompt(&mut self, rename_pane: bool) {
-        let seed = if rename_pane {
-            self.status.pane_title().to_string()
-        } else {
-            self.status
+    /// Open the prompt modal for `target`: the rename flows seed the
+    /// target's current name — the window's `name`, or the pane's sticky
+    /// user title — and the new-window flow seeds the next free index.
+    fn enter_prompt(&mut self, target: PromptTarget) {
+        let seed = match target {
+            PromptTarget::Pane => self.status.pane_title().to_string(),
+            PromptTarget::Window => self
+                .status
                 .active_window
                 .as_deref()
                 .and_then(|id| {
@@ -3029,9 +3103,10 @@ impl WindowSession {
                         .find(|(wid, _)| wid == id)
                         .map(|(_, name)| name.clone())
                 })
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            PromptTarget::NewWindow => super::next_window_name(self.status.windows()),
         };
-        self.prompt_pane = rename_pane;
+        self.prompt_target = target;
         self.prompt_text = seed;
         self.prompt_mode = true;
         self.refresh_prompt();
@@ -3046,23 +3121,34 @@ impl WindowSession {
 
     /// Re-compose the prompt overlay from the edit buffer.
     fn refresh_prompt(&mut self) {
+        let title = match self.prompt_target {
+            PromptTarget::Pane => super::PROMPT_PANE_OVERLAY_TITLE,
+            PromptTarget::Window => super::PROMPT_WINDOW_OVERLAY_TITLE,
+            PromptTarget::NewWindow => super::PROMPT_NEW_WINDOW_OVERLAY_TITLE,
+        };
+        let footer = match self.prompt_target {
+            PromptTarget::NewWindow => super::NEW_PROMPT_FOOTER,
+            _ => super::PROMPT_FOOTER,
+        };
         self.renderer.set_overlay(Some((
-            if self.prompt_pane {
-                super::PROMPT_PANE_OVERLAY_TITLE
-            } else {
-                super::PROMPT_WINDOW_OVERLAY_TITLE
-            },
-            super::compose_prompt_panel(&self.prompt_text),
+            title,
+            super::compose_prompt_panel(&self.prompt_text, footer),
+            None,
         )));
     }
 
     /// One plain byte while the prompt is up: printable bytes and
-    /// spaces append, Backspace pops, Enter commits (the daemon command
-    /// below), Escape cancels. Returns whether the mode is still up.
+    /// spaces append, Backspace pops, ^C clears the input (herdr's
+    /// footer), Enter commits (the daemon command below), Escape
+    /// cancels. Returns whether the mode is still up.
     fn prompt_byte(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, byte: u8) -> bool {
         match byte {
             0x1b => self.leave_prompt(),
             b'\r' => self.commit_prompt(conn),
+            0x03 => {
+                self.prompt_text.clear();
+                self.refresh_prompt();
+            }
             0x7f => {
                 self.prompt_text.pop();
                 self.refresh_prompt();
@@ -3101,22 +3187,50 @@ impl WindowSession {
 
     /// Commit the prompt: the pane spelling sets the sticky user title
     /// (`select-pane -T`), the window spelling renames the window
-    /// (`rename-window`); an empty input cancels (an empty name is not
-    /// expressible on the wire — the parses require one).
+    /// (`rename-window`), the new-window spelling creates the window
+    /// (`new-window -n`) and lands the view on it; an empty input
+    /// cancels (an empty name is not expressible on the wire — the
+    /// parses require one).
     fn commit_prompt(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let text = self.prompt_text.trim();
+        let text = self.prompt_text.trim().to_string();
         if text.is_empty() {
             self.leave_prompt();
             return;
         }
-        let cmd = if self.prompt_pane {
-            format!("select-pane -t {} -T {text}", self.focused_pane())
-        } else {
-            format!("rename-window -t {} {text}", self.window)
-        };
-        let _ = conn.send_checked(&cmd);
-        self.leave_prompt();
-        self.status_dirty = true;
+        match self.prompt_target {
+            PromptTarget::Pane => {
+                let _ =
+                    conn.send_checked(&format!("select-pane -t {} -T {text}", self.focused_pane()));
+                self.leave_prompt();
+                self.status_dirty = true;
+            }
+            PromptTarget::Window => {
+                let _ = conn.send_checked(&format!("rename-window -t {} {text}", self.window));
+                self.leave_prompt();
+                self.status_dirty = true;
+            }
+            PromptTarget::NewWindow => {
+                let Some(session) = self.status.session_id.clone() else {
+                    self.leave_prompt();
+                    return;
+                };
+                let Ok(reply) = conn.send_checked(&format!(
+                    "new-window -t {session} -n {}",
+                    super::wire_quote(&text)
+                )) else {
+                    self.leave_prompt();
+                    return;
+                };
+                self.leave_prompt();
+                if !reply.ok {
+                    return;
+                }
+                if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
+                    let _ = conn.send_checked(&format!("select-window -t {window}"));
+                    self.reseed_window(conn, &window);
+                }
+            }
+        }
     }
 
     /// The zoom state's effective layout — the daemon's zoom re-lays the
@@ -3155,13 +3269,22 @@ impl WindowSession {
         self.picker_start = start;
         self.picker_panel_len = lines.len();
         self.renderer
-            .set_overlay(Some((super::PICKER_OVERLAY_TITLE, lines)));
+            .set_overlay(Some((super::PICKER_OVERLAY_TITLE, lines, None)));
     }
 
-    /// The picker\'s visible content-row count (the same window the
-    /// compose uses).
+    /// The picker's visible content-row count (the same window the
+    /// compose uses; the filter line joins the chrome only while a
+    /// filter is open or set).
     fn picker_visible(&self) -> usize {
-        usize::from(self.renderer.window_size().1.saturating_sub(4)).max(1)
+        let filtering = self.picker_filtering || !self.picker_filter.is_empty();
+        let filter_lines = usize::from(filtering);
+        usize::from(
+            self.renderer
+                .window_size()
+                .1
+                .saturating_sub(3 + filter_lines as u16),
+        )
+        .max(1)
     }
 
     /// Move the picker\'s selection cursor by `delta` content rows (the
@@ -3266,7 +3389,7 @@ impl WindowSession {
         self.picker_start = start;
         self.picker_panel_len = lines.len();
         self.renderer
-            .set_overlay(Some((super::WORKSPACE_PICKER_OVERLAY_TITLE, lines)));
+            .set_overlay(Some((super::WORKSPACE_PICKER_OVERLAY_TITLE, lines, None)));
     }
 
     /// One key while the picker is up: the same modal-key shape the help
@@ -3631,7 +3754,21 @@ impl WindowSession {
                 self.draw_status_row();
             }
             super::ManagementKey::RenameWindow | super::ManagementKey::RenamePane => {
-                self.enter_prompt(matches!(key, super::ManagementKey::RenamePane));
+                self.enter_prompt(if matches!(key, super::ManagementKey::RenamePane) {
+                    PromptTarget::Pane
+                } else {
+                    PromptTarget::Window
+                });
+            }
+            super::ManagementKey::StatusBar => {
+                self.status_bar_on = !self.status_bar_on;
+                // No flash cue: the flash paints ON the status row, so a
+                // hide would flash invisibly — the row's vanishing (or
+                // returning) is the feedback. The bottom row's presence
+                // changes the content height: park a refit so the report
+                // and re-fit follow (the sidebar toggle's contract).
+                self.pending_grid_refit = true;
+                self.draw_status_row();
             }
             super::ManagementKey::BorderCycle => {
                 self.border_glyphs = self.border_glyphs.next();
@@ -3857,19 +3994,32 @@ impl WindowSession {
     /// passthrough session performs, plus a status-row flash, plus the
     /// daemon's `reload-config` — best-effort either way.
     fn reload_config(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        match super::reload_client_chords(crate::mux::config::Chords {
-            prefix: self.prefix,
-            reload: self.reload_key,
-            management: self.management,
-            resize_step: self.resize_step,
-            pane_borders: self.pane_borders,
-            show_label_in_border: self.show_label_in_border,
-            pane_gaps: self.pane_gaps,
-            scrollbar_gutter: self.scrollbar_gutter,
-            drag_cursor_shape: self.drag_cursor_shape,
-            border_lines: self.border_glyphs.name().to_string(),
-            sidebar_width: self.sidebar_width,
-        }) {
+        // The file drives both the chord rebind and the pane-borders
+        // resolution below, so it loads once, here.
+        let file = match crate::mux::config::load_canonical_checked() {
+            Ok(file) => file,
+            Err(err) => {
+                self.flash = Some(format!("reload failed: {err}"));
+                let _ = conn.send_checked("reload-config");
+                return;
+            }
+        };
+        match crate::mux::config::reload_client_chords(
+            &file,
+            &crate::mux::config::Chords {
+                prefix: self.prefix,
+                reload: self.reload_key,
+                management: self.management,
+                resize_step: self.resize_step,
+                pane_borders: self.pane_borders,
+                show_label_in_border: self.show_label_in_border,
+                pane_gaps: self.pane_gaps,
+                scrollbar_gutter: self.scrollbar_gutter,
+                drag_cursor_shape: self.drag_cursor_shape,
+                border_lines: self.border_glyphs.name().to_string(),
+                sidebar_width: self.sidebar_width,
+            },
+        ) {
             Ok(chords) => {
                 self.prefix = chords.prefix;
                 self.reload_key = chords.reload;
@@ -3882,15 +4032,21 @@ impl WindowSession {
                         self.border_glyphs.name()
                     ));
                 }
-                self.set_pane_borders(chords.pane_borders);
+                // An explicit `pane-borders` key survives every reload;
+                // an absent key follows the (possibly reloaded) border
+                // style — herdr implies per-pane boxes. The chords' own
+                // bool cannot tell explicit from absent, so the raw file
+                // key decides.
+                match file.client.pane_borders {
+                    Some(on) => self.set_pane_borders(on),
+                    None => self.set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr)),
+                }
                 self.set_pane_gaps(chords.pane_gaps);
                 self.set_scrollbar_gutter(chords.scrollbar_gutter);
                 self.set_show_label_in_border(chords.show_label_in_border);
                 self.drag_cursor_shape = chords.drag_cursor_shape;
-                let eff = crate::mux::config::resolve(
-                    &crate::mux::config::load_canonical(),
-                    &crate::mux::config::Overrides::default(),
-                );
+                let eff =
+                    crate::mux::config::resolve(&file, &crate::mux::config::Overrides::default());
                 self.set_border_colors(
                     crate::mux::config::parse_hex_color(&eff.border_active_color)
                         .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
@@ -4196,11 +4352,16 @@ impl WindowSession {
     }
 
     /// Draw the status row: fresh state composed and painted into the row
-    /// buffer (the pump flushes the diff with the next frame).
+    /// buffer (the pump flushes the diff with the next frame). Hidden,
+    /// nothing paints: the row belongs to the pane grid, and the refit's
+    /// full repaint is what erased the bar exactly once.
     fn draw_status_row(&mut self) {
         let (cols, _rows) = super::conn::terminal_grid();
         if self.status_row.cols() != cols {
             self.status_row = StatusRow::new(cols);
+        }
+        if !self.status_bar_on {
+            return;
         }
         let scroll = if self.scroll_mode {
             self.renderer
@@ -4209,36 +4370,54 @@ impl WindowSession {
         } else {
             None
         };
-        let mut segments = self.status.compose(cols, scroll, self.sidebar_on);
-        if let Some(flash) = self.flash.clone() {
-            segments.insert(
-                0,
-                Segment {
-                    text: format!(" {flash} |"),
-                    bold: true,
-                    dim: false,
-                    shaded: false,
-                },
-            );
-        }
+        // The flash cue and the zoom marker lead the line and the Help
+        // chip ends it; all three reserve their widths up front so the
+        // composed state truncates into what remains — appended after
+        // the truncation, the chip could be clipped off the row.
+        let mut head: Vec<Segment> = Vec::new();
         if self.zoomed {
-            segments.insert(
-                0,
-                Segment {
-                    text: " Z |".to_string(),
-                    bold: true,
-                    dim: false,
-                    shaded: false,
-                },
-            );
+            head.push(Segment {
+                text: " Z |".to_string(),
+                bold: true,
+                dim: false,
+                shaded: false,
+            });
         }
-        self.status_row.paint(&segments);
+        if let Some(flash) = self.flash.clone() {
+            head.push(Segment {
+                text: format!(" {flash} |"),
+                bold: true,
+                dim: false,
+                shaded: false,
+            });
+        }
+        let chip = status::help_chip(self.prefix, self.management.help);
+        let reserved: usize = head
+            .iter()
+            .chain(std::iter::once(&chip))
+            .map(|s| s.text.chars().count())
+            .sum();
+        let segments = self.status.compose(
+            cols.saturating_sub(reserved as u16),
+            scroll,
+            self.sidebar_on,
+        );
+        let mut with_head = head;
+        with_head.extend(segments);
+        with_head.push(chip);
+        self.status_row.paint(&with_head);
     }
 
     /// Flush the status row's changed cells to the host's bottom row.
     /// Returns whether anything flushed (its per-cell CUPs move the host
-    /// cursor, so the caller must re-place it).
+    /// cursor, so the caller must re-place it). While the bar is hidden
+    /// nothing flushes at all: the bottom row is pane real estate, and a
+    /// blank-cell flush would erase the pane's freshly painted bottom
+    /// row after the pane frame.
     fn flush_status_row(&mut self, sink: &mut dyn FlushSink) -> bool {
+        if !self.status_bar_on {
+            return false;
+        }
         let (_cols, rows) = super::conn::terminal_grid();
         let bottom = rows.saturating_sub(1);
         let diff = self.status_row.diff();
@@ -4274,12 +4453,15 @@ impl WindowSession {
             return;
         };
 
-        // The side panel owns its strip: a press on a workspace row lands
-        // on it (the select+resync every switch follows), and every other
-        // event in the strip is consumed — no pane, divider, or drag
-        // lives in the panel.
+        // The side panel owns its strip below the tab-strip row: a press
+        // on a workspace row lands on it (the select+resync every switch
+        // follows), and every other event in the strip is consumed — no
+        // pane, divider, or drag lives in the panel. The TOP row stays
+        // the tab strip's (the panel begins under it), so a click there
+        // falls through to the tab strip even inside the strip's width —
+        // the sidebar path used to consume it (the round-5 report).
         let strip = self.renderer.sidebar_width();
-        if strip > 0 && x < strip {
+        if strip > 0 && y > 0 && x < strip {
             if !mouse.release && !mouse.is_motion() {
                 if let Some(id) = self.renderer.sidebar_row_at(x, y) {
                     if let Some(wid) = id.strip_prefix("win:@") {
@@ -4326,17 +4508,26 @@ impl WindowSession {
             } else if mouse.release || mouse.is_motion() {
                 // Drags do nothing in the modal; only a press click.
             } else if let Some(row) = self.renderer.overlay_row_at(x, y) {
-                if row == 0 {
+                // The panel's row 0 is the filter line only while a
+                // filter is open or set; idle, content starts at row 0
+                // (the idle placeholder row the old mapping assumed is
+                // gone). The footer — the panel's last row — does
+                // nothing.
+                let filtering = self.picker_filtering || !self.picker_filter.is_empty();
+                let filter_lines = usize::from(filtering);
+                if filtering && row == 0 {
                     self.picker_filtering = true;
                     self.refresh_picker();
-                } else if row + 1 < self.picker_panel_len {
-                    // A content row: move the cursor there and activate.
-                    // row-1 is the windowed content index; +start maps to
-                    // the filtered list. The footer (last row) does
-                    // nothing.
-                    self.picker_selected = self.picker_start + row - 1;
-                    self.refresh_picker();
-                    self.picker_activate(conn);
+                } else if let Some(content) = row.checked_sub(filter_lines) {
+                    let window_len = self.picker_panel_len.saturating_sub(filter_lines + 1);
+                    if content < window_len {
+                        // Move the cursor to the clicked row and activate
+                        // it (start maps the windowed index onto the
+                        // filtered list).
+                        self.picker_selected = self.picker_start + content;
+                        self.refresh_picker();
+                        self.picker_activate(conn);
+                    }
                 }
             }
             return;
@@ -4429,12 +4620,17 @@ impl WindowSession {
         }
     }
 
-    /// A press on the tab strip: hit-test the clicked column against the
-    /// painted layout and switch to that window through the existing
-    /// select+resync contract (daemon-side `select-window`, then a full
-    /// re-seed). A click on the already-shown window, or on a pad/marker
-    /// column, does nothing. No pane focus, no pane forwarding.
+    /// A press on the tab strip: the ` + ` button opens the new-tab
+    /// prompt; any tab column switches to that window through the
+    /// existing select+resync contract (daemon-side `select-window`,
+    /// then a full re-seed). A click on the already-shown window, or on
+    /// a pad/marker column, does nothing. No pane focus, no pane
+    /// forwarding.
     fn tab_click(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, x: u16) {
+        if self.tab_strip.plus_hit(x) {
+            self.enter_prompt(PromptTarget::NewWindow);
+            return;
+        }
         let Some(index) = self.tab_strip.hit_test(x) else {
             return;
         };
@@ -4661,6 +4857,15 @@ impl WindowSession {
         // Same as the seed: repaint_all hid the cursor, so force the
         // next place_cursor.
         self.cursor_placed = Some(None);
+        // repaint_all clears the WHOLE screen — the strip rows too — and
+        // the frame below flushes diff-based, so both strips forget
+        // their previous frames here (the sidebar-toggle path parks the
+        // refit into the pump, which repaints nothing else on those
+        // rows).
+        self.status_row.invalidate();
+        self.draw_status_row();
+        self.tab_strip.invalidate();
+        self.draw_tab_strip();
         sink.repaint_all();
         self.frame(sink);
         Ok(())
@@ -5708,7 +5913,9 @@ mod tests {
         let mut sink = CursorSink {
             placements: Vec::new(),
         };
-        session.renderer.set_overlay(Some(("keybinds", vec![])));
+        session
+            .renderer
+            .set_overlay(Some(("keybinds", vec![], None)));
         session.frame(&mut sink);
         assert_eq!(
             sink.placements.last(),
@@ -6263,10 +6470,11 @@ mod tests {
             .join("\n");
         // The compose carries content rows only; the ring/title/badge are
         // paint_overlay's (asserted in the paint-level tests below). The
-        // filter line is ALWAYS present — the placeholder when inactive.
+        // idle panel has no placeholder row — the footer advertises
+        // `search /`.
         assert!(
-            joined.contains(crate::mux::attach::HELP_FILTER_PLACEHOLDER),
-            "the inactive filter line is visible: {joined}"
+            !joined.contains("press / to filter"),
+            "no idle placeholder row: {joined}"
         );
         assert!(joined.contains(" global "), "a category header: {joined}");
         assert!(
@@ -6340,7 +6548,7 @@ mod tests {
             "the picker chord opens the modal"
         );
         assert!(session.picker_mode);
-        let (overlay, _) = session.renderer.overlay.clone().expect("the overlay is up");
+        let (overlay, _, _) = session.renderer.overlay.clone().expect("the overlay is up");
         assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
         let joined = overlay_text(&session).join("\n");
         assert!(
@@ -6638,6 +6846,86 @@ mod tests {
         );
     }
 
+    /// A sink that records flushed cells (the flush-gate test's probe).
+    struct CellSink {
+        cells: Vec<(u16, u16, RtCell)>,
+    }
+
+    impl FlushSink for CellSink {
+        fn flush(&mut self, diff: &[(u16, u16, RtCell)]) {
+            self.cells.extend(diff.iter().cloned());
+        }
+        fn repaint_all(&mut self) {}
+        fn place_cursor(&mut self, _cursor: Option<(u16, u16, CursorStyle)>) {}
+    }
+
+    /// While the status bar is hidden the row is NEVER flushed: the
+    /// bottom row is pane real estate, and a blank-cell diff flush would
+    /// erase the pane's freshly painted bottom row right after the pane
+    /// frame. Shown, the row flushes as usual.
+    #[test]
+    fn hidden_status_bar_flushes_nothing() {
+        let mut session = WindowSession::new(80, 24);
+        session.draw_status_row();
+        let mut sink = CellSink { cells: Vec::new() };
+        assert!(
+            session.flush_status_row(&mut sink),
+            "shown, the row flushes"
+        );
+        assert!(!sink.cells.is_empty());
+
+        session.status_bar_on = false;
+        session.draw_status_row();
+        let mut sink = CellSink { cells: Vec::new() };
+        assert!(
+            !session.flush_status_row(&mut sink),
+            "hidden, nothing flushes"
+        );
+        assert!(sink.cells.is_empty());
+    }
+
+    /// Side-panel click geometry: the lookup takes the HOST row (row 0
+    /// is the tab strip's — nothing there), shifted one row so a click
+    /// lands on the row as PAINTED — the header at host row 1, the first
+    /// entry at host row 2.
+    #[test]
+    fn sidebar_clicks_land_on_the_painted_row() {
+        let mut session = WindowSession::new(80, 24);
+        session.renderer.set_sidebar_width(20);
+        session
+            .renderer
+            .set_sidebar_sections(Some(vec![super::super::SidebarSection {
+                title: "workspaces".to_string(),
+                rows: vec![
+                    ("ws:+0".to_string(), "alpha".to_string(), true),
+                    ("ws:+1".to_string(), "beta".to_string(), false),
+                    ("win:@0".to_string(), "0 demo".to_string(), false),
+                ],
+            }]));
+        // Host row 0 (the tab strip row): nothing.
+        assert_eq!(session.renderer.sidebar_row_at(2, 0), None);
+        // Host row 1: the header — not clickable.
+        assert_eq!(session.renderer.sidebar_row_at(2, 1), None);
+        // Host row 2: the first workspace row, as painted.
+        assert_eq!(
+            session.renderer.sidebar_row_at(2, 2),
+            Some("ws:+0".to_string()),
+            "the click lands on the row as painted"
+        );
+        // Host row 3: the second workspace row.
+        assert_eq!(
+            session.renderer.sidebar_row_at(2, 3),
+            Some("ws:+1".to_string())
+        );
+        // Host row 4: the nested window row.
+        assert_eq!(
+            session.renderer.sidebar_row_at(2, 4),
+            Some("win:@0".to_string())
+        );
+        // Past the strip's width: nothing.
+        assert_eq!(session.renderer.sidebar_row_at(20, 2), None);
+    }
+
     /// The probe FAILED (`bg: None`): the frame fill paints NO color -
     /// every cell stays terminal-default, so a failed probe can never
     /// mismatch the theme. Default-to-black only appears when the probe
@@ -6681,7 +6969,7 @@ mod tests {
             6,
             0,
         );
-        renderer.set_overlay(Some((crate::mux::attach::HELP_OVERLAY_TITLE, rows)));
+        renderer.set_overlay(Some((crate::mux::attach::HELP_OVERLAY_TITLE, rows, None)));
         renderer.render_frame();
         // Locate the modal's top-left corner.
         let mut origin = None;
@@ -7032,5 +7320,117 @@ mod tests {
                 assert_ne!(cell.bg, green, "re-seed stale green at ({x},{y})");
             }
         }
+    }
+
+    /// The new-tab prompt's default name: one past the highest window
+    /// ordinal, bumped past any window NAME that already claims the
+    /// number (the manual-pass ask: the next non-conflicting index).
+    #[test]
+    fn next_window_name_bumps_past_conflicts() {
+        // One past the highest window ordinal.
+        assert_eq!(
+            super::super::next_window_name(&[
+                ("@0".to_string(), "0".to_string()),
+                ("@1".to_string(), "1".to_string()),
+            ]),
+            "2"
+        );
+        // A rename claiming the next index bumps the default past it.
+        assert_eq!(
+            super::super::next_window_name(&[
+                ("@0".to_string(), "0".to_string()),
+                ("@1".to_string(), "2".to_string()),
+            ]),
+            "3"
+        );
+        // No numeric names in use: still the ordinal successor.
+        assert_eq!(
+            super::super::next_window_name(&[("@0".to_string(), "demo".to_string())]),
+            "1"
+        );
+    }
+
+    /// A name crossing the wire spelled so the daemon's quoting grammar
+    /// keeps it one word: unconditional single quotes, embedded quotes
+    /// via the `'\''` idiom.
+    #[test]
+    fn wire_quote_survives_spaces_and_quotes() {
+        assert_eq!(super::super::wire_quote("notes"), "'notes'");
+        assert_eq!(super::super::wire_quote("my notes"), "'my notes'");
+        assert_eq!(super::super::wire_quote("it's"), "'it'\\''s'");
+        assert_eq!(super::super::wire_quote(""), "''");
+    }
+
+    /// The help overlay's overflow scrollbar: a `┃` thumb on the ring's
+    /// right column, sized/positioned from the scroll state; a panel
+    /// that fits paints nothing on the ring.
+    #[test]
+    fn help_overlay_paints_a_scrollbar_thumb_when_it_overflows() {
+        use super::super::{compose_help_panel, help_rows};
+        let rows = help_rows(0x02, 0x12, Default::default(), 1);
+        let total = super::super::help_content(&rows, "").len();
+        let mut renderer = PaneRenderer::new(80, 40, Glyphs::Unicode);
+        renderer.apply_layout(parse_layout("0000,80x40,0,0,1").expect("parses"));
+        // A window small enough that the panel must scroll: thumb at the
+        // top border column.
+        renderer.set_overlay(Some((
+            crate::mux::attach::HELP_OVERLAY_TITLE,
+            compose_help_panel(&rows, "", false, 6, 0),
+            Some((0, 6, total)),
+        )));
+        renderer.render_frame();
+        let (x0, y0, inner, height) = renderer.overlay_geometry().expect("geometry");
+        let ring_x = (x0 + inner + 1) as u16;
+        let thumbs: Vec<u16> = (y0 as u16 + 1..y0 as u16 + 1 + height as u16)
+            .filter(|y| renderer.cell(ring_x, *y).is_some_and(|c| c.symbol() == "┃"))
+            .collect();
+        assert!(
+            !thumbs.is_empty(),
+            "the thumb paints on the ring: rows {thumbs:?}"
+        );
+        assert_eq!(
+            thumbs.len(),
+            (height * 6 / total).max(1),
+            "the thumb spans its proportional share"
+        );
+        // Scroll to the bottom: the thumb parks at the track's end.
+        renderer.set_overlay(Some((
+            crate::mux::attach::HELP_OVERLAY_TITLE,
+            compose_help_panel(&rows, "", false, 6, total),
+            Some((total.saturating_sub(6), 6, total)),
+        )));
+        renderer.render_frame();
+        let last_thumb = (y0 as u16 + 1..y0 as u16 + 1 + height as u16)
+            .filter(|y| renderer.cell(ring_x, *y).is_some_and(|c| c.symbol() == "┃"))
+            .max()
+            .expect("a bottom thumb");
+        assert_eq!(
+            last_thumb,
+            y0 as u16 + height as u16,
+            "the thumb parks at the track's end"
+        );
+        // A panel that fits: nothing on the ring.
+        let (x0s, y0s, inners, heights) = {
+            let short: Vec<crate::mux::attach::HelpRow> = (0..4)
+                .map(|i| crate::mux::attach::HelpRow {
+                    text: format!("row {i}"),
+                    accent: false,
+                    footer: false,
+                })
+                .chain(std::iter::once(crate::mux::attach::HelpRow {
+                    text: "footer".to_string(),
+                    accent: false,
+                    footer: true,
+                }))
+                .collect();
+            renderer.set_overlay(Some((" t ", short, Some((0, 6, 4)))));
+            renderer.render_frame();
+            renderer.overlay_geometry().expect("geometry")
+        };
+        assert!(
+            (y0s as u16 + 1..y0s as u16 + 1 + heights as u16).all(|y| renderer
+                .cell((x0s + inners + 1) as u16, y)
+                .is_some_and(|c| c.symbol() != "┃"))
+        );
     }
 }

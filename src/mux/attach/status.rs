@@ -19,6 +19,7 @@
 //! offset.
 
 use super::conn::AttachConn;
+use super::spell_key;
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -343,6 +344,20 @@ impl StatusState {
     }
 }
 
+/// The end-of-bar Help chip: the live help keybind, then the chip's
+/// label — ` C-b? Help ` — the keybind spelled the way the keybinds
+/// panel spells the same chord. The renderer reserves the chip's width
+/// before composing the rest of the bar, so it survives every
+/// truncation; with the bar hidden it is not drawn at all.
+pub(crate) fn help_chip(prefix: u8, help: u8) -> Segment {
+    Segment {
+        text: format!(" {}{} Help ", spell_key(prefix), spell_key(help)),
+        bold: true,
+        dim: false,
+        shaded: false,
+    }
+}
+
 /// The bottom row's paint + diff pair: a one-row ratatui `Buffer` and
 /// its previous frame, so a status change flushes only the changed
 /// cells.
@@ -643,5 +658,18 @@ mod tests {
             diff.iter().any(|(_, _, cell)| cell.symbol() == " "),
             "the tail erases to padded spaces: {diff:?}"
         );
+    }
+
+    /// The end-of-bar Help chip: the live help keybind, then the chip's
+    /// label — ` C-b? Help ` — the keybind spelled the way the keybinds
+    /// panel spells it. Bold. The renderer reserves its width before
+    /// composing the rest of the bar, so it survives every truncation.
+    #[test]
+    fn help_chip_spells_the_live_keybind() {
+        let chip = super::help_chip(0x02, b'?');
+        assert_eq!(chip.text, " C-b? Help ");
+        assert!(chip.bold);
+        let remapped = super::help_chip(0x02, b'h');
+        assert_eq!(remapped.text, " C-bh Help ");
     }
 }

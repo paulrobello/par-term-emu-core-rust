@@ -707,8 +707,10 @@ fn render_mode_zoom_rename_border_chords() {
         "Escape must cancel the prompt without committing: {title:?}"
     );
 
-    // prefix B cycles the border glyphs: the flash names the new style
-    // and the same repaint carries the double-line vertical.
+    // prefix B cycles the border glyphs (herdr is the seed default, so
+    // two presses land on double): the flash names the new style and
+    // the same repaint carries the double-line vertical.
+    host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
     host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
     host.to_child.flush().ok();
     let mut got = wait_for_output(&host, b"border style", Duration::from_secs(10));
@@ -2830,6 +2832,83 @@ fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
     cells.get(char_at).and_then(|(_, col)| *col)
 }
 
+/// The 1-based row attached to `needle`'s last occurrence — the CUP that
+/// positioned it, read from the same per-cell CUP stream
+/// [`cup_col_of_text`] walks.
+fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
+    let mut last_cup: Option<u16> = None;
+    let mut cells: Vec<(char, Option<u16>)> = Vec::new();
+    let mut iter = bytes.iter().copied();
+    while let Some(b) = iter.next() {
+        if b != 0x1b {
+            cells.push((b as char, last_cup));
+            continue;
+        }
+        match iter.next() {
+            Some(b'[') => {
+                let mut params: Vec<u8> = Vec::new();
+                let mut final_byte = 0u8;
+                for c in iter.by_ref() {
+                    if (0x40..=0x7e).contains(&c) {
+                        final_byte = c;
+                        break;
+                    }
+                    params.push(c);
+                }
+                if final_byte == b'H' {
+                    let text = String::from_utf8_lossy(&params);
+                    last_cup = text.split(';').next().and_then(|r| r.parse::<u16>().ok());
+                }
+            }
+            Some(b']') => {
+                // OSC: swallow through BEL or ST (ESC \).
+                for c in iter.by_ref() {
+                    if c == 0x07 {
+                        break;
+                    }
+                    if c == 0x1b {
+                        iter.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let text: String = cells.iter().map(|(c, _)| c).collect();
+    let at = text.rfind(needle)?;
+    let char_at = text[..at].chars().count();
+    cells.get(char_at).and_then(|(_, row)| *row)
+}
+
+/// Whether any row-24 CUP is followed (within its CUP+SGR+cell run) by
+/// `glyph`'s bytes — the wire shape the frame flushes one painted cell
+/// in. Used to see WHICH content owns the bottom row.
+fn row24_paints(bytes: &[u8], glyph: &[u8]) -> bool {
+    let mut i = 0;
+    while let Some(off) = bytes[i..].windows(5).position(|w| w == b"\x1b[24;") {
+        let mut j = i + off + 5;
+        while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+            j += 1;
+        }
+        j += 1; // past the CUP final byte
+                // The style is a CHAIN of CSI sequences (reset + fg + modifiers);
+                // skip every one before the glyph bytes.
+        while j + 1 < bytes.len() && bytes[j] == 0x1b && bytes[j + 1] == b'[' {
+            j += 2;
+            while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+                j += 1;
+            }
+            j += 1; // past this sequence's final byte
+        }
+        if j + glyph.len() <= bytes.len() && &bytes[j..j + glyph.len()] == glyph {
+            return true;
+        }
+        i += off + 1;
+    }
+    false
+}
+
 /// Sidebar toggle geometry: the refit must re-divide the panes to the
 /// reported width and paint them flush against the panel's right edge —
 /// the manual-pass screenshot showed the contents pushed right of the
@@ -2866,8 +2945,8 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
     let col_pre = cup_col_of_text(&pre, "GEO-MARK-42");
     assert_eq!(
         col_pre,
-        Some(41),
-        "pre-toggle the right pane starts at 40 (80/2). stderr: {} text: {:?}",
+        Some(42),
+        "pre-toggle the right pane's content starts at 41 (the 80/2 split, +1 for the per-pane-box inset). stderr: {} text: {:?}",
         stderr.lock().unwrap(),
         plain_text(&pre)
     );
@@ -2894,8 +2973,8 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
     let col_on = cup_col_of_text(&flash, "GEO-MARK-42");
     assert_eq!(
         col_on,
-        Some(51),
-        "panel up: panes re-divide to 60 wide, the right pane paints at 30+20. text: {:?}",
+        Some(52),
+        "panel up: panes re-divide to 60 wide, the right pane's content paints at 51 (30+20, +1 inset). text: {:?}",
         plain_text(&flash)
     );
 
@@ -2914,13 +2993,236 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
         "second toggle must flash off"
     );
     let col_off = cup_col_of_text(&flash, "GEO-MARK-42");
-    assert_eq!(col_off, Some(41), "panel down restores 40");
+    assert_eq!(
+        col_off,
+        Some(42),
+        "panel down restores the full-width split"
+    );
     host.killer.kill().ok();
 }
 
-/// The border style is session state: cycling to the per-pane-box herdr
-/// set and then splitting a pane must not revert the borders to the
-/// single-line tmux style (the manual-pass report — the re-seed rebuilt
+/// The refit's repaint_all clears the WHOLE screen — the strip rows too —
+/// so the sidebar toggle's resize_to must invalidate the tab strip and
+/// status row or their diffs flush nothing and the rows stay wiped (the
+/// manual-pass report: part of the status bar did not render after
+/// bringing the panel up).
+#[cfg(unix)]
+#[test]
+fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbstrip");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    // The refit frame rides the same flush as the flash (one pump
+    // iteration); drain a beat for the tail before matching.
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    // Bottom row, last column (host 80x24): the status row's tail only
+    // flushes on a full-row diff, which only the invalidate produces.
+    let needle = b"\x1b[24;80H";
+    assert!(
+        flash.windows(needle.len()).any(|w| w == needle),
+        "the refit must repaint the status row's tail. tail: {:?}",
+        String::from_utf8_lossy(&flash)
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
+    );
+    // Top row: the tab strip under the same rule (its col-0 pad is a
+    // blank default cell identical to the empty baseline, so the diff
+    // starts at the first text cell).
+    let needle = b"\x1b[1;2H";
+    assert!(
+        flash.windows(needle.len()).any(|w| w == needle),
+        "the refit must repaint the tab strip's head. tail: {:?}",
+        String::from_utf8_lossy(&flash)
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
+    );
+    host.killer.kill().ok();
+}
+
+/// The status-bar toggle: prefix S hides the bottom row — the pane grid
+/// grows a row, the shell prompt moves DOWN to host row 24, the Help
+/// chip vanishes from the flushes, and nothing erases the grown bottom
+/// row afterward; prefix S again restores the row, the chip, and the
+/// cursor to host row 23.
+#[cfg(unix)]
+#[test]
+fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbtoggle");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let mut shown = wait_for_output(&host, b"$", Duration::from_secs(10));
+    // Settle a beat so the seed frame's tail (the strip and the status
+    // row follow the pane cells in one flush) is in the capture.
+    shown.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&shown).contains("C-b? Help"),
+        "the Help chip ends the shown bar: {shown:?}"
+    );
+    assert_eq!(
+        cup_row_of_text(&shown, "Help"),
+        Some(24),
+        "the chip paints on the bottom row. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // Hide: the refit reports the taller grid and the pane replays one
+    // row taller — the newest line moves DOWN onto the row the status
+    // bar vacated. No flash cue — the flash paints ON the status row, so
+    // the bar's vanishing is the feedback. The chip must be gone from
+    // the flushes entirely (byte windows over a per-cell flush are
+    // meaningless — this reads the plain text).
+    host.to_child.write_all(&[0x02, b'S']).expect("prefix S");
+    host.to_child.flush().ok();
+    let mut hidden = wait_for_output(&host, b"\x1b[24;", Duration::from_secs(10));
+    hidden.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        !plain_text(&hidden).contains("Help"),
+        "the chip is gone while hidden. text: {:?}",
+        plain_text(&hidden)
+    );
+    // The pane claims the vacated row: with herdr's per-pane boxes the
+    // pane rectangle's bottom edge (the ring's ─) moves DOWN onto host
+    // row 24 — a row no flush could target while the bar owned it, since
+    // the hidden state never writes the row at all.
+    assert!(
+        row24_paints(&hidden, b"\xe2\x94\x80"),
+        "the pane box's bottom edge must move onto the vacated row"
+    );
+
+    // Show again: the chip returns to the bottom row and the cursor back
+    // to the shrunk content's last row (host row 23).
+    host.to_child.write_all(&[0x02, b'S']).expect("prefix S");
+    host.to_child.flush().ok();
+    let mut reshowed = wait_for_output(&host, b"\x1b[23;", Duration::from_secs(10));
+    reshowed.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&reshowed).contains("C-b? Help"),
+        "the chip returns with the bar: {:?}",
+        plain_text(&reshowed)
+    );
+    host.killer.kill().ok();
+}
+
+/// The tab strip's ` + ` button: a click opens the new-tab prompt
+/// (herdr's footer, the next free index as the editable default), Enter
+/// creates the window and lands on it, Esc cancels without creating.
+#[cfg(unix)]
+#[test]
+fn render_mode_plus_click_prompts_and_creates_a_window() {
+    let (fixture, _daemon, mut client) = fixture_with_session("plusclick");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // The ` + ` button owns the strip's reserved right edge: on an
+    // 80-col host the reservation spans strip cols 77..79 and the `+`
+    // paints at 78 — the click is a 1-based host col 79.
+    let press: &[u8] = b"\x1b[<0;79;1M";
+    host.to_child.write_all(press).expect("plus press");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    let text = plain_text(&flash);
+    assert!(
+        text.contains(" new tab "),
+        "the prompt opens. stderr: {} text: {text}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        text.contains("> 1"),
+        "the default is the next free index: {text}"
+    );
+    let windows_before = client.send("list-windows").expect("list").join("");
+
+    // Esc cancels without creating: the daemon's window roster is
+    // unchanged after the prompt closes.
+    host.to_child.write_all(&[0x1b]).expect("esc");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(300));
+    let after_cancel = client.send("list-windows").expect("list").join("");
+    assert_eq!(
+        after_cancel, windows_before,
+        "esc must not create a window: {after_cancel}"
+    );
+
+    // Click + again, edit the default (the input shows `> 1notes` before
+    // saving), Enter: the window exists and the view lands on it. The
+    // reopen's overlay flush races the esc restore window, so settle
+    // instead of waiting on the title needle.
+    host.to_child.write_all(press).expect("plus press");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(300));
+    host.to_child.write_all(b"notes").expect("name");
+    host.to_child.flush().ok();
+    let typed = wait_for_output(&host, b"\x00-never", Duration::from_millis(400));
+    assert!(
+        plain_text(&typed).contains("notes"),
+        "the typed name joins the default in the input line: {:?}",
+        plain_text(&typed)
+    );
+    host.to_child.write_all(&[b'\r']).expect("enter");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(500));
+    let created = client.send("list-windows").expect("list").join("");
+    assert!(
+        created.contains("notes"),
+        "the named window exists: {created}"
+    );
+    host.killer.kill().ok();
+}
+
+/// session state: cycling away and back and then splitting a pane must
+/// not revert the borders (the manual-pass report — the re-seed rebuilt
 /// the renderer with the default glyphs).
 #[cfg(unix)]
 #[test]
@@ -2935,21 +3237,28 @@ fn render_mode_border_style_survives_split() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
-
-    // Cycle Unicode → Double → Heavy → Ascii → Herdr: the fourth press
-    // selects the per-pane-box set.
-    for _ in 0..4 {
-        host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
-    }
-    host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"\xe2\x95\xad", Duration::from_secs(10));
+    // herdr is the DEFAULT: the seed's first frame (which flushes before
+    // the shell's prompt bytes) already paints per-pane boxes.
+    let pre = wait_for_output(&host, b"$", Duration::from_secs(10));
     // plain_text latin-1s multi-byte glyphs, so a painted ╭ is matched
     // on the raw bytes (the glyph's UTF-8 is contiguous in one cell's
     // flush); the wait needle is the same three bytes.
     assert!(
-        got.windows(3).any(|w| w == b"\xe2\x95\xad"),
-        "herdr corner must paint after the cycle"
+        pre.windows(3).any(|w| w == b"\xe2\x95\xad"),
+        "herdr corner must paint at seed. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // Cycle all the way around (herdr → unicode → … → herdr): five
+    // presses return to the default set.
+    for _ in 0..5 {
+        host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
+    }
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"border style: herdr", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("border style: herdr"),
+        "the full cycle must land back on herdr"
     );
 
     // Split via the CHORD: the split's re-seed used to restore the
@@ -3008,8 +3317,10 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
         stderr.lock().unwrap()
     );
 
-    // A press on the workspace row (y=1 under the header) lands on it:
-    // the select+resync re-seed must re-emit the panel's full frame (a
+    // A press ON the painted workspace row lands on it: 1-based host
+    // rows are 1 = tab strip, 2 = the panel's section header, 3 = the
+    // workspace row (the panel begins under the strip row). The
+    // select+resync re-seed must re-emit the panel's full frame (a
     // fresh renderer diffs against an empty buffer) with the panes still
     // offset by the panel's width — and REPEATED clicks must not ratchet
     // the layout left: the re-seed used to rebuild the renderer at the
@@ -3018,7 +3329,7 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
     // click-shrinks-the-panes report).
     for click in 1..=2 {
         host.to_child
-            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
+            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'3', b'M'])
             .expect("panel click");
         host.to_child.flush().ok();
         let mut got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
@@ -3034,8 +3345,8 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
         let col = cup_col_of_text(&got, "GEO-MARK-42");
         assert_eq!(
             col,
-            Some(51),
-            "click {click}: the right pane must stay at 30+20 (no ratchet). text: {:?}",
+            Some(52),
+            "click {click}: the right pane must stay put (no ratchet). text: {:?}",
             plain_text(&got)
         );
     }

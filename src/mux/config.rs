@@ -176,6 +176,14 @@ pub struct ClientSection {
     /// the workspace side panel (render mode).
     #[serde(default, rename = "sidebar", skip_serializing_if = "Option::is_none")]
     pub sidebar: Option<String>,
+    /// The status-bar chord: the key matched after the prefix that
+    /// toggles the bottom status bar (render mode; shown by default).
+    #[serde(
+        default,
+        rename = "status-bar",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub status_bar: Option<String>,
     /// The side panel's width in columns (render mode; clamped 6..=60).
     #[serde(
         default,
@@ -536,9 +544,10 @@ pub fn render(eff: &EffectiveConfig) -> String {
             label_toggle: None,
             workspace_picker: None,
             sidebar: None,
+            status_bar: None,
             sidebar_width: Some(20),
-            border_lines: Some("unicode".to_string()),
-            pane_borders: Some(false),
+            border_lines: Some("herdr".to_string()),
+            pane_borders: None,
             show_label_in_border: Some(true),
             pane_gaps: Some(0),
             scrollbar_gutter: Some(false),
@@ -651,7 +660,7 @@ impl Chords {
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
-            border_lines: "unicode".to_string(),
+            border_lines: "herdr".to_string(),
             sidebar_width: 20,
         }
     }
@@ -713,6 +722,9 @@ pub struct Management {
     /// Toggle the workspace side panel (render mode): a left strip with
     /// the workspace list, click-to-land; more sections will follow.
     pub sidebar: u8,
+    /// Toggle the bottom status bar (render mode): shown by default;
+    /// hiding it hands the row back to the pane grid.
+    pub status_bar: u8,
 }
 
 impl Default for Management {
@@ -736,6 +748,7 @@ impl Default for Management {
             label_toggle: b'l',
             workspace_picker: b'g',
             sidebar: b's',
+            status_bar: b'S',
         }
     }
 }
@@ -853,6 +866,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         sidebar: match file.client.sidebar.as_deref() {
             Some(chord) => management_key(chord, "sidebar")?,
             None => current.management.sidebar,
+        },
+        status_bar: match file.client.status_bar.as_deref() {
+            Some(chord) => management_key(chord, "status-bar")?,
+            None => current.management.status_bar,
         },
     };
     // A step the file names floors at 1 — a zero/negative step would make
@@ -1357,6 +1374,7 @@ remain-on-exit = true
                 label_toggle: b'l',
                 workspace_picker: b'g',
                 sidebar: b's',
+                status_bar: b'S',
             }
         );
         // Full override, tmux spellings and literals alike.
