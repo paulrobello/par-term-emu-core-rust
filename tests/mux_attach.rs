@@ -2779,6 +2779,246 @@ fn render_mode_sidebar_toggle_minimal() {
     host.killer.kill().ok();
 }
 
+/// The 1-based column of the CUP that positioned `needle`'s first
+/// character. The frame flushes one CUP+SGR+char per cell, so text only
+/// exists after escape stripping — walk the stream keeping the last CUP
+/// column and attach it to every plain char, then locate the needle in
+/// the stripped text. The geometry read for the sidebar-refit asserts.
+fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
+    let mut last_cup: Option<u16> = None;
+    let mut cells: Vec<(char, Option<u16>)> = Vec::new();
+    let mut iter = bytes.iter().copied();
+    while let Some(b) = iter.next() {
+        if b != 0x1b {
+            cells.push((b as char, last_cup));
+            continue;
+        }
+        match iter.next() {
+            Some(b'[') => {
+                let mut params: Vec<u8> = Vec::new();
+                let mut final_byte = 0u8;
+                for c in iter.by_ref() {
+                    if (0x40..=0x7e).contains(&c) {
+                        final_byte = c;
+                        break;
+                    }
+                    params.push(c);
+                }
+                if final_byte == b'H' {
+                    let text = String::from_utf8_lossy(&params);
+                    last_cup = text.split(';').nth(1).and_then(|c| c.parse::<u16>().ok());
+                }
+            }
+            Some(b']') => {
+                // OSC: swallow through BEL or ST (ESC \).
+                for c in iter.by_ref() {
+                    if c == 0x07 {
+                        break;
+                    }
+                    if c == 0x1b {
+                        iter.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let text: String = cells.iter().map(|(c, _)| c).collect();
+    let at = text.rfind(needle)?;
+    let char_at = text[..at].chars().count();
+    cells.get(char_at).and_then(|(_, col)| *col)
+}
+
+/// Sidebar toggle geometry: the refit must re-divide the panes to the
+/// reported width and paint them flush against the panel's right edge —
+/// the manual-pass screenshot showed the contents pushed right of the
+/// panel with dead margin at the far right. On an 80-col host with the
+/// 20-col panel up, the right pane's marker paints at column 51; with
+/// the panel down it returns to 41.
+#[cfg(unix)]
+#[test]
+fn render_mode_sidebar_toggle_refits_pane_geometry() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbgeo");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    client
+        .send(&format!("send-keys -t {pane_b} -l 'echo GEO-MARK-42'"))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane_b} Enter"))
+        .expect("Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let pre = wait_for_output(&host, b"GEO-MARK-42", Duration::from_secs(10));
+    let col_pre = cup_col_of_text(&pre, "GEO-MARK-42");
+    assert_eq!(
+        col_pre,
+        Some(41),
+        "pre-toggle the right pane starts at 40 (80/2). stderr: {} text: {:?}",
+        stderr.lock().unwrap(),
+        plain_text(&pre)
+    );
+
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    // The refit's repaint rides the same flush as the flash (one pump
+    // iteration); drain a beat for the tail before parsing the geometry.
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    assert!(
+        plain_text(&flash).contains("sidebar on"),
+        "toggle must flash on. tail: {:?}",
+        String::from_utf8_lossy(&flash)
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<String>()
+    );
+    let col_on = cup_col_of_text(&flash, "GEO-MARK-42");
+    assert_eq!(
+        col_on,
+        Some(51),
+        "panel up: panes re-divide to 60 wide, the right pane paints at 30+20. text: {:?}",
+        plain_text(&flash)
+    );
+
+    host.to_child
+        .write_all(&[0x02, b's'])
+        .expect("prefix s again");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"sidebar off", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    assert!(
+        plain_text(&flash).contains("sidebar off"),
+        "second toggle must flash off"
+    );
+    let col_off = cup_col_of_text(&flash, "GEO-MARK-42");
+    assert_eq!(col_off, Some(41), "panel down restores 40");
+    host.killer.kill().ok();
+}
+
+/// The border style is session state: cycling to the per-pane-box herdr
+/// set and then splitting a pane must not revert the borders to the
+/// single-line tmux style (the manual-pass report — the re-seed rebuilt
+/// the renderer with the default glyphs).
+#[cfg(unix)]
+#[test]
+fn render_mode_border_style_survives_split() {
+    let (fixture, _daemon, mut client) = fixture_with_session("herdrsplit");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // Cycle Unicode → Double → Heavy → Ascii → Herdr: the fourth press
+    // selects the per-pane-box set.
+    for _ in 0..4 {
+        host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
+    }
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"\xe2\x95\xad", Duration::from_secs(10));
+    // plain_text latin-1s multi-byte glyphs, so a painted ╭ is matched
+    // on the raw bytes (the glyph's UTF-8 is contiguous in one cell's
+    // flush); the wait needle is the same three bytes.
+    assert!(
+        got.windows(3).any(|w| w == b"\xe2\x95\xad"),
+        "herdr corner must paint after the cycle"
+    );
+
+    // Split daemon-side: the %layout-change re-seed must rebuild the
+    // renderer with the session's chosen glyphs.
+    client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split");
+    let got = wait_for_output(&host, b"\xe2\x95\xad", Duration::from_secs(10));
+    assert!(
+        got.windows(3).any(|w| w == b"\xe2\x95\xad"),
+        "the split must keep the per-pane-box style. stderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// Clicking a workspace row in the side panel re-seeds the view (the
+/// select+resync contract every switch follows). The re-seed must keep
+/// the panel: its width rides the fresh renderer and its rows re-query —
+/// the manual-pass report was the re-seed rebuilding the renderer
+/// without either, so the panel vanished and the panes painted under
+/// where it had been.
+#[cfg(unix)]
+#[test]
+fn render_mode_workspace_click_reseeds_with_the_panel() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbsplit");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("send-keys -t {pane_a} -l 'echo GEO-MARK-42'"))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane_a} Enter"))
+        .expect("Enter");
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"GEO-MARK-42", Duration::from_secs(10));
+
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("workspaces"),
+        "panel must paint on open. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // A press on the workspace row (y=1 under the header) lands on it:
+    // the select+resync re-seed must re-emit the panel's full frame (a
+    // fresh renderer diffs against an empty buffer) with the panes still
+    // offset by the panel's width.
+    host.to_child
+        .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
+        .expect("panel click");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("workspaces"),
+        "the click's re-seed must keep the panel painted"
+    );
+    host.killer.kill().ok();
+}
+
 /// Border labels paint the user `-T` title: set labels daemon-side
 /// before attach, cycle to the per-pane-box style, and the label text
 /// must appear embedded in the pane's top border (the manual-pass

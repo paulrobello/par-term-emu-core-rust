@@ -673,8 +673,17 @@ impl PaneRenderer {
         if self.scrollbar_gutter {
             w = w.saturating_sub(1);
         }
-        // Rect-RELATIVE insets: the callers add rect.x/rect.y themselves.
-        (d.x - rect.x + inset_x, d.y - rect.y + inset_y, w, h)
+        // Rect-RELATIVE insets: the callers add rect.x/rect.y (and the
+        // side panel's width) themselves. display_rect already carries
+        // the panel's offset in d.x, so it is subtracted back out here —
+        // otherwise the content paints the panel offset twice (the
+        // manual-pass double-push report).
+        (
+            d.x - rect.x - self.sidebar_w + inset_x,
+            d.y - rect.y + inset_y,
+            w,
+            h,
+        )
     }
 
     /// The gap-band mode (config `pane-gaps`): every pane's chrome and
@@ -4017,7 +4026,7 @@ impl WindowSession {
         // A view rebuild unzooms the cue (the daemon unzooms on layout
         // mutations and select-away; a fresh window starts unzoomed).
         self.zoomed = false;
-        self.renderer = PaneRenderer::new(cols, rows, Glyphs::Unicode);
+        self.renderer = PaneRenderer::new(cols, rows, self.border_glyphs);
         // Renderer reconstruction resets the theme and display options:
         // re-apply the session's resolved background and pane-border/
         // label flags so a re-seed does not paint a black band or drop
@@ -4028,6 +4037,18 @@ impl WindowSession {
             .set_show_label_in_border(self.show_label_in_border);
         self.renderer.set_pane_gaps(self.pane_gaps);
         self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
+        // The side panel is renderer state too: without its width the
+        // fresh renderer reports a FULL-width grid on the next size
+        // report and paints panes unshifted under the panel (the
+        // manual-pass split-while-panel-open reports).
+        self.renderer.set_sidebar_width(if self.sidebar_on {
+            self.sidebar_width
+        } else {
+            0
+        });
+        if self.sidebar_on {
+            self.refresh_sidebar(conn);
+        }
         self.scroll_mode = false;
         if let Some((l, v, f)) =
             conn.drain_pending_events()
@@ -6543,8 +6564,56 @@ mod tests {
 
     /// Two side-by-side panes (a vertical divider at x=39).
     const TWO_PANE: &str = "0000,80x24,0,0{40x24,0,0,1,40x24,40,0,2}";
+    /// The same window re-divided for a 20-col side panel: the 60-col
+    /// extent split in two 30-col panes.
+    const TWO_PANE_SIDEBAR: &str = "0000,60x24,0,0{30x24,0,0,1,30x24,30,0,2}";
     /// Two stacked panes (a horizontal divider at y=11).
     const STACKED: &str = "0000,80x24,0,0{80x12,0,0,1,80x12,0,12,2}";
+
+    /// Sidebar paint geometry: with the panel up, the re-divided
+    /// layout's right pane paints flush against the panel — content and
+    /// dividers carry the panel offset exactly once. (The manual-pass
+    /// double-push report: content shifted twice, dividers once.)
+    #[test]
+    fn sidebar_offset_paints_content_and_dividers_together() {
+        let mut session = WindowSession::new(80, 25);
+        // The pre-toggle layout: two 40-col panes; the right pane's
+        // marker row lands at x=40 (no panel, no offset).
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE).expect("parses"));
+        session.renderer.feed_output(2, b"GEO-MARK-42\r\n");
+        session.renderer.render_frame();
+        assert_eq!(
+            session.renderer.cell(40, 0).map(|c| c.symbol()),
+            Some("G"),
+            "pre-toggle the right pane starts at 40"
+        );
+
+        // The toggle: panel width on, the daemon's re-divided layout in.
+        session.renderer.set_sidebar_width(20);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_SIDEBAR).expect("parses"));
+        session.renderer.render_frame();
+        let symbol = |x: u16, y: u16| session.renderer.cell(x, y).map(|c| c.symbol());
+        assert_eq!(
+            symbol(50, 0),
+            Some("G"),
+            "content offset once by the panel: the right pane at 30+20"
+        );
+        assert_eq!(symbol(60, 0), Some("2"), "the marker paints unwrapped");
+        assert_eq!(
+            symbol(49, 5),
+            Some("│"),
+            "the pane divider carries the same offset"
+        );
+        assert_eq!(
+            symbol(40, 0),
+            Some(" "),
+            "the vacated pre-toggle position is gone"
+        );
+    }
 
     /// The probe FAILED (`bg: None`): the frame fill paints NO color -
     /// every cell stays terminal-default, so a failed probe can never

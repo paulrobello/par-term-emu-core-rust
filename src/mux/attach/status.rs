@@ -244,13 +244,18 @@ impl StatusState {
         // side panel up the roster lives in the strip, so the line leads
         // with just the ACTIVE workspace's label before the tabs.
         if sidebar {
+            // The shaded block means "the selected workspace" and must
+            // agree with the side panel's highlighted row (the manual-
+            // pass report: with the active window's tab also shaded, the
+            // strip read as selecting a different workspace). The active
+            // window's tab carries the bold current treatment instead.
             if let Some(name) = self
                 .workspaces
                 .iter()
                 .find(|(id, _)| Some(id.as_str()) == self.active_workspace.as_deref())
                 .map(|(_, name)| name)
             {
-                push(&mut segments, format!(" {name} "), true, false, false);
+                push(&mut segments, format!(" {name} "), true, false, true);
             }
         } else {
             for (index, (id, name)) in self.workspaces.iter().enumerate() {
@@ -278,7 +283,14 @@ impl StatusState {
                     push(&mut segments, " | ".to_string(), false, false, false);
                 }
                 let active = self.active_window.as_deref() == Some(id.as_str());
-                push(&mut segments, format!(" {name} "), false, !active, active);
+                if sidebar {
+                    // The shaded block stays reserved for the workspace
+                    // label in this mode; the active tab is the bold
+                    // current treatment the sessions segment follows.
+                    push(&mut segments, format!(" {name} "), active, !active, false);
+                } else {
+                    push(&mut segments, format!(" {name} "), false, !active, active);
+                }
             }
         }
         if !self.pane_title.is_empty() {
@@ -557,6 +569,16 @@ mod tests {
         assert!(text.starts_with(" alpha "), "label leads: {text}");
         assert!(!text.contains("$1:play"), "sessions dropped: {text}");
         assert!(text.contains(" main "), "tabs remain: {text}");
+        // The shaded block is the selected workspace — agreeing with the
+        // side panel's highlighted row; the active window's tab takes the
+        // bold current treatment instead (the manual-pass report: with
+        // the tab shaded too, the strip read as selecting another
+        // workspace).
+        let shaded = |needle: &str| segments.iter().any(|s| s.shaded && s.text.contains(needle));
+        let bolded = |needle: &str| segments.iter().any(|s| s.bold && s.text.contains(needle));
+        assert!(shaded("alpha"), "the ws label is the shaded block: {text}");
+        assert!(!shaded("main"), "the active tab is not shaded: {text}");
+        assert!(bolded("main"), "the active tab is bold: {text}");
     }
 
     /// A scroll offset over 0 appends a bold `[scroll +N]` cue; offset 0
