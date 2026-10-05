@@ -394,6 +394,13 @@ impl PaneRenderer {
         &self.layout
     }
 
+    /// The renderer's full frame extent — the host grid the seed and
+    /// `resize_to` derived, strip/status included. `window_size` reports
+    /// the pane extent; this is the buffer's own.
+    pub fn frame_size(&self) -> (u16, u16) {
+        (self.width, self.height)
+    }
+
     /// The window extent the daemon divides: the renderer's full width
     /// less the side panel's strip (the panel is a client-only overlay —
     /// the daemon never learns of it), full height.
@@ -3631,8 +3638,11 @@ impl WindowSession {
                 self.renderer.set_glyphs(self.border_glyphs);
                 // herdr style: every pane draws its own complete box, not
                 // the shared dividers — the style owns the paint mode.
-                self.renderer
-                    .set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr));
+                // Through the session-level setter: the chord used to
+                // flip the renderer's flag only, so every re-seed (a
+                // split is one) restored the session flag and reverted
+                // the boxes to shared dividers (the manual-pass report).
+                self.set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr));
                 self.flash = Some(format!("border style: {}", self.border_glyphs.name()));
                 self.draw_status_row();
             }
@@ -3791,7 +3801,11 @@ impl WindowSession {
                             let rest = fields.collect::<Vec<_>>().join(" ");
                             let name = if rest.is_empty() { wid } else { rest.as_str() };
                             let active = wid == self.window;
-                            rows.push((format!("win:{wid}"), name.to_string(), active));
+                            // Child indent: a nested window row must not
+                            // read as a second workspace row (the
+                            // manual-pass report — the window row was
+                            // clicked as if it were a workspace).
+                            rows.push((format!("win:{wid}"), format!("  {name}"), active));
                         }
                     }
                 }
@@ -4014,19 +4028,17 @@ impl WindowSession {
     /// fresh layout report, replay every pane, and mark everything dirty
     /// — the render-mode resync.
     fn reseed_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, window: &str) {
-        let (cols, rows) = self.renderer.window_size();
         let pane = self.focused_pane_or_first(conn, window);
-        if conn
-            .send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
-            .is_err()
-        {
-            return;
-        }
-        self.window = window.to_string();
-        // A view rebuild unzooms the cue (the daemon unzooms on layout
-        // mutations and select-away; a fresh window starts unzoomed).
-        self.zoomed = false;
-        self.renderer = PaneRenderer::new(cols, rows, self.border_glyphs);
+        // Rebuild at the CURRENT renderer's frame extent — the host grid
+        // the seed and resize_to derived — then report the fresh
+        // renderer's window_size: that size is the reported extent (the
+        // grid less the side panel), not the buffer's width, and
+        // constructing from it ratcheted the view one panel-width
+        // narrower on every re-seed while the panel was up, each report
+        // then shrinking again (the manual-pass click-shrinks-the-panes
+        // report).
+        let (host_cols, host_rows) = self.renderer.frame_size();
+        self.renderer = PaneRenderer::new(host_cols, host_rows, self.border_glyphs);
         // Renderer reconstruction resets the theme and display options:
         // re-apply the session's resolved background and pane-border/
         // label flags so a re-seed does not paint a black band or drop
@@ -4049,6 +4061,17 @@ impl WindowSession {
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }
+        let (cols, rows) = self.renderer.window_size();
+        if conn
+            .send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
+            .is_err()
+        {
+            return;
+        }
+        self.window = window.to_string();
+        // A view rebuild unzooms the cue (the daemon unzooms on layout
+        // mutations and select-away; a fresh window starts unzoomed).
+        self.zoomed = false;
         self.scroll_mode = false;
         if let Some((l, v, f)) =
             conn.drain_pending_events()

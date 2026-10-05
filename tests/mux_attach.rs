@@ -2952,15 +2952,15 @@ fn render_mode_border_style_survives_split() {
         "herdr corner must paint after the cycle"
     );
 
-    // Split daemon-side: the %layout-change re-seed must rebuild the
-    // renderer with the session's chosen glyphs.
-    client
-        .send(&format!("split-window -h -t {pane_a}"))
-        .expect("split");
+    // Split via the CHORD: the split's re-seed used to restore the
+    // session-level pane-borders flag (the cycle flipped the renderer's
+    // flag only) and the boxes reverted to shared dividers.
+    host.to_child.write_all(&[0x02, b'%']).expect("prefix %");
+    host.to_child.flush().ok();
     let got = wait_for_output(&host, b"\xe2\x95\xad", Duration::from_secs(10));
     assert!(
         got.windows(3).any(|w| w == b"\xe2\x95\xad"),
-        "the split must keep the per-pane-box style. stderr: {}",
+        "the chord split must keep the per-pane-box style. stderr: {}",
         stderr.lock().unwrap()
     );
     host.killer.kill().ok();
@@ -2984,11 +2984,16 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
         .next()
         .expect("a pane")
         .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
     client
-        .send(&format!("send-keys -t {pane_a} -l 'echo GEO-MARK-42'"))
+        .send(&format!("send-keys -t {pane_b} -l 'echo GEO-MARK-42'"))
         .expect("marker");
     client
-        .send(&format!("send-keys -t {pane_a} Enter"))
+        .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
@@ -3006,16 +3011,34 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
     // A press on the workspace row (y=1 under the header) lands on it:
     // the select+resync re-seed must re-emit the panel's full frame (a
     // fresh renderer diffs against an empty buffer) with the panes still
-    // offset by the panel's width.
-    host.to_child
-        .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
-        .expect("panel click");
-    host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
-    assert!(
-        plain_text(&got).contains("workspaces"),
-        "the click's re-seed must keep the panel painted"
-    );
+    // offset by the panel's width — and REPEATED clicks must not ratchet
+    // the layout left: the re-seed used to rebuild the renderer at the
+    // REPORTED width (grid less the panel), so each re-seed narrowed the
+    // buffer and each report then shrank again (the manual-pass
+    // click-shrinks-the-panes report).
+    for click in 1..=2 {
+        host.to_child
+            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
+            .expect("panel click");
+        host.to_child.flush().ok();
+        let mut got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));
+        got.extend(wait_for_output(
+            &host,
+            b"\x00-never",
+            Duration::from_millis(600),
+        ));
+        assert!(
+            plain_text(&got).contains("workspaces"),
+            "click {click}: the re-seed must keep the panel painted"
+        );
+        let col = cup_col_of_text(&got, "GEO-MARK-42");
+        assert_eq!(
+            col,
+            Some(51),
+            "click {click}: the right pane must stay at 30+20 (no ratchet). text: {:?}",
+            plain_text(&got)
+        );
+    }
     host.killer.kill().ok();
 }
 
