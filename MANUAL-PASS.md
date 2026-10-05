@@ -61,9 +61,10 @@ Per terminal, in passthrough then render mode, check:
   drawing its own rounded box — repaint at once; set
   `[client] border-lines = "herdr"` (or `"double"`) and reload (`C-b C-r`)
   to check the config path.
-- **Labels** (render): prefix `l` toggles each pane's title in its border
-  (label cells need the per-pane-box modes: `pane-borders` or herdr); the
-  flash names on/off, and a rename (prefix `$`) shows up in the label.
+- **Labels** (render): pane labels show in their borders by default in the
+  per-pane-box modes (`pane-borders` or herdr); prefix `l` toggles them — the
+  flash names off/on. The label is your prefix `$` title when set (it
+  repaints within a beat of the rename), else the pane's own title.
 - **Arrow navigation** (render): prefix+arrows move focus to the pane in
   that direction (side-by-side and stacked splits); at an edge the status
   row says so. Shift+arrows swap with the pane in that direction — the two
@@ -75,12 +76,14 @@ Per terminal, in passthrough then render mode, check:
   move, Enter lands on the workspace (its session's window re-seeds), a row
   click activates, esc/q dismisses.
 - **Side panel** (render): prefix `s` toggles a left strip — each workspace
-  with its windows nested dim beneath, the active workspace a full-width
-  inverted block; clicking a workspace row lands on it, clicking a nested
-  window row selects that window, and panes re-divide narrower around the
-  strip (toggling off restores). While up, the top row shows the active
-  workspace's label + the tabs. Rename a window or switch workspaces from
-  another terminal and the strip's rows follow on the next refresh.
+  with its windows nested dim beneath, ONLY the active workspace a
+  full-width inverted block (the shown window's row brightens); clicking a
+  workspace row lands on it, clicking a nested window row selects that
+  window, and panes re-divide narrower around the strip with the vacated
+  region fully erased (toggling off restores). While up, the top row shows
+  the active workspace's label + the tabs. Rename a window or switch
+  workspaces from another terminal and the strip's rows follow on the next
+  refresh.
 - **Detach cleanliness**: prefix `d` in both modes; the prompt returns intact,
   colors and cursor normal, no leftover alt-screen or hidden cursor.
 - **SSH**: from another machine, `ssh <host>` then run the same attach

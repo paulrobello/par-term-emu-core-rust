@@ -2778,3 +2778,54 @@ fn render_mode_sidebar_toggle_minimal() {
     );
     host.killer.kill().ok();
 }
+
+/// Border labels paint the user `-T` title: set labels daemon-side
+/// before attach, cycle to the per-pane-box style, and the label text
+/// must appear embedded in the pane's top border (the manual-pass
+/// report: labels never showed because the painter read the shell's OSC
+/// title only).
+#[cfg(unix)]
+#[test]
+fn render_mode_border_label_paints_the_user_title() {
+    let (fixture, _daemon, mut client) = fixture_with_session("labels");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("select-pane -t {pane_a} -T 'MY-TEST-LABEL'"))
+        .expect("label a");
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    client
+        .send(&format!("select-pane -t {pane_b} -T 'SECOND-LABEL'"))
+        .expect("label b");
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(5));
+
+    // Cycle to herdr: the per-pane-box mode labels paint in.
+    for _ in 0..4 {
+        host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
+    }
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"MY-TEST-LABEL", Duration::from_secs(10));
+    assert!(
+        plain_text(&got).contains("MY-TEST-LABEL"),
+        "the user label must paint in the border. stderr: {} tail: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
+            .chars()
+            .rev()
+            .take(500)
+            .collect::<String>()
+    );
+    host.killer.kill().ok();
+}

@@ -310,6 +310,11 @@ pub struct PaneRenderer {
     /// The panel's sections (queried workspace roster, more to come) —
     /// `None` while hidden or before the first refresh.
     sidebar_sections: Option<Vec<super::SidebarSection>>,
+    /// Per-pane effective titles (`pane-title`: the user `-T` label when
+    /// set, else the pane's OSC title) — what border labels paint. The
+    /// daemon is authoritative; the client re-queries on the throttled
+    /// status refresh.
+    user_titles: HashMap<u32, String>,
     /// Reserve a right-edge gutter column in each pane rect (config
     /// `scrollbar-gutter`): content narrows by one; the gutter renders a
     /// minimal position indicator while the pane's client scroll offset
@@ -339,6 +344,7 @@ impl PaneRenderer {
             height,
             sidebar_w: 0,
             sidebar_sections: None,
+            user_titles: HashMap::new(),
             glyphs,
             bg: None,
             drag_divider: None,
@@ -715,6 +721,27 @@ impl PaneRenderer {
             self.sidebar_sections = sections;
             self.dirty = true;
         }
+    }
+
+    /// Record a pane's effective title (the `pane-title` reply); marks
+    /// dirty when it changed so the border label repaints.
+    pub(crate) fn set_user_title(&mut self, pane: u32, title: &str) {
+        if self.user_titles.get(&pane).map(String::as_str) != Some(title) {
+            self.user_titles.insert(pane, title.to_string());
+            self.dirty = true;
+        }
+    }
+
+    /// The pane's border label: the daemon's effective title (user label
+    /// first), or the emulator's own OSC title when never queried.
+    fn border_label(&self, pane: u32) -> String {
+        if let Some(title) = self.user_titles.get(&pane) {
+            return title.trim().to_string();
+        }
+        self.emulators
+            .get(&pane)
+            .map(|e| e.terminal().title().trim().to_string())
+            .unwrap_or_default()
     }
 
     /// The workspace id under the strip-relative host cell `(x, y)`, if a
@@ -1332,9 +1359,13 @@ impl PaneRenderer {
             return;
         };
         for line in super::compose_sidebar(&sections, w, self.height) {
-            // herdr's active treatment: the row is a full-width inverted
-            // block, not just a brighter glyph run.
-            if line.active {
+            // herdr's active treatment: the ACTIVE WORKSPACE's row is a
+            // full-width inverted block; the shown WINDOW's row just
+            // brightens (two blocks read as two actives — the manual-pass
+            // screenshot).
+            let workspace_row = line.id.as_deref().is_some_and(|id| id.starts_with("ws:"));
+            let window_row = line.id.as_deref().is_some_and(|id| id.starts_with("win:"));
+            if line.active && workspace_row {
                 let block = RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
                     .add_modifier(RtModifier::BOLD);
@@ -1349,9 +1380,13 @@ impl PaneRenderer {
             }
             let style = if line.header {
                 accent
-            } else if line.active {
+            } else if line.active && workspace_row {
                 RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
+                    .add_modifier(RtModifier::BOLD)
+            } else if line.active && window_row {
+                RtStyle::default()
+                    .fg(RtColor::Indexed(14))
                     .add_modifier(RtModifier::BOLD)
             } else {
                 dim
@@ -1418,11 +1453,7 @@ impl PaneRenderer {
                 }
             }
             if self.show_label_in_border && rect.width > 4 {
-                let title = self
-                    .emulators
-                    .get(&rect.pane)
-                    .map(|e| e.terminal().title().trim().to_string())
-                    .unwrap_or_default();
+                let title = self.border_label(rect.pane);
                 if !title.is_empty() {
                     let max = rect.width.saturating_sub(4) as usize;
                     let chars: Vec<char> =
@@ -1466,11 +1497,7 @@ impl PaneRenderer {
             if y != rect.y || rect.width <= 4 {
                 continue;
             }
-            let title = self
-                .emulators
-                .get(&rect.pane)
-                .map(|e| e.terminal().title().trim().to_string())
-                .unwrap_or_default();
+            let title = self.border_label(rect.pane);
             if title.is_empty() {
                 continue;
             }
@@ -2055,6 +2082,9 @@ struct WindowSession {
     /// reconstruction re-applies it.
     sidebar_on: bool,
     sidebar_width: u16,
+    /// The pump refits the grid (resize_to + full repaint) on the next
+    /// loop — set by the sidebar toggle, whose chord has no sink.
+    pending_grid_refit: bool,
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     drag_cursor_shape: bool,
@@ -2132,6 +2162,7 @@ impl WindowSession {
             scrollbar_gutter: false,
             sidebar_on: false,
             sidebar_width: 20,
+            pending_grid_refit: false,
             drag_cursor_shape: false,
             border_glyphs: Glyphs::Unicode,
             zoomed: false,
@@ -2347,6 +2378,21 @@ impl WindowSession {
                 return Ok(());
             }
 
+            // 2b. A sidebar toggle parked a grid refit: the chord has no
+            //     flush sink, so the pump performs the resize_to here —
+            //     its repaint_all is what erases the vacated region.
+            if self.pending_grid_refit {
+                self.pending_grid_refit = false;
+                let (host_cols, host_rows) = super::conn::terminal_grid();
+                self.resize_to(conn, host_cols, host_rows.saturating_sub(2), sink)?;
+                // The refit reconstructed the renderer, dropping the
+                // strip's sections; re-query so the next frame paints
+                // them (a changed mark rides the same dirty flag).
+                if self.sidebar_on {
+                    self.refresh_sidebar(conn);
+                }
+            }
+
             // 3. Host resize (SIGWINCH): report the new grid, re-fit. The
             //    daemon's window renders into the rows between the tab
             //    strip and the status bar, so the size report carries the
@@ -2373,6 +2419,7 @@ impl WindowSession {
                 let focused = self.renderer.focused().unwrap_or(0);
                 match self.status.refresh(conn, &self.window, focused) {
                     Ok(()) => {
+                        self.refresh_pane_titles(conn);
                         if self.sidebar_on {
                             self.refresh_sidebar(conn);
                         }
@@ -3650,12 +3697,11 @@ impl WindowSession {
             0
         };
         self.renderer.set_sidebar_width(width);
-        let pane = self.focused_pane();
-        if pane.is_empty() {
-            return;
-        }
-        let (cols, rows) = self.renderer.window_size();
-        let _ = conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"));
+        // The refit runs on the pump (it owns the flush sink): resize_to
+        // reports the new grid, then repaint_all erases the region the
+        // old layout vacated — the plain %layout-change re-seed never
+        // clears those host cells (the manual-pass ghost-pane report).
+        self.pending_grid_refit = true;
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }
@@ -3668,6 +3714,23 @@ impl WindowSession {
             .to_string(),
         );
         self.draw_status_row();
+    }
+
+    /// Re-query every pane's effective title into the renderer's label
+    /// store — the border labels paint the user `-T` label when set (the
+    /// manual-pass report: prefix `$` labels never showed because the
+    /// painter read the shell's OSC title only). Called on seed and on
+    /// the throttled status refresh; a changed title marks dirty.
+    fn refresh_pane_titles(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let panes: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+        for pane in panes {
+            if let Ok(reply) = conn.send_checked(&format!("pane-title -t %{pane}")) {
+                if reply.ok {
+                    let title = reply.body.join(" ");
+                    self.renderer.set_user_title(pane, title.trim());
+                }
+            }
+        }
     }
 
     /// Re-query the workspace roster into the panel's sections — on
