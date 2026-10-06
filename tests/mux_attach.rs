@@ -3142,6 +3142,64 @@ fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
     host.killer.kill().ok();
 }
 
+/// The side panel's ` menu ` chip opens the command menu, and its
+/// `detach` row ends the client exactly like prefix `d` (exit 0).
+#[cfg(unix)]
+#[test]
+fn render_mode_panel_menu_chip_detaches() {
+    let (fixture, _daemon, mut client) = fixture_with_session("menudetach");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    host.to_child.write_all(&[0x02, b's']).expect("prefix s");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(600));
+    // The panel's footer row is the 22-row content area's last row
+    // (host row 22, SGR row 23); ` menu ` spans 0-based cols 13..19.
+    host.to_child
+        .write_all(b"\x1b[<0;17;23M")
+        .expect("menu chip press");
+    host.to_child.flush().ok();
+    let mut flash = wait_for_output(&host, b"reload config", Duration::from_secs(10));
+    flash.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    assert!(
+        plain_text(&flash).contains("reload config"),
+        "the chip must open the command menu. stderr: {} text: {}",
+        stderr.lock().unwrap(),
+        plain_text(&flash)
+    );
+
+    // The menu box: the 28-char footer is the widest row, so 30 wide
+    // over the 80-col host (x0 = 25); 5 rows plus the ring over 22
+    // content rows (y0 = 7). `detach` is panel row 3 at host y0+5.
+    let x0 = (80usize - 30) / 2;
+    let y0 = (22usize - 7) / 2;
+    host.to_child
+        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 6).as_bytes())
+        .expect("detach click");
+    host.to_child.flush().ok();
+    let code = child_exit(&mut host, Duration::from_secs(10));
+    assert_eq!(
+        code,
+        Some(0),
+        "the detach row must end the client with exit 0. stderr: {}",
+        stderr.lock().unwrap()
+    );
+}
+
 /// The tab strip's ` + ` button: a click opens the new-tab prompt
 /// (herdr's footer, the next free index as the editable default), Enter
 /// creates the window and lands on it, Esc cancels without creating.

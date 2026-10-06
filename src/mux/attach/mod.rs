@@ -1930,6 +1930,14 @@ pub(crate) fn help_rows(
                 "click +".to_string(),
                 "new tab — prompts for its name".to_string(),
             ),
+            (
+                "panel new".to_string(),
+                "new workspace — prompts for its name".to_string(),
+            ),
+            (
+                "panel menu".to_string(),
+                "keybinds / reload config / detach".to_string(),
+            ),
         ],
     );
     rows
@@ -2293,7 +2301,8 @@ pub(crate) struct SidebarLine {
 }
 
 /// The side panel's footer chips: ` new ` opens the new-workspace
-/// prompt, ` menu ` the active workspace's menu. The ids flow through
+/// prompt, ` menu ` the command menu (keybinds, reload config, detach).
+/// The ids flow through
 /// [`SidebarLine.id`] into the click dispatch.
 pub(crate) const SIDEBAR_NEW_ID: &str = "panel:new";
 pub(crate) const SIDEBAR_MENU_ID: &str = "panel:menu";

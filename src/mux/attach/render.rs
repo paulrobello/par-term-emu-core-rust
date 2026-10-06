@@ -2190,6 +2190,10 @@ struct WindowSession {
     /// tick, while a flushed frame (whose per-cell CUP left the terminal
     /// cursor wherever the last diff cell sits) always repositions.
     cursor_placed: Option<Option<(u16, u16, CursorStyle)>>,
+    /// A mouse path (the command menu's `detach` row) asked to end the
+    /// view; the pump takes it after the mouse token and exits the same
+    /// way prefix `d` does.
+    detach_requested: bool,
 }
 
 /// What the modal prompt edits: rename flows seeded from the live name,
@@ -2220,16 +2224,23 @@ enum MenuTarget {
     /// The workspace menu: the workspace id (`+N`) the actions run
     /// against.
     Workspace(String),
+    /// The side panel's ` menu ` chip: client commands with no target
+    /// entity (keybinds, reload config, detach).
+    Commands,
 }
 
 /// The context menus' action vocabulary: rename/close per target, the
-/// tab menu's add-tab, the workspace menu's new-workspace.
+/// tab menu's add-tab, the workspace menu's new-workspace, and the
+/// command menu's keybinds/reload-config/detach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
     Rename,
     Close,
     AddTab,
     NewWorkspace,
+    Keybinds,
+    ReloadConfig,
+    Detach,
 }
 
 /// The open menu's state: its target plus the action dispatched per
@@ -2248,6 +2259,9 @@ const MENU_FOOTER: &str = " action click · close esc/q ";
 /// accent header row).
 const MENU_TITLE: &str = " menu ";
 
+/// The command menu's accent header (it has no target entity to name).
+const COMMAND_MENU_HEADER: &str = "commands";
+
 /// Compose the context menu's overlay panel for `target`: the target's
 /// name as the accent header, one row per action, the footer controls
 /// line — [`super::compose_prompt_panel`]'s row/footer shape. Returns
@@ -2262,10 +2276,16 @@ fn compose_menu_panel(target: &MenuTarget, name: &str) -> (Vec<HelpRow>, Vec<Opt
             MenuAction::Close,
             MenuAction::NewWorkspace,
         ],
+        MenuTarget::Commands => &[
+            MenuAction::Keybinds,
+            MenuAction::ReloadConfig,
+            MenuAction::Detach,
+        ],
     };
     let labels: &[&str] = match target {
         MenuTarget::Tab(_) => &["rename", "close", "add tab"],
         MenuTarget::Workspace(_) => &["rename", "close", "new"],
+        MenuTarget::Commands => &["keybinds", "reload config", "detach"],
     };
     let mut rows = vec![HelpRow {
         text: format!(" {name} "),
@@ -2344,6 +2364,7 @@ impl WindowSession {
             flash: None,
             flash_ticks: 0,
             cursor_placed: Some(None),
+            detach_requested: false,
         }
     }
 
@@ -2852,6 +2873,9 @@ impl WindowSession {
                             }
                             Token::Mouse(mouse) => {
                                 self.route_mouse(conn, mouse);
+                                if std::mem::take(&mut self.detach_requested) {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -3298,9 +3322,9 @@ impl WindowSession {
     }
 
     /// Open the context menu for `target`: the tab menu (right-press on
-    /// a tab) or the workspace menu (the panel's ` menu ` chip, a
-    /// right-press on a workspace row). The overlay rides the same
-    /// modal machinery the picker uses.
+    /// a tab), the workspace menu (a right-press on a workspace row), or
+    /// the command menu (the panel's ` menu ` chip). The overlay rides
+    /// the same modal machinery the picker uses.
     fn open_menu(&mut self, target: MenuTarget) {
         let name = match &target {
             MenuTarget::Tab(id) => self
@@ -3317,6 +3341,7 @@ impl WindowSession {
                 .find(|(wsid, _)| wsid == id)
                 .map(|(_, name)| name.clone())
                 .unwrap_or_else(|| id.clone()),
+            MenuTarget::Commands => COMMAND_MENU_HEADER.to_string(),
         };
         let (rows, actions) = compose_menu_panel(&target, &name);
         self.menu = Some(MenuState { target, actions });
@@ -3380,8 +3405,11 @@ impl WindowSession {
             (MenuTarget::Workspace(workspace), MenuAction::Close) => {
                 self.close_workspace_from_menu(conn, &workspace);
             }
-            // The cross pair never composes (each menu carries only its
-            // own third action).
+            (MenuTarget::Commands, MenuAction::Keybinds) => self.enter_help(),
+            (MenuTarget::Commands, MenuAction::ReloadConfig) => self.reload_config(conn),
+            (MenuTarget::Commands, MenuAction::Detach) => self.detach_requested = true,
+            // The cross pairs never compose (each menu carries only its
+            // own actions).
             _ => {}
         }
     }
@@ -4846,9 +4874,9 @@ impl WindowSession {
         // The side panel owns its strip below the tab-strip row: a
         // press on a workspace row lands on it (the select+resync every
         // switch follows), a right-press opens the workspace menu, the
-        // footer chips open their prompts/menu, and every other event
-        // in the strip is consumed — no pane, divider, or drag lives in
-        // the panel. The TOP row stays the tab strip's (the panel
+        // footer chips open the new-workspace prompt / the command
+        // menu, and every other event in the strip is consumed — no
+        // pane, divider, or drag lives in the panel. The TOP row stays the tab strip's (the panel
         // begins under it), so a click there falls through to the tab
         // strip even inside the strip's width — the sidebar path used
         // to consume it (the round-5 report).
@@ -4858,16 +4886,7 @@ impl WindowSession {
                     if id == super::SIDEBAR_NEW_ID {
                         self.enter_prompt(PromptTarget::NewWorkspace);
                     } else if id == super::SIDEBAR_MENU_ID {
-                        // The workspace menu for the daemon-active
-                        // workspace (the first when none is marked).
-                        let active = self
-                            .status
-                            .active_workspace()
-                            .map(str::to_string)
-                            .or_else(|| self.status.workspaces().first().map(|(id, _)| id.clone()));
-                        if let Some(ws) = active {
-                            self.open_menu(MenuTarget::Workspace(ws));
-                        }
+                        self.open_menu(MenuTarget::Commands);
                     } else if let Some(ws_id) = id.strip_prefix("ws:") {
                         if mouse.is_right_press() {
                             self.open_menu(MenuTarget::Workspace(ws_id.to_string()));
@@ -7833,6 +7852,131 @@ mod tests {
             session.prompt_mode,
             "the raw-column click must open the rename prompt"
         );
+    }
+
+    /// The command menu's pure mapping: a fixed header, one row per
+    /// client command (keybinds, reload config, detach), the footer.
+    #[test]
+    fn compose_command_menu_maps_rows_to_actions() {
+        let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, "commands");
+        assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
+        assert_eq!(rows[0].text, " commands ");
+        assert_eq!(rows[1].text, " keybinds ");
+        assert_eq!(rows[2].text, " reload config ");
+        assert_eq!(rows[3].text, " detach ");
+        assert_eq!(
+            mapping,
+            vec![
+                None,
+                Some(MenuAction::Keybinds),
+                Some(MenuAction::ReloadConfig),
+                Some(MenuAction::Detach),
+                None
+            ]
+        );
+    }
+
+    /// A panel-up session (strip 20 on an 80x24 host) with the command
+    /// menu opened through the ` menu ` chip's own cell: the footer row
+    /// is the 22-row renderer's last row, host row 22 (SGR row 23), the
+    /// chip spanning cols 13..19 (SGR col 17 is inside it). No workspace
+    /// roster is loaded — the chip must not depend on one.
+    fn command_menu_session(
+        tag: &str,
+    ) -> (
+        std::sync::mpsc::Receiver<(String, String)>,
+        crate::mux::attach::conn::AttachConn,
+        WindowSession,
+    ) {
+        use crate::mux::attach::input::SgrMouse;
+        let (rx, mut conn) = recording_conn(tag);
+        let mut session = WindowSession::new(80, 24);
+        session.renderer.set_sidebar_width(20);
+        session
+            .renderer
+            .set_sidebar_sections(Some(vec![super::super::SidebarSection { rows: vec![] }]));
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 17,
+                row: 23,
+                release: false,
+            },
+        );
+        (rx, conn, session)
+    }
+
+    /// Click panel row `r` of the open menu at its raw host cell (panel
+    /// row r paints at host y0+2+r; SGR is 1-based).
+    fn click_menu_row(
+        session: &mut WindowSession,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        r: usize,
+    ) {
+        use crate::mux::attach::input::SgrMouse;
+        let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("menu up");
+        session.route_mouse(
+            conn,
+            SgrMouse {
+                cb: 0,
+                col: (x0 + 4) as u16,
+                row: (y0 + 3 + r) as u16,
+                release: false,
+            },
+        );
+    }
+
+    /// The side panel's ` menu ` chip opens the COMMAND menu (not the
+    /// workspace menu), even with no workspace roster.
+    #[test]
+    fn menu_chip_opens_the_command_menu() {
+        let (_rx, _conn, session) = command_menu_session("cmdmenu-open");
+        assert_eq!(
+            session.menu.as_ref().map(|m| m.target.clone()),
+            Some(MenuTarget::Commands),
+            "the chip opens the command menu"
+        );
+        let overlay = session.renderer.overlay.as_ref().expect("overlay up");
+        assert_eq!(overlay.0, MENU_TITLE);
+        assert_eq!(overlay.1[1].text, " keybinds ");
+    }
+
+    /// The command menu's `keybinds` row opens the help panel.
+    #[test]
+    fn command_menu_keybinds_opens_help() {
+        let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-help");
+        click_menu_row(&mut session, &mut conn, 1);
+        assert!(session.menu.is_none(), "the menu closed");
+        assert!(session.help_mode, "keybinds opened the help panel");
+        assert_eq!(
+            session.renderer.overlay.as_ref().map(|o| o.0),
+            Some(super::super::HELP_OVERLAY_TITLE)
+        );
+    }
+
+    /// The command menu's `reload config` row runs the reload (the
+    /// daemon's `reload-config` rides the wire either way).
+    #[test]
+    fn command_menu_reload_sends_reload_config() {
+        let (rx, mut conn, mut session) = command_menu_session("cmdmenu-reload");
+        click_menu_row(&mut session, &mut conn, 2);
+        assert!(session.menu.is_none(), "the menu closed");
+        assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
+        assert!(session.flash.is_some(), "the reload flashes its outcome");
+    }
+
+    /// The command menu's `detach` row requests the pump's exit (the
+    /// prefix-d path), and the header/footer rows do nothing.
+    #[test]
+    fn command_menu_detach_requests_exit() {
+        let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-detach");
+        click_menu_row(&mut session, &mut conn, 0);
+        assert!(session.menu.is_some(), "the header consumes the click");
+        assert!(!session.detach_requested);
+        click_menu_row(&mut session, &mut conn, 3);
+        assert!(session.menu.is_none(), "the menu closed");
+        assert!(session.detach_requested, "detach was requested");
     }
 
     /// The new-tab prompt's default name: one past the highest window
