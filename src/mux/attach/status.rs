@@ -213,12 +213,6 @@ impl StatusState {
         &self.workspaces
     }
 
-    /// The daemon's active workspace id, `"+N"` — the workspace menu
-    /// chip's target.
-    pub(crate) fn active_workspace(&self) -> Option<&str> {
-        self.active_workspace.as_deref()
-    }
-
     /// The focused pane's user title (the rename-pane prompt's seed).
     pub(crate) fn pane_title(&self) -> &str {
         &self.pane_title
