@@ -918,11 +918,17 @@ impl TmuxControlParser {
 
         let pane_id = parts[0].to_string();
         let delay_ms = parts[1].parse().ok()?;
-        // Skip the colon separator in parts[2]
-        let data_part = if parts[2].starts_with(':') {
-            &parts[2][1..]
+        // tmux(1): `pane-id age ... : value` — arguments up to the first
+        // lone `:` are for future use and ignored; the value follows the
+        // `: ` separator. A line with no lone colon keeps the legacy
+        // leading-`:`-stripped reading.
+        let rest = parts[2];
+        let data_part = if let Some(value) = rest.strip_prefix(": ") {
+            value
+        } else if let Some(pos) = rest.find(" : ") {
+            &rest[pos + 3..]
         } else {
-            parts[2]
+            rest.strip_prefix(':').unwrap_or(rest)
         };
         let data = Self::unescape_output(data_part);
 
@@ -1675,5 +1681,43 @@ mod tests {
         assert_eq!(parser.find_control_mode_start(b"no begin here\n"), None);
         // %begin in middle of line shouldn't match
         assert_eq!(parser.find_control_mode_start(b"text %begin more\n"), None);
+    }
+
+    /// tmux(1) CONTROL MODE: `%extended-output pane-id age ... : value` —
+    /// the value follows a lone `:` and its separating space, and any
+    /// arguments between age and the `:` are for future use and ignored.
+    #[test]
+    fn extended_output_value_follows_the_lone_colon_separator() {
+        let mut parser = TmuxControlParser::new(true);
+        let parsed = parser.parse(b"%extended-output %3 125 : hello world\n");
+        assert_eq!(
+            parsed,
+            vec![TmuxNotification::ExtendedOutput {
+                pane_id: "%3".to_string(),
+                delay_ms: 125,
+                data: b"hello world".to_vec(),
+            }]
+        );
+        let parsed = parser.parse(b"%extended-output %3 7 future args : \\033[0m\n");
+        assert_eq!(
+            parsed,
+            vec![TmuxNotification::ExtendedOutput {
+                pane_id: "%3".to_string(),
+                delay_ms: 7,
+                data: b"\x1b[0m".to_vec(),
+            }],
+            "future-use arguments before the colon are ignored"
+        );
+        // A value that itself contains " : " keeps it: only the first lone
+        // colon separates.
+        let parsed = parser.parse(b"%extended-output %3 7 : a : b\n");
+        assert_eq!(
+            parsed,
+            vec![TmuxNotification::ExtendedOutput {
+                pane_id: "%3".to_string(),
+                delay_ms: 7,
+                data: b"a : b".to_vec(),
+            }]
+        );
     }
 }
