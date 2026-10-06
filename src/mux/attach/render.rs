@@ -6525,6 +6525,38 @@ mod tests {
         std::sync::mpsc::Receiver<(String, String)>,
         crate::mux::attach::conn::AttachConn,
     ) {
+        fake_daemon(
+            tag,
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        )
+    }
+
+    /// The fake daemon's script: canned reply bodies per exact command
+    /// line, the lines answered with an error block (`ok == false`), and
+    /// notification lines pushed just BEFORE a line's reply block (the
+    /// daemon's `%layout-change` riding a size report).
+    #[derive(Default)]
+    struct FakeScript {
+        replies: std::collections::HashMap<String, String>,
+        failing: std::collections::HashSet<String>,
+        notify: std::collections::HashMap<String, String>,
+    }
+
+    fn fake_daemon(
+        tag: &str,
+        script: FakeScript,
+    ) -> (
+        std::sync::mpsc::Receiver<(String, String)>,
+        crate::mux::attach::conn::AttachConn,
+    ) {
+        let FakeScript {
+            replies,
+            failing,
+            notify,
+        } = script;
         let mut path = std::env::temp_dir();
         path.push(format!("par-mux-render-{tag}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -6559,8 +6591,12 @@ mod tests {
                 };
                 number += 1;
                 tx.send((name, trimmed.to_owned())).ok();
+                if let Some(note) = notify.get(trimmed) {
+                    writer.write_all(format!("{note}\n").as_bytes()).ok();
+                }
+                let ok = !failing.contains(trimmed);
                 writer
-                    .write_all(crate::mux::emit_block(number, &reply, true).as_bytes())
+                    .write_all(crate::mux::emit_block(number, &reply, ok).as_bytes())
                     .ok();
                 writer.flush().ok();
             }
@@ -8202,5 +8238,504 @@ mod tests {
             !lines.iter().any(|l| l.starts_with("select-window")),
             "nothing to select: {lines:?}"
         );
+    }
+
+    /// The canned replies a full re-seed onto `window` (session `$0`,
+    /// panes `panes`) needs to COMPLETE: the size-report pane lookup, the
+    /// status refresh's owner scan (`list-sessions` names `$0`, whose
+    /// windows list `window`), and the window list the strip paints.
+    /// Without them the reseed still sets `window` but bails at the
+    /// owner scan, so tests that care about completion use this.
+    fn reseed_replies(
+        replies: &mut std::collections::HashMap<String, String>,
+        windows: &str,
+        window: &str,
+        panes: &str,
+    ) {
+        replies.insert("list-sessions".to_string(), "$0: work".to_string());
+        replies.insert("list-windows -t $0".to_string(), windows.to_string());
+        replies.insert(format!("list-panes -t {window}"), panes.to_string());
+    }
+
+    /// A two-pane session showing `@0` of `$0`, the fake daemon scripted.
+    fn two_pane_session(
+        tag: &str,
+        script: FakeScript,
+    ) -> (
+        std::sync::mpsc::Receiver<(String, String)>,
+        crate::mux::attach::conn::AttachConn,
+        WindowSession,
+    ) {
+        let (rx, conn) = fake_daemon(tag, script);
+        let mut session = WindowSession::new(80, 25);
+        session
+            .renderer
+            .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+        session.window = "@0".to_string();
+        session.status.session_id = Some("$0".to_string());
+        drained(&rx);
+        (rx, conn, session)
+    }
+
+    /// One prefix chord through the plain-byte router (prefix + `key`).
+    fn chord(
+        session: &mut WindowSession,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        key: u8,
+    ) -> bool {
+        let mut prefix_pending = false;
+        session.route_plain(&[crate::mux::attach::C_B, key], conn, &mut prefix_pending)
+    }
+
+    /// Split right: `split-window -t <focused> -h`, the view re-seeds
+    /// the window, and focus lands on the NEW pane the reply names —
+    /// the select-pane rides the wire AFTER the reseed (the reseed
+    /// resets focus to the first leaf). The `%layout-change` the size
+    /// report carries makes the fresh pane part of the layout.
+    #[test]
+    fn split_chord_reseeds_and_focuses_the_new_pane() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("split-window -t %1 -h".to_string(), "%3".to_string());
+        reseed_replies(&mut replies, "@0 * main", "@0", "%1\n%3");
+        let mut notify = std::collections::HashMap::new();
+        notify.insert(
+            "refresh-client -t %1 -C 80x23".to_string(),
+            "%layout-change @0 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,3} 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,3} *"
+                .to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "split-r",
+            FakeScript {
+                replies,
+                notify,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'%');
+        let lines = drained(&rx);
+        assert_eq!(lines[0], "split-window -t %1 -h");
+        assert!(
+            lines.contains(&"refresh-client -t %1 -C 80x23".to_string()),
+            "the reseed reports the size: {lines:?}"
+        );
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("select-pane -t %3"),
+            "focus lands on the new pane last: {lines:?}"
+        );
+        assert_eq!(session.renderer.focused(), Some(3));
+        let panes: Vec<u32> = session.renderer.layout().iter().map(|r| r.pane).collect();
+        assert_eq!(panes, vec![1, 3], "the reseed applied the fresh layout");
+    }
+
+    /// Split down omits `-h`; a daemon error reply leaves the view alone
+    /// (no reseed, no focus move).
+    #[test]
+    fn split_down_chord_refused_does_nothing_more() {
+        let mut failing = std::collections::HashSet::new();
+        failing.insert("split-window -t %1".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "split-d",
+            FakeScript {
+                failing,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'"');
+        assert_eq!(drained(&rx), vec!["split-window -t %1".to_string()]);
+        assert_eq!(session.renderer.focused(), Some(1));
+    }
+
+    /// Kill with a survivor: the `*`-marked pane of `list-panes` takes
+    /// focus after the reseed. Kill with NO survivor (the last pane
+    /// died): nothing is reseeded and the status is marked stale so the
+    /// pump's refresh ends the view.
+    #[test]
+    fn kill_chord_lands_on_the_survivor_or_marks_the_view_stale() {
+        let mut replies = std::collections::HashMap::new();
+        reseed_replies(&mut replies, "@0 * main", "@0", "%1 @0 - x\n%2 @0 * y");
+        let mut notify = std::collections::HashMap::new();
+        notify.insert(
+            "refresh-client -t %1 -C 80x23".to_string(),
+            "%layout-change @0 0000,80x23,0,0,2 0000,80x23,0,0,2 *".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "kill-surv",
+            FakeScript {
+                replies,
+                notify,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'x');
+        let lines = drained(&rx);
+        assert_eq!(lines[0], "kill-pane -t %1");
+        assert_eq!(lines[1], "list-panes -t @0");
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("select-pane -t %2"),
+            "the marked survivor takes focus: {lines:?}"
+        );
+        assert_eq!(session.renderer.focused(), Some(2));
+
+        // No survivor: list-panes comes back empty.
+        let (rx, mut conn, mut session) = two_pane_session("kill-last", FakeScript::default());
+        session.status_dirty = false;
+        chord(&mut session, &mut conn, b'x');
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "kill-pane -t %1".to_string(),
+                "list-panes -t @0".to_string()
+            ],
+            "no reseed, no select"
+        );
+        assert!(session.status_dirty, "the refresh ends the view");
+    }
+
+    /// Swap prev/next pick the layout-order neighbor and wrap; a single
+    /// pane has no neighbor and sends nothing.
+    #[test]
+    fn swap_chords_pick_the_layout_neighbor_and_wrap() {
+        let (rx, mut conn, mut session) = two_pane_session("swap", FakeScript::default());
+        chord(&mut session, &mut conn, b'}');
+        assert_eq!(drained(&rx), vec!["swap-pane -s %1 -t %2".to_string()]);
+        chord(&mut session, &mut conn, b'{');
+        assert_eq!(
+            drained(&rx),
+            vec!["swap-pane -s %1 -t %2".to_string()],
+            "prev from the first pane wraps to the last"
+        );
+        session.renderer.focus(2);
+        chord(&mut session, &mut conn, b'}');
+        assert_eq!(
+            drained(&rx),
+            vec!["swap-pane -s %2 -t %1".to_string()],
+            "next from the last pane wraps to the first"
+        );
+
+        let (rx, mut conn) = recording_conn("swap-one");
+        let mut single = WindowSession::new(80, 25);
+        single
+            .renderer
+            .apply_layout(parse_layout("0000,80x23,0,0,1").expect("parses"));
+        drained(&rx);
+        chord(&mut single, &mut conn, b'}');
+        assert!(drained(&rx).is_empty(), "one pane: nothing to swap");
+    }
+
+    /// New window: `new-window -t $0`, then select + reseed onto the id
+    /// the reply names. With no known session the chord sends nothing.
+    #[test]
+    fn new_window_chord_creates_selects_and_reseeds() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("new-window -t $0".to_string(), "@4".to_string());
+        reseed_replies(&mut replies, "@0 - main\n@4 * fresh", "@4", "%9");
+        let (rx, mut conn, mut session) = two_pane_session(
+            "neww",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'c');
+        let lines = drained(&rx);
+        assert_eq!(lines[0], "new-window -t $0");
+        assert_eq!(lines[1], "select-window -t @4");
+        assert!(
+            lines.contains(&"refresh-client -t %9 -C 80x23".to_string()),
+            "{lines:?}"
+        );
+        assert_eq!(session.window, "@4");
+        assert_eq!(session.status.active_window.as_deref(), Some("@4"));
+
+        let (rx, mut conn) = recording_conn("neww-none");
+        let mut orphan = WindowSession::new(80, 25);
+        drained(&rx);
+        chord(&mut orphan, &mut conn, b'c');
+        assert!(drained(&rx).is_empty(), "no session: nothing to create in");
+    }
+
+    /// Zoom toggles the cue on an ok reply (flash + ` Z |` head on the
+    /// status row) and back; a refused zoom leaves the cue alone.
+    #[cfg(unix)]
+    #[test]
+    fn zoom_chord_toggles_the_cue_only_on_success() {
+        let (rx, mut conn, mut session) = two_pane_session("zoom", FakeScript::default());
+        chord(&mut session, &mut conn, b'z');
+        assert_eq!(drained(&rx), vec!["resize-pane -t %1 -Z".to_string()]);
+        assert!(session.zoomed);
+        assert_eq!(session.flash.as_deref(), Some("zoomed"));
+        let row: String = session
+            .status_row
+            .diff()
+            .iter()
+            .map(|(_, _, c)| c.symbol().to_string())
+            .collect();
+        assert!(
+            row.starts_with(" Z |"),
+            "the zoom head leads the row: {row}"
+        );
+        chord(&mut session, &mut conn, b'z');
+        assert!(!session.zoomed);
+        assert_eq!(session.flash.as_deref(), Some("unzoomed"));
+
+        let mut failing = std::collections::HashSet::new();
+        failing.insert("resize-pane -t %1 -Z".to_string());
+        let (_rx, mut conn, mut session) = two_pane_session(
+            "zoom-no",
+            FakeScript {
+                failing,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'z');
+        assert!(!session.zoomed, "a refused zoom keeps the cue off");
+        assert_eq!(session.flash, None);
+    }
+
+    /// The border chord cycles the glyph set; reaching herdr turns on
+    /// per-pane boxes at the SESSION level, so a reseed (a split is one)
+    /// keeps them — the regression the chord's comment names.
+    #[test]
+    fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
+        let mut replies = std::collections::HashMap::new();
+        reseed_replies(&mut replies, "@0 * main", "@0", "%1");
+        let (_rx, mut conn, mut session) = two_pane_session(
+            "border",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        for expected in ["double", "heavy", "ascii"] {
+            chord(&mut session, &mut conn, b'B');
+            assert_eq!(session.border_glyphs.name(), expected);
+            assert!(!session.pane_borders, "{expected}: shared dividers");
+        }
+        chord(&mut session, &mut conn, b'B');
+        assert_eq!(session.border_glyphs, Glyphs::Herdr);
+        assert!(session.pane_borders && session.renderer.pane_borders);
+        assert_eq!(session.flash.as_deref(), Some("border style: herdr"));
+        session.reseed_window(&mut conn, "@0");
+        assert!(
+            session.renderer.pane_borders,
+            "the rebuilt renderer keeps the herdr boxes"
+        );
+        chord(&mut session, &mut conn, b'B');
+        assert_eq!(session.border_glyphs, Glyphs::Unicode, "the cycle wraps");
+        assert!(!session.renderer.pane_borders);
+    }
+
+    /// The labels chord flips the in-border titles with a flash; the
+    /// status-bar chord hides/shows the row and parks a grid refit; the
+    /// sidebar chord opens the panel (roster queried, refit parked) and
+    /// closes it without re-querying.
+    #[test]
+    fn toggle_chords_flip_their_state_and_park_refits() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-workspaces".to_string(),
+            "+0: alpha active\n+1: beta".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "toggles",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'l');
+        assert!(session.show_label_in_border);
+        assert_eq!(session.flash.as_deref(), Some("labels on"));
+        chord(&mut session, &mut conn, b'l');
+        assert!(!session.show_label_in_border);
+        assert_eq!(session.flash.as_deref(), Some("labels off"));
+
+        chord(&mut session, &mut conn, b'S');
+        assert!(!session.status_bar_on);
+        assert!(session.pending_grid_refit);
+        let mut sink = RecordingSink::default();
+        assert!(
+            !session.flush_status_row(&mut sink),
+            "a hidden bar flushes nothing"
+        );
+        chord(&mut session, &mut conn, b'S');
+        assert!(session.status_bar_on);
+        session.pending_grid_refit = false;
+        assert!(drained(&rx).is_empty(), "the local toggles touch no wire");
+
+        chord(&mut session, &mut conn, b's');
+        assert!(session.sidebar_on && session.pending_grid_refit);
+        assert_eq!(session.renderer.sidebar_width(), 20);
+        assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
+        assert_eq!(
+            session.renderer.sidebar_row_at(2, 2),
+            Some("ws:+1".to_string()),
+            "the queried roster fills the panel"
+        );
+        chord(&mut session, &mut conn, b's');
+        assert!(!session.sidebar_on);
+        assert_eq!(session.renderer.sidebar_width(), 0);
+        assert_eq!(session.flash.as_deref(), Some("sidebar off"));
+        assert!(drained(&rx).is_empty(), "closing re-queries nothing");
+    }
+
+    /// The rename chords open the prompt seeded from the live name: `,`
+    /// the shown window's name, `$` the focused pane's title.
+    #[test]
+    fn rename_chords_open_seeded_prompts() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("list-sessions".to_string(), "$0: work".to_string());
+        replies.insert("list-windows -t $0".to_string(), "@0 * editor".to_string());
+        replies.insert("pane-title -t %1".to_string(), "build".to_string());
+        let (_rx, mut conn, mut session) = two_pane_session(
+            "rename",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+        chord(&mut session, &mut conn, b',');
+        assert!(session.prompt_mode);
+        assert_eq!(
+            session.prompt_target,
+            PromptTarget::Window("@0".to_string())
+        );
+        assert_eq!(session.prompt_text, "editor");
+        assert_eq!(
+            session.renderer.overlay.as_ref().map(|o| o.0),
+            Some(crate::mux::attach::PROMPT_WINDOW_OVERLAY_TITLE)
+        );
+        session.leave_prompt();
+        chord(&mut session, &mut conn, b'$');
+        assert_eq!(session.prompt_target, PromptTarget::Pane);
+        assert_eq!(session.prompt_text, "build");
+    }
+
+    /// Workspace next/prev: the active roster entry's neighbor (wrapping)
+    /// is selected and the view lands on its first session's active
+    /// window; a roster without an active marker does nothing.
+    #[test]
+    fn workspace_chords_select_the_neighbor_and_land_on_it() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-workspaces".to_string(),
+            "+0: alpha active\n+1: beta".to_string(),
+        );
+        replies.insert(
+            "list-sessions -t +1".to_string(),
+            "+1: beta: $1: lab".to_string(),
+        );
+        replies.insert(
+            "list-windows -t $1".to_string(),
+            "@5 - a\n@6 * b".to_string(),
+        );
+        replies.insert("list-sessions".to_string(), "+1: beta: $1: lab".to_string());
+        replies.insert("list-panes -t @6".to_string(), "%7".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "ws-next",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'W');
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..6].to_vec(),
+            vec![
+                "list-workspaces",
+                "select-workspace -t +1",
+                "select-workspace -t +1",
+                "list-sessions -t +1",
+                "list-windows -t $1",
+                "select-window -t @6",
+            ],
+            "{lines:?}"
+        );
+        assert_eq!(session.window, "@6", "the session's active window");
+        assert_eq!(session.status.session_id.as_deref(), Some("$1"));
+        // C-w from the active +0 wraps backward to the last (+1).
+        chord(&mut session, &mut conn, 0x17);
+        assert!(drained(&rx).contains(&"select-workspace -t +1".to_string()));
+
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-workspaces".to_string(),
+            "+0: alpha\n+1: beta".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "ws-noact",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'W');
+        assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
+        assert_eq!(session.window, "@0");
+    }
+
+    /// Landing on a workspace with no sessions selects it but leaves the
+    /// view on its window and marks the status stale.
+    #[test]
+    fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
+        let (rx, mut conn, mut session) = two_pane_session("ws-empty", FakeScript::default());
+        session.status_dirty = false;
+        session.land_on_workspace(&mut conn, "+3");
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "select-workspace -t +3".to_string(),
+                "list-sessions -t +3".to_string()
+            ]
+        );
+        assert_eq!(session.window, "@0");
+        assert!(session.status_dirty);
+    }
+
+    /// The workspace-picker chord lists the roster, opens on the active
+    /// row, and Enter on another row lands there; an empty roster opens
+    /// nothing.
+    #[test]
+    fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-workspaces".to_string(),
+            "+0: alpha\n+1: beta active\n+2: gamma".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "wspick",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'g');
+        assert!(session.picker_mode);
+        assert_eq!(session.picker_selected, 1, "opens on the active workspace");
+        assert_eq!(
+            session.renderer.overlay.as_ref().map(|o| o.0),
+            Some(crate::mux::attach::WORKSPACE_PICKER_OVERLAY_TITLE)
+        );
+        let text = overlay_text(&session).join("\n");
+        assert!(
+            text.contains(">+1  beta *"),
+            "the active row is marked: {text}"
+        );
+        assert!(text.contains(" +2  gamma"), "{text}");
+        drained(&rx);
+        session.picker_byte(&mut conn, b'j');
+        session.picker_byte(&mut conn, b'\r');
+        assert!(!session.picker_mode && session.picker_workspaces.is_none());
+        let lines = drained(&rx);
+        assert_eq!(lines[0], "select-workspace -t +2", "{lines:?}");
+
+        let (rx, mut conn, mut session) = two_pane_session("wspick-none", FakeScript::default());
+        chord(&mut session, &mut conn, b'g');
+        assert!(!session.picker_mode, "no workspaces: no picker");
+        assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     }
 }
