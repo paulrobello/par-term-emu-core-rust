@@ -33,6 +33,11 @@ const ACCENT: RtColor = RtColor::Indexed(14);
 /// The ellipsis spelling for truncated names and hidden edges.
 const ELLIPSIS: char = '\u{2026}';
 
+/// The invalidated baseline's symbol: a single-width private-use glyph
+/// no paint writes, so every painted cell diffs against it. (A
+/// zero-width control trips ratatui's cell-width assertion.)
+const INVALIDATED: &str = "\u{E000}";
+
 /// One visible tab's geometry and text: the column span a click on
 /// that tab owns, plus the exact text the painter writes inside its
 /// one-column pads.
@@ -281,11 +286,19 @@ impl TabStrip {
         self.cols
     }
 
-    /// Forget the previous frame: the next diff paints the whole row
-    /// (after a repaint-all or a host resize the caller knows wiped the
-    /// row).
+    /// Forget the previous frame: the next diff paints EVERY column of
+    /// the row, blank cells included. Callers invalidate when the host
+    /// row is not known to match the last frame (a reseed on a workspace
+    /// switch, a resize, a sidebar toggle) — the host row is NOT cleared
+    /// there, so a blank baseline would let stale tabs survive wherever
+    /// the new strip is blank. The baseline is filled with a sentinel
+    /// symbol no paint ever writes, so every column differs.
     pub(crate) fn invalidate(&mut self) {
-        self.prev = Buffer::empty(RtRect::new(0, 0, self.cols, 1));
+        let mut prev = Buffer::empty(RtRect::new(0, 0, self.cols, 1));
+        for x in 0..self.cols {
+            prev[(x, 0)].set_symbol(INVALIDATED);
+        }
+        self.prev = prev;
     }
 
     /// Paint `windows` over the whole row, padding the remainder with
@@ -581,6 +594,37 @@ mod tests {
             diff.len() <= first.len(),
             "an accent move repaints only the re-styled tabs"
         );
+    }
+
+    /// After `invalidate()` the next diff repaints EVERY column, blank
+    /// ones included: the caller invalidates when the host row is not
+    /// known to match the previous frame (a workspace switch reseed), so
+    /// a 3-tab strip replaced by a 1-tab strip must erase the stale
+    /// tabs' columns with blank cells rather than leave them on screen
+    /// (the manual-pass stale-tab report).
+    #[test]
+    fn invalidate_repaints_every_column_including_blanks() {
+        let mut strip = TabStrip::new(40);
+        strip.paint(&windows(), Some("@0"), None);
+        let _ = strip.diff();
+        strip.invalidate();
+        strip.paint(&windows()[..1], Some("@0"), None);
+        let diff = strip.diff();
+        let cols: Vec<u16> = diff.iter().map(|(x, _, _)| *x).collect();
+        assert_eq!(
+            cols,
+            (0..40).collect::<Vec<u16>>(),
+            "every column repaints after invalidate"
+        );
+        // The stale second/third tab columns arrive as blank cells.
+        for (x, _, cell) in &diff {
+            if (6..18).contains(x) {
+                assert_eq!(cell.symbol(), " ", "stale col {x} erases to blank");
+            }
+        }
+        // And the repaint re-baselines: an identical paint diffs empty.
+        strip.paint(&windows()[..1], Some("@0"), None);
+        assert!(strip.diff().is_empty());
     }
 
     /// An empty window list paints a blank row and hit-tests nothing.
