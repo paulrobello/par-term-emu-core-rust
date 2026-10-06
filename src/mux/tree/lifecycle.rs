@@ -149,6 +149,7 @@ impl MuxTree {
             cols,
             rows,
             name: name.to_string(),
+            window_name: None,
             env: env.clone(),
             workspace_id,
         }
@@ -169,9 +170,11 @@ impl MuxTree {
             cols,
             rows,
             name,
+            window_name,
             env,
             workspace_id,
         } = plan;
+        let window_name = window_name.unwrap_or_else(|| name.clone());
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
         self.sessions.insert(
@@ -188,7 +191,7 @@ impl MuxTree {
             session_id,
             MuxWindow {
                 id: window_id,
-                name,
+                name: window_name,
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
                 cols,

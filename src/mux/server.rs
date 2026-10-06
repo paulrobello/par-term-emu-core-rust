@@ -4404,6 +4404,15 @@ mod tests {
         // new-workspace replies with the id, selects it, and cues the roster.
         let reply = dispatch("new-workspace -n dev", 1, &tree, &clients, None);
         assert!(reply.contains("+0"), "reply carries the id: {reply}");
+        // Its auto-created first tab is named "1", not after the workspace;
+        // the session keeps the workspace's name.
+        {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            assert_eq!(guard.session(session).unwrap().name, "dev");
+            let window = guard.session(session).unwrap().windows[0];
+            assert_eq!(guard.window(window).unwrap().name, "1");
+        }
         let lines = drain_broadcasts(&rx);
         assert!(
             lines.iter().any(|l| l.starts_with("%workspaces-changed")),

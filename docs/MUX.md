@@ -397,7 +397,7 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|
 | `new-session` | `[-s name] [-e NAME=VALUE]… [-t <workspace>]` (no start command) | The session id (`$N`) | `%window-add` per window, `%sessions-changed`; `%session-changed` to the issuer |
-| `new-workspace` | `[-n name]` | The workspace id (`+N`); the new workspace becomes the daemon's active one and spawns its FIRST session/window (named after the workspace, the default shell), so it is landable the moment it exists | `%workspaces-changed`, `%sessions-changed` |
+| `new-workspace` | `[-n name]` | The workspace id (`+N`); the new workspace becomes the daemon's active one and spawns its FIRST session (named after the workspace) with a window named `1` (the default shell), so it is landable the moment it exists | `%workspaces-changed`, `%sessions-changed` |
 | `list-workspaces` | — | One `+N: name` line per workspace, id order; the daemon's active workspace ends with ` active` | — |
 | `select-workspace` | `-t <workspace>` | empty; the workspace's previously active session resumes as the active session | `%workspaces-changed`, and `%client-session-changed` when the displayed session moved |
 | `rename-workspace` | `-t <workspace> <name>` | empty | `%workspaces-changed` |

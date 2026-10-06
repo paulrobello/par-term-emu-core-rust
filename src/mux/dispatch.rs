@@ -1510,7 +1510,9 @@ fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
         let id = guard.new_workspace(&name);
         (
             id,
-            guard.begin_session_at(id, &name, DEFAULT_COLS, DEFAULT_ROWS, &Default::default()),
+            guard
+                .begin_session_at(id, &name, DEFAULT_COLS, DEFAULT_ROWS, &Default::default())
+                .with_window_name("1"),
             guard.factory(),
         )
     };

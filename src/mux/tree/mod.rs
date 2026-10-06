@@ -134,6 +134,8 @@ pub struct SessionSpawn {
     /// Initial grid height in rows.
     pub rows: u16,
     name: String,
+    /// The first window's name; the session's own name when `None`.
+    window_name: Option<String>,
     env: BTreeMap<String, String>,
     /// The workspace the session links to in phase 3, resolved at begin
     /// (explicit target, else active, else the lazily created default).
@@ -182,6 +184,12 @@ impl RespawnSpawn {
 }
 
 impl SessionSpawn {
+    /// Name the first window `name` instead of after the session.
+    pub fn with_window_name(mut self, name: &str) -> Self {
+        self.window_name = Some(name.to_string());
+        self
+    }
+
     /// The factory-facing context — the same fields the one-shot path passes.
     pub fn context(&self) -> SpawnContext<'_> {
         SpawnContext {
