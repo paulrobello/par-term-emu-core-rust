@@ -2200,6 +2200,12 @@ fn client_attach_and_drop_broadcast_lifecycle_lines() {
         !b_first.contains("%client-attached"),
         "the joining client is not told about itself: {b_first}"
     );
+    // Registered but silent about its size: not announced yet.
+    let before_size = poll_times(&mut writer_a, &mut reader_a, "list-panes", 6);
+    assert!(
+        !before_size.contains("%client-attached"),
+        "a client that has not reported a size is not announced: {before_size}"
+    );
     command(
         &mut writer_b,
         &mut reader_b,
@@ -2234,6 +2240,34 @@ fn client_attach_and_drop_broadcast_lifecycle_lines() {
         line,
         format!("%client-left {id} $0 @0"),
         "the left line names the same client and the window it displayed"
+    );
+}
+
+#[test]
+fn a_client_that_never_reports_a_size_causes_no_lifecycle_lines() {
+    let fixture = MuxFixture::new("clientquiet");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s quiet");
+
+    // A one-shot command client: registers, never reports a size, leaves.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+    drop(writer_b);
+    drop(reader_b);
+
+    let seen = poll_times(&mut writer_a, &mut reader_a, "list-panes", 12);
+    assert!(
+        !seen.contains("%client-attached") && !seen.contains("%client-left"),
+        "a client that never reported a size is neither announced nor missed: {seen}"
     );
 }
 

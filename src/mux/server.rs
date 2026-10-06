@@ -653,6 +653,11 @@ fn read_control_line<R: BufRead>(reader: &mut R, evicted: &AtomicBool) -> Contro
 /// client's own channel ahead of its first command's reply.
 struct Registration {
     done: bool,
+    /// The `%client-attached` announcement has gone out. It waits for the
+    /// connection's first size report (`refresh-client -C`) so one-shot
+    /// command clients, which never report one, are neither announced nor
+    /// missed.
+    announced: bool,
     abort: Option<ConnectionAbort>,
 }
 
@@ -678,16 +683,6 @@ impl Registration {
         // in either direction (`reap_dead_panes` releases the tree before
         // broadcasting; `push_to_clients` takes only `clients`), so this
         // introduces no lock inversion.
-        // The attach announcement goes to the clients already registered,
-        // before this one joins, so the joining client never hears itself.
-        // Its own statement: `clients` is not reentrant and the push takes
-        // it.
-        broadcast_notification(
-            clients,
-            &TmuxNotification::ClientAttached {
-                client: client_id.to_string(),
-            },
-        );
         let replay = {
             let guard = tree.lock();
             let lines = held_state_replay_lines(&guard);
@@ -705,6 +700,23 @@ impl Registration {
             }
         }
         self.done = true;
+    }
+
+    /// Announce the connection once it holds a reported view. The push goes
+    /// to every registered client but this one, so the joining client never
+    /// hears itself.
+    fn announce_if_sized(&mut self, tree: &Arc<Mutex<MuxTree>>, clients: &Clients, client_id: u64) {
+        if self.announced || !self.done || !tree.lock().client_views.contains_key(&client_id) {
+            return;
+        }
+        self.announced = true;
+        push_to_clients_except(
+            clients,
+            client_id,
+            emit(&TmuxNotification::ClientAttached {
+                client: client_id.to_string(),
+            }),
+        );
     }
 }
 
@@ -749,6 +761,7 @@ fn handle_client(
     // connections never register and drop theirs with the frame.
     let mut registration = Registration {
         done: false,
+        announced: false,
         abort: Some(abort),
     };
 
@@ -879,6 +892,7 @@ fn handle_client(
                 if tx.send(reply).is_err() {
                     break;
                 }
+                registration.announce_if_sized(&tree, &clients, client_id);
             }
             Err(err) => {
                 registration.ensure(&tree, &clients, client_id, &tx, &evicted);
@@ -918,15 +932,19 @@ fn handle_client(
         for window_id in resized {
             broadcast_layout_change(&tree, &clients, window_id);
         }
-        let (session_id, window_id) = displayed.unzip();
-        broadcast_notification(
-            &clients,
-            &TmuxNotification::ClientLeft {
-                client: client_id.to_string(),
-                session_id,
-                window_id,
-            },
-        );
+        // Only an announced client is missed: a connection that never
+        // reported a size was never introduced to its peers.
+        if registration.announced {
+            let (session_id, window_id) = displayed.unzip();
+            broadcast_notification(
+                &clients,
+                &TmuxNotification::ClientLeft {
+                    client: client_id.to_string(),
+                    session_id,
+                    window_id,
+                },
+            );
+        }
     }
 }
 
@@ -1390,9 +1408,21 @@ fn dispatch(
 /// on a timeout — so eviction also aborts the blocked I/O through the
 /// entry's [`ConnectionAbort`].
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
-    clients
-        .lock()
-        .retain(|(id, tx, evicted, abort)| match tx.try_send(line.clone()) {
+    push_to_clients_skipping(clients, None, line);
+}
+
+/// [`push_to_clients`] skipping one client (the announcement's subject, who
+/// must not hear about itself). Eviction rules are identical.
+fn push_to_clients_except(clients: &Clients, skip: u64, line: String) {
+    push_to_clients_skipping(clients, Some(skip), line);
+}
+
+fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, line: String) {
+    clients.lock().retain(|(id, tx, evicted, abort)| {
+        if skip == Some(*id) {
+            return true;
+        }
+        match tx.try_send(line.clone()) {
             Ok(()) => true,
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!(
@@ -1404,7 +1434,8 @@ pub(crate) fn push_to_clients(clients: &Clients, line: String) {
                 false
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
-        });
+        }
+    });
 }
 
 /// Execute one command with panic containment (QA-113): a panicking
@@ -1915,6 +1946,7 @@ mod tests {
         let evicted = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut registration = Registration {
             done: false,
+            announced: false,
             abort: Some(ConnectionAbort::none()),
         };
         registration.ensure(&tree, &clients, 7, &tx, &evicted);

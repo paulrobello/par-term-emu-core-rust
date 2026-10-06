@@ -1844,7 +1844,7 @@ Tmux control mode notification.
 - `session_id: str | None`: Session identifier
 - `name: str | None`: Session/window name; for `agent-state-changed`, `agent-released` and `agent-telemetry-changed`, the agent label; for `pane-exited`, the exit code as a decimal string (deprecated — read `exit_code`; kept for one release)
 - `exit_code: int | None`: For `pane-exited`, the held pane's exit code; `None` when it was unreadable (signal death, or reaped before the daemon read it) and for every other notification type
-- `client: str | None`: Client name; for the par-mux `client-attached` and `client-left` types, the daemon's decimal connection id (`client-left` also sets `session_id`/`window_id` to the view the client was displaying, when it had reported one)
+- `client: str | None`: Client name; for the par-mux `client-attached` and `client-left` types, the daemon's decimal connection id (only clients that reported a size are announced; `client-left` also sets `session_id`/`window_id` to the view the client was displaying)
 - `data: bytes | None`: Raw notification data
 - `timestamp: int | None`: Notification timestamp
 - `command_number: int | None`: Command number
