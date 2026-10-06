@@ -6727,9 +6727,11 @@ mod tests {
             .is_ok()
         {}
 
-        // The second tab's cell (" vim ") spans cols 6..11; the click is
-        // a 1-based host col 9 (strip col 8).
-        session.tab_click(&mut conn, 8);
+        // herdr blocks: "  main  " spans cols 0..8, the gap is col 8, and
+        // the second tab's block ("  vim  ") spans cols 9..16; the click
+        // is a 1-based host col 13 (strip col 12).
+        assert_eq!(session.tab_strip.hit_test(8), None, "the gap hits nothing");
+        session.tab_click(&mut conn, 12);
 
         assert_eq!(session.window, "@1", "the view moved to the clicked tab");
         assert_eq!(session.status.active_window.as_deref(), Some("@1"));
@@ -6753,7 +6755,7 @@ mod tests {
         // (The receiver is dropped with the conn at scope end; the
         // assertions above ran over every recorded line already.)
         assert_eq!(
-            session.tab_strip.hit_test(8),
+            session.tab_strip.hit_test(12),
             Some(1),
             "the strip layout still maps the clicked column"
         );

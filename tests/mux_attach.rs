@@ -2460,8 +2460,9 @@ fn render_mode_without_target_picks_the_newest_session() {
 #[test]
 fn render_mode_tab_click_switches_the_active_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("tabstrip");
-    // Two windows with deterministic names: " one " = 5 cols, so the
-    // second tab's cell spans 0-based host cols 5..9 (1-based 6..10).
+    // Two windows with deterministic names: the herdr block "  one  " is
+    // 7 cols (0-based 0..7), one gap column (7), so the second tab's
+    // block "  two  " spans 0-based host cols 8..15 (1-based 9..15).
     client.send("new-window -t $0").expect("new-window");
     client.send("rename-window -t @0 one").expect("rename @0");
     client.send("rename-window -t @1 two").expect("rename @1");
@@ -2476,7 +2477,7 @@ fn render_mode_tab_click_switches_the_active_window() {
 
     // A press on the second tab (host row 1 = the strip).
     host.to_child
-        .write_all(b"\x1b[<0;8;1M")
+        .write_all(b"\x1b[<0;12;1M")
         .expect("click press");
     host.to_child.flush().ok();
 
@@ -3043,19 +3044,21 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
             .take(400)
             .collect::<String>()
     );
-    // Top row: the tab strip under the same rule (its col-0 pad is a
-    // blank default cell identical to the empty baseline, so the diff
-    // starts at the first text cell).
-    let needle = b"\x1b[1;2H";
-    assert!(
-        flash.windows(needle.len()).any(|w| w == needle),
-        "the refit must repaint the tab strip's head. tail: {:?}",
-        String::from_utf8_lossy(&flash)
-            .chars()
-            .rev()
-            .take(400)
-            .collect::<String>()
-    );
+    // Top row: the tab strip under the same rule. The invalidate
+    // repaints every strip column, so both the head (col 1) and the bar
+    // tail (col 80, unchanged since the seed frame) flush.
+    for needle in [b"\x1b[1;1H".as_slice(), b"\x1b[1;80H".as_slice()] {
+        assert!(
+            flash.windows(needle.len()).any(|w| w == needle),
+            "the refit must repaint the whole tab strip row ({:?}). tail: {:?}",
+            String::from_utf8_lossy(needle),
+            String::from_utf8_lossy(&flash)
+                .chars()
+                .rev()
+                .take(400)
+                .collect::<String>()
+        );
+    }
     host.killer.kill().ok();
 }
 
@@ -3233,9 +3236,9 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
     let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(600));
     // With the panel up the tabs start at the panel's right edge
-    // (strip col 20): the shown window's tab (` att `, width 5) spans
-    // 0-based host cols 20-24, so the right press at 1-based col 24
-    // (0-based 23) lands on it.
+    // (strip col 20): the shown window's herdr block (`  att  `, width
+    // 7) spans 0-based host cols 20-26, so the right press at 1-based
+    // col 24 (0-based 23, the `a`) lands on it.
     let press: &[u8] = b"\x1b[<2;24;1M";
     host.to_child.write_all(press).expect("right press");
     host.to_child.flush().ok();
