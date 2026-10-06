@@ -843,6 +843,7 @@ fn handle_client(
                     command_number,
                     shutdown: shutdown.as_deref(),
                     config: config.as_deref(),
+                    client_id: Some(client_id),
                 };
                 let dispatch_started = std::time::Instant::now();
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
@@ -888,6 +889,14 @@ fn handle_client(
     }
     if registration.done {
         clients.lock().retain(|(id, _, _, _)| *id != client_id);
+        // The disconnect drops the connection's sizing contribution; the
+        // windows it constrained may grow to the remaining viewers'
+        // minimum, and the grown windows broadcast `%layout-change` to the
+        // clients that are still attached.
+        let resized = tree.lock().clear_client_view(client_id);
+        for window_id in resized {
+            broadcast_layout_change(&tree, &clients, window_id);
+        }
     }
 }
 
@@ -1314,6 +1323,7 @@ fn dispatch_issued(
                 command_number,
                 shutdown: None,
                 config: None,
+                client_id: None,
             };
             dispatch_command(command, &ctx, persist, issuer)
         }
@@ -1788,6 +1798,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let run = |line: &str| {
             dispatch_command(
@@ -1854,6 +1865,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         dispatch_command(
             crate::mux::command::parse_command("new-session -s main").unwrap(),
@@ -4100,6 +4112,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let poisoned = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(poisoned, &ctx, None, None);
@@ -4117,6 +4130,7 @@ mod tests {
             command_number: 2,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let healthy = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(healthy, &ctx, None, None);

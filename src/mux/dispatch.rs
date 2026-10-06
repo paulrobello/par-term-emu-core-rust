@@ -58,6 +58,11 @@ thread_local! {
 
 /// The per-dispatch context every handler shares.
 pub(super) struct Ctx<'a> {
+    /// The issuing connection's id ([`CLIENT_SEQ`]'s counter) — the key the
+    /// client's sizing contribution is recorded under. `None` for embedders
+    /// and tests that dispatch without a running accept loop; their
+    /// `refresh-client -C` then keeps the legacy direct-resize behavior.
+    pub(super) client_id: Option<u64>,
     /// The whole pane tree behind its lock.
     pub(super) tree: &'a Arc<Mutex<MuxTree>>,
     /// Connected clients' broadcast senders.
@@ -582,11 +587,14 @@ fn cmd_refresh_client(
             // The target-less size-report form (the attach handshake's
             // shape): never a replay — replay is what the -t form exists
             // for, and resyncing a pane the client never named would push
-            // it screen bytes of the wrong pane. `-C` still resizes, using
-            // the same newest-session stand-in bare `new-window` documents.
+            // it screen bytes of the wrong pane. `-C` records the report as
+            // the connection's sizing contribution against the window it
+            // displays (the bare form's documented stand-in: the newest
+            // session's active window) and re-fits that window to the
+            // smallest-attached-client minimum.
             match size {
                 Some((cols, rows)) => {
-                    let outcome: Result<WindowId, String> = {
+                    let outcome: Result<(WindowId, Vec<WindowId>), String> = {
                         let mut guard = ctx.tree.lock();
                         // Newest = highest id (ids are monotonic). The
                         // map has no insertion order, so this is the
@@ -599,10 +607,23 @@ fn cmd_refresh_client(
                                     .session(session)
                                     .and_then(|s| s.windows.get(s.active).copied());
                                 match window {
-                                    Some(window_id) => guard
-                                        .resize_window(window_id, cols, rows)
-                                        .map(|()| window_id)
-                                        .map_err(|err| err.to_string()),
+                                    Some(window_id) => {
+                                        let resized = match ctx.client_id {
+                                            Some(client_id) => guard
+                                                .set_client_view(client_id, window_id, cols, rows),
+                                            // No connection identity (embedder/test
+                                            // dispatch): keep the legacy direct resize.
+                                            None => {
+                                                match guard.resize_window(window_id, cols, rows) {
+                                                    Ok(()) => vec![window_id],
+                                                    Err(err) => {
+                                                        return Outcome::err(ctx, &err.to_string())
+                                                    }
+                                                }
+                                            }
+                                        };
+                                        Ok((window_id, resized))
+                                    }
                                     None => Err(format!("no such session: {session}")),
                                 }
                             }
@@ -610,7 +631,15 @@ fn cmd_refresh_client(
                         }
                     };
                     match outcome {
-                        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+                        Ok((window_id, resized)) => {
+                            let mut outcome = Outcome::ok(ctx, "").with_layout(window_id);
+                            for extra in resized {
+                                if extra != window_id {
+                                    outcome = outcome.with_layout(extra);
+                                }
+                            }
+                            outcome
+                        }
                         Err(err) => Outcome::err(ctx, &err),
                     }
                 }
@@ -628,23 +657,43 @@ fn cmd_refresh_client(
                 }
             };
             match size {
-                // The window-size policy's input (T4.C): a client's renderer
-                // reports its grid size, the pane's window is resized to it, and
-                // every pane terminal re-fits to the re-divided geometry —
-                // followed by a %layout-change so clients re-render.
-                // Latest report wins (par-mux.md Phase 4 decision).
+                // The window-size policy's input: a client's renderer reports
+                // its grid against one of the window's panes; the report is
+                // recorded as that connection's sizing contribution and the
+                // window re-fits to the smallest-attached-client minimum.
+                // Every pane terminal re-fits to the re-divided geometry —
+                // followed by a %layout-change so clients re-render (the
+                // seed path requires one even when the minimum did not move
+                // the grid).
                 Some((cols, rows)) => {
                     let outcome = {
                         let mut guard = ctx.tree.lock();
                         match guard.window_of_pane(pane) {
-                            Some(window_id) => guard
-                                .resize_window(window_id, cols, rows)
-                                .map(|()| window_id),
+                            Some(window_id) => {
+                                let resized = match ctx.client_id {
+                                    Some(client_id) => {
+                                        guard.set_client_view(client_id, window_id, cols, rows)
+                                    }
+                                    None => match guard.resize_window(window_id, cols, rows) {
+                                        Ok(()) => vec![window_id],
+                                        Err(err) => return Outcome::err(ctx, &err.to_string()),
+                                    },
+                                };
+                                Ok((window_id, resized))
+                            }
                             None => Err(MuxError::NoSuchPane(pane)),
                         }
                     };
                     match outcome {
-                        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+                        Ok((window_id, resized)) => {
+                            let mut outcome = Outcome::ok(ctx, "").with_layout(window_id);
+                            for extra in resized {
+                                if extra != window_id {
+                                    outcome = outcome.with_layout(extra);
+                                }
+                            }
+                            outcome
+                        }
                         Err(err) => Outcome::err(ctx, &err.to_string()),
                     }
                 }
@@ -1189,30 +1238,61 @@ fn cmd_new_window(
 }
 
 fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
-    let outcome = {
+    let (window, active, session_id, selection_moved, resized) = {
         let mut guard = ctx.tree.lock();
         let window = match guard.resolve_window_target(window) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        guard
-            .select_window(window)
-            .map(|()| guard.window(window).map(|w| w.active))
-            .map(|active| (window, active))
-    };
-    match outcome {
-        Ok((window, active)) => {
-            let mut result = Outcome::ok(ctx, "");
-            if let Some(pane) = active {
-                result = result.notifying(TmuxNotification::WindowPaneChanged {
-                    window_id: window.to_string(),
-                    pane_id: pane.to_string(),
-                });
-            }
-            result
+        let session_id = guard.session_of_window(window);
+        let was_active = session_id
+            .and_then(|s| guard.session(s))
+            .and_then(|s| s.windows.get(s.active).copied());
+        if let Err(err) = guard.select_window(window) {
+            return Outcome::err(ctx, &err.to_string());
         }
-        Err(err) => Outcome::err(ctx, &err.to_string()),
+        // Shared-selection sync: when the move touches the displayed
+        // session, every render client attached to it follows to the new
+        // active window, and `%session-window-changed` tells them so. A
+        // background session's pointer moves silently — clients displaying
+        // it are not yanked.
+        let displayed = guard.active_session();
+        let selection_moved = was_active != Some(window) && displayed == session_id;
+        let resized = if selection_moved {
+            let Some(session_id) = session_id else {
+                return Outcome::err(ctx, "window has no session");
+            };
+            guard.follow_session_window(session_id, window)
+        } else {
+            Vec::new()
+        };
+        (
+            window,
+            guard.window(window).map(|w| w.active),
+            session_id,
+            selection_moved,
+            resized,
+        )
+    };
+    let mut result = Outcome::ok(ctx, "");
+    if selection_moved {
+        if let Some(session_id) = session_id {
+            result = result.notifying(TmuxNotification::SessionWindowChanged {
+                session_id: session_id.to_string(),
+                window_id: window.to_string(),
+            });
+        }
     }
+    for window_id in resized {
+        result = result.with_layout(window_id);
+    }
+    if let Some(pane) = active {
+        result = result.notifying(TmuxNotification::WindowPaneChanged {
+            window_id: window.to_string(),
+            pane_id: pane.to_string(),
+        });
+    }
+    result
 }
 
 fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
@@ -1477,20 +1557,60 @@ fn cmd_list_workspaces(ctx: &Ctx<'_>) -> Outcome {
 }
 
 fn cmd_select_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {
-    let workspace = {
-        let guard = ctx.tree.lock();
-        match guard.resolve_workspace_target(workspace) {
+    let (workspace, session, window, moved, resized) = {
+        let mut guard = ctx.tree.lock();
+        let workspace = match guard.resolve_workspace_target(workspace) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let previous = guard.active_workspace();
+        let was_session = guard.active_session();
+        let was_window = was_session
+            .and_then(|s| guard.session(s))
+            .and_then(|s| s.windows.get(s.active).copied());
+        if let Err(err) = guard.select_workspace(workspace) {
+            return Outcome::err(ctx, &err.to_string());
         }
+        let session = guard.active_session();
+        let window = session
+            .and_then(|s| guard.session(s))
+            .and_then(|s| s.windows.get(s.active).copied());
+        // Shared-selection sync: when the switch moves the displayed view,
+        // render clients attached to the left workspace's sessions follow
+        // to the new displayed window and `%client-session-changed` tells
+        // them so — the `client` field carries the workspace the display
+        // moved to, since par-mux has no per-client names. Re-selecting
+        // the active workspace (same displayed session and window) is a
+        // no-op.
+        let moved = was_window != window;
+        let resized = match (moved, window) {
+            (true, Some(window)) => match previous {
+                Some(previous) => guard.follow_workspace_views(previous, window),
+                None => guard.follow_workspace_views(workspace, window),
+            },
+            _ => Vec::new(),
+        };
+        (workspace, session, window, moved, resized)
     };
-    match ctx.tree.lock().select_workspace(workspace) {
-        // The active pointer is daemon state every client reads through
-        // list-workspaces; the argument-less cue is the select side of the
-        // same re-query contract.
-        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged),
-        Err(err) => Outcome::err(ctx, &err.to_string()),
+    let mut result = Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged);
+    if moved {
+        if let (Some(session), Some(_)) = (session, window) {
+            result = result.notifying(TmuxNotification::ClientSessionChanged {
+                client: workspace.to_string(),
+                session_id: session.to_string(),
+                name: ctx
+                    .tree
+                    .lock()
+                    .session(session)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default(),
+            });
+        }
     }
+    for window_id in resized {
+        result = result.with_layout(window_id);
+    }
+    result
 }
 
 fn cmd_rename_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, name: String) -> Outcome {
@@ -1763,6 +1883,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -1824,6 +1945,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         // Two sessions: newest = second. Its active window is what -C hits.
@@ -1915,6 +2037,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let reply = dispatch_command(
             parse_command("refresh-client -C 100x40").unwrap(),
@@ -1943,6 +2066,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -2009,6 +2133,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
         run("new-session -s main");
@@ -2146,6 +2271,7 @@ mod tests {
             ..crate::mux::config::EffectiveConfig::default()
         }));
         let ctx = Ctx {
+            client_id: None,
             tree: &tree,
             clients: &clients,
             command_number: 1,
@@ -2196,6 +2322,7 @@ mod tests {
             command_number: 1,
             shutdown: None,
             config: None,
+            client_id: None,
         };
         let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
         assert!(

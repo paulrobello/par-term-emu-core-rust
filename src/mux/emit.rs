@@ -143,6 +143,19 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::AgentTelemetryChanged { pane_id, agent } => {
             format!("%agent-telemetry-changed {pane_id} {agent}\n")
         }
+        TmuxNotification::ClientSessionChanged {
+            client,
+            session_id,
+            name,
+        } => {
+            format!("%client-session-changed {client} {session_id} {name}\n")
+        }
+        TmuxNotification::SessionWindowChanged {
+            session_id,
+            window_id,
+        } => {
+            format!("%session-window-changed {session_id} {window_id}\n")
+        }
         TmuxNotification::PaneTitleChanged { pane_id, title } => {
             // The separator is omitted for an empty title (the clear
             // operation) so the wire never carries a trailing space; the
@@ -172,8 +185,6 @@ pub fn emit(notification: &TmuxNotification) -> String {
         // by construction.
         TmuxNotification::UnlinkedWindowAdd { .. }
         | TmuxNotification::UnlinkedWindowRenamed { .. }
-        | TmuxNotification::ClientSessionChanged { .. }
-        | TmuxNotification::SessionWindowChanged { .. }
         | TmuxNotification::ClientDetached { .. }
         | TmuxNotification::Pause { .. }
         | TmuxNotification::ExtendedOutput { .. }
@@ -473,13 +484,48 @@ mod tests {
         // when rename-session (card 01a0ea74ec2e) made it a wire
         // notification.
         assert_eq!(
-            emit(&TmuxNotification::ClientSessionChanged {
+            emit(&TmuxNotification::ClientDetached {
                 client: "c1".to_string(),
-                session_id: "$0".to_string(),
-                name: "x".to_string(),
             }),
             ""
         );
+    }
+
+    #[test]
+    fn session_window_changed_round_trips() {
+        // The shared-selection tab-switch push: session then window.
+        let original = TmuxNotification::SessionWindowChanged {
+            session_id: "$0".to_string(),
+            window_id: "@1".to_string(),
+        };
+        assert_eq!(
+            emit(&original),
+            "%session-window-changed $0 @1\n",
+            "the wire shape"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn client_session_changed_round_trips_with_a_workspace_id_as_the_client() {
+        // The workspace-switch push: the `client` field carries the
+        // workspace the display moved to, the name is the rest of the line
+        // (a spaced name round-trips).
+        let original = TmuxNotification::ClientSessionChanged {
+            client: "+0".to_string(),
+            session_id: "$1".to_string(),
+            name: "my session".to_string(),
+        };
+        assert_eq!(
+            emit(&original),
+            "%client-session-changed +0 $1 my session\n",
+            "the wire shape"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
     }
 
     #[test]

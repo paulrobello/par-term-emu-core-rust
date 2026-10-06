@@ -2055,6 +2055,15 @@ struct WindowSession {
     renderer: PaneRenderer,
     /// A `%layout-change` whose re-fit + replay the pump still owes.
     pending_layout: Option<Vec<PaneRect>>,
+    /// A shared-selection move the pump still owes: the window another
+    /// client's select-window landed the shown session on (parked by the
+    /// nonblocking event handler, performed by the pump with the queries
+    /// and reseed it needs the connection for).
+    pending_follow_window: Option<String>,
+    /// A shared-selection move the pump still owes: the displayed session
+    /// a select-workspace landed on (`%client-session-changed`). The pump
+    /// resolves the session's active window by query before reseeding.
+    pending_follow_session: Option<String>,
     /// The bottom row: queried state + paint/diff pair.
     status: status::StatusState,
     status_row: status::StatusRow,
@@ -2287,6 +2296,8 @@ impl WindowSession {
             window: String::new(),
             renderer: PaneRenderer::new(cols, rows.saturating_sub(2), Glyphs::Unicode),
             pending_layout: None,
+            pending_follow_window: None,
+            pending_follow_session: None,
             status: status::StatusState::default(),
             status_row: status::StatusRow::new(cols),
             tab_strip: TabStrip::new(cols),
@@ -2529,6 +2540,35 @@ impl WindowSession {
                 self.replay_all_panes(conn);
             }
 
+            // 1b. Parked shared-selection follows: the reseed (and the
+            //     session follow's list-windows query) need the
+            //     connection, so the nonblocking handler only parks them
+            //     and the pump performs them here. No select is ever sent
+            //     — the daemon already moved the shared pointer, and a
+            //     re-select would echo the notification back as a loop.
+            if let Some(window) = self.pending_follow_window.take() {
+                if window != self.window {
+                    self.reseed_window(conn, &window);
+                }
+            }
+            if let Some(session) = self.pending_follow_session.take() {
+                if let Ok(windows) = conn.send_checked(&format!("list-windows -t {session}")) {
+                    if windows.ok {
+                        let window = windows
+                            .body
+                            .iter()
+                            .find(|l| l.split_whitespace().nth(1) == Some("*"))
+                            .or_else(|| windows.body.first())
+                            .and_then(|l| l.split_whitespace().next().map(str::to_string));
+                        if let Some(window) = window {
+                            if window != self.window {
+                                self.reseed_window(conn, &window);
+                            }
+                        }
+                    }
+                }
+            }
+
             // 2. Stdin: prefix routing (d detaches, [ enters scroll mode,
             //    n/p/(/) switch windows/sessions), then keys/mouse to the
             //    focused pane.
@@ -2662,15 +2702,49 @@ impl WindowSession {
             // The status facts: agent churn, session churn, and renames
             // all re-query (the contract's throttled re-query; one burst
             // of events collapses into one refresh in the pump's step 3b).
+            TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
+                // An external focus move on the shown window re-points the
+                // local highlight; on any other window it is chrome-only.
+                if *window_id == self.window {
+                    if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                        self.renderer.focus(pane);
+                    }
+                }
+                self.status_dirty = true;
+                EventOutcome::Continue
+            }
+            TmuxNotification::SessionWindowChanged {
+                session_id,
+                window_id,
+            } => {
+                // The shared selection moved this session to another
+                // window: park the follow — the pump performs the reseed
+                // (the handler runs in the nonblocking drain, where the
+                // queries and replays a reseed needs are not available).
+                if self.status.session_id.as_deref() == Some(session_id.as_str())
+                    && window_id != self.window
+                {
+                    self.pending_follow_window = Some(window_id.clone());
+                }
+                self.status_dirty = true;
+                EventOutcome::Continue
+            }
+            TmuxNotification::ClientSessionChanged { session_id, .. } => {
+                // The displayed session moved (a workspace switch): park
+                // the follow; the pump resolves the session's active
+                // window by query and reseeds. Re-selecting here would
+                // echo the notification back into a loop.
+                self.pending_follow_session = Some(session_id.clone());
+                self.status_dirty = true;
+                EventOutcome::Continue
+            }
             TmuxNotification::AgentStateChanged { .. }
             | TmuxNotification::AgentReleased { .. }
             | TmuxNotification::AgentTelemetryChanged { .. }
             | TmuxNotification::SessionsChanged
             | TmuxNotification::WorkspacesChanged
             | TmuxNotification::WindowRenamed { .. }
-            | TmuxNotification::SessionRenamed { .. }
-            | TmuxNotification::WindowPaneChanged { .. }
-            | TmuxNotification::SessionWindowChanged { .. } => {
+            | TmuxNotification::SessionRenamed { .. } => {
                 self.status_dirty = true;
                 EventOutcome::Continue
             }
@@ -4559,6 +4633,12 @@ impl WindowSession {
         self.draw_status_row();
         self.tab_strip.invalidate();
         self.draw_tab_strip();
+        // Stale parked state from the replaced view: a follow aimed at the
+        // old window is done (this reseed IS the follow landing), a parked
+        // layout triple was parsed against the old renderer's pane set.
+        self.pending_follow_window = None;
+        self.pending_follow_session = None;
+        self.pending_layout = None;
     }
 
     /// A pane id of `window` to hang the size report on: the focused pane

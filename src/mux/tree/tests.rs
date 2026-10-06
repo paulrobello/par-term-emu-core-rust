@@ -2219,3 +2219,118 @@ fn a_workspace_born_empty_survives_until_a_session_dies_inside_it() {
     // No session removal happened, so the empty workspace stays.
     assert!(tree.workspace(ws).is_some());
 }
+
+// ---- Smallest-attached-client window sizing ----
+
+fn extent(tree: &MuxTree, window: WindowId) -> (u16, u16) {
+    let window = tree.window(window).unwrap();
+    (window.cols, window.rows)
+}
+
+#[test]
+fn window_size_is_the_componentwise_minimum_of_viewers_reports() {
+    let mut tree = tree();
+    let session = tree.new_session("sync", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+
+    // The first viewer's report sizes the window outright.
+    assert_eq!(tree.set_client_view(1, window, 100, 30), vec![window]);
+    assert_eq!(extent(&tree, window), (100, 30));
+
+    // A smaller viewer pulls the window down to the componentwise minimum.
+    assert_eq!(tree.set_client_view(2, window, 60, 20), vec![window]);
+    assert_eq!(extent(&tree, window), (60, 20));
+
+    // A viewer larger than the current minimum contributes nothing.
+    assert!(tree.set_client_view(3, window, 90, 28).is_empty());
+    assert_eq!(extent(&tree, window), (60, 20));
+
+    // Repeated identical reports are idempotent — the property that keeps
+    // the re-fit from feeding back into a resize loop.
+    for _ in 0..3 {
+        assert!(tree.set_client_view(1, window, 100, 30).is_empty());
+    }
+    assert_eq!(extent(&tree, window), (60, 20));
+}
+
+#[test]
+fn disconnect_removes_a_contribution_and_the_window_grows() {
+    let mut tree = tree();
+    let session = tree.new_session("sync", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    tree.set_client_view(1, window, 100, 30);
+    tree.set_client_view(2, window, 60, 20);
+    assert_eq!(extent(&tree, window), (60, 20));
+
+    // The constraining viewer leaves: the window re-fits to the remaining
+    // viewers' minimum.
+    assert_eq!(tree.clear_client_view(2), vec![window]);
+    assert_eq!(extent(&tree, window), (100, 30));
+    // Clearing an unknown connection is a no-op.
+    assert!(tree.clear_client_view(2).is_empty());
+    // The last viewer leaving leaves the extent where it is (it re-fits
+    // when next displayed).
+    assert!(tree.clear_client_view(1).is_empty());
+    assert_eq!(extent(&tree, window), (100, 30));
+}
+
+#[test]
+fn switching_away_releases_the_old_window_from_the_switched_client() {
+    let mut tree = tree();
+    let session = tree.new_session("sync", 80, 24).unwrap();
+    let w1 = tree.session(session).unwrap().windows[0];
+    let w2 = tree.new_window(session, "second", 80, 24).unwrap();
+
+    tree.set_client_view(1, w1, 100, 30);
+    tree.set_client_view(2, w1, 60, 20);
+    assert_eq!(extent(&tree, w1), (60, 20));
+
+    // Client 2's renderer lands on the other window: its contribution
+    // moves, and the old window grows back to the remaining minimum.
+    let resized = tree.set_client_view(2, w2, 60, 20);
+    assert!(
+        resized.contains(&w2),
+        "the new window takes the report: {resized:?}"
+    );
+    assert!(
+        resized.contains(&w1),
+        "the old window re-fits too: {resized:?}"
+    );
+    assert_eq!(extent(&tree, w1), (100, 30));
+    assert_eq!(extent(&tree, w2), (60, 20));
+}
+
+#[test]
+fn a_selection_follow_moves_every_viewer_of_the_session() {
+    let mut tree = tree();
+    let session = tree.new_session("sync", 80, 24).unwrap();
+    let w1 = tree.session(session).unwrap().windows[0];
+    let w2 = tree.new_window(session, "second", 80, 24).unwrap();
+    tree.set_client_view(1, w1, 100, 30);
+    tree.set_client_view(2, w1, 60, 20);
+
+    // The shared selection lands the session on w2: both viewers follow,
+    // and the target window re-fits to the moved minimum. The left window
+    // has no viewer left, so it keeps its extent (it re-fits when next
+    // displayed) — neither client constrains it anymore.
+    let resized = tree.follow_session_window(session, w2);
+    assert!(resized.contains(&w2), "the target re-fits: {resized:?}");
+    assert_eq!(extent(&tree, w2), (60, 20));
+    assert_eq!(
+        extent(&tree, w1),
+        (60, 20),
+        "kept, not grown: nobody views it"
+    );
+}
+
+#[test]
+fn a_window_without_viewers_keeps_its_extent() {
+    let mut tree = tree();
+    let session = tree.new_session("sync", 80, 24).unwrap();
+    let w1 = tree.session(session).unwrap().windows[0];
+    let w2 = tree.new_window(session, "second", 100, 30).unwrap();
+    tree.set_client_view(1, w1, 60, 20);
+    // w2 has no viewer: the rule does not touch it.
+    assert!(tree.follow_session_window(session, w1).is_empty());
+    assert_eq!(extent(&tree, w2), (100, 30));
+}

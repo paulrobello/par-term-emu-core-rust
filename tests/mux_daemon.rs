@@ -1947,3 +1947,323 @@ fn workspace_commands_over_the_wire() {
         assert!(saw >= 1, "the observer received %workspaces-changed");
     }
 }
+
+// ---- Smallest-attached-client sizing + shared-selection sync ----
+//
+// Two real client connections against one daemon: A drives, B observes.
+
+/// The last `%layout-change` line's window extent, parsed from the layout
+/// triple's `0000,COLSxROWS,0,0,N` window header field.
+fn last_layout_size(text: &str) -> Option<(u32, u32)> {
+    text.lines()
+        .rfind(|l| l.starts_with("%layout-change "))
+        .and_then(|line| {
+            // `%layout-change @N <layout> <visible> <flags>` — the extent
+            // is the window header field `0000,COLSxROWS,0,0,N`.
+            line.split_whitespace()
+                .nth(2)
+                .and_then(|triple| triple.split(',').nth(1))
+                .and_then(|extent| {
+                    let (cols, rows) = extent.split_once('x')?;
+                    Some((cols.parse().ok()?, rows.parse().ok()?))
+                })
+        })
+}
+
+/// Probe with `probe` until `needle` appears in the accumulated stream
+/// (pushes ride the probes as body noise), returning everything read.
+fn poll_until(
+    writer: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    probe: &str,
+    needle: &str,
+) -> String {
+    let mut seen = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !seen.contains(needle) {
+        seen.push_str(&command(writer, reader, probe).join(""));
+        assert!(
+            Instant::now() < deadline,
+            "never saw {needle:?}; read so far: {seen}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    seen
+}
+
+/// Poll `probes` times and return the accumulated stream (assertions about
+/// what must NOT appear run over the whole accumulation).
+fn poll_times(
+    writer: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    probe: &str,
+    probes: usize,
+) -> String {
+    let mut seen = String::new();
+    for _ in 0..probes {
+        seen.push_str(&command(writer, reader, probe).join(""));
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    seen
+}
+
+#[test]
+fn window_sizes_to_the_smallest_viewing_client_and_grows_on_disconnect() {
+    let fixture = MuxFixture::new("minsize");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s min");
+    let pane = pane_ids(&command(&mut writer_a, &mut reader_a, "list-panes").join("")).remove(0);
+
+    // B registers and reports a smaller grid against the same window.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+    let b_report = command(
+        &mut writer_b,
+        &mut reader_b,
+        &format!("refresh-client -t {pane} -C 60x20"),
+    );
+    assert!(
+        b_report.iter().any(|l| l.starts_with("%end")),
+        "B's size report must succeed: {b_report:?}"
+    );
+
+    // A reports larger: the window takes the componentwise minimum (60x20).
+    // The broadcast precedes the issuer's reply on the wire, so A's own
+    // report read carries B's %layout-change line — the poll seeds from it.
+    let report = command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("refresh-client -t {pane} -C 100x30"),
+    );
+    assert!(
+        report.iter().any(|l| l.starts_with("%end")),
+        "A's size report must succeed: {report:?}"
+    );
+    let mut seen: Vec<String> = report;
+    seen.extend(b_report);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !seen.join("").contains("%layout-change @0 0000,60x20") {
+        seen.extend(command(&mut writer_a, &mut reader_a, "list-panes"));
+        assert!(
+            Instant::now() < deadline,
+            "never saw the 60x20 minimum; read so far: {:?}",
+            seen.join("")
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    // Repeated identical reports from B never move the grid again — the
+    // no-feedback-loop property, observed live.
+    for _ in 0..3 {
+        command(
+            &mut writer_b,
+            &mut reader_b,
+            &format!("refresh-client -t {pane} -C 60x20"),
+        );
+    }
+    let stable = poll_times(&mut writer_a, &mut reader_a, "list-panes", 4);
+    assert_eq!(
+        last_layout_size(&stable),
+        Some((60, 20)),
+        "the minimum is stable under repeated reports; stream: {}",
+        stable.escape_debug()
+    );
+
+    // B disconnects: its contribution is dropped and the window grows to
+    // A's report.
+    drop(writer_b);
+    drop(reader_b);
+    poll_until(
+        &mut writer_a,
+        &mut reader_a,
+        "list-panes",
+        "%layout-change @0 0000,100x30",
+    );
+}
+
+#[test]
+fn a_tab_switch_broadcasts_the_session_window_change_to_the_other_client() {
+    let fixture = MuxFixture::new("tabsync");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s tabs");
+    command(&mut writer_a, &mut reader_a, "new-window");
+
+    // B registers BEFORE the switch so it is in the broadcast set.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+
+    command(&mut writer_a, &mut reader_a, "select-window -t @1");
+    let seen = poll_until(
+        &mut writer_b,
+        &mut reader_b,
+        "list-panes",
+        "%session-window-changed $0 @1",
+    );
+    assert!(
+        seen.contains("%session-window-changed $0 @1"),
+        "client B learns the session's window moved: {seen}"
+    );
+}
+
+#[test]
+fn a_workspace_switch_broadcasts_the_display_move_to_the_other_client() {
+    let fixture = MuxFixture::new("wssync");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s first");
+    // A second workspace with its auto-spawned first session; the daemon's
+    // displayed view now sits in +1.
+    command(&mut writer_a, &mut reader_a, "new-workspace -n alt");
+
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+
+    // Switching back to the first workspace moves the shared display; the
+    // notification's `client` field carries the workspace (+0), the rest
+    // names the session the display landed on.
+    command(&mut writer_a, &mut reader_a, "select-workspace -t +0");
+    let seen = poll_until(
+        &mut writer_b,
+        &mut reader_b,
+        "list-panes",
+        "%client-session-changed +0 ",
+    );
+    assert!(
+        seen.contains("%client-session-changed +0 $0"),
+        "client B learns the displayed session moved: {seen}"
+    );
+}
+
+#[test]
+fn a_control_client_that_never_reports_a_size_never_constrains() {
+    let fixture = MuxFixture::new("noconstrain");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s solo");
+
+    // B registers (joins the broadcast set) but NEVER reports a size —
+    // the plain control / roster-watcher shape.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+
+    // Several polls: no %layout-change may appear from B's mere
+    // registration.
+    let quiet = poll_times(&mut writer_a, &mut reader_a, "list-panes", 4);
+    assert!(
+        !quiet.contains("%layout-change"),
+        "an unreported control connection must not move any grid: {quiet}"
+    );
+
+    // A report still lands: the window takes A's own extent. The issuer's
+    // own broadcast rides its report reply, so assert there.
+    let pane = pane_ids(&command(&mut writer_a, &mut reader_a, "list-panes").join("")).remove(0);
+    let report = command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("refresh-client -t {pane} -C 90x26"),
+    );
+    assert!(
+        report.join("").contains("%layout-change @0 0000,90x26"),
+        "A's own report sizes the window to 90x26: {report:?}"
+    );
+}
+
+#[test]
+fn a_following_client_reconstructs_the_switched_window_screen() {
+    let fixture = MuxFixture::new("rescreen");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s rescreen");
+    command(&mut writer_a, &mut reader_a, "new-window");
+    let second_pane =
+        pane_ids(&command(&mut writer_a, &mut reader_a, "list-panes -t @1").join("")).remove(0);
+    // Distinctive output on the second window's pane.
+    command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("send-keys -t {second_pane} -l 'echo PARMUXSYNC_OK'"),
+    );
+    command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("send-keys -t {second_pane} Enter"),
+    );
+
+    // B registers, then sees the shared selection land on @1.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+    command(&mut writer_a, &mut reader_a, "select-window -t @1");
+    poll_until(
+        &mut writer_b,
+        &mut reader_b,
+        "list-panes",
+        "%session-window-changed $0 @1",
+    );
+
+    // The pump's follow, spelled over the wire: a pane resync (no -C)
+    // replays the pane's screen-restore stream, which a REAL terminal
+    // emulator reconstructs into a screen — no raw needle matching against
+    // escape soup.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut rendered_ok = false;
+    while Instant::now() < deadline {
+        let replay = command(
+            &mut writer_b,
+            &mut reader_b,
+            &format!("refresh-client -t {second_pane}"),
+        )
+        .join("\n");
+        let mut term = par_term_emu_core_rust::terminal::Terminal::new(120, 40);
+        term.process(replay.as_bytes());
+        if term.grid().content_as_string().contains("PARMUXSYNC_OK") {
+            rendered_ok = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        rendered_ok,
+        "the resync replay must render the switched window's screen in a real emulator"
+    );
+}

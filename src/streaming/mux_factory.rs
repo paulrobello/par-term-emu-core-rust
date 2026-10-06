@@ -18,10 +18,13 @@
 //! `create_session` blocks on daemon I/O, so the streaming server calls it
 //! off the async runtime (`spawn_blocking`).
 //!
-//! Size policy (owner decision 2026-09-24): latest-resize-wins. The mirror is
-//! seeded at the pane's current size (`pane-info`), never the viewer's, and
-//! re-fits only when a `%layout-change` changes that pane's rectangle. A
-//! streaming client's `Resize` becomes `refresh-client -t %N -C WxH`.
+//! Size policy: the daemon's smallest-attached-client rule — a window's
+//! extent is the componentwise minimum over the render clients displaying
+//! it, and a streaming viewer's `Resize` becomes `refresh-client -t %N -C
+//! WxH`, one sizing contribution per streaming server connection. The
+//! mirror is seeded at the pane's current size (`pane-info`), never the
+//! viewer's, and re-fits only when a `%layout-change` changes that pane's
+//! rectangle.
 
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
@@ -423,7 +426,8 @@ impl SessionFactory for MuxSessionFactory {
         }
 
         // A viewer's resize is a deliberate request for the pane's size
-        // (latest-resize-wins); the mirror follows via %layout-change.
+        // (the daemon re-fits to the smallest-viewer minimum); the mirror
+        // follows via %layout-change.
         let resize_rx = session.get_resize_receiver();
         let writer = Arc::clone(&link.writer);
         let pane = link.pane;
@@ -884,8 +888,10 @@ mod tests {
             "connecting a viewer must not resize the pane"
         );
 
-        // A viewer resize is a deliberate request: latest-resize-wins. The
-        // pane re-fits and the mirror follows via %layout-change.
+        // A viewer resize is a deliberate request: it is recorded as the
+        // viewer's sizing contribution and the pane re-fits to the
+        // smallest-viewer minimum — here the viewer alone, 70x20. The
+        // mirror follows via %layout-change.
         session.resize_tx.send((70, 20)).expect("resize request");
         wait("the pane and mirror at 70x20", || {
             let pane_now = pane_size(&mut control, &pane);
@@ -894,13 +900,18 @@ mod tests {
                 .then(|| format!("pane {pane_now:?}, mirror {mirror_now:?}"))
         });
 
-        // A resize from elsewhere (the desktop) is followed too.
+        // A larger report from elsewhere (the desktop) does NOT lift the
+        // grid: the attached viewer still displays the window at 70x20,
+        // and the window's extent is the componentwise minimum over its
+        // viewers. The desktop's report only becomes its own contribution.
         control
             .send(&format!("refresh-client -t {pane} -C 90x25"))
             .expect("desktop resize");
-        wait("the mirror at 90x25", || {
-            let now = session.terminal.read().size();
-            (now != (90, 25)).then(|| format!("{now:?}"))
+        wait("the pane and mirror still at the viewer's 70x20", || {
+            let pane_now = pane_size(&mut control, &pane);
+            let mirror_now = session.terminal.read().size();
+            (pane_now != (70, 20) || mirror_now != (70, 20))
+                .then(|| format!("pane {pane_now:?}, mirror {mirror_now:?}"))
         });
     }
 

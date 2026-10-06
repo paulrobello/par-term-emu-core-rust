@@ -20,7 +20,7 @@ One-line summaries of the design decisions that par-mux code comments cite by nu
 | D6.2 | An agent's resume invocation is never persisted; it is built at restore time from a table shipped in the binary, with a hook-reported invocation taking precedence | `src/mux/agent_resume.rs` |
 | D6.3 | Restore respawns agent panes through that invocation and fails safe: when none can be built, the pane spawns its original command | `src/mux/agent_resume.rs`, `src/mux/persist.rs` |
 | T4.B | `send-keys` contract: key names, `-l` literal, `-H` hex, and no implicit trailing newline | `src/mux/command.rs` |
-| T4.C | Sizing: pane terminals re-fit to layout geometry after every change; `resize-pane -x/-y`; `refresh-client -C` resizes with latest report wins | `src/mux/command.rs`, `src/mux/dispatch.rs`, `src/mux/tree/` |
+| T4.C | Sizing: pane terminals re-fit to layout geometry after every change; `resize-pane -x/-y`; `refresh-client -C` sizes the window to the smallest-attached-client minimum over the render clients displaying it (supersedes the original latest-report-wins decision) | `src/mux/command.rs`, `src/mux/dispatch.rs`, `src/mux/tree/` |
 | T4.E | Queries have fixed reply shapes and no `-F` format strings; push notifications cover what `-F` polling was for | `src/mux/dispatch.rs` |
 | R7 | par-mux owns agent state for the panes in its sessions and never reconciles another tool's roster; par-term consumes that state rather than becoming a second owner. Recorded in `REPORT.md` in the same repository; `src/streaming/mux_factory.rs` applies the same no-second-owner rule to pane terminals | `src/streaming/mux_factory.rs` |
 

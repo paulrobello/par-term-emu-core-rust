@@ -2,9 +2,9 @@
 //! moves, resizes, client metrics, and the `mutate_layout` choke point
 //! every layout-shape edit goes through (ARC-090).
 
-use super::{kill_detached, MuxTree, MuxWindow, SplitSpawn};
+use super::{kill_detached, ClientView, MuxTree, MuxWindow, SplitSpawn};
 use crate::color::Color;
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
 use std::path::Path;
@@ -611,6 +611,164 @@ impl MuxTree {
         for window_id in window_ids {
             self.sync_pane_sizes(window_id);
         }
+    }
+
+    /// Record `client_id`'s sizing contribution — the grid it reported via
+    /// `refresh-client -C` and the window it is displaying — and re-fit the
+    /// windows the smallest-attached-client rule governs.
+    ///
+    /// Returns the windows whose extent actually changed (a grow or shrink
+    /// under the new minimum), so the caller broadcasts `%layout-change`
+    /// only for those. Extents are clamped positive: a sub-minimum report
+    /// that would make the window 0 wide/tall cannot land.
+    pub fn set_client_view(
+        &mut self,
+        client_id: u64,
+        window: WindowId,
+        cols: u16,
+        rows: u16,
+    ) -> Vec<WindowId> {
+        let view = ClientView {
+            window,
+            cols: cols.max(1),
+            rows: rows.max(1),
+        };
+        let (previous_window, updated) = match self.client_views.get(&client_id) {
+            Some(previous) => (Some(previous.window), *previous == view),
+            None => (None, false),
+        };
+        self.client_views.insert(client_id, view);
+        if updated {
+            return Vec::new();
+        }
+        // Only the windows the change can move: the displayed one and, when
+        // the view switched windows, the one it left.
+        let mut candidates = vec![window];
+        if let Some(previous_window) = previous_window {
+            if previous_window != window {
+                candidates.push(previous_window);
+            }
+        }
+        self.refit_reported_windows(&candidates)
+    }
+
+    /// Drop `client_id`'s sizing contribution and re-fit the window it was
+    /// displaying — the disconnect path: with the constraining report gone
+    /// the window may grow to the remaining viewers' minimum.
+    pub fn clear_client_view(&mut self, client_id: u64) -> Vec<WindowId> {
+        let Some(removed) = self.client_views.remove(&client_id) else {
+            return Vec::new();
+        };
+        self.refit_reported_windows(&[removed.window])
+    }
+
+    /// Point every tracked client view displaying a window of `session_id`
+    /// at `window_id` — the shared-selection follow for a tab switch: all
+    /// render clients attached to the session display its (new) active
+    /// window. Returns the windows whose extent changed under the moved
+    /// contributions.
+    pub fn follow_session_window(
+        &mut self,
+        session_id: SessionId,
+        window: WindowId,
+    ) -> Vec<WindowId> {
+        // The windows the moved viewers leave (each re-fits to the minimum
+        // of whoever is still attached, if anyone) plus the target.
+        let mut candidates = vec![window];
+        let ids: Vec<u64> = self
+            .client_views
+            .iter()
+            .filter(|(_, view)| {
+                self.window(view.window)
+                    .is_some_and(|w| self.session_of_window(w.id) == Some(session_id))
+                    && view.window != window
+            })
+            .map(|(id, view)| {
+                candidates.push(view.window);
+                *id
+            })
+            .collect();
+        for id in ids {
+            if let Some(view) = self.client_views.get_mut(&id) {
+                view.window = window;
+            }
+        }
+        self.refit_reported_windows(&candidates)
+    }
+
+    /// Point every tracked client view displaying a window of
+    /// `workspace_id`'s sessions at `window` — the shared-selection follow
+    /// for a workspace switch. Returns the windows whose extent changed.
+    pub fn follow_workspace_views(
+        &mut self,
+        workspace_id: WorkspaceId,
+        window: WindowId,
+    ) -> Vec<WindowId> {
+        let session_ids: Vec<SessionId> = self
+            .workspace(workspace_id)
+            .map(|ws| ws.sessions.clone())
+            .unwrap_or_default();
+        let mut resized = Vec::new();
+        let ids: Vec<u64> = self
+            .client_views
+            .iter()
+            .filter(|(_, view)| {
+                view.window != window
+                    && self
+                        .session_of_window(view.window)
+                        .is_some_and(|s| session_ids.contains(&s))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            resized.extend(self.set_client_view_keep_size(id, window));
+        }
+        resized.extend(self.refit_reported_windows(&[window]));
+        resized
+    }
+
+    /// Move one client's view pointer without re-deriving extents from its
+    /// stored report (the follow paths size the target window from ALL
+    /// moved contributions at once, not client by client).
+    fn set_client_view_keep_size(&mut self, client_id: u64, window: WindowId) -> Vec<WindowId> {
+        match self.client_views.get_mut(&client_id) {
+            Some(view) => {
+                view.window = window;
+            }
+            None => return Vec::new(),
+        }
+        Vec::new()
+    }
+
+    /// Re-fit every window in `candidates` to the componentwise minimum of
+    /// its contributors' reported sizes. A window with no contributors is
+    /// left at its current extent (it re-fits when next displayed); a
+    /// window whose minimum equals its current extent is left alone — the
+    /// idempotence that keeps repeated identical reports and the follow
+    /// moves from looping.
+    fn refit_reported_windows(&mut self, candidates: &[WindowId]) -> Vec<WindowId> {
+        let mut resized = Vec::new();
+        for window_id in candidates {
+            let mut cols: Option<u16> = None;
+            let mut rows: Option<u16> = None;
+            for view in self.client_views.values() {
+                if view.window == *window_id {
+                    cols = Some(cols.map_or(view.cols, |c: u16| c.min(view.cols)));
+                    rows = Some(rows.map_or(view.rows, |r: u16| r.min(view.rows)));
+                }
+            }
+            if let (Some(cols), Some(rows)) = (cols, rows) {
+                let changed = self
+                    .window(*window_id)
+                    .map(|win| win.cols != cols || win.rows != rows)
+                    .unwrap_or(false);
+                if changed {
+                    let _ = self.resize_window(*window_id, cols, rows);
+                    resized.push(*window_id);
+                }
+            }
+        }
+        resized
     }
 
     /// Record the client's theme colors and apply them to every pane

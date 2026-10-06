@@ -811,6 +811,8 @@ impl Session {
             | TmuxNotification::SessionRenamed { .. }
             | TmuxNotification::SessionsChanged
             | TmuxNotification::WorkspacesChanged
+            | TmuxNotification::SessionWindowChanged { .. }
+            | TmuxNotification::ClientSessionChanged { .. }
             | TmuxNotification::AgentStateChanged { .. }
             | TmuxNotification::AgentReleased { .. } => {
                 // Geometry/roster/name changes can move the status facts;
