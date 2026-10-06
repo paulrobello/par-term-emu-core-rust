@@ -8738,4 +8738,399 @@ mod tests {
         assert!(!session.picker_mode, "no workspaces: no picker");
         assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     }
+
+    /// Type `text` into the open prompt as plain bytes, then Enter.
+    fn type_and_commit(
+        session: &mut WindowSession,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        text: &str,
+    ) {
+        session.prompt_text.clear();
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\r');
+        let mut prefix_pending = false;
+        session.route_plain(&bytes, conn, &mut prefix_pending);
+    }
+
+    /// Each rename target's commit spelling: the pane title and the
+    /// workspace name ride `wire_quote` (their parsers take one quoted
+    /// word), the window name rides UNQUOTED (rename-window takes the
+    /// rest of the line verbatim). Every commit closes the prompt and
+    /// marks the status stale.
+    #[test]
+    fn prompt_commits_send_each_targets_wire_spelling() {
+        let (rx, mut conn, mut session) = two_pane_session("prompt-ren", FakeScript::default());
+        for (target, typed, wire) in [
+            (
+                PromptTarget::Pane,
+                "my build",
+                "select-pane -t %1 -T 'my build'",
+            ),
+            (
+                PromptTarget::Window("@0".to_string()),
+                "my notes",
+                "rename-window -t @0 my notes",
+            ),
+            (
+                PromptTarget::Workspace("+2".to_string()),
+                "it's",
+                "rename-workspace -t +2 'it'\\''s'",
+            ),
+        ] {
+            session.enter_prompt(target.clone());
+            session.status_dirty = false;
+            type_and_commit(&mut session, &mut conn, typed);
+            assert_eq!(drained(&rx), vec![wire.to_string()], "{target:?}");
+            assert!(!session.prompt_mode, "{target:?}: the commit closes");
+            assert_eq!(session.renderer.overlay, None);
+            assert!(session.status_dirty, "{target:?}: the status re-queries");
+        }
+    }
+
+    /// An empty or whitespace-only input cancels: nothing rides the wire
+    /// (an empty name is not expressible on it).
+    #[test]
+    fn whitespace_only_prompt_cancels_without_sending() {
+        let (rx, mut conn, mut session) = two_pane_session("prompt-empty", FakeScript::default());
+        session.enter_prompt(PromptTarget::Window("@0".to_string()));
+        type_and_commit(&mut session, &mut conn, "   ");
+        assert!(!session.prompt_mode);
+        assert!(drained(&rx).is_empty());
+    }
+
+    /// The prompt's byte editing: printable bytes append, Backspace pops,
+    /// ^C clears, non-printable bytes are ignored, and Escape cancels
+    /// without sending; the overlay mirrors the buffer as it edits.
+    #[test]
+    fn prompt_bytes_edit_the_buffer_and_escape_cancels() {
+        let (rx, mut conn, mut session) = two_pane_session("prompt-edit", FakeScript::default());
+        session.enter_prompt(PromptTarget::Window("@0".to_string()));
+        session.prompt_text.clear();
+        for &b in b"abc" {
+            assert!(session.prompt_byte(&mut conn, b));
+        }
+        assert!(session.prompt_byte(&mut conn, 0x7f));
+        assert_eq!(session.prompt_text, "ab");
+        assert!(
+            overlay_text(&session).join("\n").contains("ab"),
+            "the overlay mirrors the buffer"
+        );
+        assert!(session.prompt_byte(&mut conn, 0x01), "^A is ignored");
+        assert_eq!(session.prompt_text, "ab");
+        assert!(session.prompt_byte(&mut conn, 0x03));
+        assert_eq!(session.prompt_text, "", "^C clears the input");
+        session.prompt_byte(&mut conn, b'z');
+        assert!(!session.prompt_byte(&mut conn, 0x1b), "Escape closes");
+        assert!(!session.prompt_mode);
+        assert!(drained(&rx).is_empty(), "a cancel sends nothing");
+    }
+
+    /// The prompt's key path: characters (including non-ASCII) append,
+    /// other keys are consumed without effect, Escape cancels; the mouse
+    /// is swallowed while it is up.
+    #[test]
+    fn prompt_keys_append_chars_and_swallow_the_mouse() {
+        let (rx, mut conn, mut session) = two_pane_session("prompt-key", FakeScript::default());
+        session.enter_prompt(PromptTarget::Pane);
+        session.prompt_text.clear();
+        session.prompt_key(&mut conn, &TermKeyEvent::char_('é', 0));
+        session.prompt_key(&mut conn, &TermKeyEvent::functional(TermKey::Left, 0));
+        assert_eq!(session.prompt_text, "é");
+        session.route_mouse(
+            &mut conn,
+            SgrMouse {
+                cb: 0,
+                col: 10,
+                row: 6,
+                release: false,
+            },
+        );
+        assert_eq!(session.renderer.focused(), Some(1));
+        assert!(session.prompt_mode, "the click did not dismiss it");
+        assert!(drained(&rx).is_empty(), "the click selected nothing");
+        session.prompt_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
+        assert!(!session.prompt_mode);
+    }
+
+    /// The new-tab prompt seeds the next free index; its commit creates
+    /// the window (quoted name), selects it, and lands the view there.
+    /// With no session known it cancels without sending.
+    #[test]
+    fn new_window_prompt_creates_and_lands_on_the_window() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("new-window -t $0 -n 'logs'".to_string(), "@3".to_string());
+        reseed_replies(&mut replies, "@0 - 0\n@3 * logs", "@3", "%5");
+        let (rx, mut conn, mut session) = two_pane_session(
+            "prompt-neww",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+        drained(&rx);
+        session.enter_prompt(PromptTarget::NewWindow);
+        assert_eq!(
+            session.prompt_text, "4",
+            "one past the highest window ordinal (@3)"
+        );
+        assert_eq!(
+            session.renderer.overlay.as_ref().map(|o| o.0),
+            Some(crate::mux::attach::PROMPT_NEW_WINDOW_OVERLAY_TITLE)
+        );
+        type_and_commit(&mut session, &mut conn, "logs");
+        let lines = drained(&rx);
+        assert_eq!(lines[0], "new-window -t $0 -n 'logs'");
+        assert_eq!(lines[1], "select-window -t @3");
+        assert_eq!(session.window, "@3");
+
+        let (rx, mut conn) = recording_conn("prompt-neww-no");
+        let mut orphan = WindowSession::new(80, 25);
+        drained(&rx);
+        orphan.enter_prompt(PromptTarget::NewWindow);
+        type_and_commit(&mut orphan, &mut conn, "x");
+        assert!(!orphan.prompt_mode);
+        assert!(drained(&rx).is_empty());
+    }
+
+    /// The new-workspace prompt's commit creates the workspace and lands
+    /// on the id the reply names; a refused create closes the prompt and
+    /// lands nowhere.
+    #[test]
+    fn new_workspace_prompt_creates_and_lands_or_stops_on_error() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("new-workspace -n 'ops'".to_string(), "+4".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "prompt-newws",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.enter_prompt(PromptTarget::NewWorkspace);
+        type_and_commit(&mut session, &mut conn, "ops");
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..4].to_vec(),
+            vec![
+                "new-workspace -n 'ops'",
+                "select-workspace -t +4",
+                "select-workspace -t +4",
+                "list-sessions -t +4",
+            ]
+        );
+
+        let mut failing = std::collections::HashSet::new();
+        failing.insert("new-workspace -n 'ops'".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "prompt-newws-no",
+            FakeScript {
+                failing,
+                ..FakeScript::default()
+            },
+        );
+        session.enter_prompt(PromptTarget::NewWorkspace);
+        type_and_commit(&mut session, &mut conn, "ops");
+        assert_eq!(drained(&rx), vec!["new-workspace -n 'ops'".to_string()]);
+        assert!(!session.prompt_mode);
+    }
+
+    /// The tab menu's close on a window the view is NOT showing: only
+    /// the kill rides the wire, and the status is marked stale.
+    #[test]
+    fn closing_an_unshown_tab_only_kills_it() {
+        let (rx, mut conn, mut session) = two_pane_session("close-other", FakeScript::default());
+        session.status_dirty = false;
+        session.open_menu(MenuTarget::Tab("@7".to_string()));
+        session.menu_click(&mut conn, 2);
+        assert!(session.menu.is_none());
+        assert_eq!(drained(&rx), vec!["kill-window -t @7".to_string()]);
+        assert_eq!(session.window, "@0");
+        assert!(session.status_dirty);
+    }
+
+    /// Closing the SHOWN tab lands on the session's `*`-marked survivor
+    /// (not merely the first window); closing the last window leaves
+    /// nothing to land on and marks the view stale instead.
+    #[test]
+    fn closing_the_shown_tab_lands_on_the_marked_survivor() {
+        let mut replies = std::collections::HashMap::new();
+        reseed_replies(&mut replies, "@1 - one\n@2 * two", "@2", "%4");
+        let (rx, mut conn, mut session) = two_pane_session(
+            "close-shown",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.open_menu(MenuTarget::Tab("@0".to_string()));
+        session.menu_click(&mut conn, 2);
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..3].to_vec(),
+            vec![
+                "kill-window -t @0",
+                "list-windows -t $0",
+                "select-window -t @2"
+            ]
+        );
+        assert_eq!(session.window, "@2");
+
+        let (rx, mut conn, mut session) = two_pane_session("close-last", FakeScript::default());
+        session.status_dirty = false;
+        session.open_menu(MenuTarget::Tab("@0".to_string()));
+        session.menu_click(&mut conn, 2);
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "kill-window -t @0".to_string(),
+                "list-windows -t $0".to_string()
+            ]
+        );
+        assert_eq!(session.window, "@0");
+        assert!(session.status_dirty);
+    }
+
+    /// The workspace menu's close: when the shown session lives in the
+    /// killed workspace, the view lands on the first surviving one; when
+    /// it does not, only the kill rides; when none survive, the view is
+    /// marked stale.
+    #[test]
+    fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-sessions -t +0".to_string(),
+            "+0: main: $0: work".to_string(),
+        );
+        replies.insert("list-workspaces".to_string(), "+1: beta active".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "closews-shown",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.open_menu(MenuTarget::Workspace("+0".to_string()));
+        session.menu_click(&mut conn, 2);
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..5].to_vec(),
+            vec![
+                "list-sessions -t +0",
+                "kill-workspace -t +0",
+                "list-workspaces",
+                "select-workspace -t +1",
+                "select-workspace -t +1",
+            ]
+        );
+
+        // Another workspace's close: the shown session is not inside it.
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-sessions -t +5".to_string(),
+            "+5: far: $9: else".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "closews-other",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.status_dirty = false;
+        session.open_menu(MenuTarget::Workspace("+5".to_string()));
+        session.menu_click(&mut conn, 2);
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "list-sessions -t +5".to_string(),
+                "kill-workspace -t +5".to_string()
+            ]
+        );
+        assert!(session.status_dirty);
+
+        // The last workspace: nothing survives to land on.
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-sessions -t +0".to_string(),
+            "+0: main: $0: work".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "closews-last",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.status_dirty = false;
+        session.open_menu(MenuTarget::Workspace("+0".to_string()));
+        session.menu_click(&mut conn, 2);
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "list-sessions -t +0".to_string(),
+                "kill-workspace -t +0".to_string(),
+                "list-workspaces".to_string()
+            ]
+        );
+        assert!(session.status_dirty);
+        assert_eq!(session.window, "@0");
+    }
+
+    /// The tab and workspace menus' remaining rows open their prompts
+    /// with the right target and seed; keys/bytes other than q/Escape
+    /// leave the menu up.
+    #[test]
+    fn menu_rows_open_their_prompts_and_q_or_escape_close() {
+        let (rx, mut conn, mut session) = two_pane_session("menu-rows", FakeScript::default());
+        for (target, row, expected) in [
+            (
+                MenuTarget::Tab("@9".to_string()),
+                1,
+                PromptTarget::Window("@9".to_string()),
+            ),
+            (
+                MenuTarget::Tab("@9".to_string()),
+                3,
+                PromptTarget::NewWindow,
+            ),
+            (
+                MenuTarget::Workspace("+2".to_string()),
+                1,
+                PromptTarget::Workspace("+2".to_string()),
+            ),
+            (
+                MenuTarget::Workspace("+2".to_string()),
+                3,
+                PromptTarget::NewWorkspace,
+            ),
+        ] {
+            session.open_menu(target.clone());
+            session.menu_click(&mut conn, row);
+            assert!(session.menu.is_none());
+            assert!(session.prompt_mode, "{target:?} row {row}");
+            assert_eq!(session.prompt_target, expected);
+            session.leave_prompt();
+        }
+        assert!(drained(&rx).is_empty(), "opening prompts sends nothing");
+
+        session.open_menu(MenuTarget::Tab("@0".to_string()));
+        assert_eq!(
+            overlay_text(&session)[0],
+            " @0 ",
+            "an unknown window's menu names its id"
+        );
+        session.menu_click(&mut conn, 9);
+        assert!(session.menu.is_some(), "an off-panel row is consumed");
+        assert!(session.menu_byte(b'x'), "other bytes leave it up");
+        session.menu_key(&TermKeyEvent::functional(TermKey::Down, 0));
+        assert!(session.menu.is_some());
+        session.menu_key(&TermKeyEvent::functional(TermKey::Escape, 0));
+        assert!(session.menu.is_none());
+        session.open_menu(MenuTarget::Commands);
+        let mut prefix_pending = false;
+        session.route_plain(b"aq", &mut conn, &mut prefix_pending);
+        assert!(session.menu.is_none(), "q in a plain run closes the menu");
+        assert!(drained(&rx).is_empty(), "nothing leaked into the pane");
+    }
 }
