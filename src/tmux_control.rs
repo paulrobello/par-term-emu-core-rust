@@ -1683,6 +1683,298 @@ mod tests {
         assert_eq!(parser.find_control_mode_start(b"text %begin more\n"), None);
     }
 
+    fn parse_one(line: &str) -> Vec<TmuxNotification> {
+        let mut parser = TmuxControlParser::new(true);
+        parser.parse(format!("{line}\n").as_bytes())
+    }
+
+    /// A known keyword whose arguments are too few or malformed is dropped
+    /// outright — not surfaced as `Unknown`, which a client would treat as
+    /// an unrecognised-but-valid line — and the parser keeps going: the
+    /// next well-formed line still parses.
+    #[test]
+    fn malformed_known_notifications_are_dropped_and_parsing_continues() {
+        for line in [
+            "%begin",
+            "%begin 1",
+            "%begin x 1 1",
+            "%begin 1 y 1",
+            "%end 1",
+            "%end 1 x",
+            "%error",
+            "%error x 1",
+            "%window-pane-changed @1",
+            "%window-renamed @1",
+            "%unlinked-window-renamed @1",
+            "%session-changed $1",
+            "%client-session-changed c $1",
+            "%session-renamed $1",
+            "%session-window-changed $1",
+            "%client-attached",
+            "%client-left",
+            "%extended-output %1 5",
+            "%extended-output %1 soon : x",
+            "%layout-change @1 a b",
+            "%agent-state-changed %1 claude",
+            "%agent-released %1",
+            "%agent-released %1 claude extra",
+            "%agent-telemetry-changed %1",
+            "%pane-title-changed",
+            "%pane-title-changed  title",
+            "%pane-exited",
+            "%pane-respawned",
+        ] {
+            let mut parser = TmuxControlParser::new(true);
+            let parsed = parser.parse(format!("{line}\n%exit\n").as_bytes());
+            assert_eq!(
+                parsed,
+                vec![TmuxNotification::Exit],
+                "`{line}` must be dropped and the next line still parse"
+            );
+        }
+    }
+
+    /// The parse-only notifications (the daemon never emits them, real
+    /// tmux does) decode into their typed fields.
+    #[test]
+    fn parse_only_notifications_decode_their_fields() {
+        use TmuxNotification as N;
+        let cases: Vec<(&str, N)> = vec![
+            (
+                "%pause %4",
+                N::Pause {
+                    pane_id: "%4".into(),
+                },
+            ),
+            ("%continue %4", N::Continue),
+            (
+                "%subscription-changed sub $1 @2 0 %3 - : the value",
+                N::SubscriptionChanged {
+                    name: "sub".into(),
+                    value: "$1 @2 0 %3 - : the value".into(),
+                },
+            ),
+            (
+                "%subscription-changed lonely",
+                N::SubscriptionChanged {
+                    name: "lonely".into(),
+                    value: String::new(),
+                },
+            ),
+            (
+                "%unlinked-window-add @7",
+                N::UnlinkedWindowAdd {
+                    window_id: "@7".into(),
+                },
+            ),
+            (
+                "%unlinked-window-close @7",
+                N::UnlinkedWindowClose {
+                    window_id: "@7".into(),
+                },
+            ),
+            (
+                "%unlinked-window-renamed @7 build logs",
+                N::UnlinkedWindowRenamed {
+                    window_id: "@7".into(),
+                    name: "build logs".into(),
+                },
+            ),
+            (
+                "%client-detached /dev/ttys003",
+                N::ClientDetached {
+                    client: "/dev/ttys003".into(),
+                },
+            ),
+            (
+                "%client-session-changed /dev/ttys003 $2 my session",
+                N::ClientSessionChanged {
+                    client: "/dev/ttys003".into(),
+                    session_id: "$2".into(),
+                    name: "my session".into(),
+                },
+            ),
+            (
+                "%session-renamed $2 new name",
+                N::SessionRenamed {
+                    session_id: "$2".into(),
+                    name: "new name".into(),
+                },
+            ),
+            (
+                "%session-window-changed $2 @9",
+                N::SessionWindowChanged {
+                    session_id: "$2".into(),
+                    window_id: "@9".into(),
+                },
+            ),
+            (
+                "%error 1700000000 3 1",
+                N::Error {
+                    timestamp: 1_700_000_000,
+                    command_number: 3,
+                    flags: "1".into(),
+                },
+            ),
+            (
+                "%end 1700000000 3",
+                N::End {
+                    timestamp: 1_700_000_000,
+                    command_number: 3,
+                    flags: String::new(),
+                },
+            ),
+            (
+                "%output %1",
+                N::Output {
+                    pane_id: "%1".into(),
+                    data: Vec::new(),
+                },
+            ),
+            ("%workspaces-changed", N::WorkspacesChanged),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(parse_one(line), vec![expected], "`{line}`");
+        }
+    }
+
+    /// The par-mux extensions decode their optional tails: a client-left
+    /// with and without its view pair, a pane-exited with a code, without
+    /// one, and with an unparsable one (None, not a misread), and an
+    /// agent-state-changed whose state spans words, with and without the
+    /// trailing provenance token.
+    #[test]
+    fn par_mux_extension_optional_fields_decode() {
+        use TmuxNotification as N;
+        assert_eq!(
+            parse_one("%client-left 12 $1 @3"),
+            vec![N::ClientLeft {
+                client: "12".into(),
+                session_id: Some("$1".into()),
+                window_id: Some("@3".into()),
+            }]
+        );
+        assert_eq!(
+            parse_one("%client-left 12"),
+            vec![N::ClientLeft {
+                client: "12".into(),
+                session_id: None,
+                window_id: None,
+            }]
+        );
+        assert_eq!(
+            parse_one("%client-attached 12 extra"),
+            vec![N::ClientAttached {
+                client: "12".into()
+            }]
+        );
+        for (line, code) in [
+            ("%pane-exited %5 3", Some(3)),
+            ("%pane-exited %5 -1", Some(-1)),
+            ("%pane-exited %5", None),
+            ("%pane-exited %5 ?", None),
+        ] {
+            assert_eq!(
+                parse_one(line),
+                vec![N::PaneExited {
+                    pane_id: "%5".into(),
+                    exit_code: code,
+                }],
+                "`{line}`"
+            );
+        }
+        assert_eq!(
+            parse_one("%pane-respawned %5"),
+            vec![N::PaneRespawned {
+                pane_id: "%5".into()
+            }]
+        );
+        assert_eq!(
+            parse_one("%pane-title-changed %5 my build pane"),
+            vec![N::PaneTitleChanged {
+                pane_id: "%5".into(),
+                title: "my build pane".into(),
+            }]
+        );
+        assert_eq!(
+            parse_one("%pane-title-changed %5"),
+            vec![N::PaneTitleChanged {
+                pane_id: "%5".into(),
+                title: String::new(),
+            }],
+            "a missing title is the clear"
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude waiting for input source=hook"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "waiting for input".into(),
+                source: "hook".into(),
+            }]
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude busy"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "busy".into(),
+                source: String::new(),
+            }]
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude source=hook"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "source=hook".into(),
+                source: String::new(),
+            }],
+            "with only three tokens the third is the state, never provenance"
+        );
+    }
+
+    /// Octal escapes decode only as three digits forming a byte; anything
+    /// else (an out-of-range value, a non-octal digit, a short or trailing
+    /// backslash) stays literal, so a stray backslash in pane output is
+    /// never eaten.
+    #[test]
+    fn unescape_output_keeps_invalid_escapes_literal() {
+        let decode = |s: &str| TmuxControlParser::unescape_output(s);
+        assert_eq!(decode("\\101\\102"), b"AB");
+        assert_eq!(decode("\\400"), b"\\400", "past 0o377 is not a byte");
+        assert_eq!(decode("\\189"), b"\\189", "8 and 9 are not octal digits");
+        assert_eq!(decode("\\12"), b"\\12", "two digits are not an escape");
+        assert_eq!(decode("end\\"), b"end\\", "a trailing backslash stays");
+        assert_eq!(decode("\\\\"), b"\\\\", "an escaped backslash is \\134");
+    }
+
+    /// An unrecognised `%` keyword reaches the caller verbatim as
+    /// `Unknown` (leading whitespace trimmed), and the parser's line
+    /// buffer drains completely.
+    #[test]
+    fn unknown_keywords_surface_verbatim_and_drain_the_buffer() {
+        let mut parser = TmuxControlParser::new(true);
+        let parsed = parser.parse(b"  %config-error bad line here\r\n%sessions-changed\n");
+        assert_eq!(
+            parsed,
+            vec![
+                TmuxNotification::Unknown {
+                    line: "%config-error bad line here".into()
+                },
+                TmuxNotification::SessionsChanged,
+            ]
+        );
+        assert_eq!(parser.buffer_len(), 0);
+        assert_eq!(
+            TmuxNotification::Unknown {
+                line: String::new()
+            }
+            .notification_type(),
+            "unknown"
+        );
+    }
+
     /// tmux(1) CONTROL MODE: `%extended-output pane-id age ... : value` —
     /// the value follows a lone `:` and its separating space, and any
     /// arguments between age and the `:` are for future use and ignored.
