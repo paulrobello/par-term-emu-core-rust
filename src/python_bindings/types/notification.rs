@@ -287,6 +287,20 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 client: Some(client.clone()),
                 ..Self::empty(kind)
             },
+            TmuxNotification::ClientAttached { client } => Self {
+                client: Some(client.clone()),
+                ..Self::empty(kind)
+            },
+            TmuxNotification::ClientLeft {
+                client,
+                session_id,
+                window_id,
+            } => Self {
+                client: Some(client.clone()),
+                session_id: session_id.clone(),
+                window_id: window_id.clone(),
+                ..Self::empty(kind)
+            },
             TmuxNotification::Exit => Self {
                 ..Self::empty(kind)
             },
@@ -551,6 +565,8 @@ mod tests {
         "sessions-changed | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "session-window-changed | None | None | Some(\"w-session-window\") | Some(\"s-session-window\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "client-detached | None | None | None | None | None | None | Some(\"c-detached\") | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-attached | None | None | None | None | None | None | Some(\"c-attached\") | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-left | None | None | Some(\"w-client-left\") | Some(\"s-client-left\") | None | None | Some(\"c-left\") | None | None | None | None | None | None | None | None | None | None | None\n",
         "exit | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "agent-state-changed | Some(\"hook\") | Some(\"p-agent-state\") | None | None | Some(\"agent-state\") | None | None | None | None | None | None | None | None | Some(\"working\") | None | None | None | None\n",
         "agent-released | None | Some(\"p-agent-released\") | None | None | Some(\"agent-released\") | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
@@ -647,6 +663,14 @@ mod tests {
             },
             TmuxNotification::ClientDetached {
                 client: "c-detached".to_string(),
+            },
+            TmuxNotification::ClientAttached {
+                client: "c-attached".to_string(),
+            },
+            TmuxNotification::ClientLeft {
+                client: "c-left".to_string(),
+                session_id: Some("s-client-left".to_string()),
+                window_id: Some("w-client-left".to_string()),
             },
             TmuxNotification::Exit,
             TmuxNotification::AgentStateChanged {
@@ -747,6 +771,8 @@ mod tests {
                 TmuxNotification::SessionsChanged => (),
                 TmuxNotification::SessionWindowChanged { .. } => (),
                 TmuxNotification::ClientDetached { .. } => (),
+                TmuxNotification::ClientAttached { .. } => (),
+                TmuxNotification::ClientLeft { .. } => (),
                 TmuxNotification::Exit => (),
                 TmuxNotification::AgentStateChanged { .. } => (),
                 TmuxNotification::AgentReleased { .. } => (),

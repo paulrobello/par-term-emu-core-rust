@@ -2172,6 +2172,71 @@ fn a_zoom_and_its_select_away_unzoom_reach_the_other_client() {
     );
 }
 
+/// Client lifecycle: a second client's registration (its first control
+/// command) reaches the already-registered client as
+/// `%client-attached <id>`, and its socket drop — the same teardown an
+/// eviction ends in — as `%client-left <id> $S @W`, naming the window it
+/// was displaying. The joining client never sees its own attach line.
+#[test]
+fn client_attach_and_drop_broadcast_lifecycle_lines() {
+    let fixture = MuxFixture::new("clientlife");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    // A registers FIRST so it is in the broadcast set for B's lifecycle.
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s life");
+    let pane = pane_ids(&command(&mut writer_a, &mut reader_a, "list-panes").join("")).remove(0);
+
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    let b_first = command(&mut writer_b, &mut reader_b, "list-panes").join("");
+    assert!(
+        !b_first.contains("%client-attached"),
+        "the joining client is not told about itself: {b_first}"
+    );
+    command(
+        &mut writer_b,
+        &mut reader_b,
+        &format!("refresh-client -t {pane} -C 60x20"),
+    );
+
+    let attached = poll_until(
+        &mut writer_a,
+        &mut reader_a,
+        "list-panes",
+        "%client-attached ",
+    );
+    let id = attached
+        .lines()
+        .find_map(|l| l.strip_prefix("%client-attached "))
+        .expect("the attach line")
+        .trim()
+        .to_string();
+    assert!(
+        !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()),
+        "the attach line carries a numeric client id: {id:?}"
+    );
+
+    drop(writer_b);
+    drop(reader_b);
+    let left = poll_until(&mut writer_a, &mut reader_a, "list-panes", "%client-left ");
+    let line = left
+        .lines()
+        .find(|l| l.starts_with("%client-left "))
+        .expect("the left line");
+    assert_eq!(
+        line,
+        format!("%client-left {id} $0 @0"),
+        "the left line names the same client and the window it displayed"
+    );
+}
+
 #[test]
 fn a_workspace_switch_broadcasts_the_display_move_to_the_other_client() {
     let fixture = MuxFixture::new("wssync");

@@ -187,6 +187,29 @@ pub enum TmuxNotification {
         client: String,
     },
 
+    /// par-mux: a control client registered — joined the broadcast set
+    /// on its first control command. Sent to the clients already
+    /// registered, never to the joining client itself.
+    /// Arguments: client_id
+    ClientAttached {
+        /// The daemon's connection id (decimal).
+        client: String,
+    },
+
+    /// par-mux: a registered control client's connection ended — a clean
+    /// disconnect, a socket EOF, or an eviction teardown alike.
+    /// Arguments: client_id [session_id window_id]
+    ClientLeft {
+        /// The daemon's connection id (decimal).
+        client: String,
+        /// The session of the window the client was displaying; None when
+        /// it never reported a view (`refresh-client -C`).
+        session_id: Option<String>,
+        /// The window the client was displaying; None when it never
+        /// reported a view.
+        window_id: Option<String>,
+    },
+
     /// Client exited (only with -CC flag)
     Exit,
 
@@ -357,6 +380,8 @@ impl TmuxNotification {
             Self::WorkspacesChanged => "workspaces-changed",
             Self::SessionWindowChanged { .. } => "session-window-changed",
             Self::ClientDetached { .. } => "client-detached",
+            Self::ClientAttached { .. } => "client-attached",
+            Self::ClientLeft { .. } => "client-left",
             Self::Exit => "exit",
             Self::Pause { .. } => "pause",
             Self::ExtendedOutput { .. } => "extended-output",
@@ -576,6 +601,8 @@ impl TmuxControlParser {
             "workspaces-changed" => Some(TmuxNotification::WorkspacesChanged),
             "session-window-changed" => Self::parse_session_window_changed(args),
             "client-detached" => Self::parse_client_detached(args),
+            "client-attached" => Self::parse_client_attached(args),
+            "client-left" => Self::parse_client_left(args),
             "exit" => Some(TmuxNotification::Exit),
             "pause" => Self::parse_pause(args),
             "extended-output" => Self::parse_extended_output(args),
@@ -855,6 +882,25 @@ impl TmuxControlParser {
     fn parse_client_detached(args: &str) -> Option<TmuxNotification> {
         Some(TmuxNotification::ClientDetached {
             client: args.trim().to_string(),
+        })
+    }
+
+    fn parse_client_attached(args: &str) -> Option<TmuxNotification> {
+        let client = args.split_whitespace().next()?;
+        Some(TmuxNotification::ClientAttached {
+            client: client.to_string(),
+        })
+    }
+
+    fn parse_client_left(args: &str) -> Option<TmuxNotification> {
+        let mut parts = args.split_whitespace();
+        let client = parts.next()?.to_string();
+        let session_id = parts.next().map(str::to_string);
+        let window_id = parts.next().map(str::to_string);
+        Some(TmuxNotification::ClientLeft {
+            client,
+            session_id,
+            window_id,
         })
     }
 

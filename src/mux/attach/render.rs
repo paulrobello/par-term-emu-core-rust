@@ -2776,7 +2776,9 @@ impl WindowSession {
             | TmuxNotification::SessionsChanged
             | TmuxNotification::WorkspacesChanged
             | TmuxNotification::WindowRenamed { .. }
-            | TmuxNotification::SessionRenamed { .. } => {
+            | TmuxNotification::SessionRenamed { .. }
+            | TmuxNotification::ClientAttached { .. }
+            | TmuxNotification::ClientLeft { .. } => {
                 self.status_dirty = true;
                 EventOutcome::Continue
             }

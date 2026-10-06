@@ -156,6 +156,23 @@ pub fn emit(notification: &TmuxNotification) -> String {
         } => {
             format!("%session-window-changed {session_id} {window_id}\n")
         }
+        TmuxNotification::ClientAttached { client } => {
+            format!("%client-attached {client}\n")
+        }
+        TmuxNotification::ClientLeft {
+            client,
+            session_id,
+            window_id,
+        } => {
+            // The displayed view rides along only when the client reported
+            // one; the pair is all-or-nothing.
+            match (session_id, window_id) {
+                (Some(session), Some(window)) => {
+                    format!("%client-left {client} {session} {window}\n")
+                }
+                _ => format!("%client-left {client}\n"),
+            }
+        }
         TmuxNotification::PaneTitleChanged { pane_id, title } => {
             // The separator is omitted for an empty title (the clear
             // operation) so the wire never carries a trailing space; the
@@ -473,6 +490,32 @@ mod tests {
                 "one line in, one notification out for {original:?}"
             );
             assert_eq!(&parsed[0], original, "round trip changed the notification");
+        }
+    }
+
+    #[test]
+    fn client_lifecycle_notifications_round_trip() {
+        // The attach line is the id alone; the left line carries the
+        // displayed session and window when the client reported a view,
+        // and is the bare id when it never did.
+        let attached = TmuxNotification::ClientAttached {
+            client: "7".to_string(),
+        };
+        assert_eq!(emit(&attached), "%client-attached 7\n");
+        let left = TmuxNotification::ClientLeft {
+            client: "7".to_string(),
+            session_id: Some("$1".to_string()),
+            window_id: Some("@2".to_string()),
+        };
+        assert_eq!(emit(&left), "%client-left 7 $1 @2\n");
+        let bare = TmuxNotification::ClientLeft {
+            client: "8".to_string(),
+            session_id: None,
+            window_id: None,
+        };
+        assert_eq!(emit(&bare), "%client-left 8\n");
+        for original in [&attached, &left, &bare] {
+            assert_eq!(round_trip(original), vec![original.clone()]);
         }
     }
 

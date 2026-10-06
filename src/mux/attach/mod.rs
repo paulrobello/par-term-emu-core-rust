@@ -814,7 +814,9 @@ impl Session {
             | TmuxNotification::SessionWindowChanged { .. }
             | TmuxNotification::ClientSessionChanged { .. }
             | TmuxNotification::AgentStateChanged { .. }
-            | TmuxNotification::AgentReleased { .. } => {
+            | TmuxNotification::AgentReleased { .. }
+            | TmuxNotification::ClientAttached { .. }
+            | TmuxNotification::ClientLeft { .. } => {
                 // Geometry/roster/name changes can move the status facts;
                 // re-query before the next redraw.
                 *status_dirty = true;

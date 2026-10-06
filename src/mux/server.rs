@@ -678,6 +678,16 @@ impl Registration {
         // in either direction (`reap_dead_panes` releases the tree before
         // broadcasting; `push_to_clients` takes only `clients`), so this
         // introduces no lock inversion.
+        // The attach announcement goes to the clients already registered,
+        // before this one joins, so the joining client never hears itself.
+        // Its own statement: `clients` is not reentrant and the push takes
+        // it.
+        broadcast_notification(
+            clients,
+            &TmuxNotification::ClientAttached {
+                client: client_id.to_string(),
+            },
+        );
         let replay = {
             let guard = tree.lock();
             let lines = held_state_replay_lines(&guard);
@@ -888,15 +898,35 @@ fn handle_client(
         }
     }
     if registration.done {
+        // Every registered connection ends here — a clean disconnect, a
+        // socket EOF, and an eviction (its flag ends the read loop) alike.
         clients.lock().retain(|(id, _, _, _)| *id != client_id);
         // The disconnect drops the connection's sizing contribution; the
         // windows it constrained may grow to the remaining viewers'
         // minimum, and the grown windows broadcast `%layout-change` to the
-        // clients that are still attached.
-        let resized = tree.lock().clear_client_view(client_id);
+        // clients that are still attached. The displayed view is read
+        // first, for the `%client-left` line that follows the layout
+        // changes (dispatch's layout-then-lifecycle order).
+        let (resized, displayed) = {
+            let mut guard = tree.lock();
+            let displayed = guard.client_views.get(&client_id).and_then(|view| {
+                let session = guard.session_of_window(view.window)?;
+                Some((session.to_string(), view.window.to_string()))
+            });
+            (guard.clear_client_view(client_id), displayed)
+        };
         for window_id in resized {
             broadcast_layout_change(&tree, &clients, window_id);
         }
+        let (session_id, window_id) = displayed.unzip();
+        broadcast_notification(
+            &clients,
+            &TmuxNotification::ClientLeft {
+                client: client_id.to_string(),
+                session_id,
+                window_id,
+            },
+        );
     }
 }
 
