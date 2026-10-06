@@ -9514,4 +9514,277 @@ mod tests {
         session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
         assert!(!session.picker_mode);
     }
+
+    /// A 1-based SGR press/release/wheel at host `(col, row)`.
+    fn sgr(cb: u8, col: u16, row: u16, release: bool) -> SgrMouse {
+        SgrMouse {
+            cb,
+            col,
+            row,
+            release,
+        }
+    }
+
+    /// Coordinates SGR never sends (column or row 0) are dropped
+    /// outright, and a press in the content area focuses the pane under
+    /// the pointer with select-pane (no forwarding: the pane does not
+    /// track the mouse).
+    #[test]
+    fn mouse_press_focuses_and_zero_coordinates_drop() {
+        let (rx, mut conn, mut session) = two_pane_session("m-press", FakeScript::default());
+        session.route_mouse(&mut conn, sgr(0, 0, 5, false));
+        session.route_mouse(&mut conn, sgr(0, 60, 0, false));
+        assert!(drained(&rx).is_empty(), "zero coordinates are dropped");
+        // Host col 61 (x 60), host row 6 (content row 4): pane 2.
+        session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+        assert_eq!(session.renderer.focused(), Some(2));
+        assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
+        // A release/motion over a pane that does not own the mouse does
+        // nothing; neither does a press past the layout's last row.
+        session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+        session.route_mouse(&mut conn, sgr(32, 10, 6, false));
+        // (The 24-row daemon layout overhangs the 23-row renderer, so
+        // the first row past it is host row 26.)
+        session.route_mouse(&mut conn, sgr(0, 10, 26, false));
+        assert!(drained(&rx).is_empty());
+        assert_eq!(session.renderer.focused(), Some(2));
+    }
+
+    /// A pane that tracks the mouse gets its events re-encoded as
+    /// pane-relative SGR over `send-keys -H`: the press (after the focus
+    /// select), the release, and the wheel — which then does NOT scroll
+    /// the client's scrollback.
+    #[test]
+    fn mouse_owning_pane_receives_rebased_sgr_reports() {
+        let (rx, mut conn, mut session) = two_pane_session("m-fwd", FakeScript::default());
+        session.renderer.feed_output(2, b"\x1b[?1000h\x1b[?1006h");
+        // Host (61, 6) 1-based → x 60, content row 4 → pane 2 origin
+        // x 40: pane-relative (20, 4) → SGR `ESC[<0;21;5M`.
+        session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+        let hex = |s: &str| {
+            s.bytes()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "select-pane -t %2".to_string(),
+                format!("send-keys -t %2 -H {}", hex("\x1b[<0;21;5M"))
+            ]
+        );
+        session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+        assert_eq!(
+            drained(&rx),
+            vec![format!("send-keys -t %2 -H {}", hex("\x1b[<0;21;5m"))]
+        );
+        for i in 0..30 {
+            session
+                .renderer
+                .feed_output(2, format!("h{i}\r\n").as_bytes());
+        }
+        session.route_mouse(&mut conn, sgr(64, 61, 6, false));
+        assert_eq!(
+            drained(&rx),
+            vec![format!("send-keys -t %2 -H {}", hex("\x1b[<64;21;5M"))]
+        );
+        assert_eq!(
+            session.renderer.scroll_offset_of(2),
+            0,
+            "the owning pane's wheel is the app's, not the scrollback's"
+        );
+    }
+
+    /// The side panel's pointer: a left press on a workspace row lands
+    /// on it, a RIGHT press opens that workspace's menu, the `new` chip
+    /// opens the new-workspace prompt, and a release in the panel does
+    /// nothing. A click on the TOP row inside the panel's width is the
+    /// tab strip's, not the panel's.
+    #[test]
+    fn sidebar_pointer_lands_opens_menus_and_prompts() {
+        let (rx, mut conn, mut session) = two_pane_session("m-side", FakeScript::default());
+        session.renderer.set_sidebar_width(20);
+        session
+            .renderer
+            .set_sidebar_sections(Some(vec![super::super::SidebarSection {
+                rows: vec![
+                    ("ws:+0".to_string(), "alpha".to_string(), true),
+                    ("ws:+1".to_string(), "beta".to_string(), false),
+                ],
+            }]));
+        // Host row 2 (1-based 3) is the second workspace row.
+        session.route_mouse(&mut conn, sgr(2, 3, 3, false));
+        assert_eq!(
+            session.menu.as_ref().map(|m| m.target.clone()),
+            Some(MenuTarget::Workspace("+1".to_string()))
+        );
+        assert!(drained(&rx).is_empty(), "opening the menu sends nothing");
+        session.leave_menu();
+        session.route_mouse(&mut conn, sgr(0, 3, 3, true));
+        assert!(drained(&rx).is_empty(), "a release does nothing");
+        session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+        assert_eq!(
+            drained(&rx)[..2].to_vec(),
+            vec!["select-workspace -t +1", "list-sessions -t +1"],
+            "a left press lands on the workspace"
+        );
+        // The ` new ` chip: the 23-row renderer's footer row is host
+        // row 23 (SGR 24); col 2.
+        session.route_mouse(&mut conn, sgr(0, 3, 24, false));
+        assert!(session.prompt_mode);
+        assert_eq!(session.prompt_target, PromptTarget::NewWorkspace);
+    }
+
+    /// The tab strip's right press opens that tab's context menu; a
+    /// right press on a gap opens nothing; wheel and release on the strip
+    /// do nothing; the `+` button opens the new-tab prompt.
+    #[test]
+    fn tab_strip_right_press_opens_the_tab_menu() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert("list-sessions".to_string(), "$0: work".to_string());
+        replies.insert(
+            "list-windows -t $0".to_string(),
+            "@0 * main\n@1 - vim".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "m-tabmenu",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+        session.draw_tab_strip();
+        drained(&rx);
+        session.route_mouse(&mut conn, sgr(2, 9, 1, false));
+        assert!(session.menu.is_none(), "the gap column opens nothing");
+        session.route_mouse(&mut conn, sgr(2, 13, 1, false));
+        assert_eq!(
+            session.menu.as_ref().map(|m| m.target.clone()),
+            Some(MenuTarget::Tab("@1".to_string()))
+        );
+        assert_eq!(overlay_text(&session)[0], " vim ", "the menu names the tab");
+        session.leave_menu();
+        session.route_mouse(&mut conn, sgr(64, 13, 1, false));
+        session.route_mouse(&mut conn, sgr(0, 13, 1, true));
+        assert_eq!(session.window, "@0", "wheel/release never switch");
+        // Clicking the shown tab is a no-op.
+        session.route_mouse(&mut conn, sgr(0, 3, 1, false));
+        assert!(drained(&rx).is_empty());
+        let plus = (0..80u16)
+            .find(|x| session.tab_strip.plus_hit(*x))
+            .expect("the strip paints a + button");
+        session.route_mouse(&mut conn, sgr(0, plus + 1, 1, false));
+        assert!(session.prompt_mode);
+        assert_eq!(session.prompt_target, PromptTarget::NewWindow);
+    }
+
+    /// The pickers are modal for the pointer: wheels move the selection,
+    /// a click on a content row activates it, the footer and drags do
+    /// nothing, and while filtering a click on the filter line re-opens
+    /// the filter box.
+    #[test]
+    fn picker_pointer_wheels_move_and_a_click_activates() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-workspaces".to_string(),
+            "+0: alpha active\n+1: beta\n+2: gamma".to_string(),
+        );
+        let (rx, mut conn, mut session) = two_pane_session(
+            "m-picker",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'g');
+        drained(&rx);
+        session.route_mouse(&mut conn, sgr(65, 40, 10, false));
+        assert_eq!(session.picker_selected, 1, "wheel down moves down");
+        session.route_mouse(&mut conn, sgr(64, 40, 10, false));
+        assert_eq!(session.picker_selected, 0, "wheel up moves up");
+        session.route_mouse(&mut conn, sgr(32, 40, 10, false));
+        session.route_mouse(&mut conn, sgr(0, 40, 10, true));
+        assert!(session.picker_mode, "drags and releases do nothing");
+
+        let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
+        // The footer (the panel's last row; panel row r sits at SGR row
+        // y0 + 3 + r): consumed.
+        let footer = session.picker_panel_len - 1;
+        session.route_mouse(
+            &mut conn,
+            sgr(0, (x0 + 4) as u16, (y0 + 3 + footer) as u16, false),
+        );
+        assert!(session.picker_mode, "the footer does nothing");
+        assert!(drained(&rx).is_empty());
+
+        // Filtering: panel row 0 is the filter line.
+        session.picker_byte(&mut conn, b'/');
+        session.picker_byte(&mut conn, b'a');
+        session.picker_byte(&mut conn, b'\r');
+        assert!(!session.picker_filtering);
+        let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
+        session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false));
+        assert!(session.picker_filtering, "the filter line re-opens the box");
+        assert!(drained(&rx).is_empty());
+        // "a" keeps all three rows: panel row 3 is the third content
+        // row (gamma).
+        session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 6) as u16, false));
+        assert!(!session.picker_mode, "a content click activates");
+        assert_eq!(drained(&rx)[0], "select-workspace -t +2");
+    }
+
+    /// With a context menu up, wheels, motion and releases are swallowed
+    /// and a press outside the panel is consumed without dispatching.
+    #[test]
+    fn open_menu_swallows_non_press_pointer_events() {
+        let (rx, mut conn, mut session) = two_pane_session("m-menu", FakeScript::default());
+        session.open_menu(MenuTarget::Commands);
+        for event in [
+            sgr(64, 40, 12, false),
+            sgr(32, 40, 12, false),
+            sgr(0, 40, 12, true),
+            sgr(0, 1, 2, false),
+        ] {
+            session.route_mouse(&mut conn, event);
+        }
+        assert!(session.menu.is_some(), "still up");
+        assert!(!session.detach_requested && !session.help_mode);
+        assert!(drained(&rx).is_empty());
+        assert_eq!(session.renderer.focused(), Some(1), "no click-through");
+    }
+
+    /// The help panel owns the pointer: the wheel scrolls the panel (up
+    /// clamped at 0) and a press neither focuses nor closes.
+    #[test]
+    fn help_panel_pointer_scrolls_and_swallows_presses() {
+        let (rx, mut conn, mut session) = two_pane_session("m-help", FakeScript::default());
+        session.enter_help();
+        session.route_mouse(&mut conn, sgr(65, 61, 6, false));
+        assert_eq!(session.help_scroll, 3);
+        session.route_mouse(&mut conn, sgr(64, 61, 6, false));
+        session.route_mouse(&mut conn, sgr(64, 61, 6, false));
+        assert_eq!(session.help_scroll, 0);
+        session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+        assert!(session.help_mode);
+        assert_eq!(session.renderer.focused(), Some(1));
+        assert!(drained(&rx).is_empty());
+    }
+
+    /// While a divider drag is held the wheel waits, and a drag that
+    /// wanders onto the tab-strip row still ends on release.
+    #[test]
+    fn drag_owns_the_pointer_until_release_even_on_the_strip_row() {
+        let (rx, mut conn, mut session) = two_pane_session("m-drag", FakeScript::default());
+        session.route_mouse(&mut conn, sgr(0, 40, 6, false));
+        assert!(matches!(session.drag, Some(DragState::Pending { .. })));
+        session.route_mouse(&mut conn, sgr(64, 10, 6, false));
+        assert!(session.drag.is_some(), "the wheel waits for the drag");
+        session.route_mouse(&mut conn, sgr(0, 42, 1, true));
+        assert!(session.drag.is_none(), "release on the strip row ends it");
+        // A motionless drag is a click: no resize, the release point's
+        // pane (content row 0 under the strip row) takes focus.
+        assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
+    }
 }
