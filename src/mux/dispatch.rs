@@ -2408,4 +2408,552 @@ mod tests {
         }
         let _ = tree.lock().pane_mut(pane).unwrap().kill();
     }
+
+    /// Creates every pane dead (no process): the tree mechanics run for
+    /// real, but no shell starts, so no `%output` races the assertions.
+    struct DeadPaneFactory;
+
+    impl PaneFactory for DeadPaneFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            _context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            self.create_dead_pane(id, cols, rows, command, Some(0))
+        }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
+        }
+    }
+
+    /// A dispatch harness over a process-free tree with one registered
+    /// broadcast sink.
+    struct Harness {
+        tree: Arc<Mutex<MuxTree>>,
+        clients: crate::mux::server::Clients,
+        sink: std::sync::mpsc::Receiver<String>,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(DeadPaneFactory))));
+            let clients: crate::mux::server::Clients = Arc::new(Mutex::new(Vec::new()));
+            let (sink_tx, sink) = std::sync::mpsc::sync_channel(4096);
+            clients.lock().push((
+                u64::MAX,
+                sink_tx,
+                Arc::new(AtomicBool::new(false)),
+                crate::mux::ipc::ConnectionAbort::none(),
+            ));
+            Self {
+                tree,
+                clients,
+                sink,
+            }
+        }
+
+        fn run_as(&self, client_id: Option<u64>, line: &str) -> String {
+            let ctx = Ctx {
+                tree: &self.tree,
+                clients: &self.clients,
+                command_number: 7,
+                shutdown: None,
+                config: None,
+                client_id,
+            };
+            dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+        }
+
+        fn run(&self, line: &str) -> String {
+            self.run_as(None, line)
+        }
+
+        /// Everything broadcast since the last drain, one entry per send.
+        fn drain(&self) -> Vec<String> {
+            self.sink.try_iter().collect()
+        }
+
+        /// A stable picture of the tree: workspaces, sessions, windows in
+        /// order, and each window's panes and extent.
+        fn snapshot(&self) -> String {
+            let guard = self.tree.lock();
+            let mut out = String::new();
+            let mut sessions = guard.sessions();
+            sessions.sort();
+            for ws in guard.workspaces() {
+                let ws = guard.workspace(ws).unwrap();
+                out.push_str(&format!("ws {} {} {:?};", ws.id, ws.name, ws.sessions));
+            }
+            for s in sessions {
+                let session = guard.session(s).unwrap();
+                out.push_str(&format!(
+                    "s {} {} active={} ",
+                    session.id, session.name, session.active
+                ));
+                for w in &session.windows {
+                    let window = guard.window(*w).unwrap();
+                    out.push_str(&format!(
+                        "[{} {} {}x{} {:?}]",
+                        window.id,
+                        window.name,
+                        window.cols,
+                        window.rows,
+                        window.panes()
+                    ));
+                }
+                out.push(';');
+            }
+            out
+        }
+
+        fn session_named(&self, name: &str) -> crate::mux::ids::SessionId {
+            let guard = self.tree.lock();
+            guard
+                .sessions()
+                .into_iter()
+                .find(|s| guard.session(*s).unwrap().name == name)
+                .expect("session exists")
+        }
+
+        fn windows_of(
+            &self,
+            session: crate::mux::ids::SessionId,
+        ) -> Vec<crate::mux::ids::WindowId> {
+            self.tree.lock().session(session).unwrap().windows.clone()
+        }
+
+        fn panes_of(&self, window: crate::mux::ids::WindowId) -> Vec<PaneId> {
+            self.tree.lock().window(window).unwrap().panes()
+        }
+    }
+
+    /// Splits a reply block into (body lines, closed with `%end`).
+    fn reply_parts(reply: &str) -> (Vec<&str>, bool) {
+        let lines: Vec<&str> = reply.lines().collect();
+        assert!(
+            lines.first().is_some_and(|l| l.starts_with("%begin ")),
+            "a reply opens with %begin: {reply:?}"
+        );
+        let last = lines.last().copied().unwrap_or_default();
+        let ok = if last.starts_with("%end ") {
+            true
+        } else if last.starts_with("%error ") {
+            false
+        } else {
+            panic!("a reply closes with %end or %error: {reply:?}")
+        };
+        (lines[1..lines.len() - 1].to_vec(), ok)
+    }
+
+    fn assert_error(reply: &str, expected: &str) {
+        let (body, ok) = reply_parts(reply);
+        assert!(!ok, "expected an %error block: {reply:?}");
+        assert_eq!(body, vec![expected], "error text for: {reply:?}");
+    }
+
+    fn assert_ok(reply: &str) -> Vec<String> {
+        let (body, ok) = reply_parts(reply);
+        assert!(ok, "expected an %end block: {reply:?}");
+        body.into_iter().map(str::to_string).collect()
+    }
+
+    /// Every targeted command answers an unknown id or name with the exact
+    /// `no such …` text inside an `%error` block, and leaves the tree and
+    /// the broadcast stream untouched — a typo'd target must never land on
+    /// some other object or announce a change that did not happen.
+    #[test]
+    fn unknown_targets_error_exactly_and_change_nothing() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        // paste-buffer checks for a buffer before it resolves the pane.
+        assert_ok(&h.run("set-buffer clip"));
+        h.drain();
+        let before = h.snapshot();
+        let cases: &[(&str, &str)] = &[
+            ("send-keys -t %99 x", "no such pane: %99"),
+            ("refresh-client -t %99 -C 100x40", "no such pane: %99"),
+            ("kill-pane -t %99", "no such pane: %99"),
+            ("split-window -t %99", "no such pane: %99"),
+            ("select-pane -t %99", "no such pane: %99"),
+            ("select-pane -t %99 -T title", "no such pane: %99"),
+            ("pane-title -t %99", "no such pane: %99"),
+            ("clear-history -t %99", "no such pane: %99"),
+            ("resize-pane -t %99 -L 2", "no such pane: %99"),
+            ("swap-pane -s %99 -t %0", "no such pane: %99"),
+            ("swap-pane -s %0 -t %99", "no such pane: %99"),
+            ("break-pane -s %99", "no such pane: %99"),
+            ("join-pane -s %99 -t %0", "no such pane: %99"),
+            ("join-pane -s %0 -t %99", "no such pane: %99"),
+            ("respawn-pane -k -t %99", "no such pane: %99"),
+            ("capture-pane -t %99", "no such pane: %99"),
+            ("paste-buffer -t %99", "no such pane: %99"),
+            ("select-pane -t ghost", "no such pane: ghost"),
+            ("list-panes -t @99", "no such window: @99"),
+            ("select-window -t @99", "no such window: @99"),
+            ("kill-window -t @99", "no such window: @99"),
+            ("kill-window -t nope", "no such window: nope"),
+            ("rename-window -t @99 x", "no such window: @99"),
+            ("move-window -s @99 -t 0", "no such window: @99"),
+            ("move-window -s nope -t 0", "no such window: nope"),
+            ("swap-window -s nope -t @0", "no such window: nope"),
+            ("swap-window -s @99 -t @99", "no such window: @99"),
+            ("swap-pane -s %99 -t %99", "no such pane: %99"),
+            ("join-pane -s %99 -t %99", "no such pane: %99"),
+            ("new-window -t @99", "no such window: @99"),
+            ("list-windows -t $99", "no such session: $99"),
+            ("rename-session -t $99 x", "no such session: $99"),
+            ("rename-session -t nope x", "no such session: nope"),
+            ("kill-session -t $99", "no such session: $99"),
+            ("kill-session -t nope", "no such session: nope"),
+            ("set-environment -t $99 K V", "no such session: $99"),
+            ("list-sessions -t +99", "no such workspace: +99"),
+            ("select-workspace -t +99", "no such workspace: +99"),
+            ("select-workspace -t nope", "no such workspace: nope"),
+            ("rename-workspace -t +99 x", "no such workspace: +99"),
+            ("rename-workspace -t nope x", "no such workspace: nope"),
+            ("kill-workspace -t +99", "no such workspace: +99"),
+            ("kill-workspace -t nope", "no such workspace: nope"),
+        ];
+        let mut mismatches = Vec::new();
+        for (line, expected) in cases {
+            let reply = h.run(line);
+            let (body, ok) = reply_parts(&reply);
+            if ok || body != vec![*expected] {
+                mismatches.push(format!("`{line}`: want {expected:?}, got {reply:?}"));
+            }
+            assert_eq!(h.snapshot(), before, "`{line}` changed the tree");
+            assert_eq!(h.drain(), Vec::<String>::new(), "`{line}` broadcast");
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    /// A name shared by two objects is refused with every candidate listed,
+    /// and neither object is touched — guessing one would kill the wrong
+    /// window.
+    #[test]
+    fn ambiguous_names_list_the_candidates_and_touch_nothing() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let s = h.session_named("main");
+        assert_ok(&h.run(&format!("new-window -t {s}")));
+        let windows = h.windows_of(s);
+        assert_eq!(windows.len(), 2);
+        for w in &windows {
+            assert_ok(&h.run(&format!("rename-window -t {w} dup")));
+        }
+        let panes: Vec<PaneId> = windows.iter().map(|w| h.panes_of(*w)[0]).collect();
+        for p in &panes {
+            assert_ok(&h.run(&format!("select-pane -t {p} -T twin")));
+        }
+        h.drain();
+        let before = h.snapshot();
+
+        assert_error(
+            &h.run("kill-window -t dup"),
+            &format!(
+                "ambiguous window target: dup (matching: {}, {})",
+                windows[0], windows[1]
+            ),
+        );
+        assert_error(
+            &h.run("kill-pane -t twin"),
+            &format!(
+                "ambiguous pane target: twin (matching: {}, {})",
+                panes[0], panes[1]
+            ),
+        );
+        assert_eq!(
+            h.snapshot(),
+            before,
+            "the ambiguous refusals touched nothing"
+        );
+        assert!(h.drain().is_empty());
+
+        assert_ok(&h.run("new-session -s main"));
+        let before = h.snapshot();
+        let mut sessions = h.tree.lock().sessions();
+        sessions.sort();
+        assert_error(
+            &h.run("kill-session -t main"),
+            &format!(
+                "ambiguous session target: main (matching: {}, {})",
+                sessions[0], sessions[1]
+            ),
+        );
+        assert_eq!(
+            h.snapshot(),
+            before,
+            "neither same-named session was killed"
+        );
+    }
+
+    /// `move-window -s @N -t <index>` reorders the session's window list,
+    /// keeps the active window active by identity, and cues clients with
+    /// `%sessions-changed`; an index past the end clamps to the end.
+    #[test]
+    fn move_window_reorders_keeps_active_and_cues_sessions_changed() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let s = h.session_named("main");
+        assert_ok(&h.run(&format!("new-window -t {s}")));
+        assert_ok(&h.run(&format!("new-window -t {s}")));
+        let [w0, w1, w2] = <[_; 3]>::try_from(h.windows_of(s)).unwrap();
+        assert_ok(&h.run(&format!("select-window -t {w1}")));
+        h.drain();
+
+        assert_ok(&h.run(&format!("move-window -s {w2} -t 0")));
+        assert_eq!(h.windows_of(s), vec![w2, w0, w1]);
+        let active = {
+            let guard = h.tree.lock();
+            let session = guard.session(s).unwrap();
+            session.windows[session.active]
+        };
+        assert_eq!(active, w1, "the active window stays active through a move");
+        assert_eq!(h.drain(), vec!["%sessions-changed\n".to_string()]);
+
+        assert_ok(&h.run(&format!("move-window -s {w2} -t 99")));
+        assert_eq!(
+            h.windows_of(s),
+            vec![w0, w1, w2],
+            "an index past the end clamps"
+        );
+    }
+
+    /// Windows of two different sessions cannot swap — that would move
+    /// ownership, not order — and the refusal names both windows.
+    #[test]
+    fn swap_window_across_sessions_is_refused_by_name() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s a"));
+        assert_ok(&h.run("new-session -s b"));
+        let wa = h.windows_of(h.session_named("a"))[0];
+        let wb = h.windows_of(h.session_named("b"))[0];
+        h.drain();
+        let before = h.snapshot();
+        assert_error(
+            &h.run(&format!("swap-window -s {wa} -t {wb}")),
+            &format!("windows {wa} and {wb} are in different sessions"),
+        );
+        assert_eq!(h.snapshot(), before);
+        assert!(h.drain().is_empty());
+    }
+
+    /// Breaking a window's only pane out closes the source window
+    /// (`%window-close`) and announces the new one (`%window-add`); the
+    /// reply names the new window.
+    #[test]
+    fn break_pane_of_a_lone_pane_closes_the_source_window() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let s = h.session_named("main");
+        let source = h.windows_of(s)[0];
+        let pane = h.panes_of(source)[0];
+        h.drain();
+
+        let body = assert_ok(&h.run(&format!("break-pane -s {pane} -n solo")));
+        let new_window = h.windows_of(s)[0];
+        assert_ne!(new_window, source);
+        assert_eq!(body, vec![new_window.to_string()]);
+        assert_eq!(h.panes_of(new_window), vec![pane]);
+        let sent = h.drain();
+        assert!(
+            sent.iter()
+                .any(|l| l.starts_with(&format!("%window-add {new_window}"))),
+            "the new window is announced: {sent:?}"
+        );
+        assert!(
+            sent.contains(&format!("%window-close {source}\n")),
+            "the emptied source window closes: {sent:?}"
+        );
+        assert!(h.tree.lock().window(source).is_none());
+    }
+
+    /// join-pane out of a two-pane window keeps the source window alive and
+    /// re-lays out both windows; joining a session's last pane away removes
+    /// that session and cues `%sessions-changed`.
+    #[test]
+    fn join_pane_relayouts_both_windows_and_reaps_an_emptied_session() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s a"));
+        assert_ok(&h.run("new-session -s b"));
+        let wa = h.windows_of(h.session_named("a"))[0];
+        let wb = h.windows_of(h.session_named("b"))[0];
+        let a0 = h.panes_of(wa)[0];
+        let b0 = h.panes_of(wb)[0];
+        assert_ok(&h.run(&format!("split-window -t {a0}")));
+        let a1 = *h.panes_of(wa).iter().find(|p| **p != a0).unwrap();
+        h.drain();
+
+        assert_ok(&h.run(&format!("join-pane -s {a1} -t {b0}")));
+        assert_eq!(h.panes_of(wa), vec![a0], "the source keeps its other pane");
+        assert!(h.panes_of(wb).contains(&a1));
+        let sent = h.drain();
+        for w in [wa, wb] {
+            assert!(
+                sent.iter()
+                    .any(|l| l.starts_with(&format!("%layout-change {w} "))),
+                "both windows re-lay out ({w}): {sent:?}"
+            );
+        }
+        assert!(!sent.iter().any(|l| l.starts_with("%window-close")));
+
+        // Now move session a's last pane away: its window and session go.
+        assert_ok(&h.run(&format!("join-pane -s {a0} -t {b0}")));
+        let sent = h.drain();
+        assert!(sent.contains(&format!("%window-close {wa}\n")), "{sent:?}");
+        assert!(
+            sent.contains(&"%sessions-changed\n".to_string()),
+            "{sent:?}"
+        );
+        let names: Vec<String> = {
+            let guard = h.tree.lock();
+            guard
+                .sessions()
+                .into_iter()
+                .map(|s| guard.session(s).unwrap().name.clone())
+                .collect()
+        };
+        assert_eq!(names, vec!["b".to_string()]);
+        assert_eq!(h.panes_of(wb).len(), 3);
+    }
+
+    /// `resize-pane -L`/`-D` shrink a pane's width and grow its height by
+    /// the requested cells, bounded by the window.
+    #[test]
+    fn resize_pane_left_and_down_move_the_split_by_the_requested_cells() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let w = h.windows_of(h.session_named("main"))[0];
+        let p0 = h.panes_of(w)[0];
+        let rect = |pane: PaneId| {
+            let guard = h.tree.lock();
+            let window = guard.window(w).unwrap();
+            window
+                .layout
+                .geometry(0, 0, window.cols as usize, window.rows as usize)
+                .into_iter()
+                .find(|g| g.pane == pane)
+                .map(|g| (g.width, g.height))
+                .unwrap()
+        };
+        // A horizontal split (side by side), then a vertical one in p0.
+        assert_ok(&h.run(&format!("split-window -h -t {p0}")));
+        assert_ok(&h.run(&format!("split-window -v -t {p0}")));
+        let (w0, h0) = rect(p0);
+        h.drain();
+
+        assert_ok(&h.run(&format!("resize-pane -t {p0} -L 5")));
+        assert_eq!(rect(p0), (w0 - 5, h0), "-L 5 takes five columns");
+        assert_ok(&h.run(&format!("resize-pane -t {p0} -D 3")));
+        assert_eq!(rect(p0), (w0 - 5, h0 + 3), "-D 3 adds three rows");
+        let sent = h.drain();
+        assert_eq!(
+            sent.iter()
+                .filter(|l| l.starts_with(&format!("%layout-change {w} ")))
+                .count(),
+            2,
+            "each resize re-lays out the window once: {sent:?}"
+        );
+    }
+
+    /// `capture-pane -e` keeps SGR styling; the plain form strips it.
+    #[test]
+    fn capture_pane_escape_flag_controls_styling() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let p = h.panes_of(h.windows_of(h.session_named("main"))[0])[0];
+        {
+            let term = h.tree.lock().pane(p).unwrap().terminal();
+            term.write().process(b"\x1b[31mRED-TEXT\x1b[0m\r\n");
+        }
+        let plain = assert_ok(&h.run(&format!("capture-pane -t {p}"))).join("\n");
+        let styled = assert_ok(&h.run(&format!("capture-pane -e -t {p}"))).join("\n");
+        assert!(
+            plain.contains("RED-TEXT") && !plain.contains('\x1b'),
+            "{plain:?}"
+        );
+        assert!(
+            styled.contains("RED-TEXT") && styled.contains("\x1b[") && styled.contains("31"),
+            "the -e capture keeps the red SGR: {styled:?}"
+        );
+    }
+
+    /// Without a server's shutdown flag (an embedder dispatch), kill-server
+    /// has nothing to stop and says so rather than pretending.
+    #[test]
+    fn kill_server_without_a_running_server_errors() {
+        let h = Harness::new();
+        assert_error(
+            &h.run("kill-server"),
+            "kill-server: no running server to stop",
+        );
+    }
+
+    /// select-workspace moves every client view shown in the workspace it
+    /// leaves onto the newly displayed window, re-fits that window to the
+    /// smallest reporting client, and tells clients which session they now
+    /// show.
+    #[test]
+    fn select_workspace_moves_reporting_client_views_and_refits() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s first"));
+        // A client reports 100x30 against the newest (first) session.
+        assert_ok(&h.run_as(Some(1), "refresh-client -C 100x30"));
+        let first_window = h.windows_of(h.session_named("first"))[0];
+        {
+            let guard = h.tree.lock();
+            let w = guard.window(first_window).unwrap();
+            assert_eq!(
+                (w.cols, w.rows),
+                (100, 30),
+                "the report sizes the shown window"
+            );
+        }
+        let original_ws = h.tree.lock().active_workspace().unwrap();
+        assert_ok(&h.run("new-workspace -n other"));
+        let other_ws = h.tree.lock().active_workspace().unwrap();
+        assert_ne!(other_ws, original_ws);
+        h.drain();
+
+        // Switching back: the client's view follows from the left
+        // workspace (`other`) only if it was shown there — it was not, so
+        // switch to `other` first and then back to observe the follow.
+        assert_ok(&h.run(&format!("select-workspace -t {original_ws}")));
+        h.drain();
+        assert_ok(&h.run(&format!("select-workspace -t {other_ws}")));
+        let other_window = {
+            let guard = h.tree.lock();
+            let s = guard.active_session().unwrap();
+            let session = guard.session(s).unwrap();
+            session.windows[session.active]
+        };
+        let sent = h.drain();
+        assert!(
+            sent.contains(&"%workspaces-changed\n".to_string()),
+            "{sent:?}"
+        );
+        assert!(
+            sent.iter()
+                .any(|l| l.starts_with(&format!("%client-session-changed {other_ws} "))),
+            "clients learn the session the display moved to: {sent:?}"
+        );
+        let guard = h.tree.lock();
+        let w = guard.window(other_window).unwrap();
+        assert_eq!(
+            (w.cols, w.rows),
+            (100, 30),
+            "the followed view re-fits the new window to the client's report"
+        );
+    }
 }
