@@ -516,10 +516,15 @@ impl PaneRenderer {
         if x < x0 + 1 || x > x0 + inner {
             return None;
         }
-        if y < y0 + 1 || y > y0 + height {
+        // The overlay paints at buffer rows y0..y0+height+1, and the
+        // frame flushes buffer row b at HOST row b+1 (the strip-row
+        // rebase) — so panel row r sits at host y0+2+r. The old mapping
+        // dropped that rebase and read every click one row low (the
+        // manual-pass round-8 report: menu actions fired the neighbor).
+        if y < y0 + 2 || y > y0 + height + 1 {
             return None;
         }
-        Some(y - y0 - 1)
+        Some(y - y0 - 2)
     }
 
     /// Set (or clear) the modal overlay's title, rows, and scroll state.
@@ -3494,10 +3499,11 @@ impl WindowSession {
                 self.status_dirty = true;
             }
             PromptTarget::Window(id) => {
-                let _ = conn.send_checked(&format!(
-                    "rename-window -t {id} {}",
-                    super::wire_quote(&text)
-                ));
+                // rename-window takes the REST OF THE LINE verbatim (the
+                // daemon grammar's documented exception) — quoting would
+                // become part of the name (the manual-pass round-8
+                // report: renamed tabs wore literal quotes).
+                let _ = conn.send_checked(&format!("rename-window -t {id} {text}"));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -4231,6 +4237,13 @@ impl WindowSession {
     }
 
     fn land_on_workspace(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, ws_id: &str) {
+        // Select FIRST: the daemon's active-workspace pointer is what the
+        // roster query renders as the side panel's highlight, so a click
+        // must move it too — landing used to re-seed the view without
+        // selecting, leaving the highlight on the old workspace (the
+        // manual-pass round-8 report). Idempotent for the keybind path,
+        // which selects before landing.
+        let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
         let Ok(sessions) = conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
             return;
         };
@@ -6541,9 +6554,9 @@ mod tests {
             .is_ok()
         {}
 
-        // The second tab's cell (" 1:vim ") spans cols 8..15; the click
-        // is a 1-based host col 12 (strip col 11).
-        session.tab_click(&mut conn, 11);
+        // The second tab's cell (" vim ") spans cols 6..11; the click is
+        // a 1-based host col 9 (strip col 8).
+        session.tab_click(&mut conn, 8);
 
         assert_eq!(session.window, "@1", "the view moved to the clicked tab");
         assert_eq!(session.status.active_window.as_deref(), Some("@1"));
@@ -6567,7 +6580,7 @@ mod tests {
         // (The receiver is dropped with the conn at scope end; the
         // assertions above ran over every recorded line already.)
         assert_eq!(
-            session.tab_strip.hit_test(11),
+            session.tab_strip.hit_test(8),
             Some(1),
             "the strip layout still maps the clicked column"
         );
@@ -7721,10 +7734,12 @@ mod tests {
         session.open_menu(super::MenuTarget::Tab("@0".to_string()));
         let (x0, y0, inner, height) = session.renderer.overlay_geometry().expect("menu up");
         println!("GEO x0={x0} y0={y0} inner={inner} height={height}");
+        // The rename row (panel row 1) paints at host y0+3 (panel row r
+        // sits at host y0+2+r), and SGR rows are 1-based: y0+4.
         let click = SgrMouse {
             cb: 0,
             col: (x0 + 4) as u16,
-            row: (y0 + 3) as u16,
+            row: (y0 + 4) as u16,
             release: false,
         };
         session.route_mouse(&mut conn, click);

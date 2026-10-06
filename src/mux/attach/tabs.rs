@@ -3,9 +3,9 @@
 //!
 //! [`TabStrip`] is the top row's counterpart to the bottom
 //! [`super::status::StatusRow`]: it paints one tab per WINDOW of the
-//! shown session — `N:name`, in window order, the active tab a solid
-//! highlighted block on the accent, the inactive tabs dim — into a
-//! one-row buffer and diffs it, so a window churn flushes only the
+//! shown session — the bare NAME, in window order, the active tab a
+//! solid highlighted block on the accent, the inactive tabs dim — into
+//! a one-row buffer and diffs it, so a window churn flushes only the
 //! changed cells. A ` + ` button owns the strip's last three columns
 //! whenever the strip can hold tabs at all (the reservation narrows the
 //! tab area); a click on it opens the new-tab prompt. The window list comes from the same queried state the
@@ -74,20 +74,22 @@ pub(crate) struct TabStrip {
     layout: TabLayout,
 }
 
-/// The display text of one tab at a name budget: `N:name`, the window's
-/// ordinal (the id without its `@`). A name longer than the budget is
-/// truncated to it and ellipsized.
-fn tab_text(id: &str, name: &str, budget: Option<usize>) -> String {
-    let ordinal = id.trim_start_matches('@');
+/// The display text of one tab at a name budget: the bare NAME (the
+/// `N:` ordinal prefix is gone — round 8). A name longer than the
+/// budget is truncated to it and ellipsized.
+fn tab_text(_id: &str, name: &str, budget: Option<usize>) -> String {
+    // The reference rendering: the bare NAME (the `N:` ordinal prefix is
+    // gone — round 8), truncating to the name budget when over.
+    let _ = _id;
     match budget {
-        None => format!("{ordinal}:{name}"),
+        None => name.to_string(),
         Some(budget) => {
             let chars: Vec<char> = name.chars().collect();
             if chars.len() > budget {
                 let head: String = chars[..budget].iter().collect();
-                format!("{ordinal}:{head}{ELLIPSIS}")
+                format!("{head}{ELLIPSIS}")
             } else {
-                format!("{ordinal}:{name}")
+                name.to_string()
             }
         }
     }
@@ -431,13 +433,13 @@ mod tests {
         assert_eq!(layout.left_marker, None);
         assert_eq!(layout.right_marker, None);
         let texts: Vec<&str> = layout.cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, vec!["0:main", "1:vim", "2:build"]);
+        assert_eq!(texts, vec!["main", "vim", "build"]);
         assert_eq!(layout.cells[0].col, 0);
-        assert_eq!(layout.cells[0].width, 8, "' 0:main ' = 8 cols");
-        assert_eq!(layout.cells[1].col, 8);
-        assert_eq!(layout.cells[1].width, 7, "' 1:vim ' = 7 cols");
-        assert_eq!(layout.cells[2].col, 15);
-        assert_eq!(layout.cells[2].width, 9, "' 2:build ' = 9 cols");
+        assert_eq!(layout.cells[0].width, 6, "' main ' = 6 cols");
+        assert_eq!(layout.cells[1].col, 6);
+        assert_eq!(layout.cells[1].width, 5, "' vim ' = 5 cols");
+        assert_eq!(layout.cells[2].col, 11);
+        assert_eq!(layout.cells[2].width, 7, "' build ' = 7 cols");
         assert_eq!(layout.plus, Some(77), "the plus reserves the right edge");
     }
 
@@ -450,12 +452,12 @@ mod tests {
             ("@1".to_string(), "documentation".to_string()),
         ];
         // The reservation narrows the tab area to 21 (24 - 3): budget 8
-        // overflows (13 + 13 = 26 > 21), budget 6 too (11 + 11 = 22),
-        // budget 5 fits: ' 0:devel… ' = ' 1:docum… ' = 10 each.
+        // overflows (11 + 11 = 22 > 21), budget 7 fits: ' develop… ' =
+        // ' documen… ' = 10 each.
         let layout = layout_tabs(&ws, Some("@0"), 24, 0);
         assert_eq!(layout.cells.len(), 2);
-        assert_eq!(layout.cells[0].text, "0:devel\u{2026}");
-        assert_eq!(layout.cells[1].text, "1:docum\u{2026}");
+        assert_eq!(layout.cells[0].text, "develop\u{2026}");
+        assert_eq!(layout.cells[1].text, "documen\u{2026}");
         assert_eq!(layout.cells[0].width, 10);
         assert_eq!(layout.cells[1].width, 10);
         assert_eq!(layout.left_marker, None);
@@ -471,8 +473,12 @@ mod tests {
         let ws: Vec<(String, String)> = (0..12)
             .map(|i| (format!("@{i}"), format!("window{i}")))
             .collect();
-        // Budget-1 width per tab: ' Ni:w… ' = 7 cols; 12 * 7 = 84 > 40.
-        let layout = layout_tabs(&ws, Some("@7"), 40, 0);
+        // Budget-1 width per tab: ' w… ' = 4 cols; the 30-col strip's
+        // tab area beside the plus is 27, and 12 * 4 = 48 > 27 — even
+        // budget 1 overflows, so stage 3 engages. (At the old 40-col
+        // width the narrower tabs would all fit a 0-based run and no
+        // edge would hide.)
+        let layout = layout_tabs(&ws, Some("@7"), 30, 0);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&7), "the active tab is visible");
         for pair in visible.windows(2) {
@@ -481,8 +487,8 @@ mod tests {
         assert!(layout.left_marker.is_some(), "tabs hide on the left");
         assert!(layout.right_marker.is_some(), "tabs hide on the right");
         let total: usize = layout.cells.iter().map(|c| c.width as usize).sum();
-        assert!(total <= 35, "run fits beside the plus reservation: {total}");
-        assert_eq!(layout.plus, Some(37));
+        assert!(total <= 25, "run fits beside the plus reservation: {total}");
+        assert_eq!(layout.plus, Some(27));
     }
 
     /// The active tab stays visible even at the very end of the window
@@ -513,12 +519,12 @@ mod tests {
         let mut strip = TabStrip::new(80);
         strip.layout = layout;
         assert_eq!(strip.hit_test(0), Some(0), "pad still owns the cell");
-        assert_eq!(strip.hit_test(7), Some(0));
-        assert_eq!(strip.hit_test(8), Some(1));
-        assert_eq!(strip.hit_test(14), Some(1));
-        assert_eq!(strip.hit_test(15), Some(2));
-        assert_eq!(strip.hit_test(23), Some(2));
-        assert_eq!(strip.hit_test(24), None);
+        assert_eq!(strip.hit_test(5), Some(0));
+        assert_eq!(strip.hit_test(6), Some(1));
+        assert_eq!(strip.hit_test(10), Some(1));
+        assert_eq!(strip.hit_test(11), Some(2));
+        assert_eq!(strip.hit_test(17), Some(2));
+        assert_eq!(strip.hit_test(18), None);
         assert_eq!(strip.hit_test(79), None);
     }
 
@@ -528,23 +534,23 @@ mod tests {
     fn paint_highlights_the_active_tab_as_a_block_and_dims_the_rest() {
         let mut strip = TabStrip::new(40);
         strip.paint(&windows(), Some("@1"), None);
-        // The active cell's text starts at col 8 + 1 pad.
-        for (col, ch) in [(9u16, '1'), (10, ':'), (11, 'v'), (12, 'i'), (13, 'm')] {
+        // The active cell's text starts at col 6 + 1 pad.
+        for (col, ch) in [(7u16, 'v'), (8, 'i'), (9, 'm')] {
             let cell = &strip.buffer[(col, 0)];
             assert_eq!(cell.symbol(), ch.to_string(), "col {col}");
             assert_eq!(cell.fg, RtColor::Indexed(0), "col {col}");
             assert_eq!(cell.bg, ACCENT, "col {col}");
             assert!(cell.modifier.contains(RtModifier::BOLD), "col {col}");
         }
-        // The block covers the pads too: the active cell spans cols 8..14.
-        for col in [8u16, 14] {
+        // The block covers the pads too: the active cell spans cols 6..10.
+        for col in [6u16, 10] {
             let cell = &strip.buffer[(col, 0)];
             assert_eq!(cell.bg, ACCENT, "pad col {col} carries the block");
             assert!(cell.modifier.contains(RtModifier::BOLD), "pad col {col}");
         }
         // Inactive: dim, not the block.
         let cell = &strip.buffer[(1, 0)];
-        assert_eq!(cell.symbol(), "0");
+        assert_eq!(cell.symbol(), "m");
         assert!(cell.modifier.contains(RtModifier::DIM));
         assert_ne!(cell.bg, ACCENT);
     }
@@ -557,12 +563,12 @@ mod tests {
         let mut strip = TabStrip::new(40);
         strip.paint(&windows(), Some("@0"), None);
         let first = strip.diff();
-        // Only the painted cells differ from the blank buffer: 18 text
+        // Only the painted cells differ from the blank buffer: 12 text
         // cells across the three tabs, the active tab's two pads (the
         // block background), and the ` + ` glyph.
         assert_eq!(
             first.len(),
-            21,
+            15,
             "first paint is the text cells + block pads + plus"
         );
         assert_eq!(first[0].1, 0, "cell y is row-relative 0");
@@ -615,8 +621,8 @@ mod tests {
                     None
                 },
             );
-            let demo_span = lead..lead + 8; // ` 0:demo `
-            let woot_span = lead + 8..lead + 16; // ` 1:woot `
+            let demo_span = lead..lead + 6; // ` demo `
+            let woot_span = lead + 6..lead + 12; // ` woot `
             for x in 0..80u16 {
                 let bg_is_accent = strip.buffer[(x, 0)].bg == ACCENT;
                 if demo_span.contains(&x) {
@@ -639,9 +645,9 @@ mod tests {
     /// whole; a longer one truncates to the budget and ellipsizes.
     #[test]
     fn tab_text_truncates_only_over_budget() {
-        assert_eq!(tab_text("@3", "notes", Some(8)), "3:notes");
-        assert_eq!(tab_text("@3", "notes", Some(4)), "3:note\u{2026}");
-        assert_eq!(tab_text("@3", "notes", None), "3:notes");
+        assert_eq!(tab_text("@3", "notes", Some(8)), "notes");
+        assert_eq!(tab_text("@3", "notes", Some(4)), "note\u{2026}");
+        assert_eq!(tab_text("@3", "notes", None), "notes");
     }
 
     /// The ` + ` button owns the strip's reserved right-edge slot: a
@@ -650,8 +656,8 @@ mod tests {
     /// strip too narrow for the button plus a tab carries none).
     #[test]
     fn plus_button_lays_out_paints_and_hits() {
-        // ' 0:main ' = 8, ' 1:vim ' = 7, ' 2:build ' = 9 → 24 used, the
-        // plus reservation at 37..40 of the 40-col strip.
+        // ' main ' = 6, ' vim ' = 5, ' build ' = 7 → 18 used, the plus
+        // reservation at 37..40 of the 40-col strip.
         let layout = layout_tabs(&windows(), Some("@0"), 40, 0);
         assert_eq!(layout.plus, Some(37), "the plus reserves the right edge");
         let mut strip = TabStrip::new(40);
@@ -680,20 +686,20 @@ mod tests {
     /// This is the plus-defect fix's unit half.
     #[test]
     fn lead_segment_offsets_the_tabs_and_keeps_the_plus_pinned() {
-        // ' 0:main ' = 8, ' 1:vim ' = 7, ' 2:build ' = 9 → the three
-        // tabs span 20..44 of the 80-col strip, plus reservation 77..80.
+        // ' main ' = 6, ' vim ' = 5, ' build ' = 7 → the three tabs span
+        // 20..38 of the 80-col strip, plus reservation 77..80.
         let ws = windows();
         let layout = layout_tabs(&ws, Some("@1"), 80, 20);
         assert_eq!(layout.plus, Some(77), "the plus stays pinned right");
         assert_eq!(layout.cells[0].col, 20, "tabs start at the lead width");
-        assert_eq!(layout.cells[0].text, "0:main");
+        assert_eq!(layout.cells[0].text, "main");
         let mut strip = TabStrip::new(80);
         strip.layout = layout;
         assert_eq!(strip.hit_test(0), None, "lead columns hit nothing");
         assert_eq!(strip.hit_test(19), None);
         assert_eq!(strip.hit_test(20), Some(0), "the first tab owns its start");
-        assert_eq!(strip.hit_test(27), Some(0));
-        assert_eq!(strip.hit_test(28), Some(1));
+        assert_eq!(strip.hit_test(25), Some(0));
+        assert_eq!(strip.hit_test(26), Some(1));
         assert!(strip.plus_hit(78), "the plus hits at the raw right edge");
         assert!(!strip.plus_hit(10), "the lead column is not the plus");
     }
@@ -715,12 +721,12 @@ mod tests {
         );
         assert_eq!(strip.buffer[(1, 0)].fg, ACCENT);
         // The first tab's text starts at the lead width (col 14 + 1 pad).
-        assert_eq!(strip.buffer[(15, 0)].symbol(), "0");
+        assert_eq!(strip.buffer[(15, 0)].symbol(), "m");
         // No lead: the tabs start at col 0 as before.
         let mut plain = TabStrip::new(40);
         plain.paint(&windows(), Some("@0"), None);
         assert_eq!(plain.buffer[(0, 0)].symbol(), " ", "tab pad");
-        assert_eq!(plain.buffer[(1, 0)].symbol(), "0");
+        assert_eq!(plain.buffer[(1, 0)].symbol(), "m");
         assert_ne!(plain.buffer[(1, 0)].fg, ACCENT);
     }
 }

@@ -2028,7 +2028,7 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
             .collect::<String>()
     };
     assert!(
-        ever[0].iter().any(|r| r.contains("0:big")),
+        ever[0].iter().any(|r| r.contains(" big ")),
         "the tab strip must paint row 1 at the taller grid. snapshots:\n{}\n\
          stderr: {}",
         ever_row(0),
@@ -2460,8 +2460,8 @@ fn render_mode_without_target_picks_the_newest_session() {
 #[test]
 fn render_mode_tab_click_switches_the_active_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("tabstrip");
-    // Two windows with deterministic names: " 0:one " = 8 cols, so the
-    // second tab's cell spans 1-based host cols 9..15.
+    // Two windows with deterministic names: " one " = 5 cols, so the
+    // second tab's cell spans 0-based host cols 5..9 (1-based 6..10).
     client.send("new-window -t $0").expect("new-window");
     client.send("rename-window -t @0 one").expect("rename @0");
     client.send("rename-window -t @1 two").expect("rename @1");
@@ -2470,13 +2470,13 @@ fn render_mode_tab_click_switches_the_active_window() {
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", "@0"]);
     let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"0:one", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"one", Duration::from_secs(10));
     // Drain the settle paint so the post-click reads are click-attributable.
     while host.output_rx.try_recv().is_ok() {}
 
     // A press on the second tab (host row 1 = the strip).
     host.to_child
-        .write_all(b"\x1b[<0;11;1M")
+        .write_all(b"\x1b[<0;8;1M")
         .expect("click press");
     host.to_child.flush().ok();
 
@@ -3175,8 +3175,9 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
     let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
     std::thread::sleep(Duration::from_millis(600));
     // With the panel up the tabs start at the panel's right edge
-    // (strip col 20): the shown window's tab ` 0:demo ` spans host
-    // cols 20-27, so the right press is 1-based col 23.
+    // (strip col 20): the shown window's tab (` att `, width 5) spans
+    // 0-based host cols 20-24, so the right press at 1-based col 24
+    // (0-based 23) lands on it.
     let press: &[u8] = b"\x1b[<2;24;1M";
     host.to_child.write_all(press).expect("right press");
     host.to_child.flush().ok();
@@ -3200,7 +3201,7 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
     let x0 = (80usize.saturating_sub(30)) / 2; // 25
     let y0 = (22usize.saturating_sub(7)) / 2; // 7
     let menu_col = x0 + 5; // inside the box, 1-based host col
-    let menu_row = y0 + 3; // panel row 1 (rename), 1-based host row
+    let menu_row = y0 + 4; // rename (panel row 1) paints at host y0+3; SGR is 1-based
     host.to_child
         .write_all(format!("\x1b[<0;{menu_col};{menu_row}M").as_bytes())
         .expect("menu click");

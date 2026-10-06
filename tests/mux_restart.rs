@@ -745,12 +745,37 @@ fn run_restart_cli(fixture: &MuxFixture) -> std::process::Child {
 
 /// Wait for the `--restart` parent half to exit (bounded — an unfixed
 /// in-process serve would hang the suite here) and return its output.
+/// Both piped streams DRAIN on reader threads while waiting: a pipe
+/// fills at 64 KB and the writer blocks forever if nothing reads — the
+/// parent's stderr announcements once stalled behind a stderr flood and
+/// `try_wait`-only polling deadlocked the helper (the round-8 gate).
 fn wait_exited(mut child: std::process::Child, what: &str) -> std::process::Output {
+    use std::io::Read;
     use std::time::{Duration, Instant};
+    let mut stdout = child.stdout.take().expect("--restart pipes stdout");
+    let mut stderr = child.stderr.take().expect("--restart pipes stderr");
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match child.try_wait().expect("--restart is waitable") {
-            Some(_) => break,
+            Some(status) => {
+                let stdout = out_handle.join().expect("the stdout drain joins");
+                let stderr = err_handle.join().expect("the stderr drain joins");
+                return std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+            }
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -759,7 +784,6 @@ fn wait_exited(mut child: std::process::Child, what: &str) -> std::process::Outp
             None => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    child.wait_with_output().expect("--restart pipes drain")
 }
 
 /// `par-mux --stop` on the fixture, then require the socket to go quiet —
