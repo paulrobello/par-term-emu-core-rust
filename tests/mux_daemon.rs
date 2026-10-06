@@ -2122,6 +2122,56 @@ fn a_tab_switch_broadcasts_the_session_window_change_to_the_other_client() {
     );
 }
 
+/// Zoom truth is per-window and broadcast: A's `resize-pane -Z` reaches a
+/// second client as a `Z`-flagged `%layout-change` for the window, and A's
+/// select-away (which unzooms) reaches it as an unflagged one — the cue
+/// every attached render client sets its ` Z ` status from.
+#[test]
+fn a_zoom_and_its_select_away_unzoom_reach_the_other_client() {
+    let fixture = MuxFixture::new("zoomsync");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream_a = connect_local_stream(path).expect("client A");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s zoom");
+    command(&mut writer_a, &mut reader_a, "split-window -h -t %0");
+
+    // B registers BEFORE the zoom so it is in the broadcast set.
+    let stream_b = connect_local_stream(path).expect("client B");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    command(&mut writer_b, &mut reader_b, "list-panes");
+
+    command(&mut writer_a, &mut reader_a, "resize-pane -t %0 -Z");
+    let zoomed = poll_until(&mut writer_b, &mut reader_b, "list-panes", " Z\n");
+    assert!(
+        zoomed
+            .lines()
+            .any(|l| l.starts_with("%layout-change @0 ") && l.ends_with(" Z")),
+        "B sees the window's zoom flag: {zoomed}"
+    );
+
+    command(&mut writer_a, &mut reader_a, "select-pane -t %1");
+    let unzoomed = poll_until(
+        &mut writer_b,
+        &mut reader_b,
+        "list-panes",
+        "%window-pane-changed @0 %1",
+    );
+    let after_zoom = unzoomed
+        .lines()
+        .rfind(|l| l.starts_with("%layout-change @0 "))
+        .expect("the select-away unzoom broadcasts a layout change");
+    assert!(
+        after_zoom.ends_with(' '),
+        "the select-away unzoom clears the flag: {after_zoom:?}"
+    );
+}
+
 #[test]
 fn a_workspace_switch_broadcasts_the_display_move_to_the_other_client() {
     let fixture = MuxFixture::new("wssync");

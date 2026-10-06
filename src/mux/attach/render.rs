@@ -2496,6 +2496,7 @@ impl WindowSession {
             })?;
         let layout = layout::parse_layout_triple(&layout_event.0, &layout_event.1, &layout_event.2)
             .map_err(|err| err.to_string())?;
+        self.zoomed = layout_event.2.contains('Z');
         self.renderer.apply_layout(layout);
 
         // Replay every visible pane's state into its emulator: grid,
@@ -2702,6 +2703,16 @@ impl WindowSession {
                 window_visible_layout,
                 window_raw_flags,
             } if window_id == self.window => {
+                // Zoom truth is per-window and the daemon's: another
+                // client's zoom (or a select-away unzoom) reaches this one
+                // only through the flags, and a one-pane zoom leaves the
+                // geometry unchanged — so the cue updates outside the
+                // geometry guard below.
+                let zoomed = window_raw_flags.contains('Z');
+                if zoomed != self.zoomed {
+                    self.zoomed = zoomed;
+                    self.status_dirty = true;
+                }
                 match layout::parse_layout_triple(
                     &window_layout,
                     &window_visible_layout,
@@ -4615,8 +4626,8 @@ impl WindowSession {
             return;
         }
         self.window = window.to_string();
-        // A view rebuild unzooms the cue (the daemon unzooms on layout
-        // mutations and select-away; a fresh window starts unzoomed).
+        // The cue resets with the view, then takes the new window's zoom
+        // truth from the layout triple the size report queues below.
         self.zoomed = false;
         self.scroll_mode = false;
         if let Some((l, v, f)) =
@@ -4634,6 +4645,7 @@ impl WindowSession {
                     _ => None,
                 })
         {
+            self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
                 self.renderer.apply_layout(layout);
             }
@@ -5276,6 +5288,7 @@ impl WindowSession {
                 _ => None,
             });
         if let Some((l, v, f)) = layout_event {
+            self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
                 self.daemon_layout = layout.clone();
                 self.renderer.apply_layout(layout);
@@ -5650,6 +5663,65 @@ mod tests {
             .map(|c| renderer.buffer[(c, 0)].symbol())
             .collect::<String>();
         assert_eq!(right, "ZOOMED", "pane 2 kept its grid through the zoom");
+    }
+
+    /// The ` Z ` cue follows the daemon's per-window zoom truth: another
+    /// client's `resize-pane -Z` reaches this one only as a `Z`-flagged
+    /// `%layout-change`, so the event (not the local chord alone) sets and
+    /// clears the cue — even when the geometry is unchanged (a one-pane
+    /// window zooms to the same rect) — and another window's zoom never
+    /// touches it.
+    #[test]
+    fn layout_change_flags_drive_the_zoom_cue_for_the_shown_window_only() {
+        let mut session = WindowSession::new(80, 25);
+        session.window = "@0".to_string();
+        let change = |window: &str, flags: &str| TmuxNotification::LayoutChange {
+            window_id: window.to_string(),
+            window_layout: TWO_PANE_LAYOUT.to_string(),
+            window_visible_layout: if flags == "Z" {
+                "0000,80x24,0,0,2".to_string()
+            } else {
+                TWO_PANE_LAYOUT.to_string()
+            },
+            window_raw_flags: flags.to_string(),
+        };
+
+        session.handle_event(change("@0", "Z"));
+        assert!(
+            session.zoomed,
+            "a Z-flagged layout for the shown window sets the cue"
+        );
+
+        session.handle_event(change("@1", ""));
+        assert!(
+            session.zoomed,
+            "another window's layout leaves the cue alone"
+        );
+
+        session.handle_event(change("@0", ""));
+        assert!(!session.zoomed, "an unflagged layout clears the cue");
+
+        session.handle_event(change("@1", "Z"));
+        assert!(!session.zoomed, "another window's zoom never sets the cue");
+
+        // Unchanged geometry (the layout already applied) still flips it.
+        let single = "0000,80x24,0,0,1";
+        let one_pane = |flags: &str| TmuxNotification::LayoutChange {
+            window_id: "@0".to_string(),
+            window_layout: single.to_string(),
+            window_visible_layout: single.to_string(),
+            window_raw_flags: flags.to_string(),
+        };
+        session
+            .renderer
+            .apply_layout(parse_layout(single).expect("parses"));
+        session.handle_event(one_pane("Z"));
+        assert!(session.zoomed, "a same-geometry zoom still sets the cue");
+        session.handle_event(one_pane(""));
+        assert!(
+            !session.zoomed,
+            "a same-geometry unzoom still clears the cue"
+        );
     }
 
     /// Pane membership changes drop only the gone panes' emulators.
