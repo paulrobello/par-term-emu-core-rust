@@ -4537,6 +4537,9 @@ impl WindowSession {
             .iter()
             .filter_map(|l| super::parse_session_line(l).map(|(id, _)| id))
             .collect();
+        if sessions.is_empty() {
+            return;
+        }
         // Which session owns the shown window right now?
         let Ok(windows) = conn.send_checked(&format!(
             "list-windows -t {}",
@@ -8164,6 +8167,40 @@ mod tests {
             (y0s as u16 + 1..y0s as u16 + 1 + heights as u16).all(|y| renderer
                 .cell((x0s + inners + 1) as u16, y)
                 .is_some_and(|c| c.symbol() != "┃"))
+        );
+    }
+
+    /// Every line the fake daemon recorded so far, in wire order. A
+    /// `send_checked` returns only after its reply, and the fake records
+    /// a line BEFORE replying, so after an action returns its lines are
+    /// all queued: the exact-sequence read the wire assertions use.
+    fn drained(rx: &std::sync::mpsc::Receiver<(String, String)>) -> Vec<String> {
+        rx.try_iter().map(|(_, line)| line).collect()
+    }
+
+    /// A session whose status saw `$0` but whose session roster comes
+    /// back EMPTY (another client killed the last session before the
+    /// throttled refresh noticed): prefix `)` must be a no-op — no
+    /// select, the view unchanged — never a panic that skips the
+    /// terminal restore.
+    #[test]
+    fn switch_session_with_an_empty_roster_is_a_no_op() {
+        let (rx, mut conn) = recording_conn("sw-empty");
+        let mut session = WindowSession::new(80, 25);
+        session.window = "@0".to_string();
+        session.status.session_id = Some("$0".to_string());
+        drained(&rx);
+        let mut prefix_pending = false;
+        assert!(!session.route_plain(
+            &[crate::mux::attach::C_B, b')'],
+            &mut conn,
+            &mut prefix_pending
+        ));
+        assert_eq!(session.window, "@0", "the view stays put");
+        let lines = drained(&rx);
+        assert!(
+            !lines.iter().any(|l| l.starts_with("select-window")),
+            "nothing to select: {lines:?}"
         );
     }
 }
