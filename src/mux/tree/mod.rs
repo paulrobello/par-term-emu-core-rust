@@ -806,7 +806,13 @@ impl MuxTree {
         target: Option<Target<WorkspaceId>>,
     ) -> Result<WorkspaceId, MuxError> {
         match target {
-            Some(target) => self.resolve_workspace_target(target),
+            Some(target) => {
+                let id = self.resolve_workspace_target(target)?;
+                if !self.workspaces.contains_key(&id) {
+                    return Err(MuxError::NoSuchWorkspace(id));
+                }
+                Ok(id)
+            }
             None => Ok(self.ensure_default_workspace()),
         }
     }

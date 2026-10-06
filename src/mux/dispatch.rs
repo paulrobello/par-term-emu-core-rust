@@ -2610,6 +2610,8 @@ mod tests {
             ("swap-window -s @99 -t @99", "no such window: @99"),
             ("swap-pane -s %99 -t %99", "no such pane: %99"),
             ("join-pane -s %99 -t %99", "no such pane: %99"),
+            ("new-session -s extra -t +99", "no such workspace: +99"),
+            ("new-session -s extra -t nope", "no such workspace: nope"),
             ("new-window -t @99", "no such window: @99"),
             ("list-windows -t $99", "no such session: $99"),
             ("rename-session -t $99 x", "no such session: $99"),
