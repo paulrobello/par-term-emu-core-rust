@@ -4504,4 +4504,233 @@ mod tests {
             }
         );
     }
+
+    /// A passthrough Session over a fake daemon answering each exact
+    /// command line from `replies` (everything else an ok empty reply),
+    /// focused on %0 in window @0 of session $0; the handshake's lines
+    /// are drained before it returns, so the receiver holds only what
+    /// the test drives.
+    fn scripted_passthrough(
+        tag: &str,
+        replies: &[(&str, &str)],
+    ) -> (std::sync::mpsc::Receiver<String>, Session) {
+        let path = test_socket(tag);
+        let _ = std::fs::remove_file(&path);
+        let listener = crate::mux::bind_local_listener(&path).expect("bind");
+        let table: std::collections::HashMap<String, String> = replies
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let Ok(stream) = listener.accept() else {
+                return;
+            };
+            use interprocess::TryClone as _;
+            let mut writer = stream.try_clone().expect("clone stream");
+            let mut reader = BufReader::new(stream);
+            let mut number = 0u32;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let reply = match trimmed {
+                    "version" => "9.9.9+deadbeef".to_string(),
+                    "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
+                    other => table.get(other).cloned().unwrap_or_default(),
+                };
+                number += 1;
+                tx.send(trimmed.to_owned()).ok();
+                writer
+                    .write_all(emit_block(number, &reply, true).as_bytes())
+                    .ok();
+                writer.flush().ok();
+            }
+        });
+        let conn = conn::AttachConn::connect(&path).expect("connect");
+        let session = Session {
+            conn,
+            socket_path: path,
+            pane: "%0".to_string(),
+            emulator: render::PaneEmulator::new(0, 80, 24),
+            window: "@0".to_string(),
+            session_id: Some("$0".to_string()),
+            session_name: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: None,
+            pane_title: String::new(),
+            agents: 0,
+            exited: None,
+            drawn_size: Some((80, 24)),
+            settling: false,
+            prefix: 0x02,
+            prefix_pending: false,
+            reload_key: 0x12,
+            management: crate::mux::config::Management::default(),
+            resize_step: 1,
+            resize_mode: false,
+            flash: None,
+        };
+        let _: Vec<String> = rx.try_iter().collect();
+        (rx, session)
+    }
+
+    /// The wire lines a passthrough action sent that select or land
+    /// (the status re-query burst filtered out), in order.
+    fn switch_lines(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
+        rx.try_iter()
+            .filter(|l| {
+                l.starts_with("select-")
+                    || l.starts_with("list-panes -t")
+                    || l.starts_with("list-windows -t")
+                    || l.starts_with("list-sessions -t")
+            })
+            .collect()
+    }
+
+    /// Passthrough prefix n / p: the neighbor window (wrapping) is
+    /// selected and the pump attaches its `*`-marked pane; an unlisted
+    /// shown window moves nowhere.
+    #[test]
+    fn passthrough_window_switch_wraps_and_attaches_the_marked_pane() {
+        let (rx, mut session) = scripted_passthrough(
+            "pt-win",
+            &[
+                ("list-sessions", "$0: work"),
+                ("list-windows -t $0", "@0 * a\n@1 - b\n@2 - c"),
+                ("list-panes -t @2", "%4 0 -\n%5 1 *"),
+                ("pane-info -t %5", "%5 @2 80x24"),
+            ],
+        );
+        assert!(!session.route_bytes(&[0x02, b'p']));
+        assert_eq!(
+            switch_lines(&rx)[..4].to_vec(),
+            vec![
+                "list-windows -t $0",
+                "select-window -t @2",
+                "list-panes -t @2",
+                "select-pane -t %5"
+            ],
+            "p from the first window wraps to the last"
+        );
+        assert_eq!(session.window, "@2");
+        assert_eq!(session.pane, "%5", "the pump follows the marked pane");
+
+        assert_eq!(session.session_id.as_deref(), Some("$0"));
+        session.window = "@9".to_string();
+        assert!(!session.route_bytes(&[0x02, b'n']));
+        assert_eq!(switch_lines(&rx), vec!["list-windows -t $0".to_string()]);
+        assert_eq!(session.pane, "%5", "an unlisted window moves nowhere");
+    }
+
+    /// Passthrough prefix ( / ): the neighbor session in roster order
+    /// (wrapping), its `*` window, that window's marked pane; a session
+    /// absent from the roster (or an empty roster) moves nowhere.
+    #[test]
+    fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
+        let (rx, mut session) = scripted_passthrough(
+            "pt-sess",
+            &[
+                ("list-sessions", "$0: work\n$1: lab"),
+                ("list-windows -t $1", "@3 - x\n@4 * y"),
+                ("list-panes -t @4", "%8 0 *"),
+            ],
+        );
+        assert!(!session.route_bytes(&[0x02, b'(']));
+        let lines = switch_lines(&rx);
+        assert_eq!(
+            lines[..3].to_vec(),
+            vec![
+                "list-windows -t $1",
+                "select-window -t @4",
+                "list-panes -t @4"
+            ],
+            "( from the head wraps to $1: {lines:?}"
+        );
+        assert_eq!(session.session_id.as_deref(), Some("$1"));
+        assert_eq!(session.window, "@4");
+        assert_eq!(session.pane, "%8");
+
+        session.session_id = Some("$7".to_string());
+        assert!(!session.route_bytes(&[0x02, b')']));
+        assert!(switch_lines(&rx).is_empty(), "an unknown session: no move");
+        assert_eq!(session.pane, "%8");
+    }
+
+    /// Passthrough prefix o: the next pane of the window (wrapping) by
+    /// the daemon's list; a single-pane window does nothing.
+    #[test]
+    fn passthrough_cycle_moves_to_the_next_listed_pane() {
+        let (rx, mut session) =
+            scripted_passthrough("pt-cycle", &[("list-panes -t @0", "%0 0 *\n%1 1 -")]);
+        assert!(!session.route_bytes(&[0x02, b'o']));
+        assert_eq!(
+            switch_lines(&rx)[..2].to_vec(),
+            vec!["list-panes -t @0", "select-pane -t %1"]
+        );
+        assert_eq!(session.pane, "%1");
+        assert!(!session.route_bytes(&[0x02, b'o']));
+        assert_eq!(switch_lines(&rx)[1], "select-pane -t %0", "wraps");
+
+        let (rx, mut session) =
+            scripted_passthrough("pt-cycle1", &[("list-panes -t @0", "%0 0 *")]);
+        assert!(!session.route_bytes(&[0x02, b'o']));
+        assert_eq!(switch_lines(&rx), vec!["list-panes -t @0".to_string()]);
+        assert_eq!(session.pane, "%0");
+    }
+
+    /// Passthrough prefix W: the next workspace is selected and the pump
+    /// lands in its first session's active window's marked pane; a
+    /// workspace with no sessions only moves the selection.
+    #[test]
+    fn passthrough_workspace_switch_lands_in_the_next_workspace() {
+        let (rx, mut session) = scripted_passthrough(
+            "pt-ws",
+            &[
+                ("list-workspaces", "+0: main active\n+1: lab"),
+                ("list-sessions -t +1", "+1: lab: $2: build"),
+                ("list-sessions", "+1: lab: $2: build"),
+                ("list-windows -t $2", "@6 * logs"),
+                ("list-panes -t @6", "%9 0 *"),
+            ],
+        );
+        assert!(!session.route_bytes(&[0x02, b'W']));
+        assert_eq!(
+            switch_lines(&rx)[..5].to_vec(),
+            vec![
+                "select-workspace -t +1",
+                "list-sessions -t +1",
+                "list-windows -t $2",
+                "select-window -t @6",
+                "list-panes -t @6"
+            ]
+        );
+        assert_eq!(session.session_id.as_deref(), Some("$2"));
+        assert_eq!(session.window, "@6");
+        assert_eq!(session.pane, "%9");
+
+        let (rx, mut session) = scripted_passthrough(
+            "pt-ws-empty",
+            &[("list-workspaces", "+0: main active\n+1: lab")],
+        );
+        assert!(!session.route_bytes(&[0x02, 0x17]));
+        let lines = switch_lines(&rx);
+        assert_eq!(
+            lines[..2].to_vec(),
+            vec!["select-workspace -t +1", "list-sessions -t +1"],
+            "C-w from +0 wraps to +1: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("select-window")),
+            "an empty workspace lands nowhere: {lines:?}"
+        );
+        assert_eq!(session.pane, "%0");
+    }
 }
