@@ -944,13 +944,18 @@ impl TmuxControlParser {
         if parts.is_empty() {
             return None;
         }
+        // tmux(1): `name session-id window-id window-index pane-id ... :
+        // value` — the value follows the first lone `:`; the ids and any
+        // future-use arguments before it are not part of it. A line with no
+        // lone colon keeps the whole remainder as the value.
+        let rest = parts.get(1).copied().unwrap_or_default();
+        let value = match rest.strip_prefix(": ") {
+            Some(value) => value,
+            None => rest.find(" : ").map_or(rest, |pos| &rest[pos + 3..]),
+        };
         Some(TmuxNotification::SubscriptionChanged {
             name: parts[0].to_string(),
-            value: if parts.len() > 1 {
-                parts[1].to_string()
-            } else {
-                String::new()
-            },
+            value: value.to_string(),
         })
     }
 
@@ -1751,7 +1756,7 @@ mod tests {
                 "%subscription-changed sub $1 @2 0 %3 - : the value",
                 N::SubscriptionChanged {
                     name: "sub".into(),
-                    value: "$1 @2 0 %3 - : the value".into(),
+                    value: "the value".into(),
                 },
             ),
             (
