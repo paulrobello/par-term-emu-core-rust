@@ -9133,4 +9133,385 @@ mod tests {
         assert!(session.menu.is_none(), "q in a plain run closes the menu");
         assert!(drained(&rx).is_empty(), "nothing leaked into the pane");
     }
+
+    /// prefix n / p: the next/previous window of the shown session,
+    /// wrapping at both ends; a refused select leaves the view put; a
+    /// view whose window vanished from the list moves nowhere.
+    #[test]
+    fn window_switch_chords_wrap_and_respect_a_refused_select() {
+        let mut replies = std::collections::HashMap::new();
+        reseed_replies(&mut replies, "@0 * a\n@1 - b\n@2 - c", "@2", "%6");
+        let (rx, mut conn, mut session) = two_pane_session(
+            "win-sw",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'p');
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..2].to_vec(),
+            vec!["list-windows -t $0", "select-window -t @2"],
+            "p from the first window wraps to the last"
+        );
+        assert_eq!(session.window, "@2");
+        chord(&mut session, &mut conn, b'n');
+        assert_eq!(
+            drained(&rx)[1],
+            "select-window -t @0",
+            "n from the last wraps to the first"
+        );
+
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-windows -t $0".to_string(),
+            "@0 * a\n@1 - b".to_string(),
+        );
+        let mut failing = std::collections::HashSet::new();
+        failing.insert("select-window -t @1".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "win-sw-no",
+            FakeScript {
+                replies,
+                failing,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'n');
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "list-windows -t $0".to_string(),
+                "select-window -t @1".to_string()
+            ],
+            "a refused select reseeds nothing"
+        );
+        assert_eq!(session.window, "@0");
+
+        session.window = "@8".to_string();
+        chord(&mut session, &mut conn, b'n');
+        assert_eq!(
+            drained(&rx),
+            vec!["list-windows -t $0".to_string()],
+            "an unlisted shown window: nowhere to move from"
+        );
+    }
+
+    /// prefix ( / ): the neighbor session in roster order (wrapping),
+    /// landing on its `*` window; a stale shown window (not in its
+    /// session any more) falls back to the roster head.
+    #[test]
+    fn session_switch_chords_land_on_the_neighbors_active_window() {
+        let mut replies = std::collections::HashMap::new();
+        replies.insert(
+            "list-sessions".to_string(),
+            "$0: work\n$1: lab\n$2: ops".to_string(),
+        );
+        replies.insert("list-windows -t $0".to_string(), "@0 * a".to_string());
+        replies.insert(
+            "list-windows -t $2".to_string(),
+            "@7 - x\n@8 * y".to_string(),
+        );
+        replies.insert("list-windows -t $1".to_string(), "@4 - only".to_string());
+        let (rx, mut conn, mut session) = two_pane_session(
+            "sess-sw",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'(');
+        let lines = drained(&rx);
+        assert_eq!(
+            lines[..4].to_vec(),
+            vec![
+                "list-sessions",
+                "list-windows -t $0",
+                "list-windows -t $2",
+                "select-window -t @8"
+            ],
+            "( from the head wraps to the last session's active window"
+        );
+        assert_eq!(session.window, "@8");
+
+        // A stale state: the shown window is not in $0's list, so the
+        // head ($0) is the base and ) moves to $1, whose only window is
+        // unmarked — the first window is the landing.
+        session.window = "@99".to_string();
+        session.status.session_id = Some("$0".to_string());
+        chord(&mut session, &mut conn, b')');
+        let lines = drained(&rx);
+        assert_eq!(lines[2], "list-windows -t $1", "{lines:?}");
+        assert_eq!(lines[3], "select-window -t @4");
+    }
+
+    /// prefix o cycles focus through the layout order (wrapping) and
+    /// tells the daemon; a single pane does nothing.
+    #[test]
+    fn cycle_chord_walks_the_layout_and_wraps() {
+        let (rx, mut conn, mut session) = two_pane_session("cycle", FakeScript::default());
+        chord(&mut session, &mut conn, b'o');
+        assert_eq!(session.renderer.focused(), Some(2));
+        chord(&mut session, &mut conn, b'o');
+        assert_eq!(session.renderer.focused(), Some(1), "wraps to the first");
+        assert_eq!(
+            drained(&rx),
+            vec![
+                "select-pane -t %2".to_string(),
+                "select-pane -t %1".to_string()
+            ]
+        );
+    }
+
+    /// The plain-byte router's own cases: a literal prefix (prefix
+    /// prefix) forwards one prefix byte, an unbound chord key is
+    /// consumed, typed bytes forward as hex `send-keys`, `d` detaches,
+    /// and resize mode swallows a typed run while leaving the mode.
+    #[test]
+    fn plain_router_forwards_literals_and_consumes_unbound_keys() {
+        let (rx, mut conn, mut session) = two_pane_session("plain", FakeScript::default());
+        let mut pending = false;
+        assert!(!session.route_plain(
+            &[crate::mux::attach::C_B, crate::mux::attach::C_B, b'a'],
+            &mut conn,
+            &mut pending
+        ));
+        assert_eq!(drained(&rx), vec!["send-keys -t %1 -H 02 61".to_string()]);
+        assert!(!session.route_plain(&[crate::mux::attach::C_B, b'Q'], &mut conn, &mut pending));
+        assert!(drained(&rx).is_empty(), "an unbound chord key is consumed");
+        // A prefix at the END of one run completes in the next run.
+        assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn, &mut pending));
+        assert!(pending);
+        assert!(
+            session.route_plain(b"d", &mut conn, &mut pending),
+            "d detaches"
+        );
+
+        session.resize_mode = true;
+        assert!(!session.route_plain(b"xyz", &mut conn, &mut pending));
+        assert!(!session.resize_mode, "a typed run leaves resize mode");
+        assert!(drained(&rx).is_empty(), "and nothing leaks into the pane");
+    }
+
+    /// prefix + arrow focuses the neighbor in that direction (an edge
+    /// sends nothing); Shift+arrow swaps with it and flashes, and at an
+    /// edge flashes "no pane in that direction" without a swap. While
+    /// zoomed the cached daemon layout is the geometry, so an arrow can
+    /// aim at a pane the zoomed renderer does not even hold.
+    #[test]
+    fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
+        let (rx, mut conn, mut session) = two_pane_session("arrows", FakeScript::default());
+        let right = TermKeyEvent::functional(TermKey::Right, 0);
+        let left = TermKeyEvent::functional(TermKey::Left, 0);
+        session.prefix_pane_arrow(&mut conn, &left);
+        assert!(drained(&rx).is_empty(), "the left edge: nowhere to go");
+        session.prefix_pane_arrow(&mut conn, &right);
+        assert_eq!(session.renderer.focused(), Some(2));
+        assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
+        session.prefix_pane_arrow(
+            &mut conn,
+            &TermKeyEvent::functional(TermKey::Right, crate::keyboard::modifiers::ALT),
+        );
+        assert!(drained(&rx).is_empty(), "a non-shift modifier is ignored");
+
+        let shift = crate::keyboard::modifiers::SHIFT;
+        session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Right, shift));
+        assert!(drained(&rx).is_empty());
+        assert_eq!(session.flash.as_deref(), Some("no pane in that direction"));
+        session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Left, shift));
+        assert_eq!(drained(&rx), vec!["swap-pane -s %2 -t %1".to_string()]);
+        assert_eq!(session.flash.as_deref(), Some("swapped %2 with %1"));
+
+        // Zoomed onto pane 1: the renderer holds only the zoomed rect,
+        // the cached tree still knows pane 2 to the right.
+        session.daemon_layout = session.renderer.layout().to_vec();
+        session
+            .renderer
+            .apply_layout(parse_layout("0000,80x23,0,0,1").expect("parses"));
+        session.renderer.focus(1);
+        session.zoomed = true;
+        session.prefix_pane_arrow(&mut conn, &right);
+        assert_eq!(
+            drained(&rx),
+            vec!["select-pane -t %2".to_string()],
+            "the arrow leaves the zoom toward the cached neighbor"
+        );
+    }
+
+    /// Scroll mode's keys: Up/PgUp scroll back, Down returns, Home jumps
+    /// to the top of history, and End or q leave the mode back at live.
+    #[test]
+    fn scroll_mode_keys_move_the_viewport_and_exit() {
+        let (_rx, _conn, mut session) = two_pane_session("scrollkeys", FakeScript::default());
+        for i in 0..60 {
+            session
+                .renderer
+                .feed_output(1, format!("line{i}\r\n").as_bytes());
+        }
+        let history = session
+            .renderer
+            .pane_terminal(1)
+            .expect("pane")
+            .active_grid()
+            .scrollback_len();
+        assert!(history > 0);
+        assert!(session.renderer.enter_scroll_mode(1));
+        session.scroll_mode = true;
+        let start = session.renderer.scroll_offset_of(1);
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Up, 0));
+        assert_eq!(session.renderer.scroll_offset_of(1), start + 1);
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Down, 0));
+        assert_eq!(session.renderer.scroll_offset_of(1), start);
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageDown, 0));
+        assert_eq!(
+            session.renderer.scroll_offset_of(1),
+            0,
+            "a page down to live"
+        );
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageUp, 0));
+        assert_eq!(
+            session.renderer.scroll_offset_of(1),
+            start,
+            "a page is the pane height"
+        );
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Home, 0));
+        assert_eq!(
+            session.renderer.scroll_offset_of(1),
+            history,
+            "the top of history"
+        );
+        session.scroll_mode_key(&TermKeyEvent::functional(TermKey::End, 0));
+        assert!(!session.scroll_mode);
+        assert!(!session.renderer.scroll_mode_active(1));
+        assert_eq!(session.renderer.scroll_offset_of(1), 0);
+
+        assert!(session.renderer.enter_scroll_mode(1));
+        session.scroll_mode = true;
+        session.scroll_mode_key(&TermKeyEvent::char_('q', 0));
+        assert!(!session.scroll_mode, "q leaves too");
+    }
+
+    /// prefix [ enters scroll mode only when the focused pane has
+    /// history; in the mode, typed bytes never reach the pane and q
+    /// leaves it.
+    #[test]
+    fn scroll_chord_needs_history_and_owns_typed_bytes() {
+        let (rx, mut conn, mut session) = two_pane_session("scrollchord", FakeScript::default());
+        chord(&mut session, &mut conn, b'[');
+        assert!(!session.scroll_mode, "no history: nothing to scroll");
+        for i in 0..40 {
+            session
+                .renderer
+                .feed_output(1, format!("l{i}\r\n").as_bytes());
+        }
+        chord(&mut session, &mut conn, b'[');
+        assert!(session.scroll_mode);
+        let mut pending = false;
+        session.route_plain(b"abc", &mut conn, &mut pending);
+        assert!(session.scroll_mode);
+        assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
+        session.route_plain(b"q", &mut conn, &mut pending);
+        assert!(!session.scroll_mode);
+    }
+
+    /// The help panel's key path: j/k and arrows scroll (clamped at the
+    /// top), `/` opens the filter that typed chars extend, a non-char
+    /// key commits the filter, and an unbound key closes the panel.
+    #[test]
+    fn help_keys_scroll_filter_and_close() {
+        let (_rx, _conn, mut session) = two_pane_session("helpkeys", FakeScript::default());
+        session.enter_help();
+        session.help_key(&TermKeyEvent::char_('k', 0));
+        assert_eq!(session.help_scroll, 0, "clamped at the top");
+        session.help_key(&TermKeyEvent::char_('j', 0));
+        session.help_key(&TermKeyEvent::functional(TermKey::Down, 0));
+        assert_eq!(session.help_scroll, 2);
+        session.help_key(&TermKeyEvent::functional(TermKey::Up, 0));
+        session.help_key(&TermKeyEvent::functional(TermKey::PageDown, 0));
+        assert_eq!(session.help_scroll, 11);
+        session.help_key(&TermKeyEvent::functional(TermKey::PageUp, 0));
+        assert_eq!(session.help_scroll, 1);
+        session.help_key(&TermKeyEvent::char_('/', 0));
+        assert!(session.help_filtering);
+        for c in "zoom".chars() {
+            session.help_key(&TermKeyEvent::char_(c, 0));
+        }
+        assert_eq!(session.help_filter, "zoom");
+        assert!(overlay_text(&session).join("\n").contains("zoom"));
+        session.help_key(&TermKeyEvent::functional(TermKey::Down, 0));
+        assert!(!session.help_filtering, "a non-char key commits the filter");
+        assert_eq!(session.help_filter, "zoom", "the filter is kept");
+        assert!(session.help_mode);
+        session.help_key(&TermKeyEvent::functional(TermKey::Tab, 0));
+        assert!(!session.help_mode, "an unbound key closes");
+        assert_eq!(session.renderer.overlay, None);
+
+        session.enter_help();
+        session.help_key(&TermKeyEvent::char_('/', 0));
+        session.help_key(&TermKeyEvent::functional(TermKey::Escape, 0));
+        assert!(!session.help_mode, "Escape in the filter closes the panel");
+        session.enter_help();
+        session.help_byte(b'/');
+        session.help_byte(b'a');
+        session.help_byte(0x7f);
+        assert_eq!(session.help_filter, "", "Backspace pops the filter");
+        session.help_byte(b'\r');
+        assert!(!session.help_filtering && session.help_mode);
+    }
+
+    /// The picker's key and byte paths: j/k/arrows move (wrapping), `/`
+    /// filters as you type (Backspace pops, Enter commits, Escape
+    /// closes), and an unbound key closes.
+    #[test]
+    fn picker_keys_move_filter_and_close() {
+        let replies = std::collections::HashMap::from([
+            ("list-sessions".to_string(), "$0: work\n$1: lab".to_string()),
+            ("list-windows -t $0".to_string(), "@0 * main".to_string()),
+            ("list-windows -t $1".to_string(), "@2 * logs".to_string()),
+        ]);
+        let (_rx, mut conn, mut session) = two_pane_session(
+            "pickkeys",
+            FakeScript {
+                replies,
+                ..FakeScript::default()
+            },
+        );
+        chord(&mut session, &mut conn, b'w');
+        assert!(session.picker_mode);
+        let count = session.picker_refs.len();
+        assert_eq!(count, 4, "two sessions with one window each");
+        assert_eq!(session.picker_selected, 0, "opens on the current session");
+        session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
+        assert_eq!(session.picker_selected, count - 1, "Up wraps to the bottom");
+        session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+        session.picker_key(&mut conn, &TermKeyEvent::char_('j', 0));
+        session.picker_key(&mut conn, &TermKeyEvent::char_('k', 0));
+        assert_eq!(session.picker_selected, 0);
+        session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
+        for c in "logs".chars() {
+            session.picker_key(&mut conn, &TermKeyEvent::char_(c, 0));
+        }
+        assert_eq!(session.picker_filter, "logs");
+        let text = overlay_text(&session).join("\n");
+        assert!(text.contains("logs") && !text.contains("main"), "{text}");
+        session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+        assert!(!session.picker_filtering, "a non-char key commits");
+        session.picker_byte(&mut conn, b'/');
+        session.picker_byte(&mut conn, 0x7f);
+        assert_eq!(session.picker_filter, "log");
+        session.picker_byte(&mut conn, b'\r');
+        assert!(!session.picker_filtering && session.picker_mode);
+        session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
+        assert!(!session.picker_mode, "an unbound key closes");
+
+        chord(&mut session, &mut conn, b'w');
+        session.picker_byte(&mut conn, b'/');
+        assert!(!session.picker_byte(&mut conn, 0x1b), "Escape closes");
+        assert!(!session.picker_mode);
+        chord(&mut session, &mut conn, b'w');
+        session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
+        session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
+        assert!(!session.picker_mode);
+    }
 }
