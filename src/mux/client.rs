@@ -714,6 +714,122 @@ mod tests {
         );
     }
 
+    /// A daemon already serving the primary path is attached through both
+    /// public entry points without spawning anything, and ending "the
+    /// spawned daemon" on such a client is a no-op, never a kill of a
+    /// server other clients share.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_daemon_is_attached_without_spawning() {
+        let (dir, socket) = temp_socket("live.sock");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let holder = std::thread::spawn(move || {
+            let a = listener.accept().expect("first client");
+            let b = listener.accept().expect("second client");
+            std::thread::sleep(Duration::from_millis(200));
+            drop((a, b));
+        });
+
+        let mut via_paths =
+            MuxClient::connect_or_spawn_paths(&socket, None).expect("attach via paths");
+        let mut via_at = MuxClient::connect_or_spawn_at(&socket).expect("attach via at");
+        for client in [&mut via_paths, &mut via_at] {
+            assert_eq!(client.spawned_daemon_pid(), None);
+            client
+                .kill_spawned_daemon()
+                .expect("no spawned daemon: a no-op");
+        }
+        drop((via_paths, via_at));
+        holder.join().expect("holder thread");
+        drop(dir);
+    }
+
+    /// Connecting where nothing listens is an error, not a hang or a
+    /// silent spawn.
+    #[test]
+    fn connect_to_an_absent_socket_errors() {
+        let (_dir, socket) = temp_socket("absent.sock");
+        assert!(MuxClient::connect(&socket).is_err());
+    }
+
+    /// Drives the reader loop against a scripted server: a notification
+    /// sent before the reply reaches `notifications()` parsed; framing
+    /// lines carrying another command's number stay body content; a block
+    /// closed by `%error` comes back `ok: false` with its body; and a
+    /// server that closes the connection mid-command surfaces as
+    /// `ConnectionAborted`, not a hang.
+    #[cfg(unix)]
+    #[test]
+    fn replies_and_notifications_are_split_by_the_reader() {
+        use std::io::{BufRead as _, Write as _};
+        let (dir, socket) = temp_socket("script.sock");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+
+            assert_eq!(lines.next().unwrap().unwrap(), "capture-pane -t %1");
+            writer
+                .write_all(
+                    b"%output %1 hi\\012\n\
+                      %begin 1 5 1\n\
+                      row one\n\
+                      %end 1 4 1\n\
+                      %begin 1 9 1\n\
+                      %end 1 5 1\n",
+                )
+                .unwrap();
+
+            assert_eq!(lines.next().unwrap().unwrap(), "kill-pane -t %9");
+            writer
+                .write_all(b"%begin 2 6 1\nno such pane: %9\n%error 2 6 1\n")
+                .unwrap();
+
+            assert_eq!(lines.next().unwrap().unwrap(), "list-panes");
+            // Close without answering.
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        let reply = client.send_checked("capture-pane -t %1").expect("reply");
+        assert_eq!(
+            reply,
+            Reply {
+                body: vec![
+                    "row one".to_string(),
+                    "%end 1 4 1".to_string(),
+                    "%begin 1 9 1".to_string(),
+                ],
+                ok: true,
+            },
+            "mismatched framing numbers are content"
+        );
+        assert_eq!(
+            client
+                .notifications()
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the pre-reply notification"),
+            TmuxNotification::Output {
+                pane_id: "%1".to_string(),
+                data: b"hi\n".to_vec(),
+            }
+        );
+
+        let reply = client.send_checked("kill-pane -t %9").expect("reply");
+        assert_eq!(
+            reply,
+            Reply {
+                body: vec!["no such pane: %9".to_string()],
+                ok: false,
+            }
+        );
+
+        let err = client.send("list-panes").expect_err("server hung up");
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{err}");
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
     /// The platform daemon file name, shared by the tests above.
     fn file_name() -> &'static str {
         #[cfg(unix)]
