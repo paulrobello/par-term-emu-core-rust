@@ -105,6 +105,12 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --lib 
 #     a `\n`-terminated line but never SUBMITS it — a typed Enter must be
 #     `\r` (26100 submitted `\n`; CI intermittents during the image rollout
 #     were mixed runner builds, card 01a0ee2fcfa67d62bb9b9906a353deea).
+#     Measured 2026-10-05 (Windows 26200): the first PTY update after a
+#     cmd.exe spawn arrives ~30-80 ms in with an EMPTY screen (ConPTY setup
+#     output, not the prompt). A Ctrl+C written then kills cmd.exe with
+#     0xC000013A (STATUS_CONTROL_C_EXIT) and later writes fail with
+#     NotStartedError. Tests that send ^C must wait for the prompt text
+#     (`>`), not for "any update".
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --locked --lib --no-default-features --features rust-only,mux-bin,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"

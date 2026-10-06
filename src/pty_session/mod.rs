@@ -2735,9 +2735,6 @@ mod tests {
     #[test]
     fn test_generation_counter_after_ctrl_c() {
         let mut session = PtySession::new(80, 24, 1000);
-        // Read before the spawn, so a prompt that lands before the wait below
-        // still counts as the shell having started.
-        let gen_before_spawn = session.update_generation();
 
         // Spawn a shell
         #[cfg(unix)]
@@ -2747,12 +2744,21 @@ mod tests {
 
         assert!(result.is_ok());
 
-        // The shell is up once it has printed something (its prompt); a
-        // Ctrl+C sent earlier could reach it before its SIGINT handling.
-        session
-            .update_waiter()
-            .wait_for_update(gen_before_spawn, std::time::Duration::from_secs(30))
-            .expect("shell printed a prompt");
+        // Wait for the prompt itself, not just the first update: a Ctrl+C sent
+        // before the shell installs its interrupt handling kills it. ConPTY's
+        // first update is its own setup output on a still-empty screen, and a
+        // Ctrl+C then ends cmd.exe with STATUS_CONTROL_C_EXIT.
+        assert!(
+            session.wait_until(std::time::Duration::from_secs(30), |t| {
+                let content = t.content();
+                let content = content.trim_end();
+                #[cfg(windows)]
+                return content.ends_with('>');
+                #[cfg(not(windows))]
+                return !content.is_empty();
+            }),
+            "shell printed a prompt"
+        );
 
         // Send Ctrl+C, and let its ^C echo and prompt redraw land before the
         // command, so the shell has handled the interrupt first.
