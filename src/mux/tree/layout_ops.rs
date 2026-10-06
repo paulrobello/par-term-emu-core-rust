@@ -182,6 +182,9 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
+        if self.window_of_pane(source).is_none() {
+            return Err(MuxError::NoSuchPane(source));
+        }
         self.mutate_layout(window_id, |window| {
             if !window.layout.pane_ids().contains(&source) {
                 return Err(MuxError::PanesInDifferentWindows(target, source));
@@ -317,12 +320,12 @@ impl MuxTree {
         direction: SplitDirection,
         new_share: f32,
     ) -> Result<(WindowId, WindowId, bool, Option<SessionId>), MuxError> {
-        if source == target {
-            return Err(MuxError::SamePane(source));
-        }
         let source_window = self
             .window_of_pane(source)
             .ok_or(MuxError::NoSuchPane(source))?;
+        if source == target {
+            return Err(MuxError::SamePane(source));
+        }
         let target_window = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
@@ -415,6 +418,11 @@ impl MuxTree {
     /// sessions changes window ownership, a different operation than a
     /// reorder. The active window is tracked by identity, not position.
     pub fn swap_windows(&mut self, a: WindowId, b: WindowId) -> Result<(), MuxError> {
+        for id in [a, b] {
+            if !self.windows.contains_key(&id) {
+                return Err(MuxError::NoSuchWindow(id));
+            }
+        }
         if a == b {
             return Ok(());
         }

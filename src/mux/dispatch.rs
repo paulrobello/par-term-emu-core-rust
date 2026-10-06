@@ -1462,7 +1462,8 @@ fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> O
     let guard = ctx.tree.lock();
     let workspace_id = match workspace {
         Some(target) => match guard.resolve_workspace_target(target) {
-            Ok(id) => Some(id),
+            Ok(id) if guard.workspace(id).is_some() => Some(id),
+            Ok(id) => return Outcome::err(ctx, &MuxError::NoSuchWorkspace(id).to_string()),
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         },
         None => None,
@@ -2362,5 +2363,49 @@ mod tests {
             applied.lock().remain_on_exit,
             "the applied copy now holds the dead panes"
         );
+    }
+
+    /// Typed ids resolve without an existence check, so each handler's
+    /// tree operation must reject an unknown one itself. These four did
+    /// not: an unknown window swapped with itself replied `%end` and
+    /// broadcast `%sessions-changed`; an unknown workspace listed as an
+    /// empty success; an unknown swap-pane source was reported as "in
+    /// different windows"; an unknown pane joined onto itself was
+    /// reported as "cannot be moved onto itself".
+    #[test]
+    fn unknown_typed_ids_are_rejected_as_missing_not_misreported() {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        for (line, expected) in [
+            ("swap-window -s @99 -t @99", "no such window: @99"),
+            ("list-sessions -t +99", "no such workspace: +99"),
+            (&*format!("swap-pane -s %99 -t {pane}"), "no such pane: %99"),
+            ("join-pane -s %99 -t %99", "no such pane: %99"),
+        ] {
+            let reply = run(line);
+            let lines: Vec<&str> = reply.lines().collect();
+            assert_eq!(lines.len(), 3, "`{line}`: {reply:?}");
+            assert_eq!(lines[1], expected, "`{line}`: {reply:?}");
+            assert!(lines[2].starts_with("%error "), "`{line}`: {reply:?}");
+        }
+        let _ = tree.lock().pane_mut(pane).unwrap().kill();
     }
 }
