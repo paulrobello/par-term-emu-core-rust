@@ -66,6 +66,14 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+The `dev` and `start` scripts bind to loopback (`127.0.0.1`) only. To test from
+another device on your LAN, opt in explicitly by binding all interfaces:
+
+```bash
+npx next dev -H 0.0.0.0     # or: bunx next dev -H 0.0.0.0
+npx next start -H 0.0.0.0   # production server, after a build
+```
+
 ### Production Build
 
 ```bash

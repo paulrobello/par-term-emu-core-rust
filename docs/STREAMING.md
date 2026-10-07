@@ -593,8 +593,11 @@ cd web-terminal-frontend
 # Install dependencies
 npm install
 
-# Development server (binds to 0.0.0.0:3000 for mobile testing)
+# Development server (binds to 127.0.0.1:3000)
 npm run dev
+
+# LAN/mobile testing: opt in to binding all interfaces
+npx next dev -H 0.0.0.0
 
 # Production build (creates Next.js server build)
 npm run build
