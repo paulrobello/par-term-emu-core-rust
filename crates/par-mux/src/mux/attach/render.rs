@@ -266,6 +266,15 @@ pub struct DividerHit {
     pub b: u32,
 }
 
+/// A modal overlay's scroll state: `(scrolled-past, visible, total)`
+/// rows — the painter draws a border thumb from it when the content
+/// overflows.
+pub(crate) type OverlayScroll = (usize, usize, usize);
+
+/// The modal overlay the renderer paints over the frame: its title, its
+/// composed rows, and its optional scroll state.
+pub(crate) type Overlay = (&'static str, Vec<HelpRow>, Option<OverlayScroll>);
+
 /// The frame renderer: pane emulators + layout rects + the double buffers
 /// the damage diff reads.
 pub struct PaneRenderer {
@@ -293,7 +302,7 @@ pub struct PaneRenderer {
     /// their accent flag so the painter styles headers/border ring in the
     /// accent color; the scroll state draws a border thumb when the
     /// content overflows.
-    overlay: Option<(&'static str, Vec<HelpRow>, Option<(usize, usize, usize)>)>,
+    overlay: Option<Overlay>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -530,10 +539,7 @@ impl PaneRenderer {
     /// Set (or clear) the modal overlay's title, rows, and scroll state.
     /// The overlay paints as the themed modal over the frame; clearing it
     /// lets the next frame's pane repaint restore the covered cells.
-    pub(crate) fn set_overlay(
-        &mut self,
-        overlay: Option<(&'static str, Vec<HelpRow>, Option<(usize, usize, usize)>)>,
-    ) {
+    pub(crate) fn set_overlay(&mut self, overlay: Option<Overlay>) {
         let same = match (&self.overlay, &overlay) {
             (Some((a, ra, sa)), Some((b, rb, sb))) => a == b && ra == rb && sa == sb,
             (None, None) => true,

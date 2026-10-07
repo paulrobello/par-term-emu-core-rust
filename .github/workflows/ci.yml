@@ -243,12 +243,9 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Run Rust clippy
-      # `attach` stays off PR lint until ARC-001 lands: render.rs carries two
-      # pre-existing type_complexity errors (lines 296 and 535 at the audit
-      # base), so `-D warnings` would redden every PR. The PR test job still
-      # compiles and runs the attach suites; add the feature back here when
-      # the render.rs decomposition merges.
-      run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+      # `attach` is linted here too (ARC-001 cleared its type_complexity
+      # errors), so the attach client compiles under `-D warnings` on PRs.
+      run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach -- -D warnings
 
     - name: Run Rust clippy (par-term-emu-core member)
       # ARC-007 O2: root clippy covers only the root package; lint the core
@@ -258,11 +255,12 @@ jobs:
         cargo clippy --locked -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 
     - name: Run Rust clippy (par-mux member)
-      # ARC-007 O2 Phase 2. `attach` stays off for the same ARC-001 reason
-      # as the root clippy step above.
+      # ARC-007 O2 Phase 2. The `attach` run lints the attach client's lib
+      # tests and the mux_attach PTY suite, which only compile with it.
       run: |
         cargo clippy --locked -p par-mux --all-targets -- -D warnings
         cargo clippy --locked -p par-mux --all-targets --features mux-bin -- -D warnings
+        cargo clippy --locked -p par-mux --all-targets --features mux-bin,attach -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

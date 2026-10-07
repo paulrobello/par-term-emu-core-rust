@@ -2738,7 +2738,7 @@ fn render_mode_sidebar_toggle_minimal() {
         .expect("Enter");
     std::thread::sleep(Duration::from_millis(300));
 
-    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     let _ = wait_for_output(&host, b"SIDEBAR-MINI-MARK", Duration::from_secs(10));
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
@@ -3009,7 +3009,7 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
         .next()
         .expect("a pane")
         .to_string();
-    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
@@ -3419,7 +3419,7 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
         "the typed name joins the default in the input line: {:?}",
         plain_text(&typed)
     );
-    host.to_child.write_all(&[b'\r']).expect("enter");
+    host.to_child.write_all(b"\r").expect("enter");
     host.to_child.flush().ok();
     std::thread::sleep(Duration::from_millis(500));
     let created = client.send("list-windows").expect("list").join("");
