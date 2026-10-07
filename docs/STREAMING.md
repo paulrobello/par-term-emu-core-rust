@@ -313,6 +313,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_NO_RESTART_SHELL` | `--no-restart-shell` | Don't restart the shell on exit |
 | `PAR_TERM_DOWNLOAD_FRONTEND` | `--download-frontend` | Download the web frontend on startup |
 | `PAR_TERM_FRONTEND_VERSION` | `--frontend-version` | Web frontend version to download |
+| `PAR_TERM_FORCE_WEB_DOWNLOAD` | `--force-web-download` | Let `--download-frontend` replace a web root that has no `index.html` |
 | `PAR_TERM_MACRO_FILE` | `--macro-file` | Macro file for playback |
 | `PAR_TERM_MACRO_SPEED` | `--macro-speed` | Macro playback speed multiplier |
 | `PAR_TERM_MACRO_LOOP` | `--macro-loop` | Loop macro playback |

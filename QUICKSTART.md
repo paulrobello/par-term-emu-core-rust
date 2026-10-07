@@ -208,15 +208,22 @@ graph TB
     WS -->|Input| PTY
     HTTP -->|Serve Assets| Frontend
 
-    style PTY fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Term fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style WS fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
-    style HTTP fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
-    style Frontend fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style XTerm fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    class PTY active
+    class Term info
+    class WS primary
+    class HTTP http
+    class Frontend external
+    class XTerm neutral
+
+    classDef primary fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef info fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef http fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    classDef external fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef neutral fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
-> **📝 Note:** For detailed streaming documentation including protocol specification, advanced features, and troubleshooting, see [docs/STREAMING.md](docs/STREAMING.md)
+> **Note:** For detailed streaming documentation including protocol specification, advanced features, and troubleshooting, see [docs/STREAMING.md](docs/STREAMING.md)
 
 ## Explore Examples
 
@@ -239,6 +246,7 @@ uv run python examples/pty_shell.py
 - Explore the [examples directory](examples/) for code samples including PTY, graphics, and advanced features
 - Review [Streaming Documentation](docs/STREAMING.md) for WebSocket protocol, advanced features, and troubleshooting
 - Read [docs/BUILDING.md](docs/BUILDING.md) for build details and [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
+- Check [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) when a build, test, streaming, or par-mux step fails
 - Run example demonstrations: `make examples`
 
 ## Common Patterns
@@ -295,6 +303,7 @@ term.process_str("New content\n")
 
 ## Help & Support
 
+- [Troubleshooting](docs/TROUBLESHOOTING.md) for common build, streaming, and par-mux failures
 - [Report issues on GitHub](https://github.com/paulrobello/par-term-emu-core-rust/issues)
 - Read the full documentation in README.md
 - Check examples/ for more code samples

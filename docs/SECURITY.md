@@ -2,39 +2,9 @@
 
 This document outlines security considerations when using the PTY functionality in par-term-emu-core-rust.
 
-## API Overview
-
-The `PtyTerminal.spawn()` method signature:
-
-```python
-term.spawn(
-    command: str,                      # Required: command to execute
-    args: list[str] | None = None,     # Optional: list of command arguments
-    env: dict[str, str] | None = None, # Optional: environment variables (merges with inherited)
-    cwd: str | None = None             # Optional: working directory
-)
-```
-
-**Key Points:**
-- `env` parameter **merges with and overrides specific keys** in the inherited environment (all parent env vars are inherited by default, then overridden by keys in `env`)
-- `args` must be a list of strings or None (e.g., `args=["arg1", "arg2"]` or `args=None`)
-- All path arguments (`cwd`, values in `args`) should be validated to prevent directory traversal
-- Command must be absolute path (e.g., `/bin/bash`) or findable in `PATH`
-- The system automatically drops size, multiplexer, par-mux, and agent-session variables from the inherited environment — see [Inherited Environment](#inherited-environment)
-- Set `PAR_TERM_REPLY_XTWINOPS=0` **before creating `PtyTerminal`** to suppress XTWINOPS (CSI t) query responses (this setting is cached at terminal creation time)
-
-**Convenience Methods:**
-- `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` on Unix or `%COMSPEC%` on Windows, with fallback to `/bin/bash` or `cmd.exe` respectively)
-- `PtyTerminal.get_default_shell()` - Static method that returns the default shell path for current platform
-
-**Implementation Notes:**
-- The Python wrapper calls `set_env()` and `set_cwd()` on the Rust `PtySession` before calling `spawn()`
-- Environment variables are stored internally as `Vec<(String, String)>` and applied during process spawn
-- Working directory is stored as `Option<String>` and applied via `CommandBuilder::cwd()` if set
-- The Python API accepts `dict[str, str]` for environment variables and `str` for working directory, which are converted to Rust types
-
 ## Table of Contents
 
+- [API Overview](#api-overview)
 - [Security Architecture](#security-architecture)
 - [Command Injection Prevention](#command-injection-prevention)
   - [DO: Use Command + Args Array Format](#do-use-command--args-array-format)
@@ -75,6 +45,37 @@ term.spawn(
 - [Resource Limits Reference](#resource-limits-reference)
 - [Reporting Security Issues](#reporting-security-issues)
 
+## API Overview
+
+The `PtyTerminal.spawn()` method signature:
+
+```python
+term.spawn(
+    command: str,                      # Required: command to execute
+    args: list[str] | None = None,     # Optional: list of command arguments
+    env: dict[str, str] | None = None, # Optional: environment variables (merges with inherited)
+    cwd: str | None = None             # Optional: working directory
+)
+```
+
+**Key Points:**
+- `env` parameter **merges with and overrides specific keys** in the inherited environment (all parent env vars are inherited by default, then overridden by keys in `env`)
+- `args` must be a list of strings or None (e.g., `args=["arg1", "arg2"]` or `args=None`)
+- All path arguments (`cwd`, values in `args`) should be validated to prevent directory traversal
+- Command must be absolute path (e.g., `/bin/bash`) or findable in `PATH`
+- The system automatically drops size, multiplexer, par-mux, and agent-session variables from the inherited environment — see [Inherited Environment](#inherited-environment)
+- Set `PAR_TERM_REPLY_XTWINOPS=0` **before creating `PtyTerminal`** to suppress XTWINOPS (CSI t) query responses (this setting is cached at terminal creation time)
+
+**Convenience Methods:**
+- `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` on Unix or `%COMSPEC%` on Windows, with fallback to `/bin/bash` or `cmd.exe` respectively)
+- `PtyTerminal.get_default_shell()` - Static method that returns the default shell path for current platform
+
+**Implementation Notes:**
+- The Python wrapper calls `set_env()` and `set_cwd()` on the Rust `PtySession` before calling `spawn()`
+- Environment variables are stored internally as `Vec<(String, String)>` and applied during process spawn
+- Working directory is stored as `Option<String>` and applied via `CommandBuilder::cwd()` if set
+- The Python API accepts `dict[str, str]` for environment variables and `str` for working directory, which are converted to Rust types
+
 ## Security Architecture
 
 Dependency advisories are gated by `make audit-deps` (cargo deny, `bun audit`, `pip-audit`; weekly in CI). Accepted advisories and the reasons they are tolerated are listed in `deny.toml`.
@@ -104,14 +105,19 @@ graph TB
     PTY -->|Validated bytes| PtyPair
     PtyPair -->|Input| ChildProc
 
-    style User fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style Validate fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style EnvFilter fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style PTY fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
-    style PtyPair fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style ChildProc fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
-    style ReaderThread fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style Terminal fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    class PTY primary
+    class Validate,EnvFilter active
+    class PtyPair,Terminal info
+    class User external
+    class ChildProc process
+    class ReaderThread neutral
+
+    classDef primary fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef info fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef external fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef process fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    classDef neutral fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
 ### Security Boundaries

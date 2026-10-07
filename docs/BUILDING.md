@@ -2,7 +2,7 @@
 
 This guide explains how to build and install the par-term-emu-core-rust library.
 
-> ⚠️ **Never use `cargo build` directly for this PyO3 module.** Bare `cargo build` fails at the link stage because the `extension-module` feature produces a Python extension that cannot be linked as a normal Rust binary. Always build with **`make dev`** (which drives `maturin`) for Python bindings, or `make streamer-run` for the streaming server binary. The only time you invoke `cargo` directly is for tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround (see [Running Tests](#running-tests) below). See `CLAUDE.md` and `docs/ARCHITECTURE.md` for background.
+> **Warning:** **Never use `cargo build` directly for this PyO3 module.** Bare `cargo build` fails at the link stage because the `extension-module` feature produces a Python extension that cannot be linked as a normal Rust binary. Always build with **`make dev`** (which drives `maturin`) for Python bindings, or `make streamer-run` for the streaming server binary. The only time you invoke `cargo` directly is for tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround (see [Running Tests](#running-tests) below). See `CLAUDE.md` and `docs/ARCHITECTURE.md` for background.
 
 ## Table of Contents
 
@@ -54,7 +54,7 @@ You need Rust 1.98 or later (as specified in `Cargo.toml` with `rust-version = "
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-> **📝 Note:** The streaming feature requires Protocol Buffers code generation via `build.rs` and `prost-build`. This is handled automatically during the build process when the `streaming` feature is enabled.
+> **Note:** The streaming feature requires Protocol Buffers code generation via `build.rs` and `prost-build`. This is handled automatically during the build process when the `streaming` feature is enabled.
 
 ### Python
 
@@ -97,7 +97,7 @@ The library supports several optional features that can be enabled during the bu
 - **`sim`** - Headless simulation profile: grid + terminal only (no screenshot, PTY, Python, or streaming — screenshot is opt-in since 0.54.0, ENH-024; render-capable embedders use `features = ["sim", "screenshot"]`). Excludes the real-PTY backend, Python bindings, and streaming server, so a pure-Rust embedder can vendor the crate as a server-side screen model without pulling in `portable-pty` or the PyO3/streaming dep trees. Build with `cargo build --no-default-features --features sim`. (`graphics`/`sixel` remain compiled because the `Terminal` depends on them intrinsically.)
 - **`full`** - Enable all features (`python` + `streaming` + `streaming-bin`)
 
-> **📝 Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
+> **Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
 
 ## Building from Source
 
@@ -138,7 +138,7 @@ uv run maturin develop --release
 make dev
 ```
 
-> **📝 Note:** The `make dev` target also runs `uv sync` to ensure all dependencies are up-to-date before building.
+> **Note:** The `make dev` target also runs `uv sync` to ensure all dependencies are up-to-date before building.
 
 This installs the package in your virtual environment, allowing you to import it:
 
@@ -167,7 +167,7 @@ uv pip install target/wheels/par_term_emu_core_rust-*.whl
 pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
 
-> **📝 Note:** Always prefer `uv pip install` over direct `pip` usage for consistency with the project's package management approach.
+> **Note:** Always prefer `uv pip install` over direct `pip` usage for consistency with the project's package management approach.
 
 ### Auto-rebuild on Changes
 
@@ -181,7 +181,7 @@ cargo install cargo-watch
 make watch
 ```
 
-> **📝 Note:** The `watch` target automatically rebuilds and reinstalls the package whenever Rust source files change.
+> **Note:** The `watch` target automatically rebuilds and reinstalls the package whenever Rust source files change.
 
 ### Building with Streaming Feature
 
@@ -205,7 +205,7 @@ The streaming feature provides:
 - HTTP Basic Authentication support (via `--http-user`, `--http-password`, `--http-password-hash`, `--http-password-file`)
 - Environment variable support for all CLI options (prefix: `PAR_TERM_`)
 
-> **📝 Note:** jemalloc is a separate optional feature for improved server performance on non-Windows platforms. Enable it explicitly with `--features streaming,jemalloc` (e.g. `uv run maturin develop --release --features streaming,jemalloc`). It is not enabled automatically by `streaming` and is unavailable on the Windows MSVC target.
+> **Note:** jemalloc is a separate optional feature for improved server performance on non-Windows platforms. Enable it explicitly with `--features streaming,jemalloc` (e.g. `uv run maturin develop --release --features streaming,jemalloc`). It is not enabled automatically by `streaming` and is unavailable on the Windows MSVC target.
 
 See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
 
@@ -250,7 +250,7 @@ cargo test --lib --no-default-features --features pyo3/auto-initialize
 make test-rust
 ```
 
-> **⚠️ Important:** The simple `cargo test` command will fail due to PyO3's `extension-module` feature. Tests require the `auto-initialize` feature instead. The Makefile target handles this automatically.
+> **Warning:** The simple `cargo test` command will fail due to PyO3's `extension-module` feature. Tests require the `auto-initialize` feature instead. The Makefile target handles this automatically.
 
 **Why different features?**
 - **Production builds** use `pyo3/extension-module` (configured in `pyproject.toml` - tells linker NOT to link against libpython)
@@ -289,7 +289,7 @@ make lint             # Lint Rust code (clippy --all-targets --all-features --fi
 make lint-python      # Lint and type-check Python code (ruff format + ruff check --fix + pyright)
 ```
 
-> **📝 Note:** The `make checkall` target runs checks in this order:
+> **Note:** The `make checkall` target runs checks in this order:
 > 1. Rust tests (`test-rust`)
 > 2. Rust streaming tests (`test-rust-streaming`)
 > 3. Rust linting with auto-fix (`lint` - runs clippy + fmt)
@@ -323,9 +323,9 @@ make pre-commit-uninstall
 
 The pytest hook runs `uv sync && maturin develop && uv run pytest tests/ -v` to ensure the package is built before running tests.
 
-> **⚠️ Important:** The pytest pre-commit hook can be slow since it rebuilds the package. You may want to comment out the pytest section in `.pre-commit-config.yaml` if you prefer to run tests manually before pushing.
+> **Warning:** The pytest pre-commit hook can be slow since it rebuilds the package. You may want to comment out the pytest section in `.pre-commit-config.yaml` if you prefer to run tests manually before pushing.
 
-> **📝 Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
+> **Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
 
 ## Running Examples
 
@@ -353,7 +353,7 @@ uv run python examples/pty_shell.py
 # ... and many more in the examples/ directory
 ```
 
-> **📝 Note:** The project includes 39 example scripts demonstrating various features including:
+> **Note:** The project includes 39 example scripts demonstrating various features including:
 > - **Basic Terminal**: Basic usage (`basic_usage_improved.py`), colors, cursor movement, scrollback, text attributes, rectangle operations, alt screen, Unicode/emoji, gradient tests
 > - **PTY/Shell**: Basic PTY (`pty_basic.py`), shell sessions (`pty_shell.py`), resize, custom environments, multiple PTYs, event loops, mouse events
 > - **Graphics**: Sixel image display (`display_image_sixel.py`, `test_sixel_display.py`, `test_sixel_simple.py`)
@@ -413,7 +413,7 @@ make proto-clean
 - Rust output: `src/streaming/terminal.pb.rs` (checked in; `build.rs` verifies its checksum, `make proto-rust` regenerates)
 - TypeScript output: `web-terminal-frontend/lib/proto/`
 
-> **📝 Note:** The Protocol Buffers implementation replaces JSON encoding for ~80% smaller message sizes. See [STREAMING.md](STREAMING.md) for protocol details.
+> **Note:** The Protocol Buffers implementation replaces JSON encoding for ~80% smaller message sizes. See [STREAMING.md](STREAMING.md) for protocol details.
 
 ## Cross-Compilation
 
@@ -449,7 +449,7 @@ uv run maturin build --release --universal2
 uv run maturin build --release --target x86_64-pc-windows-msvc
 ```
 
-> **📝 Note:** Cross-compilation may require additional toolchains. See [CROSS_PLATFORM.md](CROSS_PLATFORM.md) for detailed setup instructions.
+> **Note:** Cross-compilation may require additional toolchains. See [CROSS_PLATFORM.md](CROSS_PLATFORM.md) for detailed setup instructions.
 
 ## Publishing to PyPI
 
@@ -468,7 +468,7 @@ uv run maturin build --release --target aarch64-apple-darwin
 uv run maturin publish
 ```
 
-> **📝 Note:** You'll need to configure PyPI credentials first. Use `maturin publish --help` for authentication options.
+> **Note:** You'll need to configure PyPI credentials first. Use `maturin publish --help` for authentication options.
 
 ## Troubleshooting
 
@@ -524,7 +524,7 @@ make dev  # Release build (recommended for most development)
 
 ## Docker Build
 
-> **📝 Note:** This project does not currently include a Dockerfile. If you need to build in a containerized environment, you can create a Dockerfile based on this example:
+> **Note:** This project does not currently include a Dockerfile. If you need to build in a containerized environment, you can create a Dockerfile based on this example:
 
 ```dockerfile
 FROM rust:latest
@@ -556,7 +556,7 @@ docker cp builder:/build/target/wheels/ ./wheels/
 docker rm builder
 ```
 
-> **✅ Note:** Screenshot functionality uses pure Rust libraries (Swash for font rendering), so no external font library dependencies (FreeType, HarfBuzz) are required.
+> **Note:** Screenshot functionality uses pure Rust libraries (Swash for font rendering), so no external font library dependencies (FreeType, HarfBuzz) are required.
 
 ## Related Documentation
 
