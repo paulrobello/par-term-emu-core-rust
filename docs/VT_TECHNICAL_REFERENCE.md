@@ -1113,7 +1113,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 **Implementation:**
 - APC to DCS conversion in `src/terminal/mod.rs`
 - DCS handler in `src/terminal/sequences/dcs/mod.rs` (action 'G')
-- Kitty parser in `src/graphics/kitty.rs`
+- Kitty parser in `src/graphics/kitty/`
 - Graphics store in `src/graphics/mod.rs`
 
 #### Actions
@@ -1435,7 +1435,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | Protocol | Support | Implementation | Notes |
 |----------|---------|----------------|-------|
 | Kitty Keyboard | ✅ Full | `src/terminal/sequences/csi/mod.rs` | Flags, push/pop, query |
-| Kitty Graphics | ✅ Full | `src/graphics/kitty.rs` | APC G protocol, animations, image reuse, Unicode placeholders |
+| Kitty Graphics | ✅ Full | `src/graphics/kitty/` | APC G protocol, animations, image reuse, Unicode placeholders |
 | iTerm2 Inline Images | ✅ Full | `src/graphics/iterm.rs` | OSC 1337 File protocol |
 | Synchronized Updates | ✅ Full | Mode 2026 | Flicker-free rendering |
 | OSC 8 Hyperlinks | ✅ Full | `src/terminal/sequences/osc/mod.rs` | With deduplication |
@@ -1465,7 +1465,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | Protocol | Format | Implementation | Features |
 |----------|--------|----------------|----------|
 | Sixel | DCS q | `src/sixel.rs`, `src/graphics/mod.rs` | Palette, repeat, raster attributes |
-| Kitty Graphics | APC G | `src/graphics/kitty.rs` | Animations, image reuse, Unicode placeholders |
+| Kitty Graphics | APC G | `src/graphics/kitty/` | Animations, image reuse, Unicode placeholders |
 | iTerm2 Inline | OSC 1337 | `src/graphics/iterm.rs` | PNG, JPEG, GIF, dimension control |
 
 **Unified Architecture:**
@@ -1615,7 +1615,7 @@ To validate VT compatibility, test with:
     - Unified store: `src/graphics/mod.rs`
     - Terminal integration: `src/terminal/graphics.rs`
     - Sixel parser: `src/sixel.rs`
-    - Kitty protocol: `src/graphics/kitty.rs`
+    - Kitty protocol: `src/graphics/kitty/`
     - iTerm2 protocol: `src/graphics/iterm.rs`
     - Animation support: `src/graphics/animation.rs`
     - Unicode placeholders: `src/graphics/placeholder.rs`

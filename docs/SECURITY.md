@@ -594,7 +594,7 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 ### File Loading Implementation
 
-The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty.rs`. Validations run in this order, each refusing with a distinct error before the next runs:
+The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty/`. Validations run in this order, each refusing with a distinct error before the next runs:
 
 1. **UTF-8 Path Validation** — paths are decoded from the raw bytes (not base64-encoded for file transmission) and must be valid UTF-8.
 2. **Directory Traversal Prevention** — component-wise, not substring: `my..notes.png` has no `..` component and stays readable, `a/../b` does not. Applied before any filesystem operation.
@@ -660,7 +660,7 @@ logger = logging.getLogger(__name__)
 
 ### Integer Overflow Protection (Kitty Pixel Decoding, 0.43.1)
 
-`decode_pixels()` in `src/graphics/kitty.rs` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
+`decode_pixels()` in `src/graphics/kitty/` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
 
 ### Best Practices for Graphics Protocol
 
@@ -959,7 +959,7 @@ budget, per-value hook caps, the host probe, and pane respawn. The
 budgets' current values live in the
 [Resource Limits Reference](#resource-limits-reference) table. Every
 statement is verified against
-`src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks/`,
+`src/mux/ipc.rs`, `src/mux/server/`, `src/mux/hooks/`,
 `src/mux/host_probe.rs`, `src/mux/persist.rs`, and `src/mux/win_resume.rs`.
 
 ### Threat Model
@@ -1260,22 +1260,22 @@ sections; the numbers live here.
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
-| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
-| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
+| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
+| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
+| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty/mod.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command/mod.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `src/mux/command/mod.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `src/mux/command/mod.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server/mod.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |
@@ -1285,12 +1285,12 @@ sections; the numbers live here.
 | `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
 | `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
 | `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
-| `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
-| `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
-| `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
-| `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
-| `MAX_COLS` | 1,000 | `src/streaming/server.rs:162` | Columns a streaming client may request for its terminal. |
-| `MAX_ROWS` | 500 | `src/streaming/server.rs:165` | Rows a streaming client may request for its terminal. |
+| `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
+| `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
+| `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server/mod.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
+| `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server/mod.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
+| `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:162` | Columns a streaming client may request for its terminal. |
+| `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:165` | Rows a streaming client may request for its terminal. |
 | `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:26` | Client input chunks queued per session pending write to the PTY. |
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:35` | Client input bytes queued per session pending write to the PTY. |
 | `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |

@@ -4,7 +4,7 @@
 Diffs four code-owned lists against their documentation, so the next mux
 command or notification added without its doc row fails the gate:
 
-  1. `const COMMANDS` (src/mux/command.rs)      ↔ MUX.md "Command Reference" rows
+  1. `const COMMANDS` (src/mux/command/)        ↔ MUX.md "Command Reference" rows
   2. `MuxCommand::mutates()` true arms           ↔ MUX.md "When it saves" list
   3. `"%…` strings in `emit()` (src/mux/emit.rs) ↔ MUX.md "Notifications" rows
   4. `notification_type()` strings (src/tmux_control.rs)
@@ -46,7 +46,7 @@ NEVER_SENT: set[str] = {"unlinked-window-close", "pane-mode-changed"}
 
 # Files the gate reads (also the set --self-test copies and drifts).
 SELF_TEST_FILES: tuple[str, ...] = (
-    "src/mux/command.rs",
+    "src/mux/command/",
     "src/mux/emit.rs",
     "src/tmux_control.rs",
     "docs/MUX.md",
@@ -65,7 +65,19 @@ def fail(msg: str) -> NoReturn:
 
 
 def read(root: Path, rel: str) -> str:
+    """One file's text, or a module directory's production files concatenated.
+
+    A directory (`rel` ends in `/`) reads `mod.rs` first, then every other
+    `*.rs` except `tests.rs`, so items can move between the module's files
+    (ARC-003) without the gate losing them.
+    """
     try:
+        if rel.endswith("/"):
+            d = root / rel
+            files = [d / "mod.rs"] + sorted(
+                f for f in d.glob("*.rs") if f.name not in ("mod.rs", "tests.rs")
+            )
+            return "\n".join(f.read_text() for f in files)
         return (root / rel).read_text()
     except OSError as exc:
         fail(f"parsed nothing from {rel}: cannot read ({exc})")
@@ -220,30 +232,30 @@ def parse_commands(command_rs: str) -> list[tuple[str, str]]:
     start = command_rs.find("const COMMANDS")
     if start < 0:
         fail(
-            "parsed nothing from src/mux/command.rs: `const COMMANDS` not found (identifier renamed?)"
+            "parsed nothing from src/mux/command/: `const COMMANDS` not found (identifier renamed?)"
         )
     end = command_rs.find("];", start)
     if end < 0:
         fail(
-            "parsed nothing from src/mux/command.rs: unterminated `const COMMANDS` table"
+            "parsed nothing from src/mux/command/: unterminated `const COMMANDS` table"
         )
     rows = COMMANDS_ROW_RE.findall(command_rs[start:end])
     if not rows:
         fail(
-            "parsed nothing from src/mux/command.rs: no (name, parser, …) rows inside `const COMMANDS`"
+            "parsed nothing from src/mux/command/: no (name, parser, …) rows inside `const COMMANDS`"
         )
     return rows
 
 
 def parse_mutates_true_arms(command_rs: str) -> set[str]:
-    body = fn_block(command_rs, "pub fn mutates(", "src/mux/command.rs")
+    body = fn_block(command_rs, "pub fn mutates(", "src/mux/command/")
     idx = body.find("=> true")
     if idx < 0:
-        fail("parsed nothing from src/mux/command.rs: no `=> true` arm in mutates()")
+        fail("parsed nothing from src/mux/command/: no `=> true` arm in mutates()")
     variants = set(VARIANT_RE.findall(body[:idx]))
     if not variants:
         fail(
-            "parsed nothing from src/mux/command.rs: no MuxCommand variants before `=> true` in mutates()"
+            "parsed nothing from src/mux/command/: no MuxCommand variants before `=> true` in mutates()"
         )
     if not re.search(
         r"MuxCommand::RefreshClient\s*\{[^}]*\}\s*=>\s*size\.is_some\(\)", body
@@ -261,7 +273,7 @@ def variant_map(command_rs: str, commands: list[tuple[str, str]]) -> dict[str, s
     result: dict[str, str] = {}
     for name, parser in commands:
         body = strip_line_comments(
-            fn_block(command_rs, f"fn {parser}(", "src/mux/command.rs")
+            fn_block(command_rs, f"fn {parser}(", "src/mux/command/")
         )
         variants = set(VARIANT_RE.findall(body))
         if len(variants) != 1:
@@ -333,7 +345,7 @@ def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str
 
 
 def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
-    command_rs = read(root, "src/mux/command.rs")
+    command_rs = read(root, "src/mux/command/")
     emit_rs = read(root, "src/mux/emit.rs")
     tmux_rs = read(root, "src/tmux_control.rs")
     mux_md = read(root, "docs/MUX.md")
@@ -357,7 +369,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     for name in doc_commands:
         if name not in command_names:
             problems.append(
-                f"MUX.md Command Reference row `{name}` has no `const COMMANDS` entry in src/mux/command.rs"
+                f"MUX.md Command Reference row `{name}` has no `const COMMANDS` entry in src/mux/command/"
             )
 
     # Check 2: mutates() true arms ↔ the "When it saves" list.
@@ -448,6 +460,9 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
 def copy_inputs(src_root: Path, dst_root: Path) -> None:
     for rel in SELF_TEST_FILES:
         dst = dst_root / rel
+        if rel.endswith("/"):
+            shutil.copytree(src_root / rel, dst)
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src_root / rel, dst)
 
@@ -499,7 +514,7 @@ def run_self_test(root: Path) -> int:
         ),
         (
             'add a fake ("fake-cmd", parse_version, &[]) entry to COMMANDS',
-            "src/mux/command.rs",
+            "src/mux/command/mod.rs",
             lambda t: t.replace(
                 '("version", parse_version, &[]),',
                 '("version", parse_version, &[]),\n    ("fake-cmd", parse_version, &[]),',
@@ -543,7 +558,7 @@ def run_self_test(root: Path) -> int:
         with tempfile.TemporaryDirectory() as td:
             dst_root = Path(td)
             copy_inputs(root, dst_root)
-            target = dst_root / "src/mux/command.rs"
+            target = dst_root / "src/mux/command/mod.rs"
             target.write_text(target.read_text() + append)
             problems, _ = collect_problems(dst_root)
         return problems
