@@ -403,3 +403,87 @@ fn test_panicking_observer_is_isolated() {
     // The Terminal must remain usable after the isolated panic.
     term.process(b"still alive");
 }
+
+/// Close a prompt zone, then push enough lines through a 5-row terminal with
+/// a 10-line scrollback that the zone falls below the scrollback floor.
+fn zone_scroll_out_bytes() -> Vec<u8> {
+    let mut bytes = b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07".to_vec();
+    for i in 0..30 {
+        bytes.extend_from_slice(format!("line {i}\r\n").as_bytes());
+    }
+    bytes
+}
+
+fn zone_subscribed_observer() -> Arc<MockObserver> {
+    Arc::new(MockObserver::with_subscriptions(HashSet::from([
+        TerminalEventKind::ZoneOpened,
+        TerminalEventKind::ZoneClosed,
+        TerminalEventKind::ZoneScrolledOut,
+    ])))
+}
+
+fn scrolled_out_count(observer: &MockObserver) -> usize {
+    observer
+        .zone_events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.starts_with("zone_scrolled_out:"))
+        .count()
+}
+
+#[test]
+fn test_zone_scrolled_out_reaches_observers_via_process() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    let first = zone_subscribed_observer();
+    let second = zone_subscribed_observer();
+    term.add_observer(first.clone());
+    term.add_observer(second.clone());
+
+    term.process(&zone_scroll_out_bytes());
+
+    assert!(
+        scrolled_out_count(&first) >= 1,
+        "first observer missed ZoneScrolledOut"
+    );
+    assert!(
+        scrolled_out_count(&second) >= 1,
+        "second observer missed ZoneScrolledOut"
+    );
+}
+
+#[test]
+fn test_zone_scrolled_out_reaches_observers_via_process_deferred() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    let first = zone_subscribed_observer();
+    let second = zone_subscribed_observer();
+    term.add_observer(first.clone());
+    term.add_observer(second.clone());
+
+    term.process_deferred(&zone_scroll_out_bytes()).deliver();
+
+    assert!(
+        scrolled_out_count(&first) >= 1,
+        "first observer missed ZoneScrolledOut"
+    );
+    assert!(
+        scrolled_out_count(&second) >= 1,
+        "second observer missed ZoneScrolledOut"
+    );
+}
+
+#[test]
+fn test_zone_scrolled_out_reaches_filtered_poll() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    term.set_event_subscription(HashSet::from([TerminalEventKind::ZoneScrolledOut]));
+
+    term.process(&zone_scroll_out_bytes());
+
+    let events = term.poll_subscribed_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::ZoneScrolledOut { .. })),
+        "filtered poll_subscribed_events missed ZoneScrolledOut: {events:?}"
+    );
+}
