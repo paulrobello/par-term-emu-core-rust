@@ -473,6 +473,38 @@ fn test_zone_scrolled_out_reaches_observers_via_process_deferred() {
 }
 
 #[test]
+fn test_zone_scrolled_out_reaches_observers_via_apply_actions() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    let observer = zone_subscribed_observer();
+    term.add_observer(observer.clone());
+
+    term.apply_actions(crate::terminal::action::parse_to_actions(
+        &zone_scroll_out_bytes(),
+    ));
+
+    assert!(
+        scrolled_out_count(&observer) >= 1,
+        "observer missed ZoneScrolledOut from apply_actions without process()"
+    );
+}
+
+#[test]
+fn test_zone_scrolled_out_reaches_observers_via_apply_action() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    let observer = zone_subscribed_observer();
+    term.add_observer(observer.clone());
+
+    for action in crate::terminal::action::parse_to_actions(&zone_scroll_out_bytes()) {
+        term.apply_action(action);
+    }
+
+    assert!(
+        scrolled_out_count(&observer) >= 1,
+        "observer missed ZoneScrolledOut from apply_action without process()"
+    );
+}
+
+#[test]
 fn test_zone_scrolled_out_reaches_filtered_poll() {
     let mut term = Terminal::with_scrollback(80, 5, 10);
     term.set_event_subscription(HashSet::from([TerminalEventKind::ZoneScrolledOut]));

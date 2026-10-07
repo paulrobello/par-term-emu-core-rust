@@ -185,11 +185,16 @@ impl Terminal {
     /// (Print/Execute/CSI/OSC/ESC) apply cleanly in isolation; a DCS sequence
     /// should be applied as a group via [`Terminal::apply_actions`] so its
     /// Hook→Put→Unhook spans a single parser.
+    ///
+    /// Like [`Terminal::process`], queued events (including `ZoneScrolledOut`
+    /// for zones the action scrolled off) are dispatched to observers before
+    /// returning.
     pub fn apply_action(&mut self, action: TerminalAction) {
         let bytes = action.to_bytes();
         if !bytes.is_empty() {
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.finish_applied_actions();
         }
     }
 
@@ -197,7 +202,8 @@ impl Terminal {
     ///
     /// All actions' bytes are concatenated and fed through a single
     /// `vte::Parser`, so multi-action sequences like DCS (Hook + Put(s) +
-    /// Unhook) replay correctly. Equivalent to re-running the original parse.
+    /// Unhook) replay correctly. Equivalent to re-running the original parse,
+    /// including observer dispatch of the events it queued.
     pub fn apply_actions<I>(&mut self, actions: I)
     where
         I: IntoIterator<Item = TerminalAction>,
@@ -206,6 +212,7 @@ impl Terminal {
         if !bytes.is_empty() {
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.finish_applied_actions();
         }
     }
 }
