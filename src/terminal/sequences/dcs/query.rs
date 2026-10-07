@@ -5,122 +5,127 @@
 
 use crate::color::{Color, NamedColor};
 use crate::cursor::CursorStyle;
-use crate::terminal::Terminal;
+use crate::terminal::{MarginState, TextAttributes};
 
-impl Terminal {
-    /// XTGETTCAP reply: `DCS + q <hex-name>[;<hex-name>...] ST`.
-    ///
-    /// For each requested (hex-encoded) capability name, emits a separate
-    /// reply: `DCS 1 + r <hexname>=<hexvalue> ST` if known, or
-    /// `DCS 0 + r <hexname> ST` if unknown. xterm supports concatenating
-    /// multiple results into one reply; emitting one DCS per name is
-    /// simpler and equally valid, so that's what we do here.
-    pub(crate) fn handle_xtgettcap_reply(&mut self) {
-        let buffer = self.dcs_state.dcs_buffer.clone();
-        let payload = String::from_utf8_lossy(&buffer);
+// Capability boundary (ARC-002): both replies read only the DCS payload and
+// the state they report, and write into the reply buffer.
 
-        for hex_name in payload.split(';') {
-            if hex_name.is_empty() {
-                continue;
-            }
+/// XTGETTCAP reply: `DCS + q <hex-name>[;<hex-name>...] ST`.
+///
+/// For each requested (hex-encoded) capability name, emits a separate
+/// reply: `DCS 1 + r <hexname>=<hexvalue> ST` if known, or
+/// `DCS 0 + r <hexname> ST` if unknown. xterm supports concatenating
+/// multiple results into one reply; emitting one DCS per name is
+/// simpler and equally valid, so that's what we do here.
+pub(crate) fn handle_xtgettcap_reply(buffer: &[u8], response: &mut Vec<u8>) {
+    let payload = String::from_utf8_lossy(buffer);
 
-            let value = decode_hex_to_string(hex_name).and_then(|name| lookup_capability(&name));
-
-            let response = match value {
-                Some(v) => format!("\x1bP1+r{}={}\x1b\\", hex_name, encode_hex(v.as_bytes())),
-                None => format!("\x1bP0+r{}\x1b\\", hex_name),
-            };
-            self.push_response(response.as_bytes());
+    for hex_name in payload.split(';') {
+        if hex_name.is_empty() {
+            continue;
         }
-    }
 
-    /// DECRQSS reply: `DCS $ q <mnemonic> ST`.
-    ///
-    /// Replies `DCS 1 $ r <current-setting><mnemonic> ST` for recognized
-    /// mnemonics (`m` SGR, ` q` DECSCUSR, `r` DECSTBM), or
-    /// `DCS 0 $ r ST` for anything else.
-    pub(crate) fn handle_decrqss_reply(&mut self) {
-        let buffer = self.dcs_state.dcs_buffer.clone();
-        let query = String::from_utf8_lossy(&buffer);
+        let value = decode_hex_to_string(hex_name).and_then(|name| lookup_capability(&name));
 
-        let body = match query.as_ref() {
-            "m" => Some(self.decrqss_sgr_body()),
-            " q" => Some(format!("{} q", self.decrqss_cursor_style_number())),
-            "r" => Some(format!(
-                "{};{}r",
-                self.margins.scroll_region_top + 1,
-                self.margins.scroll_region_bottom + 1
-            )),
-            _ => None,
+        let reply = match value {
+            Some(v) => format!("\x1bP1+r{}={}\x1b\\", hex_name, encode_hex(v.as_bytes())),
+            None => format!("\x1bP0+r{}\x1b\\", hex_name),
         };
+        response.extend_from_slice(reply.as_bytes());
+    }
+}
 
-        match body {
-            Some(b) => {
-                let response = format!("\x1bP1$r{}\x1b\\", b);
-                self.push_response(response.as_bytes());
-            }
-            None => self.push_response(b"\x1bP0$r\x1b\\"),
+/// DECRQSS reply: `DCS $ q <mnemonic> ST`.
+///
+/// Replies `DCS 1 $ r <current-setting><mnemonic> ST` for recognized
+/// mnemonics (`m` SGR, ` q` DECSCUSR, `r` DECSTBM), or
+/// `DCS 0 $ r ST` for anything else.
+pub(crate) fn handle_decrqss_reply(
+    buffer: &[u8],
+    attrs: &TextAttributes,
+    cursor_style: CursorStyle,
+    margins: &MarginState,
+    response: &mut Vec<u8>,
+) {
+    let query = String::from_utf8_lossy(buffer);
+
+    let body = match query.as_ref() {
+        "m" => Some(decrqss_sgr_body(attrs)),
+        " q" => Some(format!("{} q", decrqss_cursor_style_number(cursor_style))),
+        "r" => Some(format!(
+            "{};{}r",
+            margins.scroll_region_top + 1,
+            margins.scroll_region_bottom + 1
+        )),
+        _ => None,
+    };
+
+    match body {
+        Some(b) => {
+            let reply = format!("\x1bP1$r{}\x1b\\", b);
+            response.extend_from_slice(reply.as_bytes());
         }
+        None => response.extend_from_slice(b"\x1bP0$r\x1b\\"),
+    }
+}
+
+/// Build the SGR parameter string reflecting current pen state, e.g.
+/// `"0;1;4m"` for bold+underline, or `"0m"` for no attributes.
+fn decrqss_sgr_body(attrs: &TextAttributes) -> String {
+    let mut codes: Vec<String> = Vec::new();
+
+    if attrs.flags.bold() {
+        codes.push("1".to_string());
+    }
+    if attrs.flags.dim() {
+        codes.push("2".to_string());
+    }
+    if attrs.flags.italic() {
+        codes.push("3".to_string());
+    }
+    if attrs.flags.underline() {
+        codes.push("4".to_string());
+    }
+    if attrs.flags.blink() {
+        codes.push("5".to_string());
+    }
+    if attrs.flags.reverse() {
+        codes.push("7".to_string());
+    }
+    if attrs.flags.hidden() {
+        codes.push("8".to_string());
+    }
+    if attrs.flags.strikethrough() {
+        codes.push("9".to_string());
     }
 
-    /// Build the SGR parameter string reflecting current pen state, e.g.
-    /// `"0;1;4m"` for bold+underline, or `"0m"` for no attributes.
-    fn decrqss_sgr_body(&self) -> String {
-        let mut codes: Vec<String> = Vec::new();
-
-        if self.flags.bold() {
-            codes.push("1".to_string());
-        }
-        if self.flags.dim() {
-            codes.push("2".to_string());
-        }
-        if self.flags.italic() {
-            codes.push("3".to_string());
-        }
-        if self.flags.underline() {
-            codes.push("4".to_string());
-        }
-        if self.flags.blink() {
-            codes.push("5".to_string());
-        }
-        if self.flags.reverse() {
-            codes.push("7".to_string());
-        }
-        if self.flags.hidden() {
-            codes.push("8".to_string());
-        }
-        if self.flags.strikethrough() {
-            codes.push("9".to_string());
-        }
-
-        // Only emit fg/bg codes when they differ from the terminal's
-        // built-in defaults (Named White / Named Black) - matches how
-        // xterm omits 39/49 for an untouched pen.
-        if self.fg != Color::Named(NamedColor::White) {
-            codes.push(sgr_color_code(self.fg, true));
-        }
-        if self.bg != Color::Named(NamedColor::Black) {
-            codes.push(sgr_color_code(self.bg, false));
-        }
-
-        if codes.is_empty() {
-            "0m".to_string()
-        } else {
-            format!("0;{}m", codes.join(";"))
-        }
+    // Only emit fg/bg codes when they differ from the terminal's
+    // built-in defaults (Named White / Named Black) - matches how
+    // xterm omits 39/49 for an untouched pen.
+    if attrs.fg != Color::Named(NamedColor::White) {
+        codes.push(sgr_color_code(attrs.fg, true));
+    }
+    if attrs.bg != Color::Named(NamedColor::Black) {
+        codes.push(sgr_color_code(attrs.bg, false));
     }
 
-    /// Current DECSCUSR cursor style number (1-6), per the same mapping
-    /// used by the DECSCUSR setter in `sequences/csi/cursor.rs`.
-    fn decrqss_cursor_style_number(&self) -> u8 {
-        match self.cursor.style {
-            CursorStyle::BlinkingBlock => 1,
-            CursorStyle::SteadyBlock => 2,
-            CursorStyle::BlinkingUnderline => 3,
-            CursorStyle::SteadyUnderline => 4,
-            CursorStyle::BlinkingBar => 5,
-            CursorStyle::SteadyBar => 6,
-        }
+    if codes.is_empty() {
+        "0m".to_string()
+    } else {
+        format!("0;{}m", codes.join(";"))
+    }
+}
+
+/// Current DECSCUSR cursor style number (1-6), per the same mapping
+/// used by the DECSCUSR setter in `sequences/csi/cursor.rs`.
+fn decrqss_cursor_style_number(style: CursorStyle) -> u8 {
+    match style {
+        CursorStyle::BlinkingBlock => 1,
+        CursorStyle::SteadyBlock => 2,
+        CursorStyle::BlinkingUnderline => 3,
+        CursorStyle::SteadyUnderline => 4,
+        CursorStyle::BlinkingBar => 5,
+        CursorStyle::SteadyBar => 6,
     }
 }
 

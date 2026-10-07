@@ -15,7 +15,7 @@ impl Terminal {
         match action {
             'J' => {
                 // Erase in display (ED) — BCE: fill with current SGR background
-                let bg = self.bg;
+                let bg = self.attrs.bg;
                 let n = params
                     .iter()
                     .next()
@@ -67,7 +67,7 @@ impl Terminal {
             }
             'K' => {
                 // Erase in line (EL) — BCE: fill with current SGR background
-                let bg = self.bg;
+                let bg = self.attrs.bg;
                 let n = params
                     .iter()
                     .next()
@@ -93,7 +93,7 @@ impl Terminal {
             }
             'X' => {
                 // Erase characters (ECH) — BCE: fill with current SGR background
-                let bg = self.bg;
+                let bg = self.attrs.bg;
                 let n = params
                     .iter()
                     .next()
@@ -187,7 +187,7 @@ impl Terminal {
             }
         }
         // Second pass: erase the collected cells with BCE
-        let bg = self.bg;
+        let bg = self.attrs.bg;
         for (col, row) in to_erase {
             if let Some(cells) = self.active_grid_mut().row_mut(row) {
                 cells[col].reset();

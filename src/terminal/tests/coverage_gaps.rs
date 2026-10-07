@@ -409,19 +409,19 @@ fn save_then_restore_cursor_round_trips_position_and_attrs() {
 
     let mut term = Terminal::new(80, 24);
     term.cursor.goto(3, 7);
-    term.fg = Color::Named(NamedColor::Red);
+    term.attrs.fg = Color::Named(NamedColor::Red);
 
     term.save_cursor();
 
     // Mutate state after saving.
     term.cursor.goto(0, 0);
-    term.fg = Color::default();
+    term.attrs.fg = Color::default();
 
     term.restore_cursor();
 
     assert_eq!(term.cursor.col, 3);
     assert_eq!(term.cursor.row, 7);
-    assert_eq!(term.fg, Color::Named(NamedColor::Red));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::Red));
 }
 
 #[test]

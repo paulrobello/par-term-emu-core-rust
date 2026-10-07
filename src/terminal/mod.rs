@@ -752,6 +752,31 @@ impl Default for TerminalModes {
     }
 }
 
+/// Current SGR pen: the colors and flags applied to newly written cells
+/// (ARC-002 sub-struct; the capability SGR and DECRQSS handlers take).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextAttributes {
+    /// Current foreground color
+    pub(crate) fg: Color,
+    /// Current background color
+    pub(crate) bg: Color,
+    /// Current underline color (SGR 58) - None means use foreground color
+    pub(crate) underline_color: Option<Color>,
+    /// Current cell flags
+    pub(crate) flags: CellFlags,
+}
+
+impl Default for TextAttributes {
+    fn default() -> Self {
+        Self {
+            fg: Color::Named(NamedColor::White),
+            bg: Color::Named(NamedColor::Black),
+            underline_color: None,
+            flags: CellFlags::default(),
+        }
+    }
+}
+
 /// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
 pub(crate) struct SavedCursorState {
     /// Saved cursor position (for save/restore)
@@ -971,14 +996,8 @@ pub struct Terminal {
     pub(crate) cursor: Cursor,
     /// Saved cursor for alternate screen
     pub(crate) alt_cursor: Cursor,
-    /// Current foreground color
-    pub(crate) fg: Color,
-    /// Current background color
-    pub(crate) bg: Color,
-    /// Current underline color (SGR 58) - None means use foreground color
-    pub(crate) underline_color: Option<Color>,
-    /// Current cell flags
-    pub(crate) flags: CellFlags,
+    /// Current SGR pen: fg/bg/underline color + cell flags (ARC-002 sub-struct)
+    pub(crate) attrs: TextAttributes,
     /// DECSC/DECRC saved terminal state: cursor + SGR colors/flags (ARC-001 sub-struct)
     pub(crate) saved_state: SavedCursorState,
     /// Window title, title stack, answerback string (ARC-001 sub-struct)
@@ -1140,10 +1159,7 @@ impl Terminal {
             alt_screen_active: false,
             cursor: Cursor::new(),
             alt_cursor: Cursor::new(),
-            fg: Color::Named(NamedColor::White),
-            bg: Color::Named(NamedColor::Black),
-            underline_color: None,
-            flags: CellFlags::default(),
+            attrs: TextAttributes::default(),
             saved_state: SavedCursorState::default(),
             title_state: TitleState::default(),
             sync_state: SyncState::default(),
@@ -1746,20 +1762,20 @@ impl Terminal {
     /// Save current cursor state
     pub fn save_cursor(&mut self) {
         self.saved_state.saved_cursor = Some(self.cursor);
-        self.saved_state.saved_fg = self.fg;
-        self.saved_state.saved_bg = self.bg;
-        self.saved_state.saved_underline_color = self.underline_color;
-        self.saved_state.saved_flags = self.flags;
+        self.saved_state.saved_fg = self.attrs.fg;
+        self.saved_state.saved_bg = self.attrs.bg;
+        self.saved_state.saved_underline_color = self.attrs.underline_color;
+        self.saved_state.saved_flags = self.attrs.flags;
     }
 
     /// Restore previously saved cursor state
     pub fn restore_cursor(&mut self) {
         if let Some(saved) = self.saved_state.saved_cursor {
             self.cursor = saved;
-            self.fg = self.saved_state.saved_fg;
-            self.bg = self.saved_state.saved_bg;
-            self.underline_color = self.saved_state.saved_underline_color;
-            self.flags = self.saved_state.saved_flags;
+            self.attrs.fg = self.saved_state.saved_fg;
+            self.attrs.bg = self.saved_state.saved_bg;
+            self.attrs.underline_color = self.saved_state.saved_underline_color;
+            self.attrs.flags = self.saved_state.saved_flags;
         }
     }
 
@@ -3143,10 +3159,10 @@ impl Terminal {
         self.margins = MarginState::new(cols, rows);
 
         // SGR default — the fresh-terminal baseline.
-        self.fg = Color::Named(NamedColor::White);
-        self.bg = Color::Named(NamedColor::Black);
-        self.underline_color = None;
-        self.flags = CellFlags::default();
+        self.attrs.fg = Color::Named(NamedColor::White);
+        self.attrs.bg = Color::Named(NamedColor::Black);
+        self.attrs.underline_color = None;
+        self.attrs.flags = CellFlags::default();
 
         self.charset_state = CharsetState::default();
 
@@ -3541,7 +3557,7 @@ impl Terminal {
         right: usize,
         ch: char,
     ) {
-        let cell = Cell::with_colors(ch, self.fg, self.bg);
+        let cell = Cell::with_colors(ch, self.attrs.fg, self.attrs.bg);
 
         for row in top..=bottom {
             for col in left..=right {

@@ -48,7 +48,15 @@ impl Terminal {
                 self.handle_csi_scroll(action, params, intermediates);
             }
             'm' => {
-                self.handle_csi_style(action, params, intermediates);
+                style::handle_csi_style(
+                    &mut self.attrs,
+                    &mut self.keyboard_state,
+                    &self.theme,
+                    &mut self.response_buffer,
+                    action,
+                    params,
+                    intermediates,
+                );
             }
             'h' | 'l' => {
                 self.handle_csi_mode(action, params, intermediates);

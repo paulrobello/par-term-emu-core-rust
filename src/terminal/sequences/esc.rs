@@ -165,7 +165,7 @@ mod tests {
 
         assert_eq!(term.cursor.col, 9); // 0-indexed
         assert_eq!(term.cursor.row, 14);
-        assert!(term.flags.bold());
+        assert!(term.attrs.flags.bold());
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         // Check that terminal is reset
         assert_eq!(term.cursor.row, 0);
         assert_eq!(term.cursor.col, 0);
-        assert!(!term.flags.bold());
+        assert!(!term.attrs.flags.bold());
         assert!(term.modes.auto_wrap); // Default is true
         assert!(!term.modes.application_cursor); // Default is false
         assert!(!term.alt_screen_active); // Back to primary screen

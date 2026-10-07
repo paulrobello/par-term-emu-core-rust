@@ -37,8 +37,9 @@ impl Terminal {
                     let bottom = pb.saturating_sub(1);
                     let right = pr.saturating_sub(1);
 
-                    let mut fill_cell = crate::cell::Cell::with_colors(pc, self.fg, self.bg);
-                    fill_cell.flags = self.flags;
+                    let mut fill_cell =
+                        crate::cell::Cell::with_colors(pc, self.attrs.fg, self.attrs.bg);
+                    fill_cell.flags = self.attrs.flags;
 
                     self.active_grid_mut()
                         .fill_rectangle(fill_cell, top, left, bottom, right);

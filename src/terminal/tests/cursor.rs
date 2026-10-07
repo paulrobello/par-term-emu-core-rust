@@ -75,7 +75,7 @@ fn test_save_restore_cursor() {
 
     assert_eq!(term.cursor.col, 19);
     assert_eq!(term.cursor.row, 9);
-    assert_eq!(term.fg, Color::Named(NamedColor::Red));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::Red));
 }
 
 #[test]
