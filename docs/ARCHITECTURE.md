@@ -7,6 +7,7 @@ Comprehensive internal architecture documentation for par-term-emu-core-rust, a 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Crate Layout](#crate-layout)
 - [Core Components](#core-components)
   - [1. Color](#1-color)
   - [2. Cell](#2-cell)
@@ -41,6 +42,33 @@ par-term-emu-core-rust is a terminal emulator library written in Rust with Pytho
 - **Rust Library**: Can be used as a `cdylib` or `rlib` for other Rust projects
 - **Streaming Server Binary**: `par-term-streamer` - WebSocket-based terminal streaming server (optional, requires `streaming-bin` feature)
 - **Multiplexer Daemon**: `par-mux` - tmux-control-mode terminal multiplexer over a local socket (optional, Rust `mux` feature; see [MUX.md](MUX.md))
+
+## Crate Layout
+
+The repository is a Cargo workspace (ARC-007 O2). Three crates carry the code, and arrows point from a crate to what it depends on:
+
+```mermaid
+graph LR
+    Root["par-term-emu-core-rust (root)<br/>src/: streaming/, python_bindings/, ffi.rs,<br/>prelude.rs, bin/streaming_server/<br/>re-exports the pre-split public paths"]
+    Mux["par-mux<br/>crates/par-mux/<br/>src/mux/, bin/par_mux/"]
+    Core["par-term-emu-core<br/>crates/par-term-emu-core/<br/>terminal/, grid/, pty_session/, graphics/,<br/>screenshot/, tmux_control.rs"]
+    Derive["par-term-emu-derive<br/>derive/ (proc macros)"]
+
+    Root --> Core
+    Root -->|"optional, mux feature"| Mux
+    Mux --> Core
+    Root -->|"optional, python/streaming"| Derive
+
+    style Root fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style Mux fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Core fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style Derive fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+```
+
+- **`par-term-emu-core`** holds the terminal state machine, grid, PTY session, graphics protocols, screenshot renderer, and the tmux control-mode parser (`tmux_control.rs`). With no features it is the headless (`sim`) profile. Design and invariants: [crates/par-term-emu-core/DESIGN.md](../crates/par-term-emu-core/DESIGN.md).
+- **`par-mux`** is the multiplexer library and the `par-mux` daemon binary. It depends on the core only and never on the root, so the daemon builds without Python or the streaming stack.
+- **The root** keeps the streaming server, the PyO3 bindings, the C FFI, and the `par-term-streamer` binary. Its `src/lib.rs` re-exports the core's modules (and `par_mux` as `mux` behind the `mux` feature), so every pre-split `par_term_emu_core_rust::…` path still resolves.
+- The members share the root's version and the root pins each with `=X.Y.Z`. They publish to crates.io in dependency order: derive, then `par-term-emu-core`, then `par-mux`, then the root.
 
 ## Core Components
 
@@ -885,6 +913,8 @@ graph TD
 ## Dependencies
 
 ### Rust
+
+The lists below cover the workspace as a whole. The terminal-side crates (`vte`, `unicode-width`, `portable-pty`, `regex`, `image`, `swash`) are dependencies of the `par-term-emu-core` member; the streaming and Python crates belong to the root (see [Crate Layout](#crate-layout)).
 
 **Core dependencies:**
 - `pyo3` - Python bindings (optional, feature-gated; uses `multiple-pymethods` to allow the split `*_api.rs` impl blocks)
