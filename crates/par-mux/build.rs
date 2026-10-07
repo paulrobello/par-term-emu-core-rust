@@ -16,36 +16,73 @@ fn main() {
 /// same-version drift stays detectable in release builds instead of
 /// collapsing to `+unknown` (see `mux::build_stamp`).
 ///
-/// Rerun-on-`.git/HEAD` keeps the stamp moving with commits: without it the
-/// env would be frozen at the first build of the checkout and every later
-/// commit would silently keep the old identity. The reflog-style dance of
-/// branch switches also updates HEAD, which is exactly when a stale stamp
-/// would lie. The digest fallback instead reruns on the hashed inputs.
+/// Rerun-on-HEAD keeps the stamp moving with commits: without it the env
+/// would be frozen at the first build of the checkout and every later commit
+/// would silently keep the old identity. The reflog-style dance of branch
+/// switches also updates HEAD, which is exactly when a stale stamp would lie.
+/// The digest fallback instead reruns on the hashed inputs.
+///
+/// The crate sits at `crates/par-mux`, so `.git` is never next to the
+/// manifest: git reports where HEAD lives (per worktree) and where branch
+/// refs live (the common dir, shared by every worktree), and both are
+/// watched by absolute path. Only done when the git identity is used.
 fn emit_build_stamp() {
-    let head = std::path::Path::new(".git/HEAD");
-    if head.exists() {
-        println!("cargo:rerun-if-changed=.git/HEAD");
-        // HEAD is usually a symref; the ref it names changes without HEAD
-        // itself changing, so watch the resolved ref too when it is one.
-        if let Ok(content) = std::fs::read_to_string(head) {
-            if let Some(ref_path) = content.trim().strip_prefix("ref: ") {
-                let ref_file = std::path::Path::new(".git").join(ref_path);
-                if ref_file.exists() {
-                    println!("cargo:rerun-if-changed={}", ref_file.display());
-                }
-            }
-        }
-    }
-    let sha = git_short_sha().unwrap_or_else(|| {
-        // No git identity (crates.io tarball): the source digest IS the
-        // identity, so its inputs must re-run this script when they change —
-        // without these, a rebuild after editing a hashed file would keep
-        // serving the stale env.
-        println!("cargo:rerun-if-changed=src");
-        println!("cargo:rerun-if-changed=Cargo.toml");
-        source_digest().unwrap_or_else(|| "unknown".to_string())
-    });
+    let sha = git_short_sha()
+        .inspect(|_| watch_git_head())
+        .unwrap_or_else(|| {
+            // No git identity (crates.io tarball): the source digest IS the
+            // identity, so its inputs must re-run this script when they change —
+            // without these, a rebuild after editing a hashed file would keep
+            // serving the stale env.
+            println!("cargo:rerun-if-changed=src");
+            println!("cargo:rerun-if-changed=Cargo.toml");
+            source_digest().unwrap_or_else(|| "unknown".to_string())
+        });
     println!("cargo:rustc-env=PAR_TERM_CORE_BUILD_SHA={sha}");
+}
+
+/// `git rev-parse <args>` run from the manifest dir, trimmed; `None` on any
+/// failure.
+fn git_rev_parse(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("rev-parse")
+        .args(args)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Rerun when HEAD moves: watch the worktree's HEAD file and, when HEAD is a
+/// symref, the branch ref it names — a loose ref under the common dir, else
+/// `packed-refs` (a packed branch has no loose file until its next update).
+fn watch_git_head() {
+    let Some(git_dir) = git_rev_parse(&["--absolute-git-dir"]) else {
+        return;
+    };
+    let head = std::path::Path::new(&git_dir).join("HEAD");
+    println!("cargo:rerun-if-changed={}", head.display());
+    let Ok(content) = std::fs::read_to_string(&head) else {
+        return;
+    };
+    let Some(ref_path) = content.trim().strip_prefix("ref: ") else {
+        return;
+    };
+    let common = git_rev_parse(&["--path-format=absolute", "--git-common-dir"])
+        .unwrap_or_else(|| git_dir.clone());
+    let common = std::path::Path::new(&common);
+    let loose = common.join(ref_path);
+    if loose.exists() {
+        println!("cargo:rerun-if-changed={}", loose.display());
+    } else {
+        println!(
+            "cargo:rerun-if-changed={}",
+            common.join("packed-refs").display()
+        );
+    }
 }
 
 /// Deterministic FNV-1a digest over the crate's own source: every file
@@ -102,33 +139,26 @@ fn source_digest() -> Option<String> {
 fn git_short_sha() -> Option<String> {
     // ARC-120: a crate vendored inside another repository (or a crates.io
     // tarball extracted in one) would otherwise stamp the OUTER repo's
-    // commit. Git identity describes this crate only when the toplevel is
-    // the manifest dir; canonicalize both (macOS /tmp -> /private/tmp).
-    let toplevel = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !toplevel.status.success() {
+    // commit. Git identity describes this crate only when it sits at its
+    // own place in its own repository: the manifest dir is
+    // `<toplevel>/crates/par-mux` (or the toplevel itself, for a standalone
+    // checkout) AND git tracks this manifest — an extracted tarball dropped
+    // into some other repo's `crates/par-mux` is untracked there and falls
+    // back to the digest. Canonicalize both (macOS /tmp -> /private/tmp).
+    let toplevel = std::fs::canonicalize(git_rev_parse(&["--show-toplevel"])?).ok()?;
+    let manifest_dir = std::fs::canonicalize(std::env::var_os("CARGO_MANIFEST_DIR")?).ok()?;
+    if manifest_dir != toplevel && manifest_dir != toplevel.join("crates").join("par-mux") {
         return None;
     }
-    let toplevel = String::from_utf8(toplevel.stdout).ok()?;
-    let toplevel = std::fs::canonicalize(toplevel.trim()).ok()?;
-    let manifest_dir = std::fs::canonicalize(std::env::var_os("CARGO_MANIFEST_DIR")?).ok()?;
-    if toplevel != manifest_dir {
+    let tracked = std::process::Command::new("git")
+        .args(["ls-files", "--error-unmatch", "Cargo.toml"])
+        .output()
+        .ok()?;
+    if !tracked.status.success() {
         return None;
     }
 
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if sha.is_empty() {
-        return None;
-    }
+    let sha = git_rev_parse(&["--short", "HEAD"])?;
     let status = std::process::Command::new("git")
         .args(["status", "--porcelain"])
         .output()
