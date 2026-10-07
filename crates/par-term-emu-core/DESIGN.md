@@ -82,7 +82,7 @@ features is the headless (`sim`) profile.**
 | Root feature | Member feature it forwards | Notes |
 |--------------|---------------------------|-------|
 | `screenshot` | `par-term-emu-core/screenshot` | gates `dep:swash` + embedded fonts in the member |
-| `pty_session` | `par-term-emu-core/pty_session` | member gates `portable-pty`; root keeps `nix` (root mux/bin use it) |
+| `pty_session` | `par-term-emu-core/pty_session` | member gates `portable-pty`; `nix` moved to par-mux with the multiplexer, so the root forwards only |
 | `serde` | `par-term-emu-core/serde` | `smallvec/serde`, `bitflags/serde` move to the member |
 | `macro-yaml` | `par-term-emu-core/macro-yaml` | `dep:serde_yaml_ng` moves to the member |
 | `mux` | `par-term-emu-core/mux` | member `mux` only exposes the two mux hooks (see promotions) |

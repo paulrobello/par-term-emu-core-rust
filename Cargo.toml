@@ -67,9 +67,7 @@ par-term-emu-core = { path = "crates/par-term-emu-core", version = "=0.58.1" }
 # The par-mux multiplexer (ARC-007 O2 Phase 2), re-exported as `crate::mux`
 # behind the `mux` feature. Same exact pin + lockstep version as the core.
 par-mux = { path = "crates/par-mux", version = "=0.58.1", optional = true }
-portable-pty = { version = "0.9.0", optional = true }
 base64 = "0.22.1"
-regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
@@ -123,21 +121,6 @@ headers = { version = "0.4.1", optional = true }
 # System resource monitoring
 sysinfo = { version = "0.39.3", optional = true }
 
-# Screenshot support - using pure Rust swash for cross-platform compatibility
-image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
-# Decoder exclusions (SEC-007 / ARC-007): AVIF is intentionally excluded — it
-# pulls in `ravif` → `rav1e` → the unmaintained `paste` proc-macro
-# (RUSTSEC-2024-0436). EXR is excluded for the same reason (exr → pulp →
-# paste). HDR and DDS are dropped as implausible terminal payloads. None of
-# these formats are ever produced by this crate (screenshots are PNG/JPEG/BMP;
-# inline graphics decode PNG/JPEG/GIF/WebP/TIFF/etc.), so the exclusions have
-# no behavior impact and `paste` is never compiled. It still appears in
-# Cargo.lock, and `cargo audit` still reports it, because the `rayon` feature
-# above declares the weak deps `ravif?/threading` and `exr?/rayon`, and cargo
-# records weakly referenced optional deps in the lockfile (SEC-134). This crate
-# calls no `image` rayon API. SEC-134 resolution: the `rayon` feature is now
-# dropped, so `paste`, `pulp`, `rav1e`, `exr` and `ravif` are gone from
-# Cargo.lock entirely and `cargo audit` is clean.
 parking_lot = "0.12.5"
 # Streaming-only: constant-time credential compares and zeroizing drops
 # (src/streaming/config.rs, auth paths). Optional so headless profiles
@@ -147,7 +130,6 @@ zeroize = { version = "1.8.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
-nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
@@ -210,11 +192,12 @@ python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "par-term-
 # (ARC-021 created the gate; ARC-043 made it actually gate the dep).
 screenshot = ["par-term-emu-core/screenshot"]
 
-# Real PTY backend (PtySession/PtyTerminal): portable-pty + Unix signal deps.
+# Real PTY backend (PtySession/PtyTerminal), forwarded to the member that
+# owns portable-pty.
 # Enabled by `python` (PyPtyTerminal binding) and `streaming-bin` (the server
 # binary spawns real shells). Headless `sim` consumers omit it to stay
 # PTY-free — they vendor the Terminal as a pure screen model with no process.
-pty_session = ["par-term-emu-core/pty_session", "portable-pty", "nix"]
+pty_session = ["par-term-emu-core/pty_session"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
 streaming = ["par-term-emu-derive", "tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo", "subtle", "zeroize"]

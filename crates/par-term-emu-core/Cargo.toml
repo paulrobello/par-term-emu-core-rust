@@ -36,8 +36,18 @@ url = "2.5.8"
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
 # Kitty graphics o=z zlib decompression.
 flate2 = "1.1.9"
-# Decoder exclusions (SEC-007 / ARC-007 / SEC-134): see the root manifest's
-# `image` comment; the feature list here must stay identical to it.
+# Decoder exclusions (SEC-007 / ARC-007): AVIF is intentionally excluded — it
+# pulls in `ravif` → `rav1e` → the unmaintained `paste` proc-macro
+# (RUSTSEC-2024-0436). EXR is excluded for the same reason (exr → pulp →
+# paste). HDR and DDS are dropped as implausible terminal payloads. None of
+# these formats are ever produced by this crate (screenshots are PNG/JPEG/BMP;
+# inline graphics decode PNG/JPEG/GIF/WebP/TIFF/etc.), so the exclusions have
+# no behavior impact and `paste` is never compiled. The `rayon` feature stays
+# off (SEC-134): it declares the weak deps `ravif?/threading` and
+# `exr?/rayon`, which cargo records in Cargo.lock, so enabling it would bring
+# `paste` back into the lockfile and `cargo audit`. This crate calls no `image`
+# rayon API. This crate owns the decoder; the root crate has no `image`
+# dependency.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
 # Optional (ARC-043): only the `screenshot` feature shapes text.
 swash = { version = "0.2.7", optional = true }
