@@ -853,10 +853,13 @@ connected client can execute arbitrary commands as the user running the server.
 - **API Key** (`--api-key` / `PAR_TERM_API_KEY`): WebSocket connections must
   include the key via `Authorization: Bearer <key>` header or `?api_key=` URL
   param (the latter is disabled by default — `--allow-api-key-in-query` logs
-  the key in proxy/browser history).
+  the key in proxy/browser history, and the server warns at startup when it
+  is enabled).
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
+  A cleartext password or a legacy `{SHA}`/MD5-crypt hash logs a startup
+  warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default and warns loudly if binding a public interface without auth (SEC-002).
 
