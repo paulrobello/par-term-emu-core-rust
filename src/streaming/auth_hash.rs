@@ -162,6 +162,24 @@ fn verify_bcrypt(stored: &str, password: &str) -> bool {
     bcrypt::verify(password, stored).unwrap_or(false)
 }
 
+/// Name the legacy (weak) htpasswd format of `hash`, or `None` for bcrypt and
+/// unrecognized input (SEC-201).
+///
+/// `{SHA}` is unsalted SHA-1 and `$1$`/`$apr1$` is MD5-crypt; both remain
+/// accepted for compatibility but are cheap to brute-force offline, so the
+/// caller should warn the operator to regenerate the hash with bcrypt.
+pub fn legacy_hash_format(hash: &str) -> Option<&'static str> {
+    if hash.starts_with("{SHA}") {
+        Some("{SHA} (unsalted SHA-1)")
+    } else if hash.starts_with("$apr1$") {
+        Some("$apr1$ (APR1 MD5-crypt)")
+    } else if hash.starts_with("$1$") {
+        Some("$1$ (MD5-crypt)")
+    } else {
+        None
+    }
+}
+
 /// Verify a password against any supported htpasswd-format hash.
 ///
 /// Dispatches on the hash prefix. Returns `false` for an unrecognized format
@@ -238,6 +256,16 @@ mod tests {
     fn test_unrecognized_format_returns_false() {
         assert!(!verify_htpasswd_hash("plaintext-or-unknown", "anything"));
         assert!(!verify_htpasswd_hash("", ""));
+    }
+
+    #[test]
+    fn test_legacy_hash_format_flags_weak_formats_only() {
+        assert!(legacy_hash_format("{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=").is_some());
+        assert!(legacy_hash_format("$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.").is_some());
+        assert!(legacy_hash_format("$1$salt$qJH7.N4xYta3aEG/dfqo/0").is_some());
+        let bcrypt_hash = bcrypt::hash("pw", 4).unwrap();
+        assert_eq!(legacy_hash_format(&bcrypt_hash), None);
+        assert_eq!(legacy_hash_format("plaintext-or-unknown"), None);
     }
 
     #[test]

@@ -338,6 +338,11 @@ par-term-streamer --download-frontend --frontend-version 0.14.0
 par-term-streamer --enable-http --web-root ./web_term
 ```
 
+Before extracting, the archive's SHA-256 is checked against the release's
+`par-term-web-frontend-v<version>.tar.gz.sha256` asset; a mismatch or an
+unreadable checksum file aborts without touching the web root. Releases
+published before the checksum asset existed download with a warning.
+
 **Available Themes:**
 - `iterm2-dark` (default) - iTerm2 Dark color scheme
 - `monokai` - Monokai color scheme
@@ -593,8 +598,11 @@ cd web-terminal-frontend
 # Install dependencies
 npm install
 
-# Development server (binds to 0.0.0.0:3000 for mobile testing)
+# Development server (binds to 127.0.0.1:3000)
 npm run dev
+
+# LAN/mobile testing: opt in to binding all interfaces
+npx next dev -H 0.0.0.0
 
 # Production build (creates Next.js server build)
 npm run build

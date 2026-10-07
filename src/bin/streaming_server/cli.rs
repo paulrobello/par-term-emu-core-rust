@@ -149,6 +149,8 @@ pub struct Args {
 
     /// Allow API key authentication via query parameter (?api_key=...).
     /// Disabled by default because query params are logged by proxies and saved in browser history.
+    /// Exists for browser WebSocket clients, which cannot set auth headers; the
+    /// server logs a warning at startup when it is enabled with an API key.
     #[arg(long, env = "PAR_TERM_ALLOW_API_KEY_IN_QUERY")]
     pub allow_api_key_in_query: bool,
 

@@ -851,6 +851,15 @@ impl StreamingServer {
 
     /// Start the streaming server
     pub async fn start(self: Arc<Self>) -> Result<()> {
+        // SEC-202: the query-string key exists only because browser WebSocket
+        // clients cannot set auth headers; it leaks into proxy logs and history.
+        if self.config.allow_api_key_in_query && self.config.api_key.is_some() {
+            log::warn!(
+                "API key authentication via ?api_key= query parameter is enabled; \
+                 query strings are recorded in proxy/access logs and browser history. \
+                 Prefer the Authorization or X-API-Key header where the client allows it."
+            );
+        }
         let use_tls = self.config.tls.is_some();
 
         if self.config.enable_http {

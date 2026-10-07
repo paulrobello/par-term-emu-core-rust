@@ -258,18 +258,53 @@ impl Drop for PasswordConfig {
 
 impl HttpBasicAuthConfig {
     /// Create a new HTTP Basic Auth config with clear text password
+    ///
+    /// Logs a `warn!` (SEC-206): a plaintext credential is configured.
     pub fn with_password(username: String, password: String) -> Self {
-        Self {
+        let config = Self {
             username,
             password: PasswordConfig::ClearText(password),
-        }
+        };
+        config.log_credential_warning();
+        config
     }
 
     /// Create a new HTTP Basic Auth config with htpasswd hash
+    ///
+    /// Logs a `warn!` when the hash uses a legacy format (SEC-201).
     pub fn with_hash(username: String, hash: String) -> Self {
-        Self {
+        let config = Self {
             username,
             password: PasswordConfig::Hash(hash),
+        };
+        config.log_credential_warning();
+        config
+    }
+
+    /// Operator-facing warning for a weak credential configuration, or `None`
+    /// for a bcrypt hash (SEC-201 / SEC-206). Never includes the secret.
+    pub(crate) fn credential_warning(&self) -> Option<String> {
+        match &self.password {
+            PasswordConfig::ClearText(_) => Some(format!(
+                "HTTP Basic Auth for user '{}' uses a cleartext password; \
+                 store a bcrypt hash instead (generate with `htpasswd -nB {}`)",
+                self.username, self.username
+            )),
+            PasswordConfig::Hash(hash) => crate::streaming::auth_hash::legacy_hash_format(hash)
+                .map(|format| {
+                    format!(
+                        "HTTP Basic Auth for user '{}' uses legacy hash format {}, which is \
+                         cheap to brute-force offline; regenerate it with bcrypt \
+                         (`htpasswd -nB {}`)",
+                        self.username, format, self.username
+                    )
+                }),
+        }
+    }
+
+    fn log_credential_warning(&self) {
+        if let Some(msg) = self.credential_warning() {
+            log::warn!("{msg}");
         }
     }
 
@@ -566,6 +601,32 @@ mod tests {
         assert_eq!(config.max_clients_per_session, 0);
         assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
     }
+    /// SEC-201 / SEC-206: cleartext passwords and legacy hash formats produce
+    /// an operator warning that never contains the secret; bcrypt does not.
+    #[test]
+    fn credential_warning_flags_weak_configs_without_leaking_secrets() {
+        let clear =
+            HttpBasicAuthConfig::with_password("admin".to_string(), "hunter2-clear".to_string());
+        let msg = clear.credential_warning().expect("cleartext must warn");
+        assert!(msg.contains("cleartext") && msg.contains("htpasswd -nB"));
+        assert!(!msg.contains("hunter2-clear"), "password leaked: {msg}");
+
+        for legacy in [
+            "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=",
+            "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.",
+            "$1$salt$qJH7.N4xYta3aEG/dfqo/0",
+        ] {
+            let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), legacy.to_string());
+            let msg = auth.credential_warning().expect("legacy hash must warn");
+            assert!(msg.contains("bcrypt"), "no bcrypt guidance: {msg}");
+            assert!(!msg.contains(legacy), "hash leaked: {msg}");
+        }
+
+        let bcrypt_hash = bcrypt::hash("pw", 4).unwrap();
+        let modern = HttpBasicAuthConfig::with_hash("admin".to_string(), bcrypt_hash);
+        assert_eq!(modern.credential_warning(), None);
+    }
+
     /// SEC-009: `{:?}` output must not contain the api key or the stored
     /// password (clear text or hash).
     #[test]
