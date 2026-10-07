@@ -1243,7 +1243,7 @@ fn target_resolution_and_clean_failure() {
 /// `capture-pane` ground truth says the pane holds — the same cell
 /// content the renderer paints at those rects. (Criterion 3's frame
 /// coalescing is pinned by `output_flood_coalesces_at_frame_cadence` in
-/// `src/mux/attach/render.rs` — a pure-renderer property.)
+/// `src/mux/attach/render/tests/mod.rs` — a pure-renderer property.)
 ///
 /// The renderer runs headless (no sink): the frames stay in the
 /// [`PaneRenderer::buffer`] the assertions read.
