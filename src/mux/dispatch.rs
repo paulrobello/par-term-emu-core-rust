@@ -1786,11 +1786,11 @@ fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
-            return Outcome::err(ctx, "no buffers");
-        };
         let Some(target) = guard.pane(pane) else {
             return Outcome::err(ctx, &format!("no such pane: {pane}"));
+        };
+        let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
+            return Outcome::err(ctx, "no buffers");
         };
         match target.input_handle() {
             Ok(handle) => (handle, content),
@@ -2576,7 +2576,6 @@ mod tests {
     fn unknown_targets_error_exactly_and_change_nothing() {
         let h = Harness::new();
         assert_ok(&h.run("new-session -s main"));
-        // paste-buffer checks for a buffer before it resolves the pane.
         assert_ok(&h.run("set-buffer clip"));
         h.drain();
         let before = h.snapshot();
@@ -2638,6 +2637,21 @@ mod tests {
             assert_eq!(h.drain(), Vec::<String>::new(), "`{line}` broadcast");
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    /// A bad target is reported before an empty buffer: `paste-buffer -t
+    /// %99` with nothing buffered names the missing pane, not the buffer.
+    #[test]
+    fn paste_buffer_reports_the_bad_target_before_the_empty_buffer() {
+        let h = Harness::new();
+        assert_ok(&h.run("new-session -s main"));
+        let reply = h.run("paste-buffer -t %99");
+        let (body, ok) = reply_parts(&reply);
+        assert!(!ok, "{reply:?}");
+        assert_eq!(body, vec!["no such pane: %99"], "{reply:?}");
+        let reply = h.run("paste-buffer -t %0");
+        let (body, ok) = reply_parts(&reply);
+        assert!(!ok && body == vec!["no buffers"], "{reply:?}");
     }
 
     /// A name shared by two objects is refused with every candidate listed,
