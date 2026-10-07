@@ -232,7 +232,10 @@ pub enum TmuxNotification {
     },
 
     /// Continue after pause (flow control)
-    Continue,
+    Continue {
+        /// Pane id (e.g. `%1`) whose output resumes.
+        pane_id: String,
+    },
 
     /// Subscription value changed
     /// Arguments: subscription_name, value
@@ -385,7 +388,7 @@ impl TmuxNotification {
             Self::Exit => "exit",
             Self::Pause { .. } => "pause",
             Self::ExtendedOutput { .. } => "extended-output",
-            Self::Continue => "continue",
+            Self::Continue { .. } => "continue",
             Self::SubscriptionChanged { .. } => "subscription-changed",
             Self::LayoutChange { .. } => "layout-change",
             Self::PasteBufferChanged { .. } => "paste-buffer-changed",
@@ -606,7 +609,7 @@ impl TmuxControlParser {
             "exit" => Some(TmuxNotification::Exit),
             "pause" => Self::parse_pause(args),
             "extended-output" => Self::parse_extended_output(args),
-            "continue" => Some(TmuxNotification::Continue),
+            "continue" => Self::parse_continue(args),
             "subscription-changed" => Self::parse_subscription_changed(args),
             "layout-change" => Self::parse_layout_change(args),
             "paste-buffer-changed" => Self::parse_paste_buffer_changed(args),
@@ -906,6 +909,12 @@ impl TmuxControlParser {
 
     fn parse_pause(args: &str) -> Option<TmuxNotification> {
         Some(TmuxNotification::Pause {
+            pane_id: args.trim().to_string(),
+        })
+    }
+
+    fn parse_continue(args: &str) -> Option<TmuxNotification> {
+        Some(TmuxNotification::Continue {
             pane_id: args.trim().to_string(),
         })
     }
@@ -1751,7 +1760,12 @@ mod tests {
                     pane_id: "%4".into(),
                 },
             ),
-            ("%continue %4", N::Continue),
+            (
+                "%continue %4",
+                N::Continue {
+                    pane_id: "%4".into(),
+                },
+            ),
             (
                 "%subscription-changed sub $1 @2 0 %3 - : the value",
                 N::SubscriptionChanged {

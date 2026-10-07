@@ -205,7 +205,7 @@ pub fn emit(notification: &TmuxNotification) -> String {
         | TmuxNotification::ClientDetached { .. }
         | TmuxNotification::Pause { .. }
         | TmuxNotification::ExtendedOutput { .. }
-        | TmuxNotification::Continue
+        | TmuxNotification::Continue { .. }
         | TmuxNotification::SubscriptionChanged { .. }
         | TmuxNotification::PasteBufferChanged { .. }
         | TmuxNotification::PasteBufferDeleted { .. }

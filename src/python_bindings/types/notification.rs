@@ -358,7 +358,8 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 data: Some(data.clone()),
                 ..Self::empty(kind)
             },
-            TmuxNotification::Continue => Self {
+            TmuxNotification::Continue { pane_id } => Self {
+                pane_id: Some(pane_id.clone()),
                 ..Self::empty(kind)
             },
             TmuxNotification::SubscriptionChanged { name, value } => Self {
@@ -577,7 +578,7 @@ mod tests {
         "pane-respawned | None | Some(\"p-respawned\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "pause | None | Some(\"p-pause\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "extended-output | None | Some(\"p-extended\") | None | None | None | None | None | Some([101, 120, 116, 101, 110, 100, 101, 100, 45, 100, 97, 116, 97]) | None | None | None | Some(777) | None | None | None | None | None | None\n",
-        "continue | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "continue | None | Some(\"p-continue\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "subscription-changed | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"sub-name\") | Some(\"sub-value\") | None | None | None | None\n",
         "layout-change | None | None | Some(\"w-layout\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-main\") | Some(\"layout-visible\") | Some(\"flags-raw\") | None\n",
         "paste-buffer-changed | None | None | None | None | Some(\"buf-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
@@ -710,7 +711,9 @@ mod tests {
                 delay_ms: 777,
                 data: b"extended-data".to_vec(),
             },
-            TmuxNotification::Continue,
+            TmuxNotification::Continue {
+                pane_id: "p-continue".to_string(),
+            },
             TmuxNotification::SubscriptionChanged {
                 name: "sub-name".to_string(),
                 value: "sub-value".to_string(),
@@ -782,7 +785,7 @@ mod tests {
                 TmuxNotification::PaneRespawned { .. } => (),
                 TmuxNotification::Pause { .. } => (),
                 TmuxNotification::ExtendedOutput { .. } => (),
-                TmuxNotification::Continue => (),
+                TmuxNotification::Continue { .. } => (),
                 TmuxNotification::SubscriptionChanged { .. } => (),
                 TmuxNotification::LayoutChange { .. } => (),
                 TmuxNotification::PasteBufferChanged { .. } => (),
