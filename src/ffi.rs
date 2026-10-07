@@ -314,11 +314,12 @@ pub struct TermEvent {
 /// Any slot may be NULL; a NULL slot costs nothing (its text or JSON is never
 /// built).
 ///
-/// Callbacks fire inline while the terminal is processing input. A callback
-/// must NOT re-enter the FFI on the same `Terminal` handle (any
-/// `ptec_terminal_*` function): the terminal is mutably borrowed for the
-/// duration of the dispatch, so re-entry aliases `&`/`&mut` — undefined
-/// behavior. Queue what you need and call back after `ptec_terminal_feed`
+/// Callbacks fire inline while the terminal is processing input or
+/// resizing (a resize can scroll zones out). A callback must NOT re-enter
+/// the FFI on the same `Terminal` handle (any `ptec_terminal_*` function):
+/// the terminal is mutably borrowed for the duration of the dispatch, so
+/// re-entry aliases `&`/`&mut` — undefined behavior. Queue what you need
+/// and call back after `ptec_terminal_feed` / `ptec_terminal_resize`
 /// returns.
 #[repr(C)]
 pub struct TerminalObserverVtable {
@@ -780,6 +781,9 @@ pub unsafe extern "C" fn ptec_terminal_feed(term: *mut Terminal, bytes: *const u
 }
 
 /// Resize the terminal grid. A zero `cols` or `rows` is a no-op.
+///
+/// Observers receive any `ZoneScrolledOut` events the resize causes
+/// before this returns (same no-re-entry rule as `ptec_terminal_feed`).
 ///
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.

@@ -505,6 +505,36 @@ fn test_zone_scrolled_out_reaches_observers_via_apply_action() {
 }
 
 #[test]
+fn test_zone_scrolled_out_reaches_observers_via_resize() {
+    // Zones scroll into a 4-line scrollback without leaving it, then a
+    // narrowing resize rewraps the full-width visible rows and pushes enough
+    // of them into scrollback to drop the zone rows. The observer must see
+    // ZoneScrolledOut from resize() alone, with no process() afterwards.
+    let mut term = Terminal::with_scrollback(20, 5, 4);
+    let observer = zone_subscribed_observer();
+    term.add_observer(observer.clone());
+
+    let mut bytes =
+        b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07".to_vec();
+    for _ in 0..5 {
+        bytes.extend_from_slice(b"\r\nxxxxxxxxxxxxxxxxxxxx");
+    }
+    term.process(&bytes);
+    assert_eq!(
+        scrolled_out_count(&observer),
+        0,
+        "setup must leave the zones inside scrollback"
+    );
+
+    term.resize(5, 5);
+
+    assert!(
+        scrolled_out_count(&observer) >= 1,
+        "observer missed ZoneScrolledOut from resize without process()"
+    );
+}
+
+#[test]
 fn test_zone_scrolled_out_reaches_filtered_poll() {
     let mut term = Terminal::with_scrollback(80, 5, 10);
     term.set_event_subscription(HashSet::from([TerminalEventKind::ZoneScrolledOut]));
