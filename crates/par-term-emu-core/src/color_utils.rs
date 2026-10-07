@@ -105,7 +105,7 @@ fn adjust_brightness_normalized(r: f64, g: f64, b: f64, target_brightness: f64) 
 /// # Examples
 ///
 /// ```
-/// use par_term_emu_core_rust::color_utils::adjust_contrast_rgb;
+/// use par_term_emu_core::color_utils::adjust_contrast_rgb;
 ///
 /// // Dark gray text on black background - will be lightened
 /// let fg = (64, 64, 64);
@@ -437,7 +437,7 @@ impl Color {
     /// # Examples
     ///
     /// ```
-    /// use par_term_emu_core_rust::color::Color;
+    /// use par_term_emu_core::color::Color;
     ///
     /// // Dark gray text on black background - will be lightened
     /// let fg = Color::Rgb(64, 64, 64);

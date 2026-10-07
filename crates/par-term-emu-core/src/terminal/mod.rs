@@ -18,8 +18,9 @@ pub mod compliance;
 pub mod event;
 mod event_broker;
 // Consumed only by the Python event dicts and the FFI structured events.
-#[cfg(any(feature = "python", feature = "python-test", feature = "ffi"))]
-pub(crate) mod event_fields;
+#[cfg(any(feature = "python", feature = "ffi"))]
+#[doc(hidden)]
+pub mod event_fields;
 pub mod file_transfer;
 mod graphics;
 pub mod image;
@@ -1059,15 +1060,18 @@ impl BadgeState {
 /// Unified graphics/inline-image/file machinery: graphics store, Sixel limits,
 /// cell pixel dimensions, iTerm2 multipart transfer state, file transfer manager.
 /// (ARC-001 sub-struct)
-pub(crate) struct GraphicsState {
+#[doc(hidden)]
+pub struct GraphicsState {
     /// Unified graphics storage (Sixel, iTerm2, Kitty)
-    pub(crate) graphics_store: GraphicsStore,
+    #[doc(hidden)]
+    pub graphics_store: GraphicsStore,
     /// Sixel resource limits (per-terminal, for decoding)
     pub(crate) sixel_limits: sixel::SixelLimits,
     /// Cell dimensions in pixels (width, height) for sixel graphics
     /// Default (1, 2) is for text-mode TUI with half-block rendering
     /// Pixel renderers should set actual cell dimensions
-    pub(crate) cell_dimensions: (u32, u32),
+    #[doc(hidden)]
+    pub cell_dimensions: (u32, u32),
     /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
     pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
     /// File transfer manager for tracking file downloads and uploads
@@ -1096,7 +1100,8 @@ impl Default for GraphicsState {
 /// through the accessor methods.
 pub struct Terminal {
     /// The primary terminal grid
-    pub(crate) grid: Grid,
+    #[doc(hidden)]
+    pub grid: Grid,
     /// Alternate screen grid
     pub(crate) alt_grid: Grid,
     /// Last damage generation observed by the built-in default consumer
@@ -1133,7 +1138,8 @@ pub struct Terminal {
     pub(crate) hyperlink_state: HyperlinkState,
     /// Unified graphics storage + Sixel limits + cell pixel dimensions +
     /// iTerm2 multipart transfer state + file transfer manager (ARC-001 sub-struct)
-    pub(crate) graphics: GraphicsState,
+    #[doc(hidden)]
+    pub graphics: GraphicsState,
     /// Sixel parser, DCS buffer, active flag, action char (ARC-001 sub-struct)
     pub(crate) dcs_state: DcsState,
     /// OSC 52 clipboard content, read flag, history, cap (ARC-001 sub-struct)
@@ -1165,9 +1171,11 @@ pub struct Terminal {
     /// DECAWM delayed wrap: set after printing in last column
     pub(crate) pending_wrap: bool,
     /// Pixel width of the text area (XTWINOPS 14)
-    pub(crate) pixel_width: usize,
+    #[doc(hidden)]
+    pub pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
-    pub(crate) pixel_height: usize,
+    #[doc(hidden)]
+    pub pixel_height: usize,
     /// Embedder configuration carried whole across RIS (ARC-100)
     pub(crate) host: HostConfig,
     /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
@@ -1477,7 +1485,8 @@ impl Terminal {
     /// not delete it, or no client can ever load the graphic. The client
     /// that renders it deletes the file with its own (default) read.
     #[cfg(feature = "mux")]
-    pub(crate) fn set_retain_kitty_temp_files(&mut self, retain: bool) {
+    #[doc(hidden)]
+    pub fn set_retain_kitty_temp_files(&mut self, retain: bool) {
         self.kitty_parser.retain_temp_files = retain;
     }
 
@@ -1550,7 +1559,8 @@ impl Terminal {
     /// counterpart of [`Terminal::process_deferred`] for callers that hold
     /// an exclusive lock around the resize. Deliver the returned batch after
     /// releasing that lock.
-    pub(crate) fn resize_deferred(&mut self, cols: usize, rows: usize) -> ObserverDispatchBatch {
+    #[doc(hidden)]
+    pub fn resize_deferred(&mut self, cols: usize, rows: usize) -> ObserverDispatchBatch {
         self.resize_internal(cols, rows);
         self.flush_evicted_zones();
         let batch = self.take_observer_dispatch_batch();
@@ -3387,14 +3397,16 @@ impl Terminal {
     /// the FFI dirty-range surface (ENH-026). Serves the built-in default
     /// consumer, like `dirty_row_indices`.
     #[cfg(feature = "ffi")]
-    pub(crate) fn for_each_dirty_range(&self, f: impl FnMut(u32, u32)) {
+    #[doc(hidden)]
+    pub fn for_each_dirty_range(&self, f: impl FnMut(u32, u32)) {
         self.for_each_dirty_range_since(self.default_consumer_gen, f);
     }
 
     /// Generation-aware [`Terminal::for_each_dirty_range`]: a run per
     /// maximal streak of rows damaged since `gen`.
     #[cfg(feature = "ffi")]
-    pub(crate) fn for_each_dirty_range_since(&self, gen: u64, f: impl FnMut(u32, u32)) {
+    #[doc(hidden)]
+    pub fn for_each_dirty_range_since(&self, gen: u64, f: impl FnMut(u32, u32)) {
         self.active_grid().for_each_damage_range_since(gen, f);
     }
 

@@ -1,0 +1,79 @@
+[package]
+name = "par-term-emu-core"
+# Lockstep with the root crate (DESIGN.md "Version train"): the XTVERSION
+# reply embeds this crate's CARGO_PKG_VERSION. `make core-version-check`
+# fails when it drifts from the root version or the root's dependency pin.
+version = "0.58.1"
+edition = "2021"
+rust-version = "1.98"
+authors = ["Paul Robello <probello@gmail.com>"]
+description = "Terminal emulator core for par-term-emu-core-rust: VT100-VT520 state machine, grid, PTY session, Sixel/iTerm2/Kitty graphics, screenshot renderer"
+readme = "DESIGN.md"
+license = "MIT"
+repository = "https://github.com/paulrobello/par-term-emu-core-rust"
+homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
+keywords = ["terminal", "emulator", "vt100", "pty", "sixel"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "par_term_emu_core"
+
+[dependencies]
+log = "0.4"
+vte = "0.15.0"
+unicode-width = "0.2.2"
+portable-pty = { version = "0.9.0", optional = true }
+base64 = "0.22.1"
+smallvec = "1.13.0"
+bitflags = "2.13.0"
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+# Macro YAML save/load only (ARC-116).
+serde_yaml_ng = { version = "0.10.0", optional = true }
+percent-encoding = "2.3.2"
+url = "2.5.8"
+uuid = { version = "1.23.2", features = ["v4", "serde"] }
+# Kitty graphics o=z zlib decompression.
+flate2 = "1.1.9"
+# Decoder exclusions (SEC-007 / ARC-007 / SEC-134): see the root manifest's
+# `image` comment; the feature list here must stay identical to it.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
+# Optional (ARC-043): only the `screenshot` feature shapes text.
+swash = { version = "0.2.7", optional = true }
+parking_lot = "0.12.5"
+unicode-segmentation = "1.13.3"
+unicode-normalization = "0.1.25"
+lru = "0.18.0"
+# Hosts the `From<PtyError|GraphicsError|ScreenshotError> for PyErr`
+# conversions only (orphan rule); no bindings live in this crate.
+pyo3 = { version = "0.29", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
+
+[dev-dependencies]
+proptest = "1.11.0"
+tempfile = "3.27"
+
+[features]
+default = []
+# Terminal-to-image renderer (embedded fonts + swash).
+screenshot = ["dep:swash"]
+# Real PTY backend (PtySession).
+pty_session = ["dep:portable-pty"]
+# Serde derives on the replay-snapshot types (par-mux persistence format).
+serde = ["smallvec/serde", "bitflags/serde"]
+# `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}`.
+macro-yaml = ["dep:serde_yaml_ng"]
+# The two hooks par-mux uses (PtyInputHandle, kitty temp-file retention).
+mux = ["pty_session"]
+# Dirty-range iteration + structured event fields for the C ABI.
+ffi = []
+# PyErr conversions for the core error types + event_fields for the Python
+# event dicts. Builds no bindings.
+python = ["dep:pyo3"]
+
+# cargo-fuzz builds with `--cfg fuzzing` (the ENH-020 apc_filter entry point).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

@@ -7,7 +7,8 @@ bounds>` doc comment on (or in the doc block of) its declaration:
     /// cap: Max decompressed payload accepted from one client message.
     const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024;
 
-This script scans `src/**/*.rs` for those comments, evaluates the constant's
+This script scans `src/**/*.rs` and the workspace members'
+`crates/*/src/**/*.rs` for those comments, evaluates the constant's
 value with a restricted arithmetic evaluator (no `eval`), renders byte-sized
 caps in human units, and writes a Markdown table between the markers in
 docs/SECURITY.md. `--check` exits non-zero when the file would change, so
@@ -93,7 +94,10 @@ def humanize(name: str, value: int) -> str:
 
 def collect_caps() -> list[dict]:
     caps: list[dict] = []
-    for path in sorted((ROOT / "src").rglob("*.rs")):
+    sources = list((ROOT / "src").rglob("*.rs")) + list(
+        ROOT.glob("crates/*/src/**/*.rs")
+    )
+    for path in sorted(sources):
         text = path.read_text(encoding="utf-8")
         for m in CAP_DECL.finditer(text):
             value = eval_int(m.group("value"))

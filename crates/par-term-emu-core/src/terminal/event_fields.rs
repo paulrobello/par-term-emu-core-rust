@@ -15,7 +15,8 @@ use crate::terminal::TerminalEvent;
 /// dispatch. Numeric, boolean, and optional Rust fields map to `Int`/`Bool`/
 /// `None` so the Python-facing dicts carry native types.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum EventField {
+#[doc(hidden)]
+pub enum EventField {
     Str(String),
     Int(i64),
     Bool(bool),
@@ -26,7 +27,8 @@ pub(crate) enum EventField {
 ///
 /// Optional fields are always present, as `EventField::None` when unset — the
 /// legacy renderer omits them instead.
-pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
+#[doc(hidden)]
+pub fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
     let mut fields: Vec<(String, EventField)> = Vec::new();
     macro_rules! put {
         ($key:expr, $val:expr) => {

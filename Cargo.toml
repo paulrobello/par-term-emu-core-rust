@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "derive"]
+members = [".", "derive", "crates/par-term-emu-core"]
 # The cargo-fuzz crate is deliberately outside the workspace: its sanitizer
 # instrumented builds must not share feature unification or target dirs with
 # the library or derive crates.
@@ -68,23 +68,18 @@ log = "0.4"
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 # Proc-macro helpers (#[pyo3_get_all]) for the Python data classes (ARC-014).
 par-term-emu-derive = { path = "derive", version = "0.47.0", optional = true }
-vte = "0.15.0"
-unicode-width = "0.2.2"
+# The terminal core (ARC-007 O2): every pre-split public path is re-exported
+# from src/lib.rs. Exact pin + lockstep version — see
+# crates/par-term-emu-core/DESIGN.md "Version train" (`make core-version-check`).
+par-term-emu-core = { path = "crates/par-term-emu-core", version = "=0.58.1" }
 portable-pty = { version = "0.9.0", optional = true }
 base64 = "0.22.1"
-smallvec = "1.13.0"
-bitflags = "2.13.0"
 regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 # par-mux agent scrape patterns (bundled + local override) — comments in the
 # override files are the point, so the format is TOML not JSON.
 toml = { version = "0.9", optional = true }
-# Macro YAML save/load only (ARC-116): gated behind `macro-yaml` so slim
-# profiles (rust-only/sim/mux) do not compile it.
-serde_yaml_ng = { version = "0.10.0", optional = true }
-percent-encoding = "2.3.2"
-url = "2.5.8"
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
 
 # Streaming server dependencies
@@ -162,20 +157,12 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "ff"
 # calls no `image` rayon API. SEC-134 resolution: the `rayon` feature is now
 # dropped, so `paste`, `pulp`, `rav1e`, `exr` and `ravif` are gone from
 # Cargo.lock entirely and `cargo audit` is clean.
-# Optional (ARC-043): only the `screenshot` feature shapes text; slim
-# profiles (rust-only/mux/streaming-lib) must not compile it.
-swash = { version = "0.2.7", optional = true }
 parking_lot = "0.12.5"
 # Streaming-only: constant-time credential compares and zeroizing drops
 # (src/streaming/config.rs, auth paths). Optional so headless profiles
 # (sim/rust-only/mux) pull neither.
 subtle = { version = "2.6.1", optional = true }
 zeroize = { version = "1.8.2", optional = true }
-
-# Unicode text handling
-unicode-segmentation = "1.13.3"
-unicode-normalization = "0.1.25"
-lru = "0.18.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
@@ -205,7 +192,6 @@ prost-build = { version = "0.14.3", optional = true }
 [dev-dependencies]
 pyo3 = { version = "0.29", features = ["auto-initialize"] }
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
-proptest = "1.11.0"
 tempfile = "3.27"
 # axum already depends on tower/util; as a dev-dep it only adds ServiceExt
 # (.oneshot) for the in-process router tests in src/streaming/server.rs.
@@ -243,23 +229,23 @@ required-features = ["pty_session"]
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session", "screenshot", "macro-yaml"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "par-term-emu-core/python", "pty_session", "screenshot", "macro-yaml"]
 # The `python` feature's deps WITHOUT pyo3/extension-module, so the bindings
 # (and their #[cfg(test)] unit tests) link a real interpreter in `cargo test`.
 # maturin needs no knowledge of this: pyproject's [tool.maturin] features add
 # pyo3/extension-module to wheel builds independently.
-python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_session", "screenshot", "macro-yaml"]
+python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "par-term-emu-core/python", "pty_session", "screenshot", "macro-yaml"]
 
 # Terminal-to-image screenshot renderer (embedded fonts + swash/image deps).
 # Enabled by `python`/`full`. The `sim` profile has excluded it since 0.54.0
 # (ARC-021 created the gate; ARC-043 made it actually gate the dep).
-screenshot = ["dep:swash"]
+screenshot = ["par-term-emu-core/screenshot"]
 
 # Real PTY backend (PtySession/PtyTerminal): portable-pty + Unix signal deps.
 # Enabled by `python` (PyPtyTerminal binding) and `streaming-bin` (the server
 # binary spawns real shells). Headless `sim` consumers omit it to stay
 # PTY-free — they vendor the Terminal as a pure screen model with no process.
-pty_session = ["portable-pty", "nix"]
+pty_session = ["par-term-emu-core/pty_session", "portable-pty", "nix"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
 streaming = ["par-term-emu-derive", "tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo", "subtle", "zeroize"]
@@ -275,7 +261,7 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "interprocess", "widestring", "windows-sys", "serde", "dirs", "dep:toml"]
+mux = ["par-term-emu-core/mux", "pty_session", "interprocess", "widestring", "windows-sys", "serde", "dirs", "dep:toml"]
 
 # The `par-mux` daemon binary (ARC-106): the `mux` library plus its CLI parser,
 # mirroring the `streaming`/`streaming-bin` split, so library embedders
@@ -294,14 +280,14 @@ attach = ["mux-bin", "dep:crossterm", "dep:ratatui"]
 # `python`/`python-test` (the Python `Macro` YAML methods) and `streaming-bin`
 # (`--macro-file` playback); `dep:` is safe because nothing names
 # serde_yaml_ng's implicit feature.
-macro-yaml = ["dep:serde_yaml_ng"]
+macro-yaml = ["par-term-emu-core/macro-yaml"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
 # D3.1). serde itself is already a required dependency, so this feature only
 # gates whether the derives are compiled in; the smallvec/bitflags serde
 # integrations are pulled in only while this feature is enabled.
-serde = ["smallvec/serde", "bitflags/serde"]
+serde = ["par-term-emu-core/serde"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms
@@ -313,7 +299,7 @@ regenerate-proto = ["prost-build"]
 # C ABI surface (`ptec_terminal_*` exports, src/ffi.rs) for the xcframework and
 # C/Swift embedders; off in Python wheels so they export no unprefixed C
 # symbols (ARC-112). Build with `--features rust-only,ffi`.
-ffi = []
+ffi = ["par-term-emu-core/ffi"]
 
 # Convenience feature combinations
 rust-only = []

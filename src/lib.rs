@@ -63,17 +63,23 @@
 //       Next slice: emit docs from the .proto comments, then drop the allow.
 #![warn(missing_docs)]
 
-pub mod ansi_utils;
-pub mod badge;
-/// Terminal grid cells: character, colors, and attribute flags.
-pub mod cell;
-/// Color representation (named, 256-color palette, and true color).
-pub mod color;
-pub mod color_utils;
-pub mod conformance_level;
-pub mod coprocess;
-/// Cursor position and DECSCUSR style.
-pub mod cursor;
+// ARC-007 O2: the terminal core lives in the `par-term-emu-core` workspace
+// member (crates/par-term-emu-core, see its DESIGN.md). Every module keeps its
+// historical `par_term_emu_core_rust::<module>` path through these re-exports.
+#[cfg(feature = "pty_session")]
+pub use par_term_emu_core::pty_session;
+#[cfg(feature = "screenshot")]
+pub use par_term_emu_core::screenshot;
+pub use par_term_emu_core::{
+    ansi_utils, badge, cell, color, color_utils, conformance_level, coprocess, cursor, debug,
+    grapheme, graphics, grid, html_export, keyboard, macros, mouse, pty_error, shell_integration,
+    sixel, terminal, text_utils, tmux_control, unicode_normalization_config, unicode_width_config,
+    zone,
+};
+
+// `#[macro_export]` debug macros: `crate::debug_log!` (root) and
+// `par_term_emu_core_rust::debug_log!` (embedders) keep resolving.
+pub use par_term_emu_core::{debug_error, debug_info, debug_log, debug_trace};
 
 // `sim` is an empty marker feature naming the headless profile; it is meant
 // to be used alone (`default-features = false, features = ["sim"]`). Combined
@@ -86,51 +92,25 @@ compile_error!(
      (e.g. `cargo build --no-default-features --features sim`); combining it with \
      the `python` feature selects nothing"
 );
-#[macro_use]
-pub mod debug;
 // The C ABI (`ptec_terminal_*` exports) is opt-in so Python wheels and Rust
 // embedders do not export unprefixed global symbols (ARC-112); the
 // xcframework build and C/Swift embedders enable `ffi`.
 #[cfg(feature = "ffi")]
 pub mod ffi;
-/// Grapheme cluster, variation selector, and emoji-sequence helpers.
-pub mod grapheme;
-pub mod graphics;
-pub mod grid;
-pub mod html_export;
-pub mod keyboard;
-pub mod macros;
-/// Mouse tracking modes, encodings, and event types.
-pub mod mouse;
+// Exercises `ffi::SharedState` against a live Terminal; lived under
+// terminal/tests/ before the core moved to its own crate.
+#[cfg(all(test, feature = "ffi"))]
+mod ffi_tests;
 #[cfg(feature = "mux")]
 pub mod mux;
 pub mod prelude;
-/// Error type for PTY operations.
-pub mod pty_error;
-#[cfg(feature = "pty_session")]
-pub mod pty_session;
 #[cfg(any(feature = "python", feature = "python-test"))]
 pub mod python_bindings;
-// Gated so a slim sim build can drop the ~700KB embedded fonts + renderer
-// (ARC-021); python/full keep it on. `sim` no longer implies it (ENH-024) —
-// render-capable sim embedders add `features = ["sim", "screenshot"]`.
-#[cfg(feature = "screenshot")]
-pub mod screenshot;
-/// Shell integration markers (OSC 133).
-pub mod shell_integration;
-/// Sixel graphics parsing for DEC VT340-compatible terminals.
-pub mod sixel;
 // The streaming module compiles for the streaming server itself and for the
 // Python bindings (whose codec entry points stub out when `streaming` is
 // off); headless profiles (sim/rust-only/mux) pull neither it nor its deps.
 #[cfg(any(feature = "streaming", feature = "python", feature = "python-test"))]
 pub mod streaming;
-pub mod terminal;
-pub mod text_utils;
-pub mod tmux_control;
-pub mod unicode_normalization_config;
-pub mod unicode_width_config;
-pub mod zone;
 
 // The observer module lives in the terminal layer (its types are Terminal
 // state and dispatch); the crate-root path `crate::observer` is kept as a
@@ -190,50 +170,9 @@ pub use python_bindings::{
     PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
 };
 
-/// Convert PtyError to PyErr (QA-009: centralized error mapping)
-#[cfg(any(feature = "python", feature = "python-test"))]
-impl From<pty_error::PtyError> for PyErr {
-    fn from(err: pty_error::PtyError) -> PyErr {
-        match err {
-            pty_error::PtyError::ProcessSpawnError(msg) => {
-                PyRuntimeError::new_err(format!("Failed to spawn process: {}", msg))
-            }
-            pty_error::PtyError::ProcessExitedError(code) => {
-                PyRuntimeError::new_err(format!("Process has exited with code: {}", code))
-            }
-            pty_error::PtyError::IoError(err) => PyIOError::new_err(err.to_string()),
-            pty_error::PtyError::ResizeError(msg) => {
-                PyRuntimeError::new_err(format!("Failed to resize PTY: {}", msg))
-            }
-            pty_error::PtyError::NotStartedError => {
-                PyRuntimeError::new_err("PTY session has not been started")
-            }
-            pty_error::PtyError::LockError(msg) => {
-                PyRuntimeError::new_err(format!("Mutex lock error: {}", msg))
-            }
-        }
-    }
-}
-
-/// Convert ScreenshotError to PyErr (QA-009)
-#[cfg(any(feature = "python", feature = "python-test"))]
-impl From<screenshot::ScreenshotError> for PyErr {
-    fn from(err: screenshot::ScreenshotError) -> PyErr {
-        use screenshot::ScreenshotError;
-        match err {
-            ScreenshotError::IoError(e) => PyIOError::new_err(e.to_string()),
-            other => PyRuntimeError::new_err(other.to_string()),
-        }
-    }
-}
-
-/// Convert GraphicsError to PyErr (QA-009)
-#[cfg(any(feature = "python", feature = "python-test"))]
-impl From<graphics::GraphicsError> for PyErr {
-    fn from(err: graphics::GraphicsError) -> PyErr {
-        PyRuntimeError::new_err(err.to_string())
-    }
-}
+// `From<PtyError | ScreenshotError | GraphicsError> for PyErr` live in
+// par-term-emu-core (feature `python`): the orphan rule forbids implementing
+// a foreign trait for a foreign type here.
 
 /// Convert StreamingError to PyErr (QA-009)
 #[cfg(all(feature = "python", feature = "streaming"))]

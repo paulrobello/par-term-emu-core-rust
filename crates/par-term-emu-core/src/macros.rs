@@ -9,7 +9,7 @@
 //! `streaming-bin`).
 //!
 //! ```rust,no_run
-//! use par_term_emu_core_rust::macros::{Macro, MacroEvent};
+//! use par_term_emu_core::macros::{Macro, MacroEvent};
 //! # fn main() -> std::io::Result<()> {
 //! # #[cfg(feature = "macro-yaml")]
 //! # {

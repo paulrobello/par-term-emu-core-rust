@@ -20,7 +20,7 @@
 //! # Example
 //!
 //! ```
-//! use par_term_emu_core_rust::unicode_width_config::{WidthConfig, UnicodeVersion, AmbiguousWidth, char_width};
+//! use par_term_emu_core::unicode_width_config::{WidthConfig, UnicodeVersion, AmbiguousWidth, char_width};
 //!
 //! let config = WidthConfig::default();
 //! assert_eq!(char_width('A', &config), 1);
@@ -364,7 +364,7 @@ pub fn is_east_asian_ambiguous(c: char) -> bool {
 /// # Examples
 ///
 /// ```
-/// use par_term_emu_core_rust::unicode_width_config::{char_width, WidthConfig, AmbiguousWidth};
+/// use par_term_emu_core::unicode_width_config::{char_width, WidthConfig, AmbiguousWidth};
 ///
 /// let config = WidthConfig::default();
 /// assert_eq!(char_width('A', &config), 1);

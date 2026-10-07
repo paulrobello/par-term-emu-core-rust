@@ -41,7 +41,7 @@ impl PtySession {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use par_term_emu_core::pty_session::PtySession;
     ///
     /// let session = PtySession::new(80, 24, 1000);
     /// let (cols, rows) = session.with_terminal(|term| term.size());
@@ -61,7 +61,7 @@ impl PtySession {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use par_term_emu_core::pty_session::PtySession;
     ///
     /// let session = PtySession::new(80, 24, 1000);
     /// session.with_terminal_mut(|term| term.process(b"hello"));

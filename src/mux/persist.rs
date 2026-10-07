@@ -3524,10 +3524,9 @@ mod serde_tests {
     /// A default cell carrying one marker character, so extracted rows are
     /// identifiable by their logical line.
     fn marker_cell(line: usize) -> crate::cell::Cell {
-        crate::cell::Cell {
-            c: char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0'),
-            ..crate::cell::Cell::default()
-        }
+        let mut cell = crate::cell::Cell::default();
+        cell.c = char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0');
+        cell
     }
 
     /// The marker of the first logical line retained after capping

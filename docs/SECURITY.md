@@ -232,7 +232,7 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 - Database connection strings
 
 **Automatic Environment Filtering**:
-- Every spawn drops these inherited variables (`DROP_VARS` in `src/pty_session/lifecycle.rs`, plus a prefix match):
+- Every spawn drops these inherited variables (`DROP_VARS` in `crates/par-term-emu-core/src/pty_session/lifecycle.rs`, plus a prefix match):
   - **Size hints** — `COLUMNS`, `LINES`. They are static and do not update on resize. Many libraries (Python's `shutil.get_terminal_size()`, some TUIs) prefer them over `ioctl(TIOCGWINSZ)` and would stay stuck at the parent terminal's size.
   - **Parent multiplexer** — `TMUX`, `TMUX_PANE`, `STY`, `WINDOW`. The child runs in a new PTY, not the parent's tmux or screen pane; tools like fzf would otherwise render in the parent pane.
   - **par-mux pane identity** — every `PAR_MUX_*` variable. A PTY spawned inside a mux pane must not report agents to the outer daemon; mux panes re-add their own values.
@@ -267,7 +267,7 @@ safe_overrides = {
 term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
-# Environment merge order (see spawn_internal() in src/pty_session/lifecycle.rs):
+# Environment merge order (see spawn_internal() in crates/par-term-emu-core/src/pty_session/lifecycle.rs):
 # 1. Inherit all parent env vars except the dropped set (see Inherited Environment:
 #    COLUMNS/LINES, TMUX/TMUX_PANE/STY/WINDOW, PAR_MUX_*, agent-session vars)
 # 2. Set terminal-specific environment variables:
@@ -536,7 +536,7 @@ term.spawn_shell()
 - Default behavior: enabled (returns true) if env var is unset, not "0", or not "false" (case-insensitive)
 - The check is: `std::env::var("PAR_TERM_REPLY_XTWINOPS").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(true)`
 - Changing the environment variable after terminal creation has no effect on that terminal instance
-- The filtering is implemented in the PTY reader thread (`start_reader_thread` in `src/pty_session/reader.rs`)
+- The filtering is implemented in the PTY reader thread (`start_reader_thread` in `crates/par-term-emu-core/src/pty_session/reader.rs`)
 - When disabled, CSI sequences ending with 't' are filtered from responses before being written back to the PTY master
 - Device query responses are processed by scanning for escape sequences (`\x1B[`) and checking the final byte
 - Only CSI sequences with alphabetic final byte 't' are dropped when filtering is enabled (other sequences pass through)
@@ -594,7 +594,7 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 ### File Loading Implementation
 
-The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty/`. Validations run in this order, each refusing with a distinct error before the next runs:
+The file loading security implementation is located in the `load_file_data()` method in `crates/par-term-emu-core/src/graphics/kitty/`. Validations run in this order, each refusing with a distinct error before the next runs:
 
 1. **UTF-8 Path Validation** — paths are decoded from the raw bytes (not base64-encoded for file transmission) and must be valid UTF-8.
 2. **Directory Traversal Prevention** — component-wise, not substring: `my..notes.png` has no `..` component and stays readable, `a/../b` does not. Applied before any filesystem operation.
@@ -660,7 +660,7 @@ logger = logging.getLogger(__name__)
 
 ### Integer Overflow Protection (Kitty Pixel Decoding, 0.43.1)
 
-`decode_pixels()` in `src/graphics/kitty/` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
+`decode_pixels()` in `crates/par-term-emu-core/src/graphics/kitty/` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
 
 ### Best Practices for Graphics Protocol
 
@@ -928,7 +928,7 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 
 `par-term-streamer` prints core diagnostics to stdout whether or not
 `DEBUG_LEVEL` is set: its `tracing` subscriber bridges the core's `log`
-records (target `par_term_emu_core_rust`, `src/debug.rs`).
+records (target `par_term_emu_core_rust`, `crates/par-term-emu-core/src/debug.rs`).
 
 - **Default:** Info and above, including `PTY_SPAWN` command lines and the
   hex of the terminal's replies to device queries.
@@ -1042,7 +1042,7 @@ adversary:
 
 ### Debug Logging
 
-The daemon logs to two independent sinks (`src/debug.rs`):
+The daemon logs to two independent sinks (`crates/par-term-emu-core/src/debug.rs`):
 
 - **stderr, always.** `par-mux` installs a stderr logger for the core's
   `log` records at Info and above, whether or not `DEBUG_LEVEL` is set.
@@ -1072,12 +1072,12 @@ a session this way can appear in either.
 
 The command summary is not the only record of input. **At
 `DEBUG_LEVEL>=3`, every byte written to a pane's PTY is logged as hex**
-(`PTY_WRITE`, `src/pty_session/io.rs`), so input delivered by `send-keys` or
+(`PTY_WRITE`, `crates/par-term-emu-core/src/pty_session/io.rs`), so input delivered by `send-keys` or
 `paste-buffer` still appears there. Level 1 records neither. Use level 1
 or 2 on a daemon that receives passwords or secrets.
 
 The log is `<temp>/par_term_emu_core_rust_debug_rust_<pid>.log`, created
-with mode `0600` and `O_NOFOLLOW` (`src/debug.rs`). It still records
+with mode `0600` and `O_NOFOLLOW` (`crates/par-term-emu-core/src/debug.rs`). It still records
 command names, targets, and environment values, so review it before
 attaching it to a bug report.
 
@@ -1256,16 +1256,39 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
-| `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
+| `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
+| `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
+| `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
+| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
+| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
+| `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
+| `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
+| `SIXEL_HARD_MAX_REPEAT` | 10,000 | `crates/par-term-emu-core/src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |
+| `SIXEL_HARD_MAX_GRAPHICS` | 1,024 | `crates/par-term-emu-core/src/sixel.rs:34` | Hard ceiling on sixel graphics retained from escape payloads. |
+| `SIXEL_DEFAULT_MAX_WIDTH` | 1 KiB | `crates/par-term-emu-core/src/sixel.rs:39` | Default ceiling on sixel raster width from payload geometry or user config. |
+| `SIXEL_DEFAULT_MAX_HEIGHT` | 1 KiB | `crates/par-term-emu-core/src/sixel.rs:42` | Default ceiling on sixel raster height from payload geometry or user config. |
+| `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `crates/par-term-emu-core/src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
+| `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `crates/par-term-emu-core/src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
+| `MAX_KITTY_APC_BYTES` | 96 MiB | `crates/par-term-emu-core/src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `MAX_TERMINAL_EVENTS` | 10,000 | `crates/par-term-emu-core/src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
+| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
+| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/mod.rs:165` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/mod.rs:167` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:169` | Bytes retained for one queued clipboard sync event. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:173` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:1022` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
+| `MAX_DCS_BUFFER` | 65,536 | `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
+| `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
+| `MAX_SIXEL_COLORS` | 4,096 | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
+| `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
-| `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
-| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
-| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `MAX_EVICTED_ZONES` | 10,000 | `src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `MAX_CLIENT_COLS` | 1,000 | `src/mux/command/mod.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `src/mux/command/mod.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `src/mux/command/mod.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
@@ -1277,14 +1300,6 @@ sections; the numbers live here.
 | `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server/mod.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
-| `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
-| `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
-| `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |
-| `SIXEL_HARD_MAX_GRAPHICS` | 1,024 | `src/sixel.rs:34` | Hard ceiling on sixel graphics retained from escape payloads. |
-| `SIXEL_DEFAULT_MAX_WIDTH` | 1 KiB | `src/sixel.rs:39` | Default ceiling on sixel raster width from payload geometry or user config. |
-| `SIXEL_DEFAULT_MAX_HEIGHT` | 1 KiB | `src/sixel.rs:42` | Default ceiling on sixel raster height from payload geometry or user config. |
-| `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
-| `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
 | `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
@@ -1294,21 +1309,6 @@ sections; the numbers live here.
 | `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:95` | Rows a streaming client may request for its terminal. |
 | `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:26` | Client input chunks queued per session pending write to the PTY. |
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:35` | Client input bytes queued per session pending write to the PTY. |
-| `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
-| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
-| `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:164` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:166` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:168` | Bytes retained for one queued clipboard sync event. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:172` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:1021` | Payload bytes accepted for one OSC sequence from terminal output. |
-| `MAX_BOOKMARKS` | 1,000 | `src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
-| `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
-| `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
-| `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
-| `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
 
 <!-- caps-table:end -->
 

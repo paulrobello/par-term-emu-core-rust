@@ -21,7 +21,7 @@ This guide explains how to test Kitty graphics protocol animation support in `pa
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Backend Animation Storage | Complete | `src/graphics/animation.rs` |
+| Backend Animation Storage | Complete | `crates/par-term-emu-core/src/graphics/animation.rs` |
 | Backend Frame Management | Complete | Frames stored in `GraphicsStore.animations` |
 | Backend Playback Control | Complete | Stop/LoadingMode/EnableLooping |
 | Backend Loop Count | Complete | Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops) |
@@ -401,7 +401,7 @@ The serialization captures:
 - Current frame number
 - Loop count and loops completed
 
-**Implementation file:** `src/graphics/serialization.rs`
+**Implementation file:** `crates/par-term-emu-core/src/graphics/serialization.rs`
 
 ## Related Documentation
 
@@ -411,10 +411,10 @@ The serialization captures:
 - [VT Sequences Reference](VT_SEQUENCES.md) - All supported VT escape sequences
 
 **Implementation Files:**
-- [`src/graphics/animation.rs`](../src/graphics/animation.rs) - Animation frame storage and playback logic
-- [`src/graphics/mod.rs`](../src/graphics/mod.rs) - Graphics store with `update_animations()` method
-- [`src/graphics/kitty/`](../src/graphics/kitty/mod.rs) - Kitty protocol parser with animation support
-- [`src/graphics/serialization.rs`](../src/graphics/serialization.rs) - Animation serialization for session persistence
+- [`crates/par-term-emu-core/src/graphics/animation.rs`](../crates/par-term-emu-core/src/graphics/animation.rs) - Animation frame storage and playback logic
+- [`crates/par-term-emu-core/src/graphics/mod.rs`](../crates/par-term-emu-core/src/graphics/mod.rs) - Graphics store with `update_animations()` method
+- [`crates/par-term-emu-core/src/graphics/kitty/`](../crates/par-term-emu-core/src/graphics/kitty/mod.rs) - Kitty protocol parser with animation support
+- [`crates/par-term-emu-core/src/graphics/serialization.rs`](../crates/par-term-emu-core/src/graphics/serialization.rs) - Animation serialization for session persistence
 - [`scripts/test_kitty_animation.py`](../scripts/test_kitty_animation.py) - Automated animation test script
 - [`src/python_bindings/terminal/mod.rs`](../src/python_bindings/terminal/mod.rs) - Python bindings for terminal animation updates
 - [`src/python_bindings/pty.rs`](../src/python_bindings/pty.rs) - Python bindings for PTY animation updates

@@ -1,7 +1,7 @@
 # ENH-027 — generate include/terminal_core.h from the Rust source of truth.
 #
 # Regenerate with `make ffi-header` after changing any #[repr(C)] type or
-# extern "C" fn in src/ffi.rs / src/keyboard.rs; `make ffi-header-check`
+# extern "C" fn in src/ffi.rs / crates/par-term-emu-core/src/keyboard.rs; `make ffi-header-check`
 # (wired into checkall) fails when the committed header is stale.
 #
 # The TERM_* constants and the _Static_assert layout pins are NOT generated:
@@ -81,4 +81,8 @@ include = [
 KeyEncodeOptions = "TermKeyOptions"
 
 [parse]
-parse_deps = false
+# The key-encoding structs (KeyEncodeOptions, TermKeyEvent) live in the
+# par-term-emu-core workspace member's keyboard.rs (ARC-007 O2); parse that
+# crate and only that crate.
+parse_deps = true
+include = ["par-term-emu-core"]

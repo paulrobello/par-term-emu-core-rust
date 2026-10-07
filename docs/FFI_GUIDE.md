@@ -531,4 +531,4 @@ The `_Static_assert`s in the header pin the struct layouts at compile time; the 
 - [Security Guide](SECURITY.md) - PTY security considerations for FFI consumers
 - [`terminal_core.h`](../include/terminal_core.h) - The authoritative C header
 - [FFI Implementation](../src/ffi.rs) - Source for the FFI types and functions
-- [Cell Implementation](../src/cell.rs) - Source for `CellBitflags` and cell attributes
+- [Cell Implementation](../crates/par-term-emu-core/src/cell.rs) - Source for `CellBitflags` and cell attributes

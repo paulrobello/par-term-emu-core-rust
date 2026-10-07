@@ -44,6 +44,13 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-clippy-core
+        name: cargo clippy (par-term-emu-core)
+        description: Lint the terminal core member (ARC-007 O2)
+        entry: cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
 
   # Rust tests
   - repo: local
@@ -52,6 +59,13 @@ repos:
         name: cargo test
         description: Run Rust tests
         entry: cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-test-core
+        name: cargo test (par-term-emu-core)
+        description: Run the terminal core member's unit tests (ARC-007 O2)
+        entry: cargo test -p par-term-emu-core --lib --features ffi
         language: system
         types: [rust]
         pass_filenames: false

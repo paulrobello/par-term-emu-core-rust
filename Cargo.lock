@@ -1997,6 +1997,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "par-term-emu-core"
+version = "0.58.1"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.13.2",
+ "flate2",
+ "image",
+ "libc",
+ "log",
+ "lru",
+ "parking_lot",
+ "percent-encoding",
+ "portable-pty",
+ "proptest",
+ "pyo3",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "smallvec",
+ "swash",
+ "tempfile",
+ "unicode-normalization",
+ "unicode-segmentation",
+ "unicode-width",
+ "url",
+ "uuid",
+ "vte",
+]
+
+[[package]]
 name = "par-term-emu-core-rust"
 version = "0.58.1"
 dependencies = [
@@ -2005,7 +2036,6 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "bcrypt",
- "bitflags 2.13.2",
  "clap",
  "criterion",
  "crossterm",
@@ -2017,14 +2047,12 @@ dependencies = [
  "interprocess",
  "libc",
  "log",
- "lru",
  "md-5",
  "nix 0.31.3",
+ "par-term-emu-core",
  "par-term-emu-derive",
  "parking_lot",
- "percent-encoding",
  "portable-pty",
- "proptest",
  "prost",
  "prost-build",
  "pyo3",
@@ -2034,12 +2062,9 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha1 0.11.0",
  "sha2",
- "smallvec",
  "subtle",
- "swash",
  "sysinfo",
  "tar",
  "tempfile",
@@ -2052,12 +2077,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "unicode-normalization",
- "unicode-segmentation",
- "unicode-width",
- "url",
  "uuid",
- "vte",
  "widestring",
  "windows-sys 0.61.2",
  "zeroize",

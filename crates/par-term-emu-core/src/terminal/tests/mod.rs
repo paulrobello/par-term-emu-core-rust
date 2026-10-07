@@ -18,8 +18,6 @@ mod damage_props;
 mod detection;
 #[cfg(test)]
 mod editing;
-#[cfg(all(test, feature = "ffi"))]
-mod ffi_tests;
 #[cfg(test)]
 mod grid_integration_tests;
 #[cfg(test)]

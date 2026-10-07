@@ -315,7 +315,7 @@ fn validate_badge_format(format: &str) -> Result<(), BadgeFormatError> {
 ///
 /// # Example
 /// ```
-/// use par_term_emu_core_rust::badge::{SessionVariables, evaluate_badge_format};
+/// use par_term_emu_core::badge::{SessionVariables, evaluate_badge_format};
 ///
 /// let mut vars = SessionVariables::new();
 /// vars.set_username("alice");

@@ -305,7 +305,8 @@ pub struct TerminalGraphic {
 
 /// Pixel access shared by `TerminalGraphic` and the Python `Graphic`
 /// binding, which carries the same RGBA buffer outside this type (QA-009).
-pub(crate) fn pixel_at_in(
+#[doc(hidden)]
+pub fn pixel_at_in(
     pixels: &[u8],
     width: usize,
     height: usize,
@@ -335,16 +336,22 @@ pub(crate) type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
 /// An RGBA pixel buffer and the terminal cell its top-left corner sits in:
 /// the graphic side of [`sample_half_block_in`].
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PlacedPixels<'a> {
-    pub(crate) pixels: &'a [u8],
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) position: (usize, usize),
+#[doc(hidden)]
+pub struct PlacedPixels<'a> {
+    #[doc(hidden)]
+    pub pixels: &'a [u8],
+    #[doc(hidden)]
+    pub width: usize,
+    #[doc(hidden)]
+    pub height: usize,
+    #[doc(hidden)]
+    pub position: (usize, usize),
 }
 
 /// Half-block sampling shared by `TerminalGraphic` and the Python
 /// `Graphic` binding (QA-009).
-pub(crate) fn sample_half_block_in(
+#[doc(hidden)]
+pub fn sample_half_block_in(
     graphic: PlacedPixels<'_>,
     cell_col: usize,
     cell_row: usize,
@@ -376,7 +383,8 @@ pub(crate) fn sample_half_block_in(
 
 /// Cell dimensions for a pixel buffer of `width` x `height`, shared by
 /// `TerminalGraphic` and the Python `Graphic` binding (QA-009).
-pub(crate) fn cell_size_for(
+#[doc(hidden)]
+pub fn cell_size_for(
     width: usize,
     height: usize,
     cell_width: u32,

@@ -10,7 +10,8 @@ use super::*;
 /// same errors.
 #[cfg(feature = "mux")]
 #[derive(Clone)]
-pub(crate) struct PtyInputHandle {
+#[doc(hidden)]
+pub struct PtyInputHandle {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     terminal: Arc<RwLock<Terminal>>,
     running: Arc<AtomicBool>,
@@ -18,7 +19,8 @@ pub(crate) struct PtyInputHandle {
 
 #[cfg(feature = "mux")]
 impl PtyInputHandle {
-    pub(crate) fn write(&self, data: &[u8]) -> Result<(), PtyError> {
+    #[doc(hidden)]
+    pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
         if !self.running.load(Ordering::SeqCst) {
             return Err(PtyError::NotStartedError);
         }
@@ -56,7 +58,8 @@ pub(super) fn write_input(
 /// Pixel extent of `cells` cells at `cell_px` pixels each, saturated to the
 /// `u16` a `winsize`/`PtySize` field can hold (QA-182: `cols * cell_w` in
 /// `u16` overflowed at 2000 columns of 40 px cells).
-pub(crate) fn pixel_extent(cells: u16, cell_px: u16) -> u16 {
+#[doc(hidden)]
+pub fn pixel_extent(cells: u16, cell_px: u16) -> u16 {
     u16::try_from(u32::from(cells) * u32::from(cell_px)).unwrap_or(u16::MAX)
 }
 
@@ -115,7 +118,7 @@ impl PtySession {
     ///
     /// # Example
     /// ```no_run
-    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use par_term_emu_core::pty_session::PtySession;
     /// use std::sync::Arc;
     ///
     /// let mut pty = PtySession::new(80, 24, 1000);
@@ -181,7 +184,8 @@ impl PtySession {
     /// buffer fills (QA-225). `None` when the session has no PTY writer
     /// (never spawned), the same [`PtyError::NotStartedError`] condition
     /// [`PtySession::write`] reports.
-    pub(crate) fn input_handle(&self) -> Option<PtyInputHandle> {
+    #[doc(hidden)]
+    pub fn input_handle(&self) -> Option<PtyInputHandle> {
         Some(PtyInputHandle {
             writer: self.writer.as_ref()?.clone(),
             terminal: Arc::clone(&self.terminal),

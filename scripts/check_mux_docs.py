@@ -7,7 +7,7 @@ command or notification added without its doc row fails the gate:
   1. `const COMMANDS` (src/mux/command/)        ↔ MUX.md "Command Reference" rows
   2. `MuxCommand::mutates()` true arms           ↔ MUX.md "When it saves" list
   3. `"%…` strings in `emit()` (src/mux/emit.rs) ↔ MUX.md "Notifications" rows
-  4. `notification_type()` strings (src/tmux_control.rs)
+  4. `notification_type()` strings (crates/par-term-emu-core/src/tmux_control.rs)
                                                  ↔ the `notification_type` bullet
                                                    in docs/API_REFERENCE.md
 
@@ -48,7 +48,7 @@ NEVER_SENT: set[str] = {"unlinked-window-close", "pane-mode-changed"}
 SELF_TEST_FILES: tuple[str, ...] = (
     "src/mux/command/",
     "src/mux/emit.rs",
-    "src/tmux_control.rs",
+    "crates/par-term-emu-core/src/tmux_control.rs",
     "docs/MUX.md",
     "docs/API_REFERENCE.md",
 )
@@ -301,10 +301,16 @@ def save_list(mux_md: str) -> list[str]:
 
 def notification_type_map(tmux_rs: str) -> dict[str, str]:
     """notification_type string → TmuxNotification variant."""
-    body = fn_block(tmux_rs, "pub fn notification_type(", "src/tmux_control.rs")
+    body = fn_block(
+        tmux_rs,
+        "pub fn notification_type(",
+        "crates/par-term-emu-core/src/tmux_control.rs",
+    )
     arms = re.findall(r'Self::(\w+)(?:\s*\{[^}]*\})?\s*=>\s*"([a-z-]+)"', body)
     if not arms:
-        fail("parsed nothing from src/tmux_control.rs: no arms in notification_type()")
+        fail(
+            "parsed nothing from crates/par-term-emu-core/src/tmux_control.rs: no arms in notification_type()"
+        )
     return {name: variant for variant, name in arms}
 
 
@@ -334,7 +340,7 @@ def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str
         variant = type_map.get(name)
         if variant is None:
             fail(
-                f"parsed nothing from src/tmux_control.rs: notification_type() has no "
+                f"parsed nothing from crates/par-term-emu-core/src/tmux_control.rs: notification_type() has no "
                 f"`{name}` arm — NEVER_SENT no longer maps to a variant"
             )
         needle = f"TmuxNotification::{variant}"
@@ -347,7 +353,7 @@ def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str
 def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     command_rs = read(root, "src/mux/command/")
     emit_rs = read(root, "src/mux/emit.rs")
-    tmux_rs = read(root, "src/tmux_control.rs")
+    tmux_rs = read(root, "crates/par-term-emu-core/src/tmux_control.rs")
     mux_md = read(root, "docs/MUX.md")
     api_md = read(root, "docs/API_REFERENCE.md")
 
@@ -431,12 +437,16 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     type_names = set(
         re.findall(
             r'=>\s*"([a-z-]+)"',
-            fn_block(tmux_rs, "pub fn notification_type(", "src/tmux_control.rs"),
+            fn_block(
+                tmux_rs,
+                "pub fn notification_type(",
+                "crates/par-term-emu-core/src/tmux_control.rs",
+            ),
         )
     )
     if not type_names:
         fail(
-            "parsed nothing from src/tmux_control.rs: no strings in notification_type()"
+            "parsed nothing from crates/par-term-emu-core/src/tmux_control.rs: no strings in notification_type()"
         )
     doc_types = set(doc_notification_types(api_md))
     for name in sorted(type_names - doc_types):
@@ -445,7 +455,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
         )
     for name in sorted(doc_types - type_names):
         problems.append(
-            f"API_REFERENCE notification_type token `{name}` has no notification_type() arm in src/tmux_control.rs"
+            f"API_REFERENCE notification_type token `{name}` has no notification_type() arm in crates/par-term-emu-core/src/tmux_control.rs"
         )
 
     counts = {

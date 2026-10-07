@@ -17,7 +17,7 @@
 //! # Example
 //!
 //! ```
-//! use par_term_emu_core_rust::unicode_normalization_config::NormalizationForm;
+//! use par_term_emu_core::unicode_normalization_config::NormalizationForm;
 //!
 //! let form = NormalizationForm::default();
 //! assert_eq!(form, NormalizationForm::NFC);

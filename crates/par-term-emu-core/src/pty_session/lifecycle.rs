@@ -48,7 +48,7 @@ impl PtySession {
     ///
     /// # Example
     /// ```no_run
-    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use par_term_emu_core::pty_session::PtySession;
     /// use std::collections::HashMap;
     ///
     /// let mut session = PtySession::new(80, 24, 1000);
@@ -81,7 +81,7 @@ impl PtySession {
     ///
     /// # Example
     /// ```no_run
-    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use par_term_emu_core::pty_session::PtySession;
     /// use std::collections::HashMap;
     ///
     /// let mut session = PtySession::new(80, 24, 1000);

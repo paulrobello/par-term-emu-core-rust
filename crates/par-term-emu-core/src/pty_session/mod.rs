@@ -56,12 +56,14 @@ mod io;
 mod lifecycle;
 mod query;
 mod updates;
-pub(crate) use io::pixel_extent;
+#[doc(hidden)]
+pub use io::pixel_extent;
 #[cfg(unix)]
 use io::send_sigwinch;
 // mux is the only consumer of the cloneable input handle.
 #[cfg(feature = "mux")]
-pub(crate) use io::PtyInputHandle;
+#[doc(hidden)]
+pub use io::PtyInputHandle;
 
 /// Callback function for PTY output
 ///

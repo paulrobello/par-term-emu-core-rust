@@ -295,6 +295,7 @@ impl ObserverDispatchBatch {
                 .is_err();
                 if panicked {
                     log::error!(
+                        target: "par_term_emu_core_rust::terminal::event_broker",
                         "par-term-emu: terminal observer panicked during dispatch; \
                          isolating to keep Terminal state consistent (ARC-007)"
                     );
