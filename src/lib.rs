@@ -139,7 +139,7 @@ pub use badge::{
     SessionVariables,
 };
 
-#[cfg(any(feature = "python", feature = "python-test"))]
+#[cfg(all(feature = "python", feature = "streaming"))]
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
 #[cfg(any(feature = "python", feature = "python-test"))]
 use pyo3::prelude::*;
