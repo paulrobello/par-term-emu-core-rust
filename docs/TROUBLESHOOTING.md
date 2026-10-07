@@ -1,6 +1,6 @@
 # Troubleshooting
 
-One entry point for the most common build, test, streaming, and par-mux failures. Each entry gives the symptom, the cause, and the fix, and links to the guide that covers the area in depth.
+One entry point for the most common build, test, streaming, and par-mux failures. Each entry gives the fix, with the cause where the source guide states it, and links to the guide that covers the area in depth.
 
 ## Table of Contents
 
@@ -116,10 +116,11 @@ Every drop cause is listed in [STREAMING.md Input Drops](STREAMING.md#input-drop
 
 **Cause:** the daemon outlives its clients, so an old daemon keeps serving old code. The `version` command reports the daemon's build stamp for comparison.
 
-**Fix:** restart the daemon on the same socket. The restart restores the saved state:
+**Fix:** restart the daemon on the same socket. The restart restores the saved state. Pass the daemon's name when it is not the default one:
 
 ```bash
 par-mux --restart
+par-mux work --restart
 ```
 
 When the restarted daemon fails to start, its stderr is in `<state file>.log` beside the state file. See [MUX.md Command Line](MUX.md#command-line).
@@ -134,7 +135,7 @@ When the restarted daemon fails to start, its stderr is in `<state file>.log` be
 
 **Cause:** a live daemon already serves that socket path. A stale remnant (a dead socket file left by SIGKILL or a crash) is reclaimed automatically and does not produce this error.
 
-**Fix:** connect to the running daemon with `--cmd` or `attach`, choose another name or `--socket`, or stop the running daemon with `par-mux --stop`.
+**Fix:** connect to the running daemon with `--cmd` or `attach`, choose another name or `--socket`, or stop the running daemon with `par-mux [<name>] --stop` (or `par-mux --socket <path> --stop`).
 
 ### this pane has hook-only access
 
