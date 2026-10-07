@@ -1096,7 +1096,7 @@ class Notification:
 
 class NotificationConfig:
     """Notification configuration"""
-    def __init__(self) -> None: ...
+    def __init__() -> None: ...
     @property
     def activity_enabled(self) -> Any:
         """Whether activity notifications are enabled"""
@@ -2126,6 +2126,9 @@ class PtyTerminal:
         If bracketed paste mode is enabled, wraps the content with ESC[200~ and ESC[201~
         Otherwise, writes the content directly to the PTY
 
+        The GIL is released while the underlying writes block, so other
+        Python threads keep running.
+
         Args:
             content: String content to paste
         """
@@ -3047,11 +3050,17 @@ class PtyTerminal:
     def write(self, data: Any) -> Any:
         """Write data to the PTY (send to the child process)
 
+        The GIL is released while the underlying write blocks, so other
+        Python threads keep running.
+
         Args:
             data: Bytes to write
         """
     def write_str(self, s: Any) -> Any:
         """Write a string to the PTY (convenience method)
+
+        The GIL is released while the underlying write blocks, so other
+        Python threads keep running.
 
         Args:
             s: String to write
@@ -4100,6 +4109,8 @@ class Terminal:
             ```python
             term = Terminal(80, 24)
             term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+            len(term.get_rendering_hints())
+            1
             ```
         """
     def add_to_clipboard_history(
@@ -4286,7 +4297,8 @@ class Terminal:
         Example:
             >>> term = Terminal(80, 24)
             >>> info = term.capture_replay_snapshot()
-            >>> print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
+            >>> info["cols"], info["rows"]
+            (80, 24)
         """
     def char_width(self, c: Any) -> int:
         """Get the display width of a single character
@@ -4343,7 +4355,17 @@ class Terminal:
             ```
         """
     def clear_all_clipboard_history(self) -> Any:
-        """Clear all clipboard history"""
+        """Clear all clipboard history
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello")
+            term.clear_all_clipboard_history()
+            term.get_clipboard_history("clipboard")
+            []
+            ```
+        """
     def clear_all_tab_stops(self) -> Any:
         """Clear all tab stops"""
     def clear_badge_format(self) -> Any:
@@ -4372,15 +4394,65 @@ class Terminal:
 
         Raises:
             ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_to_clipboard_history("clipboard", "hello")
+            term.clear_clipboard_history("clipboard")
+            term.get_clipboard_history("clipboard")
+            []
+            ```
         """
     def clear_clipboard_sync_events(self) -> Any:
-        """Clear clipboard sync events"""
+        """Clear clipboard sync events
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_clipboard_sync("clipboard", "set", "hello", False)
+            term.clear_clipboard_sync_events()
+            term.get_clipboard_sync_events()
+            []
+            ```
+        """
     def clear_command_history(self) -> Any:
-        """Clear command execution history"""
+        """Clear command execution history
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.end_command_execution(0)
+            term.clear_command_history()
+            term.get_command_history()
+            []
+            ```
+        """
     def clear_cwd_history(self) -> Any:
-        """Clear CWD change history"""
+        """Clear CWD change history
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_cwd_change("/home/user")
+            term.clear_cwd_history()
+            term.get_cwd_changes()
+            []
+            ```
+        """
     def clear_damage_regions(self) -> Any:
-        """Clear damage regions"""
+        """Clear damage regions
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_damage_region(0, 0, 10, 5)
+            term.clear_damage_regions()
+            term.get_damage_regions()
+            []
+            ```
+        """
     def clear_event_subscription(self) -> Any:
         """Clear event subscription filter (equivalent to receiving all events)"""
     def clear_graphics(self) -> Any:
@@ -4397,7 +4469,17 @@ class Terminal:
             ```
         """
     def clear_mouse_history(self) -> Any:
-        """Clear mouse history"""
+        """Clear mouse history
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+            term.clear_mouse_history()
+            term.get_mouse_events()
+            []
+            ```
+        """
     def clear_notification_events(self) -> Any:
         """Clear notification events
 
@@ -4430,7 +4512,17 @@ class Terminal:
             ```
         """
     def clear_rendering_hints(self) -> Any:
-        """Clear rendering hints"""
+        """Clear rendering hints
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_rendering_hint(0, 0, 80, 1, "overlay", "fade", "high")
+            term.clear_rendering_hints()
+            term.get_rendering_hints()
+            []
+            ```
+        """
     def clear_selection(self) -> Any:
         """Clear the current selection
 
@@ -4452,7 +4544,17 @@ class Terminal:
     def clear_tmux_notifications(self) -> Any:
         """Clear the tmux control protocol notifications buffer"""
     def clear_trigger_highlights(self) -> Any:
-        """Clear all trigger highlights"""
+        """Clear all trigger highlights
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> _ = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.process(b"ERROR: disk full\\r\\n")
+            >>> term.process_trigger_scans()
+            >>> term.clear_trigger_highlights()
+            >>> term.get_trigger_highlights()
+            []
+        """
     def clipboard(self) -> Any:
         """Get the current clipboard content
 
@@ -4833,6 +4935,13 @@ class Terminal:
 
         Args:
             exit_code: Exit code of the command
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.end_command_execution(0)
+            ```
         """
     def erase_rectangle(self, top: Any, left: Any, bottom: Any, right: Any) -> Any:
         """Erase a rectangle
@@ -4885,9 +4994,10 @@ class Terminal:
             JSON string containing the serialized graphics snapshot
 
         Example:
-            >>> json_str = terminal.export_graphics_json()
+            >>> terminal.export_graphics_json()  # doctest: +SKIP
+            '{"placements": [], "version": 1}'
             >>> with open("session_graphics.json", "w") as f:
-            ...     f.write(json_str)
+            ...     f.write(terminal.export_graphics_json())  # doctest: +SKIP
         """
     def export_html(self, include_styles: Any = True) -> Any:
         """Export terminal content as HTML
@@ -5274,6 +5384,15 @@ class Terminal:
 
         Returns:
             List of PyCommandExecution
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.end_command_execution(0)
+            len(term.get_command_history())
+            1
+            ```
         """
     def get_command_output(self, index: Any) -> Any:
         """Get command output text by index (0 = most recent completed command).
@@ -5316,6 +5435,14 @@ class Terminal:
 
         Returns:
             Optional PyCommandExecution
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.get_current_command().command
+            'ls -la'
+            ```
         """
     def get_current_regex_pattern(self) -> str | None:
         """Get current regex search pattern
@@ -5337,6 +5464,14 @@ class Terminal:
 
         Returns:
             List of PyCwdChange
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_cwd_change("/home/user")
+            len(term.get_cwd_changes())
+            1
+            ```
         """
     def get_damage_regions(self) -> list[DamageRegion]:
         """Get all accumulated damage regions without clearing them
@@ -5583,15 +5718,40 @@ class Terminal:
 
         Returns:
             int: Maximum bytes cached per clipboard event
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_clipboard_event_bytes(4096)
+            term.get_max_clipboard_event_bytes()
+            4096
+            ```
         """
     def get_max_clipboard_sync_events(self) -> int:
         """Get maximum clipboard sync events retained
 
         Returns:
             int: Maximum clipboard sync events buffered
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_clipboard_sync_events(50)
+            term.get_max_clipboard_sync_events()
+            50
+            ```
         """
     def get_max_mouse_history(self) -> Any:
-        """Get maximum mouse history size"""
+        """Get maximum mouse history size
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_mouse_history(10)
+            term.get_max_mouse_history()
+            10
+            ```
+        """
     def get_max_notifications(self) -> int:
         """Get maximum retained OSC 9/777 notifications
 
@@ -5896,6 +6056,15 @@ class Terminal:
 
         Returns:
             PyShellIntegrationStats
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.end_command_execution(0)
+            term.get_shell_integration_stats().total_commands
+            1
+            ```
         """
     def get_sixel_graphics_limit(self) -> Any:
         """Get maximum number of Sixel graphics retained
@@ -5962,6 +6131,14 @@ class Terminal:
 
         Returns:
             Trigger | None: Trigger if found, None otherwise
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> tid = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.get_trigger(tid).name
+            'errors'
+            >>> term.get_trigger(9999) is None
+            True
         """
     def get_trigger_highlights(self) -> list[tuple]:
         """Get active trigger highlights (filters expired ones)
@@ -5969,6 +6146,14 @@ class Terminal:
         Returns:
             list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
                 where fg and bg are optional (r, g, b) tuples
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> _ = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.process(b"ERROR: disk full\\r\\n")
+            >>> term.process_trigger_scans()
+            >>> term.get_trigger_highlights()
+            [(0, 0, 5, None, (255, 0, 0))]
         """
     def get_underline_color(self, col: Any, row: Any) -> Any:
         """Get a cell's underline color at the specified position (SGR 58)
@@ -6066,11 +6251,9 @@ class Terminal:
             Zone text content as a string, or None
 
         Example:
-            ```python
-            text = term.get_zone_text(some_row)
-            if text:
-                print(f"Zone content: {text}")
-            ```
+            >>> term = Terminal(80, 24)
+            >>> term.get_zone_text(0) is None  # no zones exist without shell integration
+            True
         """
     def get_zones(self) -> Any:
         """Get all semantic zones in the terminal buffer
@@ -6200,10 +6383,10 @@ class Terminal:
             Number of graphics restored
 
         Example:
-            >>> with open("session_graphics.json") as f:
-            ...     json_str = f.read()
+            >>> json_str = terminal.export_graphics_json()
             >>> count = terminal.import_graphics_json(json_str)
-            >>> print(f"Restored {count} graphics")
+            >>> count >= 0
+            True
         """
     def insert_mode(self) -> Any:
         """Get insert mode (IRM - Mode 4) state
@@ -6327,6 +6510,12 @@ class Terminal:
 
         Returns:
             list[Trigger]: List of all triggers
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> _ = term.add_trigger("errors", r"ERROR", [action])
+            >>> len(term.list_triggers())
+            1
         """
     def margin_bell_volume(self) -> Any:
         """Get margin bell volume
@@ -6385,7 +6574,18 @@ class Terminal:
             Display width in columns
         """
     def merge_damage_regions(self) -> Any:
-        """Merge overlapping damage regions"""
+        """Merge overlapping damage regions
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.add_damage_region(0, 0, 10, 5)
+            term.add_damage_region(5, 2, 20, 8)
+            term.merge_damage_regions()
+            len(term.get_damage_regions())
+            1
+            ```
+        """
     def modify_other_keys_mode(self) -> Any:
         """Get modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
 
@@ -6491,6 +6691,14 @@ class Terminal:
 
         Returns:
             list[dict]: List of action result dicts with 'type' and action-specific fields
+
+        Example:
+            >>> action = TriggerAction("notify", {"title": "Alert", "message": "Error: $1"})
+            >>> _ = term.add_trigger("errs", r"ERROR: (.+)", [action])
+            >>> term.process(b"ERROR: disk full\\r\\n")
+            >>> term.process_trigger_scans()
+            >>> term.poll_action_results()[0]["type"]
+            'notify'
         """
     def poll_cwd_events(self) -> Any:
         """Drain only CWD change events
@@ -6607,6 +6815,14 @@ class Terminal:
         """Process trigger scans on dirty rows
 
         Called automatically in PTY mode. Use manually for non-PTY terminals.
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> _ = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.process(b"ERROR: disk full\\r\\n")
+            >>> term.process_trigger_scans()
+            >>> len(term.get_trigger_highlights())
+            1
         """
     def progress_bar(self) -> Any:
         """Get the current progress bar state
@@ -6722,6 +6938,14 @@ class Terminal:
             new_cwd: New working directory
             hostname: Optional hostname (None for localhost)
             username: Optional username (user@host form)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.record_cwd_change("/home/user", hostname="server1", username="alice")
+            len(term.get_cwd_changes())
+            1
+            ```
         """
     def record_escape_sequence(self, category: Any, time_us: Any) -> Any:
         """Record an escape sequence execution
@@ -6886,6 +7110,14 @@ class Terminal:
 
         Returns:
             Optional session identifier
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_remote_session_id("ssh-session-1")
+            term.remote_session_id()
+            'ssh-session-1'
+            ```
         """
     def remove_all_named_progress_bars(self) -> Any:
         """Remove all named progress bars"""
@@ -6933,6 +7165,14 @@ class Terminal:
 
         Returns:
             bool: True if trigger was found and removed
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> tid = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.remove_trigger(tid)
+            True
+            >>> term.remove_trigger(tid)
+            False
         """
     def reset(self) -> Any:
         """Reset the terminal to default state (RIS).
@@ -7660,30 +7900,64 @@ class Terminal:
 
         Args:
             max_bytes: Maximum bytes cached per event (0 clears cached content)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_clipboard_event_bytes(4096)
+            term.get_max_clipboard_event_bytes()
+            4096
+            ```
         """
     def set_max_clipboard_sync_events(self, max: Any) -> Any:
         """Set maximum clipboard sync events retained (0 disables buffering)
 
         Args:
             max: Maximum clipboard sync events to buffer (0 disables buffering)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_clipboard_sync_events(50)
+            term.get_max_clipboard_sync_events()
+            50
+            ```
         """
     def set_max_clipboard_sync_history(self, max: Any) -> Any:
         """Set maximum clipboard sync history
 
         Args:
             max: Maximum number of entries per target
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_clipboard_sync_history(20)
+            ```
         """
     def set_max_command_history(self, max: Any) -> Any:
         """Set maximum command history size
 
         Args:
             max: Maximum number of command entries
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_command_history(50)
+            ```
         """
     def set_max_cwd_history(self, max: Any) -> Any:
         """Set maximum CWD history size
 
         Args:
             max: Maximum number of CWD change entries
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_cwd_history(50)
+            ```
         """
     def set_max_inline_images(self, max: Any) -> Any:
         """Set maximum inline images
@@ -7700,7 +7974,19 @@ class Terminal:
             ```
         """
     def set_max_mouse_history(self, max: Any) -> Any:
-        """Set maximum mouse history size"""
+        """Set maximum mouse history size
+
+        Args:
+            max: Maximum number of events/positions retained
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_max_mouse_history(10)
+            term.get_max_mouse_history()
+            10
+            ```
+        """
     def set_max_notifications(self, max: Any) -> Any:
         """Set maximum number of OSC 9/777 notifications to retain (0 disables buffering)
 
@@ -7781,7 +8067,7 @@ class Terminal:
         Example:
             >>> term.set_normalization_form(NormalizationForm.NFC)  # Compose characters
             >>> term.set_normalization_form(NormalizationForm.NFD)  # Decompose characters
-            >>> term.set_normalization_form(NormalizationForm.None) # No normalization
+            >>> term.set_normalization_form(NormalizationForm.Disabled)  # No normalization
         """
     def set_notification_config(self, config: Any) -> Any:
         """Set notification configuration
@@ -7814,6 +8100,14 @@ class Terminal:
 
         Args:
             session_id: Optional session identifier
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.set_remote_session_id("ssh-session-1")
+            term.remote_session_id()
+            'ssh-session-1'
+            ```
         """
     def set_selection(self, start: Any, end: Any, mode: Any) -> Any:
         """Set the current selection
@@ -7933,6 +8227,12 @@ class Terminal:
 
         Returns:
             bool: True if trigger was found and updated
+
+        Example:
+            >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+            >>> tid = term.add_trigger("errors", r"ERROR", [action])
+            >>> term.set_trigger_enabled(tid, False)
+            True
         """
     def set_unicode_version(self, version: Any) -> Any:
         """Set the Unicode version for width calculation tables
@@ -8045,6 +8345,13 @@ class Terminal:
 
         Args:
             command: Command being executed
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            term.start_command_execution("ls -la")
+            term.end_command_execution(0)
+            ```
         """
     def start_recording(self, title: Any) -> Any:
         """Start recording a terminal session
@@ -8635,6 +8942,7 @@ def color_luminance(rgb: tuple) -> float:
         >>> from par_term_emu_core_rust import color_luminance
         >>> lum = color_luminance((255, 255, 255))
         >>> print(f"White luminance: {lum:.2f}")
+        White luminance: 1.00
     """
 
 def complementary_color(rgb: tuple) -> tuple:
@@ -8650,6 +8958,7 @@ def complementary_color(rgb: tuple) -> tuple:
         >>> from par_term_emu_core_rust import complementary_color
         >>> comp = complementary_color((255, 0, 0))  # Red -> Cyan
         >>> print(f"Complement of red: {comp}")
+        Complement of red: (0, 255, 255)
     """
 
 def contrast_ratio(rgb1: tuple, rgb2: tuple) -> float:
@@ -8683,6 +8992,7 @@ def darken_rgb(rgb: tuple, amount: float) -> tuple:
         >>> from par_term_emu_core_rust import darken_rgb
         >>> darkened = darken_rgb((200, 150, 100), 0.3)
         >>> print(f"Darkened: {darkened}")
+        Darkened: (140, 105, 70)
     """
 
 def decode_client_message(data: Any) -> dict:
@@ -8861,6 +9171,7 @@ def lighten_rgb(rgb: tuple, amount: float) -> tuple:
         >>> from par_term_emu_core_rust import lighten_rgb
         >>> lightened = lighten_rgb((128, 64, 32), 0.5)
         >>> print(f"Lightened: {lightened}")
+        Lightened: (192, 160, 144)
     """
 
 def meets_wcag_aa(fg: tuple, bg: tuple) -> bool:
@@ -8910,6 +9221,7 @@ def mix_colors(rgb1: tuple, rgb2: tuple, ratio: float) -> tuple:
         >>> from par_term_emu_core_rust import mix_colors
         >>> mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)
         >>> print(f"Purple: {mixed}")
+        Purple: (128, 0, 128)
     """
 
 def perceived_brightness_rgb(r: int, g: int, b: int) -> float:
@@ -8948,6 +9260,7 @@ def rgb_to_ansi_256(rgb: tuple) -> int:
         >>> from par_term_emu_core_rust import rgb_to_ansi_256
         >>> idx = rgb_to_ansi_256((255, 0, 0))
         >>> print(f"Red is closest to ANSI color {idx}")
+        Red is closest to ANSI color 196
     """
 
 def rgb_to_hex(rgb: tuple) -> str:
