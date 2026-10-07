@@ -232,7 +232,7 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 - Database connection strings
 
 **Automatic Environment Filtering**:
-- Every spawn drops these inherited variables (`DROP_VARS` in `src/pty_session/mod.rs`, plus a prefix match):
+- Every spawn drops these inherited variables (`DROP_VARS` in `src/pty_session/lifecycle.rs`, plus a prefix match):
   - **Size hints** — `COLUMNS`, `LINES`. They are static and do not update on resize. Many libraries (Python's `shutil.get_terminal_size()`, some TUIs) prefer them over `ioctl(TIOCGWINSZ)` and would stay stuck at the parent terminal's size.
   - **Parent multiplexer** — `TMUX`, `TMUX_PANE`, `STY`, `WINDOW`. The child runs in a new PTY, not the parent's tmux or screen pane; tools like fzf would otherwise render in the parent pane.
   - **par-mux pane identity** — every `PAR_MUX_*` variable. A PTY spawned inside a mux pane must not report agents to the outer daemon; mux panes re-add their own values.
@@ -267,7 +267,7 @@ safe_overrides = {
 term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
-# Environment merge order (see spawn() in src/pty_session/mod.rs):
+# Environment merge order (see spawn_internal() in src/pty_session/lifecycle.rs):
 # 1. Inherit all parent env vars except the dropped set (see Inherited Environment:
 #    COLUMNS/LINES, TMUX/TMUX_PANE/STY/WINDOW, PAR_MUX_*, agent-session vars)
 # 2. Set terminal-specific environment variables:
@@ -1072,7 +1072,7 @@ a session this way can appear in either.
 
 The command summary is not the only record of input. **At
 `DEBUG_LEVEL>=3`, every byte written to a pane's PTY is logged as hex**
-(`PTY_WRITE`, `src/pty_session/mod.rs`), so input delivered by `send-keys` or
+(`PTY_WRITE`, `src/pty_session/io.rs`), so input delivered by `send-keys` or
 `paste-buffer` still appears there. Level 1 records neither. Use level 1
 or 2 on a daemon that receives passwords or secrets.
 
