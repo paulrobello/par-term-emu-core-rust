@@ -16,7 +16,7 @@ Add:
 
 ## Current state
 
-- No `deny.toml` and no `.cargo/audit.toml` exist. `Cargo.lock` is committed since ARC-107 (D2 approved), so `cargo audit` scans the same lockfile CI and release builds use (`--locked`).
+- No `deny.toml` existed when this was filed (it has since landed at the repo root as [`deny.toml`](../../deny.toml)), and the repo carries no separate cargo-audit config file. `Cargo.lock` is committed since ARC-107 (D2 approved), so `cargo audit` scans the same lockfile CI and release builds use (`--locked`).
 - **Local tools:** `cargo-deny` 0.20.2 and `cargo-audit` are installed, as are `bun` 1.4.2 and `uv` 0.12.1. `pip-audit` is **not** installed, so run it through `uvx`.
 - **The `paste` advisory** (RUSTSEC-2024-0436, unmaintained, SEC-134).
   - Probe at HEAD f6535f2: `cargo audit` reports it. `cargo deny --all-features check advisories` with default config reports `advisories ok` and does not mention it.

@@ -73,7 +73,7 @@ Most in-pane consumers need only the four hook methods (`pane.report_agent`, `pa
 
 ## Implementation (non-gated half)
 
-1. **Pane endpoint** (`src/mux/pane_endpoint.rs`, new).
+1. **Pane endpoint** (planned as a new `pane_endpoint.rs`; landed as `PaneEndpoint` in [`src/mux/server.rs`](../../src/mux/server.rs)).
    - **Location.** `PaneEndpoint::bind(control_socket: &Path, pane_id) -> io::Result<Self>` places the socket **beside the control socket, in the same guarded runtime directory**: `<dir>/par-mux-<name>.pane-<N>.sock`. It must not go under `--state-dir`: that is persistent data, and a long temp `--state-dir` would overrun `sun_path`.
    - Bind through `prepare_socket_path` + `bind_local_listener`, so the same directory guard, stale-remnant reclaim, 0600 mode and euid check apply.
    - **Length check.** If the path exceeds the platform `sun_path` limit (103 bytes usable on macOS, 107 on Linux), return an error. The factory then leaves `PAR_MUX_SOCKET` unset for that pane and logs once. It never falls back to the full socket.
@@ -122,7 +122,7 @@ Flip the default to `pane_endpoints = true` (daemon and `ShellPaneFactory`), plu
 
 ## Files to touch
 
-- `src/mux/pane_endpoint.rs` (new), `src/mux/mod.rs`
+- `src/mux/server.rs` (`PaneEndpoint`, `PaneEndpointTx`/`PaneEndpointRx`; the plan's separate `pane_endpoint.rs` was not created), `src/mux/mod.rs`
 - `src/mux/hooks/mod.rs` (`handle_report_for`)
 - `src/mux/pane.rs` (endpoint ownership, env contract), `src/mux/tree/lifecycle.rs` (kill, respawn and restore lifecycle)
 - `src/mux/ipc.rs` (pane socket path helper, `sun_path` length check, stale sweep, Windows pipe name)
