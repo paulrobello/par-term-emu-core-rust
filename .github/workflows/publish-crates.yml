@@ -66,7 +66,13 @@ jobs:
 
       - name: Run Rust tests
         if: ${{ !inputs.skip_tests && steps.check_version.outputs.exists == 'false' }}
-        run: cargo test --locked --lib --no-default-features
+        # Root `cargo test` runs only the root package; the members' unit tests
+        # run explicitly. par-mux's library code sits behind `mux` (with no
+        # features `--lib` compiles zero tests), so it runs with `mux`.
+        run: |
+          cargo test --locked --lib --no-default-features
+          cargo test --locked -p par-term-emu-core --lib --no-default-features
+          cargo test --locked -p par-mux --lib --no-default-features --features mux
 
       - name: Publish derive sub-crate if needed (par-term-emu-derive)
         # The main crate's `par-term-emu-derive = { path = "derive", version = "X" }`

@@ -93,7 +93,13 @@ jobs:
           echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Run Rust tests
-        run: cargo test --locked --lib --no-default-features
+        # Root `cargo test` runs only the root package; the members' unit tests
+        # run explicitly. par-mux's library code sits behind `mux` (with no
+        # features `--lib` compiles zero tests), so it runs with `mux`.
+        run: |
+          cargo test --locked --lib --no-default-features
+          cargo test --locked -p par-term-emu-core --lib --no-default-features
+          cargo test --locked -p par-mux --lib --no-default-features --features mux
 
       - name: Publish derive sub-crate (par-term-emu-derive)
         # Must be published before the main crate: crates.io strips `path`
