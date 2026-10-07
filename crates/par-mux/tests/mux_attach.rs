@@ -3193,11 +3193,6 @@ fn render_mode_panel_menu_chip_detaches() {
     );
 }
 
-/// The tab strip's ` + ` button: a click opens the new-tab prompt
-/// (herdr's footer, the next free index as the editable default), Enter
-/// creates the window and lands on it, Esc cancels without creating.
-#[cfg(unix)]
-#[test]
 /// The tab context menu must be CLICKABLE with the side panel up: the
 /// modal centers over the HOST width (the pane layout already carries
 /// the strip offset), so its clicks map by the raw host column — the
@@ -3272,6 +3267,8 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
     host.killer.kill().ok();
 }
 
+#[cfg(unix)]
+#[test]
 fn render_mode_plus_click_works_with_the_panel_up() {
     let (fixture, _daemon, mut client) = fixture_with_session("pluspanel");
     let pane_a = client
@@ -3354,6 +3351,9 @@ fn render_mode_plus_click_works_on_a_wide_host() {
     host.killer.kill().ok();
 }
 
+/// The tab strip's ` + ` button: a click opens the new-tab prompt
+/// (herdr's footer, the next free index as the editable default), Enter
+/// creates the window and lands on it, Esc cancels without creating.
 #[cfg(unix)]
 #[test]
 fn render_mode_plus_click_prompts_and_creates_a_window() {
