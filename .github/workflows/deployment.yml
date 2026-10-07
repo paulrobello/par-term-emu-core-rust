@@ -66,7 +66,8 @@ jobs:
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Two member index waits (up to 10 min each) ride ahead of the root publish.
+    timeout-minutes: 45
     needs: [github-release]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,11 +101,71 @@ jobs:
         # `par-term-emu-derive = { path = "derive", version = "0.43.0" }` can
         # only resolve once this sub-crate exists on crates.io. Workspace
         # publish order (crates/par-term-emu-core/DESIGN.md): derive →
-        # par-term-emu-core → par-mux → root; the core and par-mux steps are
-        # the tracked ARC-007 O2 publish follow-up. Idempotent —
+        # par-term-emu-core → par-mux → root (member steps below). Idempotent —
         # a re-run after the first publish no-ops (version already exists).
         run: cargo publish --manifest-path derive/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "par-term-emu-derive already published, continuing..."
         continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish workspace member par-term-emu-core
+        # Workspace publish order (crates/par-term-emu-core/DESIGN.md "Version
+        # train"): derive -> par-term-emu-core -> par-mux -> root. The root pins
+        # this member with `=X.Y.Z` and crates.io strips `path`, so the member
+        # must be resolvable from the sparse index before par-mux or the root
+        # publishes. A failure here fails the job (no continue-on-error): a
+        # missing core would otherwise surface later as a confusing resolution
+        # error in the root publish.
+        run: |
+          CRATE=par-term-emu-core
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r --arg n "$CRATE" '.packages[] | select(.name == $n) | .version')
+          echo "$CRATE version: $VERSION"
+          if curl -fsS -o /dev/null -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://crates.io/api/v1/crates/$CRATE/$VERSION"; then
+            echo "::notice::$CRATE $VERSION already on crates.io"
+          else
+            cargo publish -p "$CRATE" --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          fi
+
+          # Wait for the sparse index (what cargo resolves against) to list the
+          # version: up to 10 minutes.
+          for i in $(seq 1 60); do
+            INDEX=$(curl -fsS -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://index.crates.io/pa/r-/$CRATE" || true)
+            if [[ "$INDEX" == *"\"vers\":\"$VERSION\""* ]]; then
+              echo "Index propagation confirmed for $CRATE $VERSION"
+              exit 0
+            fi
+            echo "Waiting for $CRATE $VERSION in the index ($i/60)..."
+            sleep 10
+          done
+          echo "::error::$CRATE $VERSION not in the crates.io index after 10 minutes"
+          exit 1
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish workspace member par-mux
+        # Depends on par-term-emu-core `=X.Y.Z` (resolvable after the step
+        # above); the root pins par-mux `=X.Y.Z`, so it publishes before the root.
+        run: |
+          CRATE=par-mux
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r --arg n "$CRATE" '.packages[] | select(.name == $n) | .version')
+          echo "$CRATE version: $VERSION"
+          if curl -fsS -o /dev/null -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://crates.io/api/v1/crates/$CRATE/$VERSION"; then
+            echo "::notice::$CRATE $VERSION already on crates.io"
+          else
+            cargo publish -p "$CRATE" --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          fi
+
+          for i in $(seq 1 60); do
+            INDEX=$(curl -fsS -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://index.crates.io/pa/r-/$CRATE" || true)
+            if [[ "$INDEX" == *"\"vers\":\"$VERSION\""* ]]; then
+              echo "Index propagation confirmed for $CRATE $VERSION"
+              exit 0
+            fi
+            echo "Waiting for $CRATE $VERSION in the index ($i/60)..."
+            sleep 10
+          done
+          echo "::error::$CRATE $VERSION not in the crates.io index after 10 minutes"
+          exit 1
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

@@ -110,17 +110,14 @@ with no features compiles neither pyo3 nor swash nor portable-pty
   manifest.
 - `par-term-emu-derive` keeps its independent version (unchanged).
 - **Publish order:** derive (if bumped) → `par-term-emu-core` → `par-mux`
-  → root (the workflows need a par-mux publish step too). crates.io strips `path`, so each dependency must exist on
-  the registry before its dependent publishes. `deployment.yml`
-  (`publish-crates`) and `publish-crates.yml` must gain a "publish
-  par-term-emu-core, wait for index propagation" step before the main
-  publish **before the next release** (tracked as Phase-1 follow-up; the
-  workflows are dispatch-only and not exercised by this phase). This is a
-  hard prerequisite: the root's `cargo publish` cannot resolve
-  `par-term-emu-core = "=X.Y.Z"` until the member is on crates.io. The same
-  follow-up should add `-p par-term-emu-core` to `deployment.yml`'s "Run
-  Rust tests" step (`cargo test --lib --no-default-features`), which now
-  runs only the root's unit tests.
+  → root. crates.io strips `path`, so each dependency must exist on the
+  registry before its dependent publishes. `deployment.yml`
+  (`publish-crates`) and `publish-crates.yml` publish each member with
+  `cargo publish -p <member>` (skipped when the version already exists),
+  then poll the sparse index (`index.crates.io`) for the version for up to
+  10 minutes before the next step; a member that never appears fails the
+  job. The root's dry run and publish come last. Publishing a brand-new
+  crate name needs a `CARGO_REGISTRY_TOKEN` with the `publish-new` scope.
 
 ## Invariants
 
