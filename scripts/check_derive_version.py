@@ -87,7 +87,9 @@ def self_test() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="ARC-008 derive-crate version skew gate"
+    )
     parser.add_argument(
         "--self-test", action="store_true", help="run the gate's own regression cases"
     )
