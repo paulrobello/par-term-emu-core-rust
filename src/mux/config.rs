@@ -794,83 +794,36 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         Some(chord) => reload_chord_key(chord)?,
         None => current.reload,
     };
+    // Each management chord: the file's spelling when present (an error
+    // names the chord), else the current binding.
+    macro_rules! chord {
+        ($field:ident, $label:literal) => {
+            match file.client.$field.as_deref() {
+                Some(chord) => management_key(chord, $label)?,
+                None => current.management.$field,
+            }
+        };
+    }
     let management = Management {
-        split_right: match file.client.split_right.as_deref() {
-            Some(chord) => management_key(chord, "split-right")?,
-            None => current.management.split_right,
-        },
-        split_down: match file.client.split_down.as_deref() {
-            Some(chord) => management_key(chord, "split-down")?,
-            None => current.management.split_down,
-        },
-        kill_pane: match file.client.kill_pane.as_deref() {
-            Some(chord) => management_key(chord, "kill-pane")?,
-            None => current.management.kill_pane,
-        },
-        new_window: match file.client.new_window.as_deref() {
-            Some(chord) => management_key(chord, "new-window")?,
-            None => current.management.new_window,
-        },
-        resize: match file.client.resize.as_deref() {
-            Some(chord) => management_key(chord, "resize")?,
-            None => current.management.resize,
-        },
-        swap_prev: match file.client.swap_prev.as_deref() {
-            Some(chord) => management_key(chord, "swap-prev")?,
-            None => current.management.swap_prev,
-        },
-        swap_next: match file.client.swap_next.as_deref() {
-            Some(chord) => management_key(chord, "swap-next")?,
-            None => current.management.swap_next,
-        },
-        workspace_next: match file.client.workspace_next.as_deref() {
-            Some(chord) => management_key(chord, "workspace-next")?,
-            None => current.management.workspace_next,
-        },
-        workspace_prev: match file.client.workspace_prev.as_deref() {
-            Some(chord) => management_key(chord, "workspace-prev")?,
-            None => current.management.workspace_prev,
-        },
-        help: match file.client.help.as_deref() {
-            Some(chord) => management_key(chord, "help")?,
-            None => current.management.help,
-        },
-        picker: match file.client.picker.as_deref() {
-            Some(chord) => management_key(chord, "picker")?,
-            None => current.management.picker,
-        },
-        zoom: match file.client.zoom.as_deref() {
-            Some(chord) => management_key(chord, "zoom")?,
-            None => current.management.zoom,
-        },
-        rename_window: match file.client.rename_window.as_deref() {
-            Some(chord) => management_key(chord, "rename-window")?,
-            None => current.management.rename_window,
-        },
-        rename_pane: match file.client.rename_pane.as_deref() {
-            Some(chord) => management_key(chord, "rename-pane")?,
-            None => current.management.rename_pane,
-        },
-        border_cycle: match file.client.border_cycle.as_deref() {
-            Some(chord) => management_key(chord, "border-cycle")?,
-            None => current.management.border_cycle,
-        },
-        label_toggle: match file.client.label_toggle.as_deref() {
-            Some(chord) => management_key(chord, "label-toggle")?,
-            None => current.management.label_toggle,
-        },
-        workspace_picker: match file.client.workspace_picker.as_deref() {
-            Some(chord) => management_key(chord, "workspace-picker")?,
-            None => current.management.workspace_picker,
-        },
-        sidebar: match file.client.sidebar.as_deref() {
-            Some(chord) => management_key(chord, "sidebar")?,
-            None => current.management.sidebar,
-        },
-        status_bar: match file.client.status_bar.as_deref() {
-            Some(chord) => management_key(chord, "status-bar")?,
-            None => current.management.status_bar,
-        },
+        split_right: chord!(split_right, "split-right"),
+        split_down: chord!(split_down, "split-down"),
+        kill_pane: chord!(kill_pane, "kill-pane"),
+        new_window: chord!(new_window, "new-window"),
+        resize: chord!(resize, "resize"),
+        swap_prev: chord!(swap_prev, "swap-prev"),
+        swap_next: chord!(swap_next, "swap-next"),
+        workspace_next: chord!(workspace_next, "workspace-next"),
+        workspace_prev: chord!(workspace_prev, "workspace-prev"),
+        help: chord!(help, "help"),
+        picker: chord!(picker, "picker"),
+        zoom: chord!(zoom, "zoom"),
+        rename_window: chord!(rename_window, "rename-window"),
+        rename_pane: chord!(rename_pane, "rename-pane"),
+        border_cycle: chord!(border_cycle, "border-cycle"),
+        label_toggle: chord!(label_toggle, "label-toggle"),
+        workspace_picker: chord!(workspace_picker, "workspace-picker"),
+        sidebar: chord!(sidebar, "sidebar"),
+        status_bar: chord!(status_bar, "status-bar"),
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
