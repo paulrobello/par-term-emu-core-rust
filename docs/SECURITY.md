@@ -1258,6 +1258,7 @@ sections; the numbers live here.
 |----------|-------|----------|--------|
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
+| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
@@ -1283,7 +1284,7 @@ sections; the numbers live here.
 | `SIXEL_DEFAULT_MAX_HEIGHT` | 1 KiB | `src/sixel.rs:42` | Default ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_DEFAULT_MAX_REPEAT` | 10,000 | `src/sixel.rs:45` | Default ceiling on one sixel repeat count from an escape payload. |
 | `SIXEL_DEFAULT_MAX_GRAPHICS` | 256 | `src/sixel.rs:48` | Default ceiling on sixel graphics retained from escape payloads. |
-| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:50` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
+| `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
