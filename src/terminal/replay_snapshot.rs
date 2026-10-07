@@ -156,7 +156,7 @@ impl Terminal {
         let alt_grid = self.alt_grid.capture_snapshot();
 
         let mut snap = TerminalSnapshot {
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
             cols,
             rows,
             grid,

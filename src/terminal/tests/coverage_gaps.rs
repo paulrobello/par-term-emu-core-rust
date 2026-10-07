@@ -12,7 +12,8 @@
 //! - No production code changes.
 
 use crate::cell::Cell;
-use crate::terminal::{cells_to_text, Terminal};
+use crate::terminal::Terminal;
+use crate::text_utils::cells_to_text;
 
 // =============================================================================
 // Dirty-region tracking: mark_row_dirty / mark_clean / get_dirty_rows /

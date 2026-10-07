@@ -102,7 +102,7 @@ impl Terminal {
             new_cwd: current_cwd,
             hostname,
             username,
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
         });
     }
 
@@ -138,7 +138,7 @@ impl Terminal {
             new_cwd: path.to_string(),
             hostname,
             username,
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
         });
     }
 }

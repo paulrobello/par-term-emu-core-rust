@@ -29,7 +29,7 @@ impl TerminalBenchmarks {
             let grid = term.active_grid();
             for row in 0..grid.rows() {
                 if let Some(line) = grid.row(row) {
-                    let _ = crate::terminal::cells_to_text(line);
+                    let _ = crate::text_utils::cells_to_text(line);
                 }
             }
 

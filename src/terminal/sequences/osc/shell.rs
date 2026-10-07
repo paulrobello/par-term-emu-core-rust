@@ -21,7 +21,7 @@ impl Terminal {
                                 new_cwd: path.clone(),
                                 hostname: hostname.clone(),
                                 username,
-                                timestamp: crate::terminal::unix_millis(),
+                                timestamp: crate::text_utils::unix_millis(),
                             });
                             crate::debug_log!(
                                 "OSC7",
@@ -160,7 +160,7 @@ fn handle_osc133(
     params: &[&[u8]],
 ) {
     if let Ok(marker) = std::str::from_utf8(params[1]) {
-        let ts = crate::terminal::unix_millis();
+        let ts = crate::text_utils::unix_millis();
         match marker.chars().next() {
             Some('A') => {
                 shell_state

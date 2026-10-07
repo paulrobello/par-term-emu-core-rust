@@ -67,7 +67,7 @@ impl Terminal {
                 .shell_integration
                 .cwd()
                 .map(|s| s.to_string()),
-            start_time: crate::terminal::unix_millis(),
+            start_time: crate::text_utils::unix_millis(),
             end_time: None,
             exit_code: None,
             duration_ms: None,
@@ -81,7 +81,7 @@ impl Terminal {
     /// End tracking the current command execution
     pub fn end_command_execution(&mut self, exit_code: Option<i32>) {
         if let Some(mut execution) = self.command_history_state.current_command.take() {
-            let now = crate::terminal::unix_millis();
+            let now = crate::text_utils::unix_millis();
             execution.end_time = Some(now);
             execution.duration_ms = Some(now - execution.start_time);
             execution.exit_code = exit_code;

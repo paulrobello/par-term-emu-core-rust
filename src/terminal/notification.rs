@@ -170,7 +170,7 @@ impl Terminal {
             trigger,
             alert,
             message,
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
             delivered: false,
         };
 
@@ -221,7 +221,7 @@ impl Terminal {
 
     /// Update last activity timestamp
     pub fn update_activity(&mut self) {
-        self.notifications_state.last_activity_time = crate::terminal::unix_millis();
+        self.notifications_state.last_activity_time = crate::text_utils::unix_millis();
     }
 
     /// Check for silence notification trigger
@@ -229,7 +229,7 @@ impl Terminal {
         if !self.notifications_state.notification_config.silence_enabled {
             return;
         }
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
         if now - self.notifications_state.last_activity_time
             > self
                 .notifications_state
@@ -265,7 +265,7 @@ impl Terminal {
         {
             return;
         }
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
         let state = &self.notifications_state;
         let has_new_activity = state.last_activity_time > state.last_activity_check;
         let due = now.saturating_sub(state.last_activity_check)

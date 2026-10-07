@@ -228,7 +228,7 @@ impl Terminal {
             content: content_str,
             is_write,
             is_remote,
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
         };
 
         self.clipboard_sync.events.push(event);
@@ -246,7 +246,7 @@ impl Terminal {
                     } else {
                         None
                     },
-                    timestamp: crate::terminal::unix_millis(),
+                    timestamp: crate::text_utils::unix_millis(),
                 };
                 let history = self.clipboard_sync.history.entry(target).or_default();
                 history.push(history_entry);

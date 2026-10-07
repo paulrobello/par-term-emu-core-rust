@@ -86,6 +86,9 @@ pub use semantic_snapshot::{
     ZoneInfo,
 };
 pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
+// Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
+// the public `crate::terminal::*` paths keep resolving.
+pub use crate::text_utils::{cells_to_text, html_escape, unix_millis};
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerEngine, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry, TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,
@@ -169,15 +172,6 @@ const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// cap: Clipboard content bytes accepted from an OSC 52 sequence.
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
 
-/// Current Unix timestamp in milliseconds since the epoch.
-#[inline]
-pub fn unix_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
 /// Truncate clipboard content in place to `max_bytes` (0 clears it), enforcing
 /// the 10 MB hard cap and appending a truncation marker when cut.
 pub fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
@@ -197,37 +191,6 @@ pub fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
             content.push_str(CLIPBOARD_TRUNCATION_SUFFIX);
         }
     }
-}
-
-/// Helper function to convert cells to text
-pub fn cells_to_text(cells: &[Cell]) -> String {
-    // Write directly into one String instead of allocating a Vec<String> per
-    // row (QA-006).
-    let mut result = String::with_capacity(cells.len());
-    for c in cells {
-        if c.flags.wide_char_spacer() {
-            result.push(' ');
-        } else {
-            c.push_grapheme(&mut result);
-        }
-    }
-    result
-}
-
-/// Helper function to escape HTML special characters
-pub fn html_escape(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => result.push_str("&lt;"),
-            '>' => result.push_str("&gt;"),
-            '&' => result.push_str("&amp;"),
-            '"' => result.push_str("&quot;"),
-            '\'' => result.push_str("&#39;"),
-            _ => result.push(c),
-        }
-    }
-    result
 }
 
 /// Get current timestamp in microseconds
@@ -392,7 +355,7 @@ pub(crate) struct NotificationState {
 
 impl Default for NotificationState {
     fn default() -> Self {
-        let now = unix_millis();
+        let now = crate::text_utils::unix_millis();
         Self {
             notifications: Vec::new(),
             notification_config: NotificationConfig::default(),
@@ -1286,7 +1249,7 @@ impl Terminal {
         let mut lines = Vec::with_capacity(scrollback_len);
         for i in 0..scrollback_len {
             if let Some(line) = self.grid.scrollback_line(i) {
-                lines.push(cells_to_text(line));
+                lines.push(crate::text_utils::cells_to_text(line));
             }
         }
         lines

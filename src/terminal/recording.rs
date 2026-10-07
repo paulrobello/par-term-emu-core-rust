@@ -100,10 +100,10 @@ impl Terminal {
             events: Vec::new(),
             env,
             duration: 0,
-            created_at: crate::terminal::unix_millis(),
+            created_at: crate::text_utils::unix_millis(),
         });
         self.recording_state.is_recording = true;
-        self.recording_state.recording_start_time = crate::terminal::unix_millis();
+        self.recording_state.recording_start_time = crate::text_utils::unix_millis();
     }
 
     /// Stop recording terminal session
@@ -111,7 +111,7 @@ impl Terminal {
         self.recording_state.is_recording = false;
         let mut session = self.recording_state.recording_session.take()?;
         session.duration =
-            crate::terminal::unix_millis() - self.recording_state.recording_start_time;
+            crate::text_utils::unix_millis() - self.recording_state.recording_start_time;
         Some(session)
     }
 
@@ -123,7 +123,7 @@ impl Terminal {
 
         if let Some(ref mut session) = self.recording_state.recording_session {
             let timestamp =
-                crate::terminal::unix_millis() - self.recording_state.recording_start_time;
+                crate::text_utils::unix_millis() - self.recording_state.recording_start_time;
             session.events.push(RecordingEvent {
                 timestamp,
                 event_type,
@@ -319,7 +319,7 @@ impl Terminal {
 
         if let Some(ref mut session) = self.recording_state.recording_session {
             let timestamp =
-                crate::terminal::unix_millis() - self.recording_state.recording_start_time;
+                crate::text_utils::unix_millis() - self.recording_state.recording_start_time;
             session.events.push(RecordingEvent {
                 timestamp,
                 event_type: RecordingEventType::Resize,
@@ -395,7 +395,7 @@ mod tests {
         assert!(ts2 > ts1, "Second timestamp should be later than first");
 
         // Timestamps are milliseconds since recording start
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
         assert!(
             ts1 < (now - start_time) + 1_000,
             "Timestamp should be reasonable"

@@ -419,7 +419,7 @@ impl TerminalGraphic {
             relative_y_offset: 0,
             was_compressed: false,
             placement: ImagePlacement::inline(),
-            added_at: crate::terminal::unix_millis(),
+            added_at: crate::text_utils::unix_millis(),
         }
     }
 
@@ -453,7 +453,7 @@ impl TerminalGraphic {
             relative_y_offset: 0,
             was_compressed: false,
             placement: ImagePlacement::inline(),
-            added_at: crate::terminal::unix_millis(),
+            added_at: crate::text_utils::unix_millis(),
         }
     }
 
