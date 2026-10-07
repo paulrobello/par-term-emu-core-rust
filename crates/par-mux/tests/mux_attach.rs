@@ -1526,18 +1526,49 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
         .next()
         .expect("a pane")
         .to_string();
+    // The DECSET is followed by a marker printf assembles (`MOUSE%sON`
+    // with `-`), so the shell's echo of the typed line never matches it.
     client
         .send(&format!(
-            "send-keys -t {pane} -l 'printf \"\\033[?1000h\\033[?1006h\"; cat -v'"
+            "send-keys -t {pane} -l 'printf \"\\033[?1000h\\033[?1006hMOUSE%sON\\n\" -; cat -v'"
         ))
         .expect("enable mouse + reader");
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(700));
+    // A fixed sleep raced the shell under full-gate load: the click
+    // landed before the pane owned the mouse and was only a focus click.
+    // Wait for the daemon's pane to show the marker (the DECSET precedes
+    // it), then for the render client to paint it (its emulator consumed
+    // the DECSET too) before clicking.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("MOUSE-ON") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never ran the mouse-enable printf: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut painted: Vec<u8> = Vec::new();
+    while !plain_text(&painted).contains("MOUSE-ON") {
+        assert!(
+            Instant::now() < deadline,
+            "the render client never painted the pane's marker: {:?}\nstderr: {}",
+            plain_text(&painted),
+            stderr.lock().unwrap()
+        );
+        painted.extend(wait_for_output(&host, b"", Duration::from_millis(100)));
+    }
 
     // Left press at host col 10 row 5 (1-based): the tab strip shifts the
     // content down one row, so the single pane's rect (0,0) maps the
@@ -1545,12 +1576,19 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     // ESC[<0;10;4M.
     host.to_child.write_all(b"\x1b[<0;10;5M").expect("click");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"0;10;4", Duration::from_secs(10));
-
-    let capture = client
-        .send(&format!("capture-pane -t {pane}"))
-        .expect("capture");
-    let body = capture.join("\n");
+    // Poll the daemon's view of the pane: the client forwards the report,
+    // `cat -v` echoes it, and the pane emulator records it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("^[[<0;10;4M") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
         body.contains("^[[<0;10;4M"),
         "the owning pane must receive the pane-relative SGR click: {body:?}\n\
