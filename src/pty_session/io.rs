@@ -205,8 +205,6 @@ impl PtySession {
         let dispatch_batch = {
             let mut term = self.terminal.write();
             let batch = term.resize_deferred(cols as usize, rows as usize);
-            // Record resize event for session recording
-            term.record_resize(cols as usize, rows as usize);
             self.geometry.publish(&term);
             batch
         };

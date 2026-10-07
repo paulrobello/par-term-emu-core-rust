@@ -229,6 +229,30 @@ fn test_resize() {
     assert_eq!(session.size(), (100, 30));
 }
 
+/// `Terminal::resize` records the resize itself, so a session recording
+/// carries exactly one `Resize` event per `PtySession` resize call.
+#[test]
+fn resize_records_one_recording_event_per_call() {
+    use crate::terminal::RecordingEventType;
+
+    let mut session = PtySession::new(80, 24, 1000);
+    session.terminal_write().start_recording(None);
+    session.resize(100, 30).ok();
+    session.resize_with_pixels(120, 40, 1200, 800).ok();
+
+    let term = session.terminal();
+    let term = term.read();
+    let resizes: Vec<_> = term
+        .get_recording_session()
+        .expect("recording active")
+        .events
+        .iter()
+        .filter(|e| e.event_type == RecordingEventType::Resize)
+        .map(|e| e.metadata)
+        .collect();
+    assert_eq!(resizes, vec![Some((100, 30)), Some((120, 40))]);
+}
+
 /// Poll `export_text()` until `marker` appears (5s deadline), then
 /// return the final text — the shared shape for spawn-then-assert tests.
 fn wait_for_text(session: &PtySession, marker: &str) -> String {
