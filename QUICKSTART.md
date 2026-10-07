@@ -239,6 +239,7 @@ uv run python examples/pty_shell.py
 - Explore the [examples directory](examples/) for code samples including PTY, graphics, and advanced features
 - Review [Streaming Documentation](docs/STREAMING.md) for WebSocket protocol, advanced features, and troubleshooting
 - Read [docs/BUILDING.md](docs/BUILDING.md) for build details and [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
+- Check [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) when a build, test, streaming, or par-mux step fails
 - Run example demonstrations: `make examples`
 
 ## Common Patterns
@@ -295,6 +296,7 @@ term.process_str("New content\n")
 
 ## Help & Support
 
+- [Troubleshooting](docs/TROUBLESHOOTING.md) for common build, streaming, and par-mux failures
 - [Report issues on GitHub](https://github.com/paulrobello/par-term-emu-core-rust/issues)
 - Read the full documentation in README.md
 - Check examples/ for more code samples
