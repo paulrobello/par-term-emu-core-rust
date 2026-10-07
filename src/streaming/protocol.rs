@@ -170,6 +170,11 @@ pub struct ThemeInfo {
 
 /// CPU statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::CpuStats")
+)]
 pub struct CpuStats {
     /// Overall CPU usage across all cores, in percent.
     pub overall_usage_percent: f64,
@@ -188,6 +193,11 @@ pub struct CpuStats {
 
 /// Memory statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MemoryStats")
+)]
 pub struct MemoryStats {
     /// Total physical memory in bytes.
     pub total_bytes: u64,
@@ -203,6 +213,11 @@ pub struct MemoryStats {
 
 /// Individual disk statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::DiskStats")
+)]
 pub struct DiskStats {
     /// Disk name.
     pub name: String,
@@ -222,6 +237,11 @@ pub struct DiskStats {
 
 /// Network interface statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::NetworkInterfaceStats")
+)]
 pub struct NetworkInterfaceStats {
     /// Interface name.
     pub name: String,
@@ -245,6 +265,11 @@ pub struct NetworkInterfaceStats {
 
 /// System load averages
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::LoadAverage")
+)]
 pub struct LoadAverage {
     /// One-minute load average.
     pub one_minute: f64,
@@ -262,6 +287,16 @@ pub struct LoadAverage {
         feature = "streaming"
     ),
     derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(
+        wire = "crate::streaming::proto::pb::ServerMessage",
+        module = "crate::streaming::proto::pb",
+        oneof = "crate::streaming::proto::pb::server_message::Message",
+        empty = "Empty server message"
+    )
 )]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
@@ -443,6 +478,7 @@ pub enum ServerMessage {
         ),
         pydict(type = "cursor")
     )]
+    #[cfg_attr(feature = "streaming", proto(oneof_variant = "Cursor"))]
     CursorPosition {
         /// Column position (0-indexed)
         col: u16,
@@ -604,6 +640,10 @@ pub enum ServerMessage {
         state: Option<String>,
         /// Progress percentage 0-100 (only for "set")
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "streaming",
+            proto(with = "crate::streaming::proto::wire::percent")
+        )]
         percent: Option<u8>,
         /// Descriptive label (only for "set")
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -805,6 +845,7 @@ pub enum ServerMessage {
 
     /// Semantic snapshot of terminal state
     #[serde(rename = "semantic_snapshot")]
+    #[cfg_attr(feature = "streaming", proto(message = "SemanticSnapshotData"))]
     SemanticSnapshot {
         /// JSON-encoded SemanticSnapshot struct
         snapshot_json: String,
@@ -907,6 +948,10 @@ pub enum ServerMessage {
     )]
     AgentStateChanged {
         /// The changed entry (only `pane_id` is meaningful when released)
+        #[cfg_attr(
+            feature = "streaming",
+            proto(with = "crate::streaming::proto::wire::required_agent")
+        )]
         agent: AgentEntry,
         /// True when the pane's agent was released or the pane exited
         released: bool,
@@ -915,6 +960,11 @@ pub enum ServerMessage {
 
 /// One par-mux agent roster entry, verbatim from `list-agents`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::AgentEntry")
+)]
 pub struct AgentEntry {
     /// par-mux pane number (`%N`)
     pub pane_id: u32,
@@ -937,6 +987,16 @@ pub struct AgentEntry {
     ),
     derive(par_term_emu_derive::PyDictConvert)
 )]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(
+        wire = "crate::streaming::proto::pb::ClientMessage",
+        module = "crate::streaming::proto::pb",
+        oneof = "crate::streaming::proto::pb::client_message::Message",
+        empty = "Empty client message"
+    )
+)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
     /// User input (keyboard)
@@ -946,6 +1006,7 @@ pub enum ClientMessage {
     },
 
     /// Terminal resize request
+    #[cfg_attr(feature = "streaming", proto(message = "ClientResize"))]
     Resize {
         /// Requested number of columns
         #[cfg_attr(
@@ -979,6 +1040,7 @@ pub enum ClientMessage {
         ),
         pydict(type = "refresh")
     )]
+    #[cfg_attr(feature = "streaming", proto(oneof_variant = "Refresh"))]
     RequestRefresh,
 
     /// Subscribe to specific events
@@ -998,12 +1060,17 @@ pub enum ClientMessage {
     },
 
     /// Mouse input from client
+    #[cfg_attr(feature = "streaming", proto(message = "MouseInput"))]
     Mouse {
         /// Column position
         col: u16,
         /// Row position
         row: u16,
         /// Button: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+        #[cfg_attr(
+            feature = "streaming",
+            proto(with = "crate::streaming::proto::wire::mouse_button")
+        )]
         button: u8,
         /// Shift key held
         shift: bool,
@@ -1026,6 +1093,7 @@ pub enum ClientMessage {
     },
 
     /// Focus change from client
+    #[cfg_attr(feature = "streaming", proto(oneof_variant = "Focus"))]
     FocusChange {
         /// Whether the terminal is focused
         #[cfg_attr(
@@ -1039,12 +1107,14 @@ pub enum ClientMessage {
     },
 
     /// Paste content from client
+    #[cfg_attr(feature = "streaming", proto(message = "PasteInput"))]
     Paste {
         /// Content to paste
         content: String,
     },
 
     /// Selection request from client
+    #[cfg_attr(feature = "streaming", proto(oneof_variant = "Selection"))]
     SelectionRequest {
         /// Start column
         start_col: u16,
@@ -1060,6 +1130,7 @@ pub enum ClientMessage {
     },
 
     /// Clipboard request from client
+    #[cfg_attr(feature = "streaming", proto(oneof_variant = "Clipboard"))]
     ClipboardRequest {
         /// Operation: "set", "get"
         operation: String,

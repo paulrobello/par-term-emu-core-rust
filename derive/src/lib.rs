@@ -1,4 +1,7 @@
-//! Proc-macro helpers for `par-term-emu-core-rust` Python bindings (ARC-014).
+//! Proc-macro helpers for `par-term-emu-core-rust`: Python bindings (ARC-014)
+//! and the streaming app <-> protobuf conversions (ARC-006).
+
+mod proto_convert;
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -384,6 +387,45 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
     };
 
     expanded
+}
+
+/// Derive macro generating the app type <-> prost wire type conversions for
+/// the streaming protocol (ARC-006).
+///
+/// Field values convert through the core crate's
+/// `crate::streaming::proto::{ToWire, FromWire}` traits, dispatched on the
+/// app field's declared type and the wire field's type, so a field whose
+/// type pair has no conversion fails to compile instead of guessing.
+///
+/// # On an enum (a message with a `message` oneof)
+///
+/// Generates `From<&Enum> for Wire` and `TryFrom<Wire> for Enum`, both with
+/// exhaustive matches. Container attributes (all required):
+///
+/// - `#[proto(wire = "pb::ServerMessage")]` — the wrapper message type.
+/// - `#[proto(module = "pb")]` — where the per-variant message structs live.
+/// - `#[proto(oneof = "pb::server_message::Message")]` — the oneof enum.
+/// - `#[proto(empty = "Empty server message")]` — error text for an unset
+///   oneof.
+///
+/// Variant attributes: `#[proto(oneof_variant = "Cursor")]` when the oneof
+/// arm is named differently from the app variant, and
+/// `#[proto(message = "CursorPosition")]` when the per-variant message
+/// struct is.
+///
+/// # On a struct (one prost message, field for field)
+///
+/// `#[proto(wire = "pb::CpuStats")]` generates `ToWire`/`FromWire` for the
+/// type, its `Option`, and its `Vec`.
+///
+/// # On a field
+///
+/// `#[proto(with = "path")]` converts through `path::to_wire(&field)` and
+/// `path::from_wire(wire_field) -> Result<FieldType>` instead of the traits,
+/// for fields with a field-specific rule (a clamp, a presence check).
+#[proc_macro_derive(ProtoConvert, attributes(proto))]
+pub fn derive_proto_convert(input: TokenStream) -> TokenStream {
+    proto_convert::expand(input.into()).into()
 }
 
 fn parse_path_value(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<Path> {
