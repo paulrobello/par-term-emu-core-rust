@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check stub-docs-check doc-links-check release-check audit-deps \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -61,6 +61,7 @@ help:
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
+	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
@@ -406,6 +407,13 @@ mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
 
+# ARC-008: the main crate's par-term-emu-derive dependency spec must name
+# derive/Cargo.toml's version (publish strips `path`, so crates.io resolves
+# the spec). Pure python3 stdlib; also runs from release-check.
+derive-version-check:
+	python3 scripts/check_derive_version.py
+	python3 scripts/check_derive_version.py --self-test
+
 # DOC-004: docstring coverage of the generated Python stub. Pure python3
 # over the committed _native.pyi, so no build or venv is needed.
 stub-docs-check:
@@ -456,7 +464,7 @@ doc-links-check:
 
 # ENH-036: release-time gate, deliberately NOT part of checkall — mid-cycle
 # the top CHANGELOG section is legitimately incomplete. Run before tagging.
-release-check:
+release-check: derive-version-check
 	python3 scripts/check_release_notes.py && python3 scripts/check_release_notes.py --self-test
 
 # ENH-040: dependency advisories across all three ecosystems. Needs network
@@ -476,7 +484,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check mux-docs-check stub-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check mux-docs-check stub-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -484,6 +492,7 @@ checkall: ffi-header-check ffi-surface-check mux-docs-check stub-docs-check mux-
 	@echo ""
 	@echo "Summary:"
 	@echo "  ✓ FFI header + surface checks"
+	@echo "  ✓ Derive crate version spec in sync"
 	@echo "  ✓ Rust tests"
 	@echo "  ✓ Rust streaming tests"
 	@echo "  ✓ Rust format (checked)"

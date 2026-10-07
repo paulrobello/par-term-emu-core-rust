@@ -56,6 +56,9 @@ jobs:
 
           echo "✅ All versions match: $CARGO_VERSION"
 
+      - name: Check derive crate version spec (ARC-008)
+        run: python3 scripts/check_derive_version.py
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
