@@ -114,7 +114,9 @@ async fn fetch_expected_sha256(client: &reqwest::Client, url: &str) -> Result<St
             response.status()
         );
     }
-    let body = read_body_capped(response, MAX_SIDECAR_BYTES).await?;
+    let body = read_body_capped(response, MAX_SIDECAR_BYTES)
+        .await
+        .context("Checksum sidecar response exceeded its 1 KiB cap")?;
     parse_sha256_sidecar(&body)
 }
 
