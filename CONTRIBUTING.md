@@ -112,7 +112,7 @@ Before tagging, `make release-check` must pass; then run `python3 scripts/check_
 When you add or modify a Rust method on `Terminal` or `PtySession`, keep the layers in sync:
 
 1. Add the Python binding in `src/python_bindings/terminal/` (in the themed `*_api.rs` file matching the feature area, or `mod.rs`; shared getter/setter pairs can go through the `common.rs` macro layer) or `src/python_bindings/pty.rs`.
-2. Add docstrings with `Args`, `Returns`, and `Example` sections (Google style).
+2. Add docstrings with `Args`, `Returns`, and `Example` sections (Google style). Document every `#[getter]` as well: `make stub-docs-check` (part of `checkall`) fails when a def in the generated `_native.pyi` has no docstring, allowing only setters of documented getters, `__init__` of documented classes, and `__enter__`/`__exit__`.
 3. Update `docs/API_REFERENCE.md`.
 4. Update `README.md` if the change is user-facing.
 5. Add Python tests in `tests/` when the feature is reachable from Python.
