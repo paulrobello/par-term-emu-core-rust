@@ -208,15 +208,22 @@ graph TB
     WS -->|Input| PTY
     HTTP -->|Serve Assets| Frontend
 
-    style PTY fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Term fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style WS fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
-    style HTTP fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
-    style Frontend fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style XTerm fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    class PTY active
+    class Term info
+    class WS primary
+    class HTTP http
+    class Frontend external
+    class XTerm neutral
+
+    classDef primary fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef info fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef http fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    classDef external fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef neutral fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
-> **📝 Note:** For detailed streaming documentation including protocol specification, advanced features, and troubleshooting, see [docs/STREAMING.md](docs/STREAMING.md)
+> **Note:** For detailed streaming documentation including protocol specification, advanced features, and troubleshooting, see [docs/STREAMING.md](docs/STREAMING.md)
 
 ## Explore Examples
 
