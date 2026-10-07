@@ -154,7 +154,7 @@ Every other release is documented in [CHANGELOG.md](CHANGELOG.md).
 - **[Security](docs/SECURITY.md)** - PTY security best practices
 - **[Building](docs/BUILDING.md)** - Build instructions and requirements
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common build, test, streaming, and par-mux failures in one place
-- **[Configuration Reference](docs/CONFIG_REFERENCE.md)** - Configuration options
+- **[Configuration Reference](docs/CONFIG_REFERENCE.md)** - Configuration options and the [environment variable reference](docs/CONFIG_REFERENCE.md#environment-variables)
 - **[Cross-Platform Notes](docs/CROSS_PLATFORM.md)** - Platform-specific information
 - **[VT Technical Reference](docs/VT_TECHNICAL_REFERENCE.md)** - Detailed VT compatibility and implementation
 - **[Fonts](docs/FONTS.md)** - Font configuration and rendering

@@ -824,7 +824,7 @@ term.process(b"\x1b[?1006h")  # SGR mouse encoding
 
 ## Environment Variables
 
-The library reads the environment variables below. The streaming server binary reads additional `PAR_TERM_*` variables, listed in [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables).
+This is the one table of every environment variable the library, the `par-mux` binary, and the `par-term-streamer` binary read. Each area's guide keeps its own detail: [SECURITY.md](SECURITY.md#xtwinops-query-response-control) for `PAR_TERM_REPLY_XTWINOPS`, [MUX.md](MUX.md#agent-hook-reports) for the variables par-mux sets inside panes, and [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) for the streaming server options.
 
 | Variable | Read by | Default | Purpose |
 |----------|---------|---------|---------|
@@ -832,7 +832,9 @@ The library reads the environment variables below. The streaming server binary r
 | `PAR_TERM_REPLY_XTWINOPS` | `PtyTerminal`/`PtySession` construction (read once) | replies on | `0` or `false` suppresses XTWINOPS (`CSI t`) query replies |
 | `SHELL` | Default shell lookup (Unix) | `/bin/bash` | Shell for `spawn_shell()` |
 | `COMSPEC` | Default shell lookup (Windows) | `cmd.exe` | Shell for `spawn_shell()` on Windows |
+| `PAR_MUX_CONFIG` | `par-mux` daemon and attach client | unset: `<config dir>/par-mux/config.toml` | Path of the par-mux config file; see [MUX.md Configuration file](MUX.md#configuration-file) |
 | `PAR_MUX_SOCKET` | `par-mux` binary | unset | Socket path when neither `--socket` nor a name is given; set inside every mux pane |
+| `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon |
 | `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
 | `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
 | `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
@@ -840,6 +842,7 @@ The library reads the environment variables below. The streaming server binary r
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |
 | `PATH` | par-mux client and Windows resume | — | Locating the `par-mux` binary; resolving `argv[0]` for Windows agent resume |
 | `COMPUTERNAME` | par-mux (Windows) | — | Local hostname for deciding whether an OSC 7 directory report is from this machine |
+| `PAR_TERM_*` (40 variables) | `par-term-streamer` binary | per option | One variable per CLI option, such as `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_API_KEY`, `PAR_TERM_TLS_CERT`, `PAR_TERM_MUX_SOCKET`. A flag on the command line wins. Full list with defaults: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) |
 
 Spawned child processes receive `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1` and `KITTY_PID=<pid>`. Override any of them with the `env` argument to `spawn()`/`spawn_shell()` (Python) or `PtySession::set_env()` (Rust). Inherited variables the library drops are listed in [SECURITY.md](SECURITY.md#inherited-environment).
 
