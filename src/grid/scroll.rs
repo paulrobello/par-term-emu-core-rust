@@ -12,14 +12,6 @@ impl Grid {
         let available = self.rows - start_row;
         let count = count.min(available);
 
-        self.total_lines_scrolled += count;
-        if self.scrollback_lines >= self.max_scrollback {
-            let floor = self
-                .total_lines_scrolled
-                .saturating_sub(self.max_scrollback);
-            self.evict_zones(floor);
-        }
-
         for i in 0..count {
             let row = start_row + i;
             let src_start = row * self.cols;
@@ -30,6 +22,13 @@ impl Grid {
                 is_wrapped,
             );
         }
+        self.total_lines_scrolled += count;
+        // The floor is computed after the pushes, so a batch that crosses
+        // the cap mid-way still evicts zones in the rows it dropped.
+        let floor = self
+            .total_lines_scrolled
+            .saturating_sub(self.scrollback_lines);
+        self.evict_zones(floor);
     }
 
     /// Scroll up by n lines
@@ -81,14 +80,6 @@ impl Grid {
             return;
         }
 
-        self.total_lines_scrolled += count;
-        if self.scrollback_lines >= self.max_scrollback {
-            let floor = self
-                .total_lines_scrolled
-                .saturating_sub(self.max_scrollback);
-            self.evict_zones(floor);
-        }
-
         for i in 0..count {
             let is_wrapped = wrapped_flags[i];
             let line: Vec<Cell> = rows[i * cols..(i + 1) * cols]
@@ -98,6 +89,11 @@ impl Grid {
             self.push_scrollback_row(line.into_boxed_slice(), is_wrapped);
         }
         rows.clear();
+        self.total_lines_scrolled += count;
+        let floor = self
+            .total_lines_scrolled
+            .saturating_sub(self.scrollback_lines);
+        self.evict_zones(floor);
     }
 
     /// Scroll down by n lines
