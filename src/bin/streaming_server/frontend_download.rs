@@ -64,6 +64,60 @@ async fn read_body_capped(response: reqwest::Response, max_bytes: usize) -> Resu
     Ok(body)
 }
 
+/// cap: Bytes accepted from a `.sha256` checksum sidecar response (SEC-203).
+const MAX_SIDECAR_BYTES: usize = 1024;
+
+/// Parse a `sha256sum`-style sidecar (`<64 hex>  <filename>`) and return the
+/// lowercase digest. A malformed sidecar is an error, never a skip (SEC-203):
+/// falling back to "unverified" on garbage would let an attacker downgrade
+/// verification by corrupting the sidecar.
+fn parse_sha256_sidecar(body: &[u8]) -> Result<String> {
+    let text = std::str::from_utf8(body).context("Checksum sidecar is not valid UTF-8")?;
+    let digest = text
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Checksum sidecar is empty"))?;
+    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        anyhow::bail!("Checksum sidecar does not start with a 64-hex-digit SHA-256 digest");
+    }
+    Ok(digest.to_ascii_lowercase())
+}
+
+/// Fail unless `bytes` hashes to `expected_hex` (lowercase SHA-256 hex).
+fn verify_archive_sha256(bytes: &[u8], expected_hex: &str) -> Result<()> {
+    use sha2::Digest;
+    let actual: String = sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if actual != expected_hex {
+        anyhow::bail!(
+            "Frontend archive SHA-256 mismatch: expected {}, got {}. Refusing to extract.",
+            expected_hex,
+            actual
+        );
+    }
+    Ok(())
+}
+
+/// Download a checksum sidecar and return its digest. Any failure (HTTP
+/// error, oversized or malformed body) is fatal (SEC-203).
+async fn fetch_expected_sha256(client: &reqwest::Client, url: &str) -> Result<String> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("Failed to download checksum sidecar")?;
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Failed to download checksum sidecar: HTTP {}",
+            response.status()
+        );
+    }
+    let body = read_body_capped(response, MAX_SIDECAR_BYTES).await?;
+    parse_sha256_sidecar(&body)
+}
+
 /// Guard the destructive web-root replacement (SEC-007): an existing
 /// directory is only cleared when it looks like a previously extracted
 /// frontend bundle (has `index.html`) or `force` was passed explicitly.
@@ -173,6 +227,25 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
     let archive_bytes = read_body_capped(response, MAX_ARCHIVE_BYTES).await?;
 
     println!("Downloaded {} bytes", archive_bytes.len());
+
+    // SEC-203: verify against the release's `<archive>.sha256` sidecar before
+    // touching the web root. Releases predating the sidecar fall back to the
+    // TLS-only behavior with a warning; a listed-but-unusable sidecar is fatal.
+    let sidecar_name = format!("{}.sha256", archive_asset.name);
+    match release.assets.iter().find(|a| a.name == sidecar_name) {
+        Some(sidecar) => {
+            let expected = fetch_expected_sha256(&client, &sidecar.browser_download_url).await?;
+            verify_archive_sha256(&archive_bytes, &expected)?;
+            println!("SHA-256 verified: {}", expected);
+        }
+        None => {
+            eprintln!(
+                "Warning: release {} has no {} checksum asset; the archive integrity \
+                 is protected by TLS only.",
+                release.tag_name, sidecar_name
+            );
+        }
+    }
 
     // Create web root directory if it doesn't exist
     let web_root_path = Path::new(web_root);
@@ -296,6 +369,57 @@ mod tests {
         let response = client.get(url).send().await.unwrap();
         let got = read_body_capped(response, 1024).await.unwrap();
         assert_eq!(got, body);
+    }
+
+    // sha256("abc"), FIPS 180-2 test vector.
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn sidecar_parses_sha256sum_output_case_insensitively() {
+        let line = format!(
+            "{}  par-term-web-frontend-v1.0.0.tar.gz\n",
+            ABC_SHA256.to_uppercase()
+        );
+        assert_eq!(parse_sha256_sidecar(line.as_bytes()).unwrap(), ABC_SHA256);
+        // Bare digest (no filename) is accepted too.
+        assert_eq!(
+            parse_sha256_sidecar(ABC_SHA256.as_bytes()).unwrap(),
+            ABC_SHA256
+        );
+    }
+
+    #[test]
+    fn malformed_sidecar_is_an_error_not_a_skip() {
+        for bad in [
+            &b""[..],
+            b"   \n",
+            b"deadbeef  file.tar.gz",
+            b"<html>Not Found</html>",
+        ] {
+            assert!(parse_sha256_sidecar(bad).is_err(), "accepted {:?}", bad);
+        }
+        let not_hex = "z".repeat(64);
+        assert!(parse_sha256_sidecar(not_hex.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn archive_digest_match_passes_and_mismatch_refuses() {
+        verify_archive_sha256(b"abc", ABC_SHA256).expect("matching digest must pass");
+        let err = verify_archive_sha256(b"abd", ABC_SHA256).expect_err("tampered bytes must fail");
+        assert!(format!("{:#}", err).contains("SHA-256 mismatch"));
+    }
+
+    #[tokio::test]
+    async fn sidecar_fetch_round_trip_and_oversize_rejection() {
+        let url = spawn_stub_server(format!("{ABC_SHA256}  a.tar.gz\n").into_bytes());
+        let client = reqwest::Client::new();
+        assert_eq!(
+            fetch_expected_sha256(&client, &url).await.unwrap(),
+            ABC_SHA256
+        );
+
+        let url = spawn_stub_server(vec![b'a'; MAX_SIDECAR_BYTES + 1]);
+        assert!(fetch_expected_sha256(&client, &url).await.is_err());
     }
 
     #[test]

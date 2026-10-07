@@ -557,6 +557,10 @@ jobs:
           cd web_term
           zip -r ../release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.zip .
           cd ..
+          # Checksum sidecar verified by `par-term-streamer --download-frontend` (SEC-203)
+          cd release-web
+          sha256sum par-term-web-frontend-v${{ steps.get_version.outputs.version }}.tar.gz > par-term-web-frontend-v${{ steps.get_version.outputs.version }}.tar.gz.sha256
+          cd ..
 
       - name: Verify archives
         run: |

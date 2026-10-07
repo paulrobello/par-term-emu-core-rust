@@ -124,6 +124,8 @@ flate2 = "1.1.9"
 
 # Archive extraction
 tar = { version = "0.4.46", optional = true }
+# SHA-256 verification of the downloaded web frontend archive (SEC-203)
+sha2 = { version = "0.11.0", optional = true }
 
 # Protocol Buffers
 prost = { version = "0.14.3", optional = true }
@@ -264,7 +266,7 @@ streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
 
 # Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
 # deps the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session", "macro-yaml"]
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "sha2", "pty_session", "macro-yaml"]
 
 # Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
 # control-mode socket. Needs real PTYs and a local socket, so it is
