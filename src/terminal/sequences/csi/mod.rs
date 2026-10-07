@@ -42,7 +42,20 @@ impl Terminal {
                 self.handle_csi_cursor(action, params, intermediates);
             }
             'J' | 'K' | 'X' => {
-                self.handle_csi_erase(action, params, intermediates);
+                let grid = if self.alt_screen_active {
+                    &mut self.alt_grid
+                } else {
+                    &mut self.grid
+                };
+                erase::handle_csi_erase(
+                    grid,
+                    &mut self.graphics.graphics_store,
+                    &mut self.events,
+                    self.attrs.bg,
+                    (self.cursor.col, self.cursor.row),
+                    action,
+                    params,
+                );
             }
             'S' | 'T' => {
                 self.handle_csi_scroll(action, params, intermediates);
@@ -67,7 +80,12 @@ impl Terminal {
             'y' => {
                 if intermediates.contains(&b'*') {
                     // DECRQCRA - Request Checksum of Rectangular Area
-                    self.handle_decrqcra(params);
+                    let grid = if self.alt_screen_active {
+                        &self.alt_grid
+                    } else {
+                        &self.grid
+                    };
+                    report::handle_decrqcra(grid, &mut self.response_buffer, params);
                 } else {
                     self.handle_csi_report(action, params, intermediates);
                 }
@@ -77,7 +95,7 @@ impl Terminal {
                 if intermediates.contains(&b' ') {
                     self.handle_csi_cursor(action, params, intermediates);
                 } else if intermediates.contains(&b'"') {
-                    self.handle_decsca(params);
+                    erase::handle_decsca(&mut self.modes, params);
                 } else {
                     self.handle_csi_report(action, params, intermediates);
                 }
@@ -100,7 +118,7 @@ impl Terminal {
                 if intermediates.contains(&b'$') {
                     self.handle_csi_window(action, params, intermediates);
                 } else if intermediates.contains(&b'*') {
-                    self.handle_decsace(params);
+                    window::handle_decsace(&mut self.modes, params);
                 } else {
                     self.handle_csi_report(action, params, intermediates);
                 }
@@ -114,7 +132,8 @@ impl Terminal {
             '{' => {
                 // { with $ is DECSERA (Selective Erase Rectangular Area)
                 if intermediates.contains(&b'$') {
-                    self.handle_decsera(params);
+                    let bg = self.attrs.bg;
+                    erase::handle_decsera(self.active_grid_mut(), bg, params);
                 }
             }
             'L' | 'M' | '@' => {
