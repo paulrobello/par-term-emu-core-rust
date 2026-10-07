@@ -30,6 +30,9 @@ cargo hack check --each-feature \
 # conversions (pyo3's build script still locates an interpreter, as for
 # python-test below).
 cargo hack check -p par-term-emu-core --each-feature
+# The par-mux member (ARC-007 O2 Phase 2): none, each feature alone, and all.
+cargo hack check -p par-mux --each-feature
+cargo check -p par-mux --all-features --all-targets
 
 echo "=== 2/3 explicit combinations + python-test ==="
 cargo check --no-default-features --features rust-only,mux
@@ -99,6 +102,22 @@ assert_member_absent portable-pty
 assert_member_absent swash
 assert_member_absent serde_yaml_ng
 assert_member_absent tokio
+
+# par-mux: the `mux` library never pulls the binary-only CLI parser, the
+# attach TUI stack, or the streaming runtime (ARC-106 / D1).
+assert_mux_absent() {
+    local features="$1" crate="$2"
+    if cargo tree -p par-mux --features "$features" -e normal -i "$crate" 2>/dev/null | grep -q .; then
+        echo "FAIL: '$crate' is in the dependency tree of par-mux --features $features" >&2
+        exit 1
+    fi
+    echo "  ok: $crate absent from par-mux --features $features"
+}
+assert_mux_absent mux clap
+assert_mux_absent mux crossterm
+assert_mux_absent mux ratatui
+assert_mux_absent mux tokio
+assert_mux_absent mux pyo3
 
 echo ""
 echo "All feature checks passed."

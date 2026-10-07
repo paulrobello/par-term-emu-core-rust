@@ -98,7 +98,10 @@ jobs:
         # Must be published before the main crate: crates.io strips `path`
         # and resolves the dependency from the registry, so the main crate's
         # `par-term-emu-derive = { path = "derive", version = "0.43.0" }` can
-        # only resolve once this sub-crate exists on crates.io. Idempotent —
+        # only resolve once this sub-crate exists on crates.io. Workspace
+        # publish order (crates/par-term-emu-core/DESIGN.md): derive →
+        # par-term-emu-core → par-mux → root; the core and par-mux steps are
+        # the tracked ARC-007 O2 publish follow-up. Idempotent —
         # a re-run after the first publish no-ops (version already exists).
         run: cargo publish --manifest-path derive/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "par-term-emu-derive already published, continuing..."
         continue-on-error: true
@@ -209,7 +212,7 @@ jobs:
           path: release-binaries/${{ matrix.asset_name }}
           retention-days: 1
 
-  # Standalone par-mux daemon binaries (feature set `rust-only,mux-bin,attach`):
+  # Standalone par-mux daemon binaries (`-p par-mux`, features `mux-bin,attach`):
   # no Python, no par-term/streaming dependency — the multiplexer alone.
   # Linux ARM64 builds natively on ubuntu-24.04-arm (no cross linker); macOS
   # x86_64 cross-compiles from the ARM runner (not smoke-run — Rosetta is not
@@ -260,7 +263,8 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build par-mux binary
-        run: cargo build --locked --release --no-default-features --features rust-only,mux-bin,attach --bin par-mux --target ${{ matrix.target }}
+        # ARC-007 O2 Phase 2: the binary lives in the par-mux member.
+        run: cargo build --locked --release -p par-mux --features mux-bin,attach --bin par-mux --target ${{ matrix.target }}
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'

@@ -195,7 +195,12 @@ jobs:
       # `attach` rides here (not in the mux-bin closure): without it the
       # attach module — client lib tests and the mux_attach PTY suite —
       # compiles nowhere in CI (the horizontal-divider regression shipped
-      # through every green gate that way).
+      # through every green gate that way). ARC-007 O2 Phase 2: the mux
+      # tree and its suites live in the par-mux member.
+      run: cargo nextest run --profile ci --locked -p par-mux --features attach
+
+    - name: Run root tests with the mux re-export on
+      # mux_feature_isolation + the root lib compiled against par-mux.
       run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
 
     - name: Run par-term-emu-core member tests with the mux feature set
@@ -251,6 +256,13 @@ jobs:
       run: |
         cargo clippy --locked -p par-term-emu-core --all-targets -- -D warnings
         cargo clippy --locked -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
+
+    - name: Run Rust clippy (par-mux member)
+      # ARC-007 O2 Phase 2. `attach` stays off for the same ARC-001 reason
+      # as the root clippy step above.
+      run: |
+        cargo clippy --locked -p par-mux --all-targets -- -D warnings
+        cargo clippy --locked -p par-mux --all-targets --features mux-bin -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .
