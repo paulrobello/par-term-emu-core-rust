@@ -306,20 +306,29 @@ impl Grid {
         self.reset_damage_for_resize();
     }
 
-    /// Push one reflowed excess line into scrollback (resize path).
-    fn reflow_push_line(&mut self, row_cells: &[Cell], is_wrapped: bool) {
-        if self.scrollback_lines < self.max_scrollback {
-            self.scrollback_rows
-                .push(row_cells.to_vec().into_boxed_slice());
-            self.scrollback_wrapped.push(is_wrapped);
-            self.scrollback_lines += 1;
-        } else {
-            self.scrollback_rows.remove(0);
-            self.scrollback_wrapped.remove(0);
-            self.scrollback_rows
-                .push(row_cells.to_vec().into_boxed_slice());
-            self.scrollback_wrapped.push(is_wrapped);
+    /// Push reflowed excess lines into scrollback (resize path) with the
+    /// same bookkeeping as a scroll: every pushed row advances
+    /// `total_lines_scrolled`, and zones that fall below the new scrollback
+    /// floor are evicted into the evicted buffer for `ZoneScrolledOut`.
+    fn reflow_push_lines(&mut self, cells: &[Cell], wrapped: &[bool], cols: usize, count: usize) {
+        if self.max_scrollback == 0 || count == 0 {
+            return;
         }
+        for line_idx in 0..count {
+            let start = line_idx * cols;
+            let is_wrapped = wrapped.get(line_idx).copied().unwrap_or(false);
+            self.push_scrollback_row(
+                cells[start..start + cols].to_vec().into_boxed_slice(),
+                is_wrapped,
+            );
+        }
+        self.total_lines_scrolled += count;
+        // The floor is computed after the pushes, so a batch that crosses
+        // the cap mid-way still evicts zones in the rows it dropped.
+        let floor = self
+            .total_lines_scrolled
+            .saturating_sub(self.scrollback_lines);
+        self.evict_zones(floor);
     }
 
     fn reflow_main_grid(
@@ -368,15 +377,7 @@ impl Grid {
         let effective_lines = last_content_line.max(1);
         if effective_lines > new_rows {
             let excess_lines = effective_lines - new_rows;
-            if self.max_scrollback > 0 {
-                for line_idx in 0..excess_lines {
-                    let start = line_idx * new_cols;
-                    let end = start + new_cols;
-                    let row_cells = &all_cells[start..end];
-                    let is_wrapped = all_wrapped.get(line_idx).copied().unwrap_or(false);
-                    self.reflow_push_line(row_cells, is_wrapped);
-                }
-            }
+            self.reflow_push_lines(&all_cells, &all_wrapped, new_cols, excess_lines);
             let keep_start = excess_lines * new_cols;
             all_cells = all_cells[keep_start..].to_vec();
             all_wrapped = all_wrapped[excess_lines..].to_vec();

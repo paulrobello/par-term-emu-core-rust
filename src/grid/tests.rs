@@ -1353,6 +1353,95 @@ mod zone_tests {
     use super::*;
     use crate::zone::{Zone, ZoneType};
 
+    /// Build a 10x3 grid whose scrollback holds `zones` one-row zones (zone
+    /// `i` marked with `'a' + i` in column 0), then fill every visible cell so
+    /// a resize to 5 columns rewraps the 3 visible rows into 6 and pushes 3
+    /// excess rows into scrollback.
+    fn grid_with_scrollback_zones(max_scrollback: usize, zones: usize) -> Grid {
+        let mut grid = Grid::new(10, 3, max_scrollback);
+        for id in 0..zones {
+            let abs_row = grid.total_lines_scrolled();
+            grid.set(0, 0, Cell::new((b'a' + id as u8) as char));
+            let mut zone = Zone::new(id, ZoneType::Output, abs_row, None);
+            zone.close(abs_row);
+            grid.push_zone(zone);
+            grid.scroll_up(1);
+        }
+        for row in 0..grid.rows() {
+            for col in 0..grid.cols() {
+                grid.set(col, row, Cell::new('x'));
+            }
+        }
+        grid
+    }
+
+    /// Every surviving zone must still address the scrollback row it was
+    /// created on: abs row `r` lives at scrollback index
+    /// `r - (total_lines_scrolled - scrollback_len)`.
+    fn assert_zone_rows_consistent(grid: &Grid) {
+        let oldest_abs = grid.total_lines_scrolled() - grid.scrollback_len();
+        for zone in grid.zones() {
+            let idx = zone.abs_row_start - oldest_abs;
+            let line = grid.scrollback_line(idx).expect("zone row in scrollback");
+            assert_eq!(
+                line[0].c,
+                (b'a' + zone.id as u8) as char,
+                "zone {} drifted off its row",
+                zone.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_reflow_drop_evicts_zones_and_advances_total_full_scrollback() {
+        let mut grid = grid_with_scrollback_zones(4, 4);
+        assert_eq!(grid.scrollback_len(), 4);
+        assert_eq!(grid.total_lines_scrolled(), 4);
+
+        grid.resize(5, 3);
+
+        // 3 rows pushed into a full scrollback: 3 oldest rows dropped.
+        assert_eq!(grid.scrollback_len(), 4);
+        assert_eq!(grid.total_lines_scrolled(), 7);
+        let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
+        assert_eq!(evicted, vec![0, 1, 2]);
+        let live: Vec<usize> = grid.zones().iter().map(|z| z.id).collect();
+        assert_eq!(live, vec![3]);
+        assert_zone_rows_consistent(&grid);
+
+        // Narrowing again pushes more rows; the last scrollback zone drops.
+        grid.resize(2, 3);
+        let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
+        assert_eq!(evicted, vec![3]);
+        assert!(grid.zones().is_empty());
+        // 3 visible rows (5, then a wrapped 5+5) rewrap to 8 rows at 2 cols.
+        assert_eq!(grid.total_lines_scrolled(), 12);
+        assert_eq!(grid.scrollback_len(), 4);
+    }
+
+    #[test]
+    fn test_reflow_push_advances_total_partial_scrollback() {
+        // Room for every pushed row: nothing dropped, nothing evicted, but
+        // the absolute row counter still advances by every pushed row.
+        let mut grid = grid_with_scrollback_zones(10, 2);
+        grid.resize(5, 3);
+        assert_eq!(grid.scrollback_len(), 5);
+        assert_eq!(grid.total_lines_scrolled(), 5);
+        assert!(grid.drain_evicted_zones().is_empty());
+        assert_eq!(grid.zones().len(), 2);
+        assert_zone_rows_consistent(&grid);
+
+        // Push crosses the cap mid-batch: 2 + 3 rows into 4 slots drops 1.
+        let mut grid = grid_with_scrollback_zones(4, 2);
+        grid.resize(5, 3);
+        assert_eq!(grid.scrollback_len(), 4);
+        assert_eq!(grid.total_lines_scrolled(), 5);
+        let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
+        assert_eq!(evicted, vec![0]);
+        assert_eq!(grid.zones().len(), 1);
+        assert_zone_rows_consistent(&grid);
+    }
+
     #[test]
     fn test_grid_zones_empty() {
         let grid = Grid::new(80, 24, 100);
