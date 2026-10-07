@@ -58,7 +58,9 @@ const EVENT_MIN_SPACING: Duration = Duration::from_millis(50);
 /// session costs one wake per [`EVENT_IDLE_WAKE`], not 20 per second, and a
 /// poll takes only the terminal lock, never the `PtySession` mutex. Every
 /// wake, the idle one included, drains `poll_events`, which also bounds
-/// the terminal's event queue and emits `ZoneScrolledOut`. `deliver` gets
+/// the terminal's event queue (`ZoneScrolledOut` itself now surfaces during
+/// `process()`/`apply_action(s)`, so the drain here is the bound, not the
+/// event source). `deliver` gets
 /// each converted message; the thread exits once `keep_running` is false.
 fn spawn_event_forwarder(
     name: String,
