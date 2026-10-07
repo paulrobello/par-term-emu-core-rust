@@ -108,9 +108,7 @@ impl Terminal {
                 // DECPAM - Application keypad mode
                 if !self.modes.application_keypad {
                     self.modes.application_keypad = true;
-                    self.events
-                        .terminal_events
-                        .push(crate::terminal::TerminalEvent::ModeChanged(
+                    self.events.push(crate::terminal::TerminalEvent::ModeChanged(
                             "application_keypad".to_string(),
                             true,
                         ));
@@ -120,9 +118,7 @@ impl Terminal {
                 // DECPNM - Numeric keypad mode
                 if self.modes.application_keypad {
                     self.modes.application_keypad = false;
-                    self.events
-                        .terminal_events
-                        .push(crate::terminal::TerminalEvent::ModeChanged(
+                    self.events.push(crate::terminal::TerminalEvent::ModeChanged(
                             "application_keypad".to_string(),
                             false,
                         ));

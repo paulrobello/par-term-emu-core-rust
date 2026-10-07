@@ -10,7 +10,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::terminal::unix_millis;
+use crate::text_utils::unix_millis;
 
 /// Unique file transfer identifier
 pub type TransferId = u64;

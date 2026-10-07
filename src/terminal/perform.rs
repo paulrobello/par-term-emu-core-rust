@@ -68,10 +68,8 @@ impl Perform for Terminal {
                 } else {
                     BellEvent::VisualBell
                 };
-                self.events.bell_events.push(event.clone());
-                self.events
-                    .terminal_events
-                    .push(TerminalEvent::BellRang(event));
+                self.events.push_bell(event.clone());
+                self.events.push(TerminalEvent::BellRang(event));
             }
             0x0E => {
                 // SO — Shift Out: switch active charset to G1

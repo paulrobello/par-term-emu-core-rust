@@ -252,14 +252,14 @@ impl Terminal {
         // Collect the first line
         {
             let line = grid.row(current_row)?;
-            lines.push(crate::terminal::cells_to_text(line));
+            lines.push(crate::text_utils::cells_to_text(line));
         }
 
         // Follow wrapped lines
         while current_row < grid.rows() - 1 && grid.is_line_wrapped(current_row) {
             current_row += 1;
             if let Some(line) = grid.row(current_row) {
-                lines.push(crate::terminal::cells_to_text(line));
+                lines.push(crate::text_utils::cells_to_text(line));
             } else {
                 break;
             }
@@ -440,7 +440,7 @@ impl Terminal {
                 let mut text = String::new();
                 for row in start_row..=end_row {
                     if let Some(line) = grid.row(row) {
-                        let line_text = crate::terminal::cells_to_text(line);
+                        let line_text = crate::text_utils::cells_to_text(line);
                         let row_start = if row == start_row { start_col } else { 0 };
                         let row_end = if row == end_row { end_col } else { usize::MAX };
 
@@ -460,7 +460,7 @@ impl Terminal {
                 let mut text = String::new();
                 for row in start_row..=end_row {
                     if let Some(line) = grid.row(row) {
-                        text.push_str(&crate::terminal::cells_to_text(line));
+                        text.push_str(&crate::text_utils::cells_to_text(line));
                         if row < end_row {
                             text.push('\n');
                         }
@@ -472,7 +472,7 @@ impl Terminal {
                 let mut text = String::new();
                 for row in start_row..=end_row {
                     if let Some(line) = grid.row(row) {
-                        let line_text = crate::terminal::cells_to_text(line);
+                        let line_text = crate::text_utils::cells_to_text(line);
                         let (start_byte, end_byte) =
                             cols_to_byte_range(&line_text, start_col, end_col);
                         let row_text = if start_byte < line_text.len() {
@@ -595,7 +595,7 @@ impl Terminal {
 
         for r in start_row..=end_row {
             if let Some(line) = grid.row(r) {
-                lines.push(crate::terminal::cells_to_text(line));
+                lines.push(crate::text_utils::cells_to_text(line));
             }
         }
 
@@ -613,7 +613,7 @@ impl Terminal {
         let mut start_row = row;
         while start_row > 0 {
             if let Some(line) = grid.row(start_row - 1) {
-                let text = crate::terminal::cells_to_text(line).trim().to_string();
+                let text = crate::text_utils::cells_to_text(line).trim().to_string();
                 if text.is_empty() {
                     break;
                 }
@@ -627,7 +627,7 @@ impl Terminal {
         let mut end_row = row;
         while end_row < grid.rows() - 1 {
             if let Some(line) = grid.row(end_row + 1) {
-                let text = crate::terminal::cells_to_text(line).trim().to_string();
+                let text = crate::text_utils::cells_to_text(line).trim().to_string();
                 if text.is_empty() {
                     break;
                 }
@@ -640,7 +640,7 @@ impl Terminal {
         // Collect paragraph lines
         for r in start_row..=end_row {
             if let Some(line) = grid.row(r) {
-                lines.push(crate::terminal::cells_to_text(line));
+                lines.push(crate::text_utils::cells_to_text(line));
             }
         }
 

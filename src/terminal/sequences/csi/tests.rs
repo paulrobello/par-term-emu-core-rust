@@ -1059,7 +1059,7 @@ fn test_decslrm_ignored_when_declrmm_disabled() {
 
 #[test]
 fn test_deccra_copies_content() {
-    use crate::terminal::cells_to_text;
+    use crate::text_utils::cells_to_text;
     let mut term = Terminal::new(80, 24);
     // Write "ABCDE" on row 1 col 1
     term.process(b"\x1b[1;1H");
@@ -1080,7 +1080,7 @@ fn test_deccra_copies_content() {
 
 #[test]
 fn test_decsera_erases_unprotected_cells() {
-    use crate::terminal::cells_to_text;
+    use crate::text_utils::cells_to_text;
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[1;1H");
     term.process(b"hello");

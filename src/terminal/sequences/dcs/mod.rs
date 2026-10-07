@@ -74,7 +74,7 @@ impl Terminal {
         self.dcs_state.dcs_overflow = false;
 
         if kind == DcsKind::Sixel {
-            self.handle_sixel_hook(params);
+            sixel::handle_sixel_hook(&mut self.dcs_state, self.graphics.sixel_limits, params);
         }
     }
 
@@ -116,7 +116,7 @@ impl Terminal {
                     self.dcs_state.dcs_buffer.clear();
                 } else if !self.dcs_state.dcs_buffer.is_empty() {
                     // Process any other pending commands (colors)
-                    self.process_sixel_command();
+                    sixel::process_sixel_command(&mut self.dcs_state);
                 }
 
                 // Feed to parser
@@ -129,14 +129,14 @@ impl Terminal {
                 }
             } else if byte == b'-' {
                 if !self.dcs_state.dcs_buffer.is_empty() {
-                    self.process_sixel_command();
+                    sixel::process_sixel_command(&mut self.dcs_state);
                 }
                 if let Some(p) = &mut self.dcs_state.sixel_parser {
                     p.new_line();
                 }
             } else if byte == b'$' {
                 if !self.dcs_state.dcs_buffer.is_empty() {
-                    self.process_sixel_command();
+                    sixel::process_sixel_command(&mut self.dcs_state);
                 }
                 if let Some(p) = &mut self.dcs_state.sixel_parser {
                     p.carriage_return();
@@ -147,7 +147,7 @@ impl Terminal {
                 if (byte == b'#' || byte == b'"' || byte == b'!')
                     && !self.dcs_state.dcs_buffer.is_empty()
                 {
-                    self.process_sixel_command();
+                    sixel::process_sixel_command(&mut self.dcs_state);
                 }
                 self.dcs_state.dcs_buffer.push(byte);
             }
@@ -182,7 +182,7 @@ impl Terminal {
         } else if self.dcs_state.dcs_kind == DcsKind::Decrqss {
             self.handle_decrqss_reply();
         } else if self.dcs_state.dcs_kind == DcsKind::Sixel {
-            self.process_sixel_command();
+            sixel::process_sixel_command(&mut self.dcs_state);
             if let Some(parser) = self.dcs_state.sixel_parser.take() {
                 // DECSDM (DECSET 80) display mode paints at the home position
                 // and leaves the cursor alone; scrolling mode (default) paints
@@ -225,7 +225,6 @@ impl Terminal {
                 let row = if display_mode { 0 } else { self.cursor.row };
                 self.graphics.graphics_store.add_graphic(graphic);
                 self.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::GraphicsAdded(row));
 
                 // Advance cursor to next line(s) as per test expectation.

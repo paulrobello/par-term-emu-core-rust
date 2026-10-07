@@ -1,7 +1,7 @@
 //! Color-related OSC sequence handling
 
 use crate::color::Color;
-use crate::terminal::Terminal;
+use crate::terminal::{ColorThemeState, Terminal};
 
 impl Terminal {
     /// Parse X11/xterm color specification to RGB tuple
@@ -39,18 +39,30 @@ impl Terminal {
 
         None
     }
+}
 
-    pub(crate) fn handle_osc_color(&mut self, command: &str, params: &[&[u8]]) {
-        match command {
+/// OSC 4/104 (palette), OSC 10/11/12 (dynamic colors, query or set),
+/// OSC 110/111/112 (reset dynamic colors).
+///
+/// Capability boundary (ARC-002): takes the color theme, the reply buffer,
+/// and the insecure-sequence policy flag rather than `&mut Terminal`.
+pub(crate) fn handle_osc_color(
+    theme: &mut ColorThemeState,
+    response: &mut Vec<u8>,
+    disable_insecure_sequences: bool,
+    command: &str,
+    params: &[&[u8]],
+) {
+    match command {
             "4"
                 // Set ANSI color palette entry (OSC 4)
-                if !self.security_state.disable_insecure_sequences && params.len() >= 3 => {
+                if !disable_insecure_sequences && params.len() >= 3 => {
                     if let Ok(data) = std::str::from_utf8(params[1]) {
                         if let Ok(index) = data.trim().parse::<usize>() {
                             if index < 16 {
                                 if let Ok(colorspec) = std::str::from_utf8(params[2]) {
-                                    if let Some((r, g, b)) = Self::parse_color_spec(colorspec) {
-                                        self.theme.ansi_palette[index] = Color::Rgb(r, g, b);
+                                    if let Some((r, g, b)) = Terminal::parse_color_spec(colorspec) {
+                                        theme.ansi_palette[index] = Color::Rgb(r, g, b);
                                     }
                                 }
                             }
@@ -59,15 +71,15 @@ impl Terminal {
                 }
             "104"
                 // Reset ANSI color palette (OSC 104)
-                if !self.security_state.disable_insecure_sequences => {
+                if !disable_insecure_sequences => {
                     if params.len() == 1 || (params.len() >= 2 && params[1].is_empty()) {
-                        self.theme.ansi_palette = Self::default_ansi_palette();
+                        theme.ansi_palette = Terminal::default_ansi_palette();
                     } else if params.len() >= 2 {
                         if let Ok(data) = std::str::from_utf8(params[1]) {
                             if let Ok(index) = data.trim().parse::<usize>() {
                                 if index < 16 {
-                                    let defaults = Self::default_ansi_palette();
-                                    self.theme.ansi_palette[index] = defaults[index];
+                                    let defaults = Terminal::default_ansi_palette();
+                                    theme.ansi_palette[index] = defaults[index];
                                 }
                             }
                         }
@@ -80,26 +92,26 @@ impl Terminal {
                         let data = data.trim();
                         if data == "?" {
                             let color = match command {
-                                "10" => self.theme.default_fg,
-                                "11" => self.theme.default_bg,
-                                "12" => self.theme.cursor_color,
+                                "10" => theme.default_fg,
+                                "11" => theme.default_bg,
+                                "12" => theme.cursor_color,
                                 _ => unreachable!(),
                             };
                             let (r, g, b) = color.to_rgb();
                             let r16 = (r as u16) * 257;
                             let g16 = (g as u16) * 257;
                             let b16 = (b as u16) * 257;
-                            let response = format!(
+                            let reply = format!(
                                 "\x1b]{};rgb:{:04x}/{:04x}/{:04x}\x1b\\",
                                 command, r16, g16, b16
                             );
-                            self.push_response(response.as_bytes());
-                        } else if !self.security_state.disable_insecure_sequences {
-                            if let Some((r, g, b)) = Self::parse_color_spec(data) {
+                            response.extend_from_slice(reply.as_bytes());
+                        } else if !disable_insecure_sequences {
+                            if let Some((r, g, b)) = Terminal::parse_color_spec(data) {
                                 match command {
-                                    "10" => self.theme.default_fg = Color::Rgb(r, g, b),
-                                    "11" => self.theme.default_bg = Color::Rgb(r, g, b),
-                                    "12" => self.theme.cursor_color = Color::Rgb(r, g, b),
+                                    "10" => theme.default_fg = Color::Rgb(r, g, b),
+                                    "11" => theme.default_bg = Color::Rgb(r, g, b),
+                                    "12" => theme.cursor_color = Color::Rgb(r, g, b),
                                     _ => unreachable!(),
                                 }
                             }
@@ -107,18 +119,17 @@ impl Terminal {
                     }
                 }
             "110"
-                if !self.security_state.disable_insecure_sequences => {
-                    self.theme.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
+                if !disable_insecure_sequences => {
+                    theme.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             "111"
-                if !self.security_state.disable_insecure_sequences => {
-                    self.theme.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
+                if !disable_insecure_sequences => {
+                    theme.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
                 }
             "112"
-                if !self.security_state.disable_insecure_sequences => {
-                    self.theme.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
+                if !disable_insecure_sequences => {
+                    theme.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             _ => {}
         }
-    }
 }

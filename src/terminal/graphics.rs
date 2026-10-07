@@ -193,14 +193,13 @@ impl Terminal {
                         size,
                         limits.max_total_memory
                     );
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::InlineImageDropped {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped {
                             reason: format!(
                                 "MultipartFile rejected: size {} exceeds graphics limit {}",
                                 size, limits.max_total_memory
                             ),
-                        },
-                    );
+                        });
                     return;
                 }
             }
@@ -225,14 +224,13 @@ impl Terminal {
                         size,
                         max_size
                     );
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::InlineImageDropped {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped {
                             reason: format!(
                                 "MultipartFile file transfer rejected: size {} exceeds limit {}",
                                 size, max_size
                             ),
-                        },
-                    );
+                        });
                     return;
                 }
             }
@@ -249,7 +247,6 @@ impl Terminal {
 
             // Emit FileTransferStarted event
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::FileTransferStarted {
                     id: transfer_id,
                     direction: crate::terminal::TransferDirection::Download,
@@ -284,11 +281,10 @@ impl Terminal {
                     "ITERM",
                     "FilePart received without MultipartFile",
                 );
-                self.events.terminal_events.push(
-                    crate::terminal::TerminalEvent::InlineImageDropped {
+                self.events
+                    .push(crate::terminal::TerminalEvent::InlineImageDropped {
                         reason: "FilePart received without MultipartFile".to_string(),
-                    },
-                );
+                    });
                 return;
             }
         };
@@ -308,19 +304,17 @@ impl Terminal {
                             .graphics
                             .file_transfer_manager
                             .fail_transfer(transfer_id, format!("base64 decode error: {}", e));
-                        self.events.terminal_events.push(
-                            crate::terminal::TerminalEvent::FileTransferFailed {
+                        self.events
+                            .push(crate::terminal::TerminalEvent::FileTransferFailed {
                                 id: transfer_id,
                                 reason: format!("base64 decode error: {}", e),
-                            },
-                        );
+                            });
                     }
                 } else {
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::InlineImageDropped {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped {
                             reason: format!("FilePart base64 decode failed: {}", e),
-                        },
-                    );
+                        });
                 }
                 self.graphics.iterm_multipart_buffer = None;
                 return;
@@ -337,25 +331,23 @@ impl Terminal {
                     .append_data(transfer_id, &decoded)
                 {
                     crate::debug_log!("ITERM", "File transfer append failed: {}", e);
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::FileTransferFailed {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
                             id: transfer_id,
                             reason: e,
-                        },
-                    );
+                        });
                     self.graphics.iterm_multipart_buffer = None;
                     return;
                 }
 
                 // Emit progress event
                 let new_accumulated = state.accumulated_size + decoded_size;
-                self.events.terminal_events.push(
-                    crate::terminal::TerminalEvent::FileTransferProgress {
+                self.events
+                    .push(crate::terminal::TerminalEvent::FileTransferProgress {
                         id: transfer_id,
                         bytes_transferred: new_accumulated,
                         total_bytes: state.total_size,
-                    },
-                );
+                    });
             }
         }
 
@@ -371,14 +363,13 @@ impl Terminal {
                         decoded_size,
                         expected_size
                     );
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::InlineImageDropped {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped {
                             reason: format!(
                                 "FilePart rejected: accumulated {} + chunk {} > expected {}",
                                 state.accumulated_size, decoded_size, expected_size
                             ),
-                        },
-                    );
+                        });
                     self.graphics.iterm_multipart_buffer = None;
                     return;
                 }
@@ -408,21 +399,19 @@ impl Terminal {
                         .graphics
                         .file_transfer_manager
                         .fail_transfer(transfer_id, "missing size parameter".to_string());
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::FileTransferFailed {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
                             id: transfer_id,
                             reason: "missing size parameter".to_string(),
-                        },
-                    );
+                        });
                 }
             } else {
-                self.events.terminal_events.push(
-                    crate::terminal::TerminalEvent::InlineImageDropped {
+                self.events
+                    .push(crate::terminal::TerminalEvent::InlineImageDropped {
                         reason:
                             "MultipartFile missing size parameter - cannot determine completion"
                                 .to_string(),
-                    },
-                );
+                    });
             }
             self.graphics.iterm_multipart_buffer = None;
             return;
@@ -459,8 +448,8 @@ impl Terminal {
                     .complete_transfer(transfer_id)
                 {
                     Ok(()) => {
-                        self.events.terminal_events.push(
-                            crate::terminal::TerminalEvent::FileTransferCompleted {
+                        self.events
+                            .push(crate::terminal::TerminalEvent::FileTransferCompleted {
                                 id: transfer_id,
                                 filename: if filename.is_empty() {
                                     None
@@ -468,17 +457,15 @@ impl Terminal {
                                     Some(filename)
                                 },
                                 size,
-                            },
-                        );
+                            });
                     }
                     Err(e) => {
                         crate::debug_log!("ITERM", "File transfer complete failed: {}", e);
-                        self.events.terminal_events.push(
-                            crate::terminal::TerminalEvent::FileTransferFailed {
+                        self.events
+                            .push(crate::terminal::TerminalEvent::FileTransferFailed {
                                 id: transfer_id,
                                 reason: e,
-                            },
-                        );
+                            });
                     }
                 }
             }
@@ -515,12 +502,11 @@ impl Terminal {
                     "ITERM",
                     "No colon separator in File= format",
                 );
-                self.events.terminal_events.push(
-                    crate::terminal::TerminalEvent::InlineImageDropped {
+                self.events
+                    .push(crate::terminal::TerminalEvent::InlineImageDropped {
                         reason: "File= missing ':' separator between parameters and payload"
                             .to_string(),
-                    },
-                );
+                    });
                 return;
             }
         };
@@ -529,7 +515,6 @@ impl Terminal {
         if !params_str.starts_with("File=") {
             crate::debug_log!("ITERM", "Unsupported OSC 1337 command: {}", params_str);
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::InlineImageDropped {
                     reason: format!(
                         "unsupported OSC 1337 command (expected File=): {}",
@@ -605,9 +590,10 @@ impl Terminal {
 
                     // Announce placement like the Sixel path (dcs) does so
                     // graphics subscribers hear iTerm2 images too.
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::GraphicsAdded(graphic.position.1),
-                    );
+                    self.events
+                        .push(crate::terminal::TerminalEvent::GraphicsAdded(
+                            graphic.position.1,
+                        ));
 
                     crate::debug_log!(
                         "ITERM",
@@ -629,7 +615,6 @@ impl Terminal {
                     }
                     debug::log(debug::DebugLevel::Debug, "ITERM", &reason);
                     self.events
-                        .terminal_events
                         .push(crate::terminal::TerminalEvent::InlineImageDropped { reason });
                 }
             }
@@ -650,7 +635,6 @@ impl Terminal {
                     }
                     debug::log(debug::DebugLevel::Debug, "ITERM", &reason);
                     self.events
-                        .terminal_events
                         .push(crate::terminal::TerminalEvent::InlineImageDropped { reason });
                     return;
                 }
@@ -668,7 +652,6 @@ impl Terminal {
 
             // Emit started event
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::FileTransferStarted {
                     id: transfer_id,
                     direction: crate::terminal::TransferDirection::Download,
@@ -691,12 +674,11 @@ impl Terminal {
                     "ITERM",
                     &format!("File transfer append failed: {}", e),
                 );
-                self.events.terminal_events.push(
-                    crate::terminal::TerminalEvent::FileTransferFailed {
+                self.events
+                    .push(crate::terminal::TerminalEvent::FileTransferFailed {
                         id: transfer_id,
                         reason: e,
-                    },
-                );
+                    });
                 return;
             }
 
@@ -708,8 +690,8 @@ impl Terminal {
                 .complete_transfer(transfer_id)
             {
                 Ok(()) => {
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::FileTransferCompleted {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::FileTransferCompleted {
                             id: transfer_id,
                             filename: if filename.is_empty() {
                                 None
@@ -717,16 +699,14 @@ impl Terminal {
                                 Some(filename)
                             },
                             size,
-                        },
-                    );
+                        });
                 }
                 Err(e) => {
-                    self.events.terminal_events.push(
-                        crate::terminal::TerminalEvent::FileTransferFailed {
+                    self.events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
                             id: transfer_id,
                             reason: e,
-                        },
-                    );
+                        });
                 }
             }
         }

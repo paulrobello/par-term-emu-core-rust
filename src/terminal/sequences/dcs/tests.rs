@@ -224,7 +224,7 @@ fn test_dcs_unhook_sixel_advances_cursor() {
 fn test_process_sixel_command_empty_buffer() {
     let mut term = create_test_terminal();
 
-    term.process_sixel_command();
+    super::sixel::process_sixel_command(&mut term.dcs_state);
 
     // Should handle gracefully
     assert!(term.dcs_state.dcs_buffer.is_empty());
@@ -235,7 +235,7 @@ fn test_process_sixel_command_no_parser() {
     let mut term = create_test_terminal();
     term.dcs_state.dcs_buffer.extend_from_slice(b"#0");
 
-    term.process_sixel_command();
+    super::sixel::process_sixel_command(&mut term.dcs_state);
 
     // Should handle gracefully when no parser exists
 }

@@ -691,7 +691,7 @@ impl Terminal {
                 let mut output = String::new();
                 for i in (0..lines_to_export).rev() {
                     if let Some(line) = self.grid.scrollback_line(i) {
-                        output.push_str(&crate::terminal::cells_to_text(line));
+                        output.push_str(&crate::text_utils::cells_to_text(line));
                         output.push('\n');
                     }
                 }
@@ -701,8 +701,8 @@ impl Terminal {
                 let mut output = String::from("<pre>\n");
                 for i in (0..lines_to_export).rev() {
                     if let Some(line) = self.grid.scrollback_line(i) {
-                        let text = crate::terminal::cells_to_text(line);
-                        output.push_str(&crate::terminal::html_escape(&text));
+                        let text = crate::text_utils::cells_to_text(line);
+                        output.push_str(&crate::text_utils::html_escape(&text));
                         output.push('\n');
                     }
                 }
@@ -864,7 +864,7 @@ impl Terminal {
         let scrollback_len = self.grid.scrollback_len();
 
         let mut snapshot = SemanticSnapshot {
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
             cols,
             rows,
             title: self.title().to_string(),
@@ -992,8 +992,8 @@ impl Terminal {
 
         for row in 0..rows {
             if let Some(line) = self.active_grid().row(row) {
-                let text = crate::terminal::cells_to_text(line);
-                let escaped = crate::terminal::html_escape(&text);
+                let text = crate::text_utils::cells_to_text(line);
+                let escaped = crate::text_utils::html_escape(&text);
                 output.push_str(&escaped);
                 output.push('\n');
             }

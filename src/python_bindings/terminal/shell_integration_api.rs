@@ -162,7 +162,7 @@ impl PyTerminal {
             new_cwd,
             hostname,
             username,
-            timestamp: crate::terminal::unix_millis(),
+            timestamp: crate::text_utils::unix_millis(),
         });
         Ok(())
     }

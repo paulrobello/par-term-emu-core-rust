@@ -250,6 +250,46 @@ pub fn select_semantic_region(
     None
 }
 
+/// Current Unix timestamp in milliseconds since the epoch.
+#[inline]
+pub fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Convert a row of cells to text; wide-char spacer cells become a space.
+pub fn cells_to_text(cells: &[Cell]) -> String {
+    // Write directly into one String instead of allocating a Vec<String> per
+    // row (QA-006).
+    let mut result = String::with_capacity(cells.len());
+    for c in cells {
+        if c.flags.wide_char_spacer() {
+            result.push(' ');
+        } else {
+            c.push_grapheme(&mut result);
+        }
+    }
+    result
+}
+
+/// Escape HTML special characters (`<`, `>`, `&`, `"`, `'`).
+pub fn html_escape(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '&' => result.push_str("&amp;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&#39;"),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -420,7 +420,6 @@ impl TriggerEngine {
 
                 // Emit event
                 term.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::TriggerMatched(
                         trigger_match.clone(),
                     ));
@@ -436,7 +435,7 @@ impl TriggerEngine {
             None => return,
         };
 
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
 
         for action in &actions {
             match action {
@@ -557,7 +556,7 @@ impl TriggerEngine {
 
     /// Get active trigger highlights (filters expired ones)
     pub fn get_trigger_highlights(term: &Terminal) -> Vec<TriggerHighlight> {
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
         term.triggers
             .trigger_highlights
             .iter()
@@ -573,7 +572,7 @@ impl TriggerEngine {
 
     /// Remove expired trigger highlights
     pub fn clear_expired_highlights(term: &mut Terminal) {
-        let now = crate::terminal::unix_millis();
+        let now = crate::text_utils::unix_millis();
         term.triggers.trigger_highlights.retain(|h| h.expiry > now);
     }
 

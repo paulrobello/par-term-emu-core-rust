@@ -67,7 +67,7 @@ impl Terminal {
                 .shell_integration
                 .cwd()
                 .map(|s| s.to_string()),
-            start_time: crate::terminal::unix_millis(),
+            start_time: crate::text_utils::unix_millis(),
             end_time: None,
             exit_code: None,
             duration_ms: None,
@@ -81,7 +81,7 @@ impl Terminal {
     /// End tracking the current command execution
     pub fn end_command_execution(&mut self, exit_code: Option<i32>) {
         if let Some(mut execution) = self.command_history_state.current_command.take() {
-            let now = crate::terminal::unix_millis();
+            let now = crate::text_utils::unix_millis();
             execution.end_time = Some(now);
             execution.duration_ms = Some(now - execution.start_time);
             execution.exit_code = exit_code;
@@ -194,12 +194,10 @@ impl Terminal {
 
         // Emit CwdChanged event
         self.events
-            .terminal_events
             .push(crate::terminal::TerminalEvent::CwdChanged(change.clone()));
 
         // Emit EnvironmentChanged event for CWD
         self.events
-            .terminal_events
             .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                 key: "cwd".to_string(),
                 value: change.new_cwd.clone(),
@@ -209,7 +207,6 @@ impl Terminal {
         // Emit EnvironmentChanged for hostname if changed
         if change.hostname != old_hostname {
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                     key: "hostname".to_string(),
                     value: change.hostname.clone().unwrap_or_default(),
@@ -217,8 +214,8 @@ impl Terminal {
                 });
 
             // Emit RemoteHostTransition event
-            self.events.terminal_events.push(
-                crate::terminal::TerminalEvent::RemoteHostTransition {
+            self.events
+                .push(crate::terminal::TerminalEvent::RemoteHostTransition {
                     hostname: change
                         .hostname
                         .clone()
@@ -226,14 +223,12 @@ impl Terminal {
                     username: change.username.clone(),
                     old_hostname,
                     old_username: old_username.clone(),
-                },
-            );
+                });
         }
 
         // Emit EnvironmentChanged for username if changed
         if change.username != old_username {
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                     key: "username".to_string(),
                     value: change.username.clone().unwrap_or_default(),

@@ -268,7 +268,7 @@ impl Terminal {
 
         for row in 0..grid.rows() {
             if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
+                let line_text = crate::text_utils::cells_to_text(line);
                 let search_text = if case_sensitive {
                     line_text.clone()
                 } else {
@@ -337,7 +337,7 @@ impl Terminal {
 
         for i in 0..lines_to_search {
             if let Some(line) = self.grid().scrollback_line(i) {
-                let line_text = crate::terminal::cells_to_text(line);
+                let line_text = crate::text_utils::cells_to_text(line);
                 let search_text = if case_sensitive {
                     line_text.clone()
                 } else {
@@ -389,7 +389,7 @@ impl Terminal {
 
         for row in 0..grid.rows() {
             if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
+                let line_text = crate::text_utils::cells_to_text(line);
 
                 for prefix in &url_prefixes {
                     let mut start_col = 0;
@@ -424,7 +424,7 @@ impl Terminal {
 
         for row in 0..grid.rows() {
             if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
+                let line_text = crate::text_utils::cells_to_text(line);
 
                 // Simple detection: paths starting with / or ./ or ../
                 let path_patterns = ["/", "./", "../"];
@@ -481,7 +481,7 @@ impl Terminal {
 
         for row in 0..grid.rows() {
             if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
+                let line_text = crate::text_utils::cells_to_text(line);
 
                 // Git hash pattern (40 hex chars)
                 for (i, window) in line_text.as_bytes().windows(40).enumerate() {
@@ -593,7 +593,7 @@ impl Terminal {
             for r in row..grid.rows() {
                 let start_c = if r == row { col } else { 0 };
                 if let Some(line) = grid.row(r) {
-                    let line_text = crate::terminal::cells_to_text(line);
+                    let line_text = crate::text_utils::cells_to_text(line);
                     for (c_idx, ch) in line_text.chars().enumerate().skip(start_c) {
                         if ch == open {
                             depth += 1;
@@ -610,7 +610,7 @@ impl Terminal {
             for r in (0..=row).rev() {
                 let start_c = if r == row { col } else { grid.cols() - 1 };
                 if let Some(line) = grid.row(r) {
-                    let line_text = crate::terminal::cells_to_text(line);
+                    let line_text = crate::text_utils::cells_to_text(line);
                     let chars: Vec<char> = line_text.chars().collect();
                     for c_idx in (0..=start_c).rev() {
                         if let Some(&ch) = chars.get(c_idx) {

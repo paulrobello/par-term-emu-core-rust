@@ -16,6 +16,7 @@ pub mod clipboard;
 mod colors;
 pub mod compliance;
 pub mod event;
+mod event_broker;
 // Consumed only by the Python event dicts and the FFI structured events.
 #[cfg(any(feature = "python", feature = "python-test", feature = "ffi"))]
 pub(crate) mod event_fields;
@@ -49,6 +50,10 @@ pub use clipboard::{
 pub use colors::ResolvedCellColors;
 pub use compliance::{ComplianceLevel, ComplianceReport, ComplianceTest};
 pub use event::{BellEvent, CwdChange, ShellEvent, TerminalEvent, TerminalEventKind};
+pub(crate) use event_broker::EventBroker;
+pub use event_broker::ObserverDispatchBatch;
+#[cfg(test)]
+pub(crate) use event_broker::MAX_TERMINAL_EVENTS;
 pub use file_transfer::{
     FileTransfer, FileTransferManager, TransferDirection, TransferId, TransferStatus,
 };
@@ -81,6 +86,9 @@ pub use semantic_snapshot::{
     ZoneInfo,
 };
 pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
+// Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
+// the public `crate::terminal::*` paths keep resolving.
+pub use crate::text_utils::{cells_to_text, html_escape, unix_millis};
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerEngine, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry, TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,
@@ -159,25 +167,10 @@ const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
 const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
 /// cap: Bytes retained for one queued clipboard sync event.
 const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
-/// Maximum number of unpolled terminal events retained (ARC-006). Past this,
-/// the oldest events are evicted to bound memory under sustained output when
-/// the host polls infrequently. Events already dispatched to observers are
-/// evicted first; only under extreme load are not-yet-dispatched events dropped.
-/// cap: Unpolled terminal events retained from processed output.
-const MAX_TERMINAL_EVENTS: usize = 10_000;
 const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// Hard upper limit for clipboard content (10 MB), regardless of configured max_bytes
 /// cap: Clipboard content bytes accepted from an OSC 52 sequence.
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
-
-/// Current Unix timestamp in milliseconds since the epoch.
-#[inline]
-pub fn unix_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 /// Truncate clipboard content in place to `max_bytes` (0 clears it), enforcing
 /// the 10 MB hard cap and appending a truncation marker when cut.
@@ -198,37 +191,6 @@ pub fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
             content.push_str(CLIPBOARD_TRUNCATION_SUFFIX);
         }
     }
-}
-
-/// Helper function to convert cells to text
-pub fn cells_to_text(cells: &[Cell]) -> String {
-    // Write directly into one String instead of allocating a Vec<String> per
-    // row (QA-006).
-    let mut result = String::with_capacity(cells.len());
-    for c in cells {
-        if c.flags.wide_char_spacer() {
-            result.push(' ');
-        } else {
-            c.push_grapheme(&mut result);
-        }
-    }
-    result
-}
-
-/// Helper function to escape HTML special characters
-pub fn html_escape(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => result.push_str("&lt;"),
-            '>' => result.push_str("&gt;"),
-            '&' => result.push_str("&amp;"),
-            '"' => result.push_str("&quot;"),
-            '\'' => result.push_str("&#39;"),
-            _ => result.push(c),
-        }
-    }
-    result
 }
 
 /// Get current timestamp in microseconds
@@ -393,7 +355,7 @@ pub(crate) struct NotificationState {
 
 impl Default for NotificationState {
     fn default() -> Self {
-        let now = unix_millis();
+        let now = crate::text_utils::unix_millis();
         Self {
             notifications: Vec::new(),
             notification_config: NotificationConfig::default(),
@@ -987,109 +949,6 @@ impl Default for GraphicsState {
     }
 }
 
-/// Event broker subsystem: terminal event buffer, bell event buffer, dispatch
-/// index, observer registry, and ID counters. The dispatch logic stays as
-/// methods on Terminal; only the STATE moves here. (ARC-001 sub-struct)
-pub(crate) struct EventBrokerState {
-    /// Bell events buffer
-    pub(crate) bell_events: Vec<BellEvent>,
-    /// Terminal events buffer
-    pub(crate) terminal_events: Vec<TerminalEvent>,
-    /// Index of the next event to dispatch to observers (prevents duplicate dispatch)
-    pub(crate) events_dispatched_up_to: usize,
-    /// Registered observers for push-based event delivery
-    pub(crate) observers: Vec<crate::observer::ObserverEntry>,
-    /// Next observer ID to assign (monotonically increasing)
-    pub(crate) next_observer_id: crate::observer::ObserverId,
-    /// Next zone ID to assign (monotonically increasing)
-    pub(crate) next_zone_id: usize,
-}
-
-impl Default for EventBrokerState {
-    fn default() -> Self {
-        Self {
-            bell_events: Vec::new(),
-            terminal_events: Vec::new(),
-            events_dispatched_up_to: 0,
-            observers: Vec::new(),
-            next_observer_id: 1,
-            next_zone_id: 0,
-        }
-    }
-}
-
-/// A batch of terminal events plus a snapshot of the observers interested in
-/// them, extracted from a `Terminal` for deferred delivery.
-///
-/// Building a batch ([`Terminal::process_deferred`]) only touches internal
-/// bookkeeping (owned clones, an index bump) and is fast/non-blocking.
-/// [`ObserverDispatchBatch::deliver`] performs the actual observer callbacks
-/// — which may be slow or re-entrant (e.g. `PyCallbackObserver` re-entering
-/// Python under the GIL) — and is designed to be called *without* holding
-/// any exclusive lock on the originating `Terminal` (see ARC-001: observer
-/// dispatch must not run while a `PtySession`'s `RwLock<Terminal>` write
-/// guard is held, or every concurrent reader stalls behind it).
-#[derive(Default)]
-pub struct ObserverDispatchBatch {
-    events: Vec<TerminalEvent>,
-    observers: Vec<std::sync::Arc<dyn crate::observer::TerminalObserver>>,
-}
-
-impl ObserverDispatchBatch {
-    /// True if there is nothing to deliver (no observers, or no new events).
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty() || self.observers.is_empty()
-    }
-
-    /// Deliver the batch to observers.
-    ///
-    /// Operates purely on the owned snapshot captured when the batch was
-    /// created — no `Terminal` borrow is held during this call, so it is
-    /// safe to invoke after dropping a `RwLock`/`Mutex` guard around the
-    /// `Terminal` that produced it.
-    ///
-    /// Mirrors the panic-isolation behavior of the old inline dispatch
-    /// (ARC-007): a panicking observer is caught and logged rather than
-    /// unwinding through the caller.
-    pub fn deliver(self) {
-        for event in &self.events {
-            let category = crate::observer::event_category(event);
-            let event_kind = event.kind();
-            for observer in &self.observers {
-                // Check subscriptions
-                if let Some(subs) = observer.subscriptions() {
-                    if !subs.contains(&event_kind) {
-                        continue;
-                    }
-                }
-
-                // ARC-007: isolate observer panics. A panicking observer (e.g. a
-                // misbehaving Python callback via PyCallbackObserver) must not
-                // unwind through the caller — catch the panic, log, and continue
-                // with the remaining observers/events.
-                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    match category {
-                        crate::observer::EventCategory::Zone => observer.on_zone_event(event),
-                        crate::observer::EventCategory::Command => observer.on_command_event(event),
-                        crate::observer::EventCategory::Environment => {
-                            observer.on_environment_event(event)
-                        }
-                        crate::observer::EventCategory::Screen => observer.on_screen_event(event),
-                    }
-                    observer.on_event(event);
-                }))
-                .is_err();
-                if panicked {
-                    log::error!(
-                        "par-term-emu: terminal observer panicked during dispatch; \
-                         isolating to keep Terminal state consistent (ARC-007)"
-                    );
-                }
-            }
-        }
-    }
-}
-
 /// A terminal emulator covering VT100/VT220/VT320/VT420/VT520 sequences with
 /// iTerm2 feature parity: scrollback, true color, Sixel/iTerm2/Kitty graphics,
 /// mouse reporting, and shell integration.
@@ -1189,8 +1048,8 @@ pub struct Terminal {
     pub(crate) margin_bell_volume: u8,
     /// tmux control-protocol state (ARC-001 sub-struct)
     pub(crate) tmux: TmuxState,
-    /// Event buffer + observer registry + dispatch index + ID counters (ARC-001 sub-struct)
-    pub(crate) events: EventBrokerState,
+    /// Event queue, observer registry, and dispatch bookkeeping (ARC-002 broker)
+    pub(crate) events: EventBroker,
     /// Current selection state
     pub(crate) selection: Option<Selection>,
     /// Bookmarks and next bookmark ID (ARC-001 sub-struct)
@@ -1319,7 +1178,7 @@ impl Terminal {
             warning_bell_volume: 4,
             margin_bell_volume: 4,
             tmux: TmuxState::default(),
-            events: EventBrokerState::default(),
+            events: EventBroker::default(),
             selection: None,
             bookmarks_state: BookmarksState::default(),
             profiling: ProfilingState::default(),
@@ -1390,7 +1249,7 @@ impl Terminal {
         let mut lines = Vec::with_capacity(scrollback_len);
         for i in 0..scrollback_len {
             if let Some(line) = self.grid.scrollback_line(i) {
-                lines.push(cells_to_text(line));
+                lines.push(crate::text_utils::cells_to_text(line));
             }
         }
         lines
@@ -1742,13 +1601,11 @@ impl Terminal {
             .custom
             .insert(name.clone(), value.clone());
         if changed {
-            self.events
-                .terminal_events
-                .push(TerminalEvent::UserVarChanged {
-                    name,
-                    value,
-                    old_value,
-                });
+            self.events.push(TerminalEvent::UserVarChanged {
+                name,
+                value,
+                old_value,
+            });
         }
     }
 
@@ -1791,7 +1648,6 @@ impl Terminal {
             self.invalidate_visible_screen();
             // Notify about alt screen entry
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::ModeChanged(
                     "alternate_screen".to_string(),
                     true,
@@ -1824,7 +1680,6 @@ impl Terminal {
             if self.keyboard_state.keyboard_flags != 0 {
                 self.keyboard_state.keyboard_flags = 0;
                 self.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "keyboard_protocol".to_string(),
                         false,
@@ -1835,7 +1690,6 @@ impl Terminal {
             if self.keyboard_state.modify_other_keys_mode != 0 {
                 self.keyboard_state.modify_other_keys_mode = 0;
                 self.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "modify_other_keys".to_string(),
                         false,
@@ -1845,7 +1699,6 @@ impl Terminal {
             if self.modes.focus_tracking {
                 self.modes.focus_tracking = false;
                 self.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "focus_tracking".to_string(),
                         false,
@@ -1853,7 +1706,6 @@ impl Terminal {
             }
             // Notify about alt screen exit
             self.events
-                .terminal_events
                 .push(crate::terminal::TerminalEvent::ModeChanged(
                     "alternate_screen".to_string(),
                     false,
@@ -2645,15 +2497,13 @@ impl Terminal {
         self.progress_state
             .named_progress_bars
             .insert(id.clone(), bar);
-        self.events
-            .terminal_events
-            .push(TerminalEvent::ProgressBarChanged {
-                action: ProgressBarAction::Set,
-                id,
-                state: Some(state),
-                percent: Some(percent),
-                label,
-            });
+        self.events.push(TerminalEvent::ProgressBarChanged {
+            action: ProgressBarAction::Set,
+            id,
+            state: Some(state),
+            percent: Some(percent),
+            label,
+        });
     }
 
     /// Remove a named progress bar by ID and emit an event
@@ -2661,15 +2511,13 @@ impl Terminal {
     /// Returns true if the bar existed and was removed.
     pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
         if self.progress_state.named_progress_bars.remove(id).is_some() {
-            self.events
-                .terminal_events
-                .push(TerminalEvent::ProgressBarChanged {
-                    action: ProgressBarAction::Remove,
-                    id: id.to_string(),
-                    state: None,
-                    percent: None,
-                    label: None,
-                });
+            self.events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::Remove,
+                id: id.to_string(),
+                state: None,
+                percent: None,
+                label: None,
+            });
             true
         } else {
             false
@@ -2680,15 +2528,13 @@ impl Terminal {
     pub fn remove_all_named_progress_bars(&mut self) {
         if !self.progress_state.named_progress_bars.is_empty() {
             self.progress_state.named_progress_bars.clear();
-            self.events
-                .terminal_events
-                .push(TerminalEvent::ProgressBarChanged {
-                    action: ProgressBarAction::RemoveAll,
-                    id: String::new(),
-                    state: None,
-                    percent: None,
-                    label: None,
-                });
+            self.events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::RemoveAll,
+                id: String::new(),
+                state: None,
+                percent: None,
+                label: None,
+            });
         }
     }
 
@@ -2883,9 +2729,10 @@ impl Terminal {
                                 // and streaming graphics subscribers hear kitty
                                 // placements too. Row is the placement row,
                                 // captured before any cursor move.
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::GraphicsAdded(position.1),
-                                );
+                                self.events
+                                    .push(crate::terminal::TerminalEvent::GraphicsAdded(
+                                        position.1,
+                                    ));
                                 if !self.kitty_parser.suppress_cursor_move {
                                     // Kitty TGP: a placement at the cursor moves it
                                     // to the first line below the image unless C=1
@@ -3107,17 +2954,7 @@ impl Terminal {
     /// stays consistent with the moved positions. Front (oldest) events are
     /// dropped — preferentially ones already dispatched to observers.
     fn cap_terminal_events(&mut self) {
-        let excess = self
-            .events
-            .terminal_events
-            .len()
-            .saturating_sub(MAX_TERMINAL_EVENTS);
-        if excess == 0 {
-            return;
-        }
-        self.events.terminal_events.drain(..excess);
-        self.events.events_dispatched_up_to =
-            self.events.events_dispatched_up_to.saturating_sub(excess);
+        self.events.cap_pending();
     }
 
     /// Dispatch pending events to all registered observers, inline.
@@ -3139,25 +2976,7 @@ impl Terminal {
     /// here, so this is safe to call while holding an exclusive lock (unlike
     /// [`ObserverDispatchBatch::deliver`]).
     fn take_observer_dispatch_batch(&mut self) -> ObserverDispatchBatch {
-        if self.events.observers.is_empty() || self.events.terminal_events.is_empty() {
-            return ObserverDispatchBatch::default();
-        }
-
-        let start = self.events.events_dispatched_up_to;
-        if start >= self.events.terminal_events.len() {
-            return ObserverDispatchBatch::default();
-        }
-
-        let events = self.events.terminal_events[start..].to_vec();
-        let observers = self
-            .events
-            .observers
-            .iter()
-            .map(|entry| entry.observer.clone())
-            .collect();
-        self.events.events_dispatched_up_to = self.events.terminal_events.len();
-
-        ObserverDispatchBatch { events, observers }
+        self.events.take_dispatch_batch()
     }
 
     /// Reset the terminal to its initial state (RIS).
@@ -3235,8 +3054,7 @@ impl Terminal {
 
         // Observers keep their registration and ID sequence; buffered
         // events reset with everything else they describe.
-        std::mem::swap(&mut fresh.events.observers, &mut self.events.observers);
-        fresh.events.next_observer_id = self.events.next_observer_id;
+        fresh.events.carry_observers_from(&mut self.events);
         std::mem::swap(&mut fresh.event_subscription, &mut self.event_subscription);
 
         // The trigger registry survives; highlights, action results, and
@@ -3554,27 +3372,17 @@ impl Terminal {
         &mut self,
         observer: std::sync::Arc<dyn crate::observer::TerminalObserver>,
     ) -> crate::observer::ObserverId {
-        let id = self.events.next_observer_id;
-        self.events.next_observer_id += 1;
-        self.events
-            .observers
-            .push(crate::observer::ObserverEntry { id, observer });
-        id
+        self.events.add_observer(observer)
     }
 
     /// Remove an observer by ID
     pub fn remove_observer(&mut self, id: crate::observer::ObserverId) -> bool {
-        if let Some(pos) = self.events.observers.iter().position(|o| o.id == id) {
-            self.events.observers.remove(pos);
-            true
-        } else {
-            false
-        }
+        self.events.remove_observer(id)
     }
 
     /// Get the number of registered observers
     pub fn observer_count(&self) -> usize {
-        self.events.observers.len()
+        self.events.observer_count()
     }
 
     /// Poll for pending events
@@ -3582,30 +3390,25 @@ impl Terminal {
         // Drain evicted zones and emit ZoneScrolledOut events
         let evicted = self.grid.drain_evicted_zones();
         for zone in evicted {
-            self.events
-                .terminal_events
-                .push(TerminalEvent::ZoneScrolledOut {
-                    zone_id: zone.id,
-                    zone_type: zone.zone_type,
-                });
+            self.events.push(TerminalEvent::ZoneScrolledOut {
+                zone_id: zone.id,
+                zone_type: zone.zone_type,
+            });
         }
         // Also check alt grid
         let alt_evicted = self.alt_grid.drain_evicted_zones();
         for zone in alt_evicted {
-            self.events
-                .terminal_events
-                .push(TerminalEvent::ZoneScrolledOut {
-                    zone_id: zone.id,
-                    zone_type: zone.zone_type,
-                });
+            self.events.push(TerminalEvent::ZoneScrolledOut {
+                zone_id: zone.id,
+                zone_type: zone.zone_type,
+            });
         }
-        self.events.events_dispatched_up_to = 0;
-        std::mem::take(&mut self.events.terminal_events)
+        self.events.take_all()
     }
 
     /// Drain pending bell events
     pub fn drain_bell_events(&mut self) -> Vec<BellEvent> {
-        std::mem::take(&mut self.events.bell_events)
+        self.events.drain_bells()
     }
 
     // === Event Subscription ===
@@ -3623,76 +3426,46 @@ impl Terminal {
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
         if let Some(ref filter) = self.event_subscription {
-            let events = std::mem::take(&mut self.events.terminal_events);
+            let events = self.events.take_pending();
             let (matched, remaining): (Vec<_>, Vec<_>) =
                 events.into_iter().partition(|e| filter.contains(&e.kind()));
-            self.events.terminal_events = remaining;
+            self.events.restore_pending(remaining);
             matched
         } else {
             self.poll_events()
         }
     }
 
-    /// Drain `events`, splitting each into either an extracted value (when
-    /// `try_extract` returns `Ok`) or a leftover event (`Err`). Powers the
-    /// typed `poll_*` methods so they can pull one event kind without
-    /// consuming the others, without copy-pasting the partition loop (ARC-006).
-    fn extract_terminal_events<T>(
-        events: Vec<TerminalEvent>,
-        mut try_extract: impl FnMut(TerminalEvent) -> Result<T, TerminalEvent>,
-    ) -> (Vec<T>, Vec<TerminalEvent>) {
-        let mut extracted = Vec::new();
-        let mut remaining = Vec::new();
-        for event in events {
-            match try_extract(event) {
-                Ok(value) => extracted.push(value),
-                Err(other) => remaining.push(other),
-            }
-        }
-        (extracted, remaining)
-    }
-
     /// Poll for CWD change events
     pub fn poll_cwd_events(&mut self) -> Vec<CwdChange> {
-        let events = std::mem::take(&mut self.events.terminal_events);
-        let (cwd_changes, remaining) = Self::extract_terminal_events(events, |event| match event {
+        self.events.extract(|event| match event {
             TerminalEvent::CwdChanged(change) => Ok(change),
             other => Err(other),
-        });
-        self.events.terminal_events = remaining;
-        cwd_changes
+        })
     }
 
     /// Poll for upload request events
     ///
     /// Returns all pending UploadRequested events and removes them from the queue.
     pub fn poll_upload_requests(&mut self) -> Vec<String> {
-        let events = std::mem::take(&mut self.events.terminal_events);
-        let (upload_formats, remaining) =
-            Self::extract_terminal_events(events, |event| match event {
-                TerminalEvent::UploadRequested { format } => Ok(format),
-                other => Err(other),
-            });
-        self.events.terminal_events = remaining;
-        upload_formats
+        self.events.extract(|event| match event {
+            TerminalEvent::UploadRequested { format } => Ok(format),
+            other => Err(other),
+        })
     }
 
     /// Poll for shell integration events
     pub fn poll_shell_integration_events(&mut self) -> Vec<ShellEvent> {
-        let events = std::mem::take(&mut self.events.terminal_events);
-        let (shell_events, remaining) =
-            Self::extract_terminal_events(events, |event| match event {
-                TerminalEvent::ShellIntegrationEvent {
-                    event_type,
-                    command,
-                    exit_code,
-                    timestamp,
-                    cursor_line,
-                } => Ok((event_type, command, exit_code, timestamp, cursor_line)),
-                other => Err(other),
-            });
-        self.events.terminal_events = remaining;
-        shell_events
+        self.events.extract(|event| match event {
+            TerminalEvent::ShellIntegrationEvent {
+                event_type,
+                command,
+                exit_code,
+                timestamp,
+                cursor_line,
+            } => Ok((event_type, command, exit_code, timestamp, cursor_line)),
+            other => Err(other),
+        })
     }
 
     /// Drain any pending `ScreenCleared` events.
@@ -3701,14 +3474,10 @@ impl Terminal {
     /// `true` means the scrollback was also cleared (ESC[3J), `false` means
     /// only the visible screen was cleared (ESC[2J).
     pub fn poll_screen_cleared_events(&mut self) -> Vec<bool> {
-        let events = std::mem::take(&mut self.events.terminal_events);
-        let (cleared_events, remaining) =
-            Self::extract_terminal_events(events, |event| match event {
-                TerminalEvent::ScreenCleared { include_scrollback } => Ok(include_scrollback),
-                other => Err(other),
-            });
-        self.events.terminal_events = remaining;
-        cleared_events
+        self.events.extract(|event| match event {
+            TerminalEvent::ScreenCleared { include_scrollback } => Ok(include_scrollback),
+            other => Err(other),
+        })
     }
 
     /// Calculate a checksum for a rectangular region of cells
