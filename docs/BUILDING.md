@@ -246,6 +246,10 @@ Run the Rust unit tests with the correct PyO3 feature flags:
 # Correct command (required for PyO3 compatibility)
 cargo test --lib --no-default-features --features pyo3/auto-initialize
 
+# Terminal-core tests live in the par-term-emu-core workspace member
+# (no PyO3 flags needed); add --features for the gated modules
+cargo test -p par-term-emu-core --features pty_session,screenshot,serde
+
 # Or use the make target
 make test-rust
 ```

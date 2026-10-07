@@ -115,7 +115,12 @@ with no features compiles neither pyo3 nor swash nor portable-pty
   (`publish-crates`) and `publish-crates.yml` must gain a "publish
   par-term-emu-core, wait for index propagation" step before the main
   publish **before the next release** (tracked as Phase-1 follow-up; the
-  workflows are dispatch-only and not exercised by this phase).
+  workflows are dispatch-only and not exercised by this phase). This is a
+  hard prerequisite: the root's `cargo publish` cannot resolve
+  `par-term-emu-core = "=X.Y.Z"` until the member is on crates.io. The same
+  follow-up should add `-p par-term-emu-core` to `deployment.yml`'s "Run
+  Rust tests" step (`cargo test --lib --no-default-features`), which now
+  runs only the root's unit tests.
 
 ## Invariants
 

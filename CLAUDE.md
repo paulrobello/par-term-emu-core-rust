@@ -30,7 +30,12 @@ make test-rust           # Rust tests only
 make test-python         # Python tests only (rebuilds first)
 make test-pty            # PTY test family with a longer per-test timeout
 
-# Single Rust test
+# Single Rust test in the terminal core (terminal/grid/pty_session/graphics/screenshot/…
+# live in the par-term-emu-core member; a root `cargo test` filter matches 0 of them)
+cargo test -p par-term-emu-core test_name
+cargo test -p par-term-emu-core --features pty_session,screenshot,serde test_name   # feature-gated core tests
+
+# Single Rust test in the root crate (streaming, python_bindings, ffi, mux)
 cargo test --lib --no-default-features --features pyo3/auto-initialize test_name
 
 # Single Python test file

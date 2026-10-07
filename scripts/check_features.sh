@@ -27,7 +27,8 @@ cargo hack check --each-feature \
     --exclude-features python,python-test,full,regenerate-proto,jemalloc
 # The par-term-emu-core workspace member (ARC-007 O2): each of its features
 # on its own, plus none. Its `python` feature only adds pyo3 for the PyErr
-# conversions and needs no interpreter to type-check.
+# conversions (pyo3's build script still locates an interpreter, as for
+# python-test below).
 cargo hack check -p par-term-emu-core --each-feature
 
 echo "=== 2/3 explicit combinations + python-test ==="

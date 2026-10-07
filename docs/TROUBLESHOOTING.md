@@ -63,12 +63,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### cargo test fails to link or finds no tests
 
-**Cause:** plain `cargo test` inherits the `extension-module` feature, which cannot link a test binary. Feature-gated modules also compile out without their feature, so a filter that targets them matches zero tests.
+**Cause:** plain `cargo test` inherits the `extension-module` feature, which cannot link a test binary. Feature-gated modules also compile out without their feature, so a filter that targets them matches zero tests. Terminal-core tests (terminal, grid, pty_session, graphics, screenshot, …) live in the `par-term-emu-core` workspace member, so a root `cargo test` filter matches zero of them.
 
 **Fix:** use the Makefile targets, or pass the test feature set explicitly:
 
 ```bash
 make test-rust
+cargo test -p par-term-emu-core [--features pty_session,screenshot,serde] test_name   # core tests
 cargo test --lib --no-default-features --features pyo3/auto-initialize test_name
 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming test_name
 cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi ffi
