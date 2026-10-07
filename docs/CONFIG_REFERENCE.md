@@ -842,7 +842,7 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |
 | `PATH` | par-mux client and Windows resume | — | Locating the `par-mux` binary; resolving `argv[0]` for Windows agent resume |
 | `COMPUTERNAME` | par-mux (Windows) | — | Local hostname for deciding whether an OSC 7 directory report is from this machine |
-| `PAR_TERM_*` (40 variables) | `par-term-streamer` binary | per option | One variable per CLI option, such as `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_API_KEY`, `PAR_TERM_TLS_CERT`, `PAR_TERM_MUX_SOCKET`. A flag on the command line wins. Full list with defaults: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) |
+| `PAR_TERM_*` (40 variables) | `par-term-streamer` binary | per option | One variable per CLI option, such as `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_API_KEY`, `PAR_TERM_TLS_CERT`, `PAR_TERM_MUX_SOCKET`. A flag on the command line wins. Full list with the matching flag: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) |
 
 Spawned child processes receive `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1` and `KITTY_PID=<pid>`. Override any of them with the `env` argument to `spawn()`/`spawn_shell()` (Python) or `PtySession::set_env()` (Rust). Inherited variables the library drops are listed in [SECURITY.md](SECURITY.md#inherited-environment).
 
