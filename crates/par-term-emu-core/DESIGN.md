@@ -12,8 +12,8 @@ resolves byte-identically after every phase.
 | Crate | Path | Owns |
 |-------|------|------|
 | `par-term-emu-core` | `crates/par-term-emu-core` | Terminal state machine, grid, VTE sequences, PTY session, graphics, screenshot renderer, tmux control-mode parser, and the text/ansi/keyboard/mouse/zone/unicode utilities |
-| `par-mux` | `crates/par-mux` (Phase 2) | `mux` (daemon library) + `mux::attach` client |
-| `par-term-emu-core-rust` | repo root (shell) | `streaming`, `python_bindings` + `_native` module, `ffi` (C ABI), `prelude`, both binaries; re-exports both members at their historical paths |
+| `par-mux` | `crates/par-mux` (Phase 2, done) | `mux` (daemon library) + `mux::attach` client + the `par-mux` binary |
+| `par-term-emu-core-rust` | repo root (shell) | `streaming`, `python_bindings` + `_native` module, `ffi` (C ABI), `prelude`, the streamer binary; re-exports both members at their historical paths |
 
 Dependency DAG (arrows point at the dependency):
 
@@ -110,7 +110,7 @@ with no features compiles neither pyo3 nor swash nor portable-pty
   manifest.
 - `par-term-emu-derive` keeps its independent version (unchanged).
 - **Publish order:** derive (if bumped) → `par-term-emu-core` → `par-mux`
-  (Phase 2) → root. crates.io strips `path`, so each dependency must exist on
+  → root (the workflows need a par-mux publish step too). crates.io strips `path`, so each dependency must exist on
   the registry before its dependent publishes. `deployment.yml`
   (`publish-crates`) and `publish-crates.yml` must gain a "publish
   par-term-emu-core, wait for index propagation" step before the main
@@ -193,17 +193,61 @@ wiring, the PyErr impls moved out), `src/mux/persist.rs` (the helper above),
 `Cargo.toml` (member dep, forwarded features, core-only deps and the
 `proptest` dev-dep removed), `cbindgen.toml` (`parse_deps`).
 
+## Phase 2 — the `par-mux` member (done)
+
+`src/mux` → `crates/par-mux/src/mux`, `src/bin/par_mux` →
+`crates/par-mux/src/bin/par_mux`, and the eleven `tests/mux_*.rs` suites plus
+`tests/common` and `tests/assets` → `crates/par-mux/tests/`, all by `git mv`.
+`tests/mux_feature_isolation.rs` stays in the root: it guards the root's
+`mux` feature gate.
+
+- **Crate shape.** par-mux's `lib.rs` declares `#[cfg(feature = "mux")] pub
+  mod mux;` and re-exports, crate-private, the core modules the moved tree
+  names through `crate::` (`cell`, `color`, `keyboard`, `terminal`,
+  `tmux_control`, `pty_session`, `pty_error`, the `debug_*!` macros, and —
+  feature/test-gated — `mouse`, `cursor`, `zone`), so the moved tree's
+  `crate::` paths resolve with no edits. Root `lib.rs` replaces `pub mod mux;`
+  with `#[cfg(feature = "mux")] pub use par_mux::mux;`: every
+  `par_term_emu_core_rust::mux::…` path is unchanged (par-term's imports were
+  checked against it).
+- **Features.** Member: `mux` (interprocess, toml, dirs, nix, and on Windows
+  widestring/windows-sys, plus `serde`), `serde` (forwards core `serde`),
+  `mux-bin` = `mux` + clap (the `[[bin]] par-mux` target), `attach` =
+  `mux-bin` + crossterm/ratatui. Root: `mux = ["dep:par-mux", "par-mux/mux",
+  "par-term-emu-core/mux", "pty_session", "interprocess", "serde"]`,
+  `mux-bin = ["mux", "par-mux/mux-bin"]`, `attach = ["mux-bin",
+  "par-mux/attach"]`, `serde` adds `par-mux?/serde`. The root keeps
+  `interprocess` (the streaming `MuxSessionFactory` dials the daemon socket)
+  and `clap`/`libc` (the streamer); `toml`, `dirs`, `crossterm`, `ratatui`,
+  `widestring`, `windows-sys` and the `par-mux` `[[bin]]` left the root.
+- **Binary.** `cargo build -p par-mux --bin par-mux --features mux-bin`.
+  **Breaking for installers:** `cargo install par-term-emu-core-rust --bin
+  par-mux` no longer works; install from the `par-mux` crate.
+- **Versioning.** par-mux is lockstep with the root; root pins `par-mux =
+  "=X.Y.Z"` and par-mux pins `par-term-emu-core = "=X.Y.Z"`. `make
+  core-version-check` gates all three edges.
+- **Build stamp.** `mux::build_stamp()` reads `PAR_TERM_CORE_BUILD_SHA` from
+  the member's own `build.rs` (the root's stamp code moved with it).
+- **Edits inside the moved subtree:** `client.rs` `MuxClient::connect_bounded`
+  `pub(crate)` → `#[doc(hidden)] pub` (its only caller is the root's
+  `streaming::roster_watcher`; the `expect(dead_code)` keyed on root-only
+  features went with it); `command/tests.rs` resolves the fuzz corpus at
+  `../../fuzz/corpus/…`. Moved tests and the binary rename
+  `par_term_emu_core_rust::mux` → `par_mux::mux`, and
+  `par_term_emu_core_rust::{tmux_control, terminal}` →
+  `par_term_emu_core::…` (the member cannot depend on the root without a
+  cycle).
+- **Log targets.** The 31 direct `log::` macro sites in the mux tree log
+  under their module path, so their default target moves from
+  `par_term_emu_core_rust::mux::…` to `par_mux::mux::…`. Unlike the Phase 1
+  `event_broker` pin, these are not pinned: par-term does not filter on that
+  target. The `debug_*!` sites use the core's fixed target and are unchanged.
+- **Test-count preservation** (`rust-only,mux-bin,serde,attach`, all
+  targets): 1019 before; after, root 64 (lib 1, `mux_feature_isolation` 1,
+  the non-mux suites 62) + par-mux 955 (lib 798, bin 8, integration 149).
+
 ## Follow-on phases (O2)
 
-- **Phase 2 — `par-mux` member.** `git mv src/mux crates/par-mux/src/…`;
-  par-mux depends on `par-term-emu-core` (`mux`, `pty_session`, `serde`
-  features). The root re-exports it as `pub mod mux` (`pub use par_mux as
-  mux;` or a module re-export) behind root feature `mux`. The `par-mux`
-  binary and its `mux-bin`/`attach` features may stay in the root or move
-  with the member; either way the binary name and CLI are unchanged.
-  Prerequisite reading: the promotions list above (the mux hooks are already
-  public on core), and `streaming::mux_factory` / `streaming::roster_watcher`,
-  which stay in the root and consume par-mux.
 - **Phase 3 — root shell cleanup.** Root keeps only `streaming`,
   `python_bindings`, `ffi`, `prelude`, binaries, and re-exports; publish
   workflow gains the par-mux step; docs (ARCHITECTURE.md crate diagram)

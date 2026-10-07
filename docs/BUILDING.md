@@ -87,8 +87,8 @@ The library supports several optional features that can be enabled during the bu
 - **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
 - **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar); also enables `macro-yaml` for `--macro-file`
-- **`mux`** - The par-mux multiplexer library (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`; does not pull `clap`
-- **`mux-bin`** - The `par-mux` daemon binary: `mux` plus its `clap` CLI parser. Build the binary with `cargo build --bin par-mux --no-default-features --features mux-bin`
+- **`mux`** - The par-mux multiplexer library, re-exported as `par_term_emu_core_rust::mux` from the `par-mux` workspace member (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`; does not pull `clap`
+- **`mux-bin`** - The `par-mux` daemon binary: `mux` plus its `clap` CLI parser. The binary lives in the `par-mux` workspace member (`crates/par-mux`): build it with `cargo build -p par-mux --bin par-mux --features mux-bin`; this root feature forwards to the member
 - **`macro-yaml`** - `Macro` YAML save/load (`serde_yaml_ng`). Enabled by `python`, `python-test`, and `streaming-bin`; slim `rust-only`/`sim`/`mux` builds must add it to use `Macro::save_yaml`/`load_yaml`/`to_yaml`/`from_yaml`
 - **`serde`** - Serde derives on the replay-snapshot types, which are the par-mux persistence format. Enabled by `mux`
 - **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
@@ -211,14 +211,14 @@ See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
 
 ### Building the Multiplexer Daemon
 
-The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate binary built with the Rust `mux-bin` feature (`mux` plus the `clap` CLI parser):
+The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate binary in the `par-mux` workspace member (`crates/par-mux`), built with its `mux-bin` feature (`mux` plus the `clap` CLI parser):
 
 ```bash
 # Build the daemon binary
-cargo build --bin par-mux --no-default-features --features mux-bin
+cargo build -p par-mux --bin par-mux --features mux-bin
 
 # Run it (prints its socket path and serves until killed)
-cargo run --bin par-mux --no-default-features --features mux-bin
+cargo run -p par-mux --bin par-mux --features mux-bin
 ```
 
 The daemon is independent of the Python bindings — it is not part of the default `make dev` build or the PyPI wheel.
@@ -226,7 +226,7 @@ The daemon is independent of the Python bindings — it is not part of the defau
 Its test suites must run serialized (the integration tests spawn daemons on colliding socket paths). The tests that exec the daemon fail to compile without `mux-bin`:
 
 ```bash
-cargo test --no-default-features --features rust-only,mux-bin,serde -- --test-threads=1
+cargo test -p par-mux --features attach -- --test-threads=1
 ```
 
 See [MUX.md](MUX.md) for the complete daemon reference (CLI, socket/state paths, protocol, persistence).

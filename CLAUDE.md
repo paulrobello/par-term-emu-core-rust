@@ -35,7 +35,10 @@ make test-pty            # PTY test family with a longer per-test timeout
 cargo test -p par-term-emu-core test_name
 cargo test -p par-term-emu-core --features pty_session,screenshot,serde test_name   # feature-gated core tests
 
-# Single Rust test in the root crate (streaming, python_bindings, ffi, mux)
+# Single Rust test in the par-mux member (the mux tree + its integration suites)
+cargo test -p par-mux --features attach test_name
+
+# Single Rust test in the root crate (streaming, python_bindings, ffi)
 cargo test --lib --no-default-features --features pyo3/auto-initialize test_name
 
 # Single Python test file
@@ -90,7 +93,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 #    2026-09-27: --all-targets passed while the mux test build failed on it). For
 #    mux/pty changes, run step 4b's feature set as a check too:
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --all-targets"
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --lib --tests --no-default-features --features rust-only,mux-bin,serde"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked -p par-mux --lib --tests --features mux-bin"
 
 # 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
 #     As of 2026-09-26 the mux:: filter is expected to PASS on Windows.
@@ -116,7 +119,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked --lib 
 #     0xC000013A (STATUS_CONTROL_C_EXIT) and later writes fail with
 #     NotStartedError. Tests that send ^C must wait for the prompt text
 #     (`>`), not for "any update".
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --locked --lib --no-default-features --features rust-only,mux-bin,serde mux:: -- --test-threads=1"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --locked -p par-mux --lib --features mux-bin mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```
@@ -145,7 +148,7 @@ The crate produces three artifacts:
 - **Rust library** (`rlib`): For use by other Rust projects (e.g., `par-term`)
 - **Streaming server binary** (`par-term-streamer`): Requires `streaming-bin` feature flag
 
-It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, sequences, PTY session, graphics, screenshot, tmux control parser, text/unicode utils) lives in the **`par-term-emu-core`** member at `crates/par-term-emu-core/`; the root crate keeps streaming, Python bindings, FFI, mux, and the binaries, and re-exports every core module at its historical `par_term_emu_core_rust::…` path. Boundary, feature mapping, and version train: `crates/par-term-emu-core/DESIGN.md`. Core-only tests run with `cargo test -p par-term-emu-core [--features …]` (no pyo3 flags needed).
+It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, sequences, PTY session, graphics, screenshot, tmux control parser, text/unicode utils) lives in the **`par-term-emu-core`** member at `crates/par-term-emu-core/`; the multiplexer (`mux` + `mux::attach` + the `par-mux` binary) lives in the **`par-mux`** member at `crates/par-mux/`; the root crate keeps streaming, Python bindings, FFI, and the streamer binary, and re-exports every core module and `mux` at its historical `par_term_emu_core_rust::…` path. Boundary, feature mapping, and version train: `crates/par-term-emu-core/DESIGN.md`. Core-only tests run with `cargo test -p par-term-emu-core [--features …]` (no pyo3 flags needed).
 
 ### Feature Flags
 
@@ -157,8 +160,8 @@ It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, seque
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |
 | `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
 | `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session` and `macro-yaml`) |
-| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, and on Windows `widestring`/`windows-sys`. No `clap` |
-| `mux-bin` | The `par-mux` daemon binary: `mux` + `clap` (mirrors `streaming`/`streaming-bin`). Required by `cargo build --bin par-mux` and by the integration tests that exec the daemon |
+| `mux` | `par-mux` multiplexer library, re-exported from the `par-mux` member as `crate::mux`: PTYs, session tree, control-mode socket, on-disk persistence. Enables `par-mux/mux`, `pty_session`, `interprocess` (for the streaming `MuxSessionFactory`), and `serde`. No `clap` |
+| `mux-bin` | Forwards to the `par-mux` member's `mux-bin` (`mux` + `clap`). The binary builds from the member: `cargo build -p par-mux --bin par-mux --features mux-bin` |
 | `macro-yaml` | `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` via `serde_yaml_ng`. Enabled by `python`, `python-test`, and `streaming-bin` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
 | `ffi` | The C ABI (`src/ffi.rs`, `ptec_terminal_*` exports). Off by default so Python wheels export no C symbols; `make xcframework` builds `rust-only,ffi` (ARC-112) |
@@ -185,7 +188,7 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 - `crates/par-term-emu-core/src/pty_session/` - PTY session: `mod.rs` (struct, construction, Drop, `UpdateWaiter`), `lifecycle.rs` (spawn/wait/kill), `io.rs` (writes, input handle, resize/SIGWINCH), `query.rs` (terminal access/export), `updates.rs` (generation counter), `coprocess.rs`, and the background reader thread (`reader.rs`)
 - `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
-- `src/mux/` - par-mux multiplexer daemon (tmux control mode over a local socket; `server/` accept loop + client/protocol/broadcast/reap/endpoint seams + `dispatch/` per-command-group handlers + `command/` per-verb parsing + `persist.rs` save/restore + `tree/` session tree (`mod.rs` types and lookups, `lifecycle.rs`, `layout_ops.rs`) + `hooks/` hook-report grammar (`mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`)) — operational reference in `docs/MUX.md`
+- `crates/par-mux/src/mux/` - par-mux multiplexer daemon (the `par-mux` workspace member; binary at `crates/par-mux/src/bin/par_mux/`, integration suites in `crates/par-mux/tests/`) (tmux control mode over a local socket; `server/` accept loop + client/protocol/broadcast/reap/endpoint seams + `dispatch/` per-command-group handlers + `command/` per-verb parsing + `persist.rs` save/restore + `tree/` session tree (`mod.rs` types and lookups, `lifecycle.rs`, `layout_ops.rs`) + `hooks/` hook-report grammar (`mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`)) — operational reference in `docs/MUX.md`
 - `crates/par-term-emu-core/src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
 - `crates/par-term-emu-core/src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
 - `src/lib.rs` - Root module declarations, the core re-exports, and `_native` PyO3 module registration
@@ -259,7 +262,8 @@ Also update:
 - `Cargo.toml` (the `version` key)
 - `pyproject.toml` (the `version` key)
 - `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
-- `crates/par-term-emu-core/Cargo.toml` (the `version` key) **and** the root's `par-term-emu-core = { …, version = "=X.Y.Z" }` pin — lockstep, gated by `make core-version-check` (the XTVERSION reply embeds the member's version). Publish order: derive (if bumped) → `par-term-emu-core` → root
+- `crates/par-term-emu-core/Cargo.toml` (the `version` key) **and** the root's `par-term-emu-core = { …, version = "=X.Y.Z" }` pin — lockstep, gated by `make core-version-check` (the XTVERSION reply embeds the member's version)
+- `crates/par-mux/Cargo.toml` (the `version` key), its `par-term-emu-core = { …, version = "=X.Y.Z" }` pin, **and** the root's `par-mux = { …, version = "=X.Y.Z" }` pin — same lockstep gate (`mux::build_stamp()` embeds par-mux's version). Publish order: derive (if bumped) → `par-term-emu-core` → `par-mux` → root
 
 **Derive crate exception**: `derive/Cargo.toml` versions independently — bump it only when the derive code changes, and keep the main crate's `par-term-emu-derive` dependency spec in `Cargo.toml` matching that version. The publish workflows publish the sub-crate before the main crate so the registry version exists when crates.io resolves the (path-stripped) dependency. `make derive-version-check` (part of `checkall` and `release-check`, and the CI version-check job) fails when the two drift.
 

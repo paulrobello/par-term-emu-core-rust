@@ -37,7 +37,7 @@ One entry point for the most common build, test, streaming, and par-mux failures
 make dev
 ```
 
-Use `make streamer-run` for the streaming server binary. A standalone `par-mux` binary builds with `cargo build --bin par-mux --no-default-features --features mux-bin`. See [BUILDING.md](BUILDING.md).
+Use `make streamer-run` for the streaming server binary. A standalone `par-mux` binary builds from its workspace member with `cargo build -p par-mux --bin par-mux --features mux-bin`. See [BUILDING.md](BUILDING.md).
 
 ### cannot find -lpython3.x
 
