@@ -115,7 +115,7 @@ impl Terminal {
             'P' => {
                 // P with # is XTPUSHCOLORS; bare P is DCH (delete chars)
                 if intermediates.contains(&b'#') {
-                    self.handle_xtpushcolors(params);
+                    color_stack::handle_xtpushcolors(&mut self.theme, params);
                 } else {
                     self.handle_csi_edit(action, params, intermediates);
                 }
@@ -123,7 +123,7 @@ impl Terminal {
             'Q' => {
                 // Q with # is XTPOPCOLORS; bare Q is unused
                 if intermediates.contains(&b'#') {
-                    self.handle_xtpopcolors(params);
+                    color_stack::handle_xtpopcolors(&mut self.theme, params);
                 } else {
                     debug::log(
                         debug::DebugLevel::Debug,
@@ -136,7 +136,7 @@ impl Terminal {
                 // R with # is XTREPORTCOLORS; bare R is the CPR reply an
                 // application would echo, not something we act on
                 if intermediates.contains(&b'#') {
-                    self.handle_xtreportcolors();
+                    color_stack::handle_xtreportcolors(&self.theme, &mut self.response_buffer);
                 } else {
                     debug::log(
                         debug::DebugLevel::Debug,
@@ -162,7 +162,13 @@ impl Terminal {
                     || intermediates.contains(&b'>')
                     || intermediates.contains(&b'<')
                 {
-                    self.handle_csi_keyboard(action, params, intermediates);
+                    keyboard::handle_csi_keyboard(
+                        &mut self.keyboard_state,
+                        &mut self.response_buffer,
+                        action,
+                        params,
+                        intermediates,
+                    );
                 } else {
                     self.handle_csi_cursor(action, params, intermediates);
                 }

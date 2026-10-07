@@ -1,7 +1,8 @@
 //! Shell integration OSC sequence handling
 
+use crate::grid::Grid;
 use crate::shell_integration::ShellIntegrationMarker;
-use crate::terminal::Terminal;
+use crate::terminal::{CommandHistoryState, EventBroker, ShellState, Terminal};
 use percent_encoding::percent_decode_str;
 use url::Url;
 
@@ -34,251 +35,16 @@ impl Terminal {
             "133"
                 // Shell integration (iTerm2/VSCode)
                 if params.len() >= 2 => {
-                    if let Ok(marker) = std::str::from_utf8(params[1]) {
-                        let ts = crate::terminal::unix_millis();
-                        let abs_line = self.active_grid().scrollback_len() + self.cursor.row;
-                        match marker.chars().next() {
-                            Some('A') => {
-                                self.shell_state.shell_integration
-                                    .set_marker(ShellIntegrationMarker::PromptStart);
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ShellIntegrationEvent {
-                                        event_type: "prompt_start".to_string(),
-                                        command: None,
-                                        exit_code: None,
-                                        timestamp: Some(ts),
-                                        cursor_line: Some(abs_line),
-                                    },
-                                );
-                                if self.shell_state.in_command_output && self.shell_state.shell_depth > 0 {
-                                    self.shell_state.shell_depth += 1;
-                                    self.events.terminal_events.push(
-                                        crate::terminal::TerminalEvent::SubShellDetected {
-                                            depth: self.shell_state.shell_depth,
-                                            shell_type: None,
-                                        },
-                                    );
-                                } else if self.shell_state.shell_depth == 0 {
-                                    self.shell_state.shell_depth = 1;
-                                }
-                                self.shell_state.in_command_output = false;
-                                if !self.alt_screen_active {
-                                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                    if let Some(zone) = self.grid.zones().last() {
-                                        let closed_id = zone.id;
-                                        let closed_type = zone.zone_type;
-                                        let closed_start = zone.abs_row_start;
-                                        self.grid.close_current_zone(close_row);
-                                        self.events.terminal_events.push(
-                                            crate::terminal::TerminalEvent::ZoneClosed {
-                                                zone_id: closed_id,
-                                                zone_type: closed_type,
-                                                abs_row_start: closed_start,
-                                                abs_row_end: close_row,
-                                                exit_code: None,
-                                            },
-                                        );
-                                    } else {
-                                        self.grid.close_current_zone(close_row);
-                                    }
-                                    let zone_id = self.events.next_zone_id;
-                                    self.events.next_zone_id += 1;
-                                    self.grid.push_zone(crate::zone::Zone::new(
-                                        zone_id,
-                                        crate::zone::ZoneType::Prompt,
-                                        abs_line,
-                                        Some(ts),
-                                    ));
-                                    self.events.terminal_events.push(
-                                        crate::terminal::TerminalEvent::ZoneOpened {
-                                            zone_id,
-                                            zone_type: crate::zone::ZoneType::Prompt,
-                                            abs_row_start: abs_line,
-                                        },
-                                    );
-                                }
-                            }
-                            Some('B') => {
-                                self.shell_state.shell_integration
-                                    .set_marker(ShellIntegrationMarker::CommandStart);
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ShellIntegrationEvent {
-                                        event_type: "command_start".to_string(),
-                                        command: self.shell_state.shell_integration.command()
-                                            .map(|s| s.to_string()),
-                                        exit_code: None,
-                                        timestamp: Some(ts),
-                                        cursor_line: Some(abs_line),
-                                    },
-                                );
-                                if !self.alt_screen_active {
-                                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                    if let Some(zone) = self.grid.zones().last() {
-                                        let closed_id = zone.id;
-                                        let closed_type = zone.zone_type;
-                                        let closed_start = zone.abs_row_start;
-                                        self.grid.close_current_zone(close_row);
-                                        self.events.terminal_events.push(
-                                            crate::terminal::TerminalEvent::ZoneClosed {
-                                                zone_id: closed_id,
-                                                zone_type: closed_type,
-                                                abs_row_start: closed_start,
-                                                abs_row_end: close_row,
-                                                exit_code: None,
-                                            },
-                                        );
-                                    } else {
-                                        self.grid.close_current_zone(close_row);
-                                    }
-                                    let zone_id = self.events.next_zone_id;
-                                    self.events.next_zone_id += 1;
-                                    let mut zone = crate::zone::Zone::new(
-                                        zone_id,
-                                        crate::zone::ZoneType::Command,
-                                        abs_line,
-                                        Some(ts),
-                                    );
-                                    zone.command =
-                                        self.shell_state.shell_integration.command().map(|s| s.to_string());
-                                    self.grid.push_zone(zone);
-                                    self.events.terminal_events.push(
-                                        crate::terminal::TerminalEvent::ZoneOpened {
-                                            zone_id,
-                                            zone_type: crate::zone::ZoneType::Command,
-                                            abs_row_start: abs_line,
-                                        },
-                                    );
-                                }
-                            }
-                            Some('C') => {
-                                // Extract optional command text from params[2]
-                                // Shell scripts send: \033]133;C;<command>\007
-                                if let Some(cmd_bytes) = params.get(2) {
-                                    if let Ok(cmd) = std::str::from_utf8(cmd_bytes) {
-                                        let cmd = cmd.trim();
-                                        if !cmd.is_empty() {
-                                            self.shell_state.shell_integration.set_command(cmd.to_string());
-                                        }
-                                    }
-                                }
-                                self.shell_state.shell_integration
-                                    .set_marker(ShellIntegrationMarker::CommandExecuted);
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ShellIntegrationEvent {
-                                        event_type: "command_executed".to_string(),
-                                        command: self.shell_state.shell_integration.command()
-                                            .map(|s| s.to_string()),
-                                        exit_code: None,
-                                        timestamp: Some(ts),
-                                        cursor_line: Some(abs_line),
-                                    },
-                                );
-
-                                // Record output start row in current command execution
-                                if let Some(ref mut execution) = self.command_history_state.current_command {
-                                    execution.output_start_row = Some(abs_line);
-                                }
-
-                                if !self.alt_screen_active {
-                                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                    if let Some(zone) = self.grid.zones().last() {
-                                        let closed_id = zone.id;
-                                        let closed_type = zone.zone_type;
-                                        let closed_start = zone.abs_row_start;
-                                        self.grid.close_current_zone(close_row);
-                                        self.events.terminal_events.push(
-                                            crate::terminal::TerminalEvent::ZoneClosed {
-                                                zone_id: closed_id,
-                                                zone_type: closed_type,
-                                                abs_row_start: closed_start,
-                                                abs_row_end: close_row,
-                                                exit_code: None,
-                                            },
-                                        );
-                                    } else {
-                                        self.grid.close_current_zone(close_row);
-                                    }
-                                    let zone_id = self.events.next_zone_id;
-                                    self.events.next_zone_id += 1;
-                                    let mut zone = crate::zone::Zone::new(
-                                        zone_id,
-                                        crate::zone::ZoneType::Output,
-                                        abs_line,
-                                        Some(ts),
-                                    );
-                                    zone.command =
-                                        self.shell_state.shell_integration.command().map(|s| s.to_string());
-                                    self.grid.push_zone(zone);
-                                    self.events.terminal_events.push(
-                                        crate::terminal::TerminalEvent::ZoneOpened {
-                                            zone_id,
-                                            zone_type: crate::zone::ZoneType::Output,
-                                            abs_row_start: abs_line,
-                                        },
-                                    );
-                                }
-                                self.shell_state.in_command_output = true;
-                            }
-                            Some('D') => {
-                                self.shell_state.shell_integration
-                                    .set_marker(ShellIntegrationMarker::CommandFinished);
-                                let exit_param = params.get(2).or_else(|| params.get(1));
-                                let mut parsed_code: Option<i32> = None;
-                                if let Some(code_bytes) = exit_param {
-                                    if let Ok(code_str) = std::str::from_utf8(code_bytes) {
-                                        if let Ok(code) = code_str.parse::<i32>() {
-                                            self.shell_state.shell_integration.set_exit_code(code);
-                                            parsed_code = Some(code);
-                                        }
-                                    }
-                                }
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ShellIntegrationEvent {
-                                        event_type: "command_finished".to_string(),
-                                        command: None,
-                                        exit_code: parsed_code,
-                                        timestamp: Some(ts),
-                                        cursor_line: Some(abs_line),
-                                    },
-                                );
-                                if !self.alt_screen_active {
-                                    let closed_info = self
-                                        .grid
-                                        .zones()
-                                        .last()
-                                        .map(|z| (z.id, z.zone_type, z.abs_row_start));
-                                    self.grid.close_current_zone(abs_line);
-                                    if let Some(zone) = self.grid.zones_mut().last_mut() {
-                                        if zone.zone_type == crate::zone::ZoneType::Output {
-                                            zone.exit_code = parsed_code;
-                                        }
-                                    }
-                                    if let Some((id, zt, start)) = closed_info {
-                                        self.events.terminal_events.push(
-                                            crate::terminal::TerminalEvent::ZoneClosed {
-                                                zone_id: id,
-                                                zone_type: zt,
-                                                abs_row_start: start,
-                                                abs_row_end: abs_line,
-                                                exit_code: parsed_code,
-                                            },
-                                        );
-                                    }
-                                }
-                                self.shell_state.in_command_output = false;
-                                if self.shell_state.shell_depth > 1 {
-                                    self.shell_state.shell_depth -= 1;
-                                    self.events.terminal_events.push(
-                                        crate::terminal::TerminalEvent::SubShellDetected {
-                                            depth: self.shell_state.shell_depth,
-                                            shell_type: None,
-                                        },
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+                    let abs_line = self.active_grid().scrollback_len() + self.cursor.row;
+                    handle_osc133(
+                        &mut self.shell_state,
+                        &mut self.grid,
+                        &mut self.events,
+                        &mut self.command_history_state,
+                        self.alt_screen_active,
+                        abs_line,
+                        params,
+                    );
                 }
             _ => {}
         }
@@ -373,5 +139,250 @@ impl Terminal {
         }
 
         Some((path, hostname, username))
+    }
+}
+
+/// OSC 133 shell-integration markers (A prompt start, B command start,
+/// C command executed, D command finished): updates shell-integration state,
+/// opens/closes semantic zones on the primary grid, and publishes the
+/// matching events.
+///
+/// Capability boundary (ARC-002): takes the shell state, primary grid, event
+/// broker, and command history explicitly rather than `&mut Terminal`.
+/// `abs_line` is the cursor's absolute line on the active grid.
+fn handle_osc133(
+    shell_state: &mut ShellState,
+    grid: &mut Grid,
+    events: &mut EventBroker,
+    command_history: &mut CommandHistoryState,
+    alt_screen_active: bool,
+    abs_line: usize,
+    params: &[&[u8]],
+) {
+    if let Ok(marker) = std::str::from_utf8(params[1]) {
+        let ts = crate::terminal::unix_millis();
+        match marker.chars().next() {
+            Some('A') => {
+                shell_state
+                    .shell_integration
+                    .set_marker(ShellIntegrationMarker::PromptStart);
+                events.push(crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                    event_type: "prompt_start".to_string(),
+                    command: None,
+                    exit_code: None,
+                    timestamp: Some(ts),
+                    cursor_line: Some(abs_line),
+                });
+                if shell_state.in_command_output && shell_state.shell_depth > 0 {
+                    shell_state.shell_depth += 1;
+                    events.push(crate::terminal::TerminalEvent::SubShellDetected {
+                        depth: shell_state.shell_depth,
+                        shell_type: None,
+                    });
+                } else if shell_state.shell_depth == 0 {
+                    shell_state.shell_depth = 1;
+                }
+                shell_state.in_command_output = false;
+                if !alt_screen_active {
+                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                    if let Some(zone) = grid.zones().last() {
+                        let closed_id = zone.id;
+                        let closed_type = zone.zone_type;
+                        let closed_start = zone.abs_row_start;
+                        grid.close_current_zone(close_row);
+                        events.push(crate::terminal::TerminalEvent::ZoneClosed {
+                            zone_id: closed_id,
+                            zone_type: closed_type,
+                            abs_row_start: closed_start,
+                            abs_row_end: close_row,
+                            exit_code: None,
+                        });
+                    } else {
+                        grid.close_current_zone(close_row);
+                    }
+                    let zone_id = events.alloc_zone_id();
+                    grid.push_zone(crate::zone::Zone::new(
+                        zone_id,
+                        crate::zone::ZoneType::Prompt,
+                        abs_line,
+                        Some(ts),
+                    ));
+                    events.push(crate::terminal::TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type: crate::zone::ZoneType::Prompt,
+                        abs_row_start: abs_line,
+                    });
+                }
+            }
+            Some('B') => {
+                shell_state
+                    .shell_integration
+                    .set_marker(ShellIntegrationMarker::CommandStart);
+                events.push(crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                    event_type: "command_start".to_string(),
+                    command: shell_state
+                        .shell_integration
+                        .command()
+                        .map(|s| s.to_string()),
+                    exit_code: None,
+                    timestamp: Some(ts),
+                    cursor_line: Some(abs_line),
+                });
+                if !alt_screen_active {
+                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                    if let Some(zone) = grid.zones().last() {
+                        let closed_id = zone.id;
+                        let closed_type = zone.zone_type;
+                        let closed_start = zone.abs_row_start;
+                        grid.close_current_zone(close_row);
+                        events.push(crate::terminal::TerminalEvent::ZoneClosed {
+                            zone_id: closed_id,
+                            zone_type: closed_type,
+                            abs_row_start: closed_start,
+                            abs_row_end: close_row,
+                            exit_code: None,
+                        });
+                    } else {
+                        grid.close_current_zone(close_row);
+                    }
+                    let zone_id = events.alloc_zone_id();
+                    let mut zone = crate::zone::Zone::new(
+                        zone_id,
+                        crate::zone::ZoneType::Command,
+                        abs_line,
+                        Some(ts),
+                    );
+                    zone.command = shell_state
+                        .shell_integration
+                        .command()
+                        .map(|s| s.to_string());
+                    grid.push_zone(zone);
+                    events.push(crate::terminal::TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type: crate::zone::ZoneType::Command,
+                        abs_row_start: abs_line,
+                    });
+                }
+            }
+            Some('C') => {
+                // Extract optional command text from params[2]
+                // Shell scripts send: \033]133;C;<command>\007
+                if let Some(cmd_bytes) = params.get(2) {
+                    if let Ok(cmd) = std::str::from_utf8(cmd_bytes) {
+                        let cmd = cmd.trim();
+                        if !cmd.is_empty() {
+                            shell_state.shell_integration.set_command(cmd.to_string());
+                        }
+                    }
+                }
+                shell_state
+                    .shell_integration
+                    .set_marker(ShellIntegrationMarker::CommandExecuted);
+                events.push(crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                    event_type: "command_executed".to_string(),
+                    command: shell_state
+                        .shell_integration
+                        .command()
+                        .map(|s| s.to_string()),
+                    exit_code: None,
+                    timestamp: Some(ts),
+                    cursor_line: Some(abs_line),
+                });
+
+                // Record output start row in current command execution
+                if let Some(ref mut execution) = command_history.current_command {
+                    execution.output_start_row = Some(abs_line);
+                }
+
+                if !alt_screen_active {
+                    let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                    if let Some(zone) = grid.zones().last() {
+                        let closed_id = zone.id;
+                        let closed_type = zone.zone_type;
+                        let closed_start = zone.abs_row_start;
+                        grid.close_current_zone(close_row);
+                        events.push(crate::terminal::TerminalEvent::ZoneClosed {
+                            zone_id: closed_id,
+                            zone_type: closed_type,
+                            abs_row_start: closed_start,
+                            abs_row_end: close_row,
+                            exit_code: None,
+                        });
+                    } else {
+                        grid.close_current_zone(close_row);
+                    }
+                    let zone_id = events.alloc_zone_id();
+                    let mut zone = crate::zone::Zone::new(
+                        zone_id,
+                        crate::zone::ZoneType::Output,
+                        abs_line,
+                        Some(ts),
+                    );
+                    zone.command = shell_state
+                        .shell_integration
+                        .command()
+                        .map(|s| s.to_string());
+                    grid.push_zone(zone);
+                    events.push(crate::terminal::TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type: crate::zone::ZoneType::Output,
+                        abs_row_start: abs_line,
+                    });
+                }
+                shell_state.in_command_output = true;
+            }
+            Some('D') => {
+                shell_state
+                    .shell_integration
+                    .set_marker(ShellIntegrationMarker::CommandFinished);
+                let exit_param = params.get(2).or_else(|| params.get(1));
+                let mut parsed_code: Option<i32> = None;
+                if let Some(code_bytes) = exit_param {
+                    if let Ok(code_str) = std::str::from_utf8(code_bytes) {
+                        if let Ok(code) = code_str.parse::<i32>() {
+                            shell_state.shell_integration.set_exit_code(code);
+                            parsed_code = Some(code);
+                        }
+                    }
+                }
+                events.push(crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                    event_type: "command_finished".to_string(),
+                    command: None,
+                    exit_code: parsed_code,
+                    timestamp: Some(ts),
+                    cursor_line: Some(abs_line),
+                });
+                if !alt_screen_active {
+                    let closed_info = grid
+                        .zones()
+                        .last()
+                        .map(|z| (z.id, z.zone_type, z.abs_row_start));
+                    grid.close_current_zone(abs_line);
+                    if let Some(zone) = grid.zones_mut().last_mut() {
+                        if zone.zone_type == crate::zone::ZoneType::Output {
+                            zone.exit_code = parsed_code;
+                        }
+                    }
+                    if let Some((id, zt, start)) = closed_info {
+                        events.push(crate::terminal::TerminalEvent::ZoneClosed {
+                            zone_id: id,
+                            zone_type: zt,
+                            abs_row_start: start,
+                            abs_row_end: abs_line,
+                            exit_code: parsed_code,
+                        });
+                    }
+                }
+                shell_state.in_command_output = false;
+                if shell_state.shell_depth > 1 {
+                    shell_state.shell_depth -= 1;
+                    events.push(crate::terminal::TerminalEvent::SubShellDetected {
+                        depth: shell_state.shell_depth,
+                        shell_type: None,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 }

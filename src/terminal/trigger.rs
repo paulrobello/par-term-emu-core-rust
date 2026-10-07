@@ -420,7 +420,6 @@ impl TriggerEngine {
 
                 // Emit event
                 term.events
-                    .terminal_events
                     .push(crate::terminal::TerminalEvent::TriggerMatched(
                         trigger_match.clone(),
                     ));

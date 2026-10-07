@@ -393,7 +393,7 @@ pub struct Terminal {
     progress_state: ProgressBellState,   // OSC 9;4 progress bar + bell counter
     security_state: SecurityFlagsState,  // OSC 7 acceptance + insecure-sequence disable
     tmux: TmuxState,                     // Tmux control-protocol parser
-    events: EventBrokerState,            // Event buffer + observer registry
+    events: EventBroker,                 // Event queue + observer registry + dispatch (event_broker.rs)
     bookmarks_state: BookmarksState,     // Bookmarks + next ID
     profiling: ProfilingState,           // Performance metrics + profiling
     mouse_history: MouseHistoryState,    // Mouse event/position history
@@ -418,6 +418,8 @@ pub struct Terminal {
 ```
 
 Each sub-struct type is defined in `src/terminal/mod.rs` immediately above the `Terminal` struct itself, with a doc comment explaining what it groups and why (search for `pub(crate) struct` in that file for the full, current list). This decomposition is a pure reorganization — field access from within `src/terminal/` goes through the sub-struct (e.g. `self.margins.scroll_region_top`), but it does not change the Python-facing API.
+
+Two pieces go further than state grouping (ARC-002). The event queue, bell queue, observer registry, dispatch-batch extraction, and queue cap live in `EventBroker` (`src/terminal/event_broker.rs`), which `Terminal` owns and delegates to; production code publishes through `EventBroker::push` rather than touching the queue. Several `sequences/` handler families are free functions that take only the sub-structs they need instead of `&mut Terminal`: CSI Kitty keyboard (`KeyboardState`), CSI XTPUSHCOLORS/XTPOPCOLORS/XTREPORTCOLORS (`ColorThemeState`), OSC 0/2/21/22/23 title (`TitleState` + `EventBroker`), OSC 8 hyperlink (`HyperlinkState` + `EventBroker`), OSC 52 clipboard (`ClipboardState`), OSC 4/10/11/12/104/110-112 color (`ColorThemeState`), OSC 133 shell integration (`ShellState` + primary `Grid` + `EventBroker` + `CommandHistoryState`), and the DCS Sixel hook/command (`DcsState`). Replies go to the `response_buffer` passed as `&mut Vec<u8>`.
 
 ## ANSI Sequence Processing
 

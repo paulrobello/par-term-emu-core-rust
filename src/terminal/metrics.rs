@@ -312,8 +312,8 @@ impl Terminal {
             keyboard_stack_depth: self.keyboard_state.keyboard_stack.len(),
             response_buffer_size: self.response_buffer.len(),
             dirty_row_count: self.dirty_row_indices().count(),
-            pending_bell_events: self.events.bell_events.len(),
-            pending_terminal_events: self.events.terminal_events.len(),
+            pending_bell_events: self.events.pending_bell_len(),
+            pending_terminal_events: self.events.pending_len(),
         }
     }
 }

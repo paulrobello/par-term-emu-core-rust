@@ -1,7 +1,11 @@
 //! Sixel graphics DCS sequence handling
 
+//!
+//! Capability boundary (ARC-002): these handlers take only the DCS state
+//! (and the Sixel limits for the hook), not `&mut Terminal`.
+
 use crate::sixel;
-use crate::terminal::Terminal;
+use crate::terminal::DcsState;
 use vte::Params;
 
 /// Maximum allowed sixel raster dimension (width or height) in pixels
@@ -12,21 +16,20 @@ const MAX_SIXEL_DIMENSION: usize = 16384;
 /// cap: Color registers accepted in a sixel palette from a DCS payload.
 const MAX_SIXEL_COLORS: usize = 4096;
 
-impl Terminal {
-    /// Process accumulated Sixel command from DCS buffer
-    pub(crate) fn process_sixel_command(&mut self) {
-        if self.dcs_state.dcs_buffer.is_empty() {
-            return;
-        }
+/// Process accumulated Sixel command from DCS buffer
+pub(crate) fn process_sixel_command(dcs_state: &mut DcsState) {
+    if dcs_state.dcs_buffer.is_empty() {
+        return;
+    }
 
-        let Some(parser) = &mut self.dcs_state.sixel_parser else {
-            return;
-        };
+    let Some(parser) = &mut dcs_state.sixel_parser else {
+        return;
+    };
 
-        let buffer_str = String::from_utf8_lossy(&self.dcs_state.dcs_buffer);
-        let command = buffer_str.chars().next().unwrap_or('\0');
+    let buffer_str = String::from_utf8_lossy(&dcs_state.dcs_buffer);
+    let command = buffer_str.chars().next().unwrap_or('\0');
 
-        match command {
+    match command {
             '#' => {
                 // Color command: #Pc or #Pc;Pu;Px;Py;Pz
                 let params: Vec<&str> = buffer_str[1..].split(';').collect();
@@ -77,20 +80,24 @@ impl Terminal {
             _ => {}
         }
 
-        self.dcs_state.dcs_buffer.clear();
-    }
+    dcs_state.dcs_buffer.clear();
+}
 
-    pub(crate) fn handle_sixel_hook(&mut self, params: &Params) {
-        let mut parser = sixel::SixelParser::new_with_limits(self.graphics.sixel_limits);
+/// DCS hook for Sixel: install a fresh parser configured from the DCS params.
+pub(crate) fn handle_sixel_hook(
+    dcs_state: &mut DcsState,
+    limits: sixel::SixelLimits,
+    params: &Params,
+) {
+    let mut parser = sixel::SixelParser::new_with_limits(limits);
 
-        // Convert Params to Vec<u16> for set_params
-        let params_vec: Vec<u16> = params
-            .iter()
-            .flat_map(|subparams| subparams.iter().copied())
-            .collect();
+    // Convert Params to Vec<u16> for set_params
+    let params_vec: Vec<u16> = params
+        .iter()
+        .flat_map(|subparams| subparams.iter().copied())
+        .collect();
 
-        parser.set_params(&params_vec);
+    parser.set_params(&params_vec);
 
-        self.dcs_state.sixel_parser = Some(parser);
-    }
+    dcs_state.sixel_parser = Some(parser);
 }

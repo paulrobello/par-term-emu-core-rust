@@ -14,96 +14,91 @@
 //! ignored; popping an empty stack is a no-op. RIS/DECSTR clear the stack
 //! via `Terminal::reset`.
 
-use crate::terminal::Terminal;
+use crate::terminal::{ColorPaletteSnapshot, ColorThemeState};
 use vte::Params;
 
 /// Maximum palette-stack depth; pushes beyond are ignored (xterm behavior)
 pub(crate) const MAX_PALETTE_STACK: usize = 10;
 
-impl Terminal {
-    /// Snapshot the dynamic + ANSI palette colors
-    fn palette_snapshot(&self) -> crate::terminal::ColorPaletteSnapshot {
-        crate::terminal::ColorPaletteSnapshot {
-            default_fg: self.theme.default_fg,
-            default_bg: self.theme.default_bg,
-            cursor_color: self.theme.cursor_color,
-            ansi_palette: self.theme.ansi_palette,
-        }
-    }
+// Capability boundary (ARC-002): these handlers take only the color theme
+// state (and the reply buffer for the report), not `&mut Terminal`.
 
-    /// XTPUSHCOLORS (`CSI Pi # P`): Pi 0 or omitted pushes a snapshot of the
-    /// dynamic + ANSI palette colors onto the stack; a nonzero Pi stores the
-    /// snapshot into slot Pi (growing the stack — padded with current-color
-    /// snapshots — when the slot is beyond the current depth) without
-    /// pushing. Pushes beyond the cap are ignored.
-    pub(crate) fn handle_xtpushcolors(&mut self, params: &Params) {
-        let slot: u16 = params
-            .iter()
-            .next()
-            .and_then(|p| p.first())
-            .copied()
-            .unwrap_or(0);
-        if slot == 0 {
-            if self.theme.palette_stack.len() >= MAX_PALETTE_STACK {
-                return;
-            }
-            let snapshot = self.palette_snapshot();
-            self.theme.palette_stack.push(snapshot);
-            self.theme.palette_stack_last = self
-                .theme
-                .palette_stack_last
-                .max(self.theme.palette_stack.len());
-        } else {
-            let slot = slot as usize;
-            if slot > MAX_PALETTE_STACK {
-                return;
-            }
-            let snapshot = self.palette_snapshot();
-            let stack = &mut self.theme.palette_stack;
-            while stack.len() < slot {
-                stack.push(snapshot.clone());
-            }
-            stack[slot - 1] = snapshot;
-            self.theme.palette_stack_last = self
-                .theme
-                .palette_stack_last
-                .max(self.theme.palette_stack.len());
-        }
+/// Snapshot the dynamic + ANSI palette colors
+fn palette_snapshot(theme: &ColorThemeState) -> ColorPaletteSnapshot {
+    ColorPaletteSnapshot {
+        default_fg: theme.default_fg,
+        default_bg: theme.default_bg,
+        cursor_color: theme.cursor_color,
+        ansi_palette: theme.ansi_palette,
     }
+}
 
-    /// XTPOPCOLORS (`CSI Pi # Q`): Pi 0 or omitted pops the top stack entry
-    /// back into the palette; a nonzero Pi restores slot Pi without popping.
-    /// Empty stack / missing slot is a no-op.
-    pub(crate) fn handle_xtpopcolors(&mut self, params: &Params) {
-        let slot: u16 = params
-            .iter()
-            .next()
-            .and_then(|p| p.first())
-            .copied()
-            .unwrap_or(0);
-        let index = (slot as usize).saturating_sub(1);
-        let snapshot = if slot == 0 {
-            self.theme.palette_stack.pop()
-        } else if slot as usize <= self.theme.palette_stack.len() {
-            Some(self.theme.palette_stack[index].clone())
-        } else {
-            None
-        };
-        if let Some(snapshot) = snapshot {
-            self.theme.default_fg = snapshot.default_fg;
-            self.theme.default_bg = snapshot.default_bg;
-            self.theme.cursor_color = snapshot.cursor_color;
-            self.theme.ansi_palette = snapshot.ansi_palette;
+/// XTPUSHCOLORS (`CSI Pi # P`): Pi 0 or omitted pushes a snapshot of the
+/// dynamic + ANSI palette colors onto the stack; a nonzero Pi stores the
+/// snapshot into slot Pi (growing the stack — padded with current-color
+/// snapshots — when the slot is beyond the current depth) without
+/// pushing. Pushes beyond the cap are ignored.
+pub(crate) fn handle_xtpushcolors(theme: &mut ColorThemeState, params: &Params) {
+    let slot: u16 = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(0);
+    if slot == 0 {
+        if theme.palette_stack.len() >= MAX_PALETTE_STACK {
+            return;
         }
+        let snapshot = palette_snapshot(theme);
+        theme.palette_stack.push(snapshot);
+        theme.palette_stack_last = theme.palette_stack_last.max(theme.palette_stack.len());
+    } else {
+        let slot = slot as usize;
+        if slot > MAX_PALETTE_STACK {
+            return;
+        }
+        let snapshot = palette_snapshot(theme);
+        let stack = &mut theme.palette_stack;
+        while stack.len() < slot {
+            stack.push(snapshot.clone());
+        }
+        stack[slot - 1] = snapshot;
+        theme.palette_stack_last = theme.palette_stack_last.max(theme.palette_stack.len());
     }
+}
 
-    /// XTREPORTCOLORS (`CSI # R`): reply `CSI ? used ; last # Q` (xterm form)
-    pub(crate) fn handle_xtreportcolors(&mut self) {
-        let used = self.theme.palette_stack.len();
-        let last = self.theme.palette_stack_last;
-        let response = format!("\x1b[?{};{}#Q", used, last);
-        self.push_response(response.as_bytes());
+/// XTPOPCOLORS (`CSI Pi # Q`): Pi 0 or omitted pops the top stack entry
+/// back into the palette; a nonzero Pi restores slot Pi without popping.
+/// Empty stack / missing slot is a no-op.
+pub(crate) fn handle_xtpopcolors(theme: &mut ColorThemeState, params: &Params) {
+    let slot: u16 = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(0);
+    let index = (slot as usize).saturating_sub(1);
+    let snapshot = if slot == 0 {
+        theme.palette_stack.pop()
+    } else if slot as usize <= theme.palette_stack.len() {
+        Some(theme.palette_stack[index].clone())
+    } else {
+        None
+    };
+    if let Some(snapshot) = snapshot {
+        theme.default_fg = snapshot.default_fg;
+        theme.default_bg = snapshot.default_bg;
+        theme.cursor_color = snapshot.cursor_color;
+        theme.ansi_palette = snapshot.ansi_palette;
     }
+}
+
+/// XTREPORTCOLORS (`CSI # R`): reply `CSI ? used ; last # Q` (xterm form)
+pub(crate) fn handle_xtreportcolors(theme: &ColorThemeState, response: &mut Vec<u8>) {
+    let used = theme.palette_stack.len();
+    let last = theme.palette_stack_last;
+    let reply = format!("\x1b[?{};{}#Q", used, last);
+    response.extend_from_slice(reply.as_bytes());
 }
 
 #[cfg(test)]

@@ -53,21 +53,19 @@ impl Terminal {
                         match param {
                             4 if !self.modes.insert_mode => {
                                 self.modes.insert_mode = true;
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ModeChanged(
+                                self.events
+                                    .push(crate::terminal::TerminalEvent::ModeChanged(
                                         "insert_mode".to_string(),
                                         true,
-                                    ),
-                                );
+                                    ));
                             }
                             20 if !self.modes.line_feed_new_line_mode => {
                                 self.modes.line_feed_new_line_mode = true;
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ModeChanged(
+                                self.events
+                                    .push(crate::terminal::TerminalEvent::ModeChanged(
                                         "line_feed_new_line_mode".to_string(),
                                         true,
-                                    ),
-                                );
+                                    ));
                             }
                             _ => {}
                         }
@@ -84,21 +82,19 @@ impl Terminal {
                         match param {
                             4 if self.modes.insert_mode => {
                                 self.modes.insert_mode = false;
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ModeChanged(
+                                self.events
+                                    .push(crate::terminal::TerminalEvent::ModeChanged(
                                         "insert_mode".to_string(),
                                         false,
-                                    ),
-                                );
+                                    ));
                             }
                             20 if self.modes.line_feed_new_line_mode => {
                                 self.modes.line_feed_new_line_mode = false;
-                                self.events.terminal_events.push(
-                                    crate::terminal::TerminalEvent::ModeChanged(
+                                self.events
+                                    .push(crate::terminal::TerminalEvent::ModeChanged(
                                         "line_feed_new_line_mode".to_string(),
                                         false,
-                                    ),
-                                );
+                                    ));
                             }
                             _ => {}
                         }
@@ -251,7 +247,6 @@ impl Terminal {
             _ => "unknown",
         };
         self.events
-            .terminal_events
             .push(TerminalEvent::ModeChanged(mode_name.to_string(), enabled));
     }
 }
