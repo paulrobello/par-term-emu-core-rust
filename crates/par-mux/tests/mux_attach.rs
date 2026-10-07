@@ -249,18 +249,11 @@ fn child_exit(host: &mut AttachHost, timeout: Duration) -> Option<i32> {
 /// A live daemon (the real binary — the production shape an attach client
 /// meets) + one seeded session/pane, by the plain control client. The
 /// DaemonGuard outlives the client and reaps the daemon even on panic.
-fn fixture_with_session(
-    tag: &str,
-) -> (
-    MuxFixture,
-    common::DaemonGuard,
-    par_term_emu_core_rust::mux::MuxClient,
-) {
+fn fixture_with_session(tag: &str) -> (MuxFixture, common::DaemonGuard, par_mux::mux::MuxClient) {
     let fixture = MuxFixture::new(tag);
     let daemon = common::spawn_daemon(&fixture);
     wait_listening(fixture.socket());
-    let mut client =
-        par_term_emu_core_rust::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
     client.send("new-session -s att").expect("new-session");
     (fixture, daemon, client)
 }
@@ -1298,7 +1291,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
 
     // The render client: the documented handshake, then the size report
     // that pulls the current layout triple.
-    let mut conn = par_term_emu_core_rust::mux::attach::conn::AttachConn::connect(fixture.socket())
+    let mut conn = par_mux::mux::attach::conn::AttachConn::connect(fixture.socket())
         .expect("render client connect");
     let _replay = conn.drain_pending_events();
     conn.send_checked(&format!("refresh-client -t {pane0} -C 80x24"))
@@ -1307,7 +1300,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
         .drain_pending_events()
         .into_iter()
         .find_map(|event| match event {
-            par_term_emu_core_rust::tmux_control::TmuxNotification::LayoutChange {
+            par_term_emu_core::tmux_control::TmuxNotification::LayoutChange {
                 window_layout,
                 window_visible_layout,
                 window_raw_flags,
@@ -1316,7 +1309,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
             _ => None,
         })
         .expect("the size report broadcast a layout change");
-    let rects = par_term_emu_core_rust::mux::attach::layout::parse_layout_triple(
+    let rects = par_mux::mux::attach::layout::parse_layout_triple(
         &layout_event.0,
         &layout_event.1,
         &layout_event.2,
@@ -1331,10 +1324,10 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
     );
 
     // Renderer over the daemon's layout, replays per pane.
-    let mut renderer = par_term_emu_core_rust::mux::attach::render::PaneRenderer::new(
+    let mut renderer = par_mux::mux::attach::render::PaneRenderer::new(
         80,
         24,
-        par_term_emu_core_rust::mux::attach::render::Glyphs::Unicode,
+        par_mux::mux::attach::render::Glyphs::Unicode,
     );
     renderer.apply_layout(rects.clone());
     for rect in &rects {
@@ -2506,10 +2499,7 @@ fn render_mode_tab_click_switches_the_active_window() {
 /// The first pane of `session` through its window — `list-panes -t`
 /// takes a window or pane target, not a session id.
 #[cfg(unix)]
-fn session_first_pane(
-    client: &mut par_term_emu_core_rust::mux::MuxClient,
-    session: &str,
-) -> String {
+fn session_first_pane(client: &mut par_mux::mux::MuxClient, session: &str) -> String {
     let window = client
         .send(&format!("list-windows -t {session}"))
         .expect("list-windows")

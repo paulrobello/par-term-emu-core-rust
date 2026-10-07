@@ -20,7 +20,7 @@ use common::{
     MuxFixture,
 };
 use interprocess::TryClone as _;
-use par_term_emu_core_rust::mux::connect_local_stream;
+use par_mux::mux::connect_local_stream;
 use std::io::BufReader;
 
 /// Pane titles survive a restart: the save carries the user title, and the
@@ -379,8 +379,8 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
 // ARC-114: a pane held dead at save time comes back held dead.
 // ---------------------------------------------------------------------------
 
-use par_term_emu_core_rust::mux::MuxClient;
-use par_term_emu_core_rust::tmux_control::TmuxNotification;
+use par_mux::mux::MuxClient;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
 
 /// Run a first daemon whose only pane prints a marker and exits with code 3,
@@ -1018,7 +1018,7 @@ fn cli_restart_surfaces_a_fresh_daemon_startup_failure() {
     );
 
     // The failure is on disk where the caller can find it.
-    let state = par_term_emu_core_rust::mux::persist::state_file_in(&fixture.state_dir(), &socket);
+    let state = par_mux::mux::persist::state_file_in(&fixture.state_dir(), &socket);
     let mut log_path = state.into_os_string();
     log_path.push(".log");
     let log = std::fs::read_to_string(std::path::PathBuf::from(log_path))

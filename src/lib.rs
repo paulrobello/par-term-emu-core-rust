@@ -101,8 +101,10 @@ pub mod ffi;
 // terminal/tests/ before the core moved to its own crate.
 #[cfg(all(test, feature = "ffi"))]
 mod ffi_tests;
+// ARC-007 O2 Phase 2: the multiplexer lives in the `par-mux` workspace member
+// (crates/par-mux); `par_term_emu_core_rust::mux::…` keeps resolving.
 #[cfg(feature = "mux")]
-pub mod mux;
+pub use par_mux::mux;
 pub mod prelude;
 #[cfg(any(feature = "python", feature = "python-test"))]
 pub mod python_bindings;

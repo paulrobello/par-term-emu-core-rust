@@ -1997,6 +1997,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "par-mux"
+version = "0.58.1"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "crossterm",
+ "dirs",
+ "image",
+ "interprocess",
+ "libc",
+ "log",
+ "nix 0.31.3",
+ "par-term-emu-core",
+ "parking_lot",
+ "portable-pty",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "widestring",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "par-term-emu-core"
 version = "0.58.1"
 dependencies = [
@@ -2038,8 +2064,6 @@ dependencies = [
  "bcrypt",
  "clap",
  "criterion",
- "crossterm",
- "dirs",
  "flate2",
  "futures-util",
  "headers",
@@ -2049,6 +2073,7 @@ dependencies = [
  "log",
  "md-5",
  "nix 0.31.3",
+ "par-mux",
  "par-term-emu-core",
  "par-term-emu-derive",
  "parking_lot",
@@ -2056,7 +2081,6 @@ dependencies = [
  "prost",
  "prost-build",
  "pyo3",
- "ratatui",
  "regex",
  "reqwest",
  "rustls",
@@ -2072,14 +2096,11 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
- "toml",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
- "widestring",
- "windows-sys 0.61.2",
  "zeroize",
 ]
 

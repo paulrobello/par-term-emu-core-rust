@@ -5,7 +5,7 @@
 #![cfg(feature = "mux")]
 
 use interprocess::TryClone as _;
-use par_term_emu_core_rust::mux::{connect_local_stream, MuxServer};
+use par_mux::mux::{connect_local_stream, MuxServer};
 use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
 
@@ -200,7 +200,7 @@ fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
     assert!(ok, "version succeeds after the undecodable line");
     assert_eq!(
         body,
-        vec![par_term_emu_core_rust::mux::build_stamp().to_string()],
+        vec![par_mux::mux::build_stamp().to_string()],
         "the reply is version's own, on the same connection"
     );
 }
@@ -242,10 +242,8 @@ fn a_multibyte_char_split_across_a_poll_wake_survives() {
 /// whole stall, and so would every other command in the daemon.
 #[test]
 fn a_slow_spawn_does_not_stall_other_clients() {
-    use par_term_emu_core_rust::mux::pane::{
-        MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext,
-    };
-    use par_term_emu_core_rust::mux::{MuxServer, MuxTree, PaneId};
+    use par_mux::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
+    use par_mux::mux::{MuxServer, MuxTree, PaneId};
 
     /// The real factory behind a gate in `create_pane`: it PROVES the
     /// dispatcher reached the spawn by sending on `entered`, then parks
@@ -368,11 +366,9 @@ fn a_slow_spawn_does_not_stall_other_clients() {
 #[cfg(unix)]
 #[test]
 fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
-    use par_term_emu_core_rust::mux::pane::{
-        MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext,
-    };
-    use par_term_emu_core_rust::mux::{MuxClient, MuxServer, MuxTree, PaneId};
-    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+    use par_mux::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
+    use par_mux::mux::{MuxClient, MuxServer, MuxTree, PaneId};
+    use par_term_emu_core::tmux_control::TmuxNotification;
 
     /// Spawns a pane that prints a marker at once, then holds the
     /// dispatcher in the factory while the pane's output arrives.

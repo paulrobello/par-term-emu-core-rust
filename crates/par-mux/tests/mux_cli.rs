@@ -257,7 +257,7 @@ fn no_daemon_fails_fast_and_does_not_start_one() {
         started.elapsed()
     );
     assert!(
-        par_term_emu_core_rust::mux::connect_local_stream(fixture.socket()).is_err(),
+        par_mux::mux::connect_local_stream(fixture.socket()).is_err(),
         "client mode must never start a daemon"
     );
 }
@@ -277,7 +277,7 @@ fn the_named_form_reaches_the_daemon_on_the_named_default_socket() {
             .and_then(|n| n.rsplit('-').next())
             .expect("fixture name carries a unique suffix")
     );
-    let socket = par_term_emu_core_rust::mux::default_socket_path(&name);
+    let socket = par_mux::mux::default_socket_path(&name);
     let state_dir = fixture.state_dir();
     let daemon = Command::new(env!("CARGO_BIN_EXE_par-mux"))
         .arg(&name)
@@ -296,8 +296,7 @@ fn the_named_form_reaches_the_daemon_on_the_named_default_socket() {
     let run = par_mux(&[&name, "--cmd", "version"]);
     assert_eq!(run.code, Some(0), "version succeeds: {:?}", run.stderr);
     assert!(
-        run.stdout
-            .contains(par_term_emu_core_rust::mux::build_stamp()),
+        run.stdout.contains(par_mux::mux::build_stamp()),
         "the named form reached this daemon: {:?}",
         run.stdout
     );
@@ -341,7 +340,7 @@ fn a_pane_reaches_its_daemon_through_par_mux_bin() {
     );
     cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
 
-    let stamp = par_term_emu_core_rust::mux::build_stamp();
+    let stamp = par_mux::mux::build_stamp();
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
@@ -498,7 +497,7 @@ struct EnvDaemonGuard {
 #[cfg(unix)]
 impl Drop for EnvDaemonGuard {
     fn drop(&mut self) {
-        if let Ok(mut stream) = par_term_emu_core_rust::mux::connect_local_stream(&self.socket) {
+        if let Ok(mut stream) = par_mux::mux::connect_local_stream(&self.socket) {
             use std::io::Write;
             let _ = writeln!(stream, "kill-server");
             let _ = stream.flush();
@@ -593,7 +592,7 @@ fn restart_and_stop_honor_the_env_socket() {
         stop.stderr
     );
     assert!(
-        par_term_emu_core_rust::mux::connect_local_stream(socket).is_err(),
+        par_mux::mux::connect_local_stream(socket).is_err(),
         "the socket is released after the stop"
     );
 }
@@ -614,7 +613,7 @@ fn explicit_socket_and_name_beat_the_env_default() {
             .and_then(|n| n.rsplit('-').next())
             .expect("fixture name carries a unique suffix")
     );
-    let named_socket = par_term_emu_core_rust::mux::default_socket_path(&name);
+    let named_socket = par_mux::mux::default_socket_path(&name);
     let daemon = Command::new(env!("CARGO_BIN_EXE_par-mux"))
         .arg(&name)
         .arg("--state-dir")
@@ -637,9 +636,7 @@ fn explicit_socket_and_name_beat_the_env_default() {
         by_name.stderr
     );
     assert!(
-        by_name
-            .stdout
-            .contains(par_term_emu_core_rust::mux::build_stamp()),
+        by_name.stdout.contains(par_mux::mux::build_stamp()),
         "the named daemon answered: {:?}",
         by_name.stdout
     );
@@ -1061,7 +1058,7 @@ fn list_servers_shows_both_running_daemons_with_session_counts() {
 /// and a re-registration over the live file leaves it byte-identical.
 #[test]
 fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
-    use par_term_emu_core_rust::mux::discovery;
+    use par_mux::mux::discovery;
 
     let fixture = MuxFixture::new("clilist-hy");
     let mut daemon = spawn_daemon(&fixture);

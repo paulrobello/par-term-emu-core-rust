@@ -7,8 +7,8 @@
 
 #![allow(dead_code)]
 
-use par_term_emu_core_rust::mux::connect_local_stream;
-use par_term_emu_core_rust::mux::persist::{state_file_in, state_file_path};
+use par_mux::mux::connect_local_stream;
+use par_mux::mux::persist::{state_file_in, state_file_path};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

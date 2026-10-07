@@ -4,9 +4,9 @@
 Diffs four code-owned lists against their documentation, so the next mux
 command or notification added without its doc row fails the gate:
 
-  1. `const COMMANDS` (src/mux/command/)        ↔ MUX.md "Command Reference" rows
+  1. `const COMMANDS` (crates/par-mux/src/mux/command/)        ↔ MUX.md "Command Reference" rows
   2. `MuxCommand::mutates()` true arms           ↔ MUX.md "When it saves" list
-  3. `"%…` strings in `emit()` (src/mux/emit.rs) ↔ MUX.md "Notifications" rows
+  3. `"%…` strings in `emit()` (crates/par-mux/src/mux/emit.rs) ↔ MUX.md "Notifications" rows
   4. `notification_type()` strings (crates/par-term-emu-core/src/tmux_control.rs)
                                                  ↔ the `notification_type` bullet
                                                    in docs/API_REFERENCE.md
@@ -40,14 +40,14 @@ FRAMING: set[str] = {"begin", "end", "error"}
 # Emit arms kept for parser round-trip tests (only emit.rs's own tests
 # construct them): never sent by the daemon, so not Notifications rows.
 # Guarded both ways: a name losing its emit arm, or a variant that starts
-# being constructed in src/mux/ production code, fails the gate — the latter
+# being constructed in crates/par-mux/src/mux/ production code, fails the gate — the latter
 # means the daemon now sends it and the row belongs in the table.
 NEVER_SENT: set[str] = {"unlinked-window-close", "pane-mode-changed"}
 
 # Files the gate reads (also the set --self-test copies and drifts).
 SELF_TEST_FILES: tuple[str, ...] = (
-    "src/mux/command/",
-    "src/mux/emit.rs",
+    "crates/par-mux/src/mux/command/",
+    "crates/par-mux/src/mux/emit.rs",
     "crates/par-term-emu-core/src/tmux_control.rs",
     "docs/MUX.md",
     "docs/API_REFERENCE.md",
@@ -232,30 +232,32 @@ def parse_commands(command_rs: str) -> list[tuple[str, str]]:
     start = command_rs.find("const COMMANDS")
     if start < 0:
         fail(
-            "parsed nothing from src/mux/command/: `const COMMANDS` not found (identifier renamed?)"
+            "parsed nothing from crates/par-mux/src/mux/command/: `const COMMANDS` not found (identifier renamed?)"
         )
     end = command_rs.find("];", start)
     if end < 0:
         fail(
-            "parsed nothing from src/mux/command/: unterminated `const COMMANDS` table"
+            "parsed nothing from crates/par-mux/src/mux/command/: unterminated `const COMMANDS` table"
         )
     rows = COMMANDS_ROW_RE.findall(command_rs[start:end])
     if not rows:
         fail(
-            "parsed nothing from src/mux/command/: no (name, parser, …) rows inside `const COMMANDS`"
+            "parsed nothing from crates/par-mux/src/mux/command/: no (name, parser, …) rows inside `const COMMANDS`"
         )
     return rows
 
 
 def parse_mutates_true_arms(command_rs: str) -> set[str]:
-    body = fn_block(command_rs, "pub fn mutates(", "src/mux/command/")
+    body = fn_block(command_rs, "pub fn mutates(", "crates/par-mux/src/mux/command/")
     idx = body.find("=> true")
     if idx < 0:
-        fail("parsed nothing from src/mux/command/: no `=> true` arm in mutates()")
+        fail(
+            "parsed nothing from crates/par-mux/src/mux/command/: no `=> true` arm in mutates()"
+        )
     variants = set(VARIANT_RE.findall(body[:idx]))
     if not variants:
         fail(
-            "parsed nothing from src/mux/command/: no MuxCommand variants before `=> true` in mutates()"
+            "parsed nothing from crates/par-mux/src/mux/command/: no MuxCommand variants before `=> true` in mutates()"
         )
     if not re.search(
         r"MuxCommand::RefreshClient\s*\{[^}]*\}\s*=>\s*size\.is_some\(\)", body
@@ -273,7 +275,7 @@ def variant_map(command_rs: str, commands: list[tuple[str, str]]) -> dict[str, s
     result: dict[str, str] = {}
     for name, parser in commands:
         body = strip_line_comments(
-            fn_block(command_rs, f"fn {parser}(", "src/mux/command/")
+            fn_block(command_rs, f"fn {parser}(", "crates/par-mux/src/mux/command/")
         )
         variants = set(VARIANT_RE.findall(body))
         if len(variants) != 1:
@@ -327,15 +329,17 @@ def doc_notification_types(api_md: str) -> list[str]:
 
 
 def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str]:
-    """Files under src/mux/ (production code) constructing a NEVER_SENT variant."""
+    """Files under crates/par-mux/src/mux/ (production code) constructing a NEVER_SENT variant."""
     hits: list[str] = []
     sources = sorted(
         p
-        for p in (root / "src" / "mux").rglob("*.rs")
+        for p in (root / "crates" / "par-mux" / "src" / "mux").rglob("*.rs")
         if p.name not in ("emit.rs", "tests.rs")
     )
     if not sources:
-        fail("parsed nothing from src/mux/: no production .rs files to scan")
+        fail(
+            "parsed nothing from crates/par-mux/src/mux/: no production .rs files to scan"
+        )
     for name in sorted(NEVER_SENT):
         variant = type_map.get(name)
         if variant is None:
@@ -351,8 +355,8 @@ def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str
 
 
 def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
-    command_rs = read(root, "src/mux/command/")
-    emit_rs = read(root, "src/mux/emit.rs")
+    command_rs = read(root, "crates/par-mux/src/mux/command/")
+    emit_rs = read(root, "crates/par-mux/src/mux/emit.rs")
     tmux_rs = read(root, "crates/par-term-emu-core/src/tmux_control.rs")
     mux_md = read(root, "docs/MUX.md")
     api_md = read(root, "docs/API_REFERENCE.md")
@@ -375,7 +379,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     for name in doc_commands:
         if name not in command_names:
             problems.append(
-                f"MUX.md Command Reference row `{name}` has no `const COMMANDS` entry in src/mux/command/"
+                f"MUX.md Command Reference row `{name}` has no `const COMMANDS` entry in crates/par-mux/src/mux/command/"
             )
 
     # Check 2: mutates() true arms ↔ the "When it saves" list.
@@ -396,10 +400,12 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     # Check 3: emit() strings ↔ Notifications table rows, both directions,
     # with the framing and never-sent allowlists gated separately.
     emit_names = EMIT_STRING_RE.findall(
-        fn_block(emit_rs, "pub fn emit(", "src/mux/emit.rs")
+        fn_block(emit_rs, "pub fn emit(", "crates/par-mux/src/mux/emit.rs")
     )
     if not emit_names:
-        fail('parsed nothing from src/mux/emit.rs: no "%… strings inside pub fn emit(')
+        fail(
+            'parsed nothing from crates/par-mux/src/mux/emit.rs: no "%… strings inside pub fn emit('
+        )
     table_rows = DOC_NOTIF_ROW_RE.findall(
         md_section(mux_md, "Notifications", "docs/MUX.md")
     )
@@ -412,7 +418,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
         )
     for name in sorted(set(table_rows) - tabled):
         problems.append(
-            f"MUX.md Notifications row `%{name}` has no emit() arm in src/mux/emit.rs"
+            f"MUX.md Notifications row `%{name}` has no emit() arm in crates/par-mux/src/mux/emit.rs"
         )
     protocol = md_section(mux_md, "Protocol Overview", "docs/MUX.md")
     for name in sorted(FRAMING):
@@ -524,7 +530,7 @@ def run_self_test(root: Path) -> int:
         ),
         (
             'add a fake ("fake-cmd", parse_version, &[]) entry to COMMANDS',
-            "src/mux/command/mod.rs",
+            "crates/par-mux/src/mux/command/mod.rs",
             lambda t: t.replace(
                 '("version", parse_version, &[]),',
                 '("version", parse_version, &[]),\n    ("fake-cmd", parse_version, &[]),',
@@ -568,7 +574,7 @@ def run_self_test(root: Path) -> int:
         with tempfile.TemporaryDirectory() as td:
             dst_root = Path(td)
             copy_inputs(root, dst_root)
-            target = dst_root / "src/mux/command/mod.rs"
+            target = dst_root / "crates/par-mux/src/mux/command/mod.rs"
             target.write_text(target.read_text() + append)
             problems, _ = collect_problems(dst_root)
         return problems

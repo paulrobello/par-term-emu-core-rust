@@ -15,7 +15,7 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 mod common;
 
 use common::{rerun_isolated, spawn_daemon, wait_listening, MuxFixture, REEXEC_MARKER};
-use par_term_emu_core_rust::mux::connect_local_stream;
+use par_mux::mux::connect_local_stream;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -326,9 +326,7 @@ fn cmd_restart_and_stop_keep_working_inside_a_pane() {
         version.stderr
     );
     assert!(
-        version
-            .stdout
-            .contains(par_term_emu_core_rust::mux::build_stamp()),
+        version.stdout.contains(par_mux::mux::build_stamp()),
         "version came from the restarted daemon: {:?}",
         version.stdout
     );
@@ -367,7 +365,7 @@ fn auto_spawn_inside_a_pane_is_refused_fast() {
     }
     let fixture = MuxFixture::new("nestrsp");
     let started = Instant::now();
-    let err = match par_term_emu_core_rust::mux::MuxClient::connect_or_spawn_at(fixture.socket()) {
+    let err = match par_mux::mux::MuxClient::connect_or_spawn_at(fixture.socket()) {
         Err(err) => err,
         Ok(_client) => panic!("auto-spawn inside a pane is refused"),
     };

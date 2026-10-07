@@ -5,9 +5,9 @@
 mod common;
 
 use common::{rerun_isolated, wait_listening, MuxFixture, REEXEC_MARKER};
-use par_term_emu_core_rust::mux::{MuxClient, MuxServer};
-use par_term_emu_core_rust::terminal::Terminal;
-use par_term_emu_core_rust::tmux_control::TmuxNotification;
+use par_mux::mux::{MuxClient, MuxServer};
+use par_term_emu_core::terminal::Terminal;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -291,7 +291,7 @@ fn forged_framing_lines_in_a_reply_body_do_not_desync_the_client() {
     assert!(reply.ok);
     assert_eq!(
         reply.body,
-        vec![par_term_emu_core_rust::mux::build_stamp().to_string()],
+        vec![par_mux::mux::build_stamp().to_string()],
         "version's own one-line reply, not a leftover forged block"
     );
 }

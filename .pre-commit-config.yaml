@@ -51,6 +51,13 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-clippy-par-mux
+        name: cargo clippy (par-mux)
+        description: Lint the par-mux member (ARC-007 O2 Phase 2); attach stays off until ARC-001
+        entry: cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
 
   # Rust tests
   - repo: local

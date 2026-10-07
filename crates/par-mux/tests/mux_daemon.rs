@@ -12,7 +12,7 @@ mod common;
 
 use common::{command, pane_ids, wait_listening, MuxFixture};
 use interprocess::TryClone as _;
-use par_term_emu_core_rust::mux::{connect_local_stream, prepare_socket_path, MuxServer};
+use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxServer};
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 
@@ -190,9 +190,9 @@ fn prepare_socket_path_makes_auto_spawn_race_safe() {
 #[cfg(unix)]
 #[test]
 fn a_restored_tree_serves_its_prior_ids_and_content() {
-    use par_term_emu_core_rust::mux::pane::ShellPaneFactory;
-    use par_term_emu_core_rust::mux::persist::{load_or_quarantine, save_to, Loaded};
-    use par_term_emu_core_rust::mux::tree::MuxTree;
+    use par_mux::mux::pane::ShellPaneFactory;
+    use par_mux::mux::persist::{load_or_quarantine, save_to, Loaded};
+    use par_mux::mux::tree::MuxTree;
 
     let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
     tree.new_session("main", 80, 24).expect("session creates");
@@ -202,7 +202,7 @@ fn a_restored_tree_serves_its_prior_ids_and_content() {
     let quiet = tree
         .split_pane(
             first,
-            par_term_emu_core_rust::mux::SplitDirection::Vertical,
+            par_mux::mux::SplitDirection::Vertical,
             0.5,
             Some("sleep 60"),
         )
@@ -278,7 +278,7 @@ fn a_restored_tree_serves_its_prior_ids_and_content() {
 fn sigterm_saves_state_on_the_way_out() {
     use nix::sys::signal::{self, Signal};
     use nix::unistd::Pid;
-    use par_term_emu_core_rust::mux::persist::{load_or_quarantine, Loaded};
+    use par_mux::mux::persist::{load_or_quarantine, Loaded};
 
     let fixture = MuxFixture::new("sigterm");
     let path = fixture.socket();
@@ -380,7 +380,7 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s reap").expect("new-session");
 
     // A live pane refuses the restart without -k.
@@ -394,7 +394,7 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned { pane_id }
+            par_term_emu_core::tmux_control::TmuxNotification::PaneRespawned { pane_id }
                 if pane_id == "%0"
         )
     });
@@ -410,7 +410,7 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+            par_term_emu_core::tmux_control::TmuxNotification::PaneExited {
                 pane_id,
                 exit_code: Some(7),
             } if pane_id == "%0"
@@ -427,7 +427,7 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned { pane_id }
+            par_term_emu_core::tmux_control::TmuxNotification::PaneRespawned { pane_id }
                 if pane_id == "%0"
         )
     });
@@ -439,12 +439,10 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw = false;
     while Instant::now() < deadline && !saw {
-        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
-            pane_id,
-            data,
-        }) = client
-            .notifications()
-            .recv_timeout(Duration::from_millis(250))
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
+            client
+                .notifications()
+                .recv_timeout(Duration::from_millis(250))
         {
             saw = pane_id == "%0" && String::from_utf8_lossy(&data).contains("respawned-out");
         }
@@ -566,7 +564,7 @@ fn respawn_pane_ignores_flags_inside_the_command() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s flags").expect("new-session");
 
     // `sort -k` is the command's own flag: the live pane must be refused.
@@ -591,13 +589,14 @@ fn respawn_pane_ignores_flags_inside_the_command() {
             .notifications()
             .recv_timeout(Duration::from_millis(250))
         {
-            Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::PaneRespawned {
-                pane_id,
-            }) if pane_id == "%0" => respawned = true,
-            Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
-                pane_id,
-                data,
-            }) if pane_id == "%0" && String::from_utf8_lossy(&data).contains("RESP-42") => {
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::PaneRespawned { pane_id })
+                if pane_id == "%0" =>
+            {
+                respawned = true
+            }
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data })
+                if pane_id == "%0" && String::from_utf8_lossy(&data).contains("RESP-42") =>
+            {
                 output = true
             }
             _ => {}
@@ -619,7 +618,7 @@ fn kill_server_stops_the_daemon_after_a_final_save() {
         .prefix("par-mux-killsrv-")
         .tempdir()
         .expect("state dir");
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_in(state_dir.path(), &path);
+    let state_path = par_mux::mux::persist::state_file_in(state_dir.path(), &path);
     let server = MuxServer::bind(&path).expect("bind");
     let run_state = state_path.clone();
     let handle = std::thread::spawn(move || server.run_persisting(run_state));
@@ -665,7 +664,7 @@ fn a_split_pane_pushes_its_output_to_clients() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s splitout").expect("new-session");
     let reply = client
         .send("split-window -h -t %0")
@@ -691,12 +690,10 @@ fn a_split_pane_pushes_its_output_to_clients() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw = false;
     while Instant::now() < deadline && !saw {
-        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
-            pane_id,
-            data,
-        }) = client
-            .notifications()
-            .recv_timeout(Duration::from_millis(250))
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
+            client
+                .notifications()
+                .recv_timeout(Duration::from_millis(250))
         {
             saw = pane_id == new_pane && String::from_utf8_lossy(&data).contains("split-out");
         }
@@ -715,13 +712,13 @@ fn a_split_pane_pushes_its_output_to_clients() {
 /// frame (whose `window_layout` stays the true tree), and so on.
 /// Returns `(window_layout, window_visible_layout)`.
 fn next_layout_change(
-    client: &mut par_term_emu_core_rust::mux::MuxClient,
+    client: &mut par_mux::mux::MuxClient,
     want_flags: &str,
     want_split: bool,
 ) -> (String, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
-        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::LayoutChange {
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::LayoutChange {
             window_layout,
             window_visible_layout,
             window_raw_flags,
@@ -752,7 +749,7 @@ fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s zoomwire").expect("new-session");
     client.send("split-window -h -t %0").expect("split");
     let (tree, visible) = next_layout_change(&mut client, "", true);
@@ -789,9 +786,9 @@ fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
 /// the interleaved `%output`/`%layout-change` frames a busy daemon pushes
 /// must not satisfy a lifecycle wait.
 fn next_notification(
-    client: &mut par_term_emu_core_rust::mux::MuxClient,
-    mut pred: impl FnMut(&par_term_emu_core_rust::tmux_control::TmuxNotification) -> bool,
-) -> par_term_emu_core_rust::tmux_control::TmuxNotification {
+    client: &mut par_mux::mux::MuxClient,
+    mut pred: impl FnMut(&par_term_emu_core::tmux_control::TmuxNotification) -> bool,
+) -> par_term_emu_core::tmux_control::TmuxNotification {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if let Ok(note) = client
@@ -819,7 +816,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s bjr").expect("new-session");
     let moved = client
         .send("split-window -h -t %0")
@@ -866,7 +863,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowAdd { window_id, .. }
+            par_term_emu_core::tmux_control::TmuxNotification::WindowAdd { window_id, .. }
                 if window_id == &broken
         )
     });
@@ -889,7 +886,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::WindowClose { window_id }
+            par_term_emu_core::tmux_control::TmuxNotification::WindowClose { window_id }
                 if window_id == &broken
         )
     });
@@ -901,7 +898,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
     next_notification(&mut client, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::SessionsChanged
+            par_term_emu_core::tmux_control::TmuxNotification::SessionsChanged
         )
     });
     let listing = client.send("list-windows").expect("list").join("\n");
@@ -936,7 +933,7 @@ fn version_reports_the_daemon_build_stamp() {
     let mut reader = BufReader::new(stream);
     let reply = command(&mut writer, &mut reader, "version").join("");
 
-    let expected = par_term_emu_core_rust::mux::build_stamp();
+    let expected = par_mux::mux::build_stamp();
     assert!(
         reply.contains(expected),
         "the daemon must answer `version` with its build stamp {expected:?}: {reply}"
@@ -964,7 +961,7 @@ fn version_reports_the_daemon_build_stamp() {
 #[test]
 fn the_auto_spawned_daemon_runs_in_its_own_session() {
     use nix::unistd::{getpgid, getpgrp, getsid, Pid};
-    use par_term_emu_core_rust::mux::MuxClient;
+    use par_mux::mux::MuxClient;
 
     let fixture = MuxFixture::new("setsid");
     let mut client =
@@ -1189,7 +1186,7 @@ fn restart_detaches_before_serving() {
 #[cfg(unix)]
 #[test]
 fn accept_emfile_keeps_the_daemon_serving() {
-    use par_term_emu_core_rust::mux::MuxClient;
+    use par_mux::mux::MuxClient;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -1445,7 +1442,7 @@ fn split_window_b_places_the_new_pane_before_its_target() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s splitb").expect("new-session");
 
     // Side by side, new pane LEFT of the target.
@@ -1507,7 +1504,7 @@ fn pane_info_reports_the_panes_foreground_command() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s fgcmd").expect("new-session");
 
     // Idle: the token names the pane's own shell. The shell may take a
@@ -1558,7 +1555,7 @@ fn pane_info_reports_exit_for_held_pane() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut first = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut first = par_mux::mux::MuxClient::connect(path).expect("connect");
     first.send("new-session -s paneexit").expect("new-session");
     first
         .send("respawn-pane -t %0 -k exit 3")
@@ -1566,7 +1563,7 @@ fn pane_info_reports_exit_for_held_pane() {
     next_notification(&mut first, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+            par_term_emu_core::tmux_control::TmuxNotification::PaneExited {
                 pane_id,
                 exit_code: Some(3),
             } if pane_id == "%0"
@@ -1574,7 +1571,7 @@ fn pane_info_reports_exit_for_held_pane() {
     });
 
     // A client that missed the push.
-    let mut late = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect late");
+    let mut late = par_mux::mux::MuxClient::connect(path).expect("connect late");
     let reply = late.send("pane-info -t %0").expect("info").join("");
     assert!(
         reply.trim_end().ends_with(" exited=3"),
@@ -1594,7 +1591,7 @@ fn pane_info_live_pane_has_no_exited_token() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s panelive").expect("new-session");
     let reply = client.send("pane-info -t %0").expect("info").join("");
     assert!(
@@ -1624,14 +1621,14 @@ fn held_state_replay_precedes_the_first_commands_reply() {
     // Client A builds the state a late client must replay: pane %1 held
     // with exit 7 and window @0 zoomed. Both waits prove the daemon has
     // settled that state before B ever registers.
-    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut a = par_mux::mux::MuxClient::connect(path).expect("connect");
     a.send("new-session -s replayord").expect("new-session");
     a.send("split-window -h -t %0").expect("split");
     a.send("respawn-pane -t %1 -k exit 7").expect("hold %1");
     next_notification(&mut a, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+            par_term_emu_core::tmux_control::TmuxNotification::PaneExited {
                 pane_id,
                 exit_code: Some(7),
             } if pane_id == "%1"
@@ -1706,13 +1703,13 @@ fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut a = par_mux::mux::MuxClient::connect(path).expect("connect");
     a.send("new-session -s replayfrm").expect("new-session");
     a.send("respawn-pane -t %0 -k exit 3").expect("hold %0");
     next_notification(&mut a, |note| {
         matches!(
             note,
-            par_term_emu_core_rust::tmux_control::TmuxNotification::PaneExited {
+            par_term_emu_core::tmux_control::TmuxNotification::PaneExited {
                 pane_id,
                 exit_code: Some(3),
             } if pane_id == "%0"
@@ -1774,14 +1771,14 @@ fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
 /// other connected clients receive nothing new.
 #[test]
 fn pane_exited_replay_reaches_only_the_issuing_client() {
-    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+    use par_term_emu_core::tmux_control::TmuxNotification;
 
     let fixture = MuxFixture::new("exitreplay");
     let path = fixture.socket();
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut a = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect a");
+    let mut a = par_mux::mux::MuxClient::connect(path).expect("connect a");
     a.send("new-session -s exitreplay").expect("new-session");
     a.send("split-window -h -t %0").expect("split");
     a.send("respawn-pane -t %1 -k exit 7").expect("hold %1");
@@ -1796,10 +1793,10 @@ fn pane_exited_replay_reaches_only_the_issuing_client() {
     // B and C register on their first command; registration replay delivers
     // the held exit once to each. Consume it so the on-demand replay is the
     // next one B sees.
-    let mut b = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect b");
+    let mut b = par_mux::mux::MuxClient::connect(path).expect("connect b");
     b.send("list-panes").expect("register b");
     next_notification(&mut b, held);
-    let mut c = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect c");
+    let mut c = par_mux::mux::MuxClient::connect(path).expect("connect c");
     c.send("list-panes").expect("register c");
     next_notification(&mut c, held);
 
@@ -1829,14 +1826,14 @@ fn pane_exited_replay_reaches_only_the_issuing_client() {
 /// reply and pushes no `%pane-exited` line.
 #[test]
 fn pane_exited_replay_with_no_held_panes_is_empty() {
-    use par_term_emu_core_rust::tmux_control::TmuxNotification;
+    use par_term_emu_core::tmux_control::TmuxNotification;
 
     let fixture = MuxFixture::new("exitnone");
     let path = fixture.socket();
     let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
-    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
     client.send("new-session -s exitnone").expect("new-session");
     let reply = client.send_checked("pane-exited-replay").expect("replay");
     assert!(reply.ok, "succeeds with nothing held: {:?}", reply.body);
@@ -1871,7 +1868,7 @@ fn workspace_commands_over_the_wire() {
         // An observer client, connected before anything happens: everything
         // it sees is a broadcast. It joins the broadcast set on its first
         // control command.
-        let mut observer = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+        let mut observer = par_mux::mux::MuxClient::connect(path).expect("connect");
         let _ = observer.send("list-panes");
 
         let reply = command(&mut writer, &mut reader, "new-workspace -n dev").join("");
@@ -1937,7 +1934,7 @@ fn workspace_commands_over_the_wire() {
                 .notifications()
                 .recv_timeout(Duration::from_millis(200))
             {
-                Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::WorkspacesChanged) => {
+                Ok(par_term_emu_core::tmux_control::TmuxNotification::WorkspacesChanged) => {
                     saw += 1;
                 }
                 Ok(_) => {}
@@ -2403,7 +2400,7 @@ fn a_following_client_reconstructs_the_switched_window_screen() {
             &format!("refresh-client -t {second_pane}"),
         )
         .join("\n");
-        let mut term = par_term_emu_core_rust::terminal::Terminal::new(120, 40);
+        let mut term = par_term_emu_core::terminal::Terminal::new(120, 40);
         term.process(replay.as_bytes());
         if term.grid().content_as_string().contains("PARMUXSYNC_OK") {
             rendered_ok = true;

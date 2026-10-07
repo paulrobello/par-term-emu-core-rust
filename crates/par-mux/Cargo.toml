@@ -1,0 +1,89 @@
+[package]
+name = "par-mux"
+# Lockstep with the root crate and par-term-emu-core (par-term-emu-core
+# DESIGN.md "Version train"): `mux::build_stamp()` embeds this crate's
+# CARGO_PKG_VERSION, which a daemon and its clients compare. `make
+# core-version-check` fails when it drifts from the root version or the
+# root's exact pin on it.
+version = "0.58.1"
+edition = "2021"
+rust-version = "1.98"
+authors = ["Paul Robello <probello@gmail.com>"]
+description = "par-mux terminal multiplexer: tmux control-mode daemon, session tree, persistence, and attach client for par-term-emu-core"
+license = "MIT"
+repository = "https://github.com/paulrobello/par-term-emu-core-rust"
+homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
+documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/docs/MUX.md"
+keywords = ["terminal", "multiplexer", "tmux", "pty"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "par_mux"
+
+# The par-mux daemon: owns PTYs and serves control mode over a local socket;
+# panes outlive every client (par-mux.md D5). `mux-bin` (not `mux`) so the
+# library feature stays free of the binary-only CLI parser (ARC-106).
+[[bin]]
+name = "par-mux"
+path = "src/bin/par_mux/main.rs"
+required-features = ["mux-bin"]
+
+[dependencies]
+# The terminal core. Exact pin + lockstep version (`make core-version-check`).
+par-term-emu-core = { path = "../par-term-emu-core", version = "=0.58.1", features = ["mux", "pty_session", "serde"] }
+log = "0.4"
+base64 = "0.22.1"
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+parking_lot = "0.12.5"
+# Cross-platform local socket (Unix domain sockets / Windows named pipes) for
+# the control socket (par-mux.md D4).
+interprocess = { version = "2.4.2", optional = true }
+# Agent scrape patterns (bundled + local override) — comments in the
+# override files are the point, so the format is TOML not JSON.
+toml = { version = "0.9", optional = true }
+# Platform state-dir resolution for the persistence path (par-mux.md D3.4).
+dirs = { version = "6.0", optional = true }
+# Daemon CLI parser (`mux-bin` only, ARC-106).
+clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
+# Attach client (feature `attach`): raw-mode terminal handling, size/keypress
+# reads, SIGWINCH-driven resize reports (crossterm) and Phase B's pane
+# renderer (ratatui's crossterm backend).
+crossterm = { version = "0.29", optional = true, default-features = false, features = ["events", "windows"] }
+ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
+nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
+
+# Windows-only: UTF-16 SDDL input for the named-pipe security descriptor
+# (par-mux.md D4), and the Win32 process/token/SID calls behind the client's
+# named-pipe server-identity check (SEC-112).
+[target.'cfg(windows)'.dependencies]
+widestring = { version = "1.2", optional = true }
+windows-sys = { version = "0.61", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3.27"
+# tests/mux_attach.rs drives the attach client through a real PTY.
+portable-pty = "0.9.0"
+# pane.rs unit test: a PNG round-trip through the kitty retention path.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[features]
+default = []
+# The multiplexer library: PTYs, session tree, control-mode socket, on-disk
+# persistence. `serde` and `dirs` are intrinsic — a mux build that cannot
+# save is not a configuration the daemon supports (par-mux.md D3).
+mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "serde"]
+# Serde derives on the mux ids/layout/persist types (the on-disk format).
+serde = ["par-term-emu-core/serde"]
+# The `par-mux` daemon binary: `mux` plus its CLI parser.
+mux-bin = ["mux", "dep:clap"]
+# The `par-mux attach` client TUI; rides the daemon binary's clap surface.
+attach = ["mux-bin", "dep:crossterm", "dep:ratatui"]

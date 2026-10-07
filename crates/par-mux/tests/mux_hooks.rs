@@ -6,7 +6,7 @@
 //!
 //! Unix-only: the daemon is stopped with SIGTERM and the hook script is
 //! POSIX sh. Clients here are plain `std` Unix streams (not
-//! [`par_term_emu_core_rust::mux::connect_local_stream`]) because the
+//! [`par_mux::mux::connect_local_stream`]) because the
 //! negative assertions need `set_read_timeout`, which the interprocess
 //! wrapper does not expose.
 

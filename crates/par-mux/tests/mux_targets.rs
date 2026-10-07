@@ -8,7 +8,7 @@ mod common;
 
 use common::{command, wait_for, MuxFixture};
 use interprocess::TryClone as _;
-use par_term_emu_core_rust::mux::{connect_local_stream, MuxServer};
+use par_mux::mux::{connect_local_stream, MuxServer};
 use std::io::BufReader;
 
 /// The replies to one command, joined — assert against this.

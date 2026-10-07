@@ -24,8 +24,8 @@ fn encoded(line: &str) -> Vec<u8> {
 /// CI fuzz job picks the seeds up automatically.
 #[test]
 fn fuzz_corpus_seeds_parse_without_panicking() {
-    let dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/corpus/mux_parse_command");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fuzz/corpus/mux_parse_command");
     let mut count = 0;
     for entry in std::fs::read_dir(&dir).expect("corpus directory exists") {
         let path = entry.expect("corpus entry").path();

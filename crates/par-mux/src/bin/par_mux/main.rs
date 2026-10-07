@@ -8,9 +8,7 @@
 
 use clap::Parser;
 
-use par_term_emu_core_rust::mux::config::{
-    self, load_canonical, resolve, write_file, EffectiveConfig, Overrides,
-};
+use par_mux::mux::config::{self, load_canonical, resolve, write_file, EffectiveConfig, Overrides};
 
 /// The daemon's one config resolution: the file tier re-read per run, the
 /// env tier read from this process's env, the flag tier from the parsed
@@ -54,7 +52,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
 /// par-mux: a tmux-control-mode-compatible multiplexer daemon.
 ///
 /// Binds one control socket and serves it until killed. `MuxClient::connect_or_spawn_at`
-/// (par_term_emu_core_rust::mux::client) spawns this binary with `--socket <path>`; the
+/// (par_mux::mux::client) spawns this binary with `--socket <path>`; the
 /// positional `NAME` form is the equivalent default-path shorthand for manual runs.
 #[derive(Parser, Debug)]
 #[command(
@@ -200,11 +198,11 @@ struct AttachArgs {
 
 #[cfg(feature = "attach")]
 impl AttachCommand {
-    fn options(&self) -> Result<par_term_emu_core_rust::mux::attach::AttachOptions, String> {
+    fn options(&self) -> Result<par_mux::mux::attach::AttachOptions, String> {
         match self {
             AttachCommand::Attach(args) => {
                 let mode = args.mode.as_deref().map(parse_mode).transpose()?;
-                Ok(par_term_emu_core_rust::mux::attach::AttachOptions {
+                Ok(par_mux::mux::attach::AttachOptions {
                     socket: args.socket.clone(),
                     name: args.name.clone(),
                     target: args.target.clone(),
@@ -238,11 +236,11 @@ impl AttachCommand {
 /// user's session in the wrong mode (the manual-pass `--mode rendered`
 /// report).
 #[cfg(feature = "attach")]
-fn parse_mode(value: &str) -> Result<par_term_emu_core_rust::mux::attach::AttachMode, String> {
+fn parse_mode(value: &str) -> Result<par_mux::mux::attach::AttachMode, String> {
     if value.eq_ignore_ascii_case("render") {
-        Ok(par_term_emu_core_rust::mux::attach::AttachMode::Render)
+        Ok(par_mux::mux::attach::AttachMode::Render)
     } else if value.eq_ignore_ascii_case("passthrough") {
-        Ok(par_term_emu_core_rust::mux::attach::AttachMode::Passthrough)
+        Ok(par_mux::mux::attach::AttachMode::Passthrough)
     } else {
         Err(format!(
             "unknown --mode {value:?} — valid modes: render, passthrough"
@@ -257,7 +255,7 @@ fn parse_mode(value: &str) -> Result<par_term_emu_core_rust::mux::attach::Attach
 fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode {
     use std::io::Write;
     use std::process::ExitCode;
-    let mut client = match par_term_emu_core_rust::mux::MuxClient::connect(path) {
+    let mut client = match par_mux::mux::MuxClient::connect(path) {
         Ok(client) => client,
         Err(err) => {
             eprintln!("par-mux: no daemon running on {} ({err})", path.display());
@@ -311,10 +309,10 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
 fn run_list_servers(cli: &Cli) -> std::process::ExitCode {
     use std::io::Write as _;
     let base = discovery_base(cli);
-    let found = par_term_emu_core_rust::mux::discovery::enumerate(&base);
+    let found = par_mux::mux::discovery::enumerate(&base);
     let mut out = std::io::stdout().lock();
     for server in &found.live {
-        let label = par_term_emu_core_rust::mux::discovery::display_label(&server.socket);
+        let label = par_mux::mux::discovery::display_label(&server.socket);
         let sessions = server
             .sessions
             .map(|count| count.to_string())
@@ -341,7 +339,7 @@ fn run_list_servers(cli: &Cli) -> std::process::ExitCode {
 fn discovery_base(cli: &Cli) -> std::path::PathBuf {
     match cli.state_dir.as_deref() {
         Some(dir) => dir.to_path_buf(),
-        None => par_term_emu_core_rust::mux::discovery::default_registry_base(),
+        None => par_mux::mux::discovery::default_registry_base(),
     }
 }
 
@@ -351,7 +349,7 @@ fn discovery_base(cli: &Cli) -> std::path::PathBuf {
 fn pane_endpoint_refusal(path: &std::path::Path, command: &str) -> bool {
     use interprocess::TryClone as _;
     use std::io::{BufRead, BufReader, Write as _};
-    let Ok(stream) = par_term_emu_core_rust::mux::connect_local_stream(path) else {
+    let Ok(stream) = par_mux::mux::connect_local_stream(path) else {
         return false;
     };
     let Ok(mut writer) = stream.try_clone() else {
@@ -384,7 +382,7 @@ const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 /// the socket stops accepting. `Ok(false)` means nothing was running.
 fn stop_daemon(path: &std::path::Path) -> std::io::Result<bool> {
     use std::io::{BufRead, BufReader, Write};
-    let stream = match par_term_emu_core_rust::mux::connect_local_stream(path) {
+    let stream = match par_mux::mux::connect_local_stream(path) {
         Ok(stream) => stream,
         Err(_) => return Ok(false),
     };
@@ -410,7 +408,7 @@ fn stop_daemon(path: &std::path::Path) -> std::io::Result<bool> {
     drop(reader);
     drop(writer);
     let deadline = std::time::Instant::now() + STOP_DEADLINE;
-    while par_term_emu_core_rust::mux::connect_local_stream(path).is_ok() {
+    while par_mux::mux::connect_local_stream(path).is_ok() {
         if std::time::Instant::now() >= deadline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -473,15 +471,15 @@ fn main() -> std::process::ExitCode {
                 // falls back to the default with a warning — the file is
                 // not a spelling error the user just typed.
                 match eff.mode.to_ascii_lowercase().as_str() {
-                    "render" => par_term_emu_core_rust::mux::attach::AttachMode::Render,
-                    "passthrough" => par_term_emu_core_rust::mux::attach::AttachMode::Passthrough,
+                    "render" => par_mux::mux::attach::AttachMode::Render,
+                    "passthrough" => par_mux::mux::attach::AttachMode::Passthrough,
                     other => {
                         use std::io::Write as _;
                         let _ = writeln!(
                             std::io::stderr().lock(),
                             "par-mux: unknown [client] mode {other:?} — using render"
                         );
-                        par_term_emu_core_rust::mux::attach::AttachMode::Render
+                        par_mux::mux::attach::AttachMode::Render
                     }
                 }
             }
@@ -500,13 +498,13 @@ fn main() -> std::process::ExitCode {
             .explicit_socket()
             .map(std::path::Path::to_path_buf)
             .or_else(|| {
-                attach.explicit_name().map(|name| {
-                    par_term_emu_core_rust::mux::resolve_socket_path(None, Some(name), None)
-                })
+                attach
+                    .explicit_name()
+                    .map(|name| par_mux::mux::resolve_socket_path(None, Some(name), None))
             });
         if explicit_target.is_none() {
             let base = discovery_base(&cli);
-            let found = par_term_emu_core_rust::mux::discovery::enumerate(&base);
+            let found = par_mux::mux::discovery::enumerate(&base);
             if found.live.len() > 1 {
                 use std::io::Write as _;
                 let mut err = std::io::stderr().lock();
@@ -516,8 +514,7 @@ fn main() -> std::process::ExitCode {
                      `par-mux attach <name|path>`:"
                 );
                 for server in &found.live {
-                    let label =
-                        par_term_emu_core_rust::mux::discovery::display_label(&server.socket);
+                    let label = par_mux::mux::discovery::display_label(&server.socket);
                     let sessions = server
                         .sessions
                         .map(|count| count.to_string())
@@ -534,7 +531,7 @@ fn main() -> std::process::ExitCode {
                 options.socket = Some(single.socket.clone());
             }
         }
-        return par_term_emu_core_rust::mux::attach::run_with_mode(&options, mode);
+        return par_mux::mux::attach::run_with_mode(&options, mode);
     }
 
     // --gen-config: write the effective config and exit. Resolution uses
@@ -566,19 +563,11 @@ fn main() -> std::process::ExitCode {
     // --pane-endpoints), then $PAR_MUX_SOCKET, then the unnamed default
     // (ENH-039). An empty value counts as unset.
     let path = if cli.socket.is_some() || cli.name.is_some() {
-        par_term_emu_core_rust::mux::resolve_socket_path(
-            cli.socket.as_deref(),
-            cli.name.as_deref(),
-            None,
-        )
+        par_mux::mux::resolve_socket_path(cli.socket.as_deref(), cli.name.as_deref(), None)
     } else {
         let socket_env = std::env::var_os("PAR_MUX_SOCKET").filter(|v| !v.is_empty());
         let control_env = std::env::var_os("PAR_MUX_CONTROL_SOCKET").filter(|v| !v.is_empty());
-        par_term_emu_core_rust::mux::resolve_socket_path(
-            None,
-            None,
-            control_env.or(socket_env).as_deref(),
-        )
+        par_mux::mux::resolve_socket_path(None, None, control_env.or(socket_env).as_deref())
     };
 
     if let Some(command) = cli.command.as_deref() {
@@ -606,10 +595,8 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // flags > env > config-file tiers, no I/O beyond the config read.
     let eff = effective(&cli, true);
     let state_path = match eff.state_dir.as_str() {
-        "" => par_term_emu_core_rust::mux::persist::state_file_path(&path),
-        dir => {
-            par_term_emu_core_rust::mux::persist::state_file_in(std::path::Path::new(dir), &path)
-        }
+        "" => par_mux::mux::persist::state_file_path(&path),
+        dir => par_mux::mux::persist::state_file_in(std::path::Path::new(dir), &path),
     };
     if cli.stop || cli.restart {
         if stop_daemon(&path)? {
@@ -625,19 +612,19 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         // terminal, so this is the caller's only window on the handoff.
         // Mirrors load_or_quarantine's conclusions (last-good fallback
         // included) without mutating anything.
-        match par_term_emu_core_rust::mux::persist::peek_state(&state_path) {
-            par_term_emu_core_rust::mux::persist::StatePeek::Populated => {}
-            par_term_emu_core_rust::mux::persist::StatePeek::Empty => eprintln!(
+        match par_mux::mux::persist::peek_state(&state_path) {
+            par_mux::mux::persist::StatePeek::Populated => {}
+            par_mux::mux::persist::StatePeek::Empty => eprintln!(
                 "par-mux: previous daemon saved an empty tree at {} — the fresh daemon will \
                  restore nothing and exit (exit-when-empty)",
                 state_path.display()
             ),
-            par_term_emu_core_rust::mux::persist::StatePeek::Missing => eprintln!(
+            par_mux::mux::persist::StatePeek::Missing => eprintln!(
                 "par-mux: no saved state at {} — the fresh daemon will start empty and exit \
                  (exit-when-empty)",
                 state_path.display()
             ),
-            par_term_emu_core_rust::mux::persist::StatePeek::Unreadable => eprintln!(
+            par_mux::mux::persist::StatePeek::Unreadable => eprintln!(
                 "par-mux: saved state {} is unreadable — the fresh daemon will quarantine it \
                  and start fresh (details: {})",
                 state_path.display(),
@@ -662,7 +649,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // --stop/--restart are exempt above, as tmux exempts kill-server; the
     // guard below therefore only bites plain serve mode.
     if !cli.restart {
-        if let Some(reason) = par_term_emu_core_rust::mux::nested_daemon_refusal() {
+        if let Some(reason) = par_mux::mux::nested_daemon_refusal() {
             return Err(std::io::Error::other(reason));
         }
     }
@@ -677,7 +664,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // factory (which binds each pane's hook-only socket) and the server
     // (which serves the connections the endpoints accept).
     let (pane_endpoint_tx, pane_endpoint_rx) = if eff.pane_endpoints {
-        let (tx, rx) = par_term_emu_core_rust::mux::server::pane_endpoint_channel();
+        let (tx, rx) = par_mux::mux::server::pane_endpoint_channel();
         (Some(tx), Some(rx))
     } else {
         (None, None)
@@ -685,7 +672,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // One factory serves both fresh and restored trees, so every pane gets
     // the same env contract. PAR_MUX_BIN is this executable: only the binary
     // knows it — in library code current_exe() names the embedding process.
-    let factory = || par_term_emu_core_rust::mux::pane::ShellPaneFactory {
+    let factory = || par_mux::mux::pane::ShellPaneFactory {
         socket_path: Some(path.to_string_lossy().into_owned()),
         bin_path: std::env::current_exe()
             .ok()
@@ -694,13 +681,10 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         expose_control_socket: eff.expose_control_socket,
         ..Default::default()
     };
-    let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
-        par_term_emu_core_rust::mux::persist::Loaded::Fresh => None,
-        par_term_emu_core_rust::mux::persist::Loaded::State(state) => {
-            match par_term_emu_core_rust::mux::tree::MuxTree::from_persist_state(
-                &state,
-                Box::new(factory()),
-            ) {
+    let restored = match par_mux::mux::persist::load_or_quarantine(&state_path) {
+        par_mux::mux::persist::Loaded::Fresh => None,
+        par_mux::mux::persist::Loaded::State(state) => {
+            match par_mux::mux::tree::MuxTree::from_persist_state(&state, Box::new(factory())) {
                 Ok(tree) => Some(tree),
                 Err(err) => {
                     log::warn!("par-mux: state restore failed ({err}); starting fresh");
@@ -708,13 +692,12 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
                 }
             }
         }
-        par_term_emu_core_rust::mux::persist::Loaded::Quarantined { .. } => None,
+        par_mux::mux::persist::Loaded::Quarantined { .. } => None,
     };
 
     // bind refuses a path a live server already owns, so a racing auto-spawn
     // loses cleanly instead of stealing the socket.
-    let tree = restored
-        .unwrap_or_else(|| par_term_emu_core_rust::mux::tree::MuxTree::new(Box::new(factory())));
+    let tree = restored.unwrap_or_else(|| par_mux::mux::tree::MuxTree::new(Box::new(factory())));
     // Restart loudness: a fresh daemon that restored nothing used to
     // exit-when-empty without a trace anywhere. The pre-fork peek (above)
     // reported the save side on the terminal; this records the restore
@@ -726,13 +709,11 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     if eff.pane_endpoints {
         // Reclaim crash leftovers before this daemon binds anything, so the
         // endpoint cap counts only live endpoints (ENH-039).
-        par_term_emu_core_rust::mux::server::sweep_pane_endpoint_remnants(&path);
+        par_mux::mux::server::sweep_pane_endpoint_remnants(&path);
     }
     let mut server = match pane_endpoint_rx {
-        Some(rx) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree_and_pane_endpoints(
-            &path, tree, rx,
-        )?,
-        None => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
+        Some(rx) => par_mux::mux::MuxServer::bind_with_tree_and_pane_endpoints(&path, tree, rx)?,
+        None => par_mux::mux::MuxServer::bind_with_tree(&path, tree)?,
     };
     // Publish the applied settings: `reload-config` diffs its re-read
     // against this copy (restart-required vs unchanged, per setting).
@@ -744,10 +725,10 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // both ends — a registry failure must not stop serving, and a failed
     // unregister must not fail a clean shutdown.
     let registry_base = match eff.state_dir.as_str() {
-        "" => par_term_emu_core_rust::mux::discovery::default_registry_base(),
+        "" => par_mux::mux::discovery::default_registry_base(),
         dir => std::path::PathBuf::from(dir),
     };
-    if let Err(err) = par_term_emu_core_rust::mux::discovery::register(&registry_base, &path) {
+    if let Err(err) = par_mux::mux::discovery::register(&registry_base, &path) {
         log::warn!("par-mux: could not register in the server registry: {err}");
     }
 
@@ -770,7 +751,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // has landed): a list-servers racing the shutdown must not see the
     // entry vanish while the socket can still answer. Best-effort — a
     // failed unlink must not fail a clean shutdown.
-    if let Err(err) = par_term_emu_core_rust::mux::discovery::unregister(&registry_base, &path) {
+    if let Err(err) = par_mux::mux::discovery::unregister(&registry_base, &path) {
         log::warn!("par-mux: could not remove the registry entry: {err}");
     }
     Ok(())
@@ -978,7 +959,7 @@ mod attach_cli_tests {
     /// loudly.
     #[test]
     fn attach_mode_flag_parses_and_validates() {
-        use par_term_emu_core_rust::mux::attach::AttachMode;
+        use par_mux::mux::attach::AttachMode;
         let cli = Cli::try_parse_from(["par-mux", "attach"]).expect("parse");
         let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
         assert!(

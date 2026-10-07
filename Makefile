@@ -238,8 +238,10 @@ test-rust:
 	cargo test --lib --no-default-features --features python-test
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
 	cargo test --lib --no-default-features --features rust-only,serde
-	@echo "Running the full mux suite (lib unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
+	@echo "Running the root with the mux re-export on (mux_feature_isolation + the root lib under mux features)..."
 	cargo test --no-default-features --features rust-only,mux-bin,serde,attach -- --test-threads=1
+	@echo "Running the full par-mux member suite (lib + bin unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
+	cargo test -p par-mux --features attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
@@ -298,6 +300,7 @@ lint:
 	@echo "Running Rust linters and auto-fixing issues..."
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi --fix --allow-dirty --allow-staged -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt --all
 
 lint-python:
@@ -315,6 +318,8 @@ lint-check:
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
+	cargo clippy -p par-mux --all-targets -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright .
@@ -327,12 +332,14 @@ typecheck:
 	@echo "Running type checks (Rust + Python)..."
 	cargo check --all-targets --features python,streaming,mux,mux-bin,ffi
 	cargo check -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python
+	cargo check -p par-mux --all-targets --features attach
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Needs a streaming build so streaming-only classes are captured; since
@@ -452,7 +459,7 @@ mux-package-check:
 # Pane ids restart at %0 on a wiped tree; the split still targets the pane
 # id `list-panes` reports rather than assuming one.
 mux-manual-seed:
-	@cargo build --release --bin par-mux --no-default-features --features mux-bin,attach && \
+	@cargo build --release -p par-mux --bin par-mux --features mux-bin,attach && \
 	P=target/release/par-mux; \
 	$$P --socket /tmp/manual-mux --stop >/dev/null 2>&1 || true; \
 	STATE_DIR="$$HOME/.local/state/par-mux"; \

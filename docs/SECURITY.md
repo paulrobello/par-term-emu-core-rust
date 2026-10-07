@@ -959,8 +959,8 @@ budget, per-value hook caps, the host probe, and pane respawn. The
 budgets' current values live in the
 [Resource Limits Reference](#resource-limits-reference) table. Every
 statement is verified against
-`src/mux/ipc.rs`, `src/mux/server/`, `src/mux/hooks/`,
-`src/mux/host_probe.rs`, `src/mux/persist.rs`, and `src/mux/win_resume.rs`.
+`crates/par-mux/src/mux/ipc.rs`, `crates/par-mux/src/mux/server/`, `crates/par-mux/src/mux/hooks/`,
+`crates/par-mux/src/mux/host_probe.rs`, `crates/par-mux/src/mux/persist.rs`, and `crates/par-mux/src/mux/win_resume.rs`.
 
 ### Threat Model
 
@@ -1167,7 +1167,7 @@ controls, so the probe:
 - serves a branch name only when it is at most `MAX_GIT_BRANCH_LEN` (128)
   bytes and free of control characters
 - bounds every step, so a wedged filesystem or a hanging repository cannot
-  stall the daemon (`src/mux/host_probe.rs`):
+  stall the daemon (`crates/par-mux/src/mux/host_probe.rs`):
   - Each pane's probe runs on a detached worker that the sweep waits for
     at most 6 s. Its git runs must finish 500 ms before that wait ends,
     and each git run is also capped at 5 s. A git child still running at
@@ -1256,6 +1256,17 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
+| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
+| `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
+| `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
@@ -1289,17 +1300,6 @@ sections; the numbers live here.
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
-| `MAX_CLIENT_COLS` | 1,000 | `src/mux/command/mod.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `src/mux/command/mod.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `src/mux/command/mod.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
-| `MAX_FOREGROUND_NAME_LEN` | 128 | `src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
-| `MAX_GIT_BRANCH_LEN` | 128 | `src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
-| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
-| `MAX_RESTORED_COLS` | 1,000 | `src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
-| `MAX_RESTORED_ROWS` | 500 | `src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server/mod.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
