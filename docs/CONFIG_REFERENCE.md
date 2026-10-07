@@ -68,7 +68,7 @@ term = Terminal(cols=120, rows=40, scrollback=5000)
 term = Terminal(cols=80, rows=24, scrollback=0)
 ```
 
-**Location:** `Terminal` struct in `src/terminal/mod.rs` and Python bindings in `src/python_bindings/terminal/mod.rs`
+**Location:** `Terminal` struct in `crates/par-term-emu-core/src/terminal/mod.rs` and Python bindings in `src/python_bindings/terminal/mod.rs`
 
 ---
 
@@ -206,7 +206,7 @@ term.set_margin_bell_volume(3)  # Low volume
 - `MouseMode::ButtonEvent` - Press + release + drag
 - `MouseMode::AnyEvent` - All motion
 
-**Implementation:** See `MouseMode` enum in `src/mouse.rs` and usage in `Terminal` struct
+**Implementation:** See `MouseMode` enum in `crates/par-term-emu-core/src/mouse.rs` and usage in `Terminal` struct
 
 ### Mouse Encoding Modes
 
@@ -223,7 +223,7 @@ term.set_margin_bell_volume(3)  # Low volume
 - `MouseEncoding::Sgr` - SGR format (recommended)
 - `MouseEncoding::Urxvt` - URXVT extended encoding
 
-**Implementation:** See `MouseEncoding` enum in `src/mouse.rs` and usage in `Terminal` struct
+**Implementation:** See `MouseEncoding` enum in `crates/par-term-emu-core/src/mouse.rs` and usage in `Terminal` struct
 
 ### Focus Tracking
 
@@ -569,9 +569,9 @@ png_bytes = term.screenshot(sixel_mode="pixels")  # Show actual image data
 ### Implementation Details
 
 **Location:**
-- Configuration: `src/screenshot/config.rs` - `ScreenshotConfig` struct
+- Configuration: `crates/par-term-emu-core/src/screenshot/config.rs` - `ScreenshotConfig` struct
 - Python bindings: `src/python_bindings/terminal/mod.rs` - `screenshot()` and `screenshot_to_file()` methods
-- Renderer: `src/screenshot/renderer.rs` - Core rendering logic
+- Renderer: `crates/par-term-emu-core/src/screenshot/renderer.rs` - Core rendering logic
 
 **Font Support:**
 - **Embedded fonts**: JetBrains Mono (primary) + Noto Emoji (monochrome)

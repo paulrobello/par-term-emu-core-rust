@@ -2,7 +2,7 @@
 
 `par-mux` is a tmux-control-mode multiplexer daemon: it owns PTY-backed panes arranged in a workspace/session/window/pane tree and serves the tmux control-mode protocol over a local socket, so control-mode clients (including `par-term-tmux` and the `MuxClient` in this crate) can attach to it in place of tmux. It also carries an agent layer: panes can report agent state over the same socket, and agent sessions survive daemon restarts.
 
-The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for the `par-mux` binary), optional, and independent of the Python bindings and the streaming server. The wire format's conformance oracle is the `TmuxControlParser` in `src/tmux_control.rs` — the daemon emits what that parser decodes.
+The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for the `par-mux` binary), optional, and independent of the Python bindings and the streaming server. The wire format's conformance oracle is the `TmuxControlParser` in `crates/par-term-emu-core/src/tmux_control.rs` — the daemon emits what that parser decodes.
 
 > **Design decisions:** code comments cite D-numbered decisions (`D3.3`, `D5`, …) summarized one line each in [MUX_DECISIONS.md](MUX_DECISIONS.md); the full plan lives in the `par-agent-os` repository (see [par-mux.md](par-mux.md)).
 

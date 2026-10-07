@@ -25,6 +25,10 @@ echo "=== 1/3 cargo hack: every feature checks on its own ==="
 # --each-feature runs each feature on its own with default features off.
 cargo hack check --each-feature \
     --exclude-features python,python-test,full,regenerate-proto,jemalloc
+# The par-term-emu-core workspace member (ARC-007 O2): each of its features
+# on its own, plus none. Its `python` feature only adds pyo3 for the PyErr
+# conversions and needs no interpreter to type-check.
+cargo hack check -p par-term-emu-core --each-feature
 
 echo "=== 2/3 explicit combinations + python-test ==="
 cargo check --no-default-features --features rust-only,mux
@@ -57,13 +61,9 @@ assert_absent rust-only tokio
 assert_absent rust-only clap
 # Macro YAML is the `macro-yaml` feature's alone (ARC-116).
 assert_absent rust-only serde_yaml_ng
-# Guarded on ARC-043 (screenshot dep-gating swash) so the script is useful
-# before and after that fix lands.
-if grep -q 'screenshot = \["dep:swash"\]' Cargo.toml; then
-    assert_absent rust-only swash
-else
-    echo "  skip: rust-only still pulls swash (ARC-043 not landed)"
-fi
+# ARC-043: swash is the `screenshot` feature's alone (gated in the member
+# since ARC-007 O2; the root `screenshot` forwards to it).
+assert_absent rust-only swash
 
 # sim: headless profile — no PTY backend, no Python, no async runtime, and no
 # font-rendering stack (ENH-024: sim no longer implies screenshot).
@@ -82,6 +82,22 @@ assert_absent rust-only,mux clap
 # streaming-bin only.
 assert_absent rust-only,streaming clap
 assert_absent rust-only,streaming tracing-subscriber
+
+# par-term-emu-core with no features is the headless profile: no Python, no
+# PTY backend, no font stack, no YAML.
+assert_member_absent() {
+    local crate="$1"
+    if cargo tree -p par-term-emu-core --no-default-features -e normal -i "$crate" 2>/dev/null | grep -q .; then
+        echo "FAIL: '$crate' is in the dependency tree of par-term-emu-core (no features)" >&2
+        exit 1
+    fi
+    echo "  ok: $crate absent from par-term-emu-core (no features)"
+}
+assert_member_absent pyo3
+assert_member_absent portable-pty
+assert_member_absent swash
+assert_member_absent serde_yaml_ng
+assert_member_absent tokio
 
 echo ""
 echo "All feature checks passed."

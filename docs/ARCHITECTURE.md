@@ -46,7 +46,7 @@ par-term-emu-core-rust is a terminal emulator library written in Rust with Pytho
 
 ### 1. Color
 
-**Location:** `src/color.rs`
+**Location:** `crates/par-term-emu-core/src/color.rs`
 
 Represents colors in various formats:
 
@@ -66,7 +66,7 @@ pub enum Color {
 
 ### 2. Cell
 
-**Location:** `src/cell.rs`
+**Location:** `crates/par-term-emu-core/src/cell.rs`
 
 Represents a single character cell in the terminal grid. Each cell contains:
 
@@ -90,7 +90,7 @@ pub struct Cell {
 
 ### 3. Cursor
 
-**Location:** `src/cursor.rs`
+**Location:** `crates/par-term-emu-core/src/cursor.rs`
 
 Tracks the cursor state:
 
@@ -111,7 +111,7 @@ pub struct Cursor {
 
 ### 4. Grid
 
-**Location:** `src/grid/mod.rs`
+**Location:** `crates/par-term-emu-core/src/grid/mod.rs`
 
 Manages the 2D terminal buffer with modular organization:
 
@@ -164,7 +164,7 @@ pub struct Grid {
 
 ### 5. Terminal
 
-**Location:** `src/terminal/mod.rs` (modular implementation)
+**Location:** `crates/par-term-emu-core/src/terminal/mod.rs` (modular implementation)
 
 The main terminal emulator that ties everything together, organized into submodules:
 
@@ -203,7 +203,7 @@ The main terminal emulator that ties everything together, organized into submodu
 
 ### 6. Supporting Modules
 
-**Graphics Module** (`src/graphics/`)
+**Graphics Module** (`crates/par-term-emu-core/src/graphics/`)
 - **Multi-protocol support**: Sixel, iTerm2 inline images (OSC 1337), Kitty graphics protocol
 - **Unified architecture**: All protocols normalized to `TerminalGraphic` with RGBA pixel data
 - **Submodules**:
@@ -215,23 +215,23 @@ The main terminal emulator that ties everything together, organized into submodu
   - `serialization.rs` - Graphics state serialization (snapshots/replay)
 - **Features**: Image reuse, scrolling, animation, composition modes
 
-**Mouse Handling** (`src/mouse.rs`, history methods in `src/terminal/mouse_api.rs`)
+**Mouse Handling** (`crates/par-term-emu-core/src/mouse.rs`, history methods in `crates/par-term-emu-core/src/terminal/mouse_api.rs`)
 - Mouse event types and button tracking
 - Mouse mode management (Normal, Button, Any)
 - Mouse encoding formats (SGR, UTF-8, URXVT)
-- Mouse history methods (`record_mouse_event` and friends) live in the terminal layer so `src/mouse.rs` stays a leaf of wire-format types (ARC-108)
+- Mouse history methods (`record_mouse_event` and friends) live in the terminal layer so `crates/par-term-emu-core/src/mouse.rs` stays a leaf of wire-format types (ARC-108)
 
-**Shell Integration** (`src/shell_integration.rs`)
+**Shell Integration** (`crates/par-term-emu-core/src/shell_integration.rs`)
 - OSC 133 prompt/command/output markers
 - Command execution tracking
 - Integration with modern shells (fish, zsh, bash)
 
-**Sixel Graphics** (`src/sixel.rs`)
+**Sixel Graphics** (`crates/par-term-emu-core/src/sixel.rs`)
 - Sixel image parser and decoder
 - DEC VT340 compatible bitmap graphics
 - Integrated with unified graphics system
 
-**Triggers & Automation** (`src/terminal/trigger.rs`)
+**Triggers & Automation** (`crates/par-term-emu-core/src/terminal/trigger.rs`)
 - Regex-based pattern matching on terminal output
 - `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching
 - Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
@@ -239,7 +239,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - Highlight overlays with optional expiry
 - Character-to-grid-column mapping for accurate match positions with wide/combining characters
 
-**Terminal Services** (`src/terminal/macros.rs`, `src/terminal/trigger.rs`, `src/terminal/benchmarks.rs`)
+**Terminal Services** (`crates/par-term-emu-core/src/terminal/macros.rs`, `crates/par-term-emu-core/src/terminal/trigger.rs`, `crates/par-term-emu-core/src/terminal/benchmarks.rs`)
 - `MacroEngine`, `TriggerEngine` and `TerminalBenchmarks` are stateless services over a borrowed `Terminal`; they replaced the `Terminal` forwarding methods removed in 0.55.0 and 0.56.0
 
 **Multiplexer Daemon** (`src/mux/`, binary `src/bin/par_mux/`; Rust `mux` feature)
@@ -247,14 +247,14 @@ The main terminal emulator that ties everything together, organized into submodu
 - Key submodules: `server.rs` (accept loop, client threads), `dispatch.rs` (per-command handlers), `command.rs` (parsing + the persistence rule), `emit.rs` (wire lines), `tree.rs`/`layout.rs` (tree + split geometry), `pane.rs` (PTY panes + env contract), `ipc.rs` (Unix socket / Windows named pipe transport), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `win_resume.rs` (Windows resume transport), `persist.rs` (save format, quarantine, restore), `hooks.rs`/`scrape.rs`/`agent_resume.rs` (agent layer), `client.rs` (`MuxClient`)
 - Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments are summarized in [MUX_DECISIONS.md](MUX_DECISIONS.md) (full plan: [par-mux.md](par-mux.md))
 
-**Coprocess Management** (`src/coprocess.rs`)
+**Coprocess Management** (`crates/par-term-emu-core/src/coprocess.rs`)
 - `CoprocessManager` for spawning and managing external processes alongside terminal sessions
 - Terminal output piping to coprocess stdin (configurable per coprocess)
 - Line-buffered stdout reading via background reader threads
 - Thread-safe output buffering with `Arc<Mutex<>>` pattern
 - Integrated with PTY reader thread for automatic output feeding
 
-**Macros Module** (`src/macros.rs`)
+**Macros Module** (`crates/par-term-emu-core/src/macros.rs`)
 - Macro recording and playback
 - Screenshot triggers
 - Event tracking
@@ -417,9 +417,9 @@ pub struct Terminal {
 }
 ```
 
-Each sub-struct type is defined in `src/terminal/mod.rs` immediately above the `Terminal` struct itself, with a doc comment explaining what it groups and why (search for `pub(crate) struct` in that file for the full, current list). This decomposition is a pure reorganization — field access from within `src/terminal/` goes through the sub-struct (e.g. `self.margins.scroll_region_top`), but it does not change the Python-facing API.
+Each sub-struct type is defined in `crates/par-term-emu-core/src/terminal/mod.rs` immediately above the `Terminal` struct itself, with a doc comment explaining what it groups and why (search for `pub(crate) struct` in that file for the full, current list). This decomposition is a pure reorganization — field access from within `crates/par-term-emu-core/src/terminal/` goes through the sub-struct (e.g. `self.margins.scroll_region_top`), but it does not change the Python-facing API.
 
-Two pieces go further than state grouping (ARC-002). The event queue, bell queue, observer registry, dispatch-batch extraction, and queue cap live in `EventBroker` (`src/terminal/event_broker.rs`), which `Terminal` owns and delegates to; production code publishes through `EventBroker::push` rather than touching the queue. Several `sequences/` handler families are free functions that take only the sub-structs they need instead of `&mut Terminal`: CSI Kitty keyboard (`KeyboardState`), CSI XTPUSHCOLORS/XTPOPCOLORS/XTREPORTCOLORS (`ColorThemeState`), OSC 0/2/21/22/23 title (`TitleState` + `EventBroker`), OSC 8 hyperlink (`HyperlinkState` + `EventBroker`), OSC 52 clipboard (`ClipboardState`), OSC 4/10/11/12/104/110-112 color (`ColorThemeState`), OSC 133 shell integration (`ShellState` + primary `Grid` + `EventBroker` + `CommandHistoryState`), and the DCS Sixel hook/command (`DcsState`). Replies go to the `response_buffer` passed as `&mut Vec<u8>`.
+Two pieces go further than state grouping (ARC-002). The event queue, bell queue, observer registry, dispatch-batch extraction, and queue cap live in `EventBroker` (`crates/par-term-emu-core/src/terminal/event_broker.rs`), which `Terminal` owns and delegates to; production code publishes through `EventBroker::push` rather than touching the queue. Several `sequences/` handler families are free functions that take only the sub-structs they need instead of `&mut Terminal`: CSI Kitty keyboard (`KeyboardState`), CSI XTPUSHCOLORS/XTPOPCOLORS/XTREPORTCOLORS (`ColorThemeState`), OSC 0/2/21/22/23 title (`TitleState` + `EventBroker`), OSC 8 hyperlink (`HyperlinkState` + `EventBroker`), OSC 52 clipboard (`ClipboardState`), OSC 4/10/11/12/104/110-112 color (`ColorThemeState`), OSC 133 shell integration (`ShellState` + primary `Grid` + `EventBroker` + `CommandHistoryState`), and the DCS Sixel hook/command (`DcsState`). Replies go to the `response_buffer` passed as `&mut Vec<u8>`.
 
 ## ANSI Sequence Processing
 
@@ -457,14 +457,14 @@ The `Terminal` struct implements the `Perform` trait with these methods:
 graph TD
     A[Python Code / Rust embedder / C FFI caller]
     B[PyO3 Bindings<br/>src/python_bindings/]
-    C[Terminal::process<br/>src/terminal/mod.rs]
-    K[Kitty APC Pre-filter<br/>src/terminal/apc_filter.rs]
+    C[Terminal::process<br/>crates/par-term-emu-core/src/terminal/mod.rs]
+    K[Kitty APC Pre-filter<br/>crates/par-term-emu-core/src/terminal/apc_filter.rs]
     D[VTE Parser]
-    E[Perform Trait Methods<br/>src/terminal/sequences/]
-    F[Grid/Cursor Updates<br/>src/grid/mod.rs, src/cursor.rs]
+    E[Perform Trait Methods<br/>crates/par-term-emu-core/src/terminal/sequences/]
+    F[Grid/Cursor Updates<br/>crates/par-term-emu-core/src/grid/mod.rs, crates/par-term-emu-core/src/cursor.rs]
     G[State Changes]
     H[Python API queries<br/>src/python_bindings/]
-    O[Observer callbacks<br/>src/terminal/observer.rs]
+    O[Observer callbacks<br/>crates/par-term-emu-core/src/terminal/observer.rs]
     S[Streaming server<br/>src/streaming/]
     X[C FFI consumers<br/>src/ffi.rs]
 
@@ -495,7 +495,7 @@ graph TD
     style X fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
-The Kitty APC pre-filter runs before the `vte` parser because `vte` does not expose APC payloads to `Perform` (see ANSI Sequence Processing). Observer callbacks (`src/terminal/observer.rs`), the streaming server (`src/streaming/`), and the C FFI surface (`src/ffi.rs`) all consume terminal state changes in addition to the Python API queries.
+The Kitty APC pre-filter runs before the `vte` parser because `vte` does not expose APC payloads to `Perform` (see ANSI Sequence Processing). Observer callbacks (`crates/par-term-emu-core/src/terminal/observer.rs`), the streaming server (`src/streaming/`), and the C FFI surface (`src/ffi.rs`) all consume terminal state changes in addition to the Python API queries.
 
 ## Python Bindings
 
@@ -591,23 +591,23 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Adding New ANSI Sequences
 
 1. Add handler in the appropriate sequence module:
-   - CSI sequences: `src/terminal/sequences/csi/` (directory: `mod.rs` plus per-topic files `cursor.rs`, `edit.rs`, `erase.rs`, `keyboard.rs`, `mode.rs`, `report.rs`, `scroll.rs`, `style.rs`, `window.rs`)
-   - OSC sequences: `src/terminal/sequences/osc/` (directory: `mod.rs` plus per-topic files `clipboard.rs`, `color.rs`, `image.rs`, `iterm.rs`, `notify.rs`, `shell.rs`, `title.rs`)
-   - ESC sequences: `src/terminal/sequences/esc.rs`
-   - DCS sequences: `src/terminal/sequences/dcs/` (directory: `mod.rs` plus `query.rs`, `sixel.rs`)
+   - CSI sequences: `crates/par-term-emu-core/src/terminal/sequences/csi/` (directory: `mod.rs` plus per-topic files `cursor.rs`, `edit.rs`, `erase.rs`, `keyboard.rs`, `mode.rs`, `report.rs`, `scroll.rs`, `style.rs`, `window.rs`)
+   - OSC sequences: `crates/par-term-emu-core/src/terminal/sequences/osc/` (directory: `mod.rs` plus per-topic files `clipboard.rs`, `color.rs`, `image.rs`, `iterm.rs`, `notify.rs`, `shell.rs`, `title.rs`)
+   - ESC sequences: `crates/par-term-emu-core/src/terminal/sequences/esc.rs`
+   - DCS sequences: `crates/par-term-emu-core/src/terminal/sequences/dcs/` (directory: `mod.rs` plus `query.rs`, `sixel.rs`)
 2. Update grid/cursor state as needed
 3. Add tests
 
 ### New Color Formats
 
-1. Add variant to `Color` enum in `src/color.rs`
+1. Add variant to `Color` enum in `crates/par-term-emu-core/src/color.rs`
 2. Implement `to_rgb()` conversion
-3. Update color handling in `src/terminal/sequences/csi/style.rs`
+3. Update color handling in `crates/par-term-emu-core/src/terminal/sequences/csi/style.rs`
 
 ### Additional Cell Attributes
 
-1. Add flag to `CellFlags` in `src/cell.rs`
-2. Update SGR handling in `src/terminal/sequences/csi/style.rs`
+1. Add flag to `CellFlags` in `crates/par-term-emu-core/src/cell.rs`
+2. Update SGR handling in `crates/par-term-emu-core/src/terminal/sequences/csi/style.rs`
 3. Expose in Python API if needed (in `src/python_bindings/`)
 
 ## Testing Strategy
@@ -690,7 +690,7 @@ The terminal emulator includes comprehensive VT100/VT220/VT320/VT420 compatibili
 
 ## Screenshot Module
 
-### Architecture (`src/screenshot/`)
+### Architecture (`crates/par-term-emu-core/src/screenshot/`)
 
 The screenshot module provides high-quality rendering of terminal content to various image formats:
 

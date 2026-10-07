@@ -357,19 +357,19 @@ EOF
 For implementation details, see:
 
 **Graphics Module:**
-- `src/graphics/mod.rs` - Unified graphics module with `TerminalGraphic` and `GraphicsStore`
-- `src/graphics/iterm.rs` - iTerm2 inline image parser
-- `src/graphics/kitty/` - Kitty graphics protocol parser
-- `src/graphics/animation.rs` - Animation frame management and composition
-- `src/graphics/placeholder.rs` - Unicode placeholder generation for Kitty virtual placements
-- `src/graphics/serialization.rs` - JSON serialization for session persistence
+- `crates/par-term-emu-core/src/graphics/mod.rs` - Unified graphics module with `TerminalGraphic` and `GraphicsStore`
+- `crates/par-term-emu-core/src/graphics/iterm.rs` - iTerm2 inline image parser
+- `crates/par-term-emu-core/src/graphics/kitty/` - Kitty graphics protocol parser
+- `crates/par-term-emu-core/src/graphics/animation.rs` - Animation frame management and composition
+- `crates/par-term-emu-core/src/graphics/placeholder.rs` - Unicode placeholder generation for Kitty virtual placements
+- `crates/par-term-emu-core/src/graphics/serialization.rs` - JSON serialization for session persistence
 
 **Sixel Support:**
-- `src/sixel.rs` - Sixel parser implementation
-- `src/terminal/sequences/dcs/mod.rs` - DCS (Device Control String) sequence handling (dispatches to `sixel.rs`, `query.rs`)
+- `crates/par-term-emu-core/src/sixel.rs` - Sixel parser implementation
+- `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` - DCS (Device Control String) sequence handling (dispatches to `sixel.rs`, `query.rs`)
 
 **Terminal Integration:**
-- `src/terminal/graphics.rs` - Graphics storage, scrolling, and position management
+- `crates/par-term-emu-core/src/terminal/graphics.rs` - Graphics storage, scrolling, and position management
 
 **Documentation:**
 - [Testing Kitty Animations](TESTING_KITTY_ANIMATIONS.md) - Animation-specific testing guide

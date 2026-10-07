@@ -59,6 +59,9 @@ jobs:
       - name: Check derive crate version spec (ARC-008)
         run: python3 scripts/check_derive_version.py
 
+      - name: Check core member lockstep version (ARC-007)
+        run: python3 scripts/check_core_version.py
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
@@ -114,6 +117,14 @@ jobs:
 
     - name: Run python_bindings unit tests (python-test)
       run: cargo test --locked --lib --no-default-features --features python-test
+
+    - name: Run par-term-emu-core member tests
+      # ARC-007 O2: the core's unit tests live in the member now; root
+      # `cargo test` runs only the root package. Feature sets mirror the root
+      # runs above (ffi; python-test's python/pty_session/screenshot/macro-yaml).
+      run: |
+        cargo test --locked -p par-term-emu-core --features ffi
+        cargo test --locked -p par-term-emu-core --lib --features python,pty_session,screenshot,macro-yaml
 
     # The --ignore entries are the only CI guard for the PTY test family:
     # since QA-111 removed the module-level skips, these files run in every
@@ -187,6 +198,11 @@ jobs:
       # through every green gate that way).
       run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
 
+    - name: Run par-term-emu-core member tests with the mux feature set
+      # ARC-007 O2: the core (incl. PtySession) unit tests moved to the
+      # member; this is the run the mux nextest above covered pre-split.
+      run: cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
+
     - name: Run mux-backed streaming tests (MuxSessionFactory)
       # The only run with streaming and mux together; without it these
       # tests would compile under lint's clippy and never execute. The ci
@@ -219,7 +235,7 @@ jobs:
       run: uv venv .venv && uv sync --group dev
 
     - name: Check Rust formatting
-      run: cargo fmt -- --check
+      run: cargo fmt --all -- --check
 
     - name: Run Rust clippy
       # `attach` stays off PR lint until ARC-001 lands: render.rs carries two
@@ -228,6 +244,13 @@ jobs:
       # compiles and runs the attach suites; add the feature back here when
       # the render.rs decomposition merges.
       run: cargo clippy --locked --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+
+    - name: Run Rust clippy (par-term-emu-core member)
+      # ARC-007 O2: root clippy covers only the root package; lint the core
+      # member with no features (the headless profile) and with all of them.
+      run: |
+        cargo clippy --locked -p par-term-emu-core --all-targets -- -D warnings
+        cargo clippy --locked -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

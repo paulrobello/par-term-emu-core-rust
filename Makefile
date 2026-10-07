@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -62,6 +62,7 @@ help:
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
+	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
@@ -241,10 +242,16 @@ test-rust:
 	cargo test --no-default-features --features rust-only,mux-bin,serde,attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
+	cargo test -p par-term-emu-core --features ffi
+	cargo test -p par-term-emu-core --lib --features python,pty_session,screenshot,macro-yaml
+	cargo test -p par-term-emu-core --lib --features serde
+	cargo test -p par-term-emu-core --features mux,serde -- --test-threads=1
 
 test-rust-streaming:
 	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
 	cargo test --no-default-features --features pyo3/auto-initialize,streaming
+	cargo test -p par-term-emu-core
 
 test-python: dev
 	@echo "Running Python tests..."
@@ -281,7 +288,7 @@ coverage-python: dev
 
 fmt:
 	@echo "Formatting Rust code..."
-	cargo fmt
+	cargo fmt --all
 
 fmt-python:
 	@echo "Formatting Python code..."
@@ -290,7 +297,8 @@ fmt-python:
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi --fix --allow-dirty --allow-staged -- -D warnings
-	cargo fmt
+	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python --fix --allow-dirty --allow-staged -- -D warnings
+	cargo fmt --all
 
 lint-python:
 	@echo "Running Python linters and auto-fixing issues..."
@@ -303,8 +311,10 @@ lint-python:
 # Keep the clippy feature list in sync with `lint` and `clippy`.
 lint-check:
 	@echo "Running non-mutating lint checks (Rust fmt + clippy, Python ruff + pyright)..."
-	cargo fmt -- --check
+	cargo fmt --all -- --check
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+	cargo clippy -p par-term-emu-core --all-targets -- -D warnings
+	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright .
@@ -316,11 +326,13 @@ check:
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
 	cargo check --all-targets --features python,streaming,mux,mux-bin,ffi
+	cargo check -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
 	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Needs a streaming build so streaming-only classes are captured; since
@@ -414,6 +426,12 @@ derive-version-check:
 	python3 scripts/check_derive_version.py
 	python3 scripts/check_derive_version.py --self-test
 
+# ARC-007 O2: crates/par-term-emu-core versions in lockstep with the root
+# (its CARGO_PKG_VERSION is the XTVERSION reply) and the root pins it exactly.
+core-version-check:
+	python3 scripts/check_core_version.py
+	python3 scripts/check_core_version.py --self-test
+
 # DOC-004: docstring coverage of the generated Python stub. Pure python3
 # over the committed _native.pyi, so no build or venv is needed.
 stub-docs-check:
@@ -464,7 +482,7 @@ doc-links-check:
 
 # ENH-036: release-time gate, deliberately NOT part of checkall — mid-cycle
 # the top CHANGELOG section is legitimately incomplete. Run before tagging.
-release-check: derive-version-check
+release-check: derive-version-check core-version-check
 	python3 scripts/check_release_notes.py && python3 scripts/check_release_notes.py --self-test
 
 # ENH-040: dependency advisories across all three ecosystems. Needs network
@@ -484,7 +502,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check mux-docs-check stub-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check stub-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

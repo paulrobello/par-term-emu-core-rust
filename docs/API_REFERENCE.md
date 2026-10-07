@@ -442,7 +442,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - Metadata encoded in cell colors (image_id in foreground, placement_id in underline)
 - Frontend detects placeholders and renders corresponding virtual placement
 - Enables inline image display within text flow
-- See `src/graphics/placeholder.rs` for encoding details
+- See `crates/par-term-emu-core/src/graphics/placeholder.rs` for encoding details
 
 #### Snapshots
 - `create_snapshot() -> ScreenSnapshot`: Create atomic snapshot of current screen state
@@ -2350,7 +2350,7 @@ Cell-level terminal snapshots with input-stream delta recording and timeline nav
 
 #### TerminalSnapshot
 
-Complete capture of terminal state at a point in time. Defined in `src/terminal/replay_snapshot.rs`.
+Complete capture of terminal state at a point in time. Defined in `crates/par-term-emu-core/src/terminal/replay_snapshot.rs`.
 
 **Fields:**
 - `timestamp` (`u64`): Unix timestamp in milliseconds when the snapshot was captured
@@ -2373,7 +2373,7 @@ Complete capture of terminal state at a point in time. Defined in `src/terminal/
 
 #### GridSnapshot
 
-Snapshot of a single grid (primary or alternate screen). Defined in `src/terminal/replay_snapshot.rs`.
+Snapshot of a single grid (primary or alternate screen). Defined in `crates/par-term-emu-core/src/terminal/replay_snapshot.rs`.
 
 **Fields:**
 - `cells` (`Vec<Cell>`): Visible screen cells (row-major, cols * rows)
@@ -2391,7 +2391,7 @@ Snapshot of a single grid (primary or alternate screen). Defined in `src/termina
 
 ### SnapshotManager
 
-Manages a rolling buffer of terminal snapshots with size-based eviction and input-stream recording. Defined in `src/terminal/snapshot_manager.rs`.
+Manages a rolling buffer of terminal snapshots with size-based eviction and input-stream recording. Defined in `crates/par-term-emu-core/src/terminal/snapshot_manager.rs`.
 
 **Constants:**
 - `DEFAULT_MAX_MEMORY_BYTES`: 4 MiB
@@ -2437,7 +2437,7 @@ A single entry in the snapshot ring buffer.
 
 ### ReplaySession
 
-Timeline navigation for replay. Creates an independent copy of snapshot data and allows seeking through terminal history. Defined in `src/terminal/replay.rs`.
+Timeline navigation for replay. Creates an independent copy of snapshot data and allows seeking through terminal history. Defined in `crates/par-term-emu-core/src/terminal/replay.rs`.
 
 #### Constructor
 

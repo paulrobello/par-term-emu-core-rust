@@ -140,6 +140,8 @@ The crate produces three artifacts:
 - **Rust library** (`rlib`): For use by other Rust projects (e.g., `par-term`)
 - **Streaming server binary** (`par-term-streamer`): Requires `streaming-bin` feature flag
 
+It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, sequences, PTY session, graphics, screenshot, tmux control parser, text/unicode utils) lives in the **`par-term-emu-core`** member at `crates/par-term-emu-core/`; the root crate keeps streaming, Python bindings, FFI, mux, and the binaries, and re-exports every core module at its historical `par_term_emu_core_rust::…` path. Boundary, feature mapping, and version train: `crates/par-term-emu-core/DESIGN.md`. Core-only tests run with `cargo test -p par-term-emu-core [--features …]` (no pyo3 flags needed).
+
 ### Feature Flags
 
 | Feature | Purpose |
@@ -165,23 +167,24 @@ The crate produces three artifacts:
 
 ```text
 Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/Cursor) → Python API queries
-                           (src/terminal/sequences/)   (src/terminal/mod.rs)        (src/python_bindings/)
+                           (crates/par-term-emu-core/src/terminal/sequences/)   (crates/par-term-emu-core/src/terminal/mod.rs)        (src/python_bindings/)
 ```
 
 ### Key Source Layout
 
-- `src/terminal/mod.rs` - Main `Terminal` struct, decomposed into ~30 `pub(crate)` sub-structs by feature area
-- `src/terminal/sequences/` - VTE escape sequence handlers, split into `csi/`, `osc/`, `dcs/` directories (each with `mod.rs` + per-topic files) plus a single `esc.rs`
-- `src/terminal/write.rs` - Character writing logic
-- `src/terminal/trigger.rs` - Regex-based output pattern matching
-- `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `snapshot.rs` (`GridSnapshot`, re-exported by `terminal::replay_snapshot`), `zone.rs`
-- `src/pty_session/` - PTY session: `mod.rs` (struct, construction, Drop, `UpdateWaiter`), `lifecycle.rs` (spawn/wait/kill), `io.rs` (writes, input handle, resize/SIGWINCH), `query.rs` (terminal access/export), `updates.rs` (generation counter), `coprocess.rs`, and the background reader thread (`reader.rs`)
+- `crates/par-term-emu-core/src/terminal/mod.rs` - Main `Terminal` struct, decomposed into ~30 `pub(crate)` sub-structs by feature area
+- `crates/par-term-emu-core/src/terminal/sequences/` - VTE escape sequence handlers, split into `csi/`, `osc/`, `dcs/` directories (each with `mod.rs` + per-topic files) plus a single `esc.rs`
+- `crates/par-term-emu-core/src/terminal/write.rs` - Character writing logic
+- `crates/par-term-emu-core/src/terminal/trigger.rs` - Regex-based output pattern matching
+- `crates/par-term-emu-core/src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `snapshot.rs` (`GridSnapshot`, re-exported by `terminal::replay_snapshot`), `zone.rs`
+- `crates/par-term-emu-core/src/pty_session/` - PTY session: `mod.rs` (struct, construction, Drop, `UpdateWaiter`), `lifecycle.rs` (spawn/wait/kill), `io.rs` (writes, input handle, resize/SIGWINCH), `query.rs` (terminal access/export), `updates.rs` (generation counter), `coprocess.rs`, and the background reader thread (`reader.rs`)
 - `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
 - `src/mux/` - par-mux multiplexer daemon (tmux control mode over a local socket; `server/` accept loop + client/protocol/broadcast/reap/endpoint seams + `dispatch/` per-command-group handlers + `command/` per-verb parsing + `persist.rs` save/restore + `tree/` session tree (`mod.rs` types and lookups, `lifecycle.rs`, `layout_ops.rs`) + `hooks/` hook-report grammar (`mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`)) — operational reference in `docs/MUX.md`
-- `src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
-- `src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
-- `src/lib.rs` - Module declarations, re-exports, and `_native` PyO3 module registration
+- `crates/par-term-emu-core/src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
+- `crates/par-term-emu-core/src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
+- `src/lib.rs` - Root module declarations, the core re-exports, and `_native` PyO3 module registration
+- `crates/par-term-emu-core/src/lib.rs` - Core module declarations and the `From<…> for PyErr` conversions for core error types (member feature `python`)
 
 ### Streaming Protocol Layers
 
@@ -203,7 +206,7 @@ Also update:
 ## Development Workflows
 
 ### Adding ANSI Sequences
-1. Add handler in `src/terminal/sequences/{csi,osc,dcs}/` or `esc.rs`
+1. Add handler in `crates/par-term-emu-core/src/terminal/sequences/{csi,osc,dcs}/` or `esc.rs`
 2. Implement grid/cursor changes if needed
 3. Add tests (Rust + Python)
 4. VT parameter 0 or missing defaults to 1
@@ -216,7 +219,7 @@ Also update:
 5. If extending `Connected`: add one method on `ConnectedBuilder` (+ the field in `Connected`/builder/build()) — the single edit site — and update `build_connect_message()` in `session.rs`; do NOT add new partial constructors
 
 ### Adding PTY Features
-1. Modify `PtySession` in `src/pty_session/` (the concern file: `lifecycle.rs`, `io.rs`, `query.rs`, `updates.rs`, `coprocess.rs`)
+1. Modify `PtySession` in `crates/par-term-emu-core/src/pty_session/` (the concern file: `lifecycle.rs`, `io.rs`, `query.rs`, `updates.rs`, `coprocess.rs`)
 2. Add Python wrapper in `src/python_bindings/pty.rs`
 3. Ensure thread safety (Arc/Mutex or atomics)
 4. Update generation counter for state changes
@@ -251,6 +254,7 @@ Also update:
 - `Cargo.toml` (the `version` key)
 - `pyproject.toml` (the `version` key)
 - `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
+- `crates/par-term-emu-core/Cargo.toml` (the `version` key) **and** the root's `par-term-emu-core = { …, version = "=X.Y.Z" }` pin — lockstep, gated by `make core-version-check` (the XTVERSION reply embeds the member's version). Publish order: derive (if bumped) → `par-term-emu-core` → root
 
 **Derive crate exception**: `derive/Cargo.toml` versions independently — bump it only when the derive code changes, and keep the main crate's `par-term-emu-derive` dependency spec in `Cargo.toml` matching that version. The publish workflows publish the sub-crate before the main crate so the registry version exists when crates.io resolves the (path-stripped) dependency. `make derive-version-check` (part of `checkall` and `release-check`, and the CI version-check job) fails when the two drift.
 
@@ -262,10 +266,10 @@ Also update:
 5. **Add Python tests** in `tests/` if the feature is testable from Python
 
 Files that must stay in sync:
-- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
-- Rust impl (`src/pty_session/`) ↔ Python binding (`src/python_bindings/pty.rs`)
+- Rust impl (`crates/par-term-emu-core/src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
+- Rust impl (`crates/par-term-emu-core/src/pty_session/`) ↔ Python binding (`src/python_bindings/pty.rs`)
 - Python binding ↔ API Reference (`docs/API_REFERENCE.md`)
-- C FFI surface (`src/ffi.rs` + `src/keyboard.rs`) ↔ `include/terminal_core.h` — GENERATED by cbindgen (`make ffi-header`); never hand-edit. `TERM_*` constants and layout asserts live in `include/terminal_core_layout.h`. Both directions gated in `checkall` (`ffi-header-check`, `ffi-surface-check`); every export must appear in `docs/FFI_GUIDE.md`
+- C FFI surface (`src/ffi.rs` + `crates/par-term-emu-core/src/keyboard.rs`) ↔ `include/terminal_core.h` — GENERATED by cbindgen (`make ffi-header`); never hand-edit. `TERM_*` constants and layout asserts live in `include/terminal_core_layout.h`. Both directions gated in `checkall` (`ffi-header-check`, `ffi-surface-check`); every export must appear in `docs/FFI_GUIDE.md`
 
 ## Resources
 

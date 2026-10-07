@@ -47,30 +47,30 @@ par-term-emu-core-rust implements extensive VT terminal compatibility:
 
 The terminal implementation uses a modular structure:
 
-**Primary directory:** `src/terminal/`
+**Primary directory:** `crates/par-term-emu-core/src/terminal/`
 
-**Sequence handlers** (in `src/terminal/sequences/`):
-- `src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
+**Sequence handlers** (in `crates/par-term-emu-core/src/terminal/sequences/`):
+- `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
-- `src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
-- `src/terminal/sequences/dcs/mod.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
+- `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
+- `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
 
 **Core components:**
-- `src/terminal/mod.rs` - Terminal core, VTE callbacks, APC to DCS conversion
-- `src/terminal/write.rs` - Character writing and text handling
-- `src/grid/mod.rs` - Screen buffer and cell grid
-- `src/conformance_level.rs` - VT conformance level management
+- `crates/par-term-emu-core/src/terminal/mod.rs` - Terminal core, VTE callbacks, APC to DCS conversion
+- `crates/par-term-emu-core/src/terminal/write.rs` - Character writing and text handling
+- `crates/par-term-emu-core/src/grid/mod.rs` - Screen buffer and cell grid
+- `crates/par-term-emu-core/src/conformance_level.rs` - VT conformance level management
 
-**Graphics support** (in `src/graphics/`):
+**Graphics support** (in `crates/par-term-emu-core/src/graphics/`):
 - `mod.rs` - Unified graphics store and protocol-agnostic representation
 - `kitty.rs` - Kitty graphics protocol parser (APC G)
 - `iterm.rs` - iTerm2 inline images parser (OSC 1337)
 - `animation.rs` - Animation frame and state management
 - `placeholder.rs` - Unicode placeholder support for Kitty virtual placements
-- `src/sixel.rs` - Sixel graphics parser (DCS q)
+- `crates/par-term-emu-core/src/sixel.rs` - Sixel graphics parser (DCS q)
 
 **Unicode and grapheme support:**
-- `src/grapheme.rs` - Grapheme cluster detection, emoji sequences, variation selectors, ZWJ handling
+- `crates/par-term-emu-core/src/grapheme.rs` - Grapheme cluster detection, emoji sequences, variation selectors, ZWJ handling
 
 ---
 
@@ -134,7 +134,7 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 | `CSI # R` | XTREPORTCOLORS | ✅ Implemented |
 
 **Notes:**
-- Dispatched in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`) via `#`-intermediate arms; the handlers live in `src/terminal/sequences/csi/color_stack.rs`.
+- Dispatched in `csi_dispatch_impl()` (`crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`) via `#`-intermediate arms; the handlers live in `crates/par-term-emu-core/src/terminal/sequences/csi/color_stack.rs`.
 - Parameterized slot forms (`CSI Pi # P` / `CSI Pi # Q`) are also implemented: Pi selects the stack slot to store/restore without pushing/popping; Pi 0 or omitted keeps push/pop semantics.
 
 **Note:** `CSI P` without the `#` intermediate is DCH (Delete Characters) — see Line and Character Editing below.
@@ -194,7 +194,7 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 
 `CSI n [; n ...] m` - Set character attributes
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 #### Basic Attributes
 
@@ -295,7 +295,7 @@ CSI 49 m    - Default background
 `CSI ? n h` - Set Private Mode
 `CSI ? n l` - Reset Private Mode
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 ##### Cursor and Display Modes
 
@@ -358,7 +358,7 @@ CSI 49 m    - Default background
 
 `CSI Ps * x` - DECSACE (Select Attribute Change Extent)
 
-**Status:** Implemented. `handle_decsace()` (`src/terminal/sequences/csi/window.rs`) sets the extent that DECCARA/DECRARA apply with; the sequence never emits a reply.
+**Status:** Implemented. `handle_decsace()` (`crates/par-term-emu-core/src/terminal/sequences/csi/window.rs`) sets the extent that DECCARA/DECRARA apply with; the sequence never emits a reply.
 
 **Parameters:**
 - `Ps = 0` or `1`: Stream mode — attribute changes cover everything in reading order from the start corner to the end corner (tail of the first row, full intermediate rows, head of the last row)
@@ -382,11 +382,11 @@ CSI 49 m    - Default background
 - Commonly used for protecting status lines or menu headers from accidental erasure
 
 **Implementation:**
-- DECSCA handler in `src/terminal/sequences/csi/mod.rs` (CSI ? Ps " q)
-- SPA/EPA handlers in `src/terminal/sequences/esc.rs` (ESC V/W)
-- Character printing applies guarded flag in `src/terminal/write.rs`
-- Grid selective erase method `erase_rectangle()` in `src/grid/mod.rs`
-- Grid unconditional erase method `erase_rectangle_unconditional()` in `src/grid/mod.rs`
+- DECSCA handler in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` (CSI ? Ps " q)
+- SPA/EPA handlers in `crates/par-term-emu-core/src/terminal/sequences/esc.rs` (ESC V/W)
+- Character printing applies guarded flag in `crates/par-term-emu-core/src/terminal/write.rs`
+- Grid selective erase method `erase_rectangle()` in `crates/par-term-emu-core/src/grid/mod.rs`
+- Grid unconditional erase method `erase_rectangle_unconditional()` in `crates/par-term-emu-core/src/grid/mod.rs`
 
 **Sequence Examples:**
 ```text
@@ -443,7 +443,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 - `22` - Color text
 - `52` - Reported by implementation (capability tag emitted in DA response)
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 #### Secondary Device Attributes
 
@@ -454,7 +454,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 - `10000` - Version
 - `0` - ROM cartridge
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 #### Device Status Report (DSR)
 
@@ -480,7 +480,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 - `3` - Permanently set
 - `4` - Permanently reset
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 **Supported Modes:**
 - DEC private (`CSI ? mode $ p`): 1, 6, 7, 9, 25, 47, 80, 1000, 1002, 1003, 1047, 1048, 1049, 2004, 2026
@@ -498,7 +498,7 @@ All other mode numbers return state `0` (not recognized).
 - `sol` - Solicited (2) or unsolicited (3)
 - Parity, bits, transmission speed, receive speed, clock, flags
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 ### Window Operations (XTWINOPS)
 
@@ -533,7 +533,7 @@ All other mode numbers return state `0` (not recognized).
 - `2` - Lock flags (cannot be changed)
 - `3` - Report current flags
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 #### Query Flags
 
@@ -541,7 +541,7 @@ All other mode numbers return state `0` (not recognized).
 
 **Response:** `CSI ? flags u`
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 #### Push/Pop Flags
 
@@ -556,7 +556,7 @@ All other mode numbers return state `0` (not recognized).
 - Flags control event reporting and key disambiguation
 - Pop with no saved state leaves flags unchanged
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 ### VT520 Conformance Level Control
 
@@ -582,8 +582,8 @@ All other mode numbers return state `0` (not recognized).
 - Default conformance level is VT520
 
 **Implementation:**
-- Handler in `src/terminal/sequences/csi/mod.rs`
-- Conformance level types in `src/conformance_level.rs`
+- Handler in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
+- Conformance level types in `crates/par-term-emu-core/src/conformance_level.rs`
 
 **Example:**
 ```text
@@ -592,7 +592,7 @@ CSI 5 " p         # Set to VT520 (short form)
 CSI 65 " p        # Set to VT520 (long form)
 ```
 
-**See Also:** `src/conformance_level.rs` for feature-level support checking
+**See Also:** `crates/par-term-emu-core/src/conformance_level.rs` for feature-level support checking
 
 #### DECSWBV - Set Warning-Bell Volume
 
@@ -610,7 +610,7 @@ CSI 65 " p        # Set to VT520 (long form)
 - Values above 8 are clamped to 8
 - Default volume is 4 (moderate)
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 **Example:**
 ```text
@@ -636,7 +636,7 @@ CSI 8 SP t    # Set to maximum volume
 - Default volume is 4 (moderate)
 - Independent from warning bell volume
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 **Example:**
 ```text
@@ -655,7 +655,7 @@ CSI 8 SP u    # Set to maximum volume
 - Margins are 1-indexed
 - Affects cursor movement, scrolling, and editing
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
+**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 ### Cursor Save/Restore (ANSI.SYS)
 
@@ -672,7 +672,7 @@ CSI 8 SP u    # Set to maximum volume
 
 ESC (Escape) sequences follow the pattern: `ESC final`
 
-**Implementation:** `esc_dispatch_impl()` in `src/terminal/sequences/esc.rs`
+**Implementation:** `esc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/esc.rs`
 
 | Sequence | Name | VT Level | Description |
 |----------|------|----------|-------------|
@@ -734,7 +734,7 @@ ESC (Escape) sequences follow the pattern: `ESC final`
 OSC (Operating System Command) sequences follow: `ESC ] Ps ; Pt ST`
 where `ST` is either `ESC \` or `BEL` (`\x07`)
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 
 ### Title and Icon
 
@@ -760,7 +760,7 @@ where `ST` is either `ESC \` or `BEL` (`\x07`)
 
 `OSC 8 ; params ; URI ST`
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 
 **Features:**
 - Full URI support (http, https, file, etc.)
@@ -780,7 +780,7 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 
 `OSC 9 ; message ST`
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 **Security:** Can be blocked via `disable_insecure_sequences`
 
 #### Progress Bar (OSC 9;4)
@@ -788,8 +788,8 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 `OSC 9 ; 4 ; state [; progress] ST` - ConEmu/Windows Terminal style progress reporting
 
 **Implementation:**
-- OSC handler in `src/terminal/sequences/osc/mod.rs` (`handle_osc9_progress()`)
-- Progress types in `src/terminal/progress.rs`
+- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` (`handle_osc9_progress()`)
+- Progress types in `crates/par-term-emu-core/src/terminal/progress.rs`
 
 **States:**
 | State | Code | Progress Required | Description |
@@ -820,8 +820,8 @@ OSC 9 ; 4 ; 4 ; 75 ST    # Show warning state at 75%
 `OSC 934 ; action ; id [; key=value ...] ST` - Named progress bar protocol for concurrent progress tracking
 
 **Implementation:**
-- OSC handler in `src/terminal/sequences/osc/mod.rs`
-- Named progress types in `src/terminal/progress.rs` (`NamedProgressBar`, `ProgressBarCommand`)
+- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
+- Named progress types in `crates/par-term-emu-core/src/terminal/progress.rs` (`NamedProgressBar`, `ProgressBarCommand`)
 
 **Actions:**
 | Action | Description |
@@ -869,14 +869,14 @@ terminal.clear_progress()
 
 `OSC 777 ; notify ; title ; body ST`
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 **Security:** Can be blocked via `disable_insecure_sequences`
 
 ### Clipboard (OSC 52)
 
 `OSC 52 ; selection ; data ST`
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 
 **Selection targets:**
 - `c` - Clipboard
@@ -936,13 +936,13 @@ XTPUSHCOLORS/XTPOPCOLORS (xterm extension): save/restore the dynamic colors (OSC
 | `CSI # Q` | XTPOPCOLORS — pop and restore top entry | No-op on an empty stack |
 | `CSI # R` | XTREPORTCOLORS — report stack state | Response: `CSI ? used ; last # Q` |
 
-Implementation: `src/terminal/sequences/csi/color_stack.rs`. The report reply matches xterm byte-for-byte (`used` = current depth, `last` = high-water mark, private-marker `?`, intermediate `#`, final `Q`). Parameterized forms: `CSI Pi # P` stores the current colors into stack slot Pi (1-10, padding intermediate slots with current-color snapshots when the slot is beyond the current depth) and `CSI Pi # Q` restores slot Pi without popping; Pi 0 or omitted keeps the push/pop semantics. RIS and DECSTR clear the stack.
+Implementation: `crates/par-term-emu-core/src/terminal/sequences/csi/color_stack.rs`. The report reply matches xterm byte-for-byte (`used` = current depth, `last` = high-water mark, private-marker `?`, intermediate `#`, final `Q`). Parameterized forms: `CSI Pi # P` stores the current colors into stack slot Pi (1-10, padding intermediate slots with current-color snapshots when the slot is beyond the current depth) and `CSI Pi # Q` restores slot Pi without popping; Pi 0 or omitted keeps the push/pop semantics. RIS and DECSTR clear the stack.
 
 ### Shell Integration (OSC 133)
 
 `OSC 133 ; marker ; ... ST`
 
-**Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc/mod.rs`
+**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
 
 **Markers:**
 - `A` - Prompt start
@@ -971,9 +971,9 @@ OSC 133 ; D ; 0 ST       # Command finished with exit code 0
 `OSC 1337 ; File=name=<base64>;size=<bytes>;inline=1:<base64-data> ST`
 
 **Implementation:**
-- OSC handler in `src/terminal/sequences/osc/mod.rs`
-- iTerm2 parser in `src/graphics/iterm.rs`
-- Graphics store in `src/graphics/mod.rs`
+- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
+- iTerm2 parser in `crates/par-term-emu-core/src/graphics/iterm.rs`
+- Graphics store in `crates/par-term-emu-core/src/graphics/mod.rs`
 
 **Parameters:**
 
@@ -1026,7 +1026,7 @@ is distinguishable from a sequence never sent.
 
 `OSC 1337 ; SetUserVar=<name>=<base64_value> ST`
 
-**Implementation:** `src/terminal/sequences/osc/mod.rs` (handle_set_user_var)
+**Implementation:** `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` (handle_set_user_var)
 
 Shell integration scripts use this sequence to report session metadata such as hostname, username, and current directory. The value is base64-encoded UTF-8 text.
 
@@ -1054,16 +1054,16 @@ printf '\e]1337;SetUserVar=%s=%s\a' "hostname" "$(printf '%s' "$(hostname)" | ba
 
 DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
-**Implementation:** `src/terminal/sequences/dcs/mod.rs`
+**Implementation:** `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs`
 
 ### Sixel Graphics (DCS q)
 
 `DCS Pa ; Pb ; Ph q ... ST`
 
 **Implementation:**
-- DCS handlers in `src/terminal/sequences/dcs/mod.rs` (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
-- Sixel parser in `src/sixel.rs`
-- Graphics store in `src/graphics/mod.rs`
+- DCS handlers in `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
+- Sixel parser in `crates/par-term-emu-core/src/sixel.rs`
+- Graphics store in `crates/par-term-emu-core/src/graphics/mod.rs`
 
 **Raster Attributes:**
 - `Pa` - Pixel aspect ratio
@@ -1111,10 +1111,10 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 **Note:** The terminal converts APC sequences (`ESC _`) to DCS sequences (`ESC P`) internally since VTE ignores APC.
 
 **Implementation:**
-- APC to DCS conversion in `src/terminal/mod.rs`
-- DCS handler in `src/terminal/sequences/dcs/mod.rs` (action 'G')
-- Kitty parser in `src/graphics/kitty/`
-- Graphics store in `src/graphics/mod.rs`
+- APC to DCS conversion in `crates/par-term-emu-core/src/terminal/mod.rs`
+- DCS handler in `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` (action 'G')
+- Kitty parser in `crates/par-term-emu-core/src/graphics/kitty/`
+- Graphics store in `crates/par-term-emu-core/src/graphics/mod.rs`
 
 #### Actions
 
@@ -1202,7 +1202,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - Diacritics use special Unicode combining marks (64 different marks for values 0-63)
 - Enables inline image display in text flow with inheritance optimization
 - Frontend looks up virtual placement using encoded IDs
-- See `src/graphics/placeholder.rs` for encoding/decoding implementation
+- See `crates/par-term-emu-core/src/graphics/placeholder.rs` for encoding/decoding implementation
 
 **Chunked Transmission:**
 - Large images split across multiple sequences
@@ -1218,7 +1218,7 @@ APC G i=<id>;OK ST
 - Maximum image dimensions enforced by `GraphicsLimits`
 - Graphics count limited to prevent memory exhaustion
 - Oldest graphics dropped when limit reached
-- See `GraphicsLimits` in `src/graphics/mod.rs`
+- See `GraphicsLimits` in `crates/par-term-emu-core/src/graphics/mod.rs`
 
 **Implementation Details:**
 - RGBA pixel data stored with Arc for sharing
@@ -1233,7 +1233,7 @@ APC G i=<id>;OK ST
 
 APC (Application Program Command) sequences follow: `ESC _ ... ESC \`
 
-**Implementation Note:** The VTE parser library ignores APC sequences, so the terminal converts them to DCS sequences internally before parsing. This conversion happens in `src/terminal/mod.rs`.
+**Implementation Note:** The VTE parser library ignores APC sequences, so the terminal converts them to DCS sequences internally before parsing. This conversion happens in `crates/par-term-emu-core/src/terminal/mod.rs`.
 
 ### Kitty Graphics Protocol
 
@@ -1258,13 +1258,13 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 **Affected Commands:**
 - All Kitty graphics commands (`APC G ...`)
 
-**Implementation:** `src/terminal/mod.rs` (process method, APC to DCS conversion)
+**Implementation:** `crates/par-term-emu-core/src/terminal/mod.rs` (process method, APC to DCS conversion)
 
 ---
 
 ## Character Handling
 
-**Implementation:** VTE parser callbacks in `src/terminal/mod.rs` and character writing in `src/terminal/write.rs`
+**Implementation:** VTE parser callbacks in `crates/par-term-emu-core/src/terminal/mod.rs` and character writing in `crates/par-term-emu-core/src/terminal/write.rs`
 
 ### Basic Characters
 
@@ -1278,7 +1278,7 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 
 ### Wide Character Support
 
-**Implementation:** Character width detection and printing in `src/terminal/write.rs`, grapheme utilities in `src/grapheme.rs`
+**Implementation:** Character width detection and printing in `crates/par-term-emu-core/src/terminal/write.rs`, grapheme utilities in `crates/par-term-emu-core/src/grapheme.rs`
 
 **Features:**
 - Detects wide characters (East Asian Width property)
@@ -1295,7 +1295,7 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 
 ### Grapheme Cluster Support
 
-**Implementation:** `src/grapheme.rs`
+**Implementation:** `crates/par-term-emu-core/src/grapheme.rs`
 
 The terminal provides comprehensive support for complex Unicode grapheme clusters:
 
@@ -1340,7 +1340,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 
 ### Auto-Wrap Mode (DECAWM)
 
-**Implementation:** Character printing and line wrapping logic in `src/terminal/write.rs`
+**Implementation:** Character printing and line wrapping logic in `crates/par-term-emu-core/src/terminal/write.rs`
 
 **Behavior:**
 - When enabled (default): Characters at right margin wrap to next line
@@ -1350,7 +1350,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 
 ### Insert Mode (IRM)
 
-**Implementation:** Character insertion and replacement logic in `src/terminal/write.rs`
+**Implementation:** Character insertion and replacement logic in `crates/par-term-emu-core/src/terminal/write.rs`
 
 **Behavior:**
 - When enabled: New characters shift existing characters right
@@ -1360,9 +1360,9 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 ### Tab Stops
 
 **Implementation:**
-- Tab handling in character printing (`src/terminal/write.rs`)
-- HTS (Set Tab Stop) in `esc_dispatch_impl()` (`src/terminal/sequences/esc.rs`)
-- TBC (Tab Clear), CHT (Forward Tab), CBT (Backward Tab) in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`)
+- Tab handling in character printing (`crates/par-term-emu-core/src/terminal/write.rs`)
+- HTS (Set Tab Stop) in `esc_dispatch_impl()` (`crates/par-term-emu-core/src/terminal/sequences/esc.rs`)
+- TBC (Tab Clear), CHT (Forward Tab), CBT (Backward Tab) in `csi_dispatch_impl()` (`crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`)
 
 **Behavior:**
 - Default tab stops every 8 columns (columns 8, 16, 24, ...)
@@ -1386,7 +1386,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | Scrolling | ✅ Full | IND, RI, NEL, DECSTBM |
 | Tabs | ✅ Full | HT, HTS, TBC |
 | SGR basic | ✅ Full | Bold, reverse, underline, etc. |
-| Character sets | ✅ Full | G0/G1 designation (`ESC ( C` / `ESC ) C`), SO/SI shifting, DEC Special Graphics/ACS translation (`src/terminal/sequences/esc.rs`, `src/terminal/perform.rs`, `src/terminal/write.rs`) |
+| Character sets | ✅ Full | G0/G1 designation (`ESC ( C` / `ESC ) C`), SO/SI shifting, DEC Special Graphics/ACS translation (`crates/par-term-emu-core/src/terminal/sequences/esc.rs`, `crates/par-term-emu-core/src/terminal/perform.rs`, `crates/par-term-emu-core/src/terminal/write.rs`) |
 | Keypad modes | ⚠️ Partial | Mode switching only (key translation in host) |
 
 ### VT220 Compatibility
@@ -1434,39 +1434,39 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 
 | Protocol | Support | Implementation | Notes |
 |----------|---------|----------------|-------|
-| Kitty Keyboard | ✅ Full | `src/terminal/sequences/csi/mod.rs` | Flags, push/pop, query |
-| Kitty Graphics | ✅ Full | `src/graphics/kitty/` | APC G protocol, animations, image reuse, Unicode placeholders |
-| iTerm2 Inline Images | ✅ Full | `src/graphics/iterm.rs` | OSC 1337 File protocol |
+| Kitty Keyboard | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` | Flags, push/pop, query |
+| Kitty Graphics | ✅ Full | `crates/par-term-emu-core/src/graphics/kitty/` | APC G protocol, animations, image reuse, Unicode placeholders |
+| iTerm2 Inline Images | ✅ Full | `crates/par-term-emu-core/src/graphics/iterm.rs` | OSC 1337 File protocol |
 | Synchronized Updates | ✅ Full | Mode 2026 | Flicker-free rendering |
-| OSC 8 Hyperlinks | ✅ Full | `src/terminal/sequences/osc/mod.rs` | With deduplication |
-| OSC 52 Clipboard | ✅ Full | `src/terminal/sequences/osc/mod.rs` | Read/write with security controls |
-| OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc/mod.rs` | Prompt/command/output markers |
-| OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc/mod.rs` | Percent-decoded paths, username, hostname, session variable sync, CWD history |
-| OSC 9;4 Progress Bar | ✅ Full | `src/terminal/sequences/osc/mod.rs`, `src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
-| OSC 934 Named Progress | ✅ Full | `src/terminal/sequences/osc/mod.rs`, `src/terminal/progress.rs` | Multiple concurrent progress bars with unique IDs |
-| OSC 1337 SetUserVar | ✅ Full | `src/terminal/sequences/osc/mod.rs` | Shell integration user variables, base64 decoding, change events |
-| Underline styles | ✅ Full | `src/terminal/sequences/csi/mod.rs` | 6 different styles |
+| OSC 8 Hyperlinks | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` | With deduplication |
+| OSC 52 Clipboard | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` | Read/write with security controls |
+| OSC 133 Shell Integration | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` | Prompt/command/output markers |
+| OSC 7 Directory Tracking | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` | Percent-decoded paths, username, hostname, session variable sync, CWD history |
+| OSC 9;4 Progress Bar | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`, `crates/par-term-emu-core/src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
+| OSC 934 Named Progress | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`, `crates/par-term-emu-core/src/terminal/progress.rs` | Multiple concurrent progress bars with unique IDs |
+| OSC 1337 SetUserVar | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` | Shell integration user variables, base64 decoding, change events |
+| Underline styles | ✅ Full | `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` | 6 different styles |
 
 ### Unicode Support
 
 | Feature | Support | Implementation | Notes |
 |---------|---------|----------------|-------|
-| Wide characters (CJK) | ✅ Full | `src/terminal/write.rs` | 2-cell width detection |
-| Emoji (base) | ✅ Full | `src/grapheme.rs` | Width detection via unicode-width |
-| Variation selectors | ✅ Full | `src/grapheme.rs` | U+FE0E (text), U+FE0F (emoji) |
-| ZWJ sequences | ✅ Full | `src/grapheme.rs` | Family emoji, flag combinations |
-| Skin tone modifiers | ✅ Full | `src/grapheme.rs` | Fitzpatrick types 1-5 |
-| Regional indicators | ✅ Full | `src/grapheme.rs` | Flag emoji (pair detection) |
-| Combining marks | ✅ Full | `src/grapheme.rs` | Diacritics, accents (width 0) |
-| Grapheme clusters | ✅ Full | `src/grapheme.rs` | Complex emoji rendering |
+| Wide characters (CJK) | ✅ Full | `crates/par-term-emu-core/src/terminal/write.rs` | 2-cell width detection |
+| Emoji (base) | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Width detection via unicode-width |
+| Variation selectors | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | U+FE0E (text), U+FE0F (emoji) |
+| ZWJ sequences | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Family emoji, flag combinations |
+| Skin tone modifiers | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Fitzpatrick types 1-5 |
+| Regional indicators | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Flag emoji (pair detection) |
+| Combining marks | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Diacritics, accents (width 0) |
+| Grapheme clusters | ✅ Full | `crates/par-term-emu-core/src/grapheme.rs` | Complex emoji rendering |
 
 ### Graphics Protocol Support
 
 | Protocol | Format | Implementation | Features |
 |----------|--------|----------------|----------|
-| Sixel | DCS q | `src/sixel.rs`, `src/graphics/mod.rs` | Palette, repeat, raster attributes |
-| Kitty Graphics | APC G | `src/graphics/kitty/` | Animations, image reuse, Unicode placeholders |
-| iTerm2 Inline | OSC 1337 | `src/graphics/iterm.rs` | PNG, JPEG, GIF, dimension control |
+| Sixel | DCS q | `crates/par-term-emu-core/src/sixel.rs`, `crates/par-term-emu-core/src/graphics/mod.rs` | Palette, repeat, raster attributes |
+| Kitty Graphics | APC G | `crates/par-term-emu-core/src/graphics/kitty/` | Animations, image reuse, Unicode placeholders |
+| iTerm2 Inline | OSC 1337 | `crates/par-term-emu-core/src/graphics/iterm.rs` | PNG, JPEG, GIF, dimension control |
 
 **Unified Architecture:**
 - All protocols normalized to RGBA pixel data
@@ -1494,7 +1494,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 
 ### Implementation Notes: `CSI q` Forms
 
-`CSI q` is overloaded by intermediate bytes (`src/terminal/sequences/csi/report.rs`):
+`CSI q` is overloaded by intermediate bytes (`crates/par-term-emu-core/src/terminal/sequences/csi/report.rs`):
 
 - `CSI Ps SP q` — DECSCUSR (cursor style)
 - `CSI Ps " q` — DECSCA (character protection)
@@ -1607,23 +1607,23 @@ To validate VT compatibility, test with:
 - [image crate](https://docs.rs/image/) - Image decoding (PNG, JPEG, GIF)
 - [unicode-width crate](https://docs.rs/unicode-width/) - Unicode character width detection
 - par-term-emu-core-rust source:
-  - Terminal core: `src/terminal/mod.rs`
-  - Sequence handlers: `src/terminal/sequences/` (`csi`, `esc.rs`, `osc`, `dcs` module directories)
-  - Character writing: `src/terminal/write.rs`
-  - Screen buffer: `src/grid/mod.rs`
+  - Terminal core: `crates/par-term-emu-core/src/terminal/mod.rs`
+  - Sequence handlers: `crates/par-term-emu-core/src/terminal/sequences/` (`csi`, `esc.rs`, `osc`, `dcs` module directories)
+  - Character writing: `crates/par-term-emu-core/src/terminal/write.rs`
+  - Screen buffer: `crates/par-term-emu-core/src/grid/mod.rs`
   - Graphics:
-    - Unified store: `src/graphics/mod.rs`
-    - Terminal integration: `src/terminal/graphics.rs`
-    - Sixel parser: `src/sixel.rs`
-    - Kitty protocol: `src/graphics/kitty/`
-    - iTerm2 protocol: `src/graphics/iterm.rs`
-    - Animation support: `src/graphics/animation.rs`
-    - Unicode placeholders: `src/graphics/placeholder.rs`
-    - Session serialization: `src/graphics/serialization.rs`
+    - Unified store: `crates/par-term-emu-core/src/graphics/mod.rs`
+    - Terminal integration: `crates/par-term-emu-core/src/terminal/graphics.rs`
+    - Sixel parser: `crates/par-term-emu-core/src/sixel.rs`
+    - Kitty protocol: `crates/par-term-emu-core/src/graphics/kitty/`
+    - iTerm2 protocol: `crates/par-term-emu-core/src/graphics/iterm.rs`
+    - Animation support: `crates/par-term-emu-core/src/graphics/animation.rs`
+    - Unicode placeholders: `crates/par-term-emu-core/src/graphics/placeholder.rs`
+    - Session serialization: `crates/par-term-emu-core/src/graphics/serialization.rs`
   - Unicode support:
-    - Grapheme utilities: `src/grapheme.rs`
-  - Conformance levels: `src/conformance_level.rs`
-  - Progress bar support: `src/terminal/progress.rs`
+    - Grapheme utilities: `crates/par-term-emu-core/src/grapheme.rs`
+  - Conformance levels: `crates/par-term-emu-core/src/conformance_level.rs`
+  - Progress bar support: `crates/par-term-emu-core/src/terminal/progress.rs`
   - Python bindings: `src/python_bindings/`
 
 ---

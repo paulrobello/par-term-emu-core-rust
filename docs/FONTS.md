@@ -30,7 +30,7 @@ The library includes two embedded fonts that work without any external dependenc
 
 **License**: OFL-1.1 (SIL Open Font License)
 **Size**: ~268 KB (embedded in binary)
-**Location**: `src/screenshot/JetBrainsMono-Regular.ttf`
+**Location**: `crates/par-term-emu-core/src/screenshot/JetBrainsMono-Regular.ttf`
 
 **Features**:
 
@@ -43,7 +43,7 @@ The library includes two embedded fonts that work without any external dependenc
 
 **License**: OFL-1.1 (SIL Open Font License)
 **Size**: ~409 KB (embedded in binary)
-**Location**: `src/screenshot/NotoEmoji-Regular.ttf`
+**Location**: `crates/par-term-emu-core/src/screenshot/NotoEmoji-Regular.ttf`
 
 **Features**:
 

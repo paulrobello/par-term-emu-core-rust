@@ -54,13 +54,13 @@ All VT100/VT220/VT320/VT420 sequences work identically across platforms.
 
 **Platform Independence: Excellent (via portable-pty)**
 
-PTY operations in `src/pty_session/` use the `portable-pty` crate for cross-platform compatibility:
+PTY operations in `crates/par-term-emu-core/src/pty_session/` use the `portable-pty` crate for cross-platform compatibility:
 
 **Shell Detection:**
 - **Windows**: Uses `%COMSPEC%` environment variable (typically `cmd.exe`), fallback to `cmd.exe`
 - **Unix/macOS**: Uses `$SHELL` environment variable, fallback to `/bin/bash`
 
-Implementation in `src/pty_session/lifecycle.rs` and `io.rs`:
+Implementation in `crates/par-term-emu-core/src/pty_session/lifecycle.rs` and `io.rs`:
 ```rust
 pub fn get_default_shell() -> String {
     if cfg!(windows) {
@@ -92,7 +92,7 @@ pub fn get_default_shell() -> String {
 
 **Platform Independence: Excellent (Pure Rust)**
 
-The screenshot module in `src/screenshot/` uses pure Rust implementations for maximum portability:
+The screenshot module in `crates/par-term-emu-core/src/screenshot/` uses pure Rust implementations for maximum portability:
 
 **Font Rendering:**
 - Uses `swash` crate (pure Rust, no FreeType/HarfBuzz dependencies)
@@ -149,7 +149,7 @@ The screenshot module in `src/screenshot/` uses pure Rust implementations for ma
 
 **Platform Independence: Excellent**
 
-Debug logging in `src/debug.rs` handles platform differences transparently:
+Debug logging in `crates/par-term-emu-core/src/debug.rs` handles platform differences transparently:
 
 **Log File Locations:**
 - **Unix/macOS**: `/tmp/par_term_emu_core_rust_debug_rust.log`
@@ -353,7 +353,7 @@ The screenshot module searches for CJK fonts in the following locations (in prio
 
 ### Font Loading Implementation
 
-The font cache in `src/screenshot/font_cache.rs` implements lazy loading:
+The font cache in `crates/par-term-emu-core/src/screenshot/font_cache.rs` implements lazy loading:
 
 ```rust
 // Embedded fonts are always available

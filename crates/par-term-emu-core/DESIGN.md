@@ -158,7 +158,35 @@ Other edits inside the moved subtree:
 
 ### Promoted items
 
-(Filled in by the move commit.)
+Every item below was `pub(crate)` before the split and is now
+`#[doc(hidden)] pub` (feature gates unchanged), because the compiler named it
+when the root built with `--all-targets --features
+python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach`. None is part of
+the documented API; they are the root's private reach into the core.
+
+| Item | Root consumer(s) |
+|------|------------------|
+| `cell::Cell::{c, flags, width}` | ffi, python_bindings (screen/common/terminal), prelude test, mux persist tests |
+| `terminal::Terminal::{grid, graphics, pixel_width, pixel_height}` | ffi, streaming session, mux pane + mux tests |
+| `terminal::GraphicsState` + `::{graphics_store, cell_dimensions}` | mux pane/tests (through `Terminal::graphics`) |
+| `Terminal::resize_deferred` | streaming `mux_factory` |
+| `Terminal::set_retain_kitty_temp_files` (`mux`) | mux pane |
+| `Terminal::for_each_dirty_range{,_since}` (`ffi`) | ffi |
+| `terminal::event_fields` module + `EventField` + `event_fields()` (`python`/`ffi`) | ffi, python_bindings observer |
+| `pty_session::PtyInputHandle` + `::write` + `PtySession::input_handle` (`mux`) | mux pane, mux dispatch |
+| `pty_session::pixel_extent` | mux pane |
+| `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (+ its 4 fields) | python_bindings graphics |
+
+Not promoted: `Cell::{combining, fg, bg, underline_color}`. One root test
+helper (`mux/persist.rs` `marker_cell`) built a `Cell` with a
+functional-update literal, which needs every field visible; promoting those
+four would leak the crate-private `PackedColor` types. The helper now builds
+the cell with `Cell::default()` and sets `c` (same value).
+
+Root-side edits outside the move: `src/lib.rs` (re-exports, `ffi_tests`
+wiring, the PyErr impls moved out), `src/mux/persist.rs` (the helper above),
+`Cargo.toml` (member dep, forwarded features, core-only deps and the
+`proptest` dev-dep removed), `cbindgen.toml` (`parse_deps`).
 
 ## Follow-on phases (O2)
 

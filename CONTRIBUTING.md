@@ -119,8 +119,8 @@ When you add or modify a Rust method on `Terminal` or `PtySession`, keep the lay
 
 Files that must stay in lockstep:
 
-- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
-- Rust impl (`src/pty_session/`) ↔ Python binding (`src/python_bindings/pty.rs`)
+- Rust impl (`crates/par-term-emu-core/src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
+- Rust impl (`crates/par-term-emu-core/src/pty_session/`) ↔ Python binding (`src/python_bindings/pty.rs`)
 - Python binding ↔ API reference (`docs/API_REFERENCE.md`)
 
 ## Streaming Protocol Changes

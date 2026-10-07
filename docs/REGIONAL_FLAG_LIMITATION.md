@@ -191,7 +191,7 @@ The xterm.js team may eventually integrate grapheme cluster support directly int
 
 **Grapheme Cluster Utilities:**
 
-The Rust backend includes a dedicated `grapheme` module (`src/grapheme.rs`) with utility functions for detecting and handling various Unicode grapheme cluster components:
+The Rust backend includes a dedicated `grapheme` module (`crates/par-term-emu-core/src/grapheme.rs`) with utility functions for detecting and handling various Unicode grapheme cluster components:
 
 - `is_regional_indicator(c)` - Detects regional indicator symbols (U+1F1E6-U+1F1FF)
 - `is_variation_selector(c)` - Detects variation selectors (U+FE0E, U+FE0F)
@@ -205,13 +205,13 @@ The Rust backend includes a dedicated `grapheme` module (`src/grapheme.rs`) with
 The backend uses the `unicode-width` crate (v0.2.2) to calculate individual character widths via the `unicode_width_config` module:
 
 ```rust
-// From src/unicode_width_config.rs
+// From crates/par-term-emu-core/src/unicode_width_config.rs
 use unicode_width::UnicodeWidthChar;
 ```
 
 **Combining Character Handling:**
 
-The terminal writer (`src/terminal/write.rs`) detects combining characters and adds them to the previous cell:
+The terminal writer (`crates/par-term-emu-core/src/terminal/write.rs`) detects combining characters and adds them to the previous cell:
 
 ```rust
 // Variation selectors, ZWJ, skin tone modifiers, and combining marks
@@ -244,7 +244,7 @@ if grapheme::is_regional_indicator(c) {
 The screenshot renderer includes special detection for regional indicators to enable shaped rendering:
 
 ```rust
-// From src/screenshot/renderer.rs
+// From crates/par-term-emu-core/src/screenshot/renderer.rs
 fn row_has_regional_indicators(grid: &Grid, row: usize) -> bool {
     // scans cells (and their combining chars) directly for U+1F1E6..=U+1F1FF,
     // avoiding a per-row String allocation
