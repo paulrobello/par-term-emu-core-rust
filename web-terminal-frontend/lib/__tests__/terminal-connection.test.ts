@@ -25,7 +25,12 @@ import {
   ShutdownSchema,
   TitleSchema,
   BellSchema,
+  CwdChangedSchema,
+  HyperlinkAddedSchema,
+  SelectionChangedSchema,
+  UserVarChangedSchema,
 } from '@/lib/proto/terminal_pb';
+import * as pako from 'pako';
 import type { ServerMessage } from '@/lib/proto/terminal_pb';
 
 // Schedules mirrored from lib/terminal-connection.ts.
@@ -519,5 +524,184 @@ describe('dispose', () => {
     conn.connect();
 
     expect(sockets).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// Decode + dispatch: remaining routed cases, compressed frames, ignored cases
+// =============================================================================
+
+describe('decode and dispatch edge cases', () => {
+  it('routes hyperlink, user-var, and selection messages to their callbacks', () => {
+    const { cbs, ws } = openConnection();
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'hyperlinkAdded',
+        value: create(HyperlinkAddedSchema, { url: 'https://example.com', row: 3, col: 7 }),
+      }),
+    );
+    expect(cbs.onHyperlinkAdded).toHaveBeenCalledTimes(1);
+    expect(cbs.onHyperlinkAdded.mock.calls[0][0]).toMatchObject({
+      url: 'https://example.com',
+      row: 3,
+      col: 7,
+    });
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'userVarChanged',
+        value: create(UserVarChangedSchema, { name: 'branch', value: 'main', oldValue: 'dev' }),
+      }),
+    );
+    expect(cbs.onUserVarChanged.mock.calls[0][0]).toMatchObject({
+      name: 'branch',
+      value: 'main',
+      oldValue: 'dev',
+    });
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'selectionChanged',
+        value: create(SelectionChangedSchema, { startCol: 1, startRow: 2, endCol: 5, endRow: 2 }),
+      }),
+    );
+    expect(cbs.onSelectionChanged.mock.calls[0][0]).toMatchObject({
+      startCol: 1,
+      startRow: 2,
+      endCol: 5,
+      endRow: 2,
+    });
+  });
+
+  it('inflates a zlib-compressed frame before dispatching it', () => {
+    const { cbs, ws } = openConnection();
+    const text = 'x'.repeat(4096);
+    const payload = toBinary(
+      ServerMessageSchema,
+      create(ServerMessageSchema, {
+        message: { case: 'output', value: create(OutputSchema, { data: encoder.encode(text) }) },
+      }),
+    );
+    const compressed = pako.deflate(payload);
+    const frame = new Uint8Array(compressed.length + 1);
+    frame[0] = 0x01; // compressed flag
+    frame.set(compressed, 1);
+
+    ws.simulateMessage(frame.buffer);
+
+    expect(cbs.onOutput).toHaveBeenCalledWith(text);
+  });
+
+  it('decodes multi-byte UTF-8 output into the original string', () => {
+    const { cbs, ws } = openConnection();
+
+    ws.simulateMessage(outputFrame('héllo — 世界 🌍'));
+
+    expect(cbs.onOutput).toHaveBeenCalledWith('héllo — 世界 🌍');
+  });
+
+  it('drops message types with no handler without invoking any callback', () => {
+    const { cbs, ws } = openConnection();
+    const before = Object.fromEntries(
+      Object.entries(cbs).map(([name, cb]) => [name, cb.mock.calls.length]),
+    );
+
+    ws.simulateMessage(
+      serverFrame({ case: 'cwdChanged', value: create(CwdChangedSchema, { newCwd: '/tmp' }) }),
+    );
+
+    for (const [name, cb] of Object.entries(cbs)) {
+      expect(cb.mock.calls.length, name).toBe(before[name]);
+    }
+  });
+});
+
+// =============================================================================
+// Reconnect: edge cases beyond the backoff schedule
+// =============================================================================
+
+describe('reconnect edge cases', () => {
+  it('closes an already-open socket before opening a new one on connect()', () => {
+    const { conn, ws } = openConnection();
+
+    conn.connect();
+
+    expect(ws.closeCalls).toBe(1);
+    expect(sockets).toHaveLength(2);
+    expect(conn.isOpen()).toBe(false); // new socket not yet open
+    sockets[1].simulateOpen();
+    expect(conn.isOpen()).toBe(true);
+  });
+
+  it('cancelRetry() before the timer fires prevents the pending reconnect', () => {
+    const { conn } = makeConnection();
+    conn.connect();
+
+    sockets[0].simulateClose();
+    vi.advanceTimersByTime(RETRY_DELAY_BASE_MS - 1);
+    conn.cancelRetry();
+    vi.advanceTimersByTime(RETRY_DELAY_MAX_MS * 10);
+
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('a manual connect() after cancelRetry() re-arms auto-reconnect', () => {
+    const { conn } = makeConnection();
+    conn.connect();
+    sockets[0].simulateClose();
+    conn.cancelRetry();
+
+    conn.connect(); // manual reconnect clears the cancelled flag
+    expect(sockets).toHaveLength(2);
+
+    sockets[1].simulateClose();
+    vi.advanceTimersByTime(RETRY_DELAY_BASE_MS);
+    expect(sockets).toHaveLength(3);
+  });
+
+  it('cancelRetry() resets the backoff so the next schedule starts at the base delay', () => {
+    const { conn } = makeConnection();
+    conn.connect();
+
+    // Grow the backoff to 2s.
+    sockets[0].simulateClose();
+    vi.advanceTimersByTime(500);
+    sockets[1].simulateClose();
+    vi.advanceTimersByTime(1000);
+    expect(sockets).toHaveLength(3);
+
+    conn.cancelRetry();
+    conn.connect();
+    expect(sockets).toHaveLength(4);
+    sockets[3].simulateClose();
+    vi.advanceTimersByTime(RETRY_DELAY_BASE_MS - 1);
+    expect(sockets).toHaveLength(4);
+    vi.advanceTimersByTime(1);
+    expect(sockets).toHaveLength(5);
+  });
+
+  it('a session-ended shutdown suppresses reconnect even after an error then close', () => {
+    const { cbs, ws } = openConnection();
+
+    ws.simulateMessage(shutdownFrame('shell exited'));
+    ws.simulateError();
+    ws.simulateClose();
+    vi.advanceTimersByTime(120_000);
+
+    expect(cbs.onConnectionError).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('a pong arriving late in the window defers the stale close', () => {
+    const { ws } = openConnection();
+
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS); // ping 1, no pong yet
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS - 1);
+    ws.simulateMessage(pongFrame()); // lands just before the next tick
+    vi.advanceTimersByTime(1); // 50s since open, but 1ms since pong
+
+    expect(ws.closeCalls).toBe(0);
+    expect(ws.sent).toHaveLength(2);
   });
 });
