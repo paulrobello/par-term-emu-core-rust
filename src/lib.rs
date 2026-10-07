@@ -33,6 +33,20 @@
 //! - OSC 8 hyperlinks (recognized)
 //! - Full Unicode support including emoji and wide characters
 //! - Bell event tracking for visual bell implementations
+//!
+//! ## API tiers (Rust embedders)
+//! - **Core**: [`prelude`] re-exports the types nearly every embedder uses
+//!   (`Terminal`, `Grid`, `Cell`, `Color`, `Cursor`, events and observers,
+//!   `TerminalGraphic`, `TmuxNotification`, width configuration, and
+//!   `PtySession` with `pty_session`). Start with
+//!   `use par_term_emu_core_rust::prelude::*;`.
+//! - **Peripheral**: everything else is reached through its module path
+//!   (`terminal::…`, `graphics::…`, `badge::…`, `streaming::…`, `mux::…`);
+//!   the [`prelude`] docs list the canonical path per area.
+//! - **Legacy crate-root re-exports**: the root-level `pub use` lines below
+//!   predate the tiering and stay for existing consumers. The PyO3 wrapper
+//!   re-exports are hidden from the docs; their canonical path is
+//!   `python_bindings::…`.
 
 // QA-201: every production `unsafe` block states its invariant. Test modules
 // are exempt — their FFI calls restate the fn contract and add only noise.
@@ -90,6 +104,7 @@ pub mod macros;
 pub mod mouse;
 #[cfg(feature = "mux")]
 pub mod mux;
+pub mod prelude;
 /// Error type for PTY operations.
 pub mod pty_error;
 #[cfg(feature = "pty_session")]
@@ -147,8 +162,12 @@ use pyo3::exceptions::{PyIOError, PyRuntimeError};
 #[cfg(any(feature = "python", feature = "python-test"))]
 use pyo3::prelude::*;
 
-// Re-export Python bindings for convenience
+// Legacy convenience re-exports of the PyO3 wrapper types (ARC-005). The
+// canonical path is `python_bindings::…`; `register_classes` and friends below
+// use these names unqualified. Hidden from rustdoc rather than removed:
+// `#[deprecated]` has no effect on `use` items.
 #[cfg(any(feature = "python", feature = "python-test"))]
+#[doc(hidden)]
 pub use python_bindings::{
     decode_client_message, decode_server_message, encode_client_message, encode_server_message,
     py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_char_width, py_char_width_cjk,
