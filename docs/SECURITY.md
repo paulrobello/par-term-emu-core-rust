@@ -1258,12 +1258,14 @@ sections; the numbers live here.
 |----------|-------|----------|--------|
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
+| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
 | `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_EVICTED_ZONES` | 10,000 | `src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `MAX_CLIENT_COLS` | 1,000 | `src/mux/command.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `src/mux/command.rs:541` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `src/mux/command.rs:543` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
@@ -1294,18 +1296,18 @@ sections; the numbers live here.
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:35` | Client input bytes queued per session pending write to the PTY. |
 | `MAX_KITTY_APC_BYTES` | 96 MiB | `src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:156` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:158` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:160` | Bytes retained for one queued clipboard sync event. |
-| `MAX_TERMINAL_EVENTS` | 10,000 | `src/terminal/mod.rs:166` | Unpolled terminal events retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:170` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:947` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `src/terminal/mod.rs:164` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `src/terminal/mod.rs:166` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `src/terminal/mod.rs:168` | Bytes retained for one queued clipboard sync event. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `src/terminal/mod.rs:172` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `src/terminal/mod.rs:1021` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_BOOKMARKS` | 1,000 | `src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
-| `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:8` | Width or height accepted for a sixel raster declared in a DCS payload. |
-| `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:12` | Color registers accepted in a sixel palette from a DCS payload. |
+| `MAX_SIXEL_DIMENSION` | 16 KiB | `src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
+| `MAX_SIXEL_COLORS` | 4,096 | `src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
 
 <!-- caps-table:end -->
