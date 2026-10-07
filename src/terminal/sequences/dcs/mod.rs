@@ -178,9 +178,15 @@ impl Terminal {
         }
 
         if self.dcs_state.dcs_kind == DcsKind::XtGetTcap {
-            self.handle_xtgettcap_reply();
+            query::handle_xtgettcap_reply(&self.dcs_state.dcs_buffer, &mut self.response_buffer);
         } else if self.dcs_state.dcs_kind == DcsKind::Decrqss {
-            self.handle_decrqss_reply();
+            query::handle_decrqss_reply(
+                &self.dcs_state.dcs_buffer,
+                &self.attrs,
+                self.cursor.style,
+                &self.margins,
+                &mut self.response_buffer,
+            );
         } else if self.dcs_state.dcs_kind == DcsKind::Sixel {
             sixel::process_sixel_command(&mut self.dcs_state);
             if let Some(parser) = self.dcs_state.sixel_parser.take() {

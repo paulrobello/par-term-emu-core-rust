@@ -1,11 +1,42 @@
 //! Edit-related CSI sequence handling (insertion/deletion)
+//!
+//! Capability boundary (ARC-002): ICH/DCH are free functions over the
+//! active grid. IL/DL stay on `Terminal` because they go through
+//! `insert_lines_tracked`/`delete_lines_tracked`, which run the trigger
+//! engine (`TriggerEngine::scan_rows` takes `&mut Terminal`) on departing
+//! rows before the grid moves them.
 
+use crate::grid::Grid;
 use crate::terminal::Terminal;
 use vte::Params;
 
+/// ICH (`CSI @`): insert `n` blank characters at the cursor.
+pub(crate) fn handle_ich(grid: &mut Grid, cursor_col: usize, cursor_row: usize, params: &Params) {
+    grid.insert_characters(cursor_col, cursor_row, count_param(params));
+}
+
+/// DCH (`CSI P`): delete `n` characters at the cursor.
+pub(crate) fn handle_dch(grid: &mut Grid, cursor_col: usize, cursor_row: usize, params: &Params) {
+    grid.delete_characters(cursor_col, cursor_row, count_param(params));
+}
+
+/// First parameter as a count; 0 or missing means 1.
+fn count_param(params: &Params) -> usize {
+    let n = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(1) as usize;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
 impl Terminal {
     pub(crate) fn handle_csi_edit(&mut self, action: char, params: &Params, _intermediates: &[u8]) {
-        let (_cols, _rows) = self.size();
         let cursor_row = self.cursor.row;
         let scroll_top = self.margins.scroll_region_top;
         let scroll_bottom = self.margins.scroll_region_bottom;
@@ -41,29 +72,13 @@ impl Terminal {
             }
             '@' => {
                 // Insert characters (ICH)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
                 let cursor_col = self.cursor.col;
-                self.active_grid_mut()
-                    .insert_characters(cursor_col, cursor_row, n);
+                handle_ich(self.active_grid_mut(), cursor_col, cursor_row, params);
             }
             'P' => {
                 // Delete characters (DCH)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
                 let cursor_col = self.cursor.col;
-                self.active_grid_mut()
-                    .delete_characters(cursor_col, cursor_row, n);
+                handle_dch(self.active_grid_mut(), cursor_col, cursor_row, params);
             }
             _ => {}
         }

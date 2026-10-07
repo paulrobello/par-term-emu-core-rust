@@ -370,6 +370,23 @@ impl Default for NotificationState {
     }
 }
 
+impl NotificationState {
+    /// Queue a notification, evicting the oldest past `max_notifications`
+    /// (0 disables buffering).
+    pub(crate) fn enqueue(&mut self, notification: Notification) {
+        if self.max_notifications == 0 {
+            return;
+        }
+
+        if self.notifications.len() >= self.max_notifications {
+            let excess = self.notifications.len() + 1 - self.max_notifications;
+            self.notifications.drain(0..excess);
+        }
+
+        self.notifications.push(notification);
+    }
+}
+
 /// Terminal replay/recording state (Feature 24).
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
@@ -752,6 +769,31 @@ impl Default for TerminalModes {
     }
 }
 
+/// Current SGR pen: the colors and flags applied to newly written cells
+/// (ARC-002 sub-struct; the capability SGR and DECRQSS handlers take).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextAttributes {
+    /// Current foreground color
+    pub(crate) fg: Color,
+    /// Current background color
+    pub(crate) bg: Color,
+    /// Current underline color (SGR 58) - None means use foreground color
+    pub(crate) underline_color: Option<Color>,
+    /// Current cell flags
+    pub(crate) flags: CellFlags,
+}
+
+impl Default for TextAttributes {
+    fn default() -> Self {
+        Self {
+            fg: Color::Named(NamedColor::White),
+            bg: Color::Named(NamedColor::Black),
+            underline_color: None,
+            flags: CellFlags::default(),
+        }
+    }
+}
+
 /// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
 pub(crate) struct SavedCursorState {
     /// Saved cursor position (for save/restore)
@@ -775,6 +817,28 @@ impl Default for SavedCursorState {
             saved_bg: Color::Named(NamedColor::Black),
             saved_underline_color: None,
             saved_flags: CellFlags::default(),
+        }
+    }
+}
+
+impl SavedCursorState {
+    /// DECSC / SCOSC: snapshot the cursor and the SGR pen.
+    pub(crate) fn save(&mut self, cursor: &Cursor, attrs: &TextAttributes) {
+        self.saved_cursor = Some(*cursor);
+        self.saved_fg = attrs.fg;
+        self.saved_bg = attrs.bg;
+        self.saved_underline_color = attrs.underline_color;
+        self.saved_flags = attrs.flags;
+    }
+
+    /// DECRC / SCORC: restore the snapshot; a no-op when nothing was saved.
+    pub(crate) fn restore(&self, cursor: &mut Cursor, attrs: &mut TextAttributes) {
+        if let Some(saved) = self.saved_cursor {
+            *cursor = saved;
+            attrs.fg = self.saved_fg;
+            attrs.bg = self.saved_bg;
+            attrs.underline_color = self.saved_underline_color;
+            attrs.flags = self.saved_flags;
         }
     }
 }
@@ -854,6 +918,54 @@ pub(crate) struct ProgressBellState {
     pub(crate) bell_count: u64,
 }
 
+impl ProgressBellState {
+    /// Set or update a named progress bar and publish the change.
+    pub(crate) fn set_named(&mut self, bar: NamedProgressBar, events: &mut EventBroker) {
+        let id = bar.id.clone();
+        let state = bar.state;
+        let percent = bar.percent;
+        let label = bar.label.clone();
+        self.named_progress_bars.insert(id.clone(), bar);
+        events.push(TerminalEvent::ProgressBarChanged {
+            action: ProgressBarAction::Set,
+            id,
+            state: Some(state),
+            percent: Some(percent),
+            label,
+        });
+    }
+
+    /// Remove a named progress bar; publishes and returns true only when it existed.
+    pub(crate) fn remove_named(&mut self, id: &str, events: &mut EventBroker) -> bool {
+        if self.named_progress_bars.remove(id).is_some() {
+            events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::Remove,
+                id: id.to_string(),
+                state: None,
+                percent: None,
+                label: None,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove every named progress bar; publishes only when any existed.
+    pub(crate) fn remove_all_named(&mut self, events: &mut EventBroker) {
+        if !self.named_progress_bars.is_empty() {
+            self.named_progress_bars.clear();
+            events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::RemoveAll,
+                id: String::new(),
+                state: None,
+                percent: None,
+                label: None,
+            });
+        }
+    }
+}
+
 /// Unicode width configuration + normalization form (ARC-001 sub-struct)
 #[derive(Default)]
 pub(crate) struct UnicodeConfigState {
@@ -918,6 +1030,32 @@ pub(crate) struct BadgeState {
     pub(crate) session_variables: crate::badge::SessionVariables,
 }
 
+impl BadgeState {
+    /// The badge format evaluated against the session variables, or `None`
+    /// when no format is set.
+    pub(crate) fn evaluate(&self) -> Option<String> {
+        self.badge_format
+            .as_ref()
+            .map(|format| crate::badge::evaluate_badge_format(format, &self.session_variables))
+    }
+
+    /// Set a user variable, publishing `UserVarChanged` only when the value changed.
+    pub(crate) fn set_user_var(&mut self, name: String, value: String, events: &mut EventBroker) {
+        let old_value = self.session_variables.custom.get(&name).cloned();
+        let changed = old_value.as_deref() != Some(&value);
+        self.session_variables
+            .custom
+            .insert(name.clone(), value.clone());
+        if changed {
+            events.push(TerminalEvent::UserVarChanged {
+                name,
+                value,
+                old_value,
+            });
+        }
+    }
+}
+
 /// Unified graphics/inline-image/file machinery: graphics store, Sixel limits,
 /// cell pixel dimensions, iTerm2 multipart transfer state, file transfer manager.
 /// (ARC-001 sub-struct)
@@ -971,14 +1109,8 @@ pub struct Terminal {
     pub(crate) cursor: Cursor,
     /// Saved cursor for alternate screen
     pub(crate) alt_cursor: Cursor,
-    /// Current foreground color
-    pub(crate) fg: Color,
-    /// Current background color
-    pub(crate) bg: Color,
-    /// Current underline color (SGR 58) - None means use foreground color
-    pub(crate) underline_color: Option<Color>,
-    /// Current cell flags
-    pub(crate) flags: CellFlags,
+    /// Current SGR pen: fg/bg/underline color + cell flags (ARC-002 sub-struct)
+    pub(crate) attrs: TextAttributes,
     /// DECSC/DECRC saved terminal state: cursor + SGR colors/flags (ARC-001 sub-struct)
     pub(crate) saved_state: SavedCursorState,
     /// Window title, title stack, answerback string (ARC-001 sub-struct)
@@ -1090,8 +1222,6 @@ pub struct Terminal {
     // === Badge Support (OSC 1337 SetBadgeFormat) ===
     /// OSC 1337 badge format + session variables (ARC-001 sub-struct)
     pub(crate) badge_state: BadgeState,
-    /// Optional event subscription filter
-    pub(crate) event_subscription: Option<HashSet<TerminalEventKind>>,
 
     // === Feature 18: Triggers & Automation ===
     /// Trigger & automation state (ARC-001 sub-struct; owned by `trigger`, ARC-102)
@@ -1140,10 +1270,7 @@ impl Terminal {
             alt_screen_active: false,
             cursor: Cursor::new(),
             alt_cursor: Cursor::new(),
-            fg: Color::Named(NamedColor::White),
-            bg: Color::Named(NamedColor::Black),
-            underline_color: None,
-            flags: CellFlags::default(),
+            attrs: TextAttributes::default(),
             saved_state: SavedCursorState::default(),
             title_state: TitleState::default(),
             sync_state: SyncState::default(),
@@ -1199,7 +1326,6 @@ impl Terminal {
                     rows as u16,
                 ),
             },
-            event_subscription: None,
             triggers: trigger::TriggerState::default(),
             charset_state: CharsetState::default(),
         }
@@ -1565,9 +1691,7 @@ impl Terminal {
     /// assert_eq!(terminal.evaluate_badge(), Some("alice@server1".to_string()));
     /// ```
     pub fn evaluate_badge(&self) -> Option<String> {
-        self.badge_state.badge_format.as_ref().map(|format| {
-            crate::badge::evaluate_badge_format(format, &self.badge_state.session_variables)
-        })
+        self.badge_state.evaluate()
     }
 
     /// Get a user variable by name
@@ -1589,24 +1713,7 @@ impl Terminal {
 
     /// Set a user variable, emitting a UserVarChanged event if the value changed
     pub fn set_user_var(&mut self, name: String, value: String) {
-        let old_value = self
-            .badge_state
-            .session_variables
-            .custom
-            .get(&name)
-            .cloned();
-        let changed = old_value.as_deref() != Some(&value);
-        self.badge_state
-            .session_variables
-            .custom
-            .insert(name.clone(), value.clone());
-        if changed {
-            self.events.push(TerminalEvent::UserVarChanged {
-                name,
-                value,
-                old_value,
-            });
-        }
+        self.badge_state.set_user_var(name, value, &mut self.events);
     }
 
     /// Check if alternate screen is active
@@ -1745,22 +1852,12 @@ impl Terminal {
 
     /// Save current cursor state
     pub fn save_cursor(&mut self) {
-        self.saved_state.saved_cursor = Some(self.cursor);
-        self.saved_state.saved_fg = self.fg;
-        self.saved_state.saved_bg = self.bg;
-        self.saved_state.saved_underline_color = self.underline_color;
-        self.saved_state.saved_flags = self.flags;
+        self.saved_state.save(&self.cursor, &self.attrs);
     }
 
     /// Restore previously saved cursor state
     pub fn restore_cursor(&mut self) {
-        if let Some(saved) = self.saved_state.saved_cursor {
-            self.cursor = saved;
-            self.fg = self.saved_state.saved_fg;
-            self.bg = self.saved_state.saved_bg;
-            self.underline_color = self.saved_state.saved_underline_color;
-            self.flags = self.saved_state.saved_flags;
-        }
+        self.saved_state.restore(&mut self.cursor, &mut self.attrs);
     }
 
     /// Check if bracketed paste is enabled
@@ -2395,19 +2492,7 @@ impl Terminal {
     }
 
     fn enqueue_notification(&mut self, notification: Notification) {
-        if self.notifications_state.max_notifications == 0 {
-            return;
-        }
-
-        if self.notifications_state.notifications.len()
-            >= self.notifications_state.max_notifications
-        {
-            let excess = self.notifications_state.notifications.len() + 1
-                - self.notifications_state.max_notifications;
-            self.notifications_state.notifications.drain(0..excess);
-        }
-
-        self.notifications_state.notifications.push(notification);
+        self.notifications_state.enqueue(notification);
     }
 
     /// Set maximum OSC 9/777 notifications retained (0 disables buffering)
@@ -2490,52 +2575,19 @@ impl Terminal {
 
     /// Set or update a named progress bar and emit an event
     pub fn set_named_progress_bar(&mut self, bar: NamedProgressBar) {
-        let id = bar.id.clone();
-        let state = bar.state;
-        let percent = bar.percent;
-        let label = bar.label.clone();
-        self.progress_state
-            .named_progress_bars
-            .insert(id.clone(), bar);
-        self.events.push(TerminalEvent::ProgressBarChanged {
-            action: ProgressBarAction::Set,
-            id,
-            state: Some(state),
-            percent: Some(percent),
-            label,
-        });
+        self.progress_state.set_named(bar, &mut self.events);
     }
 
     /// Remove a named progress bar by ID and emit an event
     ///
     /// Returns true if the bar existed and was removed.
     pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
-        if self.progress_state.named_progress_bars.remove(id).is_some() {
-            self.events.push(TerminalEvent::ProgressBarChanged {
-                action: ProgressBarAction::Remove,
-                id: id.to_string(),
-                state: None,
-                percent: None,
-                label: None,
-            });
-            true
-        } else {
-            false
-        }
+        self.progress_state.remove_named(id, &mut self.events)
     }
 
     /// Remove all named progress bars and emit an event
     pub fn remove_all_named_progress_bars(&mut self) {
-        if !self.progress_state.named_progress_bars.is_empty() {
-            self.progress_state.named_progress_bars.clear();
-            self.events.push(TerminalEvent::ProgressBarChanged {
-                action: ProgressBarAction::RemoveAll,
-                id: String::new(),
-                state: None,
-                percent: None,
-                label: None,
-            });
-        }
+        self.progress_state.remove_all_named(&mut self.events);
     }
 
     /// Get the current bell count
@@ -3052,10 +3104,10 @@ impl Terminal {
 
         std::mem::swap(&mut fresh.unicode_state, &mut self.unicode_state);
 
-        // Observers keep their registration and ID sequence; buffered
-        // events reset with everything else they describe.
+        // Observers keep their registration and ID sequence, and the
+        // subscription filter survives; buffered events reset with
+        // everything else they describe.
         fresh.events.carry_observers_from(&mut self.events);
-        std::mem::swap(&mut fresh.event_subscription, &mut self.event_subscription);
 
         // The trigger registry survives; highlights, action results, and
         // pending scan rows reset.
@@ -3143,10 +3195,10 @@ impl Terminal {
         self.margins = MarginState::new(cols, rows);
 
         // SGR default — the fresh-terminal baseline.
-        self.fg = Color::Named(NamedColor::White);
-        self.bg = Color::Named(NamedColor::Black);
-        self.underline_color = None;
-        self.flags = CellFlags::default();
+        self.attrs.fg = Color::Named(NamedColor::White);
+        self.attrs.bg = Color::Named(NamedColor::Black);
+        self.attrs.underline_color = None;
+        self.attrs.flags = CellFlags::default();
 
         self.charset_state = CharsetState::default();
 
@@ -3415,25 +3467,20 @@ impl Terminal {
 
     /// Set the event subscription filter
     pub fn set_event_subscription(&mut self, filter: HashSet<TerminalEventKind>) {
-        self.event_subscription = Some(filter);
+        self.events.set_subscription(Some(filter));
     }
 
     /// Clear the event subscription filter (subscribe to all events)
     pub fn clear_event_subscription(&mut self) {
-        self.event_subscription = None;
+        self.events.set_subscription(None);
     }
 
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
-        if let Some(ref filter) = self.event_subscription {
-            let events = self.events.take_pending();
-            let (matched, remaining): (Vec<_>, Vec<_>) =
-                events.into_iter().partition(|e| filter.contains(&e.kind()));
-            self.events.restore_pending(remaining);
-            matched
-        } else {
-            self.poll_events()
-        }
+        // No filter: the full drain, which also flushes evicted-zone events.
+        self.events
+            .extract_subscribed()
+            .unwrap_or_else(|| self.poll_events())
     }
 
     /// Poll for CWD change events
@@ -3545,7 +3592,7 @@ impl Terminal {
         right: usize,
         ch: char,
     ) {
-        let cell = Cell::with_colors(ch, self.fg, self.bg);
+        let cell = Cell::with_colors(ch, self.attrs.fg, self.attrs.bg);
 
         for row in top..=bottom {
             for col in left..=right {
@@ -3729,5 +3776,149 @@ mod arc001_observer_dispatch_tests {
             batch.is_empty(),
             "batch should be empty when no new events were queued"
         );
+    }
+
+    fn title(s: &str) -> TerminalEvent {
+        TerminalEvent::TitleChanged(s.to_string())
+    }
+
+    fn cwd(path: &str) -> TerminalEvent {
+        TerminalEvent::CwdChanged(CwdChange {
+            old_cwd: None,
+            new_cwd: path.to_string(),
+            hostname: None,
+            username: None,
+            timestamp: 0,
+        })
+    }
+
+    fn two_observers(
+        term: &mut Terminal,
+    ) -> (Arc<OrderRecordingObserver>, Arc<OrderRecordingObserver>) {
+        let a = Arc::new(OrderRecordingObserver::new());
+        let b = Arc::new(OrderRecordingObserver::new());
+        term.add_observer(a.clone());
+        term.add_observer(b.clone());
+        (a, b)
+    }
+
+    fn clear(a: &OrderRecordingObserver, b: &OrderRecordingObserver) {
+        a.seen.lock().unwrap().clear();
+        b.seen.lock().unwrap().clear();
+    }
+
+    /// Card 01a11486: a typed poll that removes an already-dispatched event
+    /// must not leave the dispatch index past the end of the queue, or the
+    /// next pushed event is never delivered to observers.
+    #[test]
+    fn typed_poll_of_dispatched_event_does_not_lose_next_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        for i in 0..9 {
+            term.events.push(title(&format!("t{i}")));
+        }
+        term.events.push(cwd("/tmp"));
+        term.take_observer_dispatch_batch().deliver();
+        assert_eq!(a.seen.lock().unwrap().len(), 10);
+        clear(&a, &b);
+
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// Removing a dispatched event below the index shifts later events
+    /// left; without adjusting the index the first undispatched event is
+    /// skipped even when the queue length never returns to the old index.
+    #[test]
+    fn typed_poll_of_dispatched_event_does_not_skip_shifted_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(cwd("/a"));
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("x"));
+        term.events.push(title("y"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(
+                *obs.seen.lock().unwrap(),
+                vec!["title:x".to_string(), "title:y".to_string()]
+            );
+        }
+    }
+
+    /// Extracting a not-yet-dispatched event must not rewind the index over
+    /// events observers already received.
+    #[test]
+    fn typed_poll_of_undispatched_event_does_not_redispatch() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        term.events.push(cwd("/a"));
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// `poll_subscribed_events` with a filter removes matched events the
+    /// same way the typed polls do.
+    #[test]
+    fn subscribed_poll_of_dispatched_event_does_not_lose_next_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.events.push(cwd("/a"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        let mut filter = HashSet::new();
+        filter.insert(TerminalEventKind::CwdChanged);
+        term.set_event_subscription(filter);
+        assert_eq!(term.poll_subscribed_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// The generic drain resets the index with the queue; pinned as a guard.
+    #[test]
+    fn generic_poll_then_push_reaches_observers() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        assert_eq!(term.poll_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
     }
 }

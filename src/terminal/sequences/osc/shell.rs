@@ -1,5 +1,6 @@
 //! Shell integration OSC sequence handling
 
+use super::iterm::CwdCapability;
 use crate::grid::Grid;
 use crate::shell_integration::ShellIntegrationMarker;
 use crate::terminal::{CommandHistoryState, EventBroker, ShellState, Terminal};
@@ -13,23 +14,7 @@ impl Terminal {
                 // Set current working directory (OSC 7)
                 if self.security_state.accept_osc7 && params.len() >= 2 => {
                     if let Ok(cwd_url) = std::str::from_utf8(params[1]) {
-                        if let Some((path, hostname, username)) = Self::parse_osc7_url(cwd_url) {
-                            // record_cwd_change handles setting shell_integration state
-                            // and reads old values before updating
-                            self.record_cwd_change(crate::terminal::event::CwdChange {
-                                old_cwd: self.shell_state.shell_integration.cwd().map(|s| s.to_string()),
-                                new_cwd: path.clone(),
-                                hostname: hostname.clone(),
-                                username,
-                                timestamp: crate::text_utils::unix_millis(),
-                            });
-                            crate::debug_log!(
-                                "OSC7",
-                                "Set directory to: {} (hostname: {:?})",
-                                path,
-                                hostname
-                            );
-                        }
+                        handle_osc7(&mut self.cwd_capability(), cwd_url);
                     }
                 }
             "133"
@@ -139,6 +124,31 @@ impl Terminal {
         }
 
         Some((path, hostname, username))
+    }
+}
+
+/// OSC 7 working-directory update. The `accept_osc7` gate is checked by
+/// the caller (the match guard in `handle_osc_shell`).
+///
+/// Capability boundary (ARC-002): takes only the cwd-change capability.
+pub(crate) fn handle_osc7(cwd: &mut CwdCapability<'_>, cwd_url: &str) {
+    if let Some((path, hostname, username)) = Terminal::parse_osc7_url(cwd_url) {
+        // record_cwd_change handles setting shell_integration state
+        // and reads old values before updating
+        let old_cwd = cwd.shell.shell_integration.cwd().map(|s| s.to_string());
+        cwd.record(crate::terminal::event::CwdChange {
+            old_cwd,
+            new_cwd: path.clone(),
+            hostname: hostname.clone(),
+            username,
+            timestamp: crate::text_utils::unix_millis(),
+        });
+        crate::debug_log!(
+            "OSC7",
+            "Set directory to: {} (hostname: {:?})",
+            path,
+            hostname
+        );
     }
 }
 

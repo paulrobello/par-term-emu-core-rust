@@ -17,9 +17,9 @@ fn test_sgr_reset() {
     term.process(b"\x1b[1;31;42mTest");
     term.process(b"\x1b[0m");
 
-    assert_eq!(term.fg, Color::Named(NamedColor::White));
-    assert_eq!(term.bg, Color::Named(NamedColor::Black));
-    assert!(!term.flags.bold());
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::White));
+    assert_eq!(term.attrs.bg, Color::Named(NamedColor::Black));
+    assert!(!term.attrs.flags.bold());
 }
 
 #[test]
@@ -27,10 +27,10 @@ fn test_multiple_sgr_attributes() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[1;3;4;9mTest");
 
-    assert!(term.flags.bold());
-    assert!(term.flags.italic());
-    assert!(term.flags.underline());
-    assert!(term.flags.strikethrough());
+    assert!(term.attrs.flags.bold());
+    assert!(term.attrs.flags.italic());
+    assert!(term.attrs.flags.underline());
+    assert!(term.attrs.flags.strikethrough());
 }
 
 #[test]

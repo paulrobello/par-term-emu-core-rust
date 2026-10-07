@@ -219,7 +219,7 @@ impl Terminal {
         }
 
         // Write the character with appropriate wide_char flag
-        let mut cell_flags = self.flags;
+        let mut cell_flags = self.attrs.flags;
         if char_width == 2 {
             cell_flags.set_wide_char(true);
         }
@@ -231,9 +231,9 @@ impl Terminal {
         let cell = Cell {
             c,
             combining: None,
-            fg: PackedColor::pack(self.fg),
-            bg: PackedColor::pack(self.bg),
-            underline_color: PackedOptionColor::pack(self.underline_color),
+            fg: PackedColor::pack(self.attrs.fg),
+            bg: PackedColor::pack(self.attrs.bg),
+            underline_color: PackedOptionColor::pack(self.attrs.underline_color),
             flags: cell_flags,
             width: char_width as u8,
         };
@@ -256,7 +256,7 @@ impl Terminal {
 
         // If it's a wide character, fill the next cell with a spacer
         if char_width == 2 && self.cursor.col - 1 < cols {
-            let mut spacer_flags = self.flags;
+            let mut spacer_flags = self.attrs.flags;
             spacer_flags.set_wide_char_spacer(true);
             // Apply hyperlink ID to spacer as well
             spacer_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
@@ -264,9 +264,9 @@ impl Terminal {
             let spacer = Cell {
                 c: ' ', // Spacer character
                 combining: None,
-                fg: PackedColor::pack(self.fg),
-                bg: PackedColor::pack(self.bg),
-                underline_color: PackedOptionColor::pack(self.underline_color),
+                fg: PackedColor::pack(self.attrs.fg),
+                bg: PackedColor::pack(self.attrs.bg),
+                underline_color: PackedOptionColor::pack(self.attrs.underline_color),
                 flags: spacer_flags,
                 width: 1, // Spacers always have width 1
             };
@@ -596,16 +596,16 @@ impl Terminal {
 
         // Write the regional indicator as width 1 initially
         // (It will become width 2 if followed by another regional indicator)
-        let mut cell_flags = self.flags;
+        let mut cell_flags = self.attrs.flags;
         cell_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
         cell_flags.set_guarded(self.modes.char_protected);
 
         let cell = Cell {
             c,
             combining: None,
-            fg: PackedColor::pack(self.fg),
-            bg: PackedColor::pack(self.bg),
-            underline_color: PackedOptionColor::pack(self.underline_color),
+            fg: PackedColor::pack(self.attrs.fg),
+            bg: PackedColor::pack(self.attrs.bg),
+            underline_color: PackedOptionColor::pack(self.attrs.underline_color),
             flags: cell_flags,
             width: 1, // Initially width 1, will become 2 when paired
         };
@@ -939,10 +939,10 @@ mod tests {
         let mut term = create_test_terminal();
 
         // Set some attributes
-        term.fg = Color::Rgb(255, 0, 0);
-        term.bg = Color::Rgb(0, 255, 0);
-        term.flags.set_bold(true);
-        term.flags.set_italic(true);
+        term.attrs.fg = Color::Rgb(255, 0, 0);
+        term.attrs.bg = Color::Rgb(0, 255, 0);
+        term.attrs.flags.set_bold(true);
+        term.attrs.flags.set_italic(true);
 
         term.write_char('A');
 

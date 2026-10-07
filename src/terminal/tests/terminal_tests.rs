@@ -601,7 +601,7 @@ fn test_save_restore_cursor() {
 
     assert_eq!(term.cursor.col, 19); // 0-indexed
     assert_eq!(term.cursor.row, 9);
-    assert_eq!(term.fg, Color::Named(NamedColor::Red));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::Red));
 }
 
 #[test]
@@ -677,9 +677,9 @@ fn test_sgr_reset() {
     term.process(b"\x1b[1;31;42mTest"); // Bold, red fg, green bg
     term.process(b"\x1b[0m"); // Reset
 
-    assert_eq!(term.fg, Color::Named(NamedColor::White));
-    assert_eq!(term.bg, Color::Named(NamedColor::Black));
-    assert!(!term.flags.bold());
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::White));
+    assert_eq!(term.attrs.bg, Color::Named(NamedColor::Black));
+    assert!(!term.attrs.flags.bold());
 }
 
 #[test]
@@ -687,10 +687,10 @@ fn test_multiple_sgr_attributes() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[1;3;4;9mTest"); // Bold, italic, underline, strikethrough
 
-    assert!(term.flags.bold());
-    assert!(term.flags.italic());
-    assert!(term.flags.underline());
-    assert!(term.flags.strikethrough());
+    assert!(term.attrs.flags.bold());
+    assert!(term.attrs.flags.italic());
+    assert!(term.attrs.flags.underline());
+    assert!(term.attrs.flags.strikethrough());
 }
 
 // Device query response tests
@@ -4216,8 +4216,8 @@ fn ris_preserves_host_config() {
     assert_eq!(term.host.max_inline_images, 2);
     assert_eq!(term.clipboard_sync.max_history, 1);
     assert_eq!(
-        term.event_subscription,
-        Some(std::collections::HashSet::from([
+        term.events.subscription(),
+        Some(&std::collections::HashSet::from([
             TerminalEventKind::BellRang,
             TerminalEventKind::TitleChanged,
         ]))
@@ -4351,9 +4351,9 @@ fn decstr_keeps_screen_and_scrollback() {
     assert_eq!(term.grid().total_lines_scrolled(), 4);
 
     // Modes, SGR, margins, and cursor reset.
-    assert_eq!(term.fg, Color::Named(NamedColor::White));
-    assert_eq!(term.bg, Color::Named(NamedColor::Black));
-    assert!(!term.flags.bold());
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::White));
+    assert_eq!(term.attrs.bg, Color::Named(NamedColor::Black));
+    assert!(!term.attrs.flags.bold());
     assert!(term.modes.auto_wrap);
     assert!(!term.modes.origin_mode);
     assert_eq!(term.margins.scroll_region_top, 0);

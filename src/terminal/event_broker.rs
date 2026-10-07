@@ -9,7 +9,8 @@
 //! `&mut Terminal`.
 
 use crate::observer::{ObserverEntry, ObserverId, TerminalObserver};
-use crate::terminal::{BellEvent, TerminalEvent};
+use crate::terminal::{BellEvent, TerminalEvent, TerminalEventKind};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Maximum number of unpolled terminal events retained (ARC-006). Past this,
@@ -34,6 +35,8 @@ pub(crate) struct EventBroker {
     next_observer_id: ObserverId,
     /// Next zone ID to assign (monotonically increasing)
     next_zone_id: usize,
+    /// Optional event subscription filter for `poll_subscribed_events`
+    subscription: Option<HashSet<TerminalEventKind>>,
 }
 
 impl Default for EventBroker {
@@ -45,6 +48,7 @@ impl Default for EventBroker {
             observers: Vec::new(),
             next_observer_id: 1,
             next_zone_id: 0,
+            subscription: None,
         }
     }
 }
@@ -107,12 +111,35 @@ impl EventBroker {
         self.observers.len()
     }
 
-    /// Move the observer registry and observer ID sequence from `old` into
-    /// `self`. Queued events, bells, and the zone ID counter are not carried
-    /// (RIS semantics: buffered events reset with the state they describe).
+    /// Move the observer registry, observer ID sequence, and subscription
+    /// filter from `old` into `self`. Queued events, bells, and the zone ID
+    /// counter are not carried (RIS semantics: buffered events reset with
+    /// the state they describe).
     pub(crate) fn carry_observers_from(&mut self, old: &mut EventBroker) {
         std::mem::swap(&mut self.observers, &mut old.observers);
         self.next_observer_id = old.next_observer_id;
+        std::mem::swap(&mut self.subscription, &mut old.subscription);
+    }
+
+    /// Set (`Some`) or clear (`None`) the subscription filter used by
+    /// `Terminal::poll_subscribed_events`.
+    pub(crate) fn set_subscription(&mut self, filter: Option<HashSet<TerminalEventKind>>) {
+        self.subscription = filter;
+    }
+
+    /// The current subscription filter (`None` = subscribed to everything).
+    #[cfg(test)]
+    pub(crate) fn subscription(&self) -> Option<&HashSet<TerminalEventKind>> {
+        self.subscription.as_ref()
+    }
+
+    /// Remove and return pending events matching the subscription filter;
+    /// `None` when no filter is set (the caller then drains everything).
+    pub(crate) fn extract_subscribed(&mut self) -> Option<Vec<TerminalEvent>> {
+        let filter = self.subscription.take()?;
+        let matched = self.extract_matching(|e| filter.contains(&e.kind()));
+        self.subscription = Some(filter);
+        Some(matched)
     }
 
     /// Take every pending event and reset the dispatch index.
@@ -121,35 +148,45 @@ impl EventBroker {
         std::mem::take(&mut self.terminal_events)
     }
 
-    /// Take the pending events without touching the dispatch index; the
-    /// caller hands the leftovers back via [`EventBroker::restore_pending`].
-    pub(crate) fn take_pending(&mut self) -> Vec<TerminalEvent> {
-        std::mem::take(&mut self.terminal_events)
-    }
-
-    /// Replace the pending queue (see [`EventBroker::take_pending`]).
-    pub(crate) fn restore_pending(&mut self, remaining: Vec<TerminalEvent>) {
-        self.terminal_events = remaining;
-    }
-
     /// Drain pending events, splitting each into either an extracted value
     /// (when `try_extract` returns `Ok`) or a leftover event (`Err`) that
     /// stays queued. Powers the typed `poll_*` methods (ARC-006).
+    ///
+    /// `events_dispatched_up_to` drops by one for every removed event that
+    /// sat below it, so it keeps pointing at the first undispatched event of
+    /// the compacted queue.
     pub(crate) fn extract<T>(
         &mut self,
         mut try_extract: impl FnMut(TerminalEvent) -> Result<T, TerminalEvent>,
     ) -> Vec<T> {
-        let events = self.take_pending();
+        let events = std::mem::take(&mut self.terminal_events);
+        let dispatched = self.events_dispatched_up_to;
+        let mut removed_dispatched = 0;
         let mut extracted = Vec::new();
-        let mut remaining = Vec::new();
-        for event in events {
+        let mut remaining = Vec::with_capacity(events.len());
+        for (index, event) in events.into_iter().enumerate() {
             match try_extract(event) {
-                Ok(value) => extracted.push(value),
+                Ok(value) => {
+                    if index < dispatched {
+                        removed_dispatched += 1;
+                    }
+                    extracted.push(value);
+                }
                 Err(other) => remaining.push(other),
             }
         }
-        self.restore_pending(remaining);
+        self.terminal_events = remaining;
+        self.events_dispatched_up_to = dispatched - removed_dispatched;
         extracted
+    }
+
+    /// Remove and return every pending event matching `pred`, keeping the
+    /// dispatch index consistent (see [`EventBroker::extract`]).
+    pub(crate) fn extract_matching(
+        &mut self,
+        mut pred: impl FnMut(&TerminalEvent) -> bool,
+    ) -> Vec<TerminalEvent> {
+        self.extract(|event| if pred(&event) { Ok(event) } else { Err(event) })
     }
 
     /// Evict the oldest terminal events when the queue exceeds the cap

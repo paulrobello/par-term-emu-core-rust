@@ -165,10 +165,10 @@ impl Terminal {
             cursor: self.cursor,
             alt_cursor: self.alt_cursor,
             saved_cursor: self.saved_state.saved_cursor,
-            fg: self.fg,
-            bg: self.bg,
-            underline_color: self.underline_color,
-            flags: self.flags,
+            fg: self.attrs.fg,
+            bg: self.attrs.bg,
+            underline_color: self.attrs.underline_color,
+            flags: self.attrs.flags,
             saved_fg: self.saved_state.saved_fg,
             saved_bg: self.saved_state.saved_bg,
             saved_underline_color: self.saved_state.saved_underline_color,
@@ -213,10 +213,10 @@ impl Terminal {
         self.cursor = snap.cursor;
         self.alt_cursor = snap.alt_cursor;
         self.saved_state.saved_cursor = snap.saved_cursor;
-        self.fg = snap.fg;
-        self.bg = snap.bg;
-        self.underline_color = snap.underline_color;
-        self.flags = snap.flags;
+        self.attrs.fg = snap.fg;
+        self.attrs.bg = snap.bg;
+        self.attrs.underline_color = snap.underline_color;
+        self.attrs.flags = snap.flags;
         self.saved_state.saved_fg = snap.saved_fg;
         self.saved_state.saved_bg = snap.saved_bg;
         self.saved_state.saved_underline_color = snap.saved_underline_color;

@@ -128,7 +128,7 @@ fn test_sgr_reset() {
 
     // Reset all
     term.process(b"\x1b[0m");
-    assert!(!term.flags.bold());
+    assert!(!term.attrs.flags.bold());
 }
 
 #[test]
@@ -137,24 +137,24 @@ fn test_sgr_bold_dim_italic() {
 
     // Bold
     term.process(b"\x1b[1m");
-    assert!(term.flags.bold());
+    assert!(term.attrs.flags.bold());
 
     // Dim
     term.process(b"\x1b[2m");
-    assert!(term.flags.dim());
+    assert!(term.attrs.flags.dim());
 
     // Italic
     term.process(b"\x1b[3m");
-    assert!(term.flags.italic());
+    assert!(term.attrs.flags.italic());
 
     // Reset bold/dim
     term.process(b"\x1b[22m");
-    assert!(!term.flags.bold());
-    assert!(!term.flags.dim());
+    assert!(!term.attrs.flags.bold());
+    assert!(!term.attrs.flags.dim());
 
     // Reset italic
     term.process(b"\x1b[23m");
-    assert!(!term.flags.italic());
+    assert!(!term.attrs.flags.italic());
 }
 
 #[test]
@@ -163,11 +163,11 @@ fn test_sgr_underline() {
 
     // Underline
     term.process(b"\x1b[4m");
-    assert!(term.flags.underline());
+    assert!(term.attrs.flags.underline());
 
     // No underline
     term.process(b"\x1b[24m");
-    assert!(!term.flags.underline());
+    assert!(!term.attrs.flags.underline());
 }
 
 #[test]
@@ -176,27 +176,27 @@ fn test_sgr_other_attributes() {
 
     // Blink
     term.process(b"\x1b[5m");
-    assert!(term.flags.blink());
+    assert!(term.attrs.flags.blink());
     term.process(b"\x1b[25m");
-    assert!(!term.flags.blink());
+    assert!(!term.attrs.flags.blink());
 
     // Reverse
     term.process(b"\x1b[7m");
-    assert!(term.flags.reverse());
+    assert!(term.attrs.flags.reverse());
     term.process(b"\x1b[27m");
-    assert!(!term.flags.reverse());
+    assert!(!term.attrs.flags.reverse());
 
     // Hidden
     term.process(b"\x1b[8m");
-    assert!(term.flags.hidden());
+    assert!(term.attrs.flags.hidden());
     term.process(b"\x1b[28m");
-    assert!(!term.flags.hidden());
+    assert!(!term.attrs.flags.hidden());
 
     // Strikethrough
     term.process(b"\x1b[9m");
-    assert!(term.flags.strikethrough());
+    assert!(term.attrs.flags.strikethrough());
     term.process(b"\x1b[29m");
-    assert!(!term.flags.strikethrough());
+    assert!(!term.attrs.flags.strikethrough());
 }
 
 #[test]
@@ -205,24 +205,24 @@ fn test_sgr_basic_colors() {
 
     // Foreground colors (30-37)
     term.process(b"\x1b[31m"); // Red
-    assert_eq!(term.fg, Color::Named(NamedColor::Red));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::Red));
 
     term.process(b"\x1b[34m"); // Blue
-    assert_eq!(term.fg, Color::Named(NamedColor::Blue));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::Blue));
 
     // Background colors (40-47)
     term.process(b"\x1b[42m"); // Green
-    assert_eq!(term.bg, Color::Named(NamedColor::Green));
+    assert_eq!(term.attrs.bg, Color::Named(NamedColor::Green));
 
     // Bright colors (90-97)
     term.process(b"\x1b[91m"); // Bright red
-    assert_eq!(term.fg, Color::Named(NamedColor::BrightRed));
+    assert_eq!(term.attrs.fg, Color::Named(NamedColor::BrightRed));
 
     // Reset to defaults
     term.process(b"\x1b[39m");
-    assert_eq!(term.fg, term.theme.default_fg);
+    assert_eq!(term.attrs.fg, term.theme.default_fg);
     term.process(b"\x1b[49m");
-    assert_eq!(term.bg, term.theme.default_bg);
+    assert_eq!(term.attrs.bg, term.theme.default_bg);
 }
 
 #[test]
@@ -231,11 +231,11 @@ fn test_sgr_rgb_colors() {
 
     // Foreground RGB (38;2;r;g;b)
     term.process(b"\x1b[38;2;255;128;64m");
-    assert_eq!(term.fg, Color::Rgb(255, 128, 64));
+    assert_eq!(term.attrs.fg, Color::Rgb(255, 128, 64));
 
     // Background RGB (48;2;r;g;b)
     term.process(b"\x1b[48;2;10;20;30m");
-    assert_eq!(term.bg, Color::Rgb(10, 20, 30));
+    assert_eq!(term.attrs.bg, Color::Rgb(10, 20, 30));
 }
 
 #[test]
@@ -244,11 +244,11 @@ fn test_sgr_256_colors() {
 
     // Foreground 256 color (38;5;idx)
     term.process(b"\x1b[38;5;123m");
-    assert_eq!(term.fg, Color::from_ansi_code(123));
+    assert_eq!(term.attrs.fg, Color::from_ansi_code(123));
 
     // Background 256 color (48;5;idx)
     term.process(b"\x1b[48;5;200m");
-    assert_eq!(term.bg, Color::from_ansi_code(200));
+    assert_eq!(term.attrs.bg, Color::from_ansi_code(200));
 }
 
 // ========== Mode Tests ==========

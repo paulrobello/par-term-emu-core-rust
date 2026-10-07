@@ -1,8 +1,35 @@
 //! Mode-related CSI sequence handling (SM/RM)
+//!
+//! Capability boundary (ARC-002): ANSI SM/RM (IRM 4, LNM 20) is a free
+//! function over the mode flags and the event broker. The DEC private-mode
+//! table (DECSET/DECRST) stays on `Terminal`: its arms orchestrate several
+//! sub-structs at once — the alt-screen trio swaps grids and cursors and
+//! flushes pending trigger rows, 1048 saves/restores cursor + pen, and
+//! 2026 flushes the synchronized-update buffer through `process`.
 
 use crate::mouse::{MouseEncoding, MouseMode};
-use crate::terminal::Terminal;
+use crate::terminal::{EventBroker, Terminal, TerminalModes};
 use vte::Params;
+
+/// ANSI SM (`enabled`) / RM: IRM (4) and LNM (20). Emits `ModeChanged`
+/// only when the mode actually changes; other params are ignored.
+fn set_ansi_mode(modes: &mut TerminalModes, events: &mut EventBroker, param: u16, enabled: bool) {
+    let (flag, name) = match param {
+        4 => (&mut modes.insert_mode, "insert_mode"),
+        20 => (
+            &mut modes.line_feed_new_line_mode,
+            "line_feed_new_line_mode",
+        ),
+        _ => return,
+    };
+    if *flag != enabled {
+        *flag = enabled;
+        events.push(crate::terminal::TerminalEvent::ModeChanged(
+            name.to_string(),
+            enabled,
+        ));
+    }
+}
 
 /// Every DEC private mode the terminal implements (DECSET/DECRST params,
 /// ARC-009). The set/reset arms of [`Terminal::set_dec_private_mode`] are
@@ -50,25 +77,7 @@ impl Terminal {
                     if private {
                         self.handle_decset(param);
                     } else {
-                        match param {
-                            4 if !self.modes.insert_mode => {
-                                self.modes.insert_mode = true;
-                                self.events
-                                    .push(crate::terminal::TerminalEvent::ModeChanged(
-                                        "insert_mode".to_string(),
-                                        true,
-                                    ));
-                            }
-                            20 if !self.modes.line_feed_new_line_mode => {
-                                self.modes.line_feed_new_line_mode = true;
-                                self.events
-                                    .push(crate::terminal::TerminalEvent::ModeChanged(
-                                        "line_feed_new_line_mode".to_string(),
-                                        true,
-                                    ));
-                            }
-                            _ => {}
-                        }
+                        set_ansi_mode(&mut self.modes, &mut self.events, param, true);
                     }
                 }
             }
@@ -79,25 +88,7 @@ impl Terminal {
                     if private {
                         self.handle_decrst(param);
                     } else {
-                        match param {
-                            4 if self.modes.insert_mode => {
-                                self.modes.insert_mode = false;
-                                self.events
-                                    .push(crate::terminal::TerminalEvent::ModeChanged(
-                                        "insert_mode".to_string(),
-                                        false,
-                                    ));
-                            }
-                            20 if self.modes.line_feed_new_line_mode => {
-                                self.modes.line_feed_new_line_mode = false;
-                                self.events
-                                    .push(crate::terminal::TerminalEvent::ModeChanged(
-                                        "line_feed_new_line_mode".to_string(),
-                                        false,
-                                    ));
-                            }
-                            _ => {}
-                        }
+                        set_ansi_mode(&mut self.modes, &mut self.events, param, false);
                     }
                 }
             }

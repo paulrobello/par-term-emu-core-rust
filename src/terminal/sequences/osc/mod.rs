@@ -75,7 +75,13 @@ impl Terminal {
                     (self.cursor.row, self.cursor.col),
                     params,
                 ),
-                "9" | "777" | "934" | "99" => self.handle_osc_notify(command, params),
+                "9" | "777" | "934" | "99" => notify::handle_osc_notify(
+                    &mut self.notifications_state,
+                    &mut self.progress_state,
+                    &mut self.events,
+                    command,
+                    params,
+                ),
                 "52" => clipboard::handle_osc_clipboard(
                     &mut self.clipboard_state,
                     &mut self.response_buffer,
