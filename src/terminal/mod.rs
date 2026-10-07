@@ -370,6 +370,23 @@ impl Default for NotificationState {
     }
 }
 
+impl NotificationState {
+    /// Queue a notification, evicting the oldest past `max_notifications`
+    /// (0 disables buffering).
+    pub(crate) fn enqueue(&mut self, notification: Notification) {
+        if self.max_notifications == 0 {
+            return;
+        }
+
+        if self.notifications.len() >= self.max_notifications {
+            let excess = self.notifications.len() + 1 - self.max_notifications;
+            self.notifications.drain(0..excess);
+        }
+
+        self.notifications.push(notification);
+    }
+}
+
 /// Terminal replay/recording state (Feature 24).
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
@@ -901,6 +918,54 @@ pub(crate) struct ProgressBellState {
     pub(crate) bell_count: u64,
 }
 
+impl ProgressBellState {
+    /// Set or update a named progress bar and publish the change.
+    pub(crate) fn set_named(&mut self, bar: NamedProgressBar, events: &mut EventBroker) {
+        let id = bar.id.clone();
+        let state = bar.state;
+        let percent = bar.percent;
+        let label = bar.label.clone();
+        self.named_progress_bars.insert(id.clone(), bar);
+        events.push(TerminalEvent::ProgressBarChanged {
+            action: ProgressBarAction::Set,
+            id,
+            state: Some(state),
+            percent: Some(percent),
+            label,
+        });
+    }
+
+    /// Remove a named progress bar; publishes and returns true only when it existed.
+    pub(crate) fn remove_named(&mut self, id: &str, events: &mut EventBroker) -> bool {
+        if self.named_progress_bars.remove(id).is_some() {
+            events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::Remove,
+                id: id.to_string(),
+                state: None,
+                percent: None,
+                label: None,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove every named progress bar; publishes only when any existed.
+    pub(crate) fn remove_all_named(&mut self, events: &mut EventBroker) {
+        if !self.named_progress_bars.is_empty() {
+            self.named_progress_bars.clear();
+            events.push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::RemoveAll,
+                id: String::new(),
+                state: None,
+                percent: None,
+                label: None,
+            });
+        }
+    }
+}
+
 /// Unicode width configuration + normalization form (ARC-001 sub-struct)
 #[derive(Default)]
 pub(crate) struct UnicodeConfigState {
@@ -963,6 +1028,32 @@ pub(crate) struct BadgeState {
     pub(crate) badge_format: Option<String>,
     /// Session variables for badge format evaluation
     pub(crate) session_variables: crate::badge::SessionVariables,
+}
+
+impl BadgeState {
+    /// The badge format evaluated against the session variables, or `None`
+    /// when no format is set.
+    pub(crate) fn evaluate(&self) -> Option<String> {
+        self.badge_format
+            .as_ref()
+            .map(|format| crate::badge::evaluate_badge_format(format, &self.session_variables))
+    }
+
+    /// Set a user variable, publishing `UserVarChanged` only when the value changed.
+    pub(crate) fn set_user_var(&mut self, name: String, value: String, events: &mut EventBroker) {
+        let old_value = self.session_variables.custom.get(&name).cloned();
+        let changed = old_value.as_deref() != Some(&value);
+        self.session_variables
+            .custom
+            .insert(name.clone(), value.clone());
+        if changed {
+            events.push(TerminalEvent::UserVarChanged {
+                name,
+                value,
+                old_value,
+            });
+        }
+    }
 }
 
 /// Unified graphics/inline-image/file machinery: graphics store, Sixel limits,
@@ -1603,9 +1694,7 @@ impl Terminal {
     /// assert_eq!(terminal.evaluate_badge(), Some("alice@server1".to_string()));
     /// ```
     pub fn evaluate_badge(&self) -> Option<String> {
-        self.badge_state.badge_format.as_ref().map(|format| {
-            crate::badge::evaluate_badge_format(format, &self.badge_state.session_variables)
-        })
+        self.badge_state.evaluate()
     }
 
     /// Get a user variable by name
@@ -1627,24 +1716,7 @@ impl Terminal {
 
     /// Set a user variable, emitting a UserVarChanged event if the value changed
     pub fn set_user_var(&mut self, name: String, value: String) {
-        let old_value = self
-            .badge_state
-            .session_variables
-            .custom
-            .get(&name)
-            .cloned();
-        let changed = old_value.as_deref() != Some(&value);
-        self.badge_state
-            .session_variables
-            .custom
-            .insert(name.clone(), value.clone());
-        if changed {
-            self.events.push(TerminalEvent::UserVarChanged {
-                name,
-                value,
-                old_value,
-            });
-        }
+        self.badge_state.set_user_var(name, value, &mut self.events);
     }
 
     /// Check if alternate screen is active
@@ -2423,19 +2495,7 @@ impl Terminal {
     }
 
     fn enqueue_notification(&mut self, notification: Notification) {
-        if self.notifications_state.max_notifications == 0 {
-            return;
-        }
-
-        if self.notifications_state.notifications.len()
-            >= self.notifications_state.max_notifications
-        {
-            let excess = self.notifications_state.notifications.len() + 1
-                - self.notifications_state.max_notifications;
-            self.notifications_state.notifications.drain(0..excess);
-        }
-
-        self.notifications_state.notifications.push(notification);
+        self.notifications_state.enqueue(notification);
     }
 
     /// Set maximum OSC 9/777 notifications retained (0 disables buffering)
@@ -2518,52 +2578,19 @@ impl Terminal {
 
     /// Set or update a named progress bar and emit an event
     pub fn set_named_progress_bar(&mut self, bar: NamedProgressBar) {
-        let id = bar.id.clone();
-        let state = bar.state;
-        let percent = bar.percent;
-        let label = bar.label.clone();
-        self.progress_state
-            .named_progress_bars
-            .insert(id.clone(), bar);
-        self.events.push(TerminalEvent::ProgressBarChanged {
-            action: ProgressBarAction::Set,
-            id,
-            state: Some(state),
-            percent: Some(percent),
-            label,
-        });
+        self.progress_state.set_named(bar, &mut self.events);
     }
 
     /// Remove a named progress bar by ID and emit an event
     ///
     /// Returns true if the bar existed and was removed.
     pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
-        if self.progress_state.named_progress_bars.remove(id).is_some() {
-            self.events.push(TerminalEvent::ProgressBarChanged {
-                action: ProgressBarAction::Remove,
-                id: id.to_string(),
-                state: None,
-                percent: None,
-                label: None,
-            });
-            true
-        } else {
-            false
-        }
+        self.progress_state.remove_named(id, &mut self.events)
     }
 
     /// Remove all named progress bars and emit an event
     pub fn remove_all_named_progress_bars(&mut self) {
-        if !self.progress_state.named_progress_bars.is_empty() {
-            self.progress_state.named_progress_bars.clear();
-            self.events.push(TerminalEvent::ProgressBarChanged {
-                action: ProgressBarAction::RemoveAll,
-                id: String::new(),
-                state: None,
-                percent: None,
-                label: None,
-            });
-        }
+        self.progress_state.remove_all_named(&mut self.events);
     }
 
     /// Get the current bell count

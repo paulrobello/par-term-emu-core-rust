@@ -2160,11 +2160,12 @@ fn test_current_dir_rejects_control_chars() {
 
     // The OSC parser cannot deliver raw C0 controls, but the handler is a
     // pub(crate) seam — it must reject them the way parse_osc7_url does.
-    term.handle_current_dir("/tmp/a\0b");
+    let accept = term.security_state.accept_osc7;
+    super::iterm::handle_current_dir(&mut term.cwd_capability(), accept, "/tmp/a\0b");
     assert_eq!(term.shell_state.shell_integration.cwd(), None);
-    term.handle_current_dir("/tmp/a\nb");
+    super::iterm::handle_current_dir(&mut term.cwd_capability(), accept, "/tmp/a\nb");
     assert_eq!(term.shell_state.shell_integration.cwd(), None);
 
-    term.handle_current_dir("/tmp/ok");
+    super::iterm::handle_current_dir(&mut term.cwd_capability(), accept, "/tmp/ok");
     assert_eq!(term.shell_state.shell_integration.cwd(), Some("/tmp/ok"));
 }

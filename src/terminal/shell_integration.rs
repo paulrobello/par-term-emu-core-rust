@@ -53,7 +53,7 @@ pub struct ShellIntegrationStats {
     pub total_duration_ms: u64,
 }
 
-use crate::terminal::Terminal;
+use crate::terminal::{BadgeState, CommandHistoryState, EventBroker, ShellState, Terminal};
 
 impl Terminal {
     // === Feature 31: Shell Integration++ ===
@@ -156,90 +156,14 @@ impl Terminal {
 
     /// Record a CWD change
     pub fn record_cwd_change(&mut self, change: crate::terminal::CwdChange) {
-        let old_hostname = self.shell_state.last_hostname.clone();
-        let old_username = self.shell_state.last_username.clone();
-        let old_cwd = self
-            .shell_state
-            .shell_integration
-            .cwd()
-            .map(|s| s.to_string());
-
-        // Update current state
-        self.shell_state.last_hostname = change.hostname.clone();
-        self.shell_state.last_username = change.username.clone();
-        self.shell_state
-            .shell_integration
-            .set_cwd(change.new_cwd.clone());
-        self.shell_state
-            .shell_integration
-            .set_hostname(change.hostname.clone());
-        self.shell_state
-            .shell_integration
-            .set_username(change.username.clone());
-
-        // Update session variables for badges
-        self.badge_state
-            .session_variables
-            .set_path(change.new_cwd.clone());
-        if let Some(ref h) = change.hostname {
-            self.badge_state.session_variables.set_hostname(h.clone());
-        } else {
-            self.badge_state.session_variables.hostname = None;
-        }
-        if let Some(ref u) = change.username {
-            self.badge_state.session_variables.set_username(u.clone());
-        } else {
-            self.badge_state.session_variables.username = None;
-        }
-
-        // Emit CwdChanged event
-        self.events
-            .push(crate::terminal::TerminalEvent::CwdChanged(change.clone()));
-
-        // Emit EnvironmentChanged event for CWD
-        self.events
-            .push(crate::terminal::TerminalEvent::EnvironmentChanged {
-                key: "cwd".to_string(),
-                value: change.new_cwd.clone(),
-                old_value: old_cwd,
-            });
-
-        // Emit EnvironmentChanged for hostname if changed
-        if change.hostname != old_hostname {
-            self.events
-                .push(crate::terminal::TerminalEvent::EnvironmentChanged {
-                    key: "hostname".to_string(),
-                    value: change.hostname.clone().unwrap_or_default(),
-                    old_value: old_hostname.clone(),
-                });
-
-            // Emit RemoteHostTransition event
-            self.events
-                .push(crate::terminal::TerminalEvent::RemoteHostTransition {
-                    hostname: change
-                        .hostname
-                        .clone()
-                        .unwrap_or_else(|| "localhost".to_string()),
-                    username: change.username.clone(),
-                    old_hostname,
-                    old_username: old_username.clone(),
-                });
-        }
-
-        // Emit EnvironmentChanged for username if changed
-        if change.username != old_username {
-            self.events
-                .push(crate::terminal::TerminalEvent::EnvironmentChanged {
-                    key: "username".to_string(),
-                    value: change.username.clone().unwrap_or_default(),
-                    old_value: old_username,
-                });
-        }
-
-        self.command_history_state.cwd_changes.push(change);
-        if self.command_history_state.cwd_changes.len() > self.host.max_cwd_history {
-            self.command_history_state.cwd_changes.remove(0);
-        }
+        record_cwd_change(
+            &mut self.shell_state,
+            &mut self.badge_state,
+            &mut self.events,
+            &mut self.command_history_state,
+            self.host.max_cwd_history,
+            change,
+        );
     }
 
     /// Get CWD change history
@@ -327,5 +251,92 @@ impl Terminal {
         (0..self.command_history_state.command_history.len())
             .filter_map(|i| self.get_command_output(i))
             .collect()
+    }
+}
+
+/// Apply a working-directory change: update shell-integration and badge
+/// session state, publish the CwdChanged / EnvironmentChanged /
+/// RemoteHostTransition events, and append to the capped CWD history.
+///
+/// Capability boundary (ARC-002): shared by `Terminal::record_cwd_change`
+/// and the OSC 7 / OSC 1337 CurrentDir / RemoteHost handlers.
+pub(crate) fn record_cwd_change(
+    shell: &mut ShellState,
+    badge: &mut BadgeState,
+    events: &mut EventBroker,
+    history: &mut CommandHistoryState,
+    max_cwd_history: usize,
+    change: crate::terminal::CwdChange,
+) {
+    let old_hostname = shell.last_hostname.clone();
+    let old_username = shell.last_username.clone();
+    let old_cwd = shell.shell_integration.cwd().map(|s| s.to_string());
+
+    // Update current state
+    shell.last_hostname = change.hostname.clone();
+    shell.last_username = change.username.clone();
+    shell.shell_integration.set_cwd(change.new_cwd.clone());
+    shell
+        .shell_integration
+        .set_hostname(change.hostname.clone());
+    shell
+        .shell_integration
+        .set_username(change.username.clone());
+
+    // Update session variables for badges
+    badge.session_variables.set_path(change.new_cwd.clone());
+    if let Some(ref h) = change.hostname {
+        badge.session_variables.set_hostname(h.clone());
+    } else {
+        badge.session_variables.hostname = None;
+    }
+    if let Some(ref u) = change.username {
+        badge.session_variables.set_username(u.clone());
+    } else {
+        badge.session_variables.username = None;
+    }
+
+    // Emit CwdChanged event
+    events.push(crate::terminal::TerminalEvent::CwdChanged(change.clone()));
+
+    // Emit EnvironmentChanged event for CWD
+    events.push(crate::terminal::TerminalEvent::EnvironmentChanged {
+        key: "cwd".to_string(),
+        value: change.new_cwd.clone(),
+        old_value: old_cwd,
+    });
+
+    // Emit EnvironmentChanged for hostname if changed
+    if change.hostname != old_hostname {
+        events.push(crate::terminal::TerminalEvent::EnvironmentChanged {
+            key: "hostname".to_string(),
+            value: change.hostname.clone().unwrap_or_default(),
+            old_value: old_hostname.clone(),
+        });
+
+        // Emit RemoteHostTransition event
+        events.push(crate::terminal::TerminalEvent::RemoteHostTransition {
+            hostname: change
+                .hostname
+                .clone()
+                .unwrap_or_else(|| "localhost".to_string()),
+            username: change.username.clone(),
+            old_hostname,
+            old_username: old_username.clone(),
+        });
+    }
+
+    // Emit EnvironmentChanged for username if changed
+    if change.username != old_username {
+        events.push(crate::terminal::TerminalEvent::EnvironmentChanged {
+            key: "username".to_string(),
+            value: change.username.clone().unwrap_or_default(),
+            old_value: old_username,
+        });
+    }
+
+    history.cwd_changes.push(change);
+    if history.cwd_changes.len() > max_cwd_history {
+        history.cwd_changes.remove(0);
     }
 }
