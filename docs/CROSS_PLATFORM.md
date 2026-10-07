@@ -543,14 +543,14 @@ fn test_windows_conpty() {
 - Use VMs or WSL for testing other platforms locally
 
 **CI/CD Testing:**
-- CI runs on Linux, macOS, and Windows via GitHub Actions (manually triggered via `workflow_dispatch`)
+- CI runs on every pull request (Linux-only test and mux legs, lint, FFI drift) and on manual `workflow_dispatch` (full Linux, macOS, and Windows matrix)
 - Check CI results before merging
 - Fix any platform-specific failures
 
-**Test Matrix:**
+**Test Matrix (manual dispatch):**
 - Tests run on Python 3.12, 3.13, and 3.14
 - Tests run on all three major platforms
-- Total: 9 test combinations per CI run
+- Total: 9 test combinations per dispatched run
 
 ### 5. Document Platform-Specific Behavior
 
@@ -577,7 +577,7 @@ let pty_system = portable_pty::native_pty_system();
 
 The project uses comprehensive cross-platform CI via GitHub Actions (`.github/workflows/ci.yml`).
 
-**Trigger**: Workflow runs on `workflow_dispatch` (manual trigger)
+**Trigger**: `pull_request` runs version check, lint, FFI drift, and the test and mux jobs on `ubuntu-latest` with Python 3.14. `workflow_dispatch` (manual) runs the full matrix below plus wheels, the feature matrix, `web_term/` drift, and the iOS xcframework.
 
 **Test Matrix:**
 ```yaml
