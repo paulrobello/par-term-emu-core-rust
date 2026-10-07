@@ -1296,32 +1296,27 @@ fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
 }
 
 fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
-    let window = {
-        let guard = ctx.tree.lock();
-        match guard.resolve_window_target(window) {
-            Ok(id) => id,
-            Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
+    let killed = match kill_target(
+        ctx,
+        window,
+        MuxTree::resolve_window_target,
+        MuxTree::kill_window,
+    ) {
+        Ok(killed) => killed,
+        Err(outcome) => return outcome,
     };
-    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
-    let killed = ctx.tree.lock().kill_window(window);
-    match killed {
-        Ok(removed_session) => {
-            let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
-                window_id: window.to_string(),
-            });
-            if removed_session.is_some() {
-                // The cascade reached the session — same argument-less
-                // cue kill-pane's cascade sends, so one handler covers both.
-                outcome = outcome.notifying(TmuxNotification::SessionsChanged);
-                if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
-                    outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
-                }
-            }
-            outcome
+    let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+        window_id: killed.id.to_string(),
+    });
+    if killed.removed.is_some() {
+        // The cascade reached the session — same argument-less
+        // cue kill-pane's cascade sends, so one handler covers both.
+        outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+        if killed.workspaces_changed {
+            outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
         }
-        Err(err) => Outcome::err(ctx, &err.to_string()),
     }
+    outcome
 }
 
 fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> Outcome {
@@ -1420,35 +1415,25 @@ fn cmd_rename_session(ctx: &Ctx<'_>, session: Target<SessionId>, name: String) -
 }
 
 fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Outcome {
-    let session = {
-        let guard = ctx.tree.lock();
-        match guard.resolve_session_target(session) {
-            Ok(id) => id,
-            Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
+    let killed = match kill_target(
+        ctx,
+        session,
+        MuxTree::resolve_session_target,
+        MuxTree::kill_session,
+    ) {
+        Ok(killed) => killed,
+        Err(outcome) => return outcome,
     };
-    let workspace_fingerprint = workspace_roster_fingerprint(ctx.tree);
-    let killed = ctx.tree.lock().kill_session(session);
-    match killed {
-        Ok(killed_windows) => {
-            // The same line order kill-window's cascade produces: one
-            // %window-close per killed window, then the session-set cue —
-            // plus the workspace cue when the session's death emptied its
-            // workspace away.
-            let mut outcome = Outcome::ok(ctx, "");
-            for window in &killed_windows {
-                outcome = outcome.notifying(TmuxNotification::WindowClose {
-                    window_id: window.to_string(),
-                });
-            }
-            outcome = outcome.notifying(TmuxNotification::SessionsChanged);
-            if workspace_roster_changed(ctx.tree, &workspace_fingerprint) {
-                outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
-            }
-            outcome
-        }
-        Err(err) => Outcome::err(ctx, &err.to_string()),
+    // The same line order kill-window's cascade produces: one
+    // %window-close per killed window, then the session-set cue —
+    // plus the workspace cue when the session's death emptied its
+    // workspace away.
+    let mut outcome = notify_window_closes(Outcome::ok(ctx, ""), &killed.removed)
+        .notifying(TmuxNotification::SessionsChanged);
+    if killed.workspaces_changed {
+        outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
     }
+    outcome
 }
 
 fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> Outcome {
@@ -1632,30 +1617,67 @@ fn cmd_rename_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, name: Str
 }
 
 fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {
-    let workspace = {
-        let guard = ctx.tree.lock();
-        match guard.resolve_workspace_target(workspace) {
-            Ok(id) => id,
-            Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
+    let killed = match kill_target(
+        ctx,
+        workspace,
+        MuxTree::resolve_workspace_target,
+        MuxTree::kill_workspace,
+    ) {
+        Ok(killed) => killed,
+        Err(outcome) => return outcome,
     };
-    match ctx.tree.lock().kill_workspace(workspace) {
-        Ok(killed_windows) => {
-            // kill-session's line order, workspace-flavored: one
-            // %window-close per killed window, then the session-set cue,
-            // then the workspace-roster cue.
-            let mut outcome = Outcome::ok(ctx, "");
-            for window in &killed_windows {
-                outcome = outcome.notifying(TmuxNotification::WindowClose {
-                    window_id: window.to_string(),
-                });
-            }
-            outcome
-                .notifying(TmuxNotification::SessionsChanged)
-                .notifying(TmuxNotification::WorkspacesChanged)
-        }
-        Err(err) => Outcome::err(ctx, &err.to_string()),
+    // kill-session's line order, workspace-flavored: one
+    // %window-close per killed window, then the session-set cue,
+    // then the workspace-roster cue — unconditional, since the killed
+    // workspace itself left the roster.
+    notify_window_closes(Outcome::ok(ctx, ""), &killed.removed)
+        .notifying(TmuxNotification::SessionsChanged)
+        .notifying(TmuxNotification::WorkspacesChanged)
+}
+
+/// What [`kill_target`] reports for a kill that landed.
+struct Killed<I, T> {
+    /// The resolved id of the killed target.
+    id: I,
+    /// The tree's kill result: the cascaded-away session for kill-window,
+    /// the killed windows for kill-session and kill-workspace.
+    removed: T,
+    /// Whether the workspace roster (set or selection) differs from its
+    /// pre-kill snapshot.
+    workspaces_changed: bool,
+}
+
+/// The resolve-then-kill step shared by the kill-window, kill-session, and
+/// kill-workspace handlers: resolve the target under its own lock (released
+/// before the kill), snapshot the workspace roster, run the tree's kill, and
+/// report the roster delta. A resolve failure, then a kill failure, becomes
+/// the command's error reply; each handler keeps only its notifications.
+fn kill_target<I: Copy, T>(
+    ctx: &Ctx<'_>,
+    target: Target<I>,
+    resolve: impl FnOnce(&MuxTree, Target<I>) -> Result<I, MuxError>,
+    kill: impl FnOnce(&mut MuxTree, I) -> Result<T, MuxError>,
+) -> Result<Killed<I, T>, Outcome> {
+    let resolved = resolve(&ctx.tree.lock(), target);
+    let id = resolved.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
+    let fingerprint = workspace_roster_fingerprint(ctx.tree);
+    let killed = kill(&mut ctx.tree.lock(), id);
+    let removed = killed.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
+    Ok(Killed {
+        id,
+        removed,
+        workspaces_changed: workspace_roster_changed(ctx.tree, &fingerprint),
+    })
+}
+
+/// Queue one `%window-close` per killed window, in kill order.
+fn notify_window_closes(mut outcome: Outcome, windows: &[WindowId]) -> Outcome {
+    for window in windows {
+        outcome = outcome.notifying(TmuxNotification::WindowClose {
+            window_id: window.to_string(),
+        });
     }
+    outcome
 }
 
 /// Snapshot the workspace roster for [`workspace_roster_changed`]: the
