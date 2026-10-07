@@ -405,7 +405,7 @@ You may hold any number of snapshots; they are independent copies, not live view
 
 ## Observers
 
-Register a vtable to receive terminal events inline as `ptec_terminal_feed` parses:
+Register a vtable to receive terminal events inline as `ptec_terminal_feed` parses (and during `ptec_terminal_resize`, which can scroll zones out):
 
 ```c
 #include "terminal_core.h"
@@ -468,7 +468,7 @@ static void on_event_v2(void *user_data, const TermEvent *ev) {
 
 - The text slots' `event_text` parameter is the Rust `Debug` formatting of the event (`format!("{:?}", event)`), **not JSON**. It is diagnostic text with **no stable format** — it changes whenever the Rust event enum changes. Parse it only for logging; gate no behavior on its shape (use `on_event_v2` for that). An interior NUL in the text is replaced with U+FFFD; the event is never dropped.
 - Every pointer (`event_text`, the `TermEvent` and its `payload`) is valid only for the duration of the callback; do not free it, do not store it.
-- **No re-entry.** Callbacks fire inline while the terminal is mutably borrowed for the dispatch — a callback must not call any `ptec_terminal_*` function on the same handle; re-entry is undefined behavior. Copy what you need out and act after `ptec_terminal_feed` returns.
+- **No re-entry.** Callbacks fire inline while the terminal is mutably borrowed for the dispatch — a callback must not call any `ptec_terminal_*` function on the same handle; re-entry is undefined behavior. Copy what you need out and act after `ptec_terminal_feed` / `ptec_terminal_resize` returns.
 - The vtable (including its `user_data`) must stay valid for the lifetime of the registration; the library never takes ownership of it. `ptec_terminal_add_observer` returns an id for `ptec_terminal_remove_observer` (returns `true` if the observer was found).
 
 ## Swift: `import TerminalCore`

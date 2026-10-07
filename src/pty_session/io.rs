@@ -200,14 +200,17 @@ impl PtySession {
         self.cols = cols;
         self.rows = rows;
 
-        // Resize the terminal
-        {
+        // Resize the terminal; observer delivery waits for the guard to drop
+        // (ARC-001).
+        let dispatch_batch = {
             let mut term = self.terminal.write();
-            term.resize(cols as usize, rows as usize);
+            let batch = term.resize_deferred(cols as usize, rows as usize);
             // Record resize event for session recording
             term.record_resize(cols as usize, rows as usize);
             self.geometry.publish(&term);
-        }
+            batch
+        };
+        dispatch_batch.deliver();
 
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {
@@ -286,13 +289,16 @@ impl PtySession {
             self.cell_pixel_height = (pixel_height / rows).max(1);
         }
 
-        // Resize the terminal and record pixel size
-        {
+        // Resize the terminal and record pixel size; observer delivery waits
+        // for the guard to drop (ARC-001).
+        let dispatch_batch = {
             let mut term = self.terminal.write();
-            term.resize(cols as usize, rows as usize);
+            let batch = term.resize_deferred(cols as usize, rows as usize);
             term.set_pixel_size(pixel_width as usize, pixel_height as usize);
             self.geometry.publish(&term);
-        }
+            batch
+        };
+        dispatch_batch.deliver();
 
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {

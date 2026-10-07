@@ -1537,7 +1537,28 @@ impl Terminal {
     }
 
     /// Resize the terminal
+    ///
+    /// Ends with the same tail as [`Terminal::process`]: zones the reflow
+    /// pushed off the scrollback floor are queued as `ZoneScrolledOut` and
+    /// delivered to observers before this returns.
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        self.resize_internal(cols, rows);
+        self.finish_applied_actions();
+    }
+
+    /// [`Terminal::resize`] without invoking observer callbacks: the
+    /// counterpart of [`Terminal::process_deferred`] for callers that hold
+    /// an exclusive lock around the resize. Deliver the returned batch after
+    /// releasing that lock.
+    pub(crate) fn resize_deferred(&mut self, cols: usize, rows: usize) -> ObserverDispatchBatch {
+        self.resize_internal(cols, rows);
+        self.flush_evicted_zones();
+        let batch = self.take_observer_dispatch_batch();
+        self.cap_terminal_events();
+        batch
+    }
+
+    fn resize_internal(&mut self, cols: usize, rows: usize) {
         crate::debug_log!("TERMINAL_RESIZE", "Requested resize to {}x{}", cols, rows);
 
         // Reflow moves rows across the scrollback boundary; pending trigger

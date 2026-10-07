@@ -400,11 +400,12 @@ typedef void (*term_event_v2_cb)(void *user_data, const TermEvent *event);
  * Any slot may be NULL; a NULL slot costs nothing (its text or JSON is never
  * built).
  *
- * Callbacks fire inline while the terminal is processing input. A callback
- * must NOT re-enter the FFI on the same `Terminal` handle (any
- * `ptec_terminal_*` function): the terminal is mutably borrowed for the
- * duration of the dispatch, so re-entry aliases `&`/`&mut` — undefined
- * behavior. Queue what you need and call back after `ptec_terminal_feed`
+ * Callbacks fire inline while the terminal is processing input or
+ * resizing (a resize can scroll zones out). A callback must NOT re-enter
+ * the FFI on the same `Terminal` handle (any `ptec_terminal_*` function):
+ * the terminal is mutably borrowed for the duration of the dispatch, so
+ * re-entry aliases `&`/`&mut` — undefined behavior. Queue what you need
+ * and call back after `ptec_terminal_feed` / `ptec_terminal_resize`
  * returns.
  */
 typedef struct {
@@ -481,6 +482,9 @@ void ptec_terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
 
 /**
  * Resize the terminal grid. A zero `cols` or `rows` is a no-op.
+ *
+ * Observers receive any `ZoneScrolledOut` events the resize causes
+ * before this returns (same no-re-entry rule as `ptec_terminal_feed`).
  *
  * # Safety
  * `term` must be a valid pointer to a `Terminal`.

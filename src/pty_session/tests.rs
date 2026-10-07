@@ -1098,6 +1098,71 @@ fn test_observer_dispatch_does_not_hold_write_lock() {
     );
 }
 
+/// A resize that evicts zones delivers `ZoneScrolledOut` to observers
+/// before it returns, and (as with the reader thread, ARC-001) only after
+/// the session's write guard is dropped. Covers both resize entry points.
+#[test]
+fn test_resize_eviction_reaches_observers_without_write_lock() {
+    use crate::observer::TerminalObserver;
+    use crate::terminal::TerminalEvent;
+
+    struct ZoneLockProbe {
+        terminal: Arc<RwLock<Terminal>>,
+        scrolled_out: AtomicBool,
+        lock_was_free: AtomicBool,
+    }
+
+    impl TerminalObserver for ZoneLockProbe {
+        fn on_zone_event(&self, event: &TerminalEvent) {
+            if matches!(event, TerminalEvent::ZoneScrolledOut { .. }) {
+                if self.terminal.try_write().is_some() {
+                    self.lock_was_free.store(true, Ordering::SeqCst);
+                }
+                self.scrolled_out.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    for with_pixels in [false, true] {
+        let mut session = PtySession::new(20, 5, 4);
+        let terminal_arc = Arc::clone(session.terminal_ref());
+        let probe = Arc::new(ZoneLockProbe {
+            terminal: Arc::clone(&terminal_arc),
+            scrolled_out: AtomicBool::new(false),
+            lock_was_free: AtomicBool::new(false),
+        });
+        {
+            let mut term = terminal_arc.write();
+            term.add_observer(probe.clone());
+            let mut bytes =
+                b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07"
+                    .to_vec();
+            for _ in 0..5 {
+                bytes.extend_from_slice(b"\r\nxxxxxxxxxxxxxxxxxxxx");
+            }
+            term.process(&bytes);
+        }
+        assert!(!probe.scrolled_out.load(Ordering::SeqCst));
+
+        if with_pixels {
+            session
+                .resize_with_pixels(5, 5, 50, 100)
+                .expect("resize_with_pixels");
+        } else {
+            session.resize(5, 5).expect("resize");
+        }
+
+        assert!(
+            probe.scrolled_out.load(Ordering::SeqCst),
+            "observer missed ZoneScrolledOut from resize (with_pixels={with_pixels})"
+        );
+        assert!(
+            probe.lock_was_free.load(Ordering::SeqCst),
+            "resize delivered observer events under the write guard (with_pixels={with_pixels})"
+        );
+    }
+}
+
 #[test]
 fn test_get_writer_before_spawn_is_none() {
     let session = PtySession::new(80, 24, 1000);

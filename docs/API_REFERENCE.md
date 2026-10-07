@@ -1027,7 +1027,7 @@ r, g, b = term.hsv_to_rgb_color(0.0, 1.0, 1.0)  # (255, 0, 0)
 
 ### Observer API
 
-Push-based event delivery for terminal state changes. Observers receive event dicts as they occur during `process()` calls, eliminating the need to poll for events.
+Push-based event delivery for terminal state changes. Observers receive event dicts as they occur during `process()` calls (and `resize()`, which can scroll zones out), eliminating the need to poll for events.
 
 #### Registration Methods
 
