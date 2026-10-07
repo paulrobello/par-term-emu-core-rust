@@ -1,7 +1,136 @@
 //! Cursor-related CSI sequence handling
+//!
+//! Capability boundary (ARC-002): cursor motion (CUU/CUD/CUF/CUB, CUP/HVP,
+//! CNL/CPL, CHA/HPA, VPA, CBT) is a free function over the cursor, the
+//! delayed-wrap flag, the margins, and the tab stops. The router stays on
+//! `Terminal`: CHT writes tab characters through `write_char` (the full
+//! print path), and the remaining arms (DECSCUSR + DECSWBV, SCOSC/SCORC +
+//! DECSMBV, TBC) each touch one or two loose `Terminal` fields.
 
-use crate::terminal::Terminal;
+use crate::cursor::Cursor;
+use crate::terminal::{MarginState, Terminal};
 use vte::Params;
+
+/// First parameter as a count; 0 or missing means 1.
+fn count_param(params: &Params) -> usize {
+    let n = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(1) as usize;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// Cursor motion sequences. Returns `false` (and changes nothing) for an
+/// action this function does not handle. `size` is the active screen's
+/// `(cols, rows)`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_cursor_motion(
+    cursor: &mut Cursor,
+    pending_wrap: &mut bool,
+    origin_mode: bool,
+    margins: &MarginState,
+    tab_stops: &[bool],
+    size: (usize, usize),
+    action: char,
+    params: &Params,
+) -> bool {
+    let (cols, rows) = size;
+    match action {
+        'A' => {
+            // Cursor up (CUU)
+            cursor.move_up(count_param(params));
+        }
+        'B' => {
+            // Cursor down (CUD)
+            cursor.move_down(count_param(params), rows.saturating_sub(1));
+        }
+        'C' => {
+            // Cursor forward (CUF)
+            cursor.move_right(count_param(params), cols.saturating_sub(1));
+        }
+        'D' => {
+            // Cursor back (CUB)
+            cursor.move_left(count_param(params));
+        }
+        'H' | 'f' => {
+            // Cursor position (CUP/HVP)
+            let mut iter = params.iter();
+            let row = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
+            let col = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
+
+            let col = col.saturating_sub(1);
+            let row = row.saturating_sub(1);
+
+            if origin_mode {
+                let region_height = margins
+                    .scroll_region_bottom
+                    .saturating_sub(margins.scroll_region_top)
+                    + 1;
+                let actual_row =
+                    margins.scroll_region_top + row.min(region_height.saturating_sub(1));
+                let actual_col = col.min(cols.saturating_sub(1));
+                cursor.goto(actual_col, actual_row);
+            } else {
+                cursor.goto(
+                    col.min(cols.saturating_sub(1)),
+                    row.min(rows.saturating_sub(1)),
+                );
+            }
+        }
+        'E' => {
+            // Cursor next line (CNL)
+            cursor.move_down(count_param(params), rows.saturating_sub(1));
+            cursor.col = 0;
+        }
+        'F' => {
+            // Cursor preceding line (CPL)
+            cursor.move_up(count_param(params));
+            cursor.col = 0;
+        }
+        'G' | '`' => {
+            // Cursor horizontal absolute (CHA/HPA)
+            let col = params
+                .iter()
+                .next()
+                .and_then(|p| p.first())
+                .copied()
+                .unwrap_or(1) as usize;
+            cursor.col = col.saturating_sub(1).min(cols.saturating_sub(1));
+        }
+        'd' => {
+            // Line position absolute (VPA)
+            let row = params
+                .iter()
+                .next()
+                .and_then(|p| p.first())
+                .copied()
+                .unwrap_or(1) as usize;
+            cursor.row = row.saturating_sub(1).min(rows.saturating_sub(1));
+        }
+        'Z' => {
+            // Horizontal tab back (CBT)
+            for _ in 0..count_param(params) {
+                let mut col = cursor.col;
+                if col > 0 {
+                    col -= 1;
+                    while col > 0 && !tab_stops[col] {
+                        col -= 1;
+                    }
+                    cursor.col = col;
+                }
+            }
+        }
+        _ => return false,
+    }
+    *pending_wrap = false;
+    true
+}
 
 impl Terminal {
     pub(crate) fn handle_csi_cursor(
@@ -10,164 +139,26 @@ impl Terminal {
         params: &Params,
         _intermediates: &[u8],
     ) {
-        let (cols, rows) = self.size();
+        let size = self.size();
+        if handle_cursor_motion(
+            &mut self.cursor,
+            &mut self.pending_wrap,
+            self.modes.origin_mode,
+            &self.margins,
+            &self.tab_stops,
+            size,
+            action,
+            params,
+        ) {
+            return;
+        }
 
         match action {
-            'A' => {
-                // Cursor up (CUU)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_up(n);
-                self.pending_wrap = false;
-            }
-            'B' => {
-                // Cursor down (CUD)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_down(n, rows.saturating_sub(1));
-                self.pending_wrap = false;
-            }
-            'C' => {
-                // Cursor forward (CUF)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_right(n, cols.saturating_sub(1));
-                self.pending_wrap = false;
-            }
-            'D' => {
-                // Cursor back (CUB)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_left(n);
-                self.pending_wrap = false;
-            }
-            'H' | 'f' => {
-                // Cursor position (CUP/HVP)
-                let mut iter = params.iter();
-                let row = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
-                let col = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
-
-                let col = col.saturating_sub(1);
-                let row = row.saturating_sub(1);
-
-                if self.modes.origin_mode {
-                    let region_height = self
-                        .margins.scroll_region_bottom
-                        .saturating_sub(self.margins.scroll_region_top)
-                        + 1;
-                    let actual_row =
-                        self.margins.scroll_region_top + row.min(region_height.saturating_sub(1));
-                    let actual_col = col.min(cols.saturating_sub(1));
-                    self.cursor.goto(actual_col, actual_row);
-                } else {
-                    self.cursor.goto(
-                        col.min(cols.saturating_sub(1)),
-                        row.min(rows.saturating_sub(1)),
-                    );
-                }
-                self.pending_wrap = false;
-            }
-            'E' => {
-                // Cursor next line (CNL)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_down(n, rows.saturating_sub(1));
-                self.cursor.col = 0;
-                self.pending_wrap = false;
-            }
-            'F' => {
-                // Cursor preceding line (CPL)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                self.cursor.move_up(n);
-                self.cursor.col = 0;
-                self.pending_wrap = false;
-            }
-            'G' | '`' => {
-                // Cursor horizontal absolute (CHA/HPA)
-                let col = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                self.cursor.col = col.saturating_sub(1).min(cols.saturating_sub(1));
-                self.pending_wrap = false;
-            }
-            'd' => {
-                // Line position absolute (VPA)
-                let row = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                self.cursor.row = row.saturating_sub(1).min(rows.saturating_sub(1));
-                self.pending_wrap = false;
-            }
             'I' => {
                 // Horizontal tab forward (CHT)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                for _ in 0..n {
+                for _ in 0..count_param(params) {
                     self.write_char('\t');
                 }
-            }
-            'Z' => {
-                // Horizontal tab back (CBT)
-                let n = params
-                    .iter()
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(1) as usize;
-                let n = if n == 0 { 1 } else { n };
-                for _ in 0..n {
-                    let mut col = self.cursor.col;
-                    if col > 0 {
-                        col -= 1;
-                        while col > 0 && !self.tab_stops[col] {
-                            col -= 1;
-                        }
-                        self.cursor.col = col;
-                    }
-                }
-                self.pending_wrap = false;
             }
             'q'
                 // DECSCUSR - Set Cursor Style OR DECSWBV - Set Warning Bell Volume

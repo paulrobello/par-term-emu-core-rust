@@ -804,6 +804,28 @@ impl Default for SavedCursorState {
     }
 }
 
+impl SavedCursorState {
+    /// DECSC / SCOSC: snapshot the cursor and the SGR pen.
+    pub(crate) fn save(&mut self, cursor: &Cursor, attrs: &TextAttributes) {
+        self.saved_cursor = Some(*cursor);
+        self.saved_fg = attrs.fg;
+        self.saved_bg = attrs.bg;
+        self.saved_underline_color = attrs.underline_color;
+        self.saved_flags = attrs.flags;
+    }
+
+    /// DECRC / SCORC: restore the snapshot; a no-op when nothing was saved.
+    pub(crate) fn restore(&self, cursor: &mut Cursor, attrs: &mut TextAttributes) {
+        if let Some(saved) = self.saved_cursor {
+            *cursor = saved;
+            attrs.fg = self.saved_fg;
+            attrs.bg = self.saved_bg;
+            attrs.underline_color = self.saved_underline_color;
+            attrs.flags = self.saved_flags;
+        }
+    }
+}
+
 /// Feature 31 command/CWD execution history (ARC-001 sub-struct)
 #[derive(Default)]
 pub(crate) struct CommandHistoryState {
@@ -1761,22 +1783,12 @@ impl Terminal {
 
     /// Save current cursor state
     pub fn save_cursor(&mut self) {
-        self.saved_state.saved_cursor = Some(self.cursor);
-        self.saved_state.saved_fg = self.attrs.fg;
-        self.saved_state.saved_bg = self.attrs.bg;
-        self.saved_state.saved_underline_color = self.attrs.underline_color;
-        self.saved_state.saved_flags = self.attrs.flags;
+        self.saved_state.save(&self.cursor, &self.attrs);
     }
 
     /// Restore previously saved cursor state
     pub fn restore_cursor(&mut self) {
-        if let Some(saved) = self.saved_state.saved_cursor {
-            self.cursor = saved;
-            self.attrs.fg = self.saved_state.saved_fg;
-            self.attrs.bg = self.saved_state.saved_bg;
-            self.attrs.underline_color = self.saved_state.saved_underline_color;
-            self.attrs.flags = self.saved_state.saved_flags;
-        }
+        self.saved_state.restore(&mut self.cursor, &mut self.attrs);
     }
 
     /// Check if bracketed paste is enabled
