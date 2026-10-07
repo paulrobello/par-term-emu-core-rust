@@ -219,24 +219,8 @@ impl Grid {
     /// damaged since generation `since`, ascending, without allocating.
     /// Coalesces exactly the rows [`Grid::damage_indices`] would yield
     /// one by one (ENH-026).
-    pub fn for_each_damage_range_since(&self, since: u64, mut f: impl FnMut(u32, u32)) {
-        let mut run: Option<(u32, u32)> = None;
-        for (row, &gen) in self.row_gen.iter().enumerate() {
-            if gen > since {
-                let row = row as u32;
-                match run {
-                    Some((start, end)) if end + 1 == row => run = Some((start, row)),
-                    Some((start, end)) => {
-                        f(start, end);
-                        run = Some((row, row));
-                    }
-                    None => run = Some((row, row)),
-                }
-            }
-        }
-        if let Some((start, end)) = run {
-            f(start, end);
-        }
+    pub fn for_each_damage_range_since(&self, since: u64, f: impl FnMut(u32, u32)) {
+        for_each_run_above(&self.row_gen, since, f);
     }
 
     /// Invoke `f(start, end)` once per maximal run of consecutive rows whose
@@ -244,24 +228,8 @@ impl Grid {
     /// allocating (ENH-038). Coalesces exactly the rows whose
     /// `row_content_gen` exceeds `since` — the rows a scroll-aware renderer
     /// must redraw after blitting its previous frame.
-    pub fn for_each_content_damage_range_since(&self, since: u64, mut f: impl FnMut(u32, u32)) {
-        let mut run: Option<(u32, u32)> = None;
-        for (row, &gen) in self.row_content_gen.iter().enumerate() {
-            if gen > since {
-                let row = row as u32;
-                match run {
-                    Some((start, end)) if end + 1 == row => run = Some((start, row)),
-                    Some((start, end)) => {
-                        f(start, end);
-                        run = Some((row, row));
-                    }
-                    None => run = Some((row, row)),
-                }
-            }
-        }
-        if let Some((start, end)) = run {
-            f(start, end);
-        }
+    pub fn for_each_content_damage_range_since(&self, since: u64, f: impl FnMut(u32, u32)) {
+        for_each_run_above(&self.row_content_gen, since, f);
     }
 
     /// Scroll-aware damage report for a consumer holding generation `since`
@@ -515,6 +483,30 @@ impl Grid {
             rows.push(row.into_boxed_slice());
         }
         rows
+    }
+}
+
+/// Invoke `f(start, end)` once per maximal run of consecutive indices whose
+/// generation in `gens` exceeds `since`, ascending, without allocating. The
+/// shared walk behind [`Grid::for_each_damage_range_since`] and
+/// [`Grid::for_each_content_damage_range_since`].
+fn for_each_run_above(gens: &[u64], since: u64, mut f: impl FnMut(u32, u32)) {
+    let mut run: Option<(u32, u32)> = None;
+    for (row, &gen) in gens.iter().enumerate() {
+        if gen > since {
+            let row = row as u32;
+            match run {
+                Some((start, end)) if end + 1 == row => run = Some((start, row)),
+                Some((start, end)) => {
+                    f(start, end);
+                    run = Some((row, row));
+                }
+                None => run = Some((row, row)),
+            }
+        }
+    }
+    if let Some((start, end)) = run {
+        f(start, end);
     }
 }
 
