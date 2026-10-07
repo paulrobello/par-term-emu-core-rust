@@ -60,7 +60,7 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
-	@echo "  mux-manual-seed - Build the attach daemon and seed the MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
+	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
@@ -418,7 +418,7 @@ stub-docs-check:
 mux-package-check:
 	python3 scripts/package_mux_release.py --self-test
 
-# Seed the MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
+# Seed the docs/MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
 # WIPE the socket's saved tree (stop, then remove the state file and its
 # last-good snapshot — a plain restart would restore every stale session
