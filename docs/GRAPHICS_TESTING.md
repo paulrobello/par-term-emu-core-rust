@@ -359,7 +359,7 @@ For implementation details, see:
 **Graphics Module:**
 - `src/graphics/mod.rs` - Unified graphics module with `TerminalGraphic` and `GraphicsStore`
 - `src/graphics/iterm.rs` - iTerm2 inline image parser
-- `src/graphics/kitty.rs` - Kitty graphics protocol parser
+- `src/graphics/kitty/` - Kitty graphics protocol parser
 - `src/graphics/animation.rs` - Animation frame management and composition
 - `src/graphics/placeholder.rs` - Unicode placeholder generation for Kitty virtual placements
 - `src/graphics/serialization.rs` - JSON serialization for session persistence

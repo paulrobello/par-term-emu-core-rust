@@ -13,11 +13,8 @@
 
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
-    AgentEntry as AppAgentEntry, ClientMessage as AppClientMessage, CpuStats as AppCpuStats,
-    DiskStats as AppDiskStats, EventType as AppEventType, LoadAverage as AppLoadAverage,
-    MemoryStats as AppMemoryStats, MouseEventType,
-    NetworkInterfaceStats as AppNetworkInterfaceStats, ServerMessage as AppServerMessage,
-    ThemeInfo as AppThemeInfo,
+    AgentEntry as AppAgentEntry, ClientMessage as AppClientMessage, EventType as AppEventType,
+    MouseEventType, ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -194,492 +191,236 @@ impl From<&AppThemeInfo> for pb::ThemeInfo {
     }
 }
 
-impl From<&AppAgentEntry> for pb::AgentEntry {
-    fn from(e: &AppAgentEntry) -> Self {
-        Self {
-            pane_id: e.pane_id,
-            agent: e.agent.clone(),
-            state: e.state.clone(),
-            source: e.source.clone(),
-            reason: e.reason.clone(),
+// =============================================================================
+// Field conversions for the `ProtoConvert` derive (ARC-006)
+// =============================================================================
+//
+// The derive (par-term-emu-derive) generates the message-level conversions;
+// every field value goes through `ToWire`/`FromWire`, keyed on the app
+// field's declared type and the wire field's type. Each type pair is listed
+// explicitly: there is no blanket numeric narrowing, so a field whose pair
+// is missing fails to compile instead of picking a conversion. Fields with a
+// field-specific rule (a clamp, a presence check) use `#[proto(with = ..)]`
+// and a function pair in [`wire`].
+
+/// App value -> wire value for one field (ARC-006).
+pub(crate) trait ToWire<W> {
+    /// Convert to the wire representation.
+    fn to_wire(&self) -> W;
+}
+
+/// Wire value -> app value for one field (ARC-006).
+pub(crate) trait FromWire<W>: Sized {
+    /// Convert from the wire representation.
+    fn from_wire(w: W) -> Result<Self>;
+}
+
+/// Same `Copy` type on both sides.
+macro_rules! identity_copy_wire {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl ToWire<$ty> for $ty {
+            fn to_wire(&self) -> $ty {
+                *self
+            }
+        }
+        impl FromWire<$ty> for $ty {
+            fn from_wire(w: $ty) -> Result<Self> {
+                Ok(w)
+            }
+        }
+    )+};
+}
+
+/// Same owned type on both sides.
+macro_rules! identity_clone_wire {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl ToWire<$ty> for $ty {
+            fn to_wire(&self) -> $ty {
+                self.clone()
+            }
+        }
+        impl FromWire<$ty> for $ty {
+            fn from_wire(w: $ty) -> Result<Self> {
+                Ok(w)
+            }
+        }
+    )+};
+}
+
+identity_copy_wire!(
+    bool,
+    u32,
+    u64,
+    i32,
+    f32,
+    f64,
+    Option<bool>,
+    Option<u32>,
+    Option<u64>,
+    Option<i32>,
+    Option<f32>,
+);
+identity_clone_wire!(String, Option<String>, Vec<String>, Vec<f64>);
+
+/// Grid coordinates and sizes: `u16` in the app, `uint32` on the wire. The
+/// decode truncates (`as u16`), as the hand-written conversions did.
+impl ToWire<u32> for u16 {
+    fn to_wire(&self) -> u32 {
+        *self as u32
+    }
+}
+impl FromWire<u32> for u16 {
+    fn from_wire(w: u32) -> Result<Self> {
+        Ok(w as u16)
+    }
+}
+impl ToWire<Option<u32>> for Option<u16> {
+    fn to_wire(&self) -> Option<u32> {
+        self.map(|v| v as u32)
+    }
+}
+impl FromWire<Option<u32>> for Option<u16> {
+    fn from_wire(w: Option<u32>) -> Result<Self> {
+        Ok(w.map(|v| v as u16))
+    }
+}
+
+/// Terminal text carried as `bytes`; invalid UTF-8 decodes lossily.
+impl ToWire<Vec<u8>> for String {
+    fn to_wire(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+impl FromWire<Vec<u8>> for String {
+    fn from_wire(w: Vec<u8>) -> Result<Self> {
+        Ok(String::from_utf8_lossy(&w).into_owned())
+    }
+}
+impl ToWire<Option<Vec<u8>>> for Option<String> {
+    fn to_wire(&self) -> Option<Vec<u8>> {
+        self.as_ref().map(|s| s.as_bytes().to_vec())
+    }
+}
+impl FromWire<Option<Vec<u8>>> for Option<String> {
+    fn from_wire(w: Option<Vec<u8>>) -> Result<Self> {
+        Ok(w.map(|s| String::from_utf8_lossy(&s).into_owned()))
+    }
+}
+
+/// RGB colors: channels truncate on decode (`as u8`).
+impl ToWire<pb::Color> for (u8, u8, u8) {
+    fn to_wire(&self) -> pb::Color {
+        pb::Color {
+            r: self.0 as u32,
+            g: self.1 as u32,
+            b: self.2 as u32,
         }
     }
 }
+impl FromWire<pb::Color> for (u8, u8, u8) {
+    fn from_wire(c: pb::Color) -> Result<Self> {
+        Ok((c.r as u8, c.g as u8, c.b as u8))
+    }
+}
+impl ToWire<Option<pb::Color>> for Option<(u8, u8, u8)> {
+    fn to_wire(&self) -> Option<pb::Color> {
+        self.as_ref().map(ToWire::to_wire)
+    }
+}
+impl FromWire<Option<pb::Color>> for Option<(u8, u8, u8)> {
+    fn from_wire(w: Option<pb::Color>) -> Result<Self> {
+        w.map(<(u8, u8, u8)>::from_wire).transpose()
+    }
+}
 
-impl From<pb::AgentEntry> for AppAgentEntry {
-    fn from(e: pb::AgentEntry) -> Self {
-        Self {
-            pane_id: e.pane_id,
-            agent: e.agent,
-            state: e.state,
-            source: e.source,
-            reason: e.reason,
+/// Theme: validated by the hand-written `TryFrom<pb::ThemeInfo>` below.
+impl ToWire<Option<pb::ThemeInfo>> for Option<AppThemeInfo> {
+    fn to_wire(&self) -> Option<pb::ThemeInfo> {
+        self.as_ref().map(Into::into)
+    }
+}
+impl FromWire<Option<pb::ThemeInfo>> for Option<AppThemeInfo> {
+    fn from_wire(w: Option<pb::ThemeInfo>) -> Result<Self> {
+        w.map(TryInto::try_into).transpose()
+    }
+}
+
+/// Subscriptions: unknown wire ints are dropped, not rejected.
+impl ToWire<Vec<i32>> for Vec<AppEventType> {
+    fn to_wire(&self) -> Vec<i32> {
+        self.iter().map(|e| e.clone().into()).collect()
+    }
+}
+impl FromWire<Vec<i32>> for Vec<AppEventType> {
+    fn from_wire(w: Vec<i32>) -> Result<Self> {
+        Ok(w.iter()
+            .filter_map(|e| pb::EventType::try_from(*e).ok())
+            .map(Into::into)
+            .collect())
+    }
+}
+
+/// Mouse event type: a wire string; unknown names decode as `Press`.
+impl ToWire<String> for MouseEventType {
+    fn to_wire(&self) -> String {
+        self.as_str().to_string()
+    }
+}
+impl FromWire<String> for MouseEventType {
+    fn from_wire(w: String) -> Result<Self> {
+        Ok(mouse_event_type_from_wire(&w))
+    }
+}
+
+/// Field-specific conversions named by `#[proto(with = ..)]`.
+pub(crate) mod wire {
+    use super::{pb, AppAgentEntry, FromWire, Result, StreamingError, ToWire};
+
+    /// Progress percent: `u8` in the app; the decode clamps to 100.
+    pub(crate) mod percent {
+        use super::Result;
+
+        pub(crate) fn to_wire(v: &Option<u8>) -> Option<u32> {
+            v.map(|p| p as u32)
+        }
+
+        pub(crate) fn from_wire(w: Option<u32>) -> Result<Option<u8>> {
+            Ok(w.map(|p| p.min(100) as u8))
         }
     }
-}
 
-impl From<&AppServerMessage> for pb::ServerMessage {
-    fn from(msg: &AppServerMessage) -> Self {
-        use pb::server_message::Message;
+    /// Mouse button: `u8` in the app; the decode clamps to 255.
+    pub(crate) mod mouse_button {
+        use super::Result;
 
-        let message = match msg {
-            AppServerMessage::Output { data, timestamp } => Some(Message::Output(pb::Output {
-                data: data.as_bytes().to_vec(),
-                timestamp: *timestamp,
-            })),
-            AppServerMessage::Resize { cols, rows } => Some(Message::Resize(pb::Resize {
-                cols: *cols as u32,
-                rows: *rows as u32,
-            })),
-            AppServerMessage::Title { title } => Some(Message::Title(pb::Title {
-                title: title.clone(),
-            })),
-            AppServerMessage::Connected {
-                cols,
-                rows,
-                initial_screen,
-                session_id,
-                theme,
-                badge,
-                faint_text_alpha,
-                cwd,
-                modify_other_keys,
-                client_id,
-                readonly,
-            } => Some(Message::Connected(pb::Connected {
-                cols: *cols as u32,
-                rows: *rows as u32,
-                initial_screen: initial_screen.as_ref().map(|s| s.as_bytes().to_vec()),
-                session_id: session_id.clone(),
-                theme: theme.as_ref().map(|t| t.into()),
-                badge: badge.clone(),
-                faint_text_alpha: *faint_text_alpha,
-                cwd: cwd.clone(),
-                modify_other_keys: *modify_other_keys,
-                client_id: client_id.clone(),
-                readonly: *readonly,
-            })),
-            AppServerMessage::Refresh {
-                cols,
-                rows,
-                screen_content,
-            } => Some(Message::Refresh(pb::Refresh {
-                cols: *cols as u32,
-                rows: *rows as u32,
-                screen_content: screen_content.as_bytes().to_vec(),
-            })),
-            AppServerMessage::CursorPosition { col, row, visible } => {
-                Some(Message::Cursor(pb::CursorPosition {
-                    col: *col as u32,
-                    row: *row as u32,
-                    visible: *visible,
-                }))
-            }
-            AppServerMessage::CwdChanged {
-                old_cwd,
-                new_cwd,
-                hostname,
-                username,
-                timestamp,
-            } => Some(Message::CwdChanged(pb::CwdChanged {
-                old_cwd: old_cwd.clone(),
-                new_cwd: new_cwd.clone(),
-                hostname: hostname.clone(),
-                username: username.clone(),
-                timestamp: *timestamp,
-            })),
-            AppServerMessage::TriggerMatched {
-                trigger_id,
-                row,
-                col,
-                end_col,
-                text,
-                captures,
-                timestamp,
-            } => Some(Message::TriggerMatched(pb::TriggerMatched {
-                trigger_id: *trigger_id,
-                row: *row as u32,
-                col: *col as u32,
-                end_col: *end_col as u32,
-                text: text.clone(),
-                captures: captures.clone(),
-                timestamp: *timestamp,
-            })),
-            AppServerMessage::ActionNotify {
-                trigger_id,
-                title,
-                message,
-            } => Some(Message::ActionNotify(pb::ActionNotify {
-                trigger_id: *trigger_id,
-                title: title.clone(),
-                message: message.clone(),
-            })),
-            AppServerMessage::ActionMarkLine {
-                trigger_id,
-                row,
-                label,
-                color,
-            } => Some(Message::ActionMarkLine(pb::ActionMarkLine {
-                trigger_id: *trigger_id,
-                row: *row as u32,
-                label: label.clone(),
-                color: color.map(|(r, g, b)| pb::Color {
-                    r: r as u32,
-                    g: g as u32,
-                    b: b as u32,
-                }),
-            })),
-            AppServerMessage::Bell => Some(Message::Bell(pb::Bell {})),
-            AppServerMessage::Error { message, code } => Some(Message::Error(pb::Error {
-                message: message.clone(),
-                code: code.clone(),
-            })),
-            AppServerMessage::Shutdown { reason } => Some(Message::Shutdown(pb::Shutdown {
-                reason: reason.clone(),
-            })),
-            AppServerMessage::Pong => Some(Message::Pong(pb::Pong {})),
-            AppServerMessage::ModeChanged { mode, enabled } => {
-                Some(Message::ModeChanged(pb::ModeChanged {
-                    mode: mode.clone(),
-                    enabled: *enabled,
-                }))
-            }
-            AppServerMessage::GraphicsAdded { row, format } => {
-                Some(Message::GraphicsAdded(pb::GraphicsAdded {
-                    row: *row as u32,
-                    format: format.clone(),
-                }))
-            }
-            AppServerMessage::HyperlinkAdded { url, row, col, id } => {
-                Some(Message::HyperlinkAdded(pb::HyperlinkAdded {
-                    url: url.clone(),
-                    row: *row as u32,
-                    col: *col as u32,
-                    id: id.clone(),
-                }))
-            }
-            AppServerMessage::UserVarChanged {
-                name,
-                value,
-                old_value,
-            } => Some(Message::UserVarChanged(pb::UserVarChanged {
-                name: name.clone(),
-                value: value.clone(),
-                old_value: old_value.clone(),
-            })),
-            AppServerMessage::ProgressBarChanged {
-                action,
-                id,
-                state,
-                percent,
-                label,
-            } => Some(Message::ProgressBarChanged(pb::ProgressBarChanged {
-                action: action.clone(),
-                id: id.clone(),
-                state: state.clone(),
-                percent: percent.map(|p| p as u32),
-                label: label.clone(),
-            })),
-            AppServerMessage::BadgeChanged { badge } => {
-                Some(Message::BadgeChanged(pb::BadgeChanged {
-                    badge: badge.clone(),
-                }))
-            }
-            AppServerMessage::SelectionChanged {
-                start_col,
-                start_row,
-                end_col,
-                end_row,
-                text,
-                mode,
-                cleared,
-            } => Some(Message::SelectionChanged(pb::SelectionChanged {
-                start_col: start_col.map(|c| c as u32),
-                start_row: start_row.map(|r| r as u32),
-                end_col: end_col.map(|c| c as u32),
-                end_row: end_row.map(|r| r as u32),
-                text: text.clone(),
-                mode: mode.clone(),
-                cleared: *cleared,
-            })),
-            AppServerMessage::ClipboardSync {
-                operation,
-                content,
-                target,
-            } => Some(Message::ClipboardSync(pb::ClipboardSync {
-                operation: operation.clone(),
-                content: content.clone(),
-                target: target.clone(),
-            })),
-            AppServerMessage::ShellIntegrationEvent {
-                event_type,
-                command,
-                exit_code,
-                timestamp,
-                cursor_line,
-            } => Some(Message::ShellIntegrationEvent(pb::ShellIntegrationEvent {
-                event_type: event_type.clone(),
-                command: command.clone(),
-                exit_code: *exit_code,
-                timestamp: *timestamp,
-                cursor_line: *cursor_line,
-            })),
-            AppServerMessage::SystemStats {
-                cpu,
-                memory,
-                disks,
-                networks,
-                load_average,
-                hostname,
-                os_name,
-                os_version,
-                kernel_version,
-                uptime_secs,
-                timestamp,
-            } => Some(Message::SystemStats(pb::SystemStats {
-                cpu: cpu.as_ref().map(|c| pb::CpuStats {
-                    overall_usage_percent: c.overall_usage_percent,
-                    physical_core_count: c.physical_core_count,
-                    per_core_usage_percent: c.per_core_usage_percent.clone(),
-                    brand: c.brand.clone(),
-                    frequency_mhz: c.frequency_mhz,
-                }),
-                memory: memory.as_ref().map(|m| pb::MemoryStats {
-                    total_bytes: m.total_bytes,
-                    used_bytes: m.used_bytes,
-                    available_bytes: m.available_bytes,
-                    swap_total_bytes: m.swap_total_bytes,
-                    swap_used_bytes: m.swap_used_bytes,
-                }),
-                disks: disks
-                    .iter()
-                    .map(|d| pb::DiskStats {
-                        name: d.name.clone(),
-                        mount_point: d.mount_point.clone(),
-                        total_bytes: d.total_bytes,
-                        available_bytes: d.available_bytes,
-                        kind: d.kind.clone(),
-                        file_system: d.file_system.clone(),
-                        is_removable: d.is_removable,
-                    })
-                    .collect(),
-                networks: networks
-                    .iter()
-                    .map(|n| pb::NetworkInterfaceStats {
-                        name: n.name.clone(),
-                        received_bytes: n.received_bytes,
-                        transmitted_bytes: n.transmitted_bytes,
-                        total_received_bytes: n.total_received_bytes,
-                        total_transmitted_bytes: n.total_transmitted_bytes,
-                        packets_received: n.packets_received,
-                        packets_transmitted: n.packets_transmitted,
-                        errors_received: n.errors_received,
-                        errors_transmitted: n.errors_transmitted,
-                    })
-                    .collect(),
-                load_average: load_average.as_ref().map(|la| pb::LoadAverage {
-                    one_minute: la.one_minute,
-                    five_minutes: la.five_minutes,
-                    fifteen_minutes: la.fifteen_minutes,
-                }),
-                hostname: hostname.clone(),
-                os_name: os_name.clone(),
-                os_version: os_version.clone(),
-                kernel_version: kernel_version.clone(),
-                uptime_secs: *uptime_secs,
-                timestamp: *timestamp,
-            })),
-            AppServerMessage::ZoneOpened {
-                zone_id,
-                zone_type,
-                abs_row_start,
-            } => Some(Message::ZoneOpened(pb::ZoneOpened {
-                zone_id: *zone_id,
-                zone_type: zone_type.clone(),
-                abs_row_start: *abs_row_start,
-            })),
-            AppServerMessage::ZoneClosed {
-                zone_id,
-                zone_type,
-                abs_row_start,
-                abs_row_end,
-                exit_code,
-            } => Some(Message::ZoneClosed(pb::ZoneClosed {
-                zone_id: *zone_id,
-                zone_type: zone_type.clone(),
-                abs_row_start: *abs_row_start,
-                abs_row_end: *abs_row_end,
-                exit_code: *exit_code,
-            })),
-            AppServerMessage::ZoneScrolledOut { zone_id, zone_type } => {
-                Some(Message::ZoneScrolledOut(pb::ZoneScrolledOut {
-                    zone_id: *zone_id,
-                    zone_type: zone_type.clone(),
-                }))
-            }
-            AppServerMessage::EnvironmentChanged {
-                key,
-                value,
-                old_value,
-            } => Some(Message::EnvironmentChanged(pb::EnvironmentChanged {
-                key: key.clone(),
-                value: value.clone(),
-                old_value: old_value.clone(),
-            })),
-            AppServerMessage::RemoteHostTransition {
-                hostname,
-                username,
-                old_hostname,
-                old_username,
-            } => Some(Message::RemoteHostTransition(pb::RemoteHostTransition {
-                hostname: hostname.clone(),
-                username: username.clone(),
-                old_hostname: old_hostname.clone(),
-                old_username: old_username.clone(),
-            })),
-            AppServerMessage::SubShellDetected { depth, shell_type } => {
-                Some(Message::SubShellDetected(pb::SubShellDetected {
-                    depth: *depth,
-                    shell_type: shell_type.clone(),
-                }))
-            }
-            AppServerMessage::SemanticSnapshot { snapshot_json } => {
-                Some(Message::SemanticSnapshot(pb::SemanticSnapshotData {
-                    snapshot_json: snapshot_json.clone(),
-                }))
-            }
-            AppServerMessage::FileTransferStarted {
-                id,
-                direction,
-                filename,
-                total_bytes,
-            } => Some(Message::FileTransferStarted(pb::FileTransferStarted {
-                id: *id,
-                direction: direction.clone(),
-                filename: filename.clone(),
-                total_bytes: *total_bytes,
-            })),
-            AppServerMessage::FileTransferProgress {
-                id,
-                bytes_transferred,
-                total_bytes,
-            } => Some(Message::FileTransferProgress(pb::FileTransferProgress {
-                id: *id,
-                bytes_transferred: *bytes_transferred,
-                total_bytes: *total_bytes,
-            })),
-            AppServerMessage::FileTransferCompleted { id, filename, size } => {
-                Some(Message::FileTransferCompleted(pb::FileTransferCompleted {
-                    id: *id,
-                    filename: filename.clone(),
-                    size: *size,
-                }))
-            }
-            AppServerMessage::FileTransferFailed { id, reason } => {
-                Some(Message::FileTransferFailed(pb::FileTransferFailed {
-                    id: *id,
-                    reason: reason.clone(),
-                }))
-            }
-            AppServerMessage::UploadRequested { format } => {
-                Some(Message::UploadRequested(pb::UploadRequested {
-                    format: format.clone(),
-                }))
-            }
-            AppServerMessage::AgentRoster { agents } => {
-                Some(Message::AgentRoster(pb::AgentRoster {
-                    agents: agents.iter().map(Into::into).collect(),
-                }))
-            }
-            AppServerMessage::AgentStateChanged { agent, released } => {
-                Some(Message::AgentStateChanged(pb::AgentStateChanged {
-                    agent: Some(agent.into()),
-                    released: *released,
-                }))
-            }
-            AppServerMessage::ScreenCleared { include_scrollback } => {
-                Some(Message::ScreenCleared(pb::ScreenCleared {
-                    include_scrollback: *include_scrollback,
-                }))
-            }
-        };
+        pub(crate) fn to_wire(v: &u8) -> u32 {
+            *v as u32
+        }
 
-        pb::ServerMessage { message }
+        pub(crate) fn from_wire(w: u32) -> Result<u8> {
+            Ok(w.min(255) as u8)
+        }
     }
-}
 
-impl From<&AppClientMessage> for pb::ClientMessage {
-    fn from(msg: &AppClientMessage) -> Self {
-        use pb::client_message::Message;
+    /// `AgentStateChanged.agent`: required on the wire.
+    pub(crate) mod required_agent {
+        use super::{pb, AppAgentEntry, FromWire, Result, StreamingError, ToWire};
 
-        let message = match msg {
-            AppClientMessage::Input { data } => Some(Message::Input(pb::Input {
-                data: data.as_bytes().to_vec(),
-            })),
-            AppClientMessage::Resize { cols, rows } => Some(Message::Resize(pb::ClientResize {
-                cols: *cols as u32,
-                rows: *rows as u32,
-            })),
-            AppClientMessage::Ping => Some(Message::Ping(pb::Ping {})),
-            AppClientMessage::RequestRefresh => Some(Message::Refresh(pb::RequestRefresh {})),
-            AppClientMessage::Subscribe { events } => Some(Message::Subscribe(pb::Subscribe {
-                events: events.iter().map(|e| e.clone().into()).collect(),
-            })),
-            AppClientMessage::Mouse {
-                col,
-                row,
-                button,
-                shift,
-                ctrl,
-                alt,
-                event_type,
-            } => Some(Message::Mouse(pb::MouseInput {
-                col: *col as u32,
-                row: *row as u32,
-                button: *button as u32,
-                shift: *shift,
-                ctrl: *ctrl,
-                alt: *alt,
-                event_type: event_type.as_str().to_string(),
-            })),
-            AppClientMessage::FocusChange { focused } => {
-                Some(Message::Focus(pb::FocusChange { focused: *focused }))
-            }
-            AppClientMessage::Paste { content } => Some(Message::Paste(pb::PasteInput {
-                content: content.clone(),
-            })),
-            AppClientMessage::SelectionRequest {
-                start_col,
-                start_row,
-                end_col,
-                end_row,
-                mode,
-            } => Some(Message::Selection(pb::SelectionRequest {
-                start_col: *start_col as u32,
-                start_row: *start_row as u32,
-                end_col: *end_col as u32,
-                end_row: *end_row as u32,
-                mode: mode.clone(),
-            })),
-            AppClientMessage::ClipboardRequest {
-                operation,
-                content,
-                target,
-            } => Some(Message::Clipboard(pb::ClipboardRequest {
-                operation: operation.clone(),
-                content: content.clone(),
-                target: target.clone(),
-            })),
-            AppClientMessage::SnapshotRequest {
-                scope,
-                max_commands,
-            } => Some(Message::SnapshotRequest(pb::SnapshotRequest {
-                scope: scope.clone(),
-                max_commands: *max_commands,
-            })),
-        };
+        pub(crate) fn to_wire(v: &AppAgentEntry) -> Option<pb::AgentEntry> {
+            Some(v.to_wire())
+        }
 
-        pb::ClientMessage { message }
+        /// Presence decides, not value: pane 0 is a legal pane id, so a
+        /// missing field must stay distinct from a pane-0 entry — decoding
+        /// it as the default would fabricate a release.
+        pub(crate) fn from_wire(w: Option<pb::AgentEntry>) -> Result<AppAgentEntry> {
+            let agent = w.ok_or_else(|| {
+                StreamingError::InvalidMessage(
+                    "AgentStateChanged is missing its agent field".into(),
+                )
+            })?;
+            AppAgentEntry::from_wire(agent)
+        }
     }
 }
 
@@ -784,342 +525,6 @@ impl TryFrom<pb::ThemeInfo> for AppThemeInfo {
     }
 }
 
-impl TryFrom<pb::ServerMessage> for AppServerMessage {
-    type Error = StreamingError;
-
-    fn try_from(msg: pb::ServerMessage) -> Result<Self> {
-        use pb::server_message::Message;
-
-        match msg.message {
-            Some(Message::Output(output)) => Ok(AppServerMessage::Output {
-                data: String::from_utf8_lossy(&output.data).into_owned(),
-                timestamp: output.timestamp,
-            }),
-            Some(Message::Resize(resize)) => Ok(AppServerMessage::Resize {
-                cols: resize.cols as u16,
-                rows: resize.rows as u16,
-            }),
-            Some(Message::Title(title)) => Ok(AppServerMessage::Title { title: title.title }),
-            Some(Message::Connected(connected)) => Ok(AppServerMessage::Connected {
-                cols: connected.cols as u16,
-                rows: connected.rows as u16,
-                initial_screen: connected
-                    .initial_screen
-                    .map(|s| String::from_utf8_lossy(&s).into_owned()),
-                session_id: connected.session_id,
-                theme: connected.theme.map(|t| t.try_into()).transpose()?,
-                badge: connected.badge,
-                faint_text_alpha: connected.faint_text_alpha,
-                cwd: connected.cwd,
-                modify_other_keys: connected.modify_other_keys,
-                client_id: connected.client_id,
-                readonly: connected.readonly,
-            }),
-            Some(Message::Refresh(refresh)) => Ok(AppServerMessage::Refresh {
-                cols: refresh.cols as u16,
-                rows: refresh.rows as u16,
-                screen_content: String::from_utf8_lossy(&refresh.screen_content).into_owned(),
-            }),
-            Some(Message::Cursor(cursor)) => Ok(AppServerMessage::CursorPosition {
-                col: cursor.col as u16,
-                row: cursor.row as u16,
-                visible: cursor.visible,
-            }),
-            Some(Message::CwdChanged(cwd)) => Ok(AppServerMessage::CwdChanged {
-                old_cwd: cwd.old_cwd,
-                new_cwd: cwd.new_cwd,
-                hostname: cwd.hostname,
-                username: cwd.username,
-                timestamp: cwd.timestamp,
-            }),
-            Some(Message::TriggerMatched(tm)) => Ok(AppServerMessage::TriggerMatched {
-                trigger_id: tm.trigger_id,
-                row: tm.row as u16,
-                col: tm.col as u16,
-                end_col: tm.end_col as u16,
-                text: tm.text,
-                captures: tm.captures,
-                timestamp: tm.timestamp,
-            }),
-            Some(Message::ActionNotify(an)) => Ok(AppServerMessage::ActionNotify {
-                trigger_id: an.trigger_id,
-                title: an.title,
-                message: an.message,
-            }),
-            Some(Message::ActionMarkLine(aml)) => Ok(AppServerMessage::ActionMarkLine {
-                trigger_id: aml.trigger_id,
-                row: aml.row as u16,
-                label: aml.label,
-                color: aml.color.map(|c| (c.r as u8, c.g as u8, c.b as u8)),
-            }),
-            Some(Message::Bell(_)) => Ok(AppServerMessage::Bell),
-            Some(Message::Error(error)) => Ok(AppServerMessage::Error {
-                message: error.message,
-                code: error.code,
-            }),
-            Some(Message::Shutdown(shutdown)) => Ok(AppServerMessage::Shutdown {
-                reason: shutdown.reason,
-            }),
-            Some(Message::Pong(_)) => Ok(AppServerMessage::Pong),
-            Some(Message::ModeChanged(mc)) => Ok(AppServerMessage::ModeChanged {
-                mode: mc.mode,
-                enabled: mc.enabled,
-            }),
-            Some(Message::GraphicsAdded(ga)) => Ok(AppServerMessage::GraphicsAdded {
-                row: ga.row as u16,
-                format: ga.format,
-            }),
-            Some(Message::HyperlinkAdded(ha)) => Ok(AppServerMessage::HyperlinkAdded {
-                url: ha.url,
-                row: ha.row as u16,
-                col: ha.col as u16,
-                id: ha.id,
-            }),
-            Some(Message::UserVarChanged(uv)) => Ok(AppServerMessage::UserVarChanged {
-                name: uv.name,
-                value: uv.value,
-                old_value: uv.old_value,
-            }),
-            Some(Message::ProgressBarChanged(pbc)) => Ok(AppServerMessage::ProgressBarChanged {
-                action: pbc.action,
-                id: pbc.id,
-                state: pbc.state,
-                percent: pbc.percent.map(|p| p.min(100) as u8),
-                label: pbc.label,
-            }),
-            Some(Message::BadgeChanged(bc)) => {
-                Ok(AppServerMessage::BadgeChanged { badge: bc.badge })
-            }
-            Some(Message::SelectionChanged(sc)) => Ok(AppServerMessage::SelectionChanged {
-                start_col: sc.start_col.map(|c| c as u16),
-                start_row: sc.start_row.map(|r| r as u16),
-                end_col: sc.end_col.map(|c| c as u16),
-                end_row: sc.end_row.map(|r| r as u16),
-                text: sc.text,
-                mode: sc.mode,
-                cleared: sc.cleared,
-            }),
-            Some(Message::ClipboardSync(cs)) => Ok(AppServerMessage::ClipboardSync {
-                operation: cs.operation,
-                content: cs.content,
-                target: cs.target,
-            }),
-            Some(Message::ShellIntegrationEvent(sie)) => {
-                Ok(AppServerMessage::ShellIntegrationEvent {
-                    event_type: sie.event_type,
-                    command: sie.command,
-                    exit_code: sie.exit_code,
-                    timestamp: sie.timestamp,
-                    cursor_line: sie.cursor_line,
-                })
-            }
-            Some(Message::SystemStats(ss)) => Ok(AppServerMessage::SystemStats {
-                cpu: ss.cpu.map(|c| AppCpuStats {
-                    overall_usage_percent: c.overall_usage_percent,
-                    physical_core_count: c.physical_core_count,
-                    per_core_usage_percent: c.per_core_usage_percent,
-                    brand: c.brand,
-                    frequency_mhz: c.frequency_mhz,
-                }),
-                memory: ss.memory.map(|m| AppMemoryStats {
-                    total_bytes: m.total_bytes,
-                    used_bytes: m.used_bytes,
-                    available_bytes: m.available_bytes,
-                    swap_total_bytes: m.swap_total_bytes,
-                    swap_used_bytes: m.swap_used_bytes,
-                }),
-                disks: ss
-                    .disks
-                    .into_iter()
-                    .map(|d| AppDiskStats {
-                        name: d.name,
-                        mount_point: d.mount_point,
-                        total_bytes: d.total_bytes,
-                        available_bytes: d.available_bytes,
-                        kind: d.kind,
-                        file_system: d.file_system,
-                        is_removable: d.is_removable,
-                    })
-                    .collect(),
-                networks: ss
-                    .networks
-                    .into_iter()
-                    .map(|n| AppNetworkInterfaceStats {
-                        name: n.name,
-                        received_bytes: n.received_bytes,
-                        transmitted_bytes: n.transmitted_bytes,
-                        total_received_bytes: n.total_received_bytes,
-                        total_transmitted_bytes: n.total_transmitted_bytes,
-                        packets_received: n.packets_received,
-                        packets_transmitted: n.packets_transmitted,
-                        errors_received: n.errors_received,
-                        errors_transmitted: n.errors_transmitted,
-                    })
-                    .collect(),
-                load_average: ss.load_average.map(|la| AppLoadAverage {
-                    one_minute: la.one_minute,
-                    five_minutes: la.five_minutes,
-                    fifteen_minutes: la.fifteen_minutes,
-                }),
-                hostname: ss.hostname,
-                os_name: ss.os_name,
-                os_version: ss.os_version,
-                kernel_version: ss.kernel_version,
-                uptime_secs: ss.uptime_secs,
-                timestamp: ss.timestamp,
-            }),
-            Some(Message::ZoneOpened(zo)) => Ok(AppServerMessage::ZoneOpened {
-                zone_id: zo.zone_id,
-                zone_type: zo.zone_type,
-                abs_row_start: zo.abs_row_start,
-            }),
-            Some(Message::ZoneClosed(zc)) => Ok(AppServerMessage::ZoneClosed {
-                zone_id: zc.zone_id,
-                zone_type: zc.zone_type,
-                abs_row_start: zc.abs_row_start,
-                abs_row_end: zc.abs_row_end,
-                exit_code: zc.exit_code,
-            }),
-            Some(Message::ZoneScrolledOut(zso)) => Ok(AppServerMessage::ZoneScrolledOut {
-                zone_id: zso.zone_id,
-                zone_type: zso.zone_type,
-            }),
-            Some(Message::EnvironmentChanged(ec)) => Ok(AppServerMessage::EnvironmentChanged {
-                key: ec.key,
-                value: ec.value,
-                old_value: ec.old_value,
-            }),
-            Some(Message::RemoteHostTransition(rht)) => {
-                Ok(AppServerMessage::RemoteHostTransition {
-                    hostname: rht.hostname,
-                    username: rht.username,
-                    old_hostname: rht.old_hostname,
-                    old_username: rht.old_username,
-                })
-            }
-            Some(Message::SubShellDetected(ssd)) => Ok(AppServerMessage::SubShellDetected {
-                depth: ssd.depth,
-                shell_type: ssd.shell_type,
-            }),
-            Some(Message::SemanticSnapshot(snap)) => Ok(AppServerMessage::SemanticSnapshot {
-                snapshot_json: snap.snapshot_json,
-            }),
-            Some(Message::FileTransferStarted(fts)) => Ok(AppServerMessage::FileTransferStarted {
-                id: fts.id,
-                direction: fts.direction,
-                filename: fts.filename,
-                total_bytes: fts.total_bytes,
-            }),
-            Some(Message::FileTransferProgress(ftp)) => {
-                Ok(AppServerMessage::FileTransferProgress {
-                    id: ftp.id,
-                    bytes_transferred: ftp.bytes_transferred,
-                    total_bytes: ftp.total_bytes,
-                })
-            }
-            Some(Message::FileTransferCompleted(ftc)) => {
-                Ok(AppServerMessage::FileTransferCompleted {
-                    id: ftc.id,
-                    filename: ftc.filename,
-                    size: ftc.size,
-                })
-            }
-            Some(Message::FileTransferFailed(ftf)) => Ok(AppServerMessage::FileTransferFailed {
-                id: ftf.id,
-                reason: ftf.reason,
-            }),
-            Some(Message::UploadRequested(ur)) => {
-                Ok(AppServerMessage::UploadRequested { format: ur.format })
-            }
-            Some(Message::ScreenCleared(sc)) => Ok(AppServerMessage::ScreenCleared {
-                include_scrollback: sc.include_scrollback,
-            }),
-            Some(Message::AgentRoster(roster)) => Ok(AppServerMessage::AgentRoster {
-                agents: roster.agents.into_iter().map(Into::into).collect(),
-            }),
-            Some(Message::AgentStateChanged(change)) => {
-                // Presence decides, not value: pane 0 is a legal pane id, so
-                // a missing field must stay distinct from a pane-0 entry —
-                // decoding it as the default would fabricate a release.
-                let agent = change.agent.ok_or_else(|| {
-                    StreamingError::InvalidMessage(
-                        "AgentStateChanged is missing its agent field".into(),
-                    )
-                })?;
-                Ok(AppServerMessage::AgentStateChanged {
-                    agent: agent.into(),
-                    released: change.released,
-                })
-            }
-            None => Err(StreamingError::InvalidMessage(
-                "Empty server message".into(),
-            )),
-        }
-    }
-}
-
-impl TryFrom<pb::ClientMessage> for AppClientMessage {
-    type Error = StreamingError;
-
-    fn try_from(msg: pb::ClientMessage) -> Result<Self> {
-        use pb::client_message::Message;
-
-        match msg.message {
-            Some(Message::Input(input)) => Ok(AppClientMessage::Input {
-                data: String::from_utf8_lossy(&input.data).into_owned(),
-            }),
-            Some(Message::Resize(resize)) => Ok(AppClientMessage::Resize {
-                cols: resize.cols as u16,
-                rows: resize.rows as u16,
-            }),
-            Some(Message::Ping(_)) => Ok(AppClientMessage::Ping),
-            Some(Message::Refresh(_)) => Ok(AppClientMessage::RequestRefresh),
-            Some(Message::Subscribe(subscribe)) => Ok(AppClientMessage::Subscribe {
-                events: subscribe
-                    .events
-                    .iter()
-                    .filter_map(|e| pb::EventType::try_from(*e).ok())
-                    .map(|e| e.into())
-                    .collect(),
-            }),
-            Some(Message::Mouse(mouse)) => Ok(AppClientMessage::Mouse {
-                col: mouse.col as u16,
-                row: mouse.row as u16,
-                button: mouse.button.min(255) as u8,
-                shift: mouse.shift,
-                ctrl: mouse.ctrl,
-                alt: mouse.alt,
-                event_type: mouse_event_type_from_wire(&mouse.event_type),
-            }),
-            Some(Message::Focus(focus)) => Ok(AppClientMessage::FocusChange {
-                focused: focus.focused,
-            }),
-            Some(Message::Paste(paste)) => Ok(AppClientMessage::Paste {
-                content: paste.content,
-            }),
-            Some(Message::Selection(sel)) => Ok(AppClientMessage::SelectionRequest {
-                start_col: sel.start_col as u16,
-                start_row: sel.start_row as u16,
-                end_col: sel.end_col as u16,
-                end_row: sel.end_row as u16,
-                mode: sel.mode,
-            }),
-            Some(Message::Clipboard(clip)) => Ok(AppClientMessage::ClipboardRequest {
-                operation: clip.operation,
-                content: clip.content,
-                target: clip.target,
-            }),
-            Some(Message::SnapshotRequest(req)) => Ok(AppClientMessage::SnapshotRequest {
-                scope: req.scope,
-                max_commands: req.max_commands,
-            }),
-            None => Err(StreamingError::InvalidMessage(
-                "Empty client message".into(),
-            )),
-        }
-    }
-}
-
 /// `MouseInput.event_type` (a wire string) -> [`MouseEventType`].
 ///
 /// An unknown name decodes as `Press`, keeping the pre-enum behavior where
@@ -1135,6 +540,10 @@ fn mouse_event_type_from_wire(name: &str) -> MouseEventType {
         MouseEventType::Press
     })
 }
+
+#[cfg(test)]
+#[path = "proto_golden_tests.rs"]
+mod golden_tests;
 
 #[cfg(test)]
 mod tests {

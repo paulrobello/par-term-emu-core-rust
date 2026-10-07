@@ -413,7 +413,7 @@ The serialization captures:
 **Implementation Files:**
 - [`src/graphics/animation.rs`](../src/graphics/animation.rs) - Animation frame storage and playback logic
 - [`src/graphics/mod.rs`](../src/graphics/mod.rs) - Graphics store with `update_animations()` method
-- [`src/graphics/kitty.rs`](../src/graphics/kitty.rs) - Kitty protocol parser with animation support
+- [`src/graphics/kitty/`](../src/graphics/kitty/mod.rs) - Kitty protocol parser with animation support
 - [`src/graphics/serialization.rs`](../src/graphics/serialization.rs) - Animation serialization for session persistence
 - [`scripts/test_kitty_animation.py`](../scripts/test_kitty_animation.py) - Automated animation test script
 - [`src/python_bindings/terminal/mod.rs`](../src/python_bindings/terminal/mod.rs) - Python bindings for terminal animation updates

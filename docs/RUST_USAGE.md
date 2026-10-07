@@ -144,6 +144,8 @@ The `Terminal` struct provides the core terminal emulation functionality.
 
 > **Tip:** For custom scrollback size, use `Terminal::with_scrollback(cols, rows, scrollback_lines)` instead of `Terminal::new()`.
 
+> **Imports:** `use par_term_emu_core_rust::prelude::*;` brings in the core types (`Terminal`, `Grid`, `Cell`, `Color`, `Cursor`, `TerminalEvent`, `TerminalObserver`, `TerminalGraphic`, `TmuxNotification`, width configuration, and `PtySession` with the `pty_session` feature). Peripheral types live at their module paths (`terminal::…`, `graphics::…`, `streaming::…`, `mux::…`); the `prelude` module docs list them. The older crate-root re-exports still resolve.
+
 ```rust
 use par_term_emu_core_rust::terminal::Terminal;
 
