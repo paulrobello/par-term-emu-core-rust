@@ -2921,6 +2921,7 @@ impl Terminal {
         if !self.process_internal(data) {
             return;
         }
+        self.flush_evicted_zones();
         self.dispatch_events();
         self.cap_terminal_events();
     }
@@ -2947,6 +2948,7 @@ impl Terminal {
         if !self.process_internal(data) {
             return ObserverDispatchBatch::default();
         }
+        self.flush_evicted_zones();
         let batch = self.take_observer_dispatch_batch();
         self.cap_terminal_events();
         batch
@@ -3437,24 +3439,25 @@ impl Terminal {
         self.events.observer_count()
     }
 
+    /// Move zones evicted from either grid onto the event queue as
+    /// `ZoneScrolledOut` events. Runs before observer dispatch in
+    /// `process`/`process_deferred` so observers and filtered polls see them;
+    /// `poll_events` runs it too, for evictions caused outside `process`
+    /// (e.g. API-level `clear_scrollback` or resize).
+    fn flush_evicted_zones(&mut self) {
+        let evicted = self.grid.drain_evicted_zones();
+        let alt_evicted = self.alt_grid.drain_evicted_zones();
+        for zone in evicted.into_iter().chain(alt_evicted) {
+            self.events.push(TerminalEvent::ZoneScrolledOut {
+                zone_id: zone.id,
+                zone_type: zone.zone_type,
+            });
+        }
+    }
+
     /// Poll for pending events
     pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
-        // Drain evicted zones and emit ZoneScrolledOut events
-        let evicted = self.grid.drain_evicted_zones();
-        for zone in evicted {
-            self.events.push(TerminalEvent::ZoneScrolledOut {
-                zone_id: zone.id,
-                zone_type: zone.zone_type,
-            });
-        }
-        // Also check alt grid
-        let alt_evicted = self.alt_grid.drain_evicted_zones();
-        for zone in alt_evicted {
-            self.events.push(TerminalEvent::ZoneScrolledOut {
-                zone_id: zone.id,
-                zone_type: zone.zone_type,
-            });
-        }
+        self.flush_evicted_zones();
         self.events.take_all()
     }
 
@@ -3477,7 +3480,8 @@ impl Terminal {
 
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
-        // No filter: the full drain, which also flushes evicted-zone events.
+        self.flush_evicted_zones();
+        // No filter: the full drain.
         self.events
             .extract_subscribed()
             .unwrap_or_else(|| self.poll_events())
