@@ -3,6 +3,14 @@
 use crate::grid::Grid;
 use crate::zone::Zone;
 
+/// Maximum number of evicted zones a grid retains until the owning terminal
+/// drains them into `ZoneScrolledOut` events. Past this, the oldest evicted
+/// zones are dropped (FIFO), so a host that never drains cannot grow the
+/// buffer without bound. Matches `MAX_TERMINAL_EVENTS`, the cap on the event
+/// queue these zones feed.
+/// cap: Evicted zones buffered per grid before they become events.
+pub(crate) const MAX_EVICTED_ZONES: usize = 10_000;
+
 impl Grid {
     /// Get all semantic zones
     pub fn zones(&self) -> &[Zone] {
@@ -36,6 +44,10 @@ impl Grid {
         let (evicted, mut remaining): (Vec<_>, Vec<_>) =
             self.zones.drain(..).partition(|z| z.abs_row_end < floor);
         self.evicted_zones.extend(evicted);
+        let excess = self.evicted_zones.len().saturating_sub(MAX_EVICTED_ZONES);
+        if excess > 0 {
+            self.evicted_zones.drain(..excess);
+        }
 
         // Clamp start of remaining zones
         for zone in &mut remaining {

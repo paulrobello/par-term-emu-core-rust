@@ -1432,6 +1432,34 @@ mod zone_tests {
         grid.clear_zones();
         assert!(grid.zones().is_empty());
     }
+
+    #[test]
+    fn test_evicted_zone_buffer_is_capped_fifo() {
+        use crate::grid::zone::MAX_EVICTED_ZONES;
+
+        // One row, one line of scrollback: each scroll pushes the previous
+        // row's zone below the floor. Nothing drains the evicted buffer.
+        let mut grid = Grid::new(1, 1, 1);
+        let total = MAX_EVICTED_ZONES + 50;
+        for id in 0..total {
+            let abs_row = grid.total_lines_scrolled;
+            let mut zone = Zone::new(id, ZoneType::Output, abs_row, None);
+            zone.close(abs_row);
+            grid.push_zone(zone);
+            grid.scroll_up(1);
+        }
+        // Two more scrolls move the last zone below the floor too.
+        grid.scroll_up(1);
+        grid.scroll_up(1);
+
+        assert!(
+            grid.zones().is_empty(),
+            "every zone should have been evicted"
+        );
+        assert_eq!(grid.evicted_zones.len(), MAX_EVICTED_ZONES);
+        assert_eq!(grid.evicted_zones[0].id, total - MAX_EVICTED_ZONES);
+        assert_eq!(grid.evicted_zones.last().unwrap().id, total - 1);
+    }
 }
 
 #[cfg(test)]
