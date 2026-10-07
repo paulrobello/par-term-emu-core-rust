@@ -4216,8 +4216,8 @@ fn ris_preserves_host_config() {
     assert_eq!(term.host.max_inline_images, 2);
     assert_eq!(term.clipboard_sync.max_history, 1);
     assert_eq!(
-        term.event_subscription,
-        Some(std::collections::HashSet::from([
+        term.events.subscription(),
+        Some(&std::collections::HashSet::from([
             TerminalEventKind::BellRang,
             TerminalEventKind::TitleChanged,
         ]))

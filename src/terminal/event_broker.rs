@@ -9,7 +9,8 @@
 //! `&mut Terminal`.
 
 use crate::observer::{ObserverEntry, ObserverId, TerminalObserver};
-use crate::terminal::{BellEvent, TerminalEvent};
+use crate::terminal::{BellEvent, TerminalEvent, TerminalEventKind};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Maximum number of unpolled terminal events retained (ARC-006). Past this,
@@ -34,6 +35,8 @@ pub(crate) struct EventBroker {
     next_observer_id: ObserverId,
     /// Next zone ID to assign (monotonically increasing)
     next_zone_id: usize,
+    /// Optional event subscription filter for `poll_subscribed_events`
+    subscription: Option<HashSet<TerminalEventKind>>,
 }
 
 impl Default for EventBroker {
@@ -45,6 +48,7 @@ impl Default for EventBroker {
             observers: Vec::new(),
             next_observer_id: 1,
             next_zone_id: 0,
+            subscription: None,
         }
     }
 }
@@ -107,12 +111,35 @@ impl EventBroker {
         self.observers.len()
     }
 
-    /// Move the observer registry and observer ID sequence from `old` into
-    /// `self`. Queued events, bells, and the zone ID counter are not carried
-    /// (RIS semantics: buffered events reset with the state they describe).
+    /// Move the observer registry, observer ID sequence, and subscription
+    /// filter from `old` into `self`. Queued events, bells, and the zone ID
+    /// counter are not carried (RIS semantics: buffered events reset with
+    /// the state they describe).
     pub(crate) fn carry_observers_from(&mut self, old: &mut EventBroker) {
         std::mem::swap(&mut self.observers, &mut old.observers);
         self.next_observer_id = old.next_observer_id;
+        std::mem::swap(&mut self.subscription, &mut old.subscription);
+    }
+
+    /// Set (`Some`) or clear (`None`) the subscription filter used by
+    /// `Terminal::poll_subscribed_events`.
+    pub(crate) fn set_subscription(&mut self, filter: Option<HashSet<TerminalEventKind>>) {
+        self.subscription = filter;
+    }
+
+    /// The current subscription filter (`None` = subscribed to everything).
+    #[cfg(test)]
+    pub(crate) fn subscription(&self) -> Option<&HashSet<TerminalEventKind>> {
+        self.subscription.as_ref()
+    }
+
+    /// Remove and return pending events matching the subscription filter;
+    /// `None` when no filter is set (the caller then drains everything).
+    pub(crate) fn extract_subscribed(&mut self) -> Option<Vec<TerminalEvent>> {
+        let filter = self.subscription.take()?;
+        let matched = self.extract_matching(|e| filter.contains(&e.kind()));
+        self.subscription = Some(filter);
+        Some(matched)
     }
 
     /// Take every pending event and reset the dispatch index.

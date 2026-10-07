@@ -1222,8 +1222,6 @@ pub struct Terminal {
     // === Badge Support (OSC 1337 SetBadgeFormat) ===
     /// OSC 1337 badge format + session variables (ARC-001 sub-struct)
     pub(crate) badge_state: BadgeState,
-    /// Optional event subscription filter
-    pub(crate) event_subscription: Option<HashSet<TerminalEventKind>>,
 
     // === Feature 18: Triggers & Automation ===
     /// Trigger & automation state (ARC-001 sub-struct; owned by `trigger`, ARC-102)
@@ -1328,7 +1326,6 @@ impl Terminal {
                     rows as u16,
                 ),
             },
-            event_subscription: None,
             triggers: trigger::TriggerState::default(),
             charset_state: CharsetState::default(),
         }
@@ -3107,10 +3104,10 @@ impl Terminal {
 
         std::mem::swap(&mut fresh.unicode_state, &mut self.unicode_state);
 
-        // Observers keep their registration and ID sequence; buffered
-        // events reset with everything else they describe.
+        // Observers keep their registration and ID sequence, and the
+        // subscription filter survives; buffered events reset with
+        // everything else they describe.
         fresh.events.carry_observers_from(&mut self.events);
-        std::mem::swap(&mut fresh.event_subscription, &mut self.event_subscription);
 
         // The trigger registry survives; highlights, action results, and
         // pending scan rows reset.
@@ -3470,21 +3467,20 @@ impl Terminal {
 
     /// Set the event subscription filter
     pub fn set_event_subscription(&mut self, filter: HashSet<TerminalEventKind>) {
-        self.event_subscription = Some(filter);
+        self.events.set_subscription(Some(filter));
     }
 
     /// Clear the event subscription filter (subscribe to all events)
     pub fn clear_event_subscription(&mut self) {
-        self.event_subscription = None;
+        self.events.set_subscription(None);
     }
 
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
-        if let Some(ref filter) = self.event_subscription {
-            self.events.extract_matching(|e| filter.contains(&e.kind()))
-        } else {
-            self.poll_events()
-        }
+        // No filter: the full drain, which also flushes evicted-zone events.
+        self.events
+            .extract_subscribed()
+            .unwrap_or_else(|| self.poll_events())
     }
 
     /// Poll for CWD change events
