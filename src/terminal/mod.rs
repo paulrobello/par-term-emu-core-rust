@@ -2921,6 +2921,14 @@ impl Terminal {
         if !self.process_internal(data) {
             return;
         }
+        self.finish_applied_actions();
+    }
+
+    /// Post-parse tail shared by [`Terminal::process`] and
+    /// [`Terminal::apply_action`]/[`Terminal::apply_actions`]: queue evicted
+    /// zones as `ZoneScrolledOut`, deliver pending events to observers
+    /// inline, then cap the event queue.
+    pub(crate) fn finish_applied_actions(&mut self) {
         self.flush_evicted_zones();
         self.dispatch_events();
         self.cap_terminal_events();
@@ -3441,9 +3449,9 @@ impl Terminal {
 
     /// Move zones evicted from either grid onto the event queue as
     /// `ZoneScrolledOut` events. Runs before observer dispatch in
-    /// `process`/`process_deferred` so observers and filtered polls see them;
-    /// `poll_events` runs it too, for evictions caused outside `process`
-    /// (e.g. API-level `clear_scrollback` or resize).
+    /// `process`/`process_deferred`/`apply_action(s)` so observers and
+    /// filtered polls see them; `poll_events` runs it too, for zones evicted
+    /// by a `Grid` mutated directly rather than through the parser.
     fn flush_evicted_zones(&mut self) {
         let evicted = self.grid.drain_evicted_zones();
         let alt_evicted = self.alt_grid.drain_evicted_zones();
