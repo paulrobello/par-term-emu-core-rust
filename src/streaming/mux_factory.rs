@@ -524,11 +524,13 @@ fn spawn_drain(
             for notification in parser.parse(&framed) {
                 match notification {
                     TmuxNotification::Output { pane_id: id, data } if id == pane_id => {
-                        {
+                        let dispatch_batch = {
                             let mut term = link.terminal.write();
-                            term.process(&data);
+                            let batch = term.process_deferred(&data);
                             term.drain_responses();
-                        }
+                            batch
+                        };
+                        dispatch_batch.deliver();
                         forward(&link, &data);
                     }
                     TmuxNotification::LayoutChange {
@@ -543,15 +545,14 @@ fn spawn_drain(
                             link.alive.store(false, Ordering::Relaxed);
                             continue;
                         };
-                        let changed = {
+                        // Observer delivery waits for the guard to drop
+                        // (ARC-001).
+                        let dispatch_batch = {
                             let mut term = link.terminal.write();
-                            let changed = term.size() != (cols, rows);
-                            if changed {
-                                term.resize(cols, rows);
-                            }
-                            changed
+                            (term.size() != (cols, rows)).then(|| term.resize_deferred(cols, rows))
                         };
-                        if changed {
+                        if let Some(batch) = dispatch_batch {
+                            batch.deliver();
                             if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
                             {
                                 server.send_to_session(
