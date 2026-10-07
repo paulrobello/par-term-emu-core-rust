@@ -1505,3 +1505,271 @@ fn drag_owns_the_pointer_until_release_even_on_the_strip_row() {
     // pane (content row 0 under the strip row) takes focus.
     assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
 }
+
+// ---- ARC-001: the pure hit-testers behind route_mouse / route_plain.
+// Each Hit and PrefixChord variant pinned against the state that
+// produces it; the router suites above pin the effects.
+
+/// The zero coordinates, the menu modal, and the sidebar strip.
+#[test]
+fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    assert_eq!(session.mouse_hit(&sgr(0, 0, 5, false)), Hit::Consumed);
+    assert_eq!(session.mouse_hit(&sgr(0, 5, 0, false)), Hit::Consumed);
+
+    session.open_menu(MenuTarget::Commands);
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("menu up");
+    // Panel row r sits at SGR row y0 + 3 + r, SGR col x0 + 2 is inside.
+    let (col, row) = ((x0 + 2) as u16, (y0 + 3 + 1) as u16);
+    assert_eq!(session.mouse_hit(&sgr(0, col, row, false)), Hit::MenuRow(1));
+    assert_eq!(
+        session.mouse_hit(&sgr(0, col, row, true)),
+        Hit::Consumed,
+        "a release on a menu row is consumed"
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 1, 2, false)),
+        Hit::Consumed,
+        "off the panel"
+    );
+    session.leave_menu();
+
+    session.renderer.set_sidebar_width(20);
+    session
+        .renderer
+        .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            rows: vec![("ws:+1".to_string(), "beta".to_string(), false)],
+        }]));
+    // Host row 1 (SGR row 2) is the first workspace row.
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 2, false)),
+        Hit::SidebarWorkspace {
+            id: "+1".to_string(),
+            menu: false
+        }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(2, 3, 2, false)),
+        Hit::SidebarWorkspace {
+            id: "+1".to_string(),
+            menu: true
+        },
+        "a right press opens the workspace menu"
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 2, true)),
+        Hit::Consumed,
+        "a release in the strip is consumed"
+    );
+    // The footer chips on the renderer's last row (SGR row 24 here).
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 24, false)),
+        Hit::SidebarNewWorkspace
+    );
+    assert_eq!(session.mouse_hit(&sgr(0, 17, 24, false)), Hit::SidebarMenu);
+}
+
+/// Drags in flight, the prompt, the picker, and the help panel.
+#[test]
+fn mouse_hit_maps_drags_and_the_pointer_modals() {
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    let divider = session.renderer.divider_near(40, 4, 1).expect("divider");
+    session.drag = Some(DragState::Pending {
+        divider,
+        x: 40,
+        y: 4,
+    });
+    // Motion on the strip row saturates to content row 0.
+    assert_eq!(
+        session.mouse_hit(&sgr(32, 43, 1, false)),
+        Hit::Drag {
+            x: 42,
+            y: 0,
+            release: false
+        }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 43, 6, true)),
+        Hit::Drag {
+            x: 42,
+            y: 4,
+            release: true
+        }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(64, 10, 6, false)),
+        Hit::Consumed,
+        "a wheel waits while the button is held"
+    );
+    session.drag = None;
+
+    session.prompt_mode = true;
+    assert_eq!(session.mouse_hit(&sgr(0, 10, 6, false)), Hit::Consumed);
+    session.prompt_mode = false;
+
+    session.help_mode = true;
+    assert_eq!(
+        session.mouse_hit(&sgr(64, 10, 6, false)),
+        Hit::HelpScroll(-3)
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(65, 10, 6, false)),
+        Hit::HelpScroll(3)
+    );
+    assert_eq!(session.mouse_hit(&sgr(0, 10, 6, false)), Hit::Consumed);
+    session.help_mode = false;
+
+    session.picker_mode = true;
+    session.picker_entries = vec![super::super::super::PickerEntry {
+        session_id: "$0".to_string(),
+        session_name: "work".to_string(),
+        windows: vec![("@0".to_string(), "main".to_string())],
+        active_window: Some("@0".to_string()),
+        current: true,
+    }];
+    session.refresh_picker();
+    assert_eq!(
+        session.mouse_hit(&sgr(64, 10, 6, false)),
+        Hit::PickerMove(-1)
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(65, 10, 6, false)),
+        Hit::PickerMove(1)
+    );
+    assert_eq!(session.mouse_hit(&sgr(32, 10, 6, false)), Hit::Consumed);
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
+    let col = (x0 + 4) as u16;
+    assert_eq!(
+        session.mouse_hit(&sgr(0, col, (y0 + 3 + 1) as u16, false)),
+        Hit::PickerRow(1)
+    );
+    let footer = session.picker_panel_len - 1;
+    assert_eq!(
+        session.mouse_hit(&sgr(0, col, (y0 + 3 + footer) as u16, false)),
+        Hit::Consumed,
+        "the footer does nothing"
+    );
+    session.picker_filtering = true;
+    session.refresh_picker();
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
+    assert_eq!(
+        session.mouse_hit(&sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false)),
+        Hit::PickerFilter
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, (x0 + 4) as u16, (y0 + 3 + 1) as u16, false)),
+        Hit::PickerRow(0),
+        "content starts under the filter line"
+    );
+}
+
+/// The tab strip row and the pane area.
+#[test]
+fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 * main\n@1 - vim".to_string(),
+    );
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "m-hit",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    assert_eq!(
+        session.mouse_hit(&sgr(2, 13, 1, false)),
+        Hit::TabMenu("@1".to_string())
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(2, 9, 1, false)),
+        Hit::Consumed,
+        "a right press on a gap column"
+    );
+    assert_eq!(session.mouse_hit(&sgr(0, 13, 1, false)), Hit::TabPress(12));
+    assert_eq!(session.mouse_hit(&sgr(64, 13, 1, false)), Hit::Consumed);
+
+    // Pane 2 holds cols 40..80; content row 4 is SGR row 6.
+    let pane2 = *session.renderer.pane_at(60, 4).expect("pane 2");
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 61, 6, false)),
+        Hit::PanePress(pane2)
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(64, 61, 6, false)),
+        Hit::Wheel {
+            rect: pane2,
+            x: 60,
+            cy: 4,
+            delta: 3
+        }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 61, 6, true)),
+        Hit::Consumed,
+        "a release over a pane that does not own the mouse"
+    );
+    session.renderer.feed_output(2, b"\x1b[?1000h");
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 61, 6, true)),
+        Hit::PaneForward(pane2)
+    );
+    let divider = session.renderer.divider_near(40, 4, 1).expect("divider");
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 41, 6, false)),
+        Hit::DragStart {
+            divider,
+            x: 40,
+            y: 4
+        }
+    );
+}
+
+/// Every PrefixChord arm, and the precedence between the configurable
+/// keys and the fixed table.
+#[test]
+fn prefix_chord_classifies_bytes_in_precedence_order() {
+    let mut session = WindowSession::new(80, 25);
+    assert_eq!(session.prefix_chord(0x12), PrefixChord::Reload);
+    assert_eq!(
+        session.prefix_chord(b'%'),
+        PrefixChord::Management(ManagementKey::SplitRight)
+    );
+    assert_eq!(
+        session.prefix_chord(b's'),
+        PrefixChord::Management(ManagementKey::Sidebar)
+    );
+    assert_eq!(session.prefix_chord(b'R'), PrefixChord::Resize);
+    assert_eq!(session.prefix_chord(b'?'), PrefixChord::Help);
+    assert_eq!(session.prefix_chord(b'w'), PrefixChord::Picker);
+    assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
+    assert_eq!(session.prefix_chord(b'['), PrefixChord::Scroll);
+    for key in *b"np()o" {
+        assert_eq!(session.prefix_chord(key), PrefixChord::Switch);
+    }
+    assert_eq!(session.prefix_chord(0x02), PrefixChord::Literal);
+    assert_eq!(session.prefix_chord(b'q'), PrefixChord::Unbound);
+
+    // A management key rebound onto a fixed-table byte wins over it.
+    session.management.zoom = b'n';
+    assert_eq!(
+        session.prefix_chord(b'n'),
+        PrefixChord::Management(ManagementKey::Zoom)
+    );
+    // The reload key never shadows detach.
+    session.reload_key = b'd';
+    assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
+    // Reload outranks a management chord on the same byte.
+    session.reload_key = b'%';
+    assert_eq!(session.prefix_chord(b'%'), PrefixChord::Reload);
+}

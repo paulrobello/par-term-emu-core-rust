@@ -1,6 +1,7 @@
 //! Render-mode unit tests: the renderer, emulator, and frame-flush suites,
 //! plus the scripted-daemon helpers the session and chord suites share.
 
+use super::input_route::*;
 use super::modal::*;
 use super::session::*;
 use super::*;

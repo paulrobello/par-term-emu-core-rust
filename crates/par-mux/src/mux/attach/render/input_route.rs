@@ -3,6 +3,95 @@
 
 use super::*;
 
+/// What one host mouse report hits — the pure result of
+/// [`WindowSession::mouse_hit`], which [`WindowSession::route_mouse`]
+/// applies. Coordinates are as each consumer takes them: `TabPress`
+/// carries the RAW host column, everything below the strip row the
+/// strip-rebased content coordinates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Hit {
+    /// Nothing happens: zero coordinates, a modal swallowing the event,
+    /// or a point that hits nothing.
+    Consumed,
+    /// A press on the open context menu's panel row.
+    MenuRow(usize),
+    /// The side panel's ` new ` chip: open the new-workspace prompt.
+    SidebarNewWorkspace,
+    /// The side panel's ` menu ` chip: open the command menu.
+    SidebarMenu,
+    /// A side panel workspace row (`+N`): land on it, or open its
+    /// context menu on a right press (`menu`).
+    SidebarWorkspace { id: String, menu: bool },
+    /// Motion or release while a divider drag is in flight.
+    Drag { x: u16, y: u16, release: bool },
+    /// A picker wheel: move the selection by the delta.
+    PickerMove(isize),
+    /// A press on the picker's filter line: open the filter box.
+    PickerFilter,
+    /// A press on picker content row `n` of the visible window.
+    PickerRow(usize),
+    /// A help panel wheel: scroll the panel by the delta.
+    HelpScroll(isize),
+    /// A right press on a tab: open that window's (`@N`) context menu.
+    TabMenu(String),
+    /// A left press on the tab strip at this raw host column.
+    TabPress(u16),
+    /// A wheel over a pane: scroll the client's scrollback, or forward
+    /// when the pane owns the mouse.
+    Wheel {
+        rect: PaneRect,
+        x: u16,
+        cy: u16,
+        delta: isize,
+    },
+    /// Motion or release over a mouse-owning pane: forward it.
+    PaneForward(PaneRect),
+    /// A press near a divider: start a (pending) drag.
+    DragStart { divider: DividerHit, x: u16, y: u16 },
+    /// A press on a pane: focus it, forwarding when it owns the mouse.
+    PanePress(PaneRect),
+}
+
+/// The help panel is modal for the pointer: while it is up every mouse
+/// event is consumed — wheels scroll the PANEL (the round-3 defect: they
+/// fell through to the pane scrollback / pane forwarding), clicks and
+/// drags do nothing.
+fn help_hit(mouse: &SgrMouse) -> Hit {
+    if mouse.is_wheel_up() {
+        Hit::HelpScroll(-3)
+    } else if mouse.is_wheel_down() {
+        Hit::HelpScroll(3)
+    } else {
+        Hit::Consumed
+    }
+}
+
+/// What the byte after the prefix means — the pure result of
+/// [`WindowSession::prefix_chord`], which `route_plain` applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrefixChord {
+    /// The configurable reload chord.
+    Reload,
+    /// A configurable management chord.
+    Management(ManagementKey),
+    /// The sticky resize mode's entry key.
+    Resize,
+    /// The bindings overlay.
+    Help,
+    /// The session/window picker.
+    Picker,
+    /// `d`: detach.
+    Detach,
+    /// `[`: the scroll viewport on the focused pane.
+    Scroll,
+    /// `n`/`p`/`(`/`)`/`o`: the window, session, and pane switches.
+    Switch,
+    /// The literal prefix key: send it through.
+    Literal,
+    /// Anything else: consumed.
+    Unbound,
+}
+
 impl WindowSession {
     /// A run of plain bytes through the prefix scanner; non-prefix bytes
     /// forward to the focused pane verbatim (the host already encoded
@@ -13,108 +102,21 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         prefix_pending: &mut bool,
     ) -> bool {
-        if self.prompt_mode {
-            // The prompt owns the run whole: every byte feeds the input
-            // line until Enter commits or Escape cancels; the closing
-            // byte and everything after in the run is dropped (the
-            // picker's modal-run shape).
-            for &byte in bytes {
-                if !self.prompt_byte(conn, byte) {
-                    return false;
-                }
-            }
-            return false;
-        }
-        if self.menu.is_some() {
-            for &byte in bytes {
-                if !self.menu_byte(byte) {
-                    return false;
-                }
-            }
-            return false;
-        }
-        if self.help_mode {
-            for &byte in bytes {
-                if !self.help_byte(byte) {
-                    return false;
-                }
-            }
-            return false;
-        }
-        if self.picker_mode {
-            for &byte in bytes {
-                if !self.picker_byte(conn, byte) {
-                    return false;
-                }
-            }
-            return false;
-        }
-        if self.resize_mode {
-            // Resize mode owns plain runs: the bytes are typed keys that
-            // would leak into the pane, so the run exits the mode and is
-            // consumed whole (arrows arrive as Key tokens, not bytes).
-            self.resize_mode = false;
+        if self.feed_modal_run(bytes, conn) {
             return false;
         }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if *prefix_pending {
                 *prefix_pending = false;
-                // The reload chord matches by byte before the fixed
-                // table (configurable; the default C-r does not collide
-                // with the literal-key arms).
-                if byte == self.reload_key && byte != b'd' {
-                    self.reload_config(conn);
-                    continue;
-                }
-                // The management chords match by byte before the fixed
-                // table (configurable; the defaults `%`, `"`, `x`, `c`
-                // are consumed unbound by the table today).
-                let management = match byte {
-                    b if b == self.management.split_right => Some(ManagementKey::SplitRight),
-                    b if b == self.management.split_down => Some(ManagementKey::SplitDown),
-                    b if b == self.management.kill_pane => Some(ManagementKey::KillPane),
-                    b if b == self.management.new_window => Some(ManagementKey::NewWindow),
-                    b if b == self.management.swap_prev => Some(ManagementKey::SwapPrev),
-                    b if b == self.management.swap_next => Some(ManagementKey::SwapNext),
-                    b if b == self.management.workspace_next => Some(ManagementKey::WorkspaceNext),
-                    b if b == self.management.workspace_prev => Some(ManagementKey::WorkspacePrev),
-                    b if b == self.management.zoom => Some(ManagementKey::Zoom),
-                    b if b == self.management.rename_window => Some(ManagementKey::RenameWindow),
-                    b if b == self.management.rename_pane => Some(ManagementKey::RenamePane),
-                    b if b == self.management.border_cycle => Some(ManagementKey::BorderCycle),
-                    b if b == self.management.label_toggle => Some(ManagementKey::Labels),
-                    b if b == self.management.workspace_picker => {
-                        Some(ManagementKey::WorkspacePicker)
-                    }
-                    b if b == self.management.sidebar => Some(ManagementKey::Sidebar),
-                    b if b == self.management.status_bar => Some(ManagementKey::StatusBar),
-                    _ => None,
-                };
-                if let Some(key) = management {
-                    self.management_chord(key, conn);
-                    continue;
-                }
-                // The resize chord: a sticky mode — arrows adjust the
-                // focused pane's edges until Enter/Escape/q.
-                if byte == self.management.resize {
-                    self.enter_resize_mode();
-                    continue;
-                }
-                // The help chord: the bindings overlay over the frame.
-                if byte == self.management.help {
-                    self.enter_help();
-                    continue;
-                }
-                // The picker chord: the session/window modal over the
-                // frame.
-                if byte == self.management.picker {
-                    self.enter_picker(conn);
-                    continue;
-                }
-                match byte {
-                    b'd' => return true,
-                    b'[' => {
+                match self.prefix_chord(byte) {
+                    PrefixChord::Reload => self.reload_config(conn),
+                    PrefixChord::Management(key) => self.management_chord(key, conn),
+                    PrefixChord::Resize => self.enter_resize_mode(),
+                    PrefixChord::Help => self.enter_help(),
+                    PrefixChord::Picker => self.enter_picker(conn),
+                    PrefixChord::Detach => return true,
+                    PrefixChord::Scroll => {
                         // prefix [ — the scroll viewport on the focused
                         // pane. No scrollback means nothing to scroll;
                         // the key is consumed either way.
@@ -124,9 +126,9 @@ impl WindowSession {
                             }
                         }
                     }
-                    b'n' | b'p' | b'(' | b')' | b'o' => self.prefix_switch(byte, conn),
-                    b if b == self.literal => to_send.push(byte), // literal prefix
-                    _ => {}                                       // unbound: consumed
+                    PrefixChord::Switch => self.prefix_switch(byte, conn),
+                    PrefixChord::Literal => to_send.push(byte),
+                    PrefixChord::Unbound => {}
                 }
             } else if byte == self.prefix {
                 *prefix_pending = true;
@@ -149,6 +151,107 @@ impl WindowSession {
             super::super::forward_chunked(conn, self.focused_pane(), &to_send);
         }
         false
+    }
+
+    /// Hand a plain run to the modal that owns the keyboard, if one is
+    /// up: the prompt, the menu, help, and the picker each eat bytes
+    /// until one closes them (the closing byte and the rest of the run
+    /// are dropped); resize mode exits and consumes the run whole (its
+    /// arrows arrive as Key tokens, not bytes). Returns whether a modal
+    /// owned the run.
+    fn feed_modal_run(
+        &mut self,
+        bytes: &[u8],
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> bool {
+        if self.prompt_mode {
+            for &byte in bytes {
+                if !self.prompt_byte(conn, byte) {
+                    break;
+                }
+            }
+        } else if self.menu.is_some() {
+            for &byte in bytes {
+                if !self.menu_byte(byte) {
+                    break;
+                }
+            }
+        } else if self.help_mode {
+            for &byte in bytes {
+                if !self.help_byte(byte) {
+                    break;
+                }
+            }
+        } else if self.picker_mode {
+            for &byte in bytes {
+                if !self.picker_byte(conn, byte) {
+                    break;
+                }
+            }
+        } else if self.resize_mode {
+            self.resize_mode = false;
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Classify the byte after the prefix. Precedence matters where the
+    /// configurable keys collide with the fixed table: reload first (it
+    /// never shadows `d`), then the management chords, then resize, help,
+    /// and picker, then the fixed `d`/`[`/switch arms, then the literal
+    /// prefix; anything else is unbound and consumed.
+    pub(super) fn prefix_chord(&self, byte: u8) -> PrefixChord {
+        if byte == self.reload_key && byte != b'd' {
+            return PrefixChord::Reload;
+        }
+        if let Some(key) = self.management_key(byte) {
+            return PrefixChord::Management(key);
+        }
+        if byte == self.management.resize {
+            return PrefixChord::Resize;
+        }
+        if byte == self.management.help {
+            return PrefixChord::Help;
+        }
+        if byte == self.management.picker {
+            return PrefixChord::Picker;
+        }
+        match byte {
+            b'd' => PrefixChord::Detach,
+            b'[' => PrefixChord::Scroll,
+            b'n' | b'p' | b'(' | b')' | b'o' => PrefixChord::Switch,
+            b if b == self.literal => PrefixChord::Literal,
+            _ => PrefixChord::Unbound,
+        }
+    }
+
+    /// The configurable management chord bound to `byte`, if any (first
+    /// match wins when two keys share a byte).
+    fn management_key(&self, byte: u8) -> Option<ManagementKey> {
+        let m = &self.management;
+        let table = [
+            (m.split_right, ManagementKey::SplitRight),
+            (m.split_down, ManagementKey::SplitDown),
+            (m.kill_pane, ManagementKey::KillPane),
+            (m.new_window, ManagementKey::NewWindow),
+            (m.swap_prev, ManagementKey::SwapPrev),
+            (m.swap_next, ManagementKey::SwapNext),
+            (m.workspace_next, ManagementKey::WorkspaceNext),
+            (m.workspace_prev, ManagementKey::WorkspacePrev),
+            (m.zoom, ManagementKey::Zoom),
+            (m.rename_window, ManagementKey::RenameWindow),
+            (m.rename_pane, ManagementKey::RenamePane),
+            (m.border_cycle, ManagementKey::BorderCycle),
+            (m.label_toggle, ManagementKey::Labels),
+            (m.workspace_picker, ManagementKey::WorkspacePicker),
+            (m.sidebar, ManagementKey::Sidebar),
+            (m.status_bar, ManagementKey::StatusBar),
+        ];
+        table
+            .into_iter()
+            .find(|(bound, _)| *bound == byte)
+            .map(|(_, key)| key)
     }
 
     /// The prefix commands that move the view through the daemon's tree:
@@ -247,65 +350,86 @@ impl WindowSession {
     /// click-through), motion adjusts the adjacent split via the wire's
     /// relative `resize-pane`, and release without any motion falls
     /// through as a click (focus, plus the pane's release when owned).
+    ///
+    /// [`Self::mouse_hit`] decides what the report hits without touching
+    /// state; this applies it.
     pub(super) fn route_mouse(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         mouse: SgrMouse,
     ) {
+        match self.mouse_hit(&mouse) {
+            Hit::Consumed => {}
+            Hit::MenuRow(row) => self.menu_click(conn, row),
+            Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
+            Hit::SidebarMenu => self.open_menu(MenuTarget::Commands),
+            Hit::SidebarWorkspace { id, menu: true } => {
+                self.open_menu(MenuTarget::Workspace(id));
+            }
+            Hit::SidebarWorkspace { id, menu: false } => self.land_on_workspace(conn, &id),
+            Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
+            Hit::PickerMove(delta) => self.picker_move(delta),
+            Hit::PickerFilter => {
+                self.picker_filtering = true;
+                self.refresh_picker();
+            }
+            Hit::PickerRow(content) => {
+                // Move the cursor to the clicked row and activate it
+                // (start maps the windowed index onto the filtered
+                // list).
+                self.picker_selected = self.picker_start + content;
+                self.refresh_picker();
+                self.picker_activate(conn);
+            }
+            Hit::HelpScroll(delta) => self.help_scroll_by(delta),
+            Hit::TabMenu(id) => self.open_menu(MenuTarget::Tab(id)),
+            Hit::TabPress(rx) => self.tab_click(conn, rx),
+            Hit::Wheel { rect, x, cy, delta } => {
+                let owns = self.pane_owns_mouse(rect.pane);
+                if !owns && self.renderer.wheel_scroll(x, cy, delta) {
+                    return; // consumed client-side
+                }
+                if owns {
+                    self.forward_mouse(conn, &rect, &mouse);
+                }
+            }
+            Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, &mouse),
+            Hit::DragStart { divider, x, y } => {
+                self.drag = Some(DragState::Pending { divider, x, y });
+            }
+            Hit::PanePress(rect) => {
+                self.renderer.focus(rect.pane);
+                let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
+                if self.pane_owns_mouse(rect.pane) {
+                    self.forward_mouse(conn, &rect, &mouse);
+                }
+            }
+        }
+    }
+
+    /// What one host mouse report hits, in the router's precedence order:
+    /// the context menu, the side panel's strip, a drag in flight, the
+    /// prompt, the picker, the help panel, the tab strip row, then the
+    /// pane area. Reads state only — [`Self::route_mouse`] applies it.
+    pub(super) fn mouse_hit(&self, mouse: &SgrMouse) -> Hit {
         // Window-relative, 0-based host coordinates.
         let Some(x) = mouse.col.checked_sub(1) else {
-            return;
+            return Hit::Consumed;
         };
         let Some(y) = mouse.row.checked_sub(1) else {
-            return;
+            return Hit::Consumed;
         };
         let strip = self.renderer.sidebar_width();
 
-        // The context menu is modal for the pointer: a press on an
-        // action row dispatches it, everything else is consumed while
-        // it is up.
         if self.menu.is_some() {
-            if !mouse.release
-                && !mouse.is_motion()
-                && !mouse.is_wheel_up()
-                && !mouse.is_wheel_down()
-            {
-                // The modal centers over the HOST width (the pane layout
-                // already carries the strip offset), so the click maps by
-                // the raw column — the picker's guard does the same.
-                if let Some(row) = self.renderer.overlay_row_at(x, y) {
-                    self.menu_click(conn, row);
-                }
-            }
-            return;
+            return self.menu_hit(mouse, x, y);
         }
-
-        // The side panel owns its strip below the tab-strip row: a
-        // press on a workspace row lands on it (the select+resync every
-        // switch follows), a right-press opens the workspace menu, the
-        // footer chips open the new-workspace prompt / the command
-        // menu, and every other event in the strip is consumed — no
-        // pane, divider, or drag lives in the panel. The TOP row stays the tab strip's (the panel
-        // begins under it), so a click there falls through to the tab
-        // strip even inside the strip's width — the sidebar path used
-        // to consume it (the round-5 report).
+        // The TOP row stays the tab strip's (the panel begins under it),
+        // so a click there falls through to the tab strip even inside
+        // the strip's width — the sidebar path used to consume it (the
+        // round-5 report).
         if strip > 0 && y > 0 && x < strip {
-            if !mouse.release && !mouse.is_motion() {
-                if let Some(id) = self.renderer.sidebar_row_at(x, y) {
-                    if id == super::super::SIDEBAR_NEW_ID {
-                        self.enter_prompt(PromptTarget::NewWorkspace);
-                    } else if id == super::super::SIDEBAR_MENU_ID {
-                        self.open_menu(MenuTarget::Commands);
-                    } else if let Some(ws_id) = id.strip_prefix("ws:") {
-                        if mouse.is_right_press() {
-                            self.open_menu(MenuTarget::Workspace(ws_id.to_string()));
-                        } else {
-                            self.land_on_workspace(conn, ws_id);
-                        }
-                    }
-                }
-            }
-            return;
+            return self.sidebar_hit(mouse, x, y);
         }
         // Pane coordinates are layout coordinates: the host x less the
         // side panel's strip width. The TOP row is exempt — the strip
@@ -323,148 +447,176 @@ impl WindowSession {
         // row must not strand it); the drag's press stored content
         // coordinates, so the strip row saturates to content row 0.
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
-            self.drag_event(conn, x, y.saturating_sub(1), mouse.release);
-            return;
+            return Hit::Drag {
+                x,
+                y: y.saturating_sub(1),
+                release: mouse.release,
+            };
         }
-
         // The rename prompt is modal for the pointer too: every event is
         // consumed while it is up.
         if self.prompt_mode {
-            return;
+            return Hit::Consumed;
         }
-
-        // The picker is modal for the pointer too: wheels move the
-        // selection, a click on a content row selects AND activates it
-        // (switch through the select+resync), a click on the filter line
-        // opens the filter box, and everything else is consumed.
         if self.picker_mode {
-            if mouse.is_wheel_up() {
-                self.picker_move(-1);
-            } else if mouse.is_wheel_down() {
-                self.picker_move(1);
-            } else if mouse.release || mouse.is_motion() {
-                // Drags do nothing in the modal; only a press click.
-            } else if let Some(row) = self.renderer.overlay_row_at(x, y) {
-                // The panel's row 0 is the filter line only while a
-                // filter is open or set; idle, content starts at row 0
-                // (the idle placeholder row the old mapping assumed is
-                // gone). The footer — the panel's last row — does
-                // nothing.
-                let filtering = self.picker_filtering || !self.picker_filter.is_empty();
-                let filter_lines = usize::from(filtering);
-                if filtering && row == 0 {
-                    self.picker_filtering = true;
-                    self.refresh_picker();
-                } else if let Some(content) = row.checked_sub(filter_lines) {
-                    let window_len = self.picker_panel_len.saturating_sub(filter_lines + 1);
-                    if content < window_len {
-                        // Move the cursor to the clicked row and activate
-                        // it (start maps the windowed index onto the
-                        // filtered list).
-                        self.picker_selected = self.picker_start + content;
-                        self.refresh_picker();
-                        self.picker_activate(conn);
-                    }
-                }
-            }
-            return;
+            return self.picker_hit(mouse, x, y);
         }
-
-        // The help panel is modal for the pointer too: while it is up
-        // every mouse event is consumed — wheels scroll the PANEL (the
-        // round-3 defect: they fell through to the pane scrollback /
-        // pane forwarding), clicks and drags do nothing.
         if self.help_mode {
-            if mouse.is_wheel_up() {
-                self.help_scroll_by(-3);
-            } else if mouse.is_wheel_down() {
-                self.help_scroll_by(3);
-            }
-            return;
+            return help_hit(mouse);
         }
-
-        // The tab strip owns the top row: a left press hit-tests the
-        // tabs and switches windows through the select+resync contract;
-        // a RIGHT press on a tab opens that window's context menu; no
-        // pane focus, no pane forwarding, and no drag ever starts
-        // there. The hit-test takes the RAW host column (see above).
         if y == 0 {
-            let is_press = !mouse.release
-                && !mouse.is_motion()
-                && !mouse.is_wheel_up()
-                && !mouse.is_wheel_down();
-            if mouse.is_right_press() {
-                if let Some((id, _)) = self
-                    .tab_strip
-                    .hit_test(rx)
-                    .and_then(|index| self.status.windows().get(index))
-                {
-                    let id = id.clone();
-                    self.open_menu(MenuTarget::Tab(id));
-                }
-            } else if is_press {
-                self.tab_click(conn, rx);
-            }
-            return;
+            return self.tab_strip_hit(mouse, rx);
         }
         // Below the strip, content coordinates are host rows minus the
         // strip row.
         let Some(cy) = y.checked_sub(1) else {
-            return;
+            return Hit::Consumed;
         };
+        self.pane_area_hit(mouse, x, cy)
+    }
 
+    /// The context menu is modal for the pointer: a press on an action
+    /// row dispatches it, everything else is consumed while it is up.
+    /// The modal centers over the HOST width (the pane layout already
+    /// carries the strip offset), so the click maps by the raw column.
+    fn menu_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        if !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down() {
+            if let Some(row) = self.renderer.overlay_row_at(x, y) {
+                return Hit::MenuRow(row);
+            }
+        }
+        Hit::Consumed
+    }
+
+    /// The side panel owns its strip below the tab-strip row: a press on
+    /// a workspace row lands on it (the select+resync every switch
+    /// follows), a right-press opens the workspace menu, the footer chips
+    /// open the new-workspace prompt / the command menu, and every other
+    /// event in the strip is consumed — no pane, divider, or drag lives
+    /// in the panel.
+    fn sidebar_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        if mouse.release || mouse.is_motion() {
+            return Hit::Consumed;
+        }
+        let Some(id) = self.renderer.sidebar_row_at(x, y) else {
+            return Hit::Consumed;
+        };
+        if id == super::super::SIDEBAR_NEW_ID {
+            Hit::SidebarNewWorkspace
+        } else if id == super::super::SIDEBAR_MENU_ID {
+            Hit::SidebarMenu
+        } else if let Some(ws_id) = id.strip_prefix("ws:") {
+            Hit::SidebarWorkspace {
+                id: ws_id.to_string(),
+                menu: mouse.is_right_press(),
+            }
+        } else {
+            Hit::Consumed
+        }
+    }
+
+    /// The picker is modal for the pointer: wheels move the selection, a
+    /// click on a content row selects AND activates it (switch through
+    /// the select+resync), a click on the filter line opens the filter
+    /// box, and everything else — drags, releases, the footer — is
+    /// consumed. `x` is the strip-rebased column.
+    fn picker_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        if mouse.is_wheel_up() {
+            return Hit::PickerMove(-1);
+        }
+        if mouse.is_wheel_down() {
+            return Hit::PickerMove(1);
+        }
+        if mouse.release || mouse.is_motion() {
+            return Hit::Consumed;
+        }
+        let Some(row) = self.renderer.overlay_row_at(x, y) else {
+            return Hit::Consumed;
+        };
+        // The panel's row 0 is the filter line only while a filter is
+        // open or set; idle, content starts at row 0 (the idle
+        // placeholder row the old mapping assumed is gone). The footer —
+        // the panel's last row — does nothing.
+        let filtering = self.picker_filtering || !self.picker_filter.is_empty();
+        let filter_lines = usize::from(filtering);
+        if filtering && row == 0 {
+            return Hit::PickerFilter;
+        }
+        match row.checked_sub(filter_lines) {
+            Some(content) if content < self.picker_panel_len.saturating_sub(filter_lines + 1) => {
+                Hit::PickerRow(content)
+            }
+            _ => Hit::Consumed,
+        }
+    }
+
+    /// The tab strip owns the top row: a left press hit-tests the tabs
+    /// and switches windows through the select+resync contract; a RIGHT
+    /// press on a tab opens that window's context menu; no pane focus, no
+    /// pane forwarding, and no drag ever starts there. `rx` is the RAW
+    /// host column.
+    fn tab_strip_hit(&self, mouse: &SgrMouse, rx: u16) -> Hit {
+        if mouse.is_right_press() {
+            return self
+                .tab_strip
+                .hit_test(rx)
+                .and_then(|index| self.status.windows().get(index))
+                .map_or(Hit::Consumed, |(id, _)| Hit::TabMenu(id.clone()));
+        }
+        let is_press =
+            !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down();
+        if is_press {
+            Hit::TabPress(rx)
+        } else {
+            Hit::Consumed
+        }
+    }
+
+    /// The pane area (content coordinates `x`, `cy`): wheels go to the
+    /// pane under the pointer (unless a held button owns the pointer);
+    /// motion and release continue a drag or forward to a mouse-owning
+    /// pane; a press near a divider starts a drag — unless the cell is an
+    /// embedded border label (text cells are not drag handles, herdr's
+    /// semantics; the plain border segments around a label stay
+    /// draggable) — and otherwise focuses the pane.
+    fn pane_area_hit(&self, mouse: &SgrMouse, x: u16, cy: u16) -> Hit {
         if mouse.is_wheel_up() || mouse.is_wheel_down() {
             if self.drag.is_some() {
-                return; // the held button owns the pointer; wheels wait
+                return Hit::Consumed; // the held button owns the pointer; wheels wait
             }
-            let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
-                return;
+            return match self.renderer.pane_at(x, cy) {
+                Some(rect) => Hit::Wheel {
+                    rect: *rect,
+                    x,
+                    cy,
+                    delta: if mouse.is_wheel_up() { 3 } else { -3 },
+                },
+                None => Hit::Consumed,
             };
-            let owns = self.pane_owns_mouse(rect.pane);
-            let delta: isize = if mouse.is_wheel_up() { 3 } else { -3 };
-            if !owns && self.renderer.wheel_scroll(x, cy, delta) {
-                return; // consumed client-side
-            }
-            if owns {
-                self.forward_mouse(conn, &rect, &mouse);
-            }
-            return;
         }
-
         if mouse.release || mouse.is_motion() {
             if self.drag.is_some() {
-                self.drag_event(conn, x, cy, mouse.release);
-                return;
+                return Hit::Drag {
+                    x,
+                    y: cy,
+                    release: mouse.release,
+                };
             }
             // Drag/release only matter to a pane that owns the mouse;
             // focus follows press only.
-            let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
-                return;
+            return match self.renderer.pane_at(x, cy) {
+                Some(rect) if self.pane_owns_mouse(rect.pane) => Hit::PaneForward(*rect),
+                _ => Hit::Consumed,
             };
-            if self.pane_owns_mouse(rect.pane) {
-                self.forward_mouse(conn, &rect, &mouse);
-            }
-            return;
         }
-
-        // A press: a divider hit starts a drag (never a click-through) —
-        // UNLESS the cell is an embedded border label (text cells are not
-        // drag handles, herdr's semantics); then it falls through to the
-        // focus path below. The plain border segments around a label stay
-        // draggable (divider_near still matches the boundary line).
         if let Some(divider) = self.renderer.divider_near(x, cy, 1) {
             if !self.renderer.label_cell_at(x, cy) {
-                self.drag = Some(DragState::Pending { divider, x, y: cy });
-                return;
+                return Hit::DragStart { divider, x, y: cy };
             }
         }
-        let Some(rect) = self.renderer.pane_at(x, cy).cloned() else {
-            return;
-        };
-        self.renderer.focus(rect.pane);
-        let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
-        if self.pane_owns_mouse(rect.pane) {
-            self.forward_mouse(conn, &rect, &mouse);
+        match self.renderer.pane_at(x, cy) {
+            Some(rect) => Hit::PanePress(*rect),
+            None => Hit::Consumed,
         }
     }
 

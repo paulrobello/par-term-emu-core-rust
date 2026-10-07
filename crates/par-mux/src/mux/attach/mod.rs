@@ -597,6 +597,7 @@ enum PrefixKey {
 /// and the render router match on; the four actions live on `Session` as
 /// `split_pane`, `kill_focused_pane`, and `new_window_in_session`, and on
 /// `WindowSession` as `management_chord`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagementKey {
     /// Split the focused pane right (`split-window -h`).
     SplitRight,
