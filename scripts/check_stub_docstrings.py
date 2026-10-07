@@ -111,7 +111,9 @@ def run_self_test() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(__doc__ or "Check stub docstring coverage").splitlines()[0]
+    )
     parser.add_argument("stub", nargs="?", type=Path, default=STUB_PATH)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
