@@ -1137,6 +1137,10 @@ fn mouse_event_type_from_wire(name: &str) -> MouseEventType {
 }
 
 #[cfg(test)]
+#[path = "proto_golden_tests.rs"]
+mod golden_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

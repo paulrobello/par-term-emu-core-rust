@@ -1,0 +1,150 @@
+S 0a0e0a0a6f75741b5b316d707574100b
+  = Ok(Output { data: "out\u{1b}[1mput", timestamp: Some(11) })
+S 0a00
+  = Ok(Output { data: "", timestamp: None })
+S 1205088401102b
+  = Ok(Resize { cols: 132, rows: 43 })
+S 1a0b0a097469746c6520e29c93
+  = Ok(Title { title: "title ✓" })
+S 22cf010864101e1a0673637265656e2204736573732a9f010a0c676f6c64656e2d7468656d6512060801100218031a0908fa0110fb0118fc012204100a181422060801100b181522060802100c181622060803100d181722060804100e181822060805100f1819220608061010181a220608071011181b2a060864106e18782a060865106f18792a0608661070187a2a0608671071187b2a0608681072187c2a0608691073187d2a06086a1074187e2a06086b1075187f320562616467653d0000803e42042f746d70480252036369645801
+  = Ok(Connected { cols: 100, rows: 30, initial_screen: Some("screen"), session_id: "sess", theme: Some(ThemeInfo { name: "golden-theme", background: (1, 2, 3), foreground: (250, 251, 252), normal: [(0, 10, 20), (1, 11, 21), (2, 12, 22), (3, 13, 23), (4, 14, 24), (5, 15, 25), (6, 16, 26), (7, 17, 27)], bright: [(100, 110, 120), (101, 111, 121), (102, 112, 122), (103, 113, 123), (104, 114, 124), (105, 115, 125), (106, 116, 126), (107, 117, 127)] }), badge: Some("badge"), faint_text_alpha: Some(0.25), cwd: Some("/tmp"), modify_other_keys: Some(2), client_id: Some("cid"), readonly: Some(true) })
+S 220408011002
+  = Ok(Connected { cols: 1, rows: 2, initial_screen: None, session_id: "", theme: None, badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None })
+S 2a0d080710081a0772656672657368
+  = Ok(Refresh { cols: 7, rows: 8, screen_content: "refresh" })
+S 3206080310041801
+  = Ok(CursorPosition { col: 3, row: 4, visible: true })
+S 3a00
+  = Ok(Bell)
+S 5a1a0a042f6f6c6412042f6e65771a04686f7374220475736572280c
+  = Ok(CwdChanged { old_cwd: Some("/old"), new_cwd: "/new", hostname: Some("host"), username: Some("user"), timestamp: Some(12) })
+S 6217080d1005180620092a056d61746368320161320162380e
+  = Ok(TriggerMatched { trigger_id: 13, row: 5, col: 6, end_col: 9, text: "match", captures: ["a", "b"], timestamp: 14 })
+S 6a0a080f12026e741a026e6d
+  = Ok(ActionNotify { trigger_id: 15, title: "nt", message: "nm" })
+S 7213081010111a056c6162656c2206080910081807
+  = Ok(ActionMarkLine { trigger_id: 16, row: 17, label: Some("label"), color: Some((9, 8, 7)) })
+S 7200
+  = Ok(ActionMarkLine { trigger_id: 0, row: 0, label: None, color: None })
+S 42090a0365727212024531
+  = Ok(Error { message: "err", code: Some("E1") })
+S 4a050a03627965
+  = Ok(Shutdown { reason: "bye" })
+S 5200
+  = Ok(Pong)
+S 7a080a046d6f64651001
+  = Ok(ModeChanged { mode: "mode", enabled: true })
+S 82010908121205736978656c
+  = Ok(GraphicsAdded { row: 18, format: Some("sixel") })
+S 8a01130a0968747470733a2f2f781013181422026964
+  = Ok(HyperlinkAdded { url: "https://x", row: 19, col: 20, id: Some("id") })
+S 9201090a016e1201761a016f
+  = Ok(UserVarChanged { name: "n", value: "v", old_value: Some("o") })
+S 9a01180a03736574120270621a066e6f726d616c202a2a036c626c
+  = Ok(ProgressBarChanged { action: "set", id: "pb", state: Some("normal"), percent: Some(42), label: Some("lbl") })
+S a201030a0162
+  = Ok(BadgeChanged { badge: Some("b") })
+S aa011408011002180320042a0373656c3205626c6f636b
+  = Ok(SelectionChanged { start_col: Some(1), start_row: Some(2), end_col: Some(3), end_row: Some(4), text: Some("sel"), mode: "block", cleared: false })
+S aa0109320563686172733801
+  = Ok(SelectionChanged { start_col: None, start_row: None, end_col: None, end_row: None, text: None, mode: "chars", cleared: true })
+S b2010e0a037365741204636c69701a0163
+  = Ok(ClipboardSync { operation: "set", content: "clip", target: Some("c") })
+S ba01250a10636f6d6d616e645f66696e697368656412026c7318feffffffffffffffff0120152816
+  = Ok(ShellIntegrationEvent { event_type: "command_finished", command: Some("ls"), exit_code: Some(-2), timestamp: Some(21), cursor_line: Some(22) })
+S c20196010a2509000000000000294010081a10000000000000f03f00000000000004402203637075288019120a086410321828201e28141a1c0a046469736b12012f18e80720f4032a03535344320461706673380122150a03656e30100118022003280430053806400748082a1b09000000000000e03f11000000000000f83f1900000000000004403201683a026f734201314a016b50175818
+  = Ok(SystemStats { cpu: Some(CpuStats { overall_usage_percent: 12.5, physical_core_count: 8, per_core_usage_percent: [1.0, 2.5], brand: Some("cpu"), frequency_mhz: Some(3200) }), memory: Some(MemoryStats { total_bytes: 100, used_bytes: 50, available_bytes: 40, swap_total_bytes: 30, swap_used_bytes: 20 }), disks: [DiskStats { name: "disk", mount_point: "/", total_bytes: 1000, available_bytes: 500, kind: "SSD", file_system: "apfs", is_removable: true }], networks: [NetworkInterfaceStats { name: "en0", received_bytes: 1, transmitted_bytes: 2, total_received_bytes: 3, total_transmitted_bytes: 4, packets_received: 5, packets_transmitted: 6, errors_received: 7, errors_transmitted: 8 }], load_average: Some(LoadAverage { one_minute: 0.5, five_minutes: 1.5, fifteen_minutes: 2.5 }), hostname: Some("h"), os_name: Some("os"), os_version: Some("1"), kernel_version: Some("k"), uptime_secs: Some(23), timestamp: Some(24) })
+S c20100
+  = Ok(SystemStats { cpu: None, memory: None, disks: [], networks: [], load_average: None, hostname: None, os_name: None, os_version: None, kernel_version: None, uptime_secs: None, timestamp: None })
+S ca010c0819120670726f6d7074181a
+  = Ok(ZoneOpened { zone_id: 25, zone_type: "prompt", abs_row_start: 26 })
+S d20110081b12066f7574707574181c201d2801
+  = Ok(ZoneClosed { zone_id: 27, zone_type: "output", abs_row_start: 28, abs_row_end: 29, exit_code: Some(1) })
+S da010b081e1207636f6d6d616e64
+  = Ok(ZoneScrolledOut { zone_id: 30, zone_type: "command" })
+S e201090a014b1201561a014f
+  = Ok(EnvironmentChanged { key: "K", value: "V", old_value: Some("O") })
+S ea01100a027268120272751a026f6822026f75
+  = Ok(RemoteHostTransition { hostname: "rh", username: Some("ru"), old_hostname: Some("oh"), old_username: Some("ou") })
+S f20107081f12037a7368
+  = Ok(SubShellDetected { depth: 31, shell_type: Some("zsh") })
+S fa01090a077b2261223a317d
+  = Ok(SemanticSnapshot { snapshot_json: "{\"a\":1}" })
+S 82021108201208646f776e6c6f61641a01662021
+  = Ok(FileTransferStarted { id: 32, direction: "download", filename: Some("f"), total_bytes: Some(33) })
+S 8a0206082210231824
+  = Ok(FileTransferProgress { id: 34, bytes_transferred: 35, total_bytes: Some(36) })
+S 92020708251201671826
+  = Ok(FileTransferCompleted { id: 37, filename: Some("g"), size: 38 })
+S 9a0208082712046e6f7065
+  = Ok(FileTransferFailed { id: 39, reason: "nope" })
+S a202050a0374677a
+  = Ok(UploadRequested { format: "tgz" })
+S aa02020801
+  = Ok(ScreenCleared { include_scrollback: true })
+S b202400a1d1206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c0a1f08071206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c
+  = Ok(AgentRoster { agents: [AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool" }, AgentEntry { pane_id: 7, agent: "claude", state: "working", source: "hook", reason: "tool" }] })
+S ba02210a1d1206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c1001
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool" }, released: true })
+C 0a050a03696e03
+  = Ok(Input { data: "in\u{3}" })
+C 1204085a1021
+  = Ok(Resize { cols: 90, rows: 33 })
+C 1a00
+  = Ok(Ping)
+C 2200
+  = Ok(RequestRefresh)
+C 2a040a02011a
+  = Ok(Subscribe { events: [Output, ScreenCleared] })
+C 32130804100518c801200130013a067363726f6c6c
+  = Ok(Mouse { col: 4, row: 5, button: 200, shift: true, ctrl: false, alt: true, event_type: Scroll })
+C 3a020801
+  = Ok(FocusChange { focused: true })
+C 42070a057061737465
+  = Ok(Paste { content: "paste" })
+C 4a0e08011002180320042a046c696e65
+  = Ok(SelectionRequest { start_col: 1, start_row: 2, end_col: 3, end_row: 4, mode: "line" })
+C 52080a03676574120178
+  = Ok(ClipboardRequest { operation: "get", content: Some("x"), target: None })
+C 5a080a0466756c6c1009
+  = Ok(SnapshotRequest { scope: "full", max_commands: Some(9) })
+LS empty server oneof
+  = Err(InvalidMessage("Empty server message"))
+LS output invalid utf8
+  = Ok(Output { data: "o�(", timestamp: None })
+LS resize truncates u16
+  = Ok(Resize { cols: 1, rows: 4464 })
+LS connected wide theme truncates channels
+  = Ok(Connected { cols: 4464, rows: 0, initial_screen: Some("�a"), session_id: "s", theme: Some(ThemeInfo { name: "w", background: (0, 1, 255), foreground: (1, 2, 3), normal: [(44, 0, 0), (45, 0, 0), (46, 0, 0), (47, 0, 0), (48, 0, 0), (49, 0, 0), (50, 0, 0), (51, 0, 0)], bright: [(0, 0, 144), (0, 0, 145), (0, 0, 146), (0, 0, 147), (0, 0, 148), (0, 0, 149), (0, 0, 150), (0, 0, 151)] }), badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None })
+LS connected theme missing background
+  = Err(InvalidMessage("Missing background color"))
+LS connected theme missing foreground
+  = Err(InvalidMessage("Missing foreground color"))
+LS connected theme 7 normal colors
+  = Err(InvalidMessage("Expected 8 normal colors, got 7"))
+LS connected theme 9 bright colors
+  = Err(InvalidMessage("Expected 8 bright colors, got 9"))
+LS mark line color truncates
+  = Ok(ActionMarkLine { trigger_id: 1, row: 464, label: None, color: Some((0, 44, 255)) })
+LS progress percent clamps to 100
+  = Ok(ProgressBarChanged { action: "set", id: "p", state: None, percent: Some(100), label: None })
+LS progress percent above u8
+  = Ok(ProgressBarChanged { action: "set", id: "p", state: None, percent: Some(100), label: None })
+LS selection truncates u16
+  = Ok(SelectionChanged { start_col: Some(0), start_row: Some(1), end_col: None, end_row: Some(1), text: None, mode: "m", cleared: false })
+LS agent state missing agent
+  = Err(InvalidMessage("AgentStateChanged is missing its agent field"))
+LS agent state pane zero default entry
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "" }, released: false })
+LC empty client oneof
+  = Err(InvalidMessage("Empty client message"))
+LC input invalid utf8
+  = Ok(Input { data: "�z" })
+LC mouse button clamps to 255
+  = Ok(Mouse { col: 4464, row: 3, button: 255, shift: false, ctrl: true, alt: false, event_type: Release })
+LC mouse unknown event type is press
+  = Ok(Mouse { col: 4464, row: 3, button: 1, shift: false, ctrl: true, alt: false, event_type: Press })
+LC subscribe drops unknown ints
+  = Ok(Subscribe { events: [Output, Output, ScreenCleared] })
+LC selection request truncates u16
+  = Ok(SelectionRequest { start_col: 0, start_row: 1, end_col: 2, end_row: 3, mode: "w" })
