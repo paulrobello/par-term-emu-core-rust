@@ -1398,33 +1398,63 @@ fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
     // `cat -v` shows ESC as `^[`.
     client
         .send(&format!(
-            "send-keys -t {pane} -l 'printf \"\\033[?1h\"; cat -v'"
+            "send-keys -t {pane} -l 'printf \"\\033[?1hCKM%sON\\n\" -; cat -v'"
         ))
         .expect("start key reader");
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    // Let the pane print its DECCKM so the replay carries it before the
-    // client mirrors the pane.
-    std::thread::sleep(Duration::from_millis(700));
+    // Wait for the pane to print its DECCKM (the marker printf assembles
+    // follows it, so the shell's echo never matches) so the replay
+    // carries it before the client mirrors the pane — a fixed sleep raced
+    // a slow shell prompt under full-gate load.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("CKM-ON") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never ran the DECCKM printf: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    // Settle: the renderer's first frame paints (alt-screen enter). Then
-    // send an Up arrow (the harness's stdin is the client's host stdin).
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    // Settle: the renderer painted the pane's marker, so its emulator
+    // consumed the DECCKM before it. Then send an Up arrow (the
+    // harness's stdin is the client's host stdin).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut painted: Vec<u8> = Vec::new();
+    while !plain_text(&painted).contains("CKM-ON") {
+        assert!(
+            Instant::now() < deadline,
+            "the render client never painted the pane's marker: {:?}\nstderr: {}",
+            plain_text(&painted),
+            stderr.lock().unwrap()
+        );
+        painted.extend(wait_for_output(&host, b"", Duration::from_millis(100)));
+    }
     host.to_child.write_all(b"\x1b[A").expect("arrow up");
     host.to_child.flush().ok();
 
-    // `cat -v` renders ESC O A as `^[[O A`? No — `ESC O A` prints as
-    // `^[OA`. Wait for it on the capture via the client's own screen
-    // paint; the capture assertion below is the authority.
-    let _ = wait_for_output(&host, b"OA", Duration::from_secs(10));
-
-    // The authority: the pane itself received the SS3 spelling.
-    let capture = client
-        .send(&format!("capture-pane -t {pane}"))
-        .expect("capture");
-    let body = capture.join("\n");
+    // `ESC O A` prints as `^[OA` under `cat -v`. The authority is the
+    // pane itself: poll its capture for the SS3 spelling.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("^[OA") || body.contains("^[[A") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
         body.contains("^[OA"),
         "the pane must receive the application-cursor spelling ESC O A for Up \
