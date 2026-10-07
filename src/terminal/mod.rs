@@ -3426,11 +3426,7 @@ impl Terminal {
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
         if let Some(ref filter) = self.event_subscription {
-            let events = self.events.take_pending();
-            let (matched, remaining): (Vec<_>, Vec<_>) =
-                events.into_iter().partition(|e| filter.contains(&e.kind()));
-            self.events.restore_pending(remaining);
-            matched
+            self.events.extract_matching(|e| filter.contains(&e.kind()))
         } else {
             self.poll_events()
         }
@@ -3729,5 +3725,149 @@ mod arc001_observer_dispatch_tests {
             batch.is_empty(),
             "batch should be empty when no new events were queued"
         );
+    }
+
+    fn title(s: &str) -> TerminalEvent {
+        TerminalEvent::TitleChanged(s.to_string())
+    }
+
+    fn cwd(path: &str) -> TerminalEvent {
+        TerminalEvent::CwdChanged(CwdChange {
+            old_cwd: None,
+            new_cwd: path.to_string(),
+            hostname: None,
+            username: None,
+            timestamp: 0,
+        })
+    }
+
+    fn two_observers(
+        term: &mut Terminal,
+    ) -> (Arc<OrderRecordingObserver>, Arc<OrderRecordingObserver>) {
+        let a = Arc::new(OrderRecordingObserver::new());
+        let b = Arc::new(OrderRecordingObserver::new());
+        term.add_observer(a.clone());
+        term.add_observer(b.clone());
+        (a, b)
+    }
+
+    fn clear(a: &OrderRecordingObserver, b: &OrderRecordingObserver) {
+        a.seen.lock().unwrap().clear();
+        b.seen.lock().unwrap().clear();
+    }
+
+    /// Card 01a11486: a typed poll that removes an already-dispatched event
+    /// must not leave the dispatch index past the end of the queue, or the
+    /// next pushed event is never delivered to observers.
+    #[test]
+    fn typed_poll_of_dispatched_event_does_not_lose_next_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        for i in 0..9 {
+            term.events.push(title(&format!("t{i}")));
+        }
+        term.events.push(cwd("/tmp"));
+        term.take_observer_dispatch_batch().deliver();
+        assert_eq!(a.seen.lock().unwrap().len(), 10);
+        clear(&a, &b);
+
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// Removing a dispatched event below the index shifts later events
+    /// left; without adjusting the index the first undispatched event is
+    /// skipped even when the queue length never returns to the old index.
+    #[test]
+    fn typed_poll_of_dispatched_event_does_not_skip_shifted_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(cwd("/a"));
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("x"));
+        term.events.push(title("y"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(
+                *obs.seen.lock().unwrap(),
+                vec!["title:x".to_string(), "title:y".to_string()]
+            );
+        }
+    }
+
+    /// Extracting a not-yet-dispatched event must not rewind the index over
+    /// events observers already received.
+    #[test]
+    fn typed_poll_of_undispatched_event_does_not_redispatch() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        term.events.push(cwd("/a"));
+        assert_eq!(term.poll_cwd_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// `poll_subscribed_events` with a filter removes matched events the
+    /// same way the typed polls do.
+    #[test]
+    fn subscribed_poll_of_dispatched_event_does_not_lose_next_event() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.events.push(cwd("/a"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        let mut filter = HashSet::new();
+        filter.insert(TerminalEventKind::CwdChanged);
+        term.set_event_subscription(filter);
+        assert_eq!(term.poll_subscribed_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
+    }
+
+    /// The generic drain resets the index with the queue; pinned as a guard.
+    #[test]
+    fn generic_poll_then_push_reaches_observers() {
+        let mut term = Terminal::new(80, 24);
+        let (a, b) = two_observers(&mut term);
+
+        term.events.push(title("old"));
+        term.take_observer_dispatch_batch().deliver();
+        clear(&a, &b);
+
+        assert_eq!(term.poll_events().len(), 1);
+        term.events.push(title("new"));
+        term.take_observer_dispatch_batch().deliver();
+
+        for obs in [&a, &b] {
+            assert_eq!(*obs.seen.lock().unwrap(), vec!["title:new".to_string()]);
+        }
     }
 }

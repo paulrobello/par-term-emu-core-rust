@@ -121,35 +121,45 @@ impl EventBroker {
         std::mem::take(&mut self.terminal_events)
     }
 
-    /// Take the pending events without touching the dispatch index; the
-    /// caller hands the leftovers back via [`EventBroker::restore_pending`].
-    pub(crate) fn take_pending(&mut self) -> Vec<TerminalEvent> {
-        std::mem::take(&mut self.terminal_events)
-    }
-
-    /// Replace the pending queue (see [`EventBroker::take_pending`]).
-    pub(crate) fn restore_pending(&mut self, remaining: Vec<TerminalEvent>) {
-        self.terminal_events = remaining;
-    }
-
     /// Drain pending events, splitting each into either an extracted value
     /// (when `try_extract` returns `Ok`) or a leftover event (`Err`) that
     /// stays queued. Powers the typed `poll_*` methods (ARC-006).
+    ///
+    /// `events_dispatched_up_to` drops by one for every removed event that
+    /// sat below it, so it keeps pointing at the first undispatched event of
+    /// the compacted queue.
     pub(crate) fn extract<T>(
         &mut self,
         mut try_extract: impl FnMut(TerminalEvent) -> Result<T, TerminalEvent>,
     ) -> Vec<T> {
-        let events = self.take_pending();
+        let events = std::mem::take(&mut self.terminal_events);
+        let dispatched = self.events_dispatched_up_to;
+        let mut removed_dispatched = 0;
         let mut extracted = Vec::new();
-        let mut remaining = Vec::new();
-        for event in events {
+        let mut remaining = Vec::with_capacity(events.len());
+        for (index, event) in events.into_iter().enumerate() {
             match try_extract(event) {
-                Ok(value) => extracted.push(value),
+                Ok(value) => {
+                    if index < dispatched {
+                        removed_dispatched += 1;
+                    }
+                    extracted.push(value);
+                }
                 Err(other) => remaining.push(other),
             }
         }
-        self.restore_pending(remaining);
+        self.terminal_events = remaining;
+        self.events_dispatched_up_to = dispatched - removed_dispatched;
         extracted
+    }
+
+    /// Remove and return every pending event matching `pred`, keeping the
+    /// dispatch index consistent (see [`EventBroker::extract`]).
+    pub(crate) fn extract_matching(
+        &mut self,
+        mut pred: impl FnMut(&TerminalEvent) -> bool,
+    ) -> Vec<TerminalEvent> {
+        self.extract(|event| if pred(&event) { Ok(event) } else { Err(event) })
     }
 
     /// Evict the oldest terminal events when the queue exceeds the cap
