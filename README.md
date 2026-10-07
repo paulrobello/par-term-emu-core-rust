@@ -248,9 +248,11 @@ with a `SHA256SUMS` file. Per-platform install steps:
 # links libpython and fails at link time for a standalone binary)
 cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer
 
-# Terminal multiplexer daemon + attach client (from the par-mux crate since the
-# workspace split; drop ,attach for the daemon alone)
+# Terminal multiplexer daemon + attach client (drop ,attach for the daemon alone).
+# From the next release it ships as its own par-mux crate:
 cargo install par-mux --features mux-bin,attach --bin par-mux
+# Released versions up to 0.58.1 install it from this crate:
+cargo install par-term-emu-core-rust --version 0.58.1 --no-default-features --features mux-bin,attach --bin par-mux
 ```
 
 **Or build from source:**
