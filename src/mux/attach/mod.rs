@@ -2216,7 +2216,6 @@ pub(crate) fn listbox_scroll(start: usize, selected: usize, visible: usize) -> u
 /// the window's content start index, so a click at composed row `i`
 /// maps to content row `start + i - 1`. Pure over its inputs — the
 /// unit-test surface for the picker.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_picker_panel(
     rows: &[HelpRow],
     refs: &[PickerRef],

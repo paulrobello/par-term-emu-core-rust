@@ -290,13 +290,9 @@ impl ReplaySession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::snapshot_manager::tests::make_terminal;
     use crate::terminal::snapshot_manager::SnapshotEntry;
     use std::time::Duration;
-
-    /// Helper: create a small terminal.
-    fn make_terminal() -> Terminal {
-        Terminal::new(20, 5)
-    }
 
     /// Helper: create a manager with some entries and known content.
     fn make_populated_manager() -> SnapshotManager {

@@ -122,20 +122,35 @@ impl PtyInputHandle {
         if !self.running.load(Ordering::SeqCst) {
             return Err(PtyError::NotStartedError);
         }
-
-        debug::log_pty_write(data);
-
-        // Record input for session recording
-        {
-            let mut term = self.terminal.write();
-            term.record_input(data);
-        }
-
-        let mut w = self.writer.lock();
-        w.write_all(data).map_err(PtyError::IoError)?;
-        w.flush().map_err(PtyError::IoError)?;
-        Ok(())
+        write_input(Some(&*self.writer), &self.terminal, data)
     }
+}
+
+/// The input write shared by [`PtySession::write`] and
+/// [`PtyInputHandle::write`], after each has checked liveness: log, record
+/// the input for session recording, then write and flush to the PTY. A
+/// missing writer is `NotStartedError`, reported after the input is
+/// recorded.
+fn write_input(
+    writer: Option<&Mutex<Box<dyn Write + Send>>>,
+    terminal: &RwLock<Terminal>,
+    data: &[u8],
+) -> Result<(), PtyError> {
+    debug::log_pty_write(data);
+
+    // Record input for session recording
+    {
+        let mut term = terminal.write();
+        term.record_input(data);
+    }
+
+    let Some(writer) = writer else {
+        return Err(PtyError::NotStartedError);
+    };
+    let mut w = writer.lock();
+    w.write_all(data).map_err(PtyError::IoError)?;
+    w.flush().map_err(PtyError::IoError)?;
+    Ok(())
 }
 
 /// A PTY session that manages a shell process and terminal state
@@ -887,42 +902,29 @@ impl PtySession {
     /// Note: `$0` will show the shell path (not `-bash`) because portable-pty's
     /// CommandBuilder uses args[0] for both path resolution AND arg0. The `-l`
     /// flag provides full login shell behavior regardless.
-    #[cfg(unix)]
     #[allow(clippy::borrowed_box)]
     fn spawn_login_shell(
         &self,
-        shell_path: &str,
+        #[cfg_attr(not(unix), allow(unused_variables))] shell_path: &str,
         _args: &[&str],
         cmd_builder: &CommandBuilder,
         slave: &Box<dyn portable_pty::SlavePty + Send>,
         _additional_env: Option<HashMap<String, String>>,
     ) -> Result<Box<dyn portable_pty::Child + Send + Sync>, PtyError> {
-        let shell_basename = shell_path.rsplit('/').next().unwrap_or(shell_path);
+        #[cfg(unix)]
+        {
+            let shell_basename = shell_path.rsplit('/').next().unwrap_or(shell_path);
 
-        debug::log(
-            debug::DebugLevel::Info,
-            "PTY_SPAWN",
-            &format!(
-                "Spawning login shell: {} -l (login_shell via -l flag)",
-                shell_basename
-            ),
-        );
+            debug::log(
+                debug::DebugLevel::Info,
+                "PTY_SPAWN",
+                &format!(
+                    "Spawning login shell: {} -l (login_shell via -l flag)",
+                    shell_basename
+                ),
+            );
+        }
 
-        slave
-            .spawn_command(cmd_builder.clone())
-            .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))
-    }
-
-    #[cfg(not(unix))]
-    #[allow(clippy::borrowed_box)]
-    fn spawn_login_shell(
-        &self,
-        _shell_path: &str,
-        _args: &[&str],
-        cmd_builder: &CommandBuilder,
-        slave: &Box<dyn portable_pty::SlavePty + Send>,
-        _additional_env: Option<HashMap<String, String>>,
-    ) -> Result<Box<dyn portable_pty::Child + Send + Sync>, PtyError> {
         slave
             .spawn_command(cmd_builder.clone())
             .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))
@@ -936,23 +938,7 @@ impl PtySession {
         if !self.is_running() {
             return Err(PtyError::NotStartedError);
         }
-
-        debug::log_pty_write(data);
-
-        // Record input for session recording
-        {
-            let mut term = self.terminal.write();
-            term.record_input(data);
-        }
-
-        if let Some(ref writer) = self.writer {
-            let mut w = writer.lock();
-            w.write_all(data).map_err(PtyError::IoError)?;
-            w.flush().map_err(PtyError::IoError)?;
-            Ok(())
-        } else {
-            Err(PtyError::NotStartedError)
-        }
+        write_input(self.writer.as_deref(), &self.terminal, data)
     }
 
     /// Write a string to the PTY (convenience method)

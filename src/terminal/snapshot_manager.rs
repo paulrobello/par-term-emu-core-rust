@@ -264,11 +264,12 @@ impl SnapshotManager {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    /// Helper: create a small terminal and return it.
-    fn make_terminal() -> Terminal {
+    /// Helper: create a small terminal and return it. Shared with the
+    /// replay tests, which build on snapshot-manager fixtures.
+    pub(crate) fn make_terminal() -> Terminal {
         Terminal::new(20, 5)
     }
 
