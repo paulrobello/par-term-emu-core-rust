@@ -1260,9 +1260,9 @@ sections; the numbers live here.
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
+| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty/mod.rs:1309` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
 | `MAX_CLIENT_COLS` | 1,000 | `src/mux/command/mod.rs:539` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
