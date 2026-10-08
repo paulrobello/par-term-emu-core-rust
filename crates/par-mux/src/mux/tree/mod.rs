@@ -15,10 +15,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Deliver the observer batches `tree` parked during resizes, taking the
-/// lock only to drain them — the callbacks run with it released. Every
-/// path that can re-fit panes under the tree mutex calls this after its
-/// last guard drops.
+/// Deliver the observer batches `tree` parked during resizes and notes,
+/// taking the lock only to drain them — the callbacks run with it
+/// released. Every path that can re-fit panes or write a note under the
+/// tree mutex calls this after its last guard drops.
 pub(crate) fn deliver_pending_observer_events(tree: &Mutex<MuxTree>) {
     let batches = tree.lock().take_observer_batches();
     for batch in batches {
@@ -424,13 +424,15 @@ pub struct MuxTree {
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
     pub(crate) client_views: HashMap<u64, ClientView>,
-    /// Observer events from pane resizes, held until the tree lock drops.
-    /// A layout mutation re-fits pane terminals under the tree mutex, and
-    /// an observer callback run there could block on (or re-enter) that
-    /// mutex, so [`Self::sync_pane_sizes`] and [`Self::apply_cell_pixels`]
-    /// park their batches here and every lock holder that can trigger a
-    /// re-fit drains them through [`deliver_pending_observer_events`] after
-    /// releasing it. Only non-empty batches are kept.
+    /// Observer events from pane resizes and daemon notes, held until the
+    /// tree lock drops. A layout mutation re-fits pane terminals under the
+    /// tree mutex, and a spawn writes its start-dir note there; an observer
+    /// callback run there could block on (or re-enter) that mutex, so
+    /// [`Self::sync_pane_sizes`], [`Self::apply_cell_pixels`], and
+    /// [`Self::write_pane_note`] park their batches here and every lock
+    /// holder that can trigger one drains them through
+    /// [`deliver_pending_observer_events`] after releasing it. Only
+    /// non-empty batches are kept.
     pending_observer_batches: Vec<ObserverDispatchBatch>,
 }
 
@@ -457,7 +459,7 @@ impl MuxTree {
         }
     }
 
-    /// Park a resize's observer batch for delivery after the tree lock
+    /// Park a resize's or note's observer batch for delivery after the tree lock
     /// drops. Empty batches (no observers, or no events) are dropped here.
     pub(crate) fn defer_observer_batch(&mut self, batch: ObserverDispatchBatch) {
         if !batch.is_empty() {
@@ -465,7 +467,18 @@ impl MuxTree {
         }
     }
 
-    /// Drain the observer batches parked by pane resizes, for delivery
+    /// Write a daemon note into `pane_id`'s terminal ([`MuxPane::write_note`])
+    /// with its observer events parked for delivery after the tree lock
+    /// drops. A pane that no longer exists is skipped.
+    pub(crate) fn write_pane_note(&mut self, pane_id: PaneId, bytes: &[u8]) {
+        let Some(pane) = self.panes.get(&pane_id) else {
+            return;
+        };
+        let batch = pane.write_note_deferred(bytes);
+        self.defer_observer_batch(batch);
+    }
+
+    /// Drain the observer batches parked by pane resizes and notes, for delivery
     /// once the tree lock is released. An embedder that drives the tree
     /// directly (no [`crate::mux::MuxServer`]) calls this after its own
     /// mutations and delivers each batch itself.

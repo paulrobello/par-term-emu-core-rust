@@ -313,11 +313,11 @@ fn spawn_and_wire<P: SpawnPlan>(
     let done = plan.complete(&mut guard, pane)?;
     if let Some(pane) = guard.pane_mut(pane_id) {
         pane.on_output_sink(sink);
-        if let Some(note) = note {
-            // Same visibility rule as a restore's gone cwd: the pane says
-            // where it landed instead of silently starting elsewhere.
-            pane.write_note(note.as_bytes());
-        }
+    }
+    if let Some(note) = note {
+        // Same visibility rule as a restore's gone cwd: the pane says
+        // where it landed instead of silently starting elsewhere.
+        guard.write_pane_note(pane_id, note.as_bytes());
     }
     Ok(done)
 }

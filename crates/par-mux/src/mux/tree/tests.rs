@@ -2491,3 +2491,122 @@ fn a_direct_tree_resize_parks_observer_events_until_taken() {
     assert!(probe.scrolled_out.load(Ordering::SeqCst));
     assert!(probe.tree_lock_was_free.load(Ordering::SeqCst));
 }
+
+/// Spawns `sleep 60` panes. Once armed, the next pane it builds carries a
+/// [`TreeLockProbe`] and a terminal parked exactly at its scrollback cap
+/// with a completed zone at the top, so the first line the spawn's
+/// start-dir note scrolls evicts that zone.
+#[cfg(unix)]
+struct NoteProbeFactory {
+    tree: std::sync::Weak<parking_lot::Mutex<MuxTree>>,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    probe: Arc<std::sync::OnceLock<Arc<TreeLockProbe>>>,
+}
+
+#[cfg(unix)]
+impl PaneFactory for NoteProbeFactory {
+    fn create_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        _command: Option<&str>,
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        let pane =
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)?;
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let probe = Arc::new(TreeLockProbe {
+                tree: self.tree.clone(),
+                scrolled_out: std::sync::atomic::AtomicBool::new(false),
+                tree_lock_was_free: std::sync::atomic::AtomicBool::new(false),
+            });
+            let terminal = pane.terminal();
+            let mut term = terminal.write();
+            let mut bytes =
+                b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07"
+                    .to_vec();
+            let line = "x".repeat(term.size().0);
+            let rows = term.size().1;
+            // The zone itself scrolls three lines; the fill tops scrollback
+            // up to exactly its cap with the cursor on the bottom row.
+            let fill = term.grid().max_scrollback() - term.grid().scrollback_len() + rows - 3;
+            for _ in 0..fill {
+                bytes.extend_from_slice(b"\r\n");
+                bytes.extend_from_slice(line.as_bytes());
+            }
+            term.process(&bytes);
+            assert_eq!(
+                term.grid().scrollback_len(),
+                term.grid().max_scrollback(),
+                "scrollback parked at its cap"
+            );
+            assert_eq!(term.cursor().row, rows - 1, "cursor on the bottom row");
+            assert_eq!(term.get_zones().len(), 3, "no zone evicted yet");
+            term.add_observer(probe.clone());
+            drop(term);
+            let _ = self.probe.set(probe);
+        }
+        Ok(pane)
+    }
+
+    fn create_dead_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Result<MuxPane, MuxError> {
+        ShellPaneFactory::default().create_dead_pane(id, cols, rows, command, exit_code)
+    }
+}
+
+/// Card 01a11989: a spawn whose start dir is gone writes a note into the
+/// new pane while the dispatcher holds the tree mutex. The observer events
+/// that write raises (here a zone the note scrolls out) are delivered only
+/// after the mutex is released, as for the resize paths.
+#[cfg(unix)]
+#[test]
+fn start_dir_note_observer_events_arrive_after_the_tree_lock_drops() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let armed = Arc::new(AtomicBool::new(false));
+    let slot: Arc<std::sync::OnceLock<Arc<TreeLockProbe>>> = Arc::default();
+    let tree = Arc::new_cyclic(|weak| {
+        parking_lot::Mutex::new(MuxTree::new(Box::new(NoteProbeFactory {
+            tree: weak.clone(),
+            armed: armed.clone(),
+            probe: slot.clone(),
+        })))
+    });
+    let clients: crate::mux::server::Clients = Arc::default();
+    let ctx = crate::mux::dispatch::Ctx {
+        client_id: None,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+    };
+    let run = |line: &str| {
+        let command = crate::mux::command::parse_command(line).unwrap();
+        crate::mux::dispatch::dispatch_command(command, &ctx, None, None)
+    };
+    let reply = run("new-session -s main");
+    assert!(!reply.contains("%error"), "new-session succeeds: {reply}");
+
+    armed.store(true, Ordering::SeqCst);
+    let reply = run("new-window -c /par-mux-test-no-such-dir");
+    assert!(!reply.contains("%error"), "new-window succeeds: {reply}");
+    let probe = slot.get().expect("the armed spawn attached the probe");
+
+    assert!(
+        probe.scrolled_out.load(Ordering::SeqCst),
+        "the note's ZoneScrolledOut reached the observer by the time dispatch returned"
+    );
+    assert!(
+        probe.tree_lock_was_free.load(Ordering::SeqCst),
+        "the observer ran while the tree mutex was held"
+    );
+    assert!(tree.lock().take_observer_batches().is_empty());
+}

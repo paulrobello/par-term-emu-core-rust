@@ -527,9 +527,17 @@ impl MuxPane {
     /// Feed `bytes` to the pane's terminal as if the program printed them
     /// — a daemon note such as a gone start directory. Goes through the
     /// geometry-publishing write path, so `cursor_position()` is current
-    /// afterwards (QA-195).
+    /// afterwards (QA-195). Observer events the note raises are delivered
+    /// after the terminal's write lock drops.
     pub fn write_note(&self, bytes: &[u8]) {
-        self.with_terminal_mut(|term| term.process(bytes));
+        self.write_note_deferred(bytes).deliver();
+    }
+
+    /// [`Self::write_note`] with observer delivery left to the caller, as
+    /// [`Self::resize_deferred`]: a caller holding the tree lock parks the
+    /// batch until that lock drops.
+    pub(crate) fn write_note_deferred(&self, bytes: &[u8]) -> ObserverDispatchBatch {
+        self.with_terminal_mut(|term| term.process_deferred(bytes))
     }
 
     /// Stop forwarding this pane's output (ARC-089). On return, no sink
