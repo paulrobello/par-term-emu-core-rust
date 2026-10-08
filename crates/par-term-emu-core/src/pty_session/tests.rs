@@ -1,8 +1,38 @@
 use super::*;
 
+/// Every PTY-holding test funnels through here so the NOFILE raise runs
+/// once: parallel test binaries inherit the OS soft limit (256 on macOS)
+/// while the suites hold dozens of PTY fds — under full-gate load spawns
+/// then fail or exit with junk codes mid-suite (seen 2026-10-08: a
+/// non-3 exit code in kill_after_reap_is_a_silent_noop). The daemon
+/// raises the same limit at startup.
+fn new_test_session(cols: usize, rows: usize, scrollback: usize) -> PtySession {
+    raise_nofile_for_pty_tests();
+    PtySession::new(cols, rows, scrollback)
+}
+
+#[cfg(unix)]
+fn raise_nofile_for_pty_tests() {
+    use std::sync::Once;
+    static RAISED: Once = Once::new();
+    RAISED.call_once(|| {
+        let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            return;
+        }
+        if limit.rlim_cur < limit.rlim_max {
+            limit.rlim_cur = limit.rlim_max;
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn raise_nofile_for_pty_tests() {}
+
 #[test]
 fn test_new_pty_session() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(session.size(), (80, 24));
     assert!(!session.is_running());
 }
@@ -11,7 +41,7 @@ fn test_new_pty_session() {
 /// mirror on drop, so `cursor_position()` is current without PTY output.
 #[test]
 fn terminal_write_guard_publishes_geometry() {
-    let session = PtySession::new(80, 24, 100);
+    let session = new_test_session(80, 24, 100);
     {
         let mut term = session.terminal_write();
         term.process(b"\x1b[5;10H");
@@ -33,7 +63,7 @@ fn pixel_extent_saturates_instead_of_overflowing() {
 /// generation advancing to ever re-read fed content.
 #[test]
 fn mark_updated_advances_generation_for_childless_sessions() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(!session.is_running());
     let before = session.update_generation();
 
@@ -44,7 +74,7 @@ fn mark_updated_advances_generation_for_childless_sessions() {
 
 #[test]
 fn test_with_terminal_accessors() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(session.with_terminal(|term| term.size()), (80, 24));
 
     session.with_terminal_mut(|term| term.process(b"hello"));
@@ -64,7 +94,7 @@ fn test_get_default_shell() {
 
 #[test]
 fn test_spawn_and_exit() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Spawn a simple command that exits immediately
     #[cfg(unix)]
@@ -84,7 +114,7 @@ fn test_spawn_and_exit() {
 
 #[test]
 fn test_write_to_pty() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Try writing without spawning - should fail
     let result = session.write(b"test");
@@ -99,7 +129,7 @@ fn test_write_to_pty() {
 /// otherwise.
 #[test]
 fn poll_running_reports_exit_despite_a_stale_reader_flag() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     #[cfg(unix)]
     session.spawn("/bin/echo", &["bye"]).expect("spawn");
     #[cfg(windows)]
@@ -134,7 +164,7 @@ fn poll_running_reports_exit_despite_a_stale_reader_flag() {
 /// reap (10 s deadline) — the shared setup for the SEC-125 tests.
 #[cfg(unix)]
 fn spawn_and_reap_exit_3() -> PtySession {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.spawn("/bin/sh", &["-c", "exit 3"]).expect("spawn");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -198,7 +228,7 @@ fn resize_after_reap_sends_no_signal() {
 #[cfg(unix)]
 #[test]
 fn resize_of_a_live_child_still_signals() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session
         .spawn("/bin/sh", &["-c", "sleep 30"])
         .expect("spawn");
@@ -224,7 +254,7 @@ fn respawn_after_reap_serves_the_new_pid() {
 
 #[test]
 fn test_resize() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.resize(100, 30).ok();
     assert_eq!(session.size(), (100, 30));
 }
@@ -235,7 +265,7 @@ fn test_resize() {
 fn resize_records_one_recording_event_per_call() {
     use crate::terminal::RecordingEventType;
 
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.terminal_write().start_recording(None);
     session.resize(100, 30).ok();
     session.resize_with_pixels(120, 40, 1200, 800).ok();
@@ -269,7 +299,7 @@ fn wait_for_text(session: &PtySession, marker: &str) -> String {
 
 #[test]
 fn test_set_env() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.set_env("TEST_VAR", "test_value");
     // The stored var must reach the spawned process: echo it through
     // the PTY and assert the value lands in the terminal.
@@ -287,7 +317,7 @@ fn test_set_env() {
 
 #[test]
 fn test_set_multiple_env_vars() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.set_env("VAR1", "value1");
     session.set_env("VAR2", "value2");
     session.set_env("VAR3", "value3");
@@ -306,7 +336,7 @@ fn test_set_multiple_env_vars() {
 
 #[test]
 fn test_set_cwd() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let path = std::path::Path::new("/tmp");
     session.set_cwd(path);
     // The stored cwd must reach the spawned process: /bin/pwd prints it.
@@ -331,7 +361,7 @@ fn test_set_cwd() {
 
 #[test]
 fn test_size_getters() {
-    let session = PtySession::new(100, 50, 2000);
+    let session = new_test_session(100, 50, 2000);
     let (cols, rows) = session.size();
     assert_eq!(cols, 100);
     assert_eq!(rows, 50);
@@ -339,7 +369,7 @@ fn test_size_getters() {
 
 #[test]
 fn test_terminal_access() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let terminal = session.terminal();
     let mut guard = terminal.write();
     guard.process(b"ZQX-TERMINAL-ACCESS");
@@ -351,7 +381,7 @@ fn test_terminal_access() {
 
 #[test]
 fn test_update_generation() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let gen1 = session.update_generation();
     let gen2 = session.update_generation();
     assert_eq!(gen1, gen2); // Should be same if no updates
@@ -359,7 +389,7 @@ fn test_update_generation() {
 
 #[test]
 fn test_wait_for_update_some_after_output() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let since = session.update_generation();
     #[cfg(unix)]
     let result = session.spawn("/bin/echo", &["wait-marker"]);
@@ -373,7 +403,7 @@ fn test_wait_for_update_some_after_output() {
 #[cfg(unix)]
 #[test]
 fn test_wait_for_update_none_on_idle_timeout() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(session.spawn("sleep", &["5"]).is_ok());
     // Drain whatever the spawn itself produced before timing the idle wait.
     let _ = session.wait_for_update(
@@ -390,7 +420,7 @@ fn test_wait_for_update_none_on_idle_timeout() {
 #[cfg(unix)]
 #[test]
 fn test_wait_for_update_none_promptly_when_child_exits() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(session.spawn("/usr/bin/true", &[]).is_ok());
     // Wait out the child's lifetime (no output; EOF is the only signal).
     let _ = session.wait_for_update(
@@ -411,7 +441,7 @@ fn test_wait_for_update_none_promptly_when_child_exits() {
 
 #[test]
 fn test_wait_until_predicate_on_content() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     #[cfg(unix)]
     let result = session.spawn("/bin/echo", &["wait-until-marker"]);
     #[cfg(windows)]
@@ -427,25 +457,25 @@ fn test_wait_until_predicate_on_content() {
 
 #[test]
 fn test_is_running_initially_false() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(!session.is_running());
 }
 
 #[test]
 fn test_new_with_different_sizes() {
-    let session1 = PtySession::new(40, 20, 500);
+    let session1 = new_test_session(40, 20, 500);
     assert_eq!(session1.size(), (40, 20));
 
-    let session2 = PtySession::new(120, 40, 2000);
+    let session2 = new_test_session(120, 40, 2000);
     assert_eq!(session2.size(), (120, 40));
 
-    let session3 = PtySession::new(200, 60, 5000);
+    let session3 = new_test_session(200, 60, 5000);
     assert_eq!(session3.size(), (200, 60));
 }
 
 #[test]
 fn test_resize_multiple_times() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     session.resize(100, 30).ok();
     assert_eq!(session.size(), (100, 30));
@@ -459,21 +489,21 @@ fn test_resize_multiple_times() {
 
 #[test]
 fn test_resize_to_small_size() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.resize(10, 5).ok();
     assert_eq!(session.size(), (10, 5));
 }
 
 #[test]
 fn test_resize_to_large_size() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.resize(500, 200).ok();
     assert_eq!(session.size(), (500, 200));
 }
 
 #[test]
 fn test_write_empty_data() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.write(b"");
     assert!(result.is_err()); // Should fail as not spawned
 }
@@ -488,7 +518,7 @@ fn test_get_default_shell_not_empty() {
 
 #[test]
 fn test_terminal_locked_state() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     {
         let terminal = session.terminal();
         let _lock1 = terminal.write();
@@ -506,7 +536,7 @@ fn test_terminal_locked_state() {
 
 #[test]
 fn test_set_env_with_empty_values() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.set_env("EMPTY_VAR", "");
     // An empty NAME cannot round-trip on Windows: portable-pty builds the
     // CreateProcessW environment block as raw `name=value\0` strings, and
@@ -531,7 +561,7 @@ fn test_set_env_with_empty_values() {
 
 #[test]
 fn test_set_env_with_unicode() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.set_env("UNICODE_VAR", "Hello 世界 🌍");
     #[cfg(unix)]
     let result = session.spawn("/bin/sh", &["-c", "echo ZQX-$UNICODE_VAR"]);
@@ -549,7 +579,7 @@ fn test_set_env_with_unicode() {
 
 #[test]
 fn test_spawn_with_env() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Create env vars to pass
     let mut env = HashMap::new();
@@ -572,7 +602,7 @@ fn test_spawn_with_env() {
 
 #[test]
 fn test_spawn_shell_with_env() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Create env vars to pass
     let mut env = HashMap::new();
@@ -592,7 +622,7 @@ fn test_spawn_shell_with_env() {
 #[test]
 #[ignore = "spawns a real PTY and shell/cmd process and polls its live output for up to 5s; too slow/flaky for the default suite, run explicitly with --ignored"]
 fn test_spawn_with_env_cwd() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Spawn with cwd set to /tmp
     #[cfg(unix)]
@@ -628,7 +658,7 @@ fn test_spawn_with_env_cwd() {
 
 #[test]
 fn test_spawn_shell_with_env_cwd() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Spawn shell with cwd
     let result = session.spawn_shell_with_env(None, Some("/tmp"));
@@ -652,7 +682,7 @@ fn test_env_not_leaked_to_parent() {
         "Test var should not exist in parent env before spawn"
     );
 
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Create env vars to pass
     let mut env = HashMap::new();
@@ -675,7 +705,7 @@ fn test_env_not_leaked_to_parent() {
 
 #[test]
 fn test_spawn_with_env_and_set_env_combined() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Set env vars via set_env()
     session.set_env("VAR_FROM_SET_ENV", "set_env_value");
@@ -701,7 +731,7 @@ fn test_spawn_with_env_and_set_env_combined() {
 
 #[test]
 fn test_spawn_with_empty_env() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Pass empty env HashMap
     let env = HashMap::new();
@@ -715,7 +745,7 @@ fn test_spawn_with_empty_env() {
 }
 #[test]
 fn test_resize_with_pixels_before_spawn() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.resize_with_pixels(100, 30, 800, 600);
     assert!(
         result.is_ok(),
@@ -727,7 +757,7 @@ fn test_resize_with_pixels_before_spawn() {
 
 #[test]
 fn test_write_str_before_spawn_returns_error() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.write_str("hello");
     assert!(
         result.is_err(),
@@ -737,13 +767,13 @@ fn test_write_str_before_spawn_returns_error() {
 
 #[test]
 fn test_bell_count_initial() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(session.bell_count(), 0);
 }
 
 #[test]
 fn test_scrollback_initial_empty() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let sb = session.scrollback();
     assert!(
         sb.is_empty(),
@@ -753,20 +783,20 @@ fn test_scrollback_initial_empty() {
 
 #[test]
 fn test_scrollback_len_initial() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(session.scrollback_len(), 0);
 }
 
 #[test]
 fn test_has_updates_since_same_generation() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let gen = session.update_generation();
     assert!(!session.has_updates_since(gen));
 }
 
 #[test]
 fn test_has_updates_since_older_generation() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let gen = session.update_generation();
     // Only test if gen > 0 to avoid u64 underflow
     if gen > 0 {
@@ -788,7 +818,7 @@ fn test_has_updates_since_older_generation() {
 #[cfg(unix)]
 #[test]
 fn output_of_a_child_that_exits_before_the_first_read_is_kept() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.first_read_delay = Some(std::time::Duration::from_millis(1500));
     let gen_before = session.update_generation();
     session
@@ -819,7 +849,7 @@ fn output_of_a_child_that_exits_before_the_first_read_is_kept() {
 /// `has_updates_since()` correctly detects the change.
 #[test]
 fn test_generation_counter_increments_on_pty_output() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Spawn a simple command that exits immediately
     #[cfg(unix)]
@@ -881,7 +911,7 @@ fn test_generation_counter_increments_on_pty_output() {
 /// two bumps and observed the pre-processing bump alone, value 1.)
 #[test]
 fn test_generation_advances_after_content_applied() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Mirror the session's internal generation counter into the callback.
     // The `tests` module can reach the private field directly.
@@ -937,7 +967,7 @@ fn test_generation_advances_after_content_applied() {
 /// the write guard to process the bytes.
 #[test]
 fn output_callback_sees_applied_terminal_state() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     let terminal = Arc::clone(session.terminal_ref());
     // 0 = marker not seen yet, 1 = seen and state contained it, 2 = seen
@@ -984,7 +1014,7 @@ fn output_callback_sees_applied_terminal_state() {
 /// verifying the generation counter still advances.
 #[test]
 fn test_generation_counter_after_ctrl_c() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
 
     // Spawn a shell
     #[cfg(unix)]
@@ -1089,7 +1119,7 @@ fn test_observer_dispatch_does_not_hold_write_lock() {
         }
     }
 
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let terminal_arc = Arc::clone(session.terminal_ref());
 
     let probe = Arc::new(LockProbeObserver {
@@ -1148,7 +1178,7 @@ fn test_resize_eviction_reaches_observers_without_write_lock() {
     }
 
     for with_pixels in [false, true] {
-        let mut session = PtySession::new(20, 5, 4);
+        let mut session = new_test_session(20, 5, 4);
         let terminal_arc = Arc::clone(session.terminal_ref());
         let probe = Arc::new(ZoneLockProbe {
             terminal: Arc::clone(&terminal_arc),
@@ -1189,7 +1219,7 @@ fn test_resize_eviction_reaches_observers_without_write_lock() {
 
 #[test]
 fn test_get_writer_before_spawn_is_none() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(
         session.get_writer().is_none(),
         "writer should be None before spawn"
@@ -1198,14 +1228,14 @@ fn test_get_writer_before_spawn_is_none() {
 
 #[test]
 fn test_try_wait_before_spawn_returns_error() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.try_wait();
     assert!(result.is_err(), "try_wait before spawn should return error");
 }
 
 #[test]
 fn test_kill_before_spawn_returns_error() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.kill();
     assert!(result.is_err(), "kill before spawn should return error");
 }
@@ -1216,7 +1246,7 @@ fn test_set_and_clear_output_callback() {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let called = Arc::new(AtomicBool::new(false));
     let called_clone = called.clone();
     session.set_output_callback(Arc::new(move |_data: &[u8]| {
@@ -1248,7 +1278,7 @@ fn test_set_and_clear_output_callback() {
 #[test]
 fn test_child_pid_none_before_spawn() {
     // child_pid() must return None when no process has been spawned.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(
         session.child_pid(),
         None,
@@ -1260,7 +1290,7 @@ fn test_child_pid_none_before_spawn() {
 fn test_terminal_ref_returns_same_underlying_arc() {
     // terminal_ref() must return a reference to the SAME Arc that
     // terminal() clones — both should resolve to the same allocation.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let cloned = session.terminal();
     let borrowed = session.terminal_ref();
     // Arc::ptr_eq confirms they point at the same allocation.
@@ -1275,7 +1305,7 @@ fn test_terminal_ref_returns_same_underlying_arc() {
 #[test]
 fn test_cursor_position_initial_origin() {
     // A freshly constructed terminal has its cursor at (0, 0).
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let (col, row) = session.cursor_position();
     assert_eq!(col, 0);
     assert_eq!(row, 0);
@@ -1284,7 +1314,7 @@ fn test_cursor_position_initial_origin() {
 #[test]
 fn test_get_line_in_bounds_initially_blank() {
     // A fresh terminal row exists but consists of blank (' ') cells.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let line = session.get_line(0);
     assert!(line.is_some(), "row 0 should exist");
     let line = line.unwrap();
@@ -1302,7 +1332,7 @@ fn test_get_line_in_bounds_initially_blank() {
 #[test]
 fn test_get_line_out_of_bounds_returns_none() {
     // Out-of-range rows must return None (no panic).
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(
         session.get_line(24).is_none(),
         "row == height is out of range"
@@ -1317,7 +1347,7 @@ fn test_get_line_out_of_bounds_returns_none() {
 fn test_content_initially_blank_or_empty() {
     // content() on a fresh terminal must not panic. It returns the
     // visible screen content; on a brand-new terminal it is blank.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let content = session.content();
     // Every visible character should be whitespace (blank cells).
     assert!(
@@ -1331,7 +1361,7 @@ fn test_content_initially_blank_or_empty() {
 fn test_export_text_and_styled_on_fresh_terminal() {
     // export_text / export_styled must succeed on a fresh terminal
     // without panicking, even though no output has ever been processed.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let text = session.export_text();
     let styled = session.export_styled();
     // Both must be valid UTF-8 strings (returned as String already).
@@ -1348,7 +1378,7 @@ fn test_export_text_and_styled_on_fresh_terminal() {
 #[test]
 fn test_list_coprocesses_initially_empty() {
     // With no coprocess started, list must return an empty Vec.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(
         session.list_coprocesses().is_empty(),
         "list_coprocesses() must be empty before any start_coprocess"
@@ -1359,7 +1389,7 @@ fn test_list_coprocesses_initially_empty() {
 fn test_coprocess_status_unknown_id_is_none() {
     // status of an unregistered coprocess id must return None
     // (distinguishes "no such id" from "stopped").
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert_eq!(
         session.coprocess_status(999),
         None,
@@ -1376,7 +1406,7 @@ fn test_coprocess_status_unknown_id_is_none() {
 fn test_read_from_unknown_coprocess_is_err() {
     // read_from_coprocess must surface a deterministic error for an
     // unknown id (no panic, no blocking).
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let result = session.read_from_coprocess(42);
     assert!(
         result.is_err(),
@@ -1392,7 +1422,7 @@ fn test_read_from_unknown_coprocess_is_err() {
 
 #[test]
 fn test_read_coprocess_errors_unknown_id_is_err() {
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let result = session.read_coprocess_errors(7);
     assert!(
         result.is_err(),
@@ -1404,7 +1434,7 @@ fn test_read_coprocess_errors_unknown_id_is_err() {
 fn test_write_to_unknown_coprocess_is_err() {
     // Writing to an unknown coprocess id must be a deterministic error
     // without touching any I/O.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let result = session.write_to_coprocess(123, b"data");
     assert!(
         result.is_err(),
@@ -1415,7 +1445,7 @@ fn test_write_to_unknown_coprocess_is_err() {
 #[test]
 fn test_stop_unknown_coprocess_is_err() {
     // stop_coprocess on an unknown id must return Err (no panic).
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let result = session.stop_coprocess(256);
     assert!(
         result.is_err(),
@@ -1427,7 +1457,7 @@ fn test_stop_unknown_coprocess_is_err() {
 fn test_clear_output_callback_without_set_is_noop() {
     // clear_output_callback before any set must be safe (no panic) and
     // must not break the next spawn: drive output through afterwards.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.clear_output_callback();
     session.clear_output_callback(); // idempotent
     #[cfg(unix)]
@@ -1447,7 +1477,7 @@ fn test_set_env_does_not_affect_terminal_state() {
     // set_env stores vars for later spawn; it must NOT mutate the
     // terminal grid/size/cursor. Regression guard for accidental
     // side effects.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let size_before = session.size();
     let cursor_before = session.cursor_position();
     let gen_before = session.update_generation();
@@ -1471,7 +1501,7 @@ fn test_set_env_does_not_affect_terminal_state() {
 #[test]
 fn test_set_cwd_does_not_affect_terminal_state() {
     // set_cwd stores a path string; it must not alter terminal state.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let size_before = session.size();
     let gen_before = session.update_generation();
 
@@ -1487,7 +1517,7 @@ fn test_resize_does_not_advance_generation() {
     // bump update_generation (the counter only advances on PTY reads).
     // This pins that contract so callers relying on it for redraw
     // detection keep working.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let gen_before = session.update_generation();
     let res = session.resize(90, 30);
     assert!(res.is_ok(), "resize before spawn should be ok");
@@ -1503,7 +1533,7 @@ fn test_resize_does_not_advance_generation() {
 fn test_resize_with_pixels_zero_dimensions_no_div_by_zero() {
     // resize_with_pixels guards against cols==0 / rows==0 in its
     // per-cell division. Verify that path doesn't panic.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     // cols = 0 -> cell math skipped; must not divide-by-zero.
     let res = session.resize_with_pixels(0, 0, 100, 100);
     assert!(res.is_ok(), "resize_with_pixels(0,0,...) should not panic");
@@ -1516,7 +1546,7 @@ fn test_resize_with_pixels_zero_dimensions_no_div_by_zero() {
 #[test]
 fn test_resize_with_pixels_advances_size_not_generation() {
     // Same generation contract as plain resize (no PTY read happened).
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let gen_before = session.update_generation();
     let res = session.resize_with_pixels(100, 30, 700, 600);
     assert!(res.is_ok());
@@ -1547,7 +1577,7 @@ fn test_get_default_shell_is_absolute_path_on_unix() {
 fn test_wait_before_spawn_returns_not_started_error() {
     // wait() on a session that never spawned must surface NotStartedError,
     // not block. (It cannot block because self.child is None.)
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     let result = session.wait();
     assert!(
         result.is_err(),
@@ -1563,20 +1593,20 @@ fn test_wait_before_spawn_returns_not_started_error() {
 fn test_try_wait_before_spawn_returns_not_started_error() {
     // Mirror of the existing try_wait test, but pin the specific variant
     // so future refactors don't silently swap error types.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(matches!(session.try_wait(), Err(PtyError::NotStartedError)));
 }
 
 #[test]
 fn test_kill_before_spawn_returns_not_started_error() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(matches!(session.kill(), Err(PtyError::NotStartedError)));
 }
 
 #[test]
 fn test_write_before_spawn_returns_not_started_error() {
     // write() must fail deterministically with NotStartedError before spawn.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(matches!(
         session.write(b"data"),
         Err(PtyError::NotStartedError)
@@ -1586,7 +1616,7 @@ fn test_write_before_spawn_returns_not_started_error() {
 #[test]
 fn test_write_str_before_spawn_returns_not_started_error() {
     // write_str delegates to write(), so the same error path applies.
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert!(matches!(
         session.write_str("data"),
         Err(PtyError::NotStartedError)
@@ -1596,7 +1626,7 @@ fn test_write_str_before_spawn_returns_not_started_error() {
 #[test]
 fn test_get_writer_is_none_before_and_after_no_spawn() {
     // The writer field stays None until a successful spawn.
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     assert!(session.get_writer().is_none());
 }
 
@@ -1604,7 +1634,7 @@ fn test_get_writer_is_none_before_and_after_no_spawn() {
 fn test_scrollback_accessors_consistent_on_fresh_terminal() {
     // scrollback() and scrollback_len() must agree on a fresh terminal:
     // both should report "empty".
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let sb_vec = session.scrollback();
     let sb_len = session.scrollback_len();
     assert_eq!(sb_len, 0);
@@ -1621,7 +1651,7 @@ fn test_scrollback_accessors_consistent_on_fresh_terminal() {
 fn test_has_updates_since_future_generation_is_false() {
     // has_updates_since(gen) where gen > current must be false
     // (no updates between now and a future generation).
-    let session = PtySession::new(80, 24, 1000);
+    let session = new_test_session(80, 24, 1000);
     let current = session.update_generation();
     assert!(
         !session.has_updates_since(current + 1),
@@ -1638,7 +1668,7 @@ fn test_has_updates_since_future_generation_is_false() {
 /// call, and the cursor tracks fed output without a reader thread.
 #[test]
 fn size_and_cursor_serve_from_the_geometry_mirror() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     assert_eq!(session.size(), (80, 24));
     assert_eq!(session.cursor_position(), (0, 0));
 
@@ -1670,10 +1700,10 @@ fn test_drop_on_unspawned_session_does_not_panic() {
     // Dropping a session that was constructed but never spawned must
     // run Drop cleanly (kills coprocesses, signals reader) without
     // panicking — there is no child, no reader thread, no writer.
-    let _session = PtySession::new(80, 24, 1000);
+    let _session = new_test_session(80, 24, 1000);
     // Bound the scope so Drop runs before the assertion completes.
     let dropped_ok = std::panic::catch_unwind(|| {
-        let _s = PtySession::new(10, 5, 100);
+        let _s = new_test_session(10, 5, 100);
         // explicit drop
         drop(_s);
     });
@@ -1714,7 +1744,7 @@ fn parent_env_with(outer: &[(&str, &str)]) -> Vec<(std::ffi::OsString, std::ffi:
 
 #[test]
 fn par_mux_env_does_not_leak_into_spawned_ptys() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.parent_env_override = Some(parent_env_with(&[(
         "PAR_MUX_LEAK_PROBE",
         "stale-outer-value",
@@ -1770,7 +1800,7 @@ fn par_mux_env_does_not_leak_into_spawned_ptys() {
 /// from rosters. set_env opts back in for an intentional child session.
 #[test]
 fn outer_agent_identity_env_does_not_leak_into_spawned_ptys() {
-    let mut session = PtySession::new(80, 24, 1000);
+    let mut session = new_test_session(80, 24, 1000);
     session.parent_env_override = Some(parent_env_with(&[
         ("CLAUDECODE", "1"),
         ("CLAUDE_CODE_SESSION_ID", "outer-session"),
