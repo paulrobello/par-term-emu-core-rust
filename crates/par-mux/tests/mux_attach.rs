@@ -1185,6 +1185,14 @@ fn status_draw_tracks_the_cursor_under_output_flood() {
         "at least one status draw must appear in the flood capture. stderr: {}",
         stderr.lock().unwrap()
     );
+    // The placement stays inside the content region: a cursor parked on
+    // the status row (24) sits below the 1;23 scroll region, where later
+    // output overwrites one line instead of scrolling (card 01a11d62).
+    let rows = status_draw_placement_rows(&b);
+    assert!(
+        rows.iter().all(|&r| (1..=23).contains(&r)),
+        "status draws must park the cursor inside rows 1..=23: {rows:?}"
+    );
 
     // With draws landing under live scrolling output, an echo typed now
     // must round-trip intact through the pane.
@@ -4445,5 +4453,341 @@ fn render_mode_border_ring_keeps_the_tui_last_row_visible() {
         size_body.contains("SIZE-IS 20 78"),
         "the pane's PTY must be the border ring's interior (20 rows x 78 cols): {size_body:?}"
     );
+    host.killer.kill().ok();
+}
+
+/// A deterministic rich-like payload: bursts of cursor-addressed (CUP),
+/// truecolor-styled (SGR) chunks carrying multi-byte UTF-8 glyphs, the
+/// shape `python -m rich` floods a terminal with. No `\n`, so the pane
+/// tty's ONLCR cannot rewrite it on the way out: the bytes the pane
+/// writes are exactly the bytes its PTY reader sees.
+#[cfg(unix)]
+fn rich_like_payload(chunks: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for i in 0..chunks {
+        let row = i % 20 + 1;
+        let col = (i * 7) % 40 + 1;
+        let (r, g, b) = ((i * 37) % 256, (i * 91) % 256, (i * 53) % 256);
+        out.extend_from_slice(
+            format!(
+                "\x1b[{row};{col}H\x1b[1;38;2;{r};{g};{b}m\u{2501}\u{2501} Lorem ipsum dolor sit amet \
+                 chunk-{i:06} \u{2022} consectetur adipiscing elit \x1b[3;48;5;{}m\u{1f600}\x1b[0m",
+                i % 256
+            )
+            .as_bytes(),
+        );
+    }
+    out
+}
+
+/// Strip the passthrough client's own status draws from a host capture:
+/// each is one `ESC7 … ESC8 ESC[r;cH` run written between whole `%output`
+/// chunks, so what remains is exactly the pane bytes the client forwarded.
+#[cfg(unix)]
+fn strip_status_draws(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"\x1b7\x1b[1;") {
+            if let Some(close) = bytes[i..].windows(2).position(|w| w == b"\x1b8") {
+                let mut j = i + close + 2;
+                if bytes[j..].starts_with(b"\x1b[") {
+                    while j < bytes.len() && bytes[j] != b'H' {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+/// The bytes from the first `start` marker through the following `end`
+/// marker (markers included), or `None` when either is missing.
+#[cfg(unix)]
+fn marked_region<'a>(bytes: &'a [u8], start: &[u8], end: &[u8]) -> Option<&'a [u8]> {
+    let s = bytes.windows(start.len()).position(|w| w == start)?;
+    let e = bytes[s..].windows(end.len()).position(|w| w == end)?;
+    Some(&bytes[s..s + e + end.len()])
+}
+
+/// Card 01a11d62 (passthrough drops the rich demo's colored paragraphs):
+/// a passthrough client attached to a pane that floods rich-like output
+/// must forward EVERY pane byte to the host. Both byte streams are
+/// recorded — the daemon side through an observer control client's
+/// `%output` (the PTY reader's exact reads), the host side through the
+/// attach client's PTY master — and must be byte-identical across the
+/// marked payload region. A cargo-build-like scrolling flood runs first,
+/// the shape Paul's pane had just before the demo.
+#[cfg(unix)]
+#[test]
+fn passthrough_forwards_every_byte_of_a_rich_like_flood() {
+    passthrough_flood_round_trip(HostShape::Fast);
+}
+
+/// The flood against a slow host terminal (small, paced reads — a host
+/// painting truecolor glyphs drains far slower than the pane writes):
+/// backpressure must reach the pane, never cost bytes.
+#[cfg(unix)]
+#[test]
+fn passthrough_forwards_every_byte_to_a_slow_host() {
+    passthrough_flood_round_trip(HostShape::Slow);
+}
+
+/// Every status draw's closing placement CUP (`ESC8 ESC[r;cH`), as the
+/// 1-based row it parks the host cursor on.
+#[cfg(unix)]
+fn status_draw_placement_rows(bytes: &[u8]) -> Vec<u16> {
+    let mut rows = Vec::new();
+    let mut i = 0;
+    while let Some(at) = bytes[i..].windows(4).position(|w| w == b"\x1b8\x1b[") {
+        let start = i + at + 4;
+        let digits: Vec<u8> = bytes[start..]
+            .iter()
+            .copied()
+            .take_while(u8::is_ascii_digit)
+            .collect();
+        if let Ok(row) = std::str::from_utf8(&digits).unwrap_or("").parse::<u16>() {
+            rows.push(row);
+        }
+        i = start;
+    }
+    rows
+}
+
+/// Card 01a11d62, the HOST's view (Paul's check): after a scroll flood,
+/// pane output must land in the host terminal's screen or scrollback.
+/// The pane PTY is the host grid minus the status row; a shadow emulator
+/// one row taller tracked a scrolled pane's cursor onto the status row,
+/// every status draw parked the host cursor there — below the `1;23`
+/// scroll region, where line feeds never scroll — and every later line
+/// overwrote that one row, never reaching the host's scrollback. The
+/// bytes all arrived (the byte-exact tests above prove the transport);
+/// the host could not keep them.
+#[cfg(unix)]
+#[test]
+fn passthrough_output_after_a_scroll_reaches_the_host_scrollback() {
+    let (fixture, _daemon, mut client) = fixture_with_session("ptscroll");
+    let pane = session_first_pane(&mut client, "$0");
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+
+    // A scroll flood, a pause long enough for status draws to land with
+    // the pane scrolled, then numbered paragraphs (the `%s` split keeps
+    // the shell's echo of the typed line from matching the end marker).
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'seq 1 200; sleep 1; \
+             for i in $(seq 1 40); do printf \"PARA-%03d lorem ipsum\\n\" $i; done; \
+             sleep 1; echo PARAS%sDONE -'"
+        ))
+        .expect("send-keys");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("Enter");
+    let got = wait_for_output(&host, b"PARAS-DONE", Duration::from_secs(30));
+    std::thread::sleep(Duration::from_millis(700));
+    let mut host_bytes = got;
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        host_bytes.extend_from_slice(&bytes);
+    }
+
+    let rows = status_draw_placement_rows(&host_bytes);
+    assert!(!rows.is_empty(), "status draws must appear in the capture");
+    assert!(
+        rows.iter().all(|&r| (1..=23).contains(&r)),
+        "every status draw must park the host cursor inside the content \
+         region (rows 1..=23), never on the status row: {rows:?}"
+    );
+
+    // Replay the host's bytes into a host-sized terminal and read back
+    // what the user would see: screen plus scrollback.
+    let mut host_term = par_term_emu_core::terminal::Terminal::with_scrollback(80, 24, 10_000);
+    host_term.process(&host_bytes);
+    let grid = host_term.grid();
+    let mut seen: Vec<String> = (0..grid.scrollback_len())
+        .filter_map(|i| grid.scrollback_line(i))
+        .map(|cells| cells.iter().map(|c| c.c).collect())
+        .collect();
+    seen.extend((0..24).map(|r| grid.row_text(r)));
+    let missing: Vec<u32> = (1..=40)
+        .filter(|i| {
+            let needle = format!("PARA-{i:03} lorem ipsum");
+            !seen.iter().any(|line| line.contains(&needle))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "paragraphs missing from the host's screen AND scrollback: {missing:?}\n\
+         stderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// How the stand-in host terminal drains the attach client's output.
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HostShape {
+    /// The suite's standard harness: 8 KiB reads as fast as they come.
+    Fast,
+    /// Small reads with a pause after each, so the client's tty output
+    /// buffer fills and its host writes block.
+    Slow,
+}
+
+/// Spawn the passthrough client under a PTY drained slowly: 512-byte
+/// reads with a 1 ms pause after each.
+#[cfg(unix)]
+fn spawn_attach_slow_host(fixture: &MuxFixture, extra: &[&str]) -> AttachHost {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_par-mux"));
+    cmd.arg("attach");
+    cmd.arg("--socket");
+    cmd.arg(fixture.socket());
+    cmd.arg("--mode");
+    cmd.arg("passthrough");
+    cmd.args(extra);
+    let child = pair.slave.spawn_command(cmd).expect("spawn shimmed attach");
+    let killer = child.clone_killer();
+    let writer = std::sync::Arc::new(std::sync::Mutex::new(
+        pair.master.take_writer().expect("master writer"),
+    ));
+    let mut from_child = pair.master.try_clone_reader().expect("master reader");
+    let (tx, rx) = channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 512];
+        loop {
+            match from_child.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    });
+    AttachHost {
+        child,
+        killer,
+        to_child: SharedWriter(writer),
+        output_rx: rx,
+        master: pair.master,
+    }
+}
+
+#[cfg(unix)]
+fn passthrough_flood_round_trip(shape: HostShape) {
+    let (fixture, _daemon, mut client) = fixture_with_session("ptflood");
+    let pane = session_first_pane(&mut client, "$0");
+
+    const START: &[u8] = b"<<PT-PAYLOAD-START>>";
+    const END: &[u8] = b"<<PT-PAYLOAD-END>>";
+    let mut payload = START.to_vec();
+    payload.extend_from_slice(&rich_like_payload(3000));
+    payload.extend_from_slice(END);
+    let payload_path = fixture.state_dir().with_file_name("payload.bin");
+    std::fs::write(&payload_path, &payload).expect("write payload");
+
+    // The daemon-side recorder: a second control client whose `%output`
+    // for the pane is the PTY reader's exact byte sequence. It registers
+    // (joins the broadcast) on its first command.
+    let mut observer = par_mux::mux::MuxClient::connect(fixture.socket()).expect("observer");
+    observer.send("list-panes").expect("observer registers");
+
+    let (mut host, stderr) = match shape {
+        HostShape::Fast => spawn_attach(&fixture, &["-t", &pane]),
+        HostShape::Slow => (
+            spawn_attach_slow_host(&fixture, &["-t", &pane]),
+            std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        ),
+    };
+    let _ = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'seq 1 20000; cat {}'",
+            payload_path.display()
+        ))
+        .expect("send-keys flood");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("Enter");
+
+    let got = wait_for_output(&host, END, Duration::from_secs(60));
+    // Let the tail (and any trailing status draw) land.
+    std::thread::sleep(Duration::from_millis(300));
+    let mut host_bytes = got;
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        host_bytes.extend_from_slice(&bytes);
+    }
+
+    let mut daemon_bytes = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while marked_region(&daemon_bytes, START, END).is_none() && Instant::now() < deadline {
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
+            observer
+                .notifications()
+                .recv_timeout(Duration::from_millis(100))
+        {
+            if pane_id == pane {
+                daemon_bytes.extend_from_slice(&data);
+            }
+        }
+    }
+
+    let daemon_region = marked_region(&daemon_bytes, START, END)
+        .expect("the daemon side must carry the whole payload");
+    assert_eq!(
+        daemon_region,
+        &payload[..],
+        "the pane PTY reader must see the payload byte-exact (ONLCR-free)"
+    );
+    let host_clean = strip_status_draws(&host_bytes);
+    let Some(host_region) = marked_region(&host_clean, START, END) else {
+        panic!(
+            "the host never received the whole payload: {} host bytes, start seen: {}, \
+             end seen: {}\nstderr: {}",
+            host_bytes.len(),
+            host_clean.windows(START.len()).any(|w| w == START),
+            host_clean.windows(END.len()).any(|w| w == END),
+            stderr.lock().unwrap()
+        );
+    };
+    if host_region != daemon_region {
+        let first_diff = host_region
+            .iter()
+            .zip(daemon_region.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(host_region.len().min(daemon_region.len()));
+        let window = |r: &[u8]| {
+            String::from_utf8_lossy(
+                &r[first_diff.saturating_sub(40)..(first_diff + 120).min(r.len())],
+            )
+            .into_owned()
+        };
+        panic!(
+            "passthrough lost or altered pane bytes: daemon {} bytes, host {} bytes, \
+             first divergence at {first_diff}\n daemon: {:?}\n host:   {:?}",
+            daemon_region.len(),
+            host_region.len(),
+            window(daemon_region),
+            window(host_region),
+        );
+    }
     host.killer.kill().ok();
 }

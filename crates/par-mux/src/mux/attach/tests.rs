@@ -821,6 +821,53 @@ fn status_draw_places_the_cursor_at_the_tracked_cell() {
     );
 }
 
+/// Card 01a11d62 (passthrough "drops" the rich demo's paragraphs): the
+/// pane's PTY is the host grid minus the status row, so a pane scrolling
+/// at its bottom keeps its cursor on content row 23 (1-based). The shadow
+/// emulator must share that geometry: a full-grid shadow tracked the
+/// cursor one row lower — on the status row, OUTSIDE the `1;23` scroll
+/// region — and every draw parked the host cursor there, where line feeds
+/// never scroll, so all later output overwrote one line and never reached
+/// the host's scrollback.
+#[test]
+fn status_draw_keeps_the_cursor_inside_the_content_region_after_a_scroll() {
+    let (_daemon, path) = FakeDaemon::bind("tracked-scroll");
+    let mut session = Session {
+        conn: conn::AttachConn::connect(&path).expect("connect"),
+        socket_path: path.clone(),
+        pane: "%0".to_string(),
+        emulator: render::PaneEmulator::new(0, 80, 24),
+        window: String::new(),
+        session_id: None,
+        session_name: String::new(),
+        workspaces: Vec::new(),
+        active_workspace: None,
+        pane_title: String::new(),
+        agents: 0,
+        exited: None,
+        drawn_size: None,
+        settling: false,
+        prefix: 0x02,
+        prefix_pending: false,
+        reload_key: 0x12,
+        management: crate::mux::config::Management::default(),
+        resize_step: 1,
+        resize_mode: false,
+        flash: None,
+    };
+    // First draw fits the shadow to the host grid's pane geometry.
+    let _ = session.status_draw_bytes(24, 80);
+    // The pane scrolls: far more line feeds than it has rows.
+    session.emulator.feed(&b"line\r\n".repeat(60));
+    let bytes = session.status_draw_bytes(24, 80);
+    assert!(
+        bytes.ends_with(b"\x1b[23;1H"),
+        "a scrolled pane's cursor sits on its last row — content row 23, \
+         inside the 1;23 scroll region, never the status row 24: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+}
+
 /// Dead pane: the tracked cell is the frozen screen's cell — feeding
 /// the emulator the frozen stream is what `resync` does, so the same
 /// shape holds with `exited` set; the placement does not move to a

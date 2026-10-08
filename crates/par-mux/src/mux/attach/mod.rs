@@ -350,12 +350,13 @@ impl Session {
         let _replay = conn.drain_pending_events();
 
         let pane = resolve_target(&mut conn, target)?;
-        let grid = conn::terminal_grid();
+        let (cols, rows) = conn::terminal_grid();
+        let (pane_cols, pane_rows) = status_row::pane_grid(cols, rows);
         let mut session = Self {
             conn,
             socket_path: socket_path.to_path_buf(),
             pane,
-            emulator: render::PaneEmulator::new(0, grid.0, grid.1),
+            emulator: render::PaneEmulator::new(0, pane_cols, pane_rows),
             window: String::new(),
             session_id: None,
             session_name: String::new(),
