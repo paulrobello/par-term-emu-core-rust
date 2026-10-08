@@ -153,9 +153,25 @@ fn a_reattached_client_receives_a_seed_that_replays_state_and_survives_output() 
 
     let mut client = MuxClient::connect(path).expect("reconnect");
 
-    // The reattach seed.
-    let seed_lines = client.send("refresh-client -t %0").expect("refresh");
-    let seed = seed_lines.join("");
+    // The reattach seed. The "seed" output marker only proves the shell
+    // ECHOED the TUI command — under load the pane emulator may not have
+    // digested the tail (the hidden cursor) when the first client drops,
+    // so poll until the seed carries the full state.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let seed = loop {
+        let seed = client
+            .send("refresh-client -t %0")
+            .expect("refresh")
+            .join("");
+        if seed.contains("\x1b[?1049h") && seed.contains("\x1b[?25l") {
+            break seed;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the seed never carried the full TUI state: {seed:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
         seed.contains("\x1b[?1049h"),
         "the seed must select the alt screen (a plain-text seed replays the \
