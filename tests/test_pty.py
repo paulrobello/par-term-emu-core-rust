@@ -126,8 +126,14 @@ def test_write_to_process_unix():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix PTY write-blocking semantics")
+@pytest.mark.timeout(30)
 def test_write_releases_gil_while_pty_write_blocks():
     """QA-224: write() must not hold the GIL while blocked on a PTY write.
+
+    The 50 MB write is machine-dependent (~1.4 s when written; 5+ s on a
+    loaded machine) but the assertion is about WHEN the probe thread runs,
+    not the duration — hence the dedicated 30 s timeout over the 5 s
+    global default.
 
     PtyTerminal is unsendable, so the write runs on the main thread while a
     probe thread records when it could next take the GIL. The child never
