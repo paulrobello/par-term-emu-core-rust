@@ -433,6 +433,13 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     session.management = chords.management;
     session.resize_step = chords.resize_step;
     session.sidebar_width = chords.sidebar_width;
+    // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
+    // the seed, so the seed's first `refresh-client -C` already reports
+    // the reduced grid and the daemon's first division reserves it.
+    session.sidebar_on = chords.sidebar_on_launch;
+    if session.sidebar_on {
+        session.renderer.set_sidebar_width(session.sidebar_width);
+    }
     // The border style first, the explicit `pane-borders` flag after it —
     // the style implies a paint mode (herdr = per-pane boxes), and the
     // explicit config key still overrides for any glyph set.

@@ -275,6 +275,7 @@ impl Session {
             pane_gaps: 0,
             scrollbar_gutter: false,
             sidebar_width: 20,
+            sidebar_on_launch: true,
             drag_cursor_shape: false,
             border_lines: "unicode".to_string(),
         }) {

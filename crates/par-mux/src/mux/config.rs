@@ -192,6 +192,15 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub sidebar_width: Option<u16>,
+    /// Show the side panel when a render client attaches (default true).
+    /// Read at launch only: the sidebar chord flips it at runtime and a
+    /// config reload leaves the live panel as it is.
+    #[serde(
+        default,
+        rename = "sidebar-on-launch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sidebar_on_launch: Option<bool>,
     /// The divider/border line style: `unicode` (default), `double`,
     /// `heavy`, or `ascii`. An unknown value warns and uses the
     /// default.
@@ -547,6 +556,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             sidebar: None,
             status_bar: None,
             sidebar_width: Some(20),
+            sidebar_on_launch: Some(true),
             border_lines: Some("herdr".to_string()),
             pane_borders: None,
             show_label_in_border: Some(true),
@@ -645,6 +655,10 @@ pub struct Chords {
     pub border_lines: String,
     /// The workspace side panel's width in columns when shown.
     pub sidebar_width: u16,
+    /// Whether the side panel shows when a render client attaches
+    /// (config `sidebar-on-launch`). Default on. Launch-only: the reload
+    /// path resolves it but never applies it to a live session.
+    pub sidebar_on_launch: bool,
 }
 
 impl Chords {
@@ -663,6 +677,7 @@ impl Chords {
             drag_cursor_shape: false,
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
+            sidebar_on_launch: true,
         }
     }
 }
@@ -838,6 +853,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .sidebar_width
         .map(|width| width.clamp(6, 60))
         .unwrap_or(current.sidebar_width);
+    let sidebar_on_launch = file
+        .client
+        .sidebar_on_launch
+        .unwrap_or(current.sidebar_on_launch);
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -876,6 +895,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         drag_cursor_shape,
         border_lines,
         sidebar_width,
+        sidebar_on_launch,
     })
 }
 
@@ -1581,5 +1601,25 @@ remain-on-exit = true
             .expect("no io error")
             .expect("written file parses");
         assert_eq!(resolve(&loaded, &Overrides::default()), mutated);
+    }
+
+    /// `sidebar-on-launch` resolves to true when absent, and follows an
+    /// explicit value either way; the generated config spells it.
+    #[test]
+    fn sidebar_on_launch_resolves_default_true_and_explicit_values() {
+        let resolve_with = |text: &str| {
+            let file: ConfigFile = toml::from_str(text).expect("parses");
+            reload_client_chords(&file, &Chords::with_defaults())
+                .expect("resolves")
+                .sidebar_on_launch
+        };
+        assert!(resolve_with(""), "absent = default true");
+        assert!(resolve_with("[client]\n"), "absent key = default true");
+        assert!(!resolve_with("[client]\nsidebar-on-launch = false\n"));
+        assert!(resolve_with("[client]\nsidebar-on-launch = true\n"));
+        assert!(
+            render(&EffectiveConfig::default()).contains("sidebar-on-launch = true"),
+            "--gen-config documents the key"
+        );
     }
 }

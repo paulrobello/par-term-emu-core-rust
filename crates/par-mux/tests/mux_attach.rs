@@ -68,11 +68,29 @@ fn spawn_attach_render(
     spawn_attach_mode(fixture, extra, "render")
 }
 
+/// The client config every spawn pins unless a test supplies its own: the
+/// side panel starts hidden, the state the toggle/geometry tests were
+/// written against (the product default shows it at launch).
+const DEFAULT_CLIENT_CONFIG: &str = "[client]\nsidebar-on-launch = false\n";
+
 fn spawn_attach_mode(
     fixture: &MuxFixture,
     extra: &[&str],
     mode: &str,
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach_with_config(fixture, extra, mode, DEFAULT_CLIENT_CONFIG)
+}
+
+/// [`spawn_attach_mode`] with the client's config file contents given:
+/// `PAR_MUX_CONFIG` points the client at the fixture's client file, so it
+/// never reads the developer's real config.
+fn spawn_attach_with_config(
+    fixture: &MuxFixture,
+    extra: &[&str],
+    mode: &str,
+    client_config: &str,
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    std::fs::write(fixture.client_config_path(), client_config).expect("write client config");
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -91,6 +109,7 @@ fn spawn_attach_mode(
     cmd.arg("--mode");
     cmd.arg(mode);
     cmd.args(extra);
+    cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -3064,6 +3083,107 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
         col_off,
         Some(42),
         "panel down restores the full-width split"
+    );
+    host.killer.kill().ok();
+}
+
+/// A two-pane session whose right pane printed `marker`, for the
+/// sidebar-on-launch geometry reads. Returns the left pane's id.
+#[cfg(unix)]
+fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -> String {
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    let pane_b = pane_b.trim().to_string();
+    client
+        .send(&format!("send-keys -t {pane_b} -l 'echo {marker}'"))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane_b} Enter"))
+        .expect("Enter");
+    std::thread::sleep(Duration::from_millis(300));
+    pane_a
+}
+
+/// `sidebar-on-launch` absent (the default, true): the FIRST frame already
+/// carries the side panel — the strip's workspaces title, and the panes
+/// divided around it (the right pane's marker at column 52, the panel-up
+/// geometry of `render_mode_sidebar_toggle_refits_pane_geometry`) — with
+/// no chord sent. The first `refresh-client -C` must report the reduced
+/// grid, or the marker paints at the full-width 42.
+#[cfg(unix)]
+#[test]
+fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sblaunch");
+    let pane_a = split_with_right_marker(&mut client, "LAUNCH-MARK-7");
+
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &pane_a], "render", "[client]\n");
+    let mut got = wait_for_output(&host, b"LAUNCH-MARK-7", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    let text = plain_text(&got);
+    assert!(
+        text.contains("workspaces"),
+        "the panel paints on the first frame without a chord. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !text.contains("sidebar on"),
+        "no toggle ran — the panel is the launch state, not a flash: {text:?}"
+    );
+    assert_eq!(
+        cup_col_of_text(&got, "LAUNCH-MARK-7"),
+        Some(52),
+        "the daemon's first division already reserves the 20-col panel. text: {text:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// `sidebar-on-launch = false`: the panel stays hidden on launch and the
+/// panes divide the full width (the marker at column 42).
+#[cfg(unix)]
+#[test]
+fn render_mode_sidebar_on_launch_false_keeps_panel_hidden() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbnolaunch");
+    let pane_a = split_with_right_marker(&mut client, "NOLAUNCH-MARK-7");
+
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &pane_a],
+        "render",
+        "[client]\nsidebar-on-launch = false\n",
+    );
+    // Settle on the marker first so the absence check reads a painted
+    // frame, not an empty capture.
+    let mut got = wait_for_output(&host, b"NOLAUNCH-MARK-7", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    let text = plain_text(&got);
+    assert_eq!(
+        cup_col_of_text(&got, "NOLAUNCH-MARK-7"),
+        Some(42),
+        "panel hidden: the full-width split. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !text.contains("workspaces"),
+        "no panel strip on launch: {text:?}"
     );
     host.killer.kill().ok();
 }
