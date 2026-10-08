@@ -268,12 +268,13 @@ border-cycle = "B"    # cycle the border styles (render mode)
 label-toggle = "l"    # toggle pane titles in the borders (render mode)
 border-lines = "herdr"    # render mode border styles: herdr | unicode | double | heavy | ascii
 pane-borders = false       # render mode: full ring per pane (focused accent) instead of shared dividers
+                           # (the ring and its label take border-active-color / border-color below)
 show-label-in-border = true   # with pane-borders: the pane's title embedded in its top edge
 pane-gaps = 0                 # render mode: theme-bg gap bands between panes (cells per side)
 scrollbar-gutter = false      # render mode: reserve a right-edge gutter column (scroll indicator)
 drag-cursor-shape = false     # render mode: shape the host cursor while a divider drag is live
-border-active-color = ""      # render mode: focused boundary half, #rrggbb (default bright cyan)
-border-color = ""             # render mode: unfocused dividers/borders, #rrggbb (default dim)
+border-active-color = ""      # render mode: focused divider half, pane ring and label, #rrggbb (default bright cyan, bold)
+border-color = ""             # render mode: unfocused dividers, pane rings and labels, #rrggbb (default dim)
 
 [daemon]
 socket = "default"    # named default socket, or an absolute path

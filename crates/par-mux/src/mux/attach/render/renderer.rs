@@ -1370,8 +1370,9 @@ impl PaneRenderer {
     }
 
     /// Paint the per-pane border boxes (config `pane-borders`): a full
-    /// ring per rect — the focused pane's border in the accent color, the
-    /// rest dim, herdr's look. When `show-label-in-border` is on, each
+    /// ring per rect — the focused pane's border in `border-active-color`
+    /// (default the bright-cyan accent), the rest in `border-color`
+    /// (default dim), herdr's look; labels follow their ring. When `show-label-in-border` is on, each
     /// pane's non-empty user title breaks the top edge, space-padded and
     /// truncated to fit (herdr's exact treatment); label cells are not
     /// drag handles ([`Self::label_cell_at`]).
@@ -1381,11 +1382,9 @@ impl PaneRenderer {
         for layout_rect in &self.layout {
             let rect = self.display_rect(layout_rect);
             let style = if Some(rect.pane) == self.focused {
-                RtStyle::default()
-                    .fg(RtColor::Indexed(14))
-                    .add_modifier(RtModifier::BOLD)
+                active_border_style(self.border_active)
             } else {
-                RtStyle::default().add_modifier(RtModifier::DIM)
+                plain_border_style(self.border_plain)
             };
             let x1 = rect.x + rect.width.saturating_sub(1);
             let y1 = rect.y + rect.height.saturating_sub(1);
@@ -1433,11 +1432,9 @@ impl PaneRenderer {
         }
         for (x, y, chars, pane) in labels {
             let style = if Some(pane) == self.focused {
-                RtStyle::default()
-                    .fg(RtColor::Indexed(14))
-                    .add_modifier(RtModifier::BOLD)
+                active_border_style(self.border_active)
             } else {
-                RtStyle::default().add_modifier(RtModifier::DIM)
+                plain_border_style(self.border_plain)
             };
             for (j, ch) in chars.into_iter().enumerate() {
                 let cell = &mut self.buffer[(x + j as u16, y)];

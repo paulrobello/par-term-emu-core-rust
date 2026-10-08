@@ -1061,6 +1061,76 @@ fn pane_borders_option_replaces_dividers_with_full_boxes() {
     assert_ne!(renderer.cell(0, 0).expect("c").symbol(), "\u{256d}");
 }
 
+/// `border-active-color` / `border-color` drive the per-pane ring too:
+/// the focused ring takes the active color (still bold), the unfocused
+/// ring the plain color, and the border label follows its pane's ring.
+#[test]
+fn pane_border_ring_and_label_honor_border_colors() {
+    let active = RtColor::Rgb(255, 136, 0);
+    let plain = RtColor::Rgb(80, 80, 120);
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.set_background(Some(RtColor::Rgb(0, 0, 0)));
+    renderer.set_pane_borders(true);
+    renderer.set_border_colors(Some(active), Some(plain));
+    renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+    renderer.focus(2);
+    renderer.render_frame();
+    let focused = renderer.cell(79, 10).expect("c");
+    assert_eq!(
+        focused.fg, active,
+        "the focused ring takes border-active-color"
+    );
+    assert!(
+        focused.modifier.contains(RtModifier::BOLD),
+        "and stays bold"
+    );
+    let unfocused = renderer.cell(39, 10).expect("c");
+    assert_eq!(unfocused.fg, plain, "the unfocused ring takes border-color");
+    assert!(
+        !unfocused.modifier.contains(RtModifier::DIM),
+        "a configured plain color replaces the dim fallback"
+    );
+
+    // Labels follow their pane's ring colors.
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.set_pane_borders(true);
+    renderer.set_show_label_in_border(true);
+    renderer.set_border_colors(Some(active), Some(plain));
+    renderer.apply_layout(parse_layout(STACKED).expect("parses"));
+    renderer.feed_output(1, b"\x1b]2;top\x1b\\");
+    renderer.feed_output(2, b"\x1b]2;dbug\x1b\\");
+    renderer.focus(2);
+    renderer.render_frame();
+    let label = renderer.cell(2, 12).expect("c");
+    assert_eq!(label.symbol(), "d");
+    assert_eq!(
+        label.fg, active,
+        "the focused label takes border-active-color"
+    );
+    assert!(label.modifier.contains(RtModifier::BOLD));
+    let other = renderer.cell(2, 0).expect("c");
+    assert_eq!(other.symbol(), "t");
+    assert_eq!(other.fg, plain, "the unfocused label takes border-color");
+}
+
+/// Unset colors keep the ring's historical look exactly: focused
+/// bright cyan + bold, unfocused dim with no fg.
+#[test]
+fn pane_border_ring_unset_colors_keep_cyan_and_dim() {
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.set_pane_borders(true);
+    renderer.set_border_colors(None, None);
+    renderer.apply_layout(parse_layout(TWO_PANE).expect("parses"));
+    renderer.focus(2);
+    renderer.render_frame();
+    let focused = renderer.cell(79, 10).expect("c");
+    assert_eq!(focused.fg, RtColor::Indexed(14));
+    assert!(focused.modifier.contains(RtModifier::BOLD));
+    let unfocused = renderer.cell(39, 10).expect("c");
+    assert_eq!(unfocused.fg, RtColor::Reset);
+    assert!(unfocused.modifier.contains(RtModifier::DIM));
+}
+
 /// `show-label-in-border = on`: the pane's user title embeds in the
 /// top edge space-padded, the label cells are not drag handles, and
 /// the option OFF leaves plain borders.
