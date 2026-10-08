@@ -324,6 +324,9 @@ impl WindowSession {
                 drag_cursor_shape: self.drag_cursor_shape,
                 border_lines: self.border_glyphs.name().to_string(),
                 sidebar_width: self.sidebar_width,
+                // Launch-only: resolved for the shape, never applied to
+                // the live panel below.
+                sidebar_on_launch: self.sidebar_on,
             },
         ) {
             Ok(chords) => {

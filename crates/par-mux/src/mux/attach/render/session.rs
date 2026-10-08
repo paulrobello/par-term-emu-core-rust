@@ -279,6 +279,11 @@ impl WindowSession {
             .map_err(|err| err.to_string())?;
         self.zoomed = layout_event.2.contains('Z');
         self.renderer.apply_layout(layout);
+        // A panel up at launch (`sidebar-on-launch`) needs its sections
+        // for the first frame.
+        if self.sidebar_on {
+            self.refresh_sidebar(conn);
+        }
 
         // Replay every visible pane's state into its emulator: grid,
         // scrollback, cursor, and input modes ride the screen-restore

@@ -72,6 +72,14 @@ impl MuxFixture {
         self.dir.path().join("config.toml")
     }
 
+    /// The config file this fixture's ATTACH clients run under — separate
+    /// from [`Self::config_path`] so a client-side pin never rewrites the
+    /// daemon's `[daemon]` settings (its `reload-config` re-reads that
+    /// file mid-test).
+    pub fn client_config_path(&self) -> PathBuf {
+        self.dir.path().join("client.toml")
+    }
+
     /// Where a daemon started with [`Self::state_dir`] saves its tree.
     pub fn state_path(&self) -> PathBuf {
         state_file_in(&self.state_dir(), &self.socket)
