@@ -239,6 +239,26 @@ fn feature_token_parsing() {
     assert!(parse_feature_tokens(&[]).is_empty());
 }
 
+/// Per-command feature tokens come from the command rows (the daemon's
+/// REAL `list-commands` body), not the daemon-level `features` line — the
+/// `refresh-client chrome` token the size report's `-I` gates on.
+#[test]
+fn command_feature_parsing_reads_the_real_list_commands_body() {
+    use super::conn::{parse_command_features, parse_feature_tokens};
+    let body: Vec<String> = crate::mux::command::list_commands_body()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let pairs = parse_command_features(&body);
+    assert!(pairs.contains(&("refresh-client".to_string(), "chrome".to_string())));
+    assert!(pairs.contains(&("refresh-client".to_string(), "cell-pixels".to_string())));
+    assert!(
+        !pairs.iter().any(|(c, _)| c == "features"),
+        "the daemon-level line is not a command row"
+    );
+    assert!(!parse_feature_tokens(&body).contains(&"chrome".to_string()));
+}
+
 /// attach with no daemon on the path reports the no-daemon error
 /// instead of spawning one.
 #[test]

@@ -557,11 +557,8 @@ impl WindowSession {
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }
-        let (cols, rows) = self.renderer.window_size();
-        if conn
-            .send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
-            .is_err()
-        {
+        let report = self.size_report(conn, &pane);
+        if conn.send_checked(&report).is_err() {
             return;
         }
         self.window = window.to_string();

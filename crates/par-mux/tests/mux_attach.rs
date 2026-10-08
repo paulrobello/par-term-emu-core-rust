@@ -1898,7 +1898,9 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
         let info = client
             .send(&format!("pane-info -t {pane0}"))
             .expect("pane-info");
-        if info.join(" ").contains("50x28") {
+        // The pane rect is 50x28; the PTY is its interior inside the
+        // declared border ring (card 01a11c5b): 48x26.
+        if info.join(" ").contains("48x26") {
             fitted = true;
             break;
         }
@@ -1907,7 +1909,7 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
     assert!(
         fitted,
         "the size report must re-fit the daemon's panes to the content grid \
-         (100x28, half = 50 wide): {:?}",
+         (100x28, half = 50 wide, less the border ring = 48x26): {:?}",
         client
             .send(&format!("pane-info -t {pane0}"))
             .expect("pane-info")
@@ -2053,7 +2055,9 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
         let info = client
             .send(&format!("pane-info -t {pane}"))
             .expect("pane-info");
-        if info.join(" ").contains("80x38") {
+        // The pane rect is 80x38; the PTY is its interior inside the
+        // declared border ring (card 01a11c5b): 78x36.
+        if info.join(" ").contains("78x36") {
             fitted = true;
             break;
         }
@@ -2062,7 +2066,7 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
     assert!(
         fitted,
         "the size report must carry the content grid (40 rows minus the tab \
-         strip minus the status row = 38, width kept): {:?}",
+         strip minus the status row = 38, width kept; less the border ring = 78x36): {:?}",
         client
             .send(&format!("pane-info -t {pane}"))
             .expect("pane-info")
@@ -4229,4 +4233,90 @@ fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
     }
     a.killer.kill().ok();
     b.killer.kill().ok();
+}
+
+/// Card 01a11c5b (the size-path twin of 7059335's mouse inset): with the
+/// pane-border ring on (the default herdr style), a full-screen app's last
+/// row must be VISIBLE. The client declares its per-pane chrome on the
+/// size report, so the daemon sizes the pane's PTY to the ring's interior:
+/// the 80x24 host leaves an 80x22 content grid (tab strip + status bar),
+/// the single pane's rect is 80x22, and its interior is 78x20. A program
+/// drawing at `stty size`'s last row lands inside the painted interior.
+#[cfg(unix)]
+#[test]
+fn render_mode_border_ring_keeps_the_tui_last_row_visible() {
+    let (fixture, _daemon, mut client) = fixture_with_session("lastrow");
+    let pane = session_first_pane(&mut client, "$0");
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let mut all = Vec::new();
+    echo_marker(&mut client, &pane, "ATTACHED-OK");
+    let shown = screen_until(&host, &mut all, Duration::from_secs(15), |s| {
+        s.contains("ATTACHED-OK")
+    });
+    assert!(
+        shown.contains("ATTACHED-OK"),
+        "the render client never painted the pane:\n{shown}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // The PTY's own idea of its size: the ring's interior. The `%s`
+    // printf split keeps the shell's echo of the typed line from matching.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"SIZE%sIS \" -; stty size'"
+        ))
+        .expect("stty keys");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("stty Enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let size_body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("SIZE-IS ") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    // A full-screen draw at the PTY's last row: clear, jump to the row
+    // `stty size` reports, print the marker, park.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'r=$(stty size | cut -d\" \" -f1); clear; printf \"\\033[%s;1HLAST%sROW\" \"$r\" -; sleep 60'"
+        ))
+        .expect("draw keys");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("draw Enter");
+    let shown = screen_until(&host, &mut all, Duration::from_secs(15), |s| {
+        s.contains("LAST-ROW")
+    });
+    let rows: Vec<&str> = shown.lines().collect();
+    let at = rows.iter().position(|r| r.contains("LAST-ROW"));
+    // Host row 21 (0-based): tab strip row 0, ring row 1, interior rows
+    // 2..=21, the ring's bottom edge on row 22, the status bar on 23.
+    assert_eq!(
+        at,
+        Some(21),
+        "the TUI's last row must paint on the interior's last row, not in the cropped ring:\n{shown}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    // Character (not byte) column: the ring's glyph reconstructs as a
+    // multi-byte replacement character.
+    let col = rows[21]
+        .find("LAST-ROW")
+        .map(|byte| rows[21][..byte].chars().count());
+    assert_eq!(
+        col,
+        Some(1),
+        "column 1 is the interior's first column:\n{shown}"
+    );
+    assert!(
+        size_body.contains("SIZE-IS 20 78"),
+        "the pane's PTY must be the border ring's interior (20 rows x 78 cols): {size_body:?}"
+    );
+    host.killer.kill().ok();
 }

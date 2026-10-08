@@ -158,8 +158,41 @@ impl WindowSession {
     /// cells, replacing the shared-divider look. Session-level like the
     /// background so renderer reconstruction re-applies it.
     pub(super) fn set_pane_borders(&mut self, on: bool) {
+        if self.pane_borders != on {
+            self.chrome_changed();
+        }
         self.pane_borders = on;
         self.renderer.set_pane_borders(on);
+    }
+
+    /// A per-pane chrome option changed at runtime (the border-cycle
+    /// chord, a config reload): the declared chrome rides the size
+    /// report, so park a grid refit — the report re-declares and the
+    /// daemon re-sizes every pane's PTY to the new interior. Before the
+    /// seed there is nothing to refit (the seed's report declares).
+    fn chrome_changed(&mut self) {
+        if !self.window.is_empty() {
+            self.pending_grid_refit = true;
+        }
+    }
+
+    /// The window size report (`refresh-client -t <pane> -C WxH`) for the
+    /// current renderer, carrying the per-pane chrome declaration (`-I`)
+    /// when the daemon reserves it. Also arms the renderer's reserved
+    /// mode, so its emulators mirror the PTY grids the daemon is about
+    /// to size — the rect less the declared chrome.
+    pub(super) fn size_report(
+        &mut self,
+        conn: &crate::mux::attach::conn::AttachConn,
+        pane: &str,
+    ) -> String {
+        self.renderer
+            .set_reserved_chrome(conn.has_command_feature("refresh-client", "chrome"));
+        let (cols, rows) = self.renderer.window_size();
+        format!(
+            "refresh-client -t {pane} -C {cols}x{rows}{}",
+            conn.chrome_declaration(self.renderer.chrome())
+        )
     }
 
     /// The session's border colors (config `border-active-color` /
@@ -180,6 +213,9 @@ impl WindowSession {
     /// The session's gap-band mode (config `pane-gaps`): theme-bg gap
     /// bands between panes, the renderer insetting each pane's rect.
     pub(super) fn set_pane_gaps(&mut self, gaps: u16) {
+        if self.pane_gaps != gaps {
+            self.chrome_changed();
+        }
         self.pane_gaps = gaps;
         self.renderer.set_pane_gaps(gaps);
     }
@@ -187,6 +223,9 @@ impl WindowSession {
     /// The session's scrollbar-gutter mode (config `scrollbar-gutter`):
     /// a right-edge gutter column reserved in every pane rect.
     pub(super) fn set_scrollbar_gutter(&mut self, on: bool) {
+        if self.scrollbar_gutter != on {
+            self.chrome_changed();
+        }
         self.scrollbar_gutter = on;
         self.renderer.set_scrollbar_gutter(on);
     }
@@ -213,8 +252,8 @@ impl WindowSession {
         // to the renderer's grid (the T4.C window-size policy) and the
         // queued `%layout-change` carries the current layout triple —
         // including the Z flag and visible layout when zoomed.
-        let (cols, rows) = self.renderer.window_size();
-        conn.send_checked(&format!("refresh-client -t {pane} -C {cols}x{rows}"))
+        let report = self.size_report(conn, &pane);
+        conn.send_checked(&report)
             .map_err(|err| format!("refresh-client failed: {err}"))?;
         let layout_event = conn
             .drain_pending_events()
@@ -454,11 +493,9 @@ impl WindowSession {
         } else {
             0
         });
-        let (report_cols, report_rows) = self.renderer.window_size();
-        conn.send_checked(&format!(
-            "refresh-client -t {pane} -C {report_cols}x{report_rows}"
-        ))
-        .map_err(|err| format!("resize report failed: {err}"))?;
+        let report = self.size_report(conn, &pane);
+        conn.send_checked(&report)
+            .map_err(|err| format!("resize report failed: {err}"))?;
         // The layout broadcast the report queued re-seeds the panes; but
         // drain it here directly so the repaint is synchronous.
         let layout_event = conn

@@ -354,6 +354,7 @@ impl PaneRenderer {
             show_label_in_border: false,
             pane_gaps: 0,
             scrollbar_gutter: false,
+            reserved_chrome: false,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
             border_active: None,
@@ -435,23 +436,18 @@ impl PaneRenderer {
             !layout.is_empty(),
             "apply_layout requires at least one pane"
         );
-        let old: HashMap<u32, (u16, u16)> = self
-            .layout
-            .iter()
-            .map(|r| (r.pane, (r.width, r.height)))
-            .collect();
         let new_ids: Vec<u32> = layout.iter().map(|r| r.pane).collect();
         // Drop emulators for panes that left the layout.
         self.emulators.retain(|id, _| new_ids.contains(id));
-        // Create / re-fit the rest.
+        // Create / re-fit the rest to the pane's PTY grid.
         for rect in &layout {
-            let changed = old.get(&rect.pane) != Some(&(rect.width, rect.height));
+            let (cols, rows) = self.emulator_size(rect);
             let emulator = self
                 .emulators
                 .entry(rect.pane)
-                .or_insert_with(|| PaneEmulator::new(rect.pane, rect.width, rect.height));
-            if changed {
-                emulator.resize(rect.width, rect.height);
+                .or_insert_with(|| PaneEmulator::new(rect.pane, cols, rows));
+            if emulator.terminal().size() != (usize::from(cols), usize::from(rows)) {
+                emulator.resize(cols, rows);
             }
         }
         self.focused.get_or_insert(layout[0].pane);
@@ -557,7 +553,7 @@ impl PaneRenderer {
     pub(crate) fn set_pane_borders(&mut self, on: bool) {
         if self.pane_borders != on {
             self.pane_borders = on;
-            self.dirty = true;
+            self.refit_emulators();
         }
     }
 
@@ -659,44 +655,82 @@ impl PaneRenderer {
     /// one cell of edge survives). The band cells keep the frame's
     /// theme-bg fill.
     pub(super) fn display_rect(&self, rect: &PaneRect) -> PaneRect {
-        let gap = self
-            .pane_gaps
-            .min(rect.width.saturating_sub(1) / 2)
-            .min(rect.height.saturating_sub(1) / 2);
+        let gaps_only = PaneChrome {
+            gap: self.pane_gaps,
+            ..PaneChrome::default()
+        };
+        let (gap, _, width, height) = gaps_only.interior(rect.width, rect.height);
         let mut r = *rect;
         r.x += gap + self.sidebar_w;
         r.y += gap;
-        r.width = r.width.saturating_sub(2 * gap);
-        r.height = r.height.saturating_sub(2 * gap);
+        r.width = width;
+        r.height = height;
         r
     }
 
-    /// The content view of a pane rect: `(inset_x, inset_y, width,
-    /// height)` — the display rect's full area, or the interior inside
-    /// the one-cell border ring when the per-pane-border option is on (a
-    /// pane too small to carry a ring keeps its full rect), narrowed by
-    /// one more column when the scrollbar gutter is reserved.
-    pub(super) fn content_view(&self, rect: &PaneRect) -> (u16, u16, u16, u16) {
-        let d = self.display_rect(rect);
-        let (inset_x, inset_y, mut w, h) = if self.pane_borders && d.width > 2 && d.height > 2 {
-            (1, 1, d.width - 2, d.height - 2)
-        } else {
-            (0, 0, d.width, d.height)
-        };
-        if self.scrollbar_gutter {
-            w = w.saturating_sub(1);
+    /// The per-pane chrome this renderer paints (`pane-borders`,
+    /// `pane-gaps`, `scrollbar-gutter`) — what the size report declares
+    /// (`refresh-client -I`) so the daemon sizes each pane's PTY to the
+    /// same interior [`Self::content_view`] paints.
+    pub(crate) fn chrome(&self) -> PaneChrome {
+        PaneChrome {
+            border: self.pane_borders,
+            gap: self.pane_gaps,
+            gutter: self.scrollbar_gutter,
         }
-        // Rect-RELATIVE insets: the callers add rect.x/rect.y (and the
-        // side panel's width) themselves. display_rect already carries
-        // the panel's offset in d.x, so it is subtracted back out here —
-        // otherwise the content paints the panel offset twice (the
-        // manual-pass double-push report).
-        (
-            d.x - rect.x - self.sidebar_w + inset_x,
-            d.y - rect.y + inset_y,
-            w,
-            h,
-        )
+    }
+
+    /// The content view of a pane rect: `(inset_x, inset_y, width,
+    /// height)`, rect-RELATIVE (the callers add rect.x/rect.y and the
+    /// side panel's width themselves) — the gap band inset, then the
+    /// interior inside the one-cell border ring when the per-pane-border
+    /// option is on (a pane too small to carry a ring keeps its full
+    /// rect), narrowed by one more column when the scrollbar gutter is
+    /// reserved. The same [`PaneChrome::interior`] the daemon's division
+    /// sizes each pane's PTY with, so paint, mouse, cursor, and the PTY
+    /// grid agree on one interior.
+    pub(super) fn content_view(&self, rect: &PaneRect) -> (u16, u16, u16, u16) {
+        self.chrome().interior(rect.width, rect.height)
+    }
+
+    /// The daemon reserves the declared chrome (it advertised the
+    /// `refresh-client` `chrome` feature): each pane's emulator then
+    /// mirrors the PTY grid — the rect less the chrome — instead of the
+    /// full rect. Re-fits the existing emulators.
+    pub(crate) fn set_reserved_chrome(&mut self, on: bool) {
+        if self.reserved_chrome != on {
+            self.reserved_chrome = on;
+            self.refit_emulators();
+        }
+    }
+
+    /// The grid a pane's emulator mirrors: the daemon's PTY size for the
+    /// rect — [`PaneChrome::pty_size`] under a reserving daemon, the full
+    /// rect otherwise.
+    fn emulator_size(&self, rect: &PaneRect) -> (u16, u16) {
+        if self.reserved_chrome {
+            self.chrome().pty_size(rect.width, rect.height)
+        } else {
+            (rect.width, rect.height)
+        }
+    }
+
+    /// Re-fit every emulator to [`Self::emulator_size`] after a chrome
+    /// change; unchanged sizes are left alone.
+    fn refit_emulators(&mut self) {
+        let sizes: Vec<(u32, (u16, u16))> = self
+            .layout
+            .iter()
+            .map(|r| (r.pane, self.emulator_size(r)))
+            .collect();
+        for (pane, (cols, rows)) in sizes {
+            if let Some(emulator) = self.emulators.get_mut(&pane) {
+                if emulator.terminal().size() != (usize::from(cols), usize::from(rows)) {
+                    emulator.resize(cols, rows);
+                }
+            }
+        }
+        self.dirty = true;
     }
 
     /// The gap-band mode (config `pane-gaps`): every pane's chrome and
@@ -705,7 +739,7 @@ impl PaneRenderer {
     pub(crate) fn set_pane_gaps(&mut self, gaps: u16) {
         if self.pane_gaps != gaps {
             self.pane_gaps = gaps;
-            self.dirty = true;
+            self.refit_emulators();
         }
     }
 
@@ -716,7 +750,7 @@ impl PaneRenderer {
     pub(crate) fn set_scrollbar_gutter(&mut self, on: bool) {
         if self.scrollbar_gutter != on {
             self.scrollbar_gutter = on;
-            self.dirty = true;
+            self.refit_emulators();
         }
     }
 

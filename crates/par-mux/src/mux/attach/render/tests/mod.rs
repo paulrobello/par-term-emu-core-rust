@@ -17,6 +17,76 @@ mod session;
 /// src/mux/layout.rs's own test expectations.
 const TWO_PANE_LAYOUT: &str = "0000,80x24,0,0{40x24,0,0,1,40x24,40,0,2}";
 
+/// Card 01a11c5b's invariant: for every chrome combination and pane size,
+/// the painted content view's area equals the emulator grid AND the PTY
+/// grid the daemon sizes (`PaneChrome::pty_size` in `sync_pane_sizes`) —
+/// paint, mouse/cursor mapping, and the program's own idea of its size
+/// are one interior. The single exception is a pane whose gutter eats its
+/// only column: the view is 0 wide while a PTY floors at 1.
+#[test]
+fn content_view_area_equals_the_pty_grid_in_every_combination() {
+    for border in [false, true] {
+        for gutter in [false, true] {
+            for gap in [0u16, 1, 2, 5] {
+                for (width, height) in [(80, 22), (40, 11), (3, 3), (2, 9), (9, 2), (1, 1), (5, 4)]
+                {
+                    let mut renderer = PaneRenderer::new(100, 30, Glyphs::Herdr);
+                    renderer.set_pane_borders(border);
+                    renderer.set_scrollbar_gutter(gutter);
+                    renderer.set_pane_gaps(gap);
+                    renderer.set_reserved_chrome(true);
+                    let rect = PaneRect {
+                        pane: 1,
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    };
+                    renderer.apply_layout(vec![rect]);
+                    let (_, _, view_w, view_h) = renderer.content_view(&rect);
+                    let pty = renderer.chrome().pty_size(width, height);
+                    let emulator = renderer.emulators[&1].terminal().size();
+                    let case =
+                        format!("border={border} gutter={gutter} gap={gap} {width}x{height}");
+                    assert_eq!(
+                        emulator,
+                        (usize::from(pty.0), usize::from(pty.1)),
+                        "{case}: emulator mirrors the PTY"
+                    );
+                    if view_w == 0 {
+                        assert!(gutter && pty.0 == 1, "{case}: only the gutter edge case");
+                        continue;
+                    }
+                    assert_eq!((view_w, view_h), pty, "{case}: painted view == PTY grid");
+                }
+            }
+        }
+    }
+}
+
+/// Without a reserving daemon (no `chrome` feature) the emulators keep
+/// mirroring the full rect, exactly the pre-declaration behavior.
+#[test]
+fn unreserved_chrome_keeps_full_rect_emulators() {
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Herdr);
+    renderer.set_pane_borders(true);
+    let rect = PaneRect {
+        pane: 1,
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 22,
+    };
+    renderer.apply_layout(vec![rect]);
+    assert_eq!(renderer.emulators[&1].terminal().size(), (80, 22));
+    // A reserving daemon re-fits the live emulator to the interior.
+    renderer.set_reserved_chrome(true);
+    assert_eq!(renderer.emulators[&1].terminal().size(), (78, 20));
+    // A runtime border toggle re-fits again.
+    renderer.set_pane_borders(false);
+    assert_eq!(renderer.emulators[&1].terminal().size(), (80, 22));
+}
+
 /// Criterion 2: two panes fed distinct content render at the rects
 /// the daemon's layout names — pane 1's bytes land in cols 0..40,
 /// pane 2's in cols 40..80, same rows.

@@ -22,6 +22,9 @@ pub struct AttachConn {
     /// Feature tokens from `list-commands`' `features …` line; empty when
     /// the daemon predates the command (assume no features).
     daemon_features: Vec<String>,
+    /// Per-command feature tokens from `list-commands`' `name [feature …]`
+    /// rows, as `(command, token)` pairs.
+    command_features: Vec<(String, String)>,
     warnings: HandshakeWarnings,
 }
 
@@ -53,6 +56,7 @@ impl AttachConn {
             client,
             daemon_stamp: None,
             daemon_features: Vec::new(),
+            command_features: Vec::new(),
             warnings: HandshakeWarnings::default(),
         };
         conn.run_handshake()?;
@@ -98,6 +102,7 @@ impl AttachConn {
         match self.client.send_checked("list-commands") {
             Ok(reply) if reply.ok => {
                 self.daemon_features = parse_feature_tokens(&reply.body);
+                self.command_features = parse_command_features(&reply.body);
             }
             // Pre-feature daemon: the unknown-command %error.
             _ => self.warnings.pre_feature_daemon = true,
@@ -142,6 +147,27 @@ impl AttachConn {
     /// True when the daemon advertises `token` among its features.
     pub fn has_feature(&self, token: &str) -> bool {
         self.daemon_features.iter().any(|f| f == token)
+    }
+
+    /// True when the daemon's `list-commands` row for `command` carries
+    /// `token` (e.g. `refresh-client chrome`).
+    pub fn has_command_feature(&self, command: &str, token: &str) -> bool {
+        self.command_features
+            .iter()
+            .any(|(c, t)| c == command && t == token)
+    }
+
+    /// The `refresh-client -C` size-report suffix declaring this client's
+    /// per-pane chrome (` -I border=B,gap=N,gutter=G`) — empty when the
+    /// daemon predates the `chrome` feature (an older daemon would reject
+    /// the unknown flag; it sizes PTYs to full rects regardless) or when
+    /// no chrome is painted.
+    pub fn chrome_declaration(&self, chrome: crate::mux::layout::PaneChrome) -> String {
+        if chrome.is_none() || !self.has_command_feature("refresh-client", "chrome") {
+            String::new()
+        } else {
+            format!(" -I {}", chrome.to_wire())
+        }
     }
 
     /// Send one control command and take its reply block — the query/mutate
@@ -210,6 +236,22 @@ pub(crate) fn parse_feature_tokens(body: &[String]) -> Vec<String> {
         if let Some(rest) = line.strip_prefix("features ") {
             out.extend(rest.split_whitespace().map(str::to_owned));
         }
+    }
+    out
+}
+
+/// `list-commands` reply -> the per-command feature tokens: each
+/// `name [feature …]` row's `(name, feature)` pairs (the daemon-level
+/// `features` line is [`parse_feature_tokens`]'s, not a command row).
+pub(crate) fn parse_command_features(body: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in body {
+        let mut words = line.split_whitespace();
+        let Some(name) = words.next() else { continue };
+        if name == "features" {
+            continue;
+        }
+        out.extend(words.map(|token| (name.to_owned(), token.to_owned())));
     }
     out
 }

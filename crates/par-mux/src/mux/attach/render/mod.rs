@@ -21,6 +21,7 @@ use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::{layout, HelpRow, ManagementKey};
+use crate::mux::layout::PaneChrome;
 use crate::terminal::Terminal;
 use crate::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
@@ -340,6 +341,10 @@ pub struct PaneRenderer {
     /// minimal position indicator while the pane's client scroll offset
     /// is > 0. Default off.
     scrollbar_gutter: bool,
+    /// The daemon reserves the declared per-pane chrome (`refresh-client`
+    /// feature `chrome`): emulators mirror the PTY grid, the rect less the
+    /// chrome, rather than the full rect.
+    reserved_chrome: bool,
     /// The frame being painted.
     buffer: Buffer,
     /// The last frame handed out; `render_frame` diffs against it.
