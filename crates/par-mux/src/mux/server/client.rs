@@ -117,162 +117,255 @@ pub(super) fn handle_client(
     let evicted = Arc::new(AtomicBool::new(false));
     // The abort handle moves to the registry on first registration — hook
     // connections never register and drop theirs with the frame.
-    let mut registration = Registration {
+    let registration = Registration {
         done: false,
         announced: false,
         abort: Some(abort),
     };
 
-    let mut writer = match stream.try_clone() {
-        Ok(stream) => stream,
-        Err(_) => return,
+    if spawn_writer(&stream, rx, Arc::clone(&evicted)).is_err() {
+        return;
+    }
+
+    let _ = stream.set_recv_timeout(Some(EVICTION_POLL));
+    let mut reader = BufReader::new(stream);
+    let mut connection = Connection {
+        client_id,
+        tree,
+        clients,
+        persist,
+        shutdown,
+        config,
+        tx,
+        evicted,
+        registration,
+        command_number: 0,
     };
+    connection.serve(&mut reader);
+    connection.teardown();
+}
+
+/// Start the connection's writer thread: it drains the client's queue to a
+/// clone of the socket until the queue closes, a write fails, or eviction
+/// is flagged. Fails only when the socket cannot be cloned.
+fn spawn_writer(
+    stream: &LocalStream,
+    rx: Receiver<String>,
+    evicted: Arc<AtomicBool>,
+) -> std::io::Result<()> {
+    use interprocess::local_socket::traits::Stream as _;
+
+    let mut writer = stream.try_clone()?;
     let _ = writer.set_send_timeout(Some(EVICTION_POLL));
-    let writer_evicted = Arc::clone(&evicted);
     std::thread::spawn(move || loop {
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
-                if write_line(&mut writer, &line, &writer_evicted).is_err() {
+                if write_line(&mut writer, &line, &evicted).is_err() {
                     break;
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                if writer_evicted.load(Ordering::Relaxed) {
+                if evicted.load(Ordering::Relaxed) {
                     break;
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
     });
+    Ok(())
+}
 
-    let _ = stream.set_recv_timeout(Some(EVICTION_POLL));
-    let mut reader = BufReader::new(stream);
-    let mut command_number = 0u32;
-    loop {
-        let mut line = match read_control_line(&mut reader, &evicted) {
-            ControlLine::Line(line) => line,
-            ControlLine::Closed => break,
-            // SEC-104: over-budget accumulation is answered like a
-            // malformed command and the connection is closed, whether the
-            // line is complete or still unterminated.
-            ControlLine::Oversize => {
-                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
-                command_number += 1;
-                let _ = tx.send(emit_block(
-                    command_number,
-                    "line exceeds 1 MiB budget, closing connection",
-                    false,
-                ));
+/// Whether the read loop keeps reading after a line was handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flow {
+    Continue,
+    Close,
+}
+
+impl Flow {
+    /// `Close` when a send to the client's queue failed — the writer is
+    /// gone, so nothing more can reach the client.
+    fn after_send<E>(sent: Result<(), E>) -> Self {
+        if sent.is_err() {
+            Flow::Close
+        } else {
+            Flow::Continue
+        }
+    }
+}
+
+/// One control connection's reader-side state: what every line handler
+/// needs to register, number, dispatch, and reply.
+struct Connection {
+    client_id: u64,
+    tree: Arc<Mutex<MuxTree>>,
+    clients: Clients,
+    persist: Option<Sender<(SaveOrigin, PersistState)>>,
+    shutdown: Option<Arc<AtomicBool>>,
+    config: Option<Arc<Mutex<EffectiveConfig>>>,
+    tx: SyncSender<String>,
+    evicted: Arc<AtomicBool>,
+    registration: Registration,
+    command_number: u32,
+}
+
+impl Connection {
+    /// The read loop: classify each line read and hand it to its handler
+    /// until the connection closes or a handler ends it.
+    fn serve<R: BufRead>(&mut self, reader: &mut R) {
+        loop {
+            let flow = match read_control_line(reader, &self.evicted) {
+                ControlLine::Line(line) => self.on_line(line),
+                ControlLine::Closed => Flow::Close,
+                ControlLine::Oversize => self.on_oversize(),
+                ControlLine::Undecodable(undecodable_len) => self.on_undecodable(undecodable_len),
+            };
+            if flow == Flow::Close {
                 break;
             }
-            // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1 bytes)
-            // was read through its newline, so the stream stays
-            // line-framed, but its contents are unusable. Answer it like a
-            // parse error — a numbered %error block — instead of dropping
-            // the whole client.
-            ControlLine::Undecodable(undecodable_len) => {
-                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
-                command_number += 1;
-                crate::debug_error!(
-                    "MUX",
-                    "non-UTF-8 command line #{} from client {} ({} bytes)",
-                    command_number,
-                    client_id,
-                    undecodable_len
-                );
-                if tx
-                    .send(emit_block(command_number, "line is not valid UTF-8", false))
-                    .is_err()
-                {
-                    break;
-                }
-                continue;
-            }
-        };
+        }
+    }
+
+    /// Register (once) and take the next command number — the shared
+    /// prologue of every numbered reply.
+    fn next_command(&mut self) -> u32 {
+        self.registration.ensure(
+            &self.tree,
+            &self.clients,
+            self.client_id,
+            &self.tx,
+            &self.evicted,
+        );
+        self.command_number += 1;
+        self.command_number
+    }
+
+    /// SEC-104: over-budget accumulation is answered like a malformed
+    /// command and the connection is closed, whether the line is complete
+    /// or still unterminated.
+    fn on_oversize(&mut self) -> Flow {
+        let command_number = self.next_command();
+        let _ = self.tx.send(emit_block(
+            command_number,
+            "line exceeds 1 MiB budget, closing connection",
+            false,
+        ));
+        Flow::Close
+    }
+
+    /// A non-UTF-8 line (e.g. send-keys -l carrying Latin-1 bytes) was read
+    /// through its newline, so the stream stays line-framed, but its
+    /// contents are unusable. Answer it like a parse error — a numbered
+    /// %error block — instead of dropping the whole client.
+    fn on_undecodable(&mut self, undecodable_len: usize) -> Flow {
+        let command_number = self.next_command();
+        crate::debug_error!(
+            "MUX",
+            "non-UTF-8 command line #{} from client {} ({} bytes)",
+            command_number,
+            self.client_id,
+            undecodable_len
+        );
+        Flow::after_send(
+            self.tx
+                .send(emit_block(command_number, "line is not valid UTF-8", false)),
+        )
+    }
+
+    /// One line, two grammars: [`parse_line`] classifies. A hook report is
+    /// answered in place (no registration, no command number); a control
+    /// command — or a parse error — is a numbered dispatch.
+    fn on_line(&mut self, mut line: String) -> Flow {
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();
         }
         if line.trim().is_empty() {
-            continue;
+            return Flow::Continue;
         }
-        // One line, two grammars: [`parse_line`] classifies. A hook report
-        // is answered in place (no registration, no command number); a
-        // control command — or a parse error — is a numbered dispatch.
         match parse_line(&line) {
-            Ok(Line::Hook(report)) => {
-                let (reply, broadcast) = crate::mux::hooks::handle_report(&report, &tree);
-                if let Some(notification) = broadcast {
-                    broadcast_notification(&clients, &notification);
-                }
-                if tx.send(reply).is_err() {
-                    break;
-                }
-            }
-            Ok(Line::Control(command)) => {
-                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
-                command_number += 1;
-                crate::debug_log!(
-                    "MUX",
-                    "received #{} from client {}: {}",
-                    command_number,
-                    client_id,
-                    summarize_line(&line)
-                );
-                let ctx = Ctx {
-                    tree: &tree,
-                    clients: &clients,
-                    command_number,
-                    shutdown: shutdown.as_deref(),
-                    config: config.as_deref(),
-                    client_id: Some(client_id),
-                };
-                let dispatch_started = std::time::Instant::now();
-                let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
-                if dispatch_started.elapsed() > Duration::from_millis(100) {
-                    crate::debug_log!(
-                        "MUX",
-                        "client {client_id} dispatch of command #{command_number} took {:?}",
-                        dispatch_started.elapsed()
-                    );
-                }
-                if reply_is_error(&reply) {
-                    // A rejected command writes nothing to any pane and has
-                    // no other trace; without this log the rejection is
-                    // invisible on both sides of the socket.
-                    crate::debug_error!(
-                        "MUX",
-                        "command #{} from client {} rejected: {}",
-                        command_number,
-                        client_id,
-                        summarize_line(&line)
-                    );
-                }
-                if tx.send(reply).is_err() {
-                    break;
-                }
-                registration.announce_if_sized(&tree, &clients, client_id);
-            }
-            Err(err) => {
-                registration.ensure(&tree, &clients, client_id, &tx, &evicted);
-                command_number += 1;
-                crate::debug_error!(
-                    "MUX",
-                    "unparseable command #{} from client {}: {} ({})",
-                    command_number,
-                    client_id,
-                    summarize_line(&line),
-                    err
-                );
-                if tx.send(emit_block(command_number, &err, false)).is_err() {
-                    break;
-                }
-            }
+            Ok(Line::Hook(report)) => self.on_hook(&report),
+            Ok(Line::Control(command)) => self.on_control(command, &line),
+            Err(err) => self.on_parse_error(&err, &line),
         }
     }
-    if registration.done {
-        // Every registered connection ends here — a clean disconnect, a
-        // socket EOF, and an eviction (its flag ends the read loop) alike.
-        clients.lock().retain(|(id, _, _, _)| *id != client_id);
+
+    fn on_hook(&mut self, report: &str) -> Flow {
+        let (reply, broadcast) = crate::mux::hooks::handle_report(report, &self.tree);
+        if let Some(notification) = broadcast {
+            broadcast_notification(&self.clients, &notification);
+        }
+        Flow::after_send(self.tx.send(reply))
+    }
+
+    fn on_control(&mut self, command: crate::mux::command::MuxCommand, line: &str) -> Flow {
+        let command_number = self.next_command();
+        let client_id = self.client_id;
+        crate::debug_log!(
+            "MUX",
+            "received #{} from client {}: {}",
+            command_number,
+            client_id,
+            summarize_line(line)
+        );
+        let ctx = Ctx {
+            tree: &self.tree,
+            clients: &self.clients,
+            command_number,
+            shutdown: self.shutdown.as_deref(),
+            config: self.config.as_deref(),
+            client_id: Some(client_id),
+        };
+        let dispatch_started = std::time::Instant::now();
+        let reply = dispatch_contained(command, &ctx, self.persist.as_ref(), Some(&self.tx));
+        if dispatch_started.elapsed() > Duration::from_millis(100) {
+            crate::debug_log!(
+                "MUX",
+                "client {client_id} dispatch of command #{command_number} took {:?}",
+                dispatch_started.elapsed()
+            );
+        }
+        if reply_is_error(&reply) {
+            // A rejected command writes nothing to any pane and has no
+            // other trace; without this log the rejection is invisible on
+            // both sides of the socket.
+            crate::debug_error!(
+                "MUX",
+                "command #{} from client {} rejected: {}",
+                command_number,
+                client_id,
+                summarize_line(line)
+            );
+        }
+        if self.tx.send(reply).is_err() {
+            return Flow::Close;
+        }
+        self.registration
+            .announce_if_sized(&self.tree, &self.clients, client_id);
+        Flow::Continue
+    }
+
+    fn on_parse_error(&mut self, err: &str, line: &str) -> Flow {
+        let command_number = self.next_command();
+        crate::debug_error!(
+            "MUX",
+            "unparseable command #{} from client {}: {} ({})",
+            command_number,
+            self.client_id,
+            summarize_line(line),
+            err
+        );
+        Flow::after_send(self.tx.send(emit_block(command_number, err, false)))
+    }
+
+    /// Every registered connection ends here — a clean disconnect, a socket
+    /// EOF, and an eviction (its flag ends the read loop) alike. Hook-only
+    /// connections never registered and have nothing to undo.
+    fn teardown(self) {
+        if !self.registration.done {
+            return;
+        }
+        let client_id = self.client_id;
+        self.clients.lock().retain(|(id, _, _, _)| *id != client_id);
         // The disconnect drops the connection's sizing contribution; the
         // windows it constrained may grow to the remaining viewers'
         // minimum, and the grown windows broadcast `%layout-change` to the
@@ -280,7 +373,7 @@ pub(super) fn handle_client(
         // first, for the `%client-left` line that follows the layout
         // changes (dispatch's layout-then-lifecycle order).
         let (resized, displayed) = {
-            let mut guard = tree.lock();
+            let mut guard = self.tree.lock();
             let displayed = guard.client_views.get(&client_id).and_then(|view| {
                 let session = guard.session_of_window(view.window)?;
                 Some((session.to_string(), view.window.to_string()))
@@ -288,14 +381,14 @@ pub(super) fn handle_client(
             (guard.clear_client_view(client_id), displayed)
         };
         for window_id in resized {
-            broadcast_layout_change(&tree, &clients, window_id);
+            broadcast_layout_change(&self.tree, &self.clients, window_id);
         }
         // Only an announced client is missed: a connection that never
         // reported a size was never introduced to its peers.
-        if registration.announced {
+        if self.registration.announced {
             let (session_id, window_id) = displayed.unzip();
             broadcast_notification(
-                &clients,
+                &self.clients,
                 &TmuxNotification::ClientLeft {
                     client: client_id.to_string(),
                     session_id,
@@ -303,5 +396,16 @@ pub(super) fn handle_client(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::Flow;
+
+    #[test]
+    fn a_failed_send_closes_and_a_landed_one_continues() {
+        assert_eq!(Flow::after_send::<()>(Ok(())), Flow::Continue);
+        assert_eq!(Flow::after_send(Err(())), Flow::Close);
     }
 }
