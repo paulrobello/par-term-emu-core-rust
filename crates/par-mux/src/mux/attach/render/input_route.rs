@@ -820,8 +820,24 @@ impl WindowSession {
         rect: &PaneRect,
         mouse: &SgrMouse,
     ) {
-        let rel_col = mouse.col.saturating_sub(1).saturating_sub(rect.x);
-        let rel_row = mouse.row.saturating_sub(2).saturating_sub(rect.y);
+        // The click in content coordinates: the host report loses its
+        // 1-based origin, the side panel's strip width, and the strip
+        // row; content_view adds the pane-borders/pane-gaps inset the
+        // paint path uses, so the pane sees the cell the user actually
+        // clicked (the manual-pass +1-row/+1-col report: the border ring
+        // was never subtracted).
+        let x = mouse
+            .col
+            .saturating_sub(1)
+            .saturating_sub(self.renderer.sidebar_width());
+        let cy = mouse.row.saturating_sub(2);
+        let (inset_x, inset_y, view_w, view_h) = self.renderer.content_view(rect);
+        let rel_col = x
+            .saturating_sub(rect.x + inset_x)
+            .min(view_w.saturating_sub(1));
+        let rel_row = cy
+            .saturating_sub(rect.y + inset_y)
+            .min(view_h.saturating_sub(1));
         let bytes = mouse.reencode_sgr(rel_col, rel_row);
         super::super::forward_chunked(conn, format!("%{}", rect.pane), &bytes);
     }

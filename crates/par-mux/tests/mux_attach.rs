@@ -1601,9 +1601,10 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     }
 
     // Left press at host col 10 row 5 (1-based): the tab strip shifts the
-    // content down one row, so the single pane's rect (0,0) maps the
-    // click to pane-relative (9, 3) 0-based and the wire spelling is
-    // ESC[<0;10;4M.
+    // content down one row and the pane-border ring (the default config)
+    // insets it one more, so the single pane's rect (0,0) maps the click
+    // to pane-relative (8, 2) 0-based and the wire spelling is
+    // ESC[<0;9;3M.
     host.to_child.write_all(b"\x1b[<0;10;5M").expect("click");
     host.to_child.flush().ok();
     // Poll the daemon's view of the pane: the client forwards the report,
@@ -1614,13 +1615,13 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
             .send(&format!("capture-pane -t {pane}"))
             .expect("capture")
             .join("\n");
-        if body.contains("^[[<0;10;4M") || Instant::now() >= deadline {
+        if body.contains("^[[<0;9;3M") || Instant::now() >= deadline {
             break body;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
     assert!(
-        body.contains("^[[<0;10;4M"),
+        body.contains("^[[<0;9;3M"),
         "the owning pane must receive the pane-relative SGR click: {body:?}\n\
          stderr: {}",
         stderr.lock().unwrap()

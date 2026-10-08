@@ -1784,6 +1784,33 @@ fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
     );
 }
 
+/// Same click as `mouse_owning_pane_receives_rebased_sgr_reports`, with
+/// the per-pane border boxes on (the shipped default config): the border
+/// ring insets the content by one cell, and the rebase must follow the
+/// paint inset — the manual-pass +1-row/+1-col report.
+#[test]
+fn mouse_rebase_follows_the_pane_border_inset() {
+    let (rx, mut conn, mut session) = two_pane_session("m-fwd-b", FakeScript::default());
+    session.renderer.set_pane_borders(true);
+    session.renderer.feed_output(2, b"\x1b[?1000h\x1b[?1006h");
+    // Host (61, 6) 1-based: content (60, 4) 0-based = the pane's inner
+    // cell (19, 3) under the border ring (pane x 40 + 1, y 0 + 1).
+    session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    let hex = |s: &str| {
+        s.bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(
+        drained(&rx),
+        vec![
+            "select-pane -t %2".to_string(),
+            format!("send-keys -t %2 -H {}", hex("\x1b[<0;20;4M"))
+        ]
+    );
+}
+
 /// Every PrefixChord arm, and the precedence between the configurable
 /// keys and the fixed table.
 #[test]
