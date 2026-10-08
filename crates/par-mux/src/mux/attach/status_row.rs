@@ -4,6 +4,16 @@
 use super::*;
 use std::io::Write as _;
 
+/// The pane's grid for a `(cols, rows)` host grid: the host minus the
+/// reserved status row. The ONE source of the passthrough pane geometry —
+/// the size report [`Session::resync`] sends and the shadow emulator's
+/// size must agree, or the shadow tracks a scrolled pane's cursor onto the
+/// status row (outside the `1;rows-1` scroll region) and every status draw
+/// parks the host cursor where line feeds never scroll (card 01a11d62).
+pub(super) fn pane_grid(cols: u16, rows: u16) -> (u16, u16) {
+    (cols, rows.saturating_sub(1).max(1))
+}
+
 impl Session {
     /// Whether the host grid changed since the last status draw. The
     /// first call sees `drawn_size == None` and reports true; the draw
@@ -118,22 +128,24 @@ impl Session {
     }
 
     /// The pane's tracked cursor cell, `(col, row)`, 0-based, clamped into
-    /// the host grid. The shadow emulator is re-fit to the host grid when
-    /// the host size changed; its tracked cursor is the pane's truth —
-    /// including over a held-dead pane, where the frozen screen's cell is
-    /// the right place to put the cursor.
+    /// the pane's content region (the host grid minus the status row). The
+    /// shadow emulator is re-fit to the pane grid when the host size
+    /// changed; its tracked cursor is the pane's truth — including over a
+    /// held-dead pane, where the frozen screen's cell is the right place
+    /// to put the cursor.
     pub(super) fn tracked_cell(&mut self, rows: u16, cols: u16) -> (u16, u16) {
+        let (pane_cols, pane_rows) = pane_grid(cols, rows);
         let (ecols, erows) = self.emulator.terminal().size();
-        if (ecols as u16, erows as u16) != (cols, rows) {
-            // Re-fit to the host grid; the tracked cursor survives the
+        if (ecols as u16, erows as u16) != (pane_cols, pane_rows) {
+            // Re-fit to the pane grid; the tracked cursor survives the
             // re-fit (the core Terminal clamps it into bounds).
-            self.emulator.resize(cols, rows);
+            self.emulator.resize(pane_cols, pane_rows);
         }
         let cursor = self.emulator.terminal().cursor();
         let (col, row) = (cursor.col as u16, cursor.row as u16);
         (
-            col.min(cols.saturating_sub(1)),
-            row.min(rows.saturating_sub(1)),
+            col.min(pane_cols.saturating_sub(1)),
+            row.min(pane_rows.saturating_sub(1)),
         )
     }
 }

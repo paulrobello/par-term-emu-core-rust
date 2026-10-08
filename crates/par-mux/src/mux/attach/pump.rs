@@ -20,14 +20,14 @@ impl Session {
         // restored at another size never re-fit, and the pane's child ran
         // at the stale height (the manual-pass htop report; render mode's
         // switch path has always reported). rows-1: the status row stays
-        // reserved below the content region.
+        // reserved below the content region — the same pane grid the
+        // shadow emulator is sized to.
         let (cols, rows) = conn::terminal_grid();
         if rows >= 2 && cols >= 2 {
+            let (pane_cols, pane_rows) = super::status_row::pane_grid(cols, rows);
             let _ = self.conn.send_checked(&format!(
                 "refresh-client -t {} -C {}x{}",
-                self.pane,
-                cols,
-                rows - 1
+                self.pane, pane_cols, pane_rows
             ));
         }
         let reply = match self
