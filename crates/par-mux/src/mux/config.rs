@@ -43,8 +43,9 @@ pub struct ClientSection {
     /// The detach prefix, tmux spelling (e.g. `C-b`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    /// Default attach mode: `passthrough` (the built-in default) or
-    /// `render`. Startup-only — a running attach does not switch pipelines.
+    /// Default attach mode: `render` (the built-in default) or
+    /// `passthrough`. Startup-only — a running attach does not switch
+    /// pipelines; `--mode` overrides it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// The reload chord, spelled as prefix + key (e.g. `C-b C-r`): the
@@ -1100,6 +1101,29 @@ remain-on-exit = true
         assert_eq!(eff.prefix, "C-s");
         assert_eq!(eff.socket, "/tmp/from-flag.sock");
         assert!(!eff.pane_endpoints, "the flag tier wins over the file");
+    }
+
+    /// The attach mode tiers: unspecified = render; a file `passthrough`
+    /// beats that default; the `--mode` flag beats the file.
+    #[test]
+    fn attach_mode_defaults_to_render_and_honors_file_then_flag() {
+        assert_eq!(
+            resolve(&ConfigFile::default(), &Overrides::default()).mode,
+            "render"
+        );
+        let file = ConfigFile {
+            client: ClientSection {
+                mode: Some("passthrough".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(resolve(&file, &Overrides::default()).mode, "passthrough");
+        let flagged = Overrides {
+            mode: Some("render".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&file, &flagged).mode, "render");
     }
 
     /// An empty env value counts as unset (a pane script expanding an

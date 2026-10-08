@@ -28,8 +28,8 @@ $P --socket /tmp/manual-mux --cmd "send-keys -t $PANE Enter"
 Then attach from the terminal under test:
 
 ```sh
-$P attach --socket /tmp/manual-mux                        # passthrough (default)
-$P attach --mode render --socket /tmp/manual-mux          # render mode
+$P attach --socket /tmp/manual-mux                        # render mode (default)
+$P attach --mode passthrough --socket /tmp/manual-mux     # passthrough
 ```
 
 Per terminal, in passthrough then render mode, check:

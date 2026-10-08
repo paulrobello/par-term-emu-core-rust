@@ -180,10 +180,10 @@ Each daemon writes one pointer file into its state directory at bind (`<state-ba
 
 ## Attaching from a terminal
 
-`par-mux attach` (feature `attach`; `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]`) is the built-in client: one pane fullscreen in your terminal, the host terminal acting as the pane's VT emulator — a byte pump plus key pump plus a one-row status line, tmux's attach model minus the window chrome. Build with `--features mux-bin,attach`.
+`par-mux attach` (feature `attach`; `par-mux attach [-t TARGET] [--prefix KEY] [--mode render|passthrough] [NAME | --socket PATH]`) is the built-in client. With no `--mode` and no `[client] mode` in the config file it runs the render pipeline (the full TUI: every pane of the window, tab strip, status bar — the Phase B render mode paragraph below); `--mode passthrough` (or `mode = "passthrough"` in the config file) selects the Phase A byte pump described next: one pane fullscreen in your terminal, the host terminal acting as the pane's VT emulator — a byte pump plus key pump plus a one-row status line, tmux's attach model minus the window chrome. `--mode` beats the config file, which beats the render default. Build with `--features mux-bin,attach`.
 
 ```bash
-par-mux attach                      # newest session's newest pane
+par-mux attach                      # render mode, the displayed session's active window
 par-mux attach -t %3                # that pane
 par-mux attach -t @1                # that window's active pane
 par-mux attach -t work              # pane title / window name / session name, daemon-resolved
@@ -242,7 +242,7 @@ file is optional — with none, everything behaves exactly as before.
 ```toml
 [client]
 prefix = "C-b"        # the attach detach prefix (tmux spelling)
-mode = "passthrough"  # default attach mode: passthrough | render
+mode = "render"       # default attach mode: render (built-in default) | passthrough
 reload = "C-b C-r"    # the chord that reloads this file mid-attach
 split-right = "%"     # split the focused pane right
 split-down = "\""    # split the focused pane down

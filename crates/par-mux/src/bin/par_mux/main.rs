@@ -179,11 +179,11 @@ struct AttachArgs {
     #[arg(long = "prefix", value_name = "KEY")]
     prefix: Option<String>,
 
-    /// Render pipeline: `passthrough` (the default — pane bytes to the
-    /// host terminal verbatim, Phase A) or `render` (the Phase B pane
-    /// renderer with the input router: mode-aware key re-encode, mouse
-    /// routing, wheel scrollback). Absent = the `[client] mode` from the
-    /// config file, else passthrough.
+    /// Render pipeline: `render` (the default — the Phase B pane renderer
+    /// with the input router: mode-aware key re-encode, mouse routing,
+    /// wheel scrollback) or `passthrough` (pane bytes to the host terminal
+    /// verbatim, Phase A). Absent = the `[client] mode` from the config
+    /// file, else render.
     #[arg(long = "mode", value_name = "MODE")]
     mode: Option<String>,
 
