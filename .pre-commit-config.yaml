@@ -40,7 +40,7 @@ repos:
       - id: cargo-clippy
         name: cargo clippy
         description: Lint Rust code with clippy
-        entry: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,ffi -- -D warnings
+        entry: cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
@@ -53,8 +53,15 @@ repos:
         pass_filenames: false
       - id: cargo-clippy-par-mux
         name: cargo clippy (par-mux)
-        description: Lint the par-mux member (ARC-007 O2 Phase 2); attach stays off until ARC-001
+        description: Lint the par-mux member (ARC-007 O2 Phase 2)
         entry: cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy-par-mux-attach
+        name: cargo clippy (par-mux attach)
+        description: Lint the par-mux attach client, matching CI's mux-bin,attach run
+        entry: cargo clippy -p par-mux --all-targets --features mux-bin,attach -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
