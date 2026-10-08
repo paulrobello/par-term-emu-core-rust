@@ -303,9 +303,13 @@ pub(super) fn cmd_select_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>
 /// window/pane target's window its active window), so a client landing on
 /// a sibling session moves the pointer every other path reads — the
 /// no-target attach, `select-workspace`'s resume, the follow broadcasts,
-/// and the persisted state. When the displayed window moved, render
-/// clients viewing the previously displayed workspace follow through
-/// `%client-session-changed`, the same cue `select-workspace` sends.
+/// and the persisted state. A target in the already-displayed session is
+/// exactly `select-window` (same `%session-window-changed` /
+/// `%window-pane-changed` tab-switch cues). A cross-session switch sends
+/// `%client-session-changed` when the displayed window moved — render
+/// clients viewing the previously displayed workspace follow, the same
+/// cue `select-workspace` sends — plus `%workspaces-changed` when the
+/// workspace moved and `%window-pane-changed` for a targeted window.
 pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Outcome {
     let Some(target) = target else {
         let guard = ctx.tree.lock();
@@ -321,6 +325,16 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             Ok(resolved) => resolved,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
+        // Already the displayed session: a window target is exactly a
+        // select-window (its %session-window-changed / %window-pane-changed
+        // are what tab-switch consumers track); a session target is a no-op.
+        if guard.active_session() == Some(session) {
+            drop(guard);
+            return match window {
+                Some(window) => cmd_select_window(ctx, Target::Id(window)),
+                None => Outcome::ok(ctx, ""),
+            };
+        }
         let previous_workspace = guard.active_workspace();
         let was_window = guard
             .active_session()
@@ -347,6 +361,7 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             .session(session)
             .map(|s| s.name.clone())
             .unwrap_or_default();
+        let pane_changed = window.and_then(|w| guard.window(w).map(|win| (w, win.active)));
         (
             session,
             name,
@@ -354,10 +369,14 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             moved && shown.is_some(),
             workspace != previous_workspace,
             resized,
+            pane_changed,
         )
     };
-    let (session, name, workspace, moved, workspace_moved, resized) = switched;
+    let (session, name, workspace, moved, workspace_moved, resized, pane_changed) = switched;
     let mut result = Outcome::ok(ctx, "");
+    for window_id in resized {
+        result = result.with_layout(window_id);
+    }
     if workspace_moved {
         result = result.notifying(TmuxNotification::WorkspacesChanged);
     }
@@ -368,8 +387,11 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             name,
         });
     }
-    for window_id in resized {
-        result = result.with_layout(window_id);
+    if let Some((window, pane)) = pane_changed {
+        result = result.notifying(TmuxNotification::WindowPaneChanged {
+            window_id: window.to_string(),
+            pane_id: pane.to_string(),
+        });
     }
     result
 }

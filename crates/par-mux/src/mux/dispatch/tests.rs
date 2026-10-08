@@ -1156,6 +1156,31 @@ fn switch_client_queries_and_moves_the_displayed_session() {
         "a no-op switch must not echo a follow: {sent:?}"
     );
 
+    // A second window of the displayed session: exactly select-window's
+    // tab-switch cues — no display-move follow.
+    let second = assert_ok(&h.run(&format!("new-window -t {b}")))[0]
+        .trim()
+        .to_string();
+    h.drain();
+    assert_ok(&h.run(&format!("switch-client -t {second}")));
+    let sent = h.drain();
+    assert!(
+        sent.iter()
+            .any(|l| l.starts_with(&format!("%session-window-changed {b} {second}"))),
+        "a same-session tab switch keeps select-window's cue: {sent:?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|l| l.starts_with(&format!("%window-pane-changed {second} "))),
+        "{sent:?}"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|l| l.starts_with("%client-session-changed")),
+        "the displayed session did not move: {sent:?}"
+    );
+
     // Unknown targets fail without moving anything.
     assert!(h.run("switch-client -t $99").contains("%error"));
     assert_eq!(h.tree.lock().active_session(), Some(b));
@@ -1166,4 +1191,7 @@ fn switch_client_queries_and_moves_the_displayed_session() {
 fn switch_client_mutates_only_with_a_target() {
     assert!(!parse_command("switch-client").unwrap().mutates());
     assert!(parse_command("switch-client -t $0").unwrap().mutates());
+    // tmux's other switch-client flags are not par-mux's: an unknown flag
+    // must not silently become the read-only query.
+    assert!(parse_command("switch-client -n").is_err());
 }

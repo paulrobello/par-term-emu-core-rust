@@ -135,6 +135,19 @@ pub(super) fn parse_select_workspace(a: &Args<'_>) -> Result<MuxCommand, String>
 /// (tmux's client-session switch; par-mux has one shared display). Bare,
 /// it is the read-only query for the displayed session.
 pub(super) fn parse_switch_client(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // Only `-t` exists: tmux's other switch-client flags (-n/-p/-l/…) must
+    // fail loudly, not silently degrade into the read-only query.
+    let rest = a.line.trim_start().strip_prefix(a.name).unwrap_or_default();
+    let mut pos = a.line.len() - rest.len();
+    while let Some((_, end, word)) = next_shell_word(a.line, pos) {
+        pos = end;
+        if word != "-t" {
+            return Err(format!("{}: unexpected argument {word:?}", a.name));
+        }
+        if let Some((_, value_end, _)) = next_shell_word(a.line, pos) {
+            pos = value_end;
+        }
+    }
     Ok(MuxCommand::SwitchClient {
         target: a.any_target_opt("-t", "session")?,
     })
