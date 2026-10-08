@@ -56,6 +56,32 @@ impl MuxTree {
         Ok(())
     }
 
+    /// Make `session_id` the displayed session — the `switch-client`
+    /// landing point: its workspace becomes the daemon's active workspace
+    /// and the session that workspace's active one. This is the pointer a
+    /// no-target attach, `select-workspace`, and the shared-selection
+    /// follow all read, so a client that lands on a sibling session writes
+    /// it here instead of leaving it on the session it last displayed.
+    pub fn display_session(&mut self, session_id: SessionId) -> Result<(), MuxError> {
+        let workspace_id = self
+            .session_workspace
+            .get(&session_id)
+            .copied()
+            .ok_or(MuxError::NoSuchSession(session_id))?;
+        let workspace = self
+            .workspaces
+            .get_mut(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?;
+        let index = workspace
+            .sessions
+            .iter()
+            .position(|s| *s == session_id)
+            .ok_or(MuxError::NoSuchSession(session_id))?;
+        workspace.active = index;
+        self.active_workspace = Some(workspace_id);
+        Ok(())
+    }
+
     /// Kill a workspace and every session, window, and pane in it. The Ok
     /// value lists the killed windows, so the caller can emit one
     /// `%window-close` per window before the roster cues — the same line

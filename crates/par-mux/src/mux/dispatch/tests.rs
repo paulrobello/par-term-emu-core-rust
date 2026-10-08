@@ -1106,3 +1106,64 @@ fn select_workspace_moves_reporting_client_views_and_refits() {
         "the followed view re-fits the new window to the client's report"
     );
 }
+
+/// switch-client (card 01a11bd1): the bare form answers the displayed
+/// session; a target moves the displayed pointer — the target's workspace
+/// becomes active and the session that workspace's active one — and,
+/// when the displayed window moved, tells clients through
+/// %client-session-changed. Re-switching to the shown session is silent.
+#[test]
+fn switch_client_queries_and_moves_the_displayed_session() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s a"));
+    assert_ok(&h.run("new-workspace -n other"));
+    assert_ok(&h.run("new-session -s b -t other"));
+    // new-session -t other leaves `b` other's active session; the
+    // workspace-spawned first session is the sibling.
+    let b = h.session_named("b");
+    let a = h.session_named("a");
+    assert_eq!(assert_ok(&h.run("switch-client")), vec![b.to_string()]);
+    h.drain();
+
+    // Cross-workspace switch to `a`: the workspace and session move.
+    assert_ok(&h.run(&format!("switch-client -t {a}")));
+    assert_eq!(h.tree.lock().active_session(), Some(a));
+    assert_eq!(assert_ok(&h.run("switch-client")), vec![a.to_string()]);
+    let sent = h.drain();
+    assert!(
+        sent.contains(&"%workspaces-changed\n".to_string()),
+        "{sent:?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|l| l.starts_with("%client-session-changed ") && l.contains(&a.to_string())),
+        "{sent:?}"
+    );
+
+    // A window target selects the window too and lands on its session.
+    let b_window = h.windows_of(b)[0];
+    assert_ok(&h.run(&format!("switch-client -t {b_window}")));
+    assert_eq!(h.tree.lock().active_session(), Some(b));
+    h.drain();
+
+    // Already displayed: no broadcast.
+    assert_ok(&h.run(&format!("switch-client -t {b}")));
+    let sent = h.drain();
+    assert!(
+        !sent
+            .iter()
+            .any(|l| l.starts_with("%client-session-changed")),
+        "a no-op switch must not echo a follow: {sent:?}"
+    );
+
+    // Unknown targets fail without moving anything.
+    assert!(h.run("switch-client -t $99").contains("%error"));
+    assert_eq!(h.tree.lock().active_session(), Some(b));
+}
+
+/// The persistence rule: the query form is read-only, a switch saves.
+#[test]
+fn switch_client_mutates_only_with_a_target() {
+    assert!(!parse_command("switch-client").unwrap().mutates());
+    assert!(parse_command("switch-client -t $0").unwrap().mutates());
+}

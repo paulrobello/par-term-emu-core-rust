@@ -494,8 +494,7 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         };
-        let _ = conn.send_checked(&format!("select-window -t {survivor}"));
-        self.reseed_window(conn, &survivor);
+        self.land_window(conn, &survivor);
     }
 
     /// The workspace menu's close: `kill-workspace -t {id}`; when the
@@ -682,8 +681,7 @@ impl WindowSession {
                     return;
                 }
                 if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
-                    let _ = conn.send_checked(&format!("select-window -t {window}"));
-                    self.reseed_window(conn, &window);
+                    self.land_window(conn, &window);
                 }
             }
             PromptTarget::NewWorkspace => {
@@ -812,8 +810,7 @@ impl WindowSession {
             return;
         };
         self.leave_picker();
-        let _ = conn.send_checked(&format!("select-window -t {window}"));
-        self.reseed_window(conn, &window);
+        self.land_window(conn, &window);
     }
 
     /// Compose the workspace picker's overlay: one row per workspace

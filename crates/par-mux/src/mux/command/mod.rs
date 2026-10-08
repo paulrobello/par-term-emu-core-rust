@@ -428,6 +428,17 @@ pub enum MuxCommand {
         /// Target workspace.
         workspace: Target<WorkspaceId>,
     },
+    /// Move the displayed session (`switch-client -t <target>`, tmux's
+    /// client-session switch over par-mux's one shared display): the
+    /// target's session becomes its workspace's active session and that
+    /// workspace the daemon's active one; a window or pane target also
+    /// selects its window. Bare `switch-client` is a read-only query
+    /// replying the displayed session's `$N`.
+    SwitchClient {
+        /// `-t`: a session, window, or pane (the window's session is the
+        /// one displayed); absent = query.
+        target: Option<AnyTarget>,
+    },
     /// Rename a workspace (`rename-workspace -t +N <name>`).
     RenameWorkspace {
         /// Target workspace.
@@ -490,6 +501,8 @@ impl MuxCommand {
             | MuxCommand::RenameWorkspace { .. }
             | MuxCommand::KillWorkspace { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
+            // The query form reads only; a switch moves persisted pointers.
+            MuxCommand::SwitchClient { target } => target.is_some(),
             MuxCommand::ListPanes { .. }
             | MuxCommand::ListAgents
             | MuxCommand::ListCommands
@@ -1061,6 +1074,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("new-workspace", parse_new_workspace, &[]),
     ("list-workspaces", parse_list_workspaces, &[]),
     ("select-workspace", parse_select_workspace, &[]),
+    ("switch-client", parse_switch_client, &[]),
     ("rename-workspace", parse_rename_workspace, &[]),
     ("kill-workspace", parse_kill_workspace, &[]),
     ("list-panes", parse_list_panes, &["targeted"]),

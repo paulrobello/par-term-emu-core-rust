@@ -2607,9 +2607,12 @@ fn render_mode_workspace_chord_selects_and_lands() {
     std::thread::sleep(Duration::from_millis(300));
 
     // The rosters: `list-panes -t` takes a window or pane target, not a
-    // session, so each pane is reached through its window.
+    // session, so each pane is reached through its window. `lab` holds
+    // its auto-spawned `$1` and the newer `$2 work` — the session lab
+    // resumes as active, so the one the landing must show (card 01a11bd1:
+    // the landing follows the resumed session, not the first listed).
     let pane_a = session_first_pane(&mut client, "$0");
-    let pane_work = session_first_pane(&mut client, "$1");
+    let pane_work = session_first_pane(&mut client, "$2");
     // The landing evidence, seeded before the chord: the lab pane's
     // screen carries the marker, and the post-chord re-seed must bring
     // it into the frame.
@@ -3677,6 +3680,307 @@ fn render_mode_border_label_paints_the_user_title() {
             .rev()
             .take(500)
             .collect::<String>()
+    );
+    host.killer.kill().ok();
+}
+
+/// Type `echo <marker>` + Enter into `pane`.
+#[cfg(unix)]
+fn echo_marker(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str) {
+    client
+        .send(&format!("send-keys -t {pane} -l 'echo {marker}'"))
+        .expect("marker keys");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("marker Enter");
+}
+
+/// Split `session`'s first window into three panes, each echoing
+/// `MULTI-<i>` — the multi-pane view the stale-view reports lost.
+#[cfg(unix)]
+fn seed_multi_pane(client: &mut par_mux::mux::MuxClient, session: &str) {
+    let pane = session_first_pane(client, session);
+    client
+        .send(&format!("split-window -t {pane} -h"))
+        .expect("split -h");
+    client
+        .send(&format!("split-window -t {pane} -v"))
+        .expect("split -v");
+    let window = client
+        .send(&format!("list-windows -t {session}"))
+        .expect("list-windows")[0]
+        .split_whitespace()
+        .next()
+        .expect("a window")
+        .to_string();
+    let panes: Vec<String> = client
+        .send(&format!("list-panes -t {window}"))
+        .expect("list-panes")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .collect();
+    assert_eq!(panes.len(), 3, "three panes: {panes:?}");
+    for (i, pane) in panes.iter().enumerate() {
+        echo_marker(client, pane, &format!("MULTI-{i}"));
+    }
+}
+
+/// Collect `host` output until the reconstructed final screen satisfies
+/// `done` or the deadline passes; returns the final screen text.
+#[cfg(unix)]
+fn screen_until(
+    host: &AttachHost,
+    all: &mut Vec<u8>,
+    deadline: Duration,
+    done: impl Fn(&str) -> bool,
+) -> String {
+    let end = std::time::Instant::now() + deadline;
+    loop {
+        let (grid, _) = reconstructed_screen(all, 24, 80);
+        let shown = grid.join("\n");
+        if done(&shown) || std::time::Instant::now() >= end {
+            return shown;
+        }
+        match host.output_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(bytes) => all.extend_from_slice(&bytes),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let (grid, _) = reconstructed_screen(all, 24, 80);
+                return grid.join("\n");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn shows_multi(screen: &str) -> bool {
+    (0..3).all(|i| screen.contains(&format!("MULTI-{i}")))
+}
+
+/// Card 01a11bd1 symptom 1: a no-target attach lands on the DISPLAYED
+/// session (the active workspace's active session), not the globally
+/// newest session id. Here the newest session lives in a background
+/// workspace — the newest-id rule showed its single pane instead of the
+/// active workspace's multi-pane window.
+#[cfg(unix)]
+#[test]
+fn render_mode_no_target_attach_lands_on_the_displayed_session() {
+    let (fixture, _daemon, mut client) = fixture_with_session("dispseed");
+    seed_multi_pane(&mut client, "$0");
+    client
+        .send("new-workspace -n other")
+        .expect("new-workspace");
+    let other = session_first_pane(&mut client, "$1");
+    echo_marker(&mut client, &other, "OTHER-MARK");
+    client
+        .send("select-workspace -t main")
+        .expect("back to main");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    let mut all = Vec::new();
+    let shown = screen_until(&host, &mut all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&shown) && !shown.contains("OTHER-MARK"),
+        "a no-target attach must land on the displayed session's multi-pane \
+         window. screen:\n{shown}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// A workspace holding two sessions — `$1` (three panes) and the newer
+/// `$2` (one pane, `SOLO-MARK`), which `new-session` leaves displayed.
+#[cfg(unix)]
+fn fixture_two_session_workspace(
+    tag: &str,
+) -> (MuxFixture, common::DaemonGuard, par_mux::mux::MuxClient) {
+    let (fixture, daemon, mut client) = fixture_with_session(tag);
+    client.send("new-workspace -n demo").expect("new-workspace");
+    seed_multi_pane(&mut client, "$1");
+    client
+        .send("new-session -s solo -t demo")
+        .expect("second session in demo");
+    let solo = session_first_pane(&mut client, "$2");
+    echo_marker(&mut client, &solo, "SOLO-MARK");
+    std::thread::sleep(Duration::from_millis(500));
+    (fixture, daemon, client)
+}
+
+/// Card 01a11bd1 symptom 2: client A lands on the workspace's sibling
+/// session (prefix `(`) — that landing moves the daemon's displayed
+/// session, so client B follows to it instead of staying on (or, after
+/// a later follow, reverting to) the session the pointer still named.
+#[cfg(unix)]
+#[test]
+fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() {
+    let (fixture, _daemon, mut client) = fixture_two_session_workspace("dispfollow");
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let mut a_all = Vec::new();
+    let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
+        s.contains("SOLO-MARK")
+    });
+    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let mut b_all = Vec::new();
+    let shown = screen_until(&b, &mut b_all, Duration::from_secs(10), |s| {
+        s.contains("SOLO-MARK")
+    });
+    assert!(
+        shown.contains("SOLO-MARK"),
+        "B seeds on the displayed solo session:\n{shown}"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    while b.output_rx.try_recv().is_ok() {}
+    b_all.clear();
+
+    // A: prefix ( — the previous session ($2 -> $1).
+    a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
+    a.to_child.flush().ok();
+    let a_shown = screen_until(&a, &mut a_all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&a_shown),
+        "A lands on the multi-pane session:\n{a_shown}\nstderr: {}",
+        a_err.lock().unwrap()
+    );
+    let b_shown = screen_until(&b, &mut b_all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&b_shown) && !b_shown.contains("SOLO-MARK"),
+        "B must follow A's landing to the multi-pane session. screen:\n{b_shown}\nstderr: {}",
+        b_err.lock().unwrap()
+    );
+    let displayed = client
+        .send("switch-client")
+        .expect("displayed-session query");
+    assert_eq!(
+        displayed.join("").trim(),
+        "$1",
+        "the daemon's displayed session moved"
+    );
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}
+
+/// Card 01a11bd1, the restore half: the landing is persisted, so after a
+/// daemon restart a fresh no-target attach shows the session the user
+/// was last on — the multi-pane one — not the stale single-pane pointer.
+#[cfg(unix)]
+#[test]
+fn render_mode_landing_survives_a_restart_for_the_next_attach() {
+    let (fixture, mut daemon, client) = fixture_two_session_workspace("disprestart");
+    drop(client);
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let mut a_all = Vec::new();
+    let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
+        s.contains("SOLO-MARK")
+    });
+    a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
+    a.to_child.flush().ok();
+    let a_shown = screen_until(&a, &mut a_all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&a_shown),
+        "A lands on the multi-pane session:\n{a_shown}\nstderr: {}",
+        a_err.lock().unwrap()
+    );
+    a.killer.kill().ok();
+    let _ = child_exit(&mut a, Duration::from_secs(5));
+
+    common::sigterm_clean(&mut daemon);
+    let _restarted = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+
+    let (mut c, c_err) = spawn_attach_render(&fixture, &[]);
+    let mut c_all = Vec::new();
+    let shown = screen_until(&c, &mut c_all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&shown) && !shown.contains("SOLO-MARK"),
+        "the first attach after a restore must show the multi-pane session \
+         the user last landed on. screen:\n{shown}\nstderr: {}",
+        c_err.lock().unwrap()
+    );
+    c.killer.kill().ok();
+}
+
+/// Card 01a11bd1 symptom 3, the landing half: client A's prefix `c` in
+/// a sibling session it landed on moves the display there too, so B —
+/// on the session the pointer used to name — follows to A's new tab.
+#[cfg(unix)]
+#[test]
+fn render_mode_new_window_in_another_client_reaches_this_client() {
+    let (fixture, _daemon, _client) = fixture_two_session_workspace("newwinfollow");
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let mut a_all = Vec::new();
+    let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
+        s.contains("SOLO-MARK")
+    });
+    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let mut b_all = Vec::new();
+    let _ = screen_until(&b, &mut b_all, Duration::from_secs(10), |s| {
+        s.contains("SOLO-MARK")
+    });
+    // A lands on the multi-pane sibling first (prefix `(`), then opens
+    // a tab there.
+    a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
+    a.to_child.flush().ok();
+    let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), shows_multi);
+    std::thread::sleep(Duration::from_millis(500));
+    while b.output_rx.try_recv().is_ok() {}
+    b_all.clear();
+    a.to_child.write_all(&[0x02, b'c']).expect("prefix c");
+    a.to_child.flush().ok();
+    // B's strip names A's session's two tabs (`1` and the new `0`) and
+    // its screen leaves the multi-pane view for the fresh window.
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    let mut followed = false;
+    while std::time::Instant::now() < end && !followed {
+        if let Ok(bytes) = b.output_rx.recv_timeout(Duration::from_millis(100)) {
+            b_all.extend_from_slice(&bytes);
+        }
+        let (grid, _) = reconstructed_screen(&b_all, 24, 80);
+        followed =
+            grid[0].contains(" 1 ") && grid[0].contains(" 0 ") && !shows_multi(&grid.join("\n"));
+    }
+    let (grid, _) = reconstructed_screen(&b_all, 24, 80);
+    assert!(
+        followed,
+        "B must follow A's new tab. screen:\n{}\nA stderr: {}\nB stderr: {}",
+        grid.join("\n"),
+        a_err.lock().unwrap(),
+        b_err.lock().unwrap()
+    );
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}
+
+/// Card 01a11bd1 symptom 3: a window added by another client (here the
+/// CLI) reaches this render client's tab strip — `%window-add` marks the
+/// status stale like every other roster cue.
+#[cfg(unix)]
+#[test]
+fn render_mode_window_add_elsewhere_refreshes_the_tab_strip() {
+    let (fixture, _daemon, mut client) = fixture_with_session("tabadd");
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    let _ = wait_for_output(&host, b"$0:att", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    while host.output_rx.try_recv().is_ok() {}
+
+    client
+        .send("new-window -t $0 -n cliwin")
+        .expect("new-window elsewhere");
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    let mut all = Vec::new();
+    let mut seen = false;
+    while std::time::Instant::now() < end && !seen {
+        if let Ok(bytes) = host.output_rx.recv_timeout(Duration::from_millis(100)) {
+            all.extend_from_slice(&bytes);
+        }
+        let (_final, ever) = reconstructed_screen(&all, 24, 80);
+        seen = ever[0].iter().any(|r| r.contains("cliwin"));
+    }
+    assert!(
+        seen,
+        "the tab strip must gain the window another client added. stderr: {}",
+        stderr.lock().unwrap()
     );
     host.killer.kill().ok();
 }

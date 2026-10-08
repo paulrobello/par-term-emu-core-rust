@@ -208,6 +208,7 @@ fn route_command(
         | MuxCommand::NewWorkspace { .. }
         | MuxCommand::ListWorkspaces
         | MuxCommand::SelectWorkspace { .. }
+        | MuxCommand::SwitchClient { .. }
         | MuxCommand::RenameWorkspace { .. }
         | MuxCommand::KillWorkspace { .. }
         | MuxCommand::KillServer) => route_session_command(ctx, command),

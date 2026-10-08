@@ -4,11 +4,26 @@
 
 use super::*;
 
+/// The daemon's displayed session (the active workspace's active session)
+/// via the bare `switch-client` query; `None` when the daemon predates it
+/// or nothing is displayed.
+pub(super) fn displayed_session(conn: &mut crate::mux::attach::conn::AttachConn) -> Option<String> {
+    let reply = conn.send_checked("switch-client").ok()?;
+    if !reply.ok {
+        return None;
+    }
+    let id = reply.body.first()?.trim();
+    (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
+}
+
 /// Resolve a render target to `(window, one-of-its-panes)`. Pane targets
 /// go through pane-info (its second field is the window); window/session
-/// targets through the targeted list queries; none = the newest session's
-/// active window's active pane — the same newest stand-in passthrough
-/// uses.
+/// targets through the targeted list queries; none = the displayed
+/// session's active window's active pane — the session every other
+/// client and the follow broadcasts agree on (card 01a11bd1: the former
+/// newest-id stand-in landed on whichever session was created last, a
+/// single-pane view while the display showed another). A daemon without
+/// the `switch-client` query keeps the newest-id rule.
 pub(super) fn resolve_window_and_pane(
     conn: &mut crate::mux::attach::conn::AttachConn,
     target: Option<&str>,
@@ -20,9 +35,8 @@ pub(super) fn resolve_window_and_pane(
                 .map_err(|err| format!("list-sessions failed: {err}"))?;
             // The wire shape is `$N: name`; the id ends at the colon — a
             // whitespace split keeps it (`$0:`), which the daemon's id
-            // parser rejects. Newest = highest id (ids are monotonic), the
-            // same deterministic newest-stand-in rule passthrough uses.
-            let session = sessions
+            // parser rejects. Newest = highest id (ids are monotonic).
+            let newest = sessions
                 .body
                 .iter()
                 .filter_map(|l| super::super::parse_session_line(l).map(|(id, _)| id))
@@ -32,7 +46,9 @@ pub(super) fn resolve_window_and_pane(
                     Some((n, id))
                 })
                 .max_by_key(|(n, _)| *n)
-                .map(|(_, id)| id)
+                .map(|(_, id)| id);
+            let session = displayed_session(conn)
+                .or(newest)
                 .ok_or("no sessions exist — create one first")?;
             let windows = conn
                 .send_checked(&format!("list-windows -t {session}"))

@@ -131,6 +131,15 @@ pub(super) fn parse_select_workspace(a: &Args<'_>) -> Result<MuxCommand, String>
     })
 }
 
+/// `switch-client [-t <session|window|pane>]` — move the displayed session
+/// (tmux's client-session switch; par-mux has one shared display). Bare,
+/// it is the read-only query for the displayed session.
+pub(super) fn parse_switch_client(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SwitchClient {
+        target: a.any_target_opt("-t", "session")?,
+    })
+}
+
 /// `rename-workspace -t +N <name>` — the same single-name grammar
 /// `rename-session` uses (shell_split, exactly one name word).
 pub(super) fn parse_rename_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {

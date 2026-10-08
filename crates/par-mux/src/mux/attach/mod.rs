@@ -412,6 +412,8 @@ impl Session {
                 *status_dirty = true;
             }
             TmuxNotification::LayoutChange { .. }
+            | TmuxNotification::WindowAdd { .. }
+            | TmuxNotification::WindowClose { .. }
             | TmuxNotification::WindowRenamed { .. }
             | TmuxNotification::SessionRenamed { .. }
             | TmuxNotification::SessionsChanged

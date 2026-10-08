@@ -1042,6 +1042,12 @@ impl WindowSession {
             | TmuxNotification::WorkspacesChanged
             | TmuxNotification::WindowRenamed { .. }
             | TmuxNotification::SessionRenamed { .. }
+            // A window another client added or closed changes the shown
+            // session's tab roster; `new-window` sends no
+            // `%sessions-changed`, so without these the tab strip missed
+            // it (card 01a11bd1).
+            | TmuxNotification::WindowAdd { .. }
+            | TmuxNotification::WindowClose { .. }
             | TmuxNotification::ClientAttached { .. }
             | TmuxNotification::ClientLeft { .. } => {
                 self.status_dirty = true;

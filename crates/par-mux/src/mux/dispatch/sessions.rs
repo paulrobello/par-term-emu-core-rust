@@ -18,6 +18,7 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
         MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
         MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
         MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
+        MuxCommand::SwitchClient { target } => cmd_switch_client(ctx, target),
         MuxCommand::RenameWorkspace { workspace, name } => {
             cmd_rename_workspace(ctx, workspace, name)
         }
@@ -288,6 +289,84 @@ pub(super) fn cmd_select_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>
                     .unwrap_or_default(),
             });
         }
+    }
+    for window_id in resized {
+        result = result.with_layout(window_id);
+    }
+    result
+}
+
+/// `switch-client [-t <session|window|pane>]`: the displayed-session
+/// pointer's read and write. Bare, the reply is the displayed session's
+/// `$N` (empty when nothing exists) — what a no-target attach lands on.
+/// With a target, the target's session becomes the displayed one (and a
+/// window/pane target's window its active window), so a client landing on
+/// a sibling session moves the pointer every other path reads — the
+/// no-target attach, `select-workspace`'s resume, the follow broadcasts,
+/// and the persisted state. When the displayed window moved, render
+/// clients viewing the previously displayed workspace follow through
+/// `%client-session-changed`, the same cue `select-workspace` sends.
+pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Outcome {
+    let Some(target) = target else {
+        let guard = ctx.tree.lock();
+        let body = guard
+            .active_session()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        return Outcome::ok(ctx, &body);
+    };
+    let switched = {
+        let mut guard = ctx.tree.lock();
+        let (session, window) = match guard.resolve_new_window_target(target) {
+            Ok(resolved) => resolved,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let previous_workspace = guard.active_workspace();
+        let was_window = guard
+            .active_session()
+            .and_then(|s| guard.session(s))
+            .and_then(|s| s.windows.get(s.active).copied());
+        if let Some(window) = window {
+            if let Err(err) = guard.select_window(window) {
+                return Outcome::err(ctx, &err.to_string());
+            }
+        }
+        if let Err(err) = guard.display_session(session) {
+            return Outcome::err(ctx, &err.to_string());
+        }
+        let workspace = guard.active_workspace();
+        let shown = guard
+            .session(session)
+            .and_then(|s| s.windows.get(s.active).copied());
+        let moved = was_window != shown;
+        let resized = match (moved, shown, previous_workspace) {
+            (true, Some(shown), Some(previous)) => guard.follow_workspace_views(previous, shown),
+            _ => Vec::new(),
+        };
+        let name = guard
+            .session(session)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        (
+            session,
+            name,
+            workspace,
+            moved && shown.is_some(),
+            workspace != previous_workspace,
+            resized,
+        )
+    };
+    let (session, name, workspace, moved, workspace_moved, resized) = switched;
+    let mut result = Outcome::ok(ctx, "");
+    if workspace_moved {
+        result = result.notifying(TmuxNotification::WorkspacesChanged);
+    }
+    if moved {
+        result = result.notifying(TmuxNotification::ClientSessionChanged {
+            client: workspace.map(|w| w.to_string()).unwrap_or_default(),
+            session_id: session.to_string(),
+            name,
+        });
     }
     for window_id in resized {
         result = result.with_layout(window_id);

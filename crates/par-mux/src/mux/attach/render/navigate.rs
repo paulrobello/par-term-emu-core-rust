@@ -117,8 +117,7 @@ impl WindowSession {
                 let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
                     return;
                 };
-                let _ = conn.send_checked(&format!("select-window -t {window}"));
-                self.reseed_window(conn, &window);
+                self.land_window(conn, &window);
             }
             super::super::ManagementKey::WorkspaceNext
             | super::super::ManagementKey::WorkspacePrev => {
@@ -264,12 +263,18 @@ impl WindowSession {
         if !sessions.ok {
             return;
         }
-        let Some((session, _)) = sessions
+        let listed: Vec<String> = sessions
             .body
             .iter()
-            .filter_map(|l| super::super::parse_session_line(l))
-            .next()
-        else {
+            .filter_map(|l| super::super::parse_session_line(l).map(|(id, _)| id))
+            .collect();
+        // The session select-workspace resumed (the workspace's active
+        // one) — the session the follow broadcast names, so this client
+        // and every follower land on the same view (card 01a11bd1: the
+        // first-listed session diverged from it). The first listed is the
+        // fallback for a daemon without the displayed-session query.
+        let resumed = super::session::displayed_session(conn).filter(|s| listed.contains(s));
+        let Some(session) = resumed.or_else(|| listed.first().cloned()) else {
             self.status_dirty = true;
             return;
         };
@@ -288,8 +293,7 @@ impl WindowSession {
         let Some(window) = window else {
             return;
         };
-        let _ = conn.send_checked(&format!("select-window -t {window}"));
-        self.reseed_window(conn, window);
+        self.land_window(conn, window);
     }
 
     /// The reload chord in render mode: the same client-side rebind the
@@ -417,13 +421,7 @@ impl WindowSession {
         };
         let next = windows[(position as i32 + direction).rem_euclid(windows.len() as i32) as usize]
             .clone();
-        if !conn
-            .send_checked(&format!("select-window -t {next}"))
-            .is_ok_and(|reply| reply.ok)
-        {
-            return;
-        }
-        self.reseed_window(conn, &next);
+        self.land_window(conn, &next);
     }
 
     /// prefix ( / ): the previous/next session in list-sessions order;
@@ -488,7 +486,32 @@ impl WindowSession {
         let Some(window) = window else {
             return;
         };
-        let _ = conn.send_checked(&format!("select-window -t {window}"));
+        self.land_window(conn, window);
+    }
+
+    /// A user-initiated landing on `window`: `switch-client -t <window>`
+    /// selects it AND makes its session the daemon's displayed one, then
+    /// the view re-seeds. A landing used to `select-window` only — silent
+    /// for a background session — so the displayed pointer stayed on the
+    /// session last displayed, and every reader of it (the next no-target
+    /// attach, the persisted state a restore serves, the follow broadcast
+    /// other clients obey) landed back there (card 01a11bd1). A daemon
+    /// without `switch-client` keeps the select-window behavior; a landing
+    /// both refuse (the window is gone) leaves the view put. Follow
+    /// reseeds must NOT come through here: the daemon already moved, and a
+    /// write from a lagging follow could pull the display back.
+    pub(super) fn land_window(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+    ) {
+        let landed =
+            |reply: std::io::Result<crate::mux::client::Reply>| reply.is_ok_and(|reply| reply.ok);
+        if !landed(conn.send_checked(&format!("switch-client -t {window}")))
+            && !landed(conn.send_checked(&format!("select-window -t {window}")))
+        {
+            return;
+        }
         self.reseed_window(conn, window);
     }
 

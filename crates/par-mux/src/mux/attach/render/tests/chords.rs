@@ -23,7 +23,9 @@ fn switch_session_with_an_empty_roster_is_a_no_op() {
     assert_eq!(session.window, "@0", "the view stays put");
     let lines = drained(&rx);
     assert!(
-        !lines.iter().any(|l| l.starts_with("select-window")),
+        !lines
+            .iter()
+            .any(|l| l.starts_with("select-window") || l.starts_with("switch-client -t")),
         "nothing to select: {lines:?}"
     );
 }
@@ -182,7 +184,7 @@ fn new_window_chord_creates_selects_and_reseeds() {
     chord(&mut session, &mut conn, b'c');
     let lines = drained(&rx);
     assert_eq!(lines[0], "new-window -t $0");
-    assert_eq!(lines[1], "select-window -t @4");
+    assert_eq!(lines[1], "switch-client -t @4");
     assert!(
         lines.contains(&"refresh-client -t %9 -C 80x23".to_string()),
         "{lines:?}"
@@ -384,15 +386,19 @@ fn workspace_chords_select_the_neighbor_and_land_on_it() {
     );
     chord(&mut session, &mut conn, b'W');
     let lines = drained(&rx);
+    // The bare switch-client query answers empty here (an old daemon's
+    // shape), so the landing falls back to the first listed session; the
+    // landing itself rides switch-client -t (card 01a11bd1).
     assert_eq!(
-        lines[..6].to_vec(),
+        lines[..7].to_vec(),
         vec![
             "list-workspaces",
             "select-workspace -t +1",
             "select-workspace -t +1",
             "list-sessions -t +1",
+            "switch-client",
             "list-windows -t $1",
-            "select-window -t @6",
+            "switch-client -t @6",
         ],
         "{lines:?}"
     );
@@ -419,6 +425,43 @@ fn workspace_chords_select_the_neighbor_and_land_on_it() {
     assert_eq!(session.window, "@0");
 }
 
+/// Card 01a11bd1: a workspace landing takes the session the daemon
+/// resumed (the bare `switch-client` answer), not the first listed one —
+/// the session every follower is told to show.
+#[test]
+fn workspace_landing_takes_the_resumed_session_not_the_first_listed() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-sessions -t +1".to_string(),
+        "+1: beta: $1: first\n+1: beta: $2: resumed".to_string(),
+    );
+    replies.insert("switch-client".to_string(), "$2".to_string());
+    replies.insert("list-windows -t $2".to_string(), "@9 * r".to_string());
+    replies.insert("list-panes -t @9".to_string(), "%9".to_string());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "ws-resumed",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.land_on_workspace(&mut conn, "+1");
+    let lines = drained(&rx);
+    assert!(
+        lines.contains(&"list-windows -t $2".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.contains(&"list-windows -t $1".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"switch-client -t @9".to_string()),
+        "{lines:?}"
+    );
+    assert_eq!(session.window, "@9");
+}
+
 /// Landing on a workspace with no sessions selects it but leaves the
 /// view on its window and marks the status stale.
 #[test]
@@ -430,7 +473,8 @@ fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
         drained(&rx),
         vec![
             "select-workspace -t +3".to_string(),
-            "list-sessions -t +3".to_string()
+            "list-sessions -t +3".to_string(),
+            "switch-client".to_string()
         ]
     );
     assert_eq!(session.window, "@0");
@@ -609,7 +653,7 @@ fn new_window_prompt_creates_and_lands_on_the_window() {
     type_and_commit(&mut session, &mut conn, "logs");
     let lines = drained(&rx);
     assert_eq!(lines[0], "new-window -t $0 -n 'logs'");
-    assert_eq!(lines[1], "select-window -t @3");
+    assert_eq!(lines[1], "switch-client -t @3");
     assert_eq!(session.window, "@3");
 
     let (rx, mut conn) = recording_conn("prompt-neww-no");
@@ -699,7 +743,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
         vec![
             "kill-window -t @0",
             "list-windows -t $0",
-            "select-window -t @2"
+            "switch-client -t @2"
         ]
     );
     assert_eq!(session.window, "@2");
@@ -880,14 +924,14 @@ fn window_switch_chords_wrap_and_respect_a_refused_select() {
     let lines = drained(&rx);
     assert_eq!(
         lines[..2].to_vec(),
-        vec!["list-windows -t $0", "select-window -t @2"],
+        vec!["list-windows -t $0", "switch-client -t @2"],
         "p from the first window wraps to the last"
     );
     assert_eq!(session.window, "@2");
     chord(&mut session, &mut conn, b'n');
     assert_eq!(
         drained(&rx)[1],
-        "select-window -t @0",
+        "switch-client -t @0",
         "n from the last wraps to the first"
     );
 
@@ -896,7 +940,11 @@ fn window_switch_chords_wrap_and_respect_a_refused_select() {
         "list-windows -t $0".to_string(),
         "@0 * a\n@1 - b".to_string(),
     );
+    // Both landing spellings refused (the window is gone): the
+    // switch-client attempt, then the select-window fallback an older
+    // daemon answers — and no reseed.
     let mut failing = std::collections::HashSet::new();
+    failing.insert("switch-client -t @1".to_string());
     failing.insert("select-window -t @1".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "win-sw-no",
@@ -911,9 +959,10 @@ fn window_switch_chords_wrap_and_respect_a_refused_select() {
         drained(&rx),
         vec![
             "list-windows -t $0".to_string(),
+            "switch-client -t @1".to_string(),
             "select-window -t @1".to_string()
         ],
-        "a refused select reseeds nothing"
+        "a refused landing reseeds nothing"
     );
     assert_eq!(session.window, "@0");
 
@@ -957,7 +1006,7 @@ fn session_switch_chords_land_on_the_neighbors_active_window() {
             "list-sessions",
             "list-windows -t $0",
             "list-windows -t $2",
-            "select-window -t @8"
+            "switch-client -t @8"
         ],
         "( from the head wraps to the last session's active window"
     );
@@ -971,7 +1020,7 @@ fn session_switch_chords_land_on_the_neighbors_active_window() {
     chord(&mut session, &mut conn, b')');
     let lines = drained(&rx);
     assert_eq!(lines[2], "list-windows -t $1", "{lines:?}");
-    assert_eq!(lines[3], "select-window -t @4");
+    assert_eq!(lines[3], "switch-client -t @4");
 }
 
 /// prefix o cycles focus through the layout order (wrapping) and

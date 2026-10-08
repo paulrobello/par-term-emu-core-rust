@@ -123,8 +123,10 @@ fn strip_click_switches_windows_without_forwarding() {
 
     assert_eq!(session.window, "@1", "the view moved to the clicked tab");
     assert_eq!(session.status.active_window.as_deref(), Some("@1"));
-    // The wire contract: select-window + re-seed; nothing pane-level.
-    let switch = wait_recorded(&rx, "select-window");
+    // The wire contract: the switch-client landing (which selects the
+    // window and moves the displayed session) + re-seed; nothing
+    // pane-level.
+    let switch = wait_recorded(&rx, "switch-client");
     assert!(
         switch.contains("-t @1"),
         "the click selects the clicked window: {switch}"
@@ -502,15 +504,15 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     );
 
     // j j moves the cursor to the second window row; Enter activates
-    // — the wire sees the select-window and the re-seed's queries
-    // (the resync).
+    // — the wire sees the switch-client landing and the re-seed's
+    // queries (the resync).
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'\r');
     assert!(!session.picker_mode, "activation dismisses the modal");
     assert_eq!(
-        wait_recorded(&rx, "select-window"),
-        "select-window -t @1",
+        wait_recorded(&rx, "switch-client"),
+        "switch-client -t @1",
         "the session header's active window is the landing target"
     );
     let _ = wait_recorded(&rx, "list-panes");

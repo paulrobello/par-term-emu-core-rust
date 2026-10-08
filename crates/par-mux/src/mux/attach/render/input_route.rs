@@ -695,13 +695,7 @@ impl WindowSession {
         if id == self.window {
             return; // the shown window: a no-op click
         }
-        if !conn
-            .send_checked(&format!("select-window -t {id}"))
-            .is_ok_and(|reply| reply.ok)
-        {
-            return;
-        }
-        self.reseed_window(conn, &id);
+        self.land_window(conn, &id);
     }
 
     /// Whether `pane`'s emulator tracks the mouse (the forwarding gate).
