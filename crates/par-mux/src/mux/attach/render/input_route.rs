@@ -254,6 +254,60 @@ impl WindowSession {
             .map(|(_, key)| key)
     }
 
+    /// One functional key (arrows, function keys, modified keys). The
+    /// precedence differs from `route_plain`'s: a pending prefix comes
+    /// first (the arrows navigate panes directionally, shift+arrows swap
+    /// with the neighbor; anything else is unbound — consumed either
+    /// way), then the scroll viewport, prompt, menu, help, picker, and
+    /// resize mode; otherwise the key is re-encoded against the focused
+    /// pane's input modes and forwarded.
+    pub(super) fn route_key(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+        prefix_pending: &mut bool,
+    ) {
+        if *prefix_pending {
+            *prefix_pending = false;
+            self.prefix_pane_arrow(conn, ev);
+            return;
+        }
+        if self.scroll_mode {
+            self.scroll_mode_key(ev);
+            return;
+        }
+        if self.prompt_mode {
+            self.prompt_key(conn, ev);
+            return;
+        }
+        if self.menu.is_some() {
+            self.menu_key(ev);
+            return;
+        }
+        if self.help_mode {
+            self.help_key(ev);
+            return;
+        }
+        if self.picker_mode {
+            self.picker_key(conn, ev);
+            return;
+        }
+        if self.resize_mode {
+            self.resize_mode_key(conn, ev);
+            return;
+        }
+        let focused = self.focused_pane();
+        let bytes = self
+            .renderer
+            .focused()
+            .and_then(|id| self.renderer.pane_terminal(id))
+            .map(|term| crate::keyboard::encode_key(ev, term))
+            .unwrap_or_default();
+        if !bytes.is_empty() && !focused.is_empty() {
+            super::super::forward_chunked(conn, focused, &bytes);
+        }
+    }
+
     /// The prefix commands that move the view through the daemon's tree:
     /// `o` cycles panes of the window, `n`/`p` next/prev window, `(`/`)`
     /// prev/next session — every switch is select-then-refresh, the

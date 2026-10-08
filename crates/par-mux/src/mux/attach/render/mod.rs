@@ -1077,52 +1077,7 @@ impl WindowSession {
                                     return true;
                                 }
                             }
-                            Token::Key(ev) => {
-                                if *prefix_pending {
-                                    *prefix_pending = false;
-                                    // A prefix chord on a functional
-                                    // key: the arrows navigate panes
-                                    // directionally, shift+arrows swap
-                                    // with the neighbor; anything else
-                                    // is unbound — consumed either way.
-                                    self.prefix_pane_arrow(conn, &ev);
-                                    continue;
-                                }
-                                if self.scroll_mode {
-                                    self.scroll_mode_key(&ev);
-                                    continue;
-                                }
-                                if self.prompt_mode {
-                                    self.prompt_key(conn, &ev);
-                                    continue;
-                                }
-                                if self.menu.is_some() {
-                                    self.menu_key(&ev);
-                                    continue;
-                                }
-                                if self.help_mode {
-                                    self.help_key(&ev);
-                                    continue;
-                                }
-                                if self.picker_mode {
-                                    self.picker_key(conn, &ev);
-                                    continue;
-                                }
-                                if self.resize_mode {
-                                    self.resize_mode_key(conn, &ev);
-                                    continue;
-                                }
-                                let focused = self.focused_pane();
-                                let bytes = self
-                                    .renderer
-                                    .focused()
-                                    .and_then(|id| self.renderer.pane_terminal(id))
-                                    .map(|term| crate::keyboard::encode_key(&ev, term))
-                                    .unwrap_or_default();
-                                if !bytes.is_empty() && !focused.is_empty() {
-                                    super::forward_chunked(conn, focused, &bytes);
-                                }
-                            }
+                            Token::Key(ev) => self.route_key(conn, &ev, prefix_pending),
                             Token::Mouse(mouse) => {
                                 self.route_mouse(conn, mouse);
                                 if std::mem::take(&mut self.detach_requested) {
