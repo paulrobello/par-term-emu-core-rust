@@ -3985,3 +3985,248 @@ fn render_mode_window_add_elsewhere_refreshes_the_tab_strip() {
     );
     host.killer.kill().ok();
 }
+
+/// The pane count of `window`, by the plain control client.
+#[cfg(unix)]
+fn pane_count(client: &mut par_mux::mux::MuxClient, window: &str) -> usize {
+    client
+        .send(&format!("list-panes -t {window}"))
+        .map(|rows| rows.iter().filter(|l| l.starts_with('%')).count())
+        .unwrap_or(0)
+}
+
+/// Wait until `client` sees a `%pane-exited` push or the deadline passes.
+#[cfg(unix)]
+fn saw_pane_exited(client: &par_mux::mux::MuxClient, deadline: Duration) -> bool {
+    let end = Instant::now() + deadline;
+    while Instant::now() < end {
+        match client
+            .notifications()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::PaneExited { .. }) => {
+                return true
+            }
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
+}
+
+/// Card 01a11c3a (Phase B manual pass): Ctrl+D exits the focused pane's
+/// shell under the product default (`remain-on-exit = false`, the pane is
+/// auto-removed). The window keeps its other panes, so BOTH render
+/// clients must stay attached and repaint the survivors — the pane's
+/// death is not the session's.
+#[cfg(unix)]
+#[test]
+fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
+    let fixture = MuxFixture::new("ctrldpane");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    seed_multi_pane(&mut client, "$0");
+    let window = client.send("list-windows -t $0").expect("list-windows")[0]
+        .split_whitespace()
+        .next()
+        .expect("a window")
+        .to_string();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let mut a_all = Vec::new();
+    let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), shows_multi);
+    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let mut b_all = Vec::new();
+    let _ = screen_until(&b, &mut b_all, Duration::from_secs(10), shows_multi);
+    std::thread::sleep(Duration::from_millis(500));
+    while client.notifications().try_recv().is_ok() {}
+
+    // Ctrl+D through client A reaches its focused pane's shell at an
+    // empty prompt: the shell exits, the daemon reaps and removes it.
+    a.to_child.write_all(&[0x04]).expect("Ctrl+D");
+    a.to_child.flush().ok();
+    assert!(
+        saw_pane_exited(&client, Duration::from_secs(10)),
+        "the shell's exit must reach observers as %pane-exited"
+    );
+    let end = Instant::now() + Duration::from_secs(5);
+    while pane_count(&mut client, &window) != 2 && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        pane_count(&mut client, &window),
+        2,
+        "the dead pane is removed"
+    );
+
+    // Both clients must survive the removal (give the status refresh and
+    // reseed time to run their course).
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        child_exit(&mut a, Duration::from_millis(200)),
+        None,
+        "client A must stay attached after its pane's shell exited. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    assert_eq!(
+        child_exit(&mut b, Duration::from_millis(200)),
+        None,
+        "client B must stay attached after a pane's shell exited. stderr: {}",
+        b_err.lock().unwrap()
+    );
+    // The survivors keep painting: a marker typed into a surviving pane
+    // reaches both clients' screens.
+    let survivor = client
+        .send(&format!("list-panes -t {window}"))
+        .expect("list-panes")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .find(|p| p.starts_with('%'))
+        .expect("a survivor");
+    echo_marker(&mut client, &survivor, "AFTER-EXIT");
+    for (host, all, name) in [(&a, &mut a_all, "A"), (&b, &mut b_all, "B")] {
+        let shown = screen_until(host, all, Duration::from_secs(10), |s| {
+            s.contains("AFTER-EXIT")
+        });
+        assert!(
+            shown.contains("AFTER-EXIT"),
+            "client {name} must keep rendering the surviving panes:\n{shown}"
+        );
+    }
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}
+
+/// Card 01a11c3a, the boundary the tab-close landing must not cross: when
+/// the exiting shell is the session's LAST pane, the cascade removes the
+/// session too, and both render clients end cleanly (the session-gone
+/// contract) instead of landing anywhere.
+#[cfg(unix)]
+#[test]
+fn render_mode_ctrl_d_on_the_last_pane_ends_both_clients() {
+    let fixture = MuxFixture::new("ctrldlast");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    // A second session keeps the daemon's roster non-empty, so the
+    // clients' end comes from their own session vanishing.
+    let pane = session_first_pane(&mut client, "$0");
+    client.send("new-session -s other").expect("second session");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&a, b"\x1b[?1002h", Duration::from_secs(10));
+    let (mut b, b_err) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let _ = wait_for_output(&b, b"\x1b[?1002h", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(800));
+    while client.notifications().try_recv().is_ok() {}
+
+    a.to_child.write_all(&[0x04]).expect("Ctrl+D");
+    a.to_child.flush().ok();
+    assert!(
+        saw_pane_exited(&client, Duration::from_secs(10)),
+        "the shell's exit must reach observers as %pane-exited"
+    );
+    assert_eq!(
+        child_exit(&mut a, Duration::from_secs(5)),
+        Some(0),
+        "client A must end cleanly when its session is gone. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    assert_eq!(
+        child_exit(&mut b, Duration::from_secs(5)),
+        Some(0),
+        "client B must end cleanly when its session is gone. stderr: {}",
+        b_err.lock().unwrap()
+    );
+}
+
+/// Card 01a11c3a, the multi-tab shape: Ctrl+D exits the ONLY pane of the
+/// shown window, so the daemon closes that window — but the session keeps
+/// its other window. tmux semantics: both clients stay attached and land
+/// on the session's surviving window instead of ending the view.
+#[cfg(unix)]
+#[test]
+fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
+    let fixture = MuxFixture::new("ctrldtab");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    let first = session_first_pane(&mut client, "$0");
+    echo_marker(&mut client, &first, "KEEP-TAB");
+    // A second, single-pane window — selected, so both clients show it.
+    let doomed_window = client
+        .send("new-window -t $0")
+        .expect("new-window")
+        .first()
+        .expect("window id")
+        .trim()
+        .to_string();
+    client
+        .send(&format!("select-window -t {doomed_window}"))
+        .expect("select-window");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let _ = wait_for_output(&a, b"\x1b[?1002h", Duration::from_secs(10));
+    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let _ = wait_for_output(&b, b"\x1b[?1002h", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(800));
+    while a.output_rx.try_recv().is_ok() {}
+    while b.output_rx.try_recv().is_ok() {}
+    while client.notifications().try_recv().is_ok() {}
+
+    a.to_child.write_all(&[0x04]).expect("Ctrl+D");
+    a.to_child.flush().ok();
+    assert!(
+        saw_pane_exited(&client, Duration::from_secs(10)),
+        "the shell's exit must reach observers as %pane-exited"
+    );
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let windows = client.send("list-windows -t $0").expect("list-windows");
+        if !windows.iter().any(|l| l.starts_with(&doomed_window)) {
+            assert_eq!(
+                windows.len(),
+                1,
+                "the session keeps one window: {windows:?}"
+            );
+            break;
+        }
+        assert!(Instant::now() < end, "the emptied window must close");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        child_exit(&mut a, Duration::from_millis(200)),
+        None,
+        "client A must stay attached when its tab closed but the session lives. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    assert_eq!(
+        child_exit(&mut b, Duration::from_millis(200)),
+        None,
+        "client B must stay attached when the shown tab closed but the session lives. stderr: {}",
+        b_err.lock().unwrap()
+    );
+    // Both land on the surviving window and repaint it.
+    echo_marker(&mut client, &first, "LANDED-TAB");
+    for (host, name) in [(&a, "A"), (&b, "B")] {
+        let mut all = Vec::new();
+        let shown = screen_until(host, &mut all, Duration::from_secs(10), |s| {
+            s.contains("LANDED-TAB")
+        });
+        assert!(
+            shown.contains("LANDED-TAB"),
+            "client {name} must land on the session's surviving window:\n{shown}"
+        );
+    }
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}

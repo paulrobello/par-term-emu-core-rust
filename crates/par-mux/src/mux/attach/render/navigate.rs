@@ -72,11 +72,11 @@ impl WindowSession {
                     }
                     return;
                 }
-                // No survivor: end the view like %sessions-changed's
-                // contract does — the pump's next status refresh observes
-                // the session gone and exits cleanly. Ending NOW would
+                // No survivor: the window closed. The pump's next status
+                // refresh lands on the session's active window, or ends
+                // the view when the session went with it. Ending NOW would
                 // skip the terminal restore; flag it and let the pump's
-                // normal path tear down.
+                // normal path decide.
                 self.status_dirty = true;
             }
             super::super::ManagementKey::SwapPrev | super::super::ManagementKey::SwapNext => {
