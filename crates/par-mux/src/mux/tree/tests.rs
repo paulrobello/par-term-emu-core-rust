@@ -2334,3 +2334,154 @@ fn a_window_without_viewers_keeps_its_extent() {
     assert!(tree.follow_session_window(session, w1).is_empty());
     assert_eq!(extent(&tree, w2), (100, 30));
 }
+
+/// Records whether a zone eviction reached the observer and whether the
+/// tree mutex was free while the callback ran (it is not re-entrant, so a
+/// delivery under the lock fails `try_lock` on the delivering thread).
+#[cfg(unix)]
+struct TreeLockProbe {
+    tree: std::sync::Weak<parking_lot::Mutex<MuxTree>>,
+    scrolled_out: std::sync::atomic::AtomicBool,
+    tree_lock_was_free: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(unix)]
+impl crate::terminal::observer::TerminalObserver for TreeLockProbe {
+    fn on_zone_event(&self, event: &crate::terminal::TerminalEvent) {
+        use std::sync::atomic::Ordering;
+        if matches!(
+            event,
+            crate::terminal::TerminalEvent::ZoneScrolledOut { .. }
+        ) {
+            let free = self
+                .tree
+                .upgrade()
+                .is_some_and(|tree| tree.try_lock().is_some());
+            self.tree_lock_was_free.store(free, Ordering::SeqCst);
+            self.scrolled_out.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// A full-width pane running a quiet child, its terminal holding one
+/// completed command zone at the top of a scrollback a few lines short of
+/// its 10 000-line cap, so halving the width reflows the zone out. The
+/// quiet child keeps the reader thread from delivering events of its own,
+/// so every event the probe sees comes from the resize. Unix-only: ConPTY
+/// writes setup output after spawn, which would land past the fill and
+/// evict the zone on the reader thread instead.
+#[cfg(unix)]
+fn quiet_pane_with_evictable_zone(tree: &mut MuxTree) -> PaneId {
+    let session = tree.new_session("observers", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let first = tree.window(window).unwrap().panes()[0];
+    let quiet = tree
+        .split_pane(first, SplitDirection::Horizontal, 0.5, Some("sleep 60"))
+        .unwrap();
+    let terminal = tree.pane(quiet).unwrap().terminal();
+    let mut term = terminal.write();
+    assert_eq!(term.size().0, 80, "the quiet pane starts full width");
+    let mut bytes =
+        b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07".to_vec();
+    let line = "x".repeat(80);
+    // Only the visible rows reflow into scrollback on a narrowing, so park
+    // the scrollback two lines short of its cap: the halved width pushes a
+    // whole screen past it, evicting the zone at the top. The `- 3` covers
+    // the lines the zone itself scrolls.
+    let rows = term.size().1;
+    let fill = term.grid().max_scrollback() - term.grid().scrollback_len() + rows - 2 - 3;
+    for _ in 0..fill {
+        bytes.extend_from_slice(b"\r\n");
+        bytes.extend_from_slice(line.as_bytes());
+    }
+    term.process(&bytes);
+    let headroom = term.grid().max_scrollback() - term.grid().scrollback_len();
+    assert_eq!(headroom, 2, "scrollback parked two lines short of its cap");
+    assert_eq!(term.get_zones().len(), 3, "no zone evicted yet");
+    drop(term);
+    quiet
+}
+
+#[cfg(unix)]
+fn attach_probe(tree: &Arc<parking_lot::Mutex<MuxTree>>, pane: PaneId) -> Arc<TreeLockProbe> {
+    let probe = Arc::new(TreeLockProbe {
+        tree: Arc::downgrade(tree),
+        scrolled_out: std::sync::atomic::AtomicBool::new(false),
+        tree_lock_was_free: std::sync::atomic::AtomicBool::new(false),
+    });
+    let terminal = tree.lock().pane(pane).unwrap().terminal();
+    terminal.write().add_observer(probe.clone());
+    probe
+}
+
+/// Card 01a114e4: a layout mutation re-fits pane terminals under the tree
+/// mutex, and the observer events that re-fit raises (here a zone the
+/// shrink evicts) are delivered by the dispatcher only after the mutex is
+/// released, so an observer that touches the tree cannot deadlock on it.
+#[cfg(unix)]
+#[test]
+fn layout_resize_observer_events_arrive_after_the_tree_lock_drops() {
+    use std::sync::atomic::Ordering;
+    let mut owned = tree();
+    let quiet = quiet_pane_with_evictable_zone(&mut owned);
+    let tree = Arc::new(parking_lot::Mutex::new(owned));
+    let probe = attach_probe(&tree, quiet);
+    assert!(!probe.scrolled_out.load(Ordering::SeqCst));
+
+    let clients: crate::mux::server::Clients = Arc::default();
+    let ctx = crate::mux::dispatch::Ctx {
+        client_id: None,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+    };
+    let command =
+        crate::mux::command::parse_command(&format!("split-window -t {quiet} -h")).unwrap();
+    let reply = crate::mux::dispatch::dispatch_command(command, &ctx, None, None);
+    assert!(!reply.contains("%error"), "split succeeds: {reply}");
+    let width = tree.lock().pane(quiet).unwrap().terminal().read().size().0;
+    assert!(width < 80, "the split narrowed the quiet pane: {width}");
+
+    assert!(
+        probe.scrolled_out.load(Ordering::SeqCst),
+        "the shrink's ZoneScrolledOut reached the observer by the time dispatch returned"
+    );
+    assert!(
+        probe.tree_lock_was_free.load(Ordering::SeqCst),
+        "the observer ran while the tree mutex was held"
+    );
+    assert!(tree.lock().take_observer_batches().is_empty());
+}
+
+/// The direct-tree side of the same contract: a tree method that re-fits
+/// panes parks the observer batch instead of delivering it, and
+/// `take_observer_batches` hands it to the caller.
+#[cfg(unix)]
+#[test]
+fn a_direct_tree_resize_parks_observer_events_until_taken() {
+    use std::sync::atomic::Ordering;
+    let mut owned = tree();
+    let quiet = quiet_pane_with_evictable_zone(&mut owned);
+    let tree = Arc::new(parking_lot::Mutex::new(owned));
+    let probe = attach_probe(&tree, quiet);
+
+    let batches = {
+        let mut guard = tree.lock();
+        guard
+            .split_pane(quiet, SplitDirection::Vertical, 0.5, Some("sleep 60"))
+            .unwrap();
+        assert!(
+            !probe.scrolled_out.load(Ordering::SeqCst),
+            "nothing is delivered under the tree lock"
+        );
+        guard.take_observer_batches()
+    };
+    assert!(!batches.is_empty(), "the shrink parked a batch");
+    for batch in batches {
+        batch.deliver();
+    }
+    assert!(probe.scrolled_out.load(Ordering::SeqCst));
+    assert!(probe.tree_lock_was_free.load(Ordering::SeqCst));
+}

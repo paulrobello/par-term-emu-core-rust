@@ -2,6 +2,7 @@
 //! handle mux uses), resize, and SIGWINCH delivery.
 
 use super::*;
+use crate::terminal::ObserverDispatchBatch;
 
 /// The shared handles one PTY input write needs — writer, terminal, and
 /// liveness flag — cloned out of a session so the write can happen with no
@@ -201,19 +202,41 @@ impl PtySession {
     /// * `cols` - New number of columns
     /// * `rows` - New number of rows
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
+        self.resize_terminal(cols, rows).deliver();
+        self.resize_pty(cols, rows)
+    }
+
+    /// [`Self::resize`] without delivering observer events: the batch is
+    /// returned for the caller to deliver once every lock it holds around
+    /// this session is released (a mux tree mutex, for one). The batch
+    /// comes back even when the PTY resize fails, because the terminal has
+    /// already resized and its events are real.
+    #[cfg(feature = "mux")]
+    #[doc(hidden)]
+    pub fn resize_deferred(
+        &mut self,
+        cols: u16,
+        rows: u16,
+    ) -> (Result<(), PtyError>, ObserverDispatchBatch) {
+        let dispatch_batch = self.resize_terminal(cols, rows);
+        (self.resize_pty(cols, rows), dispatch_batch)
+    }
+
+    /// The terminal half of a resize: grid and geometry, with observer
+    /// events returned undelivered so delivery waits for the guard to drop
+    /// (ARC-001).
+    fn resize_terminal(&mut self, cols: u16, rows: u16) -> ObserverDispatchBatch {
         self.cols = cols;
         self.rows = rows;
+        let mut term = self.terminal.write();
+        let batch = term.resize_deferred(cols as usize, rows as usize);
+        self.geometry.publish(&term);
+        batch
+    }
 
-        // Resize the terminal; observer delivery waits for the guard to drop
-        // (ARC-001).
-        let dispatch_batch = {
-            let mut term = self.terminal.write();
-            let batch = term.resize_deferred(cols as usize, rows as usize);
-            self.geometry.publish(&term);
-            batch
-        };
-        dispatch_batch.deliver();
-
+    /// The PTY half of [`Self::resize_deferred`]: kernel winsize, then
+    /// SIGWINCH.
+    fn resize_pty(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {
             // Use the tracked cell pixel size (updated by `resize_with_pixels`).
@@ -282,6 +305,41 @@ impl PtySession {
         pixel_width: u16,
         pixel_height: u16,
     ) -> Result<(), PtyError> {
+        self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height)
+            .deliver();
+        self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height)
+    }
+
+    /// [`Self::resize_with_pixels`] without delivering observer events —
+    /// the pixel-aware counterpart of [`Self::resize_deferred`], with the
+    /// same batch-on-failure contract.
+    #[cfg(feature = "mux")]
+    #[doc(hidden)]
+    pub fn resize_with_pixels_deferred(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> (Result<(), PtyError>, ObserverDispatchBatch) {
+        let dispatch_batch =
+            self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height);
+        (
+            self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height),
+            dispatch_batch,
+        )
+    }
+
+    /// The terminal half of a pixel-aware resize: grid, pixel size, and
+    /// geometry, with observer events returned undelivered so delivery
+    /// waits for the guard to drop (ARC-001).
+    fn resize_terminal_with_pixels(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> ObserverDispatchBatch {
         self.cols = cols;
         self.rows = rows;
         // Cache per-cell pixel size so plain `resize()` (without pixels) and
@@ -290,18 +348,22 @@ impl PtySession {
             self.cell_pixel_width = (pixel_width / cols).max(1);
             self.cell_pixel_height = (pixel_height / rows).max(1);
         }
+        let mut term = self.terminal.write();
+        let batch = term.resize_deferred(cols as usize, rows as usize);
+        term.set_pixel_size(pixel_width as usize, pixel_height as usize);
+        self.geometry.publish(&term);
+        batch
+    }
 
-        // Resize the terminal and record pixel size; observer delivery waits
-        // for the guard to drop (ARC-001).
-        let dispatch_batch = {
-            let mut term = self.terminal.write();
-            let batch = term.resize_deferred(cols as usize, rows as usize);
-            term.set_pixel_size(pixel_width as usize, pixel_height as usize);
-            self.geometry.publish(&term);
-            batch
-        };
-        dispatch_batch.deliver();
-
+    /// The PTY half of [`Self::resize_with_pixels_deferred`]: kernel
+    /// winsize with pixels, then SIGWINCH.
+    fn resize_pty_with_pixels(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> Result<(), PtyError> {
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {
             let pty_size = PtySize {

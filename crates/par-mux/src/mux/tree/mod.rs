@@ -9,9 +9,22 @@ use crate::color::Color;
 use crate::mux::ids::{AnyTarget, IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
+use crate::terminal::ObserverDispatchBatch;
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Deliver the observer batches `tree` parked during resizes, taking the
+/// lock only to drain them — the callbacks run with it released. Every
+/// path that can re-fit panes under the tree mutex calls this after its
+/// last guard drops.
+pub(crate) fn deliver_pending_observer_events(tree: &Mutex<MuxTree>) {
+    let batches = tree.lock().take_observer_batches();
+    for batch in batches {
+        batch.deliver();
+    }
+}
 
 /// One connected render client's sizing contribution: the grid it reported
 /// (`refresh-client -C`) and the window it is displaying. A window's extent
@@ -411,6 +424,14 @@ pub struct MuxTree {
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
     pub(crate) client_views: HashMap<u64, ClientView>,
+    /// Observer events from pane resizes, held until the tree lock drops.
+    /// A layout mutation re-fits pane terminals under the tree mutex, and
+    /// an observer callback run there could block on (or re-enter) that
+    /// mutex, so [`Self::sync_pane_sizes`] and [`Self::apply_cell_pixels`]
+    /// park their batches here and every lock holder that can trigger a
+    /// re-fit drains them through [`deliver_pending_observer_events`] after
+    /// releasing it. Only non-empty batches are kept.
+    pending_observer_batches: Vec<ObserverDispatchBatch>,
 }
 
 impl MuxTree {
@@ -432,7 +453,24 @@ impl MuxTree {
             window_session: HashMap::new(),
             session_workspace: HashMap::new(),
             client_views: HashMap::new(),
+            pending_observer_batches: Vec::new(),
         }
+    }
+
+    /// Park a resize's observer batch for delivery after the tree lock
+    /// drops. Empty batches (no observers, or no events) are dropped here.
+    pub(crate) fn defer_observer_batch(&mut self, batch: ObserverDispatchBatch) {
+        if !batch.is_empty() {
+            self.pending_observer_batches.push(batch);
+        }
+    }
+
+    /// Drain the observer batches parked by pane resizes, for delivery
+    /// once the tree lock is released. An embedder that drives the tree
+    /// directly (no [`crate::mux::MuxServer`]) calls this after its own
+    /// mutations and delivers each batch itself.
+    pub fn take_observer_batches(&mut self) -> Vec<ObserverDispatchBatch> {
+        std::mem::take(&mut self.pending_observer_batches)
     }
 
     /// Append `window` to `session_id`'s window list and index it and its

@@ -5,7 +5,7 @@ use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::pty_error::PtyError;
 use crate::pty_session::{OutputCallback, PtyInputHandle, PtySession};
 use crate::terminal::replay_snapshot::TerminalSnapshot;
-use crate::terminal::Terminal;
+use crate::terminal::{ObserverDispatchBatch, Terminal};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -581,6 +581,37 @@ impl MuxPane {
                 crate::pty_session::pixel_extent(rows, cell_h),
             )
             .map_err(MuxError::from)
+    }
+
+    /// [`Self::resize`] with observer delivery left to the caller: the
+    /// returned batch is delivered once the caller's tree lock drops, so an
+    /// observer callback never runs under it. The batch returns even when
+    /// the PTY resize fails — the terminal has already resized.
+    pub(crate) fn resize_deferred(
+        &mut self,
+        cols: u16,
+        rows: u16,
+    ) -> (Result<(), MuxError>, ObserverDispatchBatch) {
+        let (result, batch) = self.session.resize_deferred(cols, rows);
+        (result.map_err(MuxError::from), batch)
+    }
+
+    /// [`Self::resize_with_cell_pixels`] with observer delivery left to the
+    /// caller, as [`Self::resize_deferred`].
+    pub(crate) fn resize_with_cell_pixels_deferred(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_w: u16,
+        cell_h: u16,
+    ) -> (Result<(), MuxError>, ObserverDispatchBatch) {
+        let (result, batch) = self.session.resize_with_pixels_deferred(
+            cols,
+            rows,
+            crate::pty_session::pixel_extent(cols, cell_w),
+            crate::pty_session::pixel_extent(rows, cell_h),
+        );
+        (result.map_err(MuxError::from), batch)
     }
 
     /// Terminate the pane's child process. Its output stops forwarding

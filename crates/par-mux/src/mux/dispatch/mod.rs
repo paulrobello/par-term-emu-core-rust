@@ -188,6 +188,7 @@ pub(super) fn dispatch_command(
     if mutates && outcome.succeeded {
         persist_state(ctx, persist);
     }
+    crate::mux::tree::deliver_pending_observer_events(ctx.tree);
     outcome.reply
 }
 

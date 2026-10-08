@@ -380,6 +380,8 @@ impl Connection {
             });
             (guard.clear_client_view(client_id), displayed)
         };
+        // Windows that grew re-fit their panes under the lock above.
+        crate::mux::tree::deliver_pending_observer_events(&self.tree);
         for window_id in resized {
             broadcast_layout_change(&self.tree, &self.clients, window_id);
         }

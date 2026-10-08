@@ -95,6 +95,8 @@ pub(super) fn reap_dead_panes(
             // respawn between the death and this pass) removes nothing twice.
         }
         workspaces_changed = workspace_roster_changed(tree, &fingerprint);
+        // The removals re-fit their windows' surviving panes.
+        crate::mux::tree::deliver_pending_observer_events(tree);
     }
     // The death notices first, queued ahead of any removal geometry.
     for &(pane_id, exit_code) in &just_died {

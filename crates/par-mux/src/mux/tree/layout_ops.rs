@@ -810,13 +810,16 @@ impl MuxTree {
     pub(super) fn apply_cell_pixels(&mut self, pane_id: PaneId, cols: u16, rows: u16) {
         if let Some((cell_w, cell_h)) = self.client_cell_pixels {
             if let Some(pane) = self.panes.get_mut(&pane_id) {
-                if let Err(err) = pane.resize_with_cell_pixels(cols, rows, cell_w, cell_h) {
+                let (resized, batch) =
+                    pane.resize_with_cell_pixels_deferred(cols, rows, cell_w, cell_h);
+                if let Err(err) = resized {
                     if !pane.dead() {
                         log::warn!(
                             "par-mux: resize of pane {pane_id} to {cols}x{rows} failed: {err}"
                         );
                     }
                 }
+                self.defer_observer_batch(batch);
             }
         }
         let (fg, bg) = (self.client_fg, self.client_bg);
@@ -917,11 +920,14 @@ impl MuxTree {
                 } else {
                     (pane_geometry.width, pane_geometry.height)
                 };
-                let resized = match self.client_cell_pixels {
-                    Some((cell_w, cell_h)) => {
-                        pane.resize_with_cell_pixels(width as u16, height as u16, cell_w, cell_h)
-                    }
-                    None => pane.resize(width as u16, height as u16),
+                let (resized, batch) = match self.client_cell_pixels {
+                    Some((cell_w, cell_h)) => pane.resize_with_cell_pixels_deferred(
+                        width as u16,
+                        height as u16,
+                        cell_w,
+                        cell_h,
+                    ),
+                    None => pane.resize_deferred(width as u16, height as u16),
                 };
                 // Best-effort (see above), but visible. A held-dead pane's
                 // PTY resize outcome is irrelevant, so it stays quiet.
@@ -933,6 +939,9 @@ impl MuxTree {
                         );
                     }
                 }
+                // Delivered after the tree lock drops (see
+                // `pending_observer_batches`).
+                self.defer_observer_batch(batch);
             }
         }
     }

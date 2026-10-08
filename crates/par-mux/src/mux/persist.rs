@@ -882,6 +882,11 @@ impl MuxTree {
                 let _ = tree.kill_pane(pane_id);
             }
         }
+        // The tree is still owned here, behind no lock, so the re-fits'
+        // observer events go out now rather than riding into the server.
+        for batch in tree.take_observer_batches() {
+            batch.deliver();
+        }
         Ok(tree)
     }
 }
