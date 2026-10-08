@@ -839,19 +839,9 @@ impl WindowSession {
                 }
             }
             if let Some(session) = self.pending_follow_session.take() {
-                if let Ok(windows) = conn.send_checked(&format!("list-windows -t {session}")) {
-                    if windows.ok {
-                        let window = windows
-                            .body
-                            .iter()
-                            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-                            .or_else(|| windows.body.first())
-                            .and_then(|l| l.split_whitespace().next().map(str::to_string));
-                        if let Some(window) = window {
-                            if window != self.window {
-                                self.reseed_window(conn, &window);
-                            }
-                        }
+                if let Some(window) = session_active_window(conn, &session) {
+                    if window != self.window {
+                        self.reseed_window(conn, &window);
                     }
                 }
             }
@@ -902,7 +892,10 @@ impl WindowSession {
             //     / %agent-telemetry-changed / %sessions-changed (and
             //     renames) marked the state stale; one re-query per burst
             //     serves them all. The shown session being gone ends the
-            //     view (docs/MUX.md's %sessions-changed client contract).
+            //     view (docs/MUX.md's %sessions-changed client contract);
+            //     only the shown WINDOW being gone (its last pane exited
+            //     or was killed) lands on the session's active window
+            //     instead — tmux semantics: the session outlives a tab.
             if self.status_dirty {
                 self.status_dirty = false;
                 let focused = self.renderer.focused().unwrap_or(0);
@@ -913,7 +906,20 @@ impl WindowSession {
                             self.refresh_sidebar(conn);
                         }
                     }
-                    Err(status::StatusError::SessionGone) => return Ok(()),
+                    Err(status::StatusError::SessionGone) => {
+                        let landing = self
+                            .status
+                            .session_id
+                            .clone()
+                            .and_then(|session| session_active_window(conn, &session));
+                        match landing {
+                            // The reseed refreshes the status itself.
+                            Some(window) if window != self.window => {
+                                self.reseed_window(conn, &window);
+                            }
+                            _ => return Ok(()),
+                        }
+                    }
                     Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
                 }
                 self.draw_status_row();
@@ -1097,6 +1103,24 @@ impl WindowSession {
             }
         }
     }
+}
+
+/// `session`'s active window id (its `*`-marked `list-windows` row, else
+/// the first), or `None` when the session no longer exists.
+fn session_active_window(
+    conn: &mut crate::mux::attach::conn::AttachConn,
+    session: &str,
+) -> Option<String> {
+    let windows = conn
+        .send_checked(&format!("list-windows -t {session}"))
+        .ok()
+        .filter(|reply| reply.ok)?;
+    windows
+        .body
+        .iter()
+        .find(|l| l.split_whitespace().nth(1) == Some("*"))
+        .or_else(|| windows.body.first())
+        .and_then(|l| l.split_whitespace().next().map(str::to_string))
 }
 
 /// What handling one event told the pump.
