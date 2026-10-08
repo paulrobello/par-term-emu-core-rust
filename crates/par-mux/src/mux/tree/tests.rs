@@ -343,9 +343,15 @@ fn killing_a_hup_ignoring_pane_reaps_it_and_returns_promptly() {
     let started = std::time::Instant::now();
     tree.kill_pane(doomed).expect("kill succeeds");
     let elapsed = started.elapsed();
+    // An inline kill cannot return before SIGKILL and the reap, so a child
+    // still present at return proves the kill was detached however slowly
+    // a loaded machine ran the call. The wall-clock bound covers the rare
+    // case where the detached thread outran the sample.
+    let present_at_return = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
     assert!(
-        elapsed < std::time::Duration::from_millis(150),
-        "kill_pane held the tree lock through the SIGHUP grace poll: {elapsed:?}"
+        present_at_return || elapsed < std::time::Duration::from_millis(150),
+        "kill_pane held the tree lock through the SIGHUP grace poll: {elapsed:?}, \
+         child already reaped at return"
     );
 
     // A reaped child vanishes from the process table; a zombie keeps
