@@ -3114,12 +3114,12 @@ fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -
     pane_a
 }
 
-/// `sidebar-on-launch` absent (the default, true): the FIRST frame already
-/// carries the side panel — the strip's workspaces title, and the panes
+/// `sidebar-on-launch` absent (the default, true): with no chord sent the
+/// view shows the side panel — the strip's workspace rows, and the panes
 /// divided around it (the right pane's marker at column 52, the panel-up
-/// geometry of `render_mode_sidebar_toggle_refits_pane_geometry`) — with
-/// no chord sent. The first `refresh-client -C` must report the reduced
-/// grid, or the marker paints at the full-width 42.
+/// geometry of `render_mode_sidebar_toggle_refits_pane_geometry`). The
+/// geometry reads the marker's last paint; the client has no launch-time
+/// refit path, so that paint is the seed's division.
 #[cfg(unix)]
 #[test]
 fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
@@ -3148,6 +3148,13 @@ fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
         cup_col_of_text(&got, "LAUNCH-MARK-7"),
         Some(52),
         "the daemon's first division already reserves the 20-col panel. text: {text:?}"
+    );
+    // The strip's ROWS, not just the tab strip's ` workspaces ` title:
+    // the active workspace row's `▸` marker (raw bytes — plain_text
+    // splits multi-byte glyphs).
+    assert!(
+        got.windows(3).any(|w| w == "▸".as_bytes()),
+        "the panel's workspace rows paint without a chord: {text:?}"
     );
     host.killer.kill().ok();
 }

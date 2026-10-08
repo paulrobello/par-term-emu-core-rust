@@ -75,7 +75,9 @@ Per terminal, in passthrough then render mode, check:
   one row per workspace, the active one marked; `/` filters, j/k and arrows
   move, Enter lands on the workspace (its session's window re-seeds), a row
   click activates, esc/q dismisses.
-- **Side panel** (render): prefix `s` toggles a left strip — each workspace
+- **Side panel** (render): the strip is up at attach by default
+  (`[client] sidebar-on-launch = false` starts it hidden), so the first
+  prefix `s` closes it. Prefix `s` toggles a left strip — each workspace
   with its windows nested dim beneath, ONLY the active workspace a
   full-width inverted block (the shown window's row brightens); clicking a
   workspace row lands on it, clicking a nested window row selects that
