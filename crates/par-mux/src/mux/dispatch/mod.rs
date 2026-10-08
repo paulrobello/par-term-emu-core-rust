@@ -401,4 +401,4 @@ fn notify_window_closes(mut outcome: Outcome, windows: &[WindowId]) -> Outcome {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
