@@ -3,6 +3,56 @@
 
 use super::*;
 
+/// The pane group's router; `route_command` sends only this group's
+/// variants here. `issuer` is for `pane-exited-replay`, which answers on
+/// the issuing client's own channel.
+pub(super) fn route_pane_command(
+    ctx: &Ctx<'_>,
+    command: MuxCommand,
+    issuer: Option<&SyncSender<String>>,
+) -> Outcome {
+    match command {
+        MuxCommand::ListPanes { window } => cmd_list_panes(ctx, window),
+        MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
+        MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
+        MuxCommand::SplitWindow {
+            target,
+            direction,
+            percent,
+            before,
+            start_dir,
+        } => cmd_split_window(
+            ctx,
+            target,
+            direction,
+            percent,
+            before,
+            start_dir.as_deref(),
+        ),
+        MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
+        MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
+        MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
+        MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
+        MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
+        MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
+        MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
+        MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
+        MuxCommand::JoinPane {
+            source,
+            target,
+            direction,
+            percent,
+        } => cmd_join_pane(ctx, source, target, direction, percent),
+        MuxCommand::RespawnPane {
+            pane,
+            kill,
+            start_dir,
+            command,
+        } => cmd_respawn_pane(ctx, pane, kill, start_dir.as_deref(), command),
+        other => unreachable!("route_command sent a non-pane command: {other:?}"),
+    }
+}
+
 pub(super) fn cmd_list_panes(ctx: &Ctx<'_>, window: Option<Target<WindowId>>) -> Outcome {
     // Wire contract: the bare form replies one line per pane, globally,
     // each just the pane id (`%N`) — the shape every existing client

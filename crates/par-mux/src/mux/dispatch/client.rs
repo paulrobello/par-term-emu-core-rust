@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// The client group's router; `route_command` sends only this group's
+/// variants here.
+pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome {
+    match command {
+        MuxCommand::RefreshClient {
+            pane,
+            size,
+            cell_pixels,
+        } => cmd_refresh_client(ctx, pane, size, cell_pixels),
+        MuxCommand::ListAgents => cmd_list_agents(ctx),
+        other => unreachable!("route_command sent a non-client command: {other:?}"),
+    }
+}
+
 pub(super) fn cmd_refresh_client(
     ctx: &Ctx<'_>,
     pane: Option<Target<PaneId>>,
