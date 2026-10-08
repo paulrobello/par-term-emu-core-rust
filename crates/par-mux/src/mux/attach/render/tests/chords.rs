@@ -270,6 +270,78 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     assert!(!session.renderer.pane_borders);
 }
 
+/// Card 01a11c5b: the size report declares the renderer's per-pane
+/// chrome (`-I`) against a daemon that advertises `refresh-client
+/// chrome`, and a runtime chrome change (the border-cycle chord leaving
+/// herdr turns the ring off) parks a grid refit whose report re-declares
+/// — here dropping `-I` — so the daemon re-sizes the PTYs. Against a
+/// daemon without the token nothing is declared.
+#[test]
+fn border_toggle_redeclares_chrome_on_the_next_size_report() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-commands".to_string(),
+        "refresh-client cell-pixels chrome\nfeatures replay-held-state".to_string(),
+    );
+    // Each report's layout broadcast re-seeds the rebuilt renderer, so the
+    // focus survives into the next report.
+    let layout = "%layout-change @0 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,2} 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,2} *";
+    let mut notify = std::collections::HashMap::new();
+    for report in [
+        "refresh-client -t %1 -C 80x23 -I border=1,gap=0,gutter=0",
+        "refresh-client -t %1 -C 80x23",
+    ] {
+        notify.insert(report.to_string(), layout.to_string());
+    }
+    let (rx, mut conn, mut session) = two_pane_session(
+        "chrome-redeclare",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.set_border_lines("herdr");
+    assert!(session.pane_borders);
+    let mut sink = RecordingSink::default();
+    session
+        .resize_to(&mut conn, 80, 23, &mut sink)
+        .expect("resize");
+    let report = wait_recorded(&rx, "refresh-client");
+    assert_eq!(
+        report, "refresh-client -t %1 -C 80x23 -I border=1,gap=0,gutter=0",
+        "the ring is declared"
+    );
+
+    // herdr -> unicode: the ring goes away and a refit is parked.
+    chord(&mut session, &mut conn, b'B');
+    assert!(!session.pane_borders);
+    assert!(
+        session.pending_grid_refit,
+        "the chrome change parks a refit"
+    );
+    drained(&rx);
+    session
+        .resize_to(&mut conn, 80, 23, &mut sink)
+        .expect("resize");
+    assert_eq!(
+        wait_recorded(&rx, "refresh-client"),
+        "refresh-client -t %1 -C 80x23",
+        "no chrome painted: nothing declared"
+    );
+
+    // Against a daemon without the token, the ring is never declared.
+    let (rx, mut conn, mut session) = two_pane_session("chrome-old", FakeScript::default());
+    session.set_border_lines("herdr");
+    session
+        .resize_to(&mut conn, 80, 23, &mut sink)
+        .expect("resize");
+    assert_eq!(
+        wait_recorded(&rx, "refresh-client"),
+        "refresh-client -t %1 -C 80x23"
+    );
+}
+
 /// The labels chord flips the in-border titles with a flash; the
 /// status-bar chord hides/shows the row and parks a grid refit; the
 /// sidebar chord opens the panel (roster queried, refit parked) and

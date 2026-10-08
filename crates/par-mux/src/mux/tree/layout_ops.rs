@@ -198,7 +198,8 @@ impl MuxTree {
     }
 
     /// Toggle `pane`'s zoom (`resize-pane -Z`): zooming resizes its
-    /// terminal and PTY to the full window grid; unzooming re-fits every
+    /// terminal and PTY to the full window grid (less the window's declared
+    /// chrome); unzooming re-fits every
     /// pane to the layout, which the zoom never edited — the exact prior
     /// geometry. Zooming a different pane moves the zoom to it. The Ok
     /// payload is the pane's window — the dispatcher's `%layout-change`
@@ -946,7 +947,7 @@ impl MuxTree {
                 // A reported cell pixel size rides every re-fit, so grid
                 // changes keep XTWINOPS/TIOCGWINSZ/image-span math correct
                 // instead of reverting to the construction default. A
-                // zoomed pane takes the full window grid instead of its
+                // zoomed pane takes the full window grid (less the chrome) instead of its
                 // layout cell.
                 let (rect_width, rect_height) = if zoomed == Some(pane_geometry.pane) {
                     (window_cols, window_rows)

@@ -116,7 +116,8 @@ pub(super) fn cmd_refresh_client(
                 // its grid against one of the window's panes; the report is
                 // recorded as that connection's sizing contribution and the
                 // window re-fits to the smallest-attached-client minimum.
-                // Every pane terminal re-fits to the re-divided geometry —
+                // Every pane terminal re-fits to the re-divided geometry (less the
+                // declared `-I` chrome) —
                 // followed by a %layout-change so clients re-render (the
                 // seed path requires one even when the minimum did not move
                 // the grid).

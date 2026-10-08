@@ -1126,7 +1126,12 @@ fn fake_daemon(
             let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
             let reply = match name.as_str() {
                 "version" => "9.9.9+deadbeef".to_string(),
-                "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
+                // A script may override the feature roster (the `chrome`
+                // size-report tests advertise `refresh-client chrome`).
+                "list-commands" => replies
+                    .get("list-commands")
+                    .cloned()
+                    .unwrap_or_else(|| "list-commands\nfeatures replay-held-state\n".to_string()),
                 _ => replies.get(trimmed).cloned().unwrap_or_default(),
             };
             number += 1;

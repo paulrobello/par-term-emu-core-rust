@@ -164,9 +164,11 @@ impl AttachConn {
 
     /// The `refresh-client -C` size-report suffix declaring this client's
     /// per-pane chrome (` -I border=B,gap=N,gutter=G`) — empty when the
-    /// daemon predates the `chrome` feature (an older daemon would reject
-    /// the unknown flag; it sizes PTYs to full rects regardless) or when
-    /// no chrome is painted.
+    /// daemon predates the `chrome` feature or when no chrome is painted.
+    /// The gate is the feature token, not the flag's reception: an older
+    /// daemon ignores `-I` and keeps full-rect PTYs, so the renderer must
+    /// know whether the daemon reserves before it sizes its emulators to
+    /// the interior.
     pub fn chrome_declaration(&self, chrome: crate::mux::layout::PaneChrome) -> String {
         if chrome.is_none() || !self.has_command_feature("refresh-client", "chrome") {
             String::new()
