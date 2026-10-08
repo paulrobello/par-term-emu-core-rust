@@ -53,7 +53,9 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "docs/API_REFERENCE.md",
 )
 
-COMMANDS_ROW_RE = re.compile(r'\("([a-z-]+)",\s*(\w+)')
+# `\s*` after the paren: rustfmt splits a row past the width limit onto
+# several lines (`(\n        "refresh-client",\n …`).
+COMMANDS_ROW_RE = re.compile(r'\(\s*"([a-z-]+)",\s*(\w+)')
 VARIANT_RE = re.compile(r"MuxCommand::(\w+)")
 EMIT_STRING_RE = re.compile(r'"%([a-z-]+)')
 DOC_CMD_ROW_RE = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)

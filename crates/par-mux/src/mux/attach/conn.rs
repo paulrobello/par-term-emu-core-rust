@@ -73,6 +73,11 @@ impl AttachConn {
     ///    means a pre-feature daemon (assume no features).
     /// 3. `set-client-colors -f/-b` — host theme (dark default for now).
     /// 4. `refresh-client -C WxH -p WxH` — renderer grid and cell pixels.
+    ///    This target-less report declares no per-pane chrome: the
+    ///    renderer's border/gap/gutter options resolve from the config
+    ///    after connect, so the render session's `-t` reports (seed,
+    ///    resize, reseed) carry the `-I` declaration instead
+    ///    ([`Self::chrome_declaration`]; docs/MUX.md `refresh-client -I`).
     ///
     /// The first control command (step 1) also registers this connection,
     /// so the registration replay (`%pane-exited` per held pane,
