@@ -1,5 +1,5 @@
 use super::*;
-use crate::mux::layout::ResizeDirection;
+use crate::mux::layout::{PaneChrome, ResizeDirection};
 use crate::mux::pane::test_support::ContextRecordingFactory;
 use crate::mux::pane::ShellPaneFactory;
 
@@ -2240,21 +2240,31 @@ fn window_size_is_the_componentwise_minimum_of_viewers_reports() {
     let window = tree.session(session).unwrap().windows[0];
 
     // The first viewer's report sizes the window outright.
-    assert_eq!(tree.set_client_view(1, window, 100, 30), vec![window]);
+    assert_eq!(
+        tree.set_client_view(1, window, 100, 30, Default::default()),
+        vec![window]
+    );
     assert_eq!(extent(&tree, window), (100, 30));
 
     // A smaller viewer pulls the window down to the componentwise minimum.
-    assert_eq!(tree.set_client_view(2, window, 60, 20), vec![window]);
+    assert_eq!(
+        tree.set_client_view(2, window, 60, 20, Default::default()),
+        vec![window]
+    );
     assert_eq!(extent(&tree, window), (60, 20));
 
     // A viewer larger than the current minimum contributes nothing.
-    assert!(tree.set_client_view(3, window, 90, 28).is_empty());
+    assert!(tree
+        .set_client_view(3, window, 90, 28, Default::default())
+        .is_empty());
     assert_eq!(extent(&tree, window), (60, 20));
 
     // Repeated identical reports are idempotent — the property that keeps
     // the re-fit from feeding back into a resize loop.
     for _ in 0..3 {
-        assert!(tree.set_client_view(1, window, 100, 30).is_empty());
+        assert!(tree
+            .set_client_view(1, window, 100, 30, Default::default())
+            .is_empty());
     }
     assert_eq!(extent(&tree, window), (60, 20));
 }
@@ -2264,8 +2274,8 @@ fn disconnect_removes_a_contribution_and_the_window_grows() {
     let mut tree = tree();
     let session = tree.new_session("sync", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
-    tree.set_client_view(1, window, 100, 30);
-    tree.set_client_view(2, window, 60, 20);
+    tree.set_client_view(1, window, 100, 30, Default::default());
+    tree.set_client_view(2, window, 60, 20, Default::default());
     assert_eq!(extent(&tree, window), (60, 20));
 
     // The constraining viewer leaves: the window re-fits to the remaining
@@ -2287,13 +2297,13 @@ fn switching_away_releases_the_old_window_from_the_switched_client() {
     let w1 = tree.session(session).unwrap().windows[0];
     let w2 = tree.new_window(session, "second", 80, 24).unwrap();
 
-    tree.set_client_view(1, w1, 100, 30);
-    tree.set_client_view(2, w1, 60, 20);
+    tree.set_client_view(1, w1, 100, 30, Default::default());
+    tree.set_client_view(2, w1, 60, 20, Default::default());
     assert_eq!(extent(&tree, w1), (60, 20));
 
     // Client 2's renderer lands on the other window: its contribution
     // moves, and the old window grows back to the remaining minimum.
-    let resized = tree.set_client_view(2, w2, 60, 20);
+    let resized = tree.set_client_view(2, w2, 60, 20, Default::default());
     assert!(
         resized.contains(&w2),
         "the new window takes the report: {resized:?}"
@@ -2312,8 +2322,8 @@ fn a_selection_follow_moves_every_viewer_of_the_session() {
     let session = tree.new_session("sync", 80, 24).unwrap();
     let w1 = tree.session(session).unwrap().windows[0];
     let w2 = tree.new_window(session, "second", 80, 24).unwrap();
-    tree.set_client_view(1, w1, 100, 30);
-    tree.set_client_view(2, w1, 60, 20);
+    tree.set_client_view(1, w1, 100, 30, Default::default());
+    tree.set_client_view(2, w1, 60, 20, Default::default());
 
     // The shared selection lands the session on w2: both viewers follow,
     // and the target window re-fits to the moved minimum. The left window
@@ -2335,7 +2345,7 @@ fn a_window_without_viewers_keeps_its_extent() {
     let session = tree.new_session("sync", 80, 24).unwrap();
     let w1 = tree.session(session).unwrap().windows[0];
     let w2 = tree.new_window(session, "second", 100, 30).unwrap();
-    tree.set_client_view(1, w1, 60, 20);
+    tree.set_client_view(1, w1, 60, 20, Default::default());
     // w2 has no viewer: the rule does not touch it.
     assert!(tree.follow_session_window(session, w1).is_empty());
     assert_eq!(extent(&tree, w2), (100, 30));
@@ -2609,4 +2619,148 @@ fn start_dir_note_observer_events_arrive_after_the_tree_lock_drops() {
         "the observer ran while the tree mutex was held"
     );
     assert!(tree.lock().take_observer_batches().is_empty());
+}
+
+/// The border ring's one-cell inset (card 01a11c5b), as declared.
+fn ring() -> PaneChrome {
+    PaneChrome {
+        border: true,
+        ..PaneChrome::default()
+    }
+}
+
+/// Card 01a11c5b, the reserve-border-lines model: a declared ring on a
+/// stacked pair sizes each pane's PTY to its rect less the ring — two
+/// rows and two columns per pane — while the rects (the layout string)
+/// keep their full geometry.
+#[test]
+fn declared_ring_sizes_stacked_panes_to_the_interior() {
+    let mut tree = tree();
+    let session = tree.new_session("ring", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let top = tree.window(window).unwrap().panes()[0];
+    let bottom = tree
+        .split_pane(top, SplitDirection::Horizontal, 0.5, None)
+        .unwrap();
+    let size_of = |tree: &MuxTree, pane| tree.pane(pane).unwrap().terminal().read().size();
+    // No declaration: today's exact sizes.
+    assert_eq!(size_of(&tree, top), (80, 12));
+    assert_eq!(size_of(&tree, bottom), (80, 12));
+
+    assert_eq!(
+        tree.set_client_view(1, window, 80, 24, ring()),
+        vec![window]
+    );
+    assert_eq!(size_of(&tree, top), (78, 10), "rect 80x12 less the ring");
+    assert_eq!(size_of(&tree, bottom), (78, 10), "rect 80x12 less the ring");
+    // The rects themselves are untouched.
+    let rects = {
+        let w = tree.window(window).unwrap();
+        w.layout.geometry(0, 0, w.cols as usize, w.rows as usize)
+    };
+    assert_eq!(
+        rects
+            .iter()
+            .map(|g| (g.width, g.height))
+            .collect::<Vec<_>>(),
+        vec![(80, 12), (80, 12)]
+    );
+}
+
+/// Side by side: the ring takes two columns from each pane.
+#[test]
+fn declared_ring_sizes_side_by_side_panes_to_the_interior() {
+    let mut tree = tree();
+    let session = tree.new_session("ring", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let left = tree.window(window).unwrap().panes()[0];
+    let right = tree
+        .split_pane(left, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree.set_client_view(1, window, 80, 24, ring());
+    let size_of = |pane| tree.pane(pane).unwrap().terminal().read().size();
+    assert_eq!(size_of(left), (38, 22));
+    assert_eq!(size_of(right), (38, 22));
+}
+
+/// Gaps multiply per side, compounding with the ring and the gutter.
+#[test]
+fn declared_gaps_and_gutter_compound_with_the_ring() {
+    let mut tree = tree();
+    let session = tree.new_session("gaps", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    let chrome = PaneChrome {
+        border: true,
+        gap: 2,
+        gutter: true,
+    };
+    tree.set_client_view(1, window, 80, 24, chrome);
+    // 80 - 2*2 gap - 2 ring - 1 gutter = 73; 24 - 2*2 gap - 2 ring = 18.
+    assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (73, 18));
+}
+
+/// A pane too small to carry a ring keeps its full rect (the client's
+/// content_view clamp: the ring needs a rect larger than 2x2).
+#[test]
+fn a_pane_too_small_for_the_ring_keeps_its_full_rect() {
+    let mut tree = tree();
+    let session = tree.new_session("tiny", 80, 2).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    tree.set_client_view(1, window, 80, 2, ring());
+    assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (80, 2));
+}
+
+/// A chrome-only change (a border toggle at an unchanged host size)
+/// re-fits — the extent check alone would leave the PTYs stale — and
+/// dropping the declaration restores today's full-rect sizing.
+#[test]
+fn a_chrome_only_report_refits_and_undeclaring_restores_full_rects() {
+    let mut tree = tree();
+    let session = tree.new_session("toggle", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    let size_of = |tree: &MuxTree| tree.pane(pane).unwrap().terminal().read().size();
+    tree.set_client_view(1, window, 80, 24, PaneChrome::default());
+    assert_eq!(size_of(&tree), (80, 24));
+    assert_eq!(
+        tree.set_client_view(1, window, 80, 24, ring()),
+        vec![window]
+    );
+    assert_eq!(size_of(&tree), (78, 22));
+    assert!(
+        tree.set_client_view(1, window, 80, 24, ring()).is_empty(),
+        "an identical re-declaration is idempotent"
+    );
+    assert_eq!(
+        tree.set_client_view(1, window, 80, 24, PaneChrome::default()),
+        vec![window]
+    );
+    assert_eq!(size_of(&tree), (80, 24));
+}
+
+/// Several viewers: the window reserves the union, so the PTY is never
+/// larger than any declaring client's painted interior.
+#[test]
+fn viewers_chrome_merges_to_the_union() {
+    let mut tree = tree();
+    let session = tree.new_session("merge", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    tree.set_client_view(1, window, 80, 24, PaneChrome::default());
+    tree.set_client_view(2, window, 80, 24, ring());
+    assert_eq!(tree.window(window).unwrap().chrome, ring());
+    assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (78, 22));
+    // The ring-declaring viewer leaves: back to full rects.
+    tree.clear_client_view(2);
+    assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (80, 24));
+}
+
+/// A zoomed pane takes the full window grid less the chrome.
+#[test]
+fn a_zoomed_pane_reserves_the_chrome_too() {
+    let (mut tree, window, first, _second) = zoomed_split();
+    tree.set_client_view(1, window, 80, 24, ring());
+    assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (78, 22));
 }

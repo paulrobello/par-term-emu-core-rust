@@ -1466,7 +1466,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
         MuxCommand::RefreshClient {
             pane: Some(Target::Id(PaneId(0))),
             size: None,
-            cell_pixels: None
+            cell_pixels: None,
+            chrome: None
         }
     );
     assert_eq!(
@@ -1474,7 +1475,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
         MuxCommand::RefreshClient {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((120, 40)),
-            cell_pixels: None
+            cell_pixels: None,
+            chrome: None
         }
     );
     // The cell-pixel report rides along or stands alone: a client
@@ -1484,7 +1486,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
         MuxCommand::RefreshClient {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((120, 40)),
-            cell_pixels: Some((10, 20))
+            cell_pixels: Some((10, 20)),
+            chrome: None
         }
     );
     assert_eq!(
@@ -1492,8 +1495,37 @@ fn parses_refresh_client_with_and_without_a_size_report() {
         MuxCommand::RefreshClient {
             pane: Some(Target::Id(PaneId(0))),
             size: None,
-            cell_pixels: Some((9, 17))
+            cell_pixels: Some((9, 17)),
+            chrome: None
         }
+    );
+}
+
+/// Card 01a11c5b: `-I` declares the client's per-pane chrome; absent, the
+/// report declares none (an older client), and a malformed value rejects.
+/// The `chrome` feature token advertises the flag on refresh-client's row.
+#[test]
+fn parses_refresh_client_chrome_declaration() {
+    assert_eq!(
+        parse_command("refresh-client -t %0 -C 80x22 -I border=1,gap=0,gutter=0").unwrap(),
+        MuxCommand::RefreshClient {
+            pane: Some(Target::Id(PaneId(0))),
+            size: Some((80, 22)),
+            cell_pixels: None,
+            chrome: Some(crate::mux::layout::PaneChrome {
+                border: true,
+                gap: 0,
+                gutter: false,
+            }),
+        }
+    );
+    assert!(parse_command("refresh-client -t %0 -C 80x22 -I ring=1").is_err());
+    assert!(parse_command("refresh-client -t %0 -C 80x22 -I border=yes").is_err());
+    let body = list_commands_body();
+    assert!(
+        body.lines()
+            .any(|l| l == "refresh-client cell-pixels chrome"),
+        "{body}"
     );
 }
 
@@ -1507,7 +1539,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
         MuxCommand::RefreshClient {
             pane: None,
             size: Some((120, 40)),
-            cell_pixels: Some((10, 20))
+            cell_pixels: Some((10, 20)),
+            chrome: None
         }
     );
     // Either measurement can appear alone in the target-less form.
@@ -1516,7 +1549,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
         MuxCommand::RefreshClient {
             pane: None,
             size: Some((100, 30)),
-            cell_pixels: None
+            cell_pixels: None,
+            chrome: None
         }
     );
     assert_eq!(
@@ -1524,7 +1558,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
         MuxCommand::RefreshClient {
             pane: None,
             size: None,
-            cell_pixels: Some((10, 20))
+            cell_pixels: Some((10, 20)),
+            chrome: None
         }
     );
     // Caps and malformed values reject exactly as the -t form does.
@@ -1538,7 +1573,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
         MuxCommand::RefreshClient {
             pane: None,
             size: None,
-            cell_pixels: None
+            cell_pixels: None,
+            chrome: None
         }
     );
     // And an invalid pane target still errors in the -t form.
@@ -1575,6 +1611,7 @@ fn refresh_client_rejects_sizes_over_the_caps() {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((MAX_CLIENT_COLS, MAX_CLIENT_ROWS)),
             cell_pixels: Some((MAX_CELL_PIXELS, MAX_CELL_PIXELS)),
+            chrome: None
         }
     );
 }
@@ -1648,6 +1685,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((80, 24)),
             cell_pixels: None,
+            chrome: None,
         },
         MuxCommand::NewWindow {
             target: None,
@@ -1707,6 +1745,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             pane: Some(Target::Id(PaneId(0))),
             size: None,
             cell_pixels: None,
+            chrome: None,
         },
         MuxCommand::ListWindows { session: None },
         MuxCommand::ListSessions { workspace: None },

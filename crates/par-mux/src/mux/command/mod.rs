@@ -167,6 +167,14 @@ pub enum MuxCommand {
         /// reported cells, a pixel report without `-C` re-fits at the
         /// current grid.
         cell_pixels: Option<(u16, u16)>,
+        /// `-I border=B,gap=N,gutter=G`: the per-pane chrome the client
+        /// paints inside every pane rect (feature token `chrome`). Rides
+        /// with `-C`: the connection's sizing contribution records it,
+        /// and the window's division sizes each pane's PTY to the rect
+        /// minus the declared chrome ([`crate::mux::layout::PaneChrome`]).
+        /// `None` (an older client) declares no chrome — PTYs keep the
+        /// full rect, exactly the pre-declaration sizing.
+        chrome: Option<crate::mux::layout::PaneChrome>,
     },
     /// Add a window to a session, optionally named.
     NewWindow {
@@ -1081,7 +1089,11 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),
     ("kill-pane", parse_kill_pane, &[]),
-    ("refresh-client", parse_refresh_client, &["cell-pixels"]),
+    (
+        "refresh-client",
+        parse_refresh_client,
+        &["cell-pixels", "chrome"],
+    ),
     ("send-keys", parse_send_keys, &[]),
     ("new-window", parse_new_window, &[]),
     ("select-window", parse_select_window, &[]),

@@ -72,6 +72,111 @@ pub struct PaneGeometry {
     pub height: usize,
 }
 
+/// The per-pane chrome a render client paints inside every pane rect, as
+/// declared on its size report (`refresh-client -C WxH -I …`): the gap
+/// band per side (`pane-gaps`), the one-cell border ring (`pane-borders`),
+/// and the reserved scrollbar-gutter column (`scrollbar-gutter`).
+///
+/// The daemon's division reserves it (tmux's reserve-border-lines model):
+/// pane RECTS keep their full geometry — layout strings stay
+/// tmux-compatible — while each pane's PTY is sized to
+/// [`Self::interior`]. The attach client's paint/mouse/cursor inset runs
+/// through the same function, so the painted interior and the PTY grid
+/// are one computation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaneChrome {
+    /// The one-cell border ring on every side.
+    pub border: bool,
+    /// The gap band, in cells per side.
+    pub gap: u16,
+    /// One right-edge column reserved for the scrollbar gutter.
+    pub gutter: bool,
+}
+
+impl PaneChrome {
+    /// True when nothing is reserved (the pre-declaration sizing).
+    pub fn is_none(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The chrome a window reserves for several viewers: the union, so the
+    /// PTY is never larger than any declaring client's painted interior.
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            border: self.border || other.border,
+            gap: self.gap.max(other.gap),
+            gutter: self.gutter || other.gutter,
+        }
+    }
+
+    /// The content interior of a `width`×`height` pane rect:
+    /// `(inset_x, inset_y, width, height)`, rect-relative. The gap band
+    /// clamps so at least one cell of edge survives; the ring applies only
+    /// when the gap-inset rect is larger than 2×2 (a pane too small to
+    /// carry a ring keeps its full area); the gutter narrows by one column.
+    /// A width can reach 0 only when the gutter eats a 1-column pane.
+    pub fn interior(&self, width: u16, height: u16) -> (u16, u16, u16, u16) {
+        let gap = self
+            .gap
+            .min(width.saturating_sub(1) / 2)
+            .min(height.saturating_sub(1) / 2);
+        let w = width.saturating_sub(2 * gap);
+        let h = height.saturating_sub(2 * gap);
+        let (ring, w, h) = if self.border && w > 2 && h > 2 {
+            (1, w - 2, h - 2)
+        } else {
+            (0, w, h)
+        };
+        let w = if self.gutter { w.saturating_sub(1) } else { w };
+        (gap + ring, gap + ring, w, h)
+    }
+
+    /// The PTY grid for a `width`×`height` pane rect: [`Self::interior`]'s
+    /// extent, floored at 1×1 (a PTY cannot be zero-sized).
+    pub fn pty_size(&self, width: u16, height: u16) -> (u16, u16) {
+        let (_, _, w, h) = self.interior(width, height);
+        (w.max(1), h.max(1))
+    }
+
+    /// The wire spelling of the declaration: `border=B,gap=N,gutter=G`.
+    pub fn to_wire(&self) -> String {
+        format!(
+            "border={},gap={},gutter={}",
+            u8::from(self.border),
+            self.gap,
+            u8::from(self.gutter)
+        )
+    }
+
+    /// Parse [`Self::to_wire`]'s spelling. Every key is optional (absent =
+    /// none) and an unknown key or malformed value is an error. The gap
+    /// needs no cap: [`Self::interior`] clamps it to the rect.
+    pub fn parse_wire(raw: &str) -> Result<Self, String> {
+        let mut chrome = Self::default();
+        for part in raw.split(',') {
+            let (key, value) = part
+                .split_once('=')
+                .ok_or_else(|| format!("chrome expects key=value, got: {part}"))?;
+            let flag = |value: &str| match value {
+                "0" => Ok(false),
+                "1" => Ok(true),
+                _ => Err(format!("chrome {key} expects 0 or 1, got: {value}")),
+            };
+            match key {
+                "border" => chrome.border = flag(value)?,
+                "gutter" => chrome.gutter = flag(value)?,
+                "gap" => {
+                    chrome.gap = value
+                        .parse::<u16>()
+                        .map_err(|_| format!("chrome gap expects a number, got: {value}"))?;
+                }
+                _ => return Err(format!("unknown chrome key: {key}")),
+            }
+        }
+        Ok(chrome)
+    }
+}
+
 /// Error returned when a tree mutation targets a pane the tree does not
 /// contain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -574,6 +679,88 @@ struct Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_chrome_interior_insets_gap_ring_and_gutter() {
+        let none = PaneChrome::default();
+        assert_eq!(none.interior(80, 24), (0, 0, 80, 24));
+        let ring = PaneChrome {
+            border: true,
+            ..none
+        };
+        assert_eq!(ring.interior(80, 24), (1, 1, 78, 22));
+        // The ring needs more than 2x2 after the gap: a 2-row pane keeps
+        // its full rect (content_view's long-standing clamp).
+        assert_eq!(ring.interior(80, 2), (0, 0, 80, 2));
+        assert_eq!(ring.interior(3, 3), (1, 1, 1, 1));
+        let gaps = PaneChrome {
+            border: true,
+            gap: 2,
+            gutter: true,
+        };
+        assert_eq!(gaps.interior(80, 24), (3, 3, 73, 18));
+        // An oversized gap clamps so one cell of edge survives.
+        let huge = PaneChrome {
+            gap: u16::MAX,
+            ..none
+        };
+        assert_eq!(huge.interior(5, 5), (2, 2, 1, 1));
+        // The gutter can eat a 1-column pane's only column; the PTY floors
+        // at 1x1.
+        let gutter = PaneChrome {
+            gutter: true,
+            ..none
+        };
+        assert_eq!(gutter.interior(1, 5), (0, 0, 0, 5));
+        assert_eq!(gutter.pty_size(1, 5), (1, 5));
+    }
+
+    #[test]
+    fn pane_chrome_wire_round_trips_and_rejects_unknown_keys() {
+        let chrome = PaneChrome {
+            border: true,
+            gap: 3,
+            gutter: false,
+        };
+        assert_eq!(chrome.to_wire(), "border=1,gap=3,gutter=0");
+        assert_eq!(PaneChrome::parse_wire(&chrome.to_wire()), Ok(chrome));
+        // Keys are optional.
+        assert_eq!(
+            PaneChrome::parse_wire("border=1"),
+            Ok(PaneChrome {
+                border: true,
+                ..PaneChrome::default()
+            })
+        );
+        assert!(PaneChrome::parse_wire("border=2").is_err());
+        assert!(PaneChrome::parse_wire("gap=x").is_err());
+        assert!(PaneChrome::parse_wire("ring=1").is_err());
+        assert!(PaneChrome::parse_wire("border").is_err());
+    }
+
+    #[test]
+    fn pane_chrome_merge_is_the_union() {
+        let a = PaneChrome {
+            border: true,
+            gap: 1,
+            gutter: false,
+        };
+        let b = PaneChrome {
+            border: false,
+            gap: 3,
+            gutter: true,
+        };
+        assert_eq!(
+            a.merge(b),
+            PaneChrome {
+                border: true,
+                gap: 3,
+                gutter: true
+            }
+        );
+        assert!(PaneChrome::default().is_none());
+        assert!(!a.is_none());
+    }
 
     #[test]
     fn leaf_pane_ids_returns_the_single_pane() {

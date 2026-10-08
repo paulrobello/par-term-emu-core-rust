@@ -7,7 +7,7 @@ mod tests;
 
 use crate::color::Color;
 use crate::mux::ids::{AnyTarget, IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
-use crate::mux::layout::{LayoutTree, SplitDirection};
+use crate::mux::layout::{LayoutTree, PaneChrome, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use crate::terminal::ObserverDispatchBatch;
 use parking_lot::Mutex;
@@ -39,6 +39,10 @@ pub struct ClientView {
     pub rows: u16,
     /// The window the client is displaying.
     pub window: WindowId,
+    /// The per-pane chrome the client declared (`refresh-client -I`);
+    /// none for a client that declared nothing. The window reserves the
+    /// merge over its viewers ([`PaneChrome::merge`]).
+    pub chrome: PaneChrome,
 }
 
 /// Kill a pane the tree has already removed, off the tree lock: killing is
@@ -84,6 +88,13 @@ pub struct MuxWindow {
     /// `MuxTree::mutate_layout`, which ends the zoom. Not persisted: a
     /// restored window starts unzoomed (tmux's behavior).
     pub zoomed: Option<PaneId>,
+    /// The per-pane chrome the window's division reserves: each pane's
+    /// PTY is its layout rect less this ([`PaneChrome::pty_size`]), while
+    /// the rects themselves — and so the layout string — keep their full
+    /// geometry. The merge over the render clients displaying the window;
+    /// none (full-rect PTYs) until a declaring client views it. Not
+    /// persisted: clients re-declare on attach.
+    pub chrome: PaneChrome,
 }
 
 impl MuxWindow {

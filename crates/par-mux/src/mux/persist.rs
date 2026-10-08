@@ -799,6 +799,7 @@ impl MuxTree {
                     // Zoom is session state, not layout — restored
                     // windows start unzoomed (tmux's behavior).
                     zoomed: None,
+                    chrome: Default::default(),
                 });
             }
             sessions.push((

@@ -1,6 +1,7 @@
 //! Client-facing query and sizing handlers: refresh-client and list-agents.
 
 use super::*;
+use crate::mux::layout::PaneChrome;
 
 /// The client group's router; `route_command` sends only this group's
 /// variants here.
@@ -10,7 +11,8 @@ pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
             pane,
             size,
             cell_pixels,
-        } => cmd_refresh_client(ctx, pane, size, cell_pixels),
+            chrome,
+        } => cmd_refresh_client(ctx, pane, size, cell_pixels, chrome.unwrap_or_default()),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         other => unreachable!("route_command sent a non-client command: {other:?}"),
     }
@@ -21,6 +23,7 @@ pub(super) fn cmd_refresh_client(
     pane: Option<Target<PaneId>>,
     size: Option<(u16, u16)>,
     cell_pixels: Option<(u16, u16)>,
+    chrome: PaneChrome,
 ) -> Outcome {
     // `-p` is applied first and independently of `-C` and of the target:
     // the cell size is daemon-wide state every later re-fit reads
@@ -58,12 +61,15 @@ pub(super) fn cmd_refresh_client(
                                 match window {
                                     Some(window_id) => {
                                         let resized = match ctx.client_id {
-                                            Some(client_id) => guard
-                                                .set_client_view(client_id, window_id, cols, rows),
+                                            Some(client_id) => guard.set_client_view(
+                                                client_id, window_id, cols, rows, chrome,
+                                            ),
                                             // No connection identity (embedder/test
                                             // dispatch): keep the legacy direct resize.
                                             None => {
-                                                match guard.resize_window(window_id, cols, rows) {
+                                                match guard.resize_window_with_chrome(
+                                                    window_id, cols, rows, chrome,
+                                                ) {
                                                     Ok(()) => vec![window_id],
                                                     Err(err) => {
                                                         return Outcome::err(ctx, &err.to_string())
@@ -120,10 +126,11 @@ pub(super) fn cmd_refresh_client(
                         match guard.window_of_pane(pane) {
                             Some(window_id) => {
                                 let resized = match ctx.client_id {
-                                    Some(client_id) => {
-                                        guard.set_client_view(client_id, window_id, cols, rows)
-                                    }
-                                    None => match guard.resize_window(window_id, cols, rows) {
+                                    Some(client_id) => guard
+                                        .set_client_view(client_id, window_id, cols, rows, chrome),
+                                    None => match guard
+                                        .resize_window_with_chrome(window_id, cols, rows, chrome)
+                                    {
                                         Ok(()) => vec![window_id],
                                         Err(err) => return Outcome::err(ctx, &err.to_string()),
                                     },

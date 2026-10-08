@@ -5,7 +5,7 @@
 use super::{kill_detached, ClientView, MuxTree, MuxWindow, SplitSpawn};
 use crate::color::Color;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
-use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
+use crate::mux::layout::{LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
 use std::path::Path;
 
@@ -274,6 +274,7 @@ impl MuxTree {
                 cols,
                 rows,
                 zoomed: None,
+                chrome: Default::default(),
             },
         );
         {
@@ -605,6 +606,23 @@ impl MuxTree {
         Ok(())
     }
 
+    /// [`Self::resize_window`] that also sets the window's reserved per-pane
+    /// chrome — the identity-less (embedder/test) `refresh-client -C … -I`
+    /// path, where no [`ClientView`] merge applies.
+    pub fn resize_window_with_chrome(
+        &mut self,
+        window_id: WindowId,
+        cols: u16,
+        rows: u16,
+        chrome: PaneChrome,
+    ) -> Result<(), MuxError> {
+        self.windows
+            .get_mut(&window_id)
+            .ok_or(MuxError::NoSuchWindow(window_id))?
+            .chrome = chrome;
+        self.resize_window(window_id, cols, rows)
+    }
+
     /// Record the client's per-cell pixel size and re-fit every pane to it.
     ///
     /// `refresh-client -p WxH`'s landing point: the cell size is the one
@@ -635,11 +653,13 @@ impl MuxTree {
         window: WindowId,
         cols: u16,
         rows: u16,
+        chrome: PaneChrome,
     ) -> Vec<WindowId> {
         let view = ClientView {
             window,
             cols: cols.max(1),
             rows: rows.max(1),
+            chrome,
         };
         let (previous_window, updated) = match self.client_views.get(&client_id) {
             Some(previous) => (Some(previous.window), *previous == view),
@@ -749,28 +769,35 @@ impl MuxTree {
     }
 
     /// Re-fit every window in `candidates` to the componentwise minimum of
-    /// its contributors' reported sizes. A window with no contributors is
-    /// left at its current extent (it re-fits when next displayed); a
-    /// window whose minimum equals its current extent is left alone — the
-    /// idempotence that keeps repeated identical reports and the follow
-    /// moves from looping.
+    /// its contributors' reported sizes and the merge of their declared
+    /// chrome. A window with no contributors is left at its current extent
+    /// and chrome (it re-fits when next displayed); a window whose minimum
+    /// and chrome equal its current ones is left alone — the idempotence
+    /// that keeps repeated identical reports and the follow moves from
+    /// looping. A chrome-only change (a border toggle at an unchanged host
+    /// size) re-fits too: the pane PTYs shrink or grow by the ring.
     fn refit_reported_windows(&mut self, candidates: &[WindowId]) -> Vec<WindowId> {
         let mut resized = Vec::new();
         for window_id in candidates {
             let mut cols: Option<u16> = None;
             let mut rows: Option<u16> = None;
+            let mut chrome = PaneChrome::default();
             for view in self.client_views.values() {
                 if view.window == *window_id {
                     cols = Some(cols.map_or(view.cols, |c: u16| c.min(view.cols)));
                     rows = Some(rows.map_or(view.rows, |r: u16| r.min(view.rows)));
+                    chrome = chrome.merge(view.chrome);
                 }
             }
             if let (Some(cols), Some(rows)) = (cols, rows) {
                 let changed = self
                     .window(*window_id)
-                    .map(|win| win.cols != cols || win.rows != rows)
+                    .map(|win| win.cols != cols || win.rows != rows || win.chrome != chrome)
                     .unwrap_or(false);
                 if changed {
+                    if let Some(window) = self.windows.get_mut(window_id) {
+                        window.chrome = chrome;
+                    }
                     let _ = self.resize_window(*window_id, cols, rows);
                     resized.push(*window_id);
                 }
@@ -899,11 +926,17 @@ impl MuxTree {
     /// the structural mutation around it — the same best-effort treatment
     /// [`Self::kill_pane`] gives pane teardown. The terminal itself, which
     /// is what capture and rendering read, always resizes.
+    ///
+    /// Each PTY is the pane's rect less the window's declared chrome
+    /// ([`PaneChrome::pty_size`]) — the reserve-border-lines model: the
+    /// render client paints the content inset by the same chrome, so the
+    /// pane's last row and column are never cropped under its border ring.
     pub(crate) fn sync_pane_sizes(&mut self, window_id: WindowId) {
         let Some(window) = self.windows.get(&window_id) else {
             return;
         };
         let zoomed = window.zoomed;
+        let chrome = window.chrome;
         let (window_cols, window_rows) = (window.cols as usize, window.rows as usize);
         let geometry = window
             .layout
@@ -915,19 +948,20 @@ impl MuxTree {
                 // instead of reverting to the construction default. A
                 // zoomed pane takes the full window grid instead of its
                 // layout cell.
-                let (width, height) = if zoomed == Some(pane_geometry.pane) {
+                let (rect_width, rect_height) = if zoomed == Some(pane_geometry.pane) {
                     (window_cols, window_rows)
                 } else {
                     (pane_geometry.width, pane_geometry.height)
                 };
+                let (width, height) = chrome.pty_size(
+                    u16::try_from(rect_width).unwrap_or(u16::MAX),
+                    u16::try_from(rect_height).unwrap_or(u16::MAX),
+                );
                 let (resized, batch) = match self.client_cell_pixels {
-                    Some((cell_w, cell_h)) => pane.resize_with_cell_pixels_deferred(
-                        width as u16,
-                        height as u16,
-                        cell_w,
-                        cell_h,
-                    ),
-                    None => pane.resize_deferred(width as u16, height as u16),
+                    Some((cell_w, cell_h)) => {
+                        pane.resize_with_cell_pixels_deferred(width, height, cell_w, cell_h)
+                    }
+                    None => pane.resize_deferred(width, height),
                 };
                 // Best-effort (see above), but visible. A held-dead pane's
                 // PTY resize outcome is irrelevant, so it stays quiet.

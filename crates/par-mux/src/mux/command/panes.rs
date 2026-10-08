@@ -46,6 +46,14 @@ pub(super) fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
         },
         size: a.size_pair("-C", (MAX_CLIENT_COLS, MAX_CLIENT_ROWS))?,
         cell_pixels: a.size_pair("-p", (MAX_CELL_PIXELS, MAX_CELL_PIXELS))?,
+        // `-I`: no tmux refresh-client flag uses the letter.
+        chrome: match a.flag("-I") {
+            Some(raw) => Some(
+                crate::mux::layout::PaneChrome::parse_wire(&raw)
+                    .map_err(|err| format!("{}: {err}", a.name))?,
+            ),
+            None => None,
+        },
     })
 }
 

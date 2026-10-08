@@ -223,6 +223,7 @@ impl MuxTree {
                 cols,
                 rows,
                 zoomed: None,
+                chrome: Default::default(),
             },
         );
         // The workspace may have been killed while the pane spawned off the
@@ -341,6 +342,7 @@ impl MuxTree {
                 cols,
                 rows,
                 zoomed: None,
+                chrome: Default::default(),
             },
         );
         // @N/%N `new-window` targets: the new window takes the slot right
