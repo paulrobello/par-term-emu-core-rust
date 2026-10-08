@@ -1073,7 +1073,7 @@ impl PaneRenderer {
         // scroll offset is > 0 — one `▐` at the view top's proportional
         // depth into the history.
         if (self.scrollbar_gutter || scroll > 0) && view_h > 0 {
-            let gx = rect.x + inset_x + view_w;
+            let gx = rect.x + self.sidebar_w + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
                     / (scroll.min(u16::MAX as usize) as u32 + u32::from(view_h));
@@ -1180,7 +1180,7 @@ impl PaneRenderer {
                     && self
                         .layout
                         .iter()
-                        .any(|r| r.pane == *a && x == r.x + r.width - 1)
+                        .any(|r| r.pane == *a && x == self.sidebar_w + r.x + r.width - 1)
                 {
                     continue;
                 }

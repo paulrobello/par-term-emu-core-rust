@@ -671,6 +671,89 @@ fn scroll_viewport_paints_history_rows() {
     assert_eq!(top, expected, "the viewport paints from history");
 }
 
+/// Card 01a11d5e (the rich demo's gradient missing a column + a stray
+/// cyan cell): with the side panel up, a scrolled pane's gutter/indicator
+/// column must sit beside the content, offset by the panel's width like
+/// every content cell. Painted at the un-offset column it reset one
+/// interior column full-height (the gradient's gap) and drew the bright-
+/// cyan `▐` indicator inside the text (the cyan cell mid-word).
+#[test]
+fn scrolled_gutter_stays_outside_the_content_with_the_side_panel_up() {
+    for (borders, gutter) in [(true, false), (false, false), (true, true), (false, true)] {
+        let side = 20u16;
+        let (w, h) = (40u16, 12u16);
+        let mut renderer = PaneRenderer::new(w + side, h, Glyphs::Unicode);
+        renderer.set_pane_borders(borders);
+        renderer.set_scrollbar_gutter(gutter);
+        renderer.set_reserved_chrome(true);
+        renderer.set_sidebar_width(side);
+        renderer.apply_layout(vec![PaneRect {
+            pane: 1,
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        }]);
+        let (cols, _) = renderer.pane_terminal(1).unwrap().size();
+        // Full-width rows of a distinct letter per row: every content cell
+        // carries a non-blank symbol in red.
+        for i in 0..40u8 {
+            let ch = (b'a' + i % 26) as char;
+            let line: String = std::iter::repeat_n(ch, cols).collect();
+            renderer.feed_output(1, format!("\x1b[31m{line}\x1b[0m").as_bytes());
+        }
+        renderer.scroll_viewport(1, 5);
+        renderer.render_frame();
+
+        let rect = renderer.layout()[0];
+        let (inset_x, inset_y, view_w, view_h) = renderer.content_view(&rect);
+        let case = format!("borders={borders} gutter={gutter}");
+        for row in 0..view_h {
+            for col in 0..view_w {
+                let cell = &renderer.buffer[(side + inset_x + col, inset_y + row)];
+                assert!(
+                    cell.symbol().chars().all(|c| c.is_ascii_lowercase())
+                        && cell.fg == RtColor::Indexed(1),
+                    "{case}: content cell ({col},{row}) was overpainted: {cell:?}"
+                );
+            }
+        }
+        // A reserved gutter carries the indicator in the column right of
+        // the content (without one, that column is the ring or off-frame).
+        if gutter {
+            let gx = side + inset_x + view_w;
+            assert!(
+                (0..view_h).any(|row| renderer.buffer[(gx, inset_y + row)].symbol() == "\u{2590}"),
+                "{case}: the scroll indicator paints beside the content"
+            );
+        }
+    }
+}
+
+/// The shared-divider look's gutter yield must compare against the
+/// panel-offset boundary column too: with the side panel up and the left
+/// pane scrolled, the divider leaves the left pane's last column (the
+/// gutter) to the scroll indicator.
+#[test]
+fn divider_yields_the_gutter_column_with_the_side_panel_up() {
+    let side = 20u16;
+    let mut renderer = PaneRenderer::new(80 + side, 24, Glyphs::Unicode);
+    renderer.set_sidebar_width(side);
+    renderer.set_scrollbar_gutter(true);
+    renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    for i in 0..60 {
+        renderer.feed_output(1, format!("line-{i:02}\r\n").as_bytes());
+    }
+    renderer.scroll_viewport(1, 10);
+    renderer.render_frame();
+    // Pane 1 is 40 wide at x 0: its last column (39) is the boundary.
+    let gx = side + 39;
+    assert!(
+        (0..24).any(|row| renderer.buffer[(gx, row)].symbol() == "\u{2590}"),
+        "the scrolled left pane's indicator survives the divider paint"
+    );
+}
+
 /// Regression (render-mode target-less resolution): a `list-sessions`
 /// line is `$N: name`, so a whitespace split keeps the colon and the
 /// daemon's id parser rejects `$0:` — the client exited with "the
