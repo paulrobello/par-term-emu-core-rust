@@ -7,8 +7,9 @@
 //! changed. The tail then emits everything in wire order, saves state for
 //! mutating commands (par-mux.md D3.3), and returns the reply. Adding a
 //! tmux command is one `parse_<cmd>` in [`crate::mux::command`], one
-//! [`MuxCommand`] variant, one `cmd_<name>` handler here, and its match arm
-//! in [`dispatch_command`].
+//! [`MuxCommand`] variant, one `cmd_<name>` handler in its group file, the
+//! variant in that group's or-pattern in `route_command`, and its arm in
+//! the group's `route_<group>_command` router.
 //!
 //! [`crate::mux::server`] keeps the accept loop, client threads, and the
 //! broadcast sinks this module calls into.
@@ -182,122 +183,100 @@ pub(super) fn dispatch_command(
         panic!("injected dispatcher panic (QA-113)");
     }
     let mutates = command.mutates();
-    let outcome = match command {
-        MuxCommand::NewSession {
-            name,
-            env,
-            workspace,
-        } => cmd_new_session(ctx, name, env, workspace),
-        MuxCommand::ListPanes { window } => cmd_list_panes(ctx, window),
-        MuxCommand::ListAgents => cmd_list_agents(ctx),
-        MuxCommand::ListCommands => cmd_list_commands(ctx),
-        MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
-        MuxCommand::RefreshClient {
-            pane,
-            size,
-            cell_pixels,
-        } => cmd_refresh_client(ctx, pane, size, cell_pixels),
-        MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
-        MuxCommand::SplitWindow {
-            target,
-            direction,
-            percent,
-            before,
-            start_dir,
-        } => cmd_split_window(
-            ctx,
-            target,
-            direction,
-            percent,
-            before,
-            start_dir.as_deref(),
-        ),
-        MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
-        MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
-        MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
-        MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
-        MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
-        MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
-        MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
-        MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
-        MuxCommand::JoinPane {
-            source,
-            target,
-            direction,
-            percent,
-        } => cmd_join_pane(ctx, source, target, direction, percent),
-        MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
-        MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
-        MuxCommand::RespawnPane {
-            pane,
-            kill,
-            start_dir,
-            command,
-        } => cmd_respawn_pane(ctx, pane, kill, start_dir.as_deref(), command),
-        MuxCommand::NewWindow {
-            target,
-            name,
-            start_dir,
-        } => cmd_new_window(ctx, target, name, start_dir.as_deref()),
-        MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
-        MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
-        MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
-        MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
-        MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
-        MuxCommand::ListWindows { session } => cmd_list_windows(ctx, session),
-        MuxCommand::ListSessions { workspace } => cmd_list_sessions(ctx, workspace),
-        MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
-        MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
-        MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
-        MuxCommand::RenameWorkspace { workspace, name } => {
-            cmd_rename_workspace(ctx, workspace, name)
-        }
-        MuxCommand::KillWorkspace { workspace } => cmd_kill_workspace(ctx, workspace),
-        MuxCommand::KillServer => cmd_kill_server(ctx),
-        MuxCommand::CapturePane {
-            pane,
-            start_line,
-            end_line,
-            escape,
-        } => cmd_capture_pane(ctx, pane, start_line, end_line, escape),
-        MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
-        MuxCommand::SetClientColors { fg, bg } => cmd_set_client_colors(ctx, fg, bg),
-        MuxCommand::SetEnvironment {
-            session,
-            name,
-            value,
-        } => cmd_set_environment(ctx, session, &name, value.as_deref()),
-        MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
-        MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
-        MuxCommand::Version => cmd_version(ctx),
-        MuxCommand::ReloadConfig => cmd_reload_config(ctx),
-    };
+    let outcome = route_command(command, ctx, issuer);
+    emit_outcome(&outcome, ctx, issuer);
+    if mutates && outcome.succeeded {
+        persist_state(ctx, persist);
+    }
+    outcome.reply
+}
 
+/// Route a command to its handler group. Wildcard-free on purpose: a new
+/// [`MuxCommand`] variant fails to compile here until it is assigned a
+/// group, and the group router then needs its arm.
+fn route_command(
+    command: MuxCommand,
+    ctx: &Ctx<'_>,
+    issuer: Option<&SyncSender<String>>,
+) -> Outcome {
+    match command {
+        command @ (MuxCommand::NewSession { .. }
+        | MuxCommand::RenameSession { .. }
+        | MuxCommand::KillSession { .. }
+        | MuxCommand::ListSessions { .. }
+        | MuxCommand::NewWorkspace { .. }
+        | MuxCommand::ListWorkspaces
+        | MuxCommand::SelectWorkspace { .. }
+        | MuxCommand::RenameWorkspace { .. }
+        | MuxCommand::KillWorkspace { .. }
+        | MuxCommand::KillServer) => route_session_command(ctx, command),
+        command @ (MuxCommand::NewWindow { .. }
+        | MuxCommand::SelectWindow { .. }
+        | MuxCommand::KillWindow { .. }
+        | MuxCommand::RenameWindow { .. }
+        | MuxCommand::ListWindows { .. }
+        | MuxCommand::MoveWindow { .. }
+        | MuxCommand::SwapWindows { .. }) => route_window_command(ctx, command),
+        command @ (MuxCommand::ListPanes { .. }
+        | MuxCommand::SendKeys { .. }
+        | MuxCommand::KillPane { .. }
+        | MuxCommand::SplitWindow { .. }
+        | MuxCommand::SelectPane { .. }
+        | MuxCommand::PaneTitle { .. }
+        | MuxCommand::PaneInfo { .. }
+        | MuxCommand::PaneExitedReplay
+        | MuxCommand::ClearHistory { .. }
+        | MuxCommand::ResizePane { .. }
+        | MuxCommand::SwapPanes { .. }
+        | MuxCommand::BreakPane { .. }
+        | MuxCommand::JoinPane { .. }
+        | MuxCommand::RespawnPane { .. }) => route_pane_command(ctx, command, issuer),
+        command @ (MuxCommand::CapturePane { .. }
+        | MuxCommand::SetBuffer { .. }
+        | MuxCommand::SetClientColors { .. }
+        | MuxCommand::SetEnvironment { .. }
+        | MuxCommand::ShowBuffer
+        | MuxCommand::PasteBuffer { .. }
+        | MuxCommand::Version
+        | MuxCommand::ReloadConfig
+        | MuxCommand::ListCommands) => route_buffer_command(ctx, command),
+        command @ (MuxCommand::RefreshClient { .. } | MuxCommand::ListAgents) => {
+            route_client_command(ctx, command)
+        }
+    }
+}
+
+/// Emit an outcome's notifications in the pre-decomposition wire order:
+/// `%layout-change` first (it carries the geometry the pane-changed
+/// notification is read against), then lifecycle broadcasts, then the
+/// issuer-only notifications.
+fn emit_outcome(outcome: &Outcome, ctx: &Ctx<'_>, issuer: Option<&SyncSender<String>>) {
     for window_id in &outcome.layout_changed {
         broadcast_layout_change(ctx.tree, ctx.clients, *window_id);
     }
     for notification in &outcome.notifications {
         broadcast_notification(ctx.clients, notification);
     }
-    for notification in &outcome.issuer_only {
-        if let Some(tx) = issuer {
+    if let Some(tx) = issuer {
+        for notification in &outcome.issuer_only {
             let _ = tx.send(emit(notification));
         }
     }
-    if mutates && outcome.succeeded {
-        if let Some(tx) = persist {
-            // Collect under the lock (cheap clones and field reads), then
-            // capture OFF it — the grid walks and cwd syscalls a cache miss
-            // triggers must not stall every client (ARC-032) — and hand off
-            // to the worker, which serializes and fsyncs off the lock
-            // (ARC-003). A send fails only if the worker is gone; the
-            // shutdown save is the durability backstop.
-            let capture = ctx.tree.lock().collect_persist_capture();
-            let state = capture.capture();
-            let _ = tx.send((SaveOrigin::Command, state));
-        }
+}
+
+/// Hand the post-command state to the persist worker, when there is one.
+///
+/// Collect under the lock (cheap clones and field reads), then capture OFF
+/// it — the grid walks and cwd syscalls a cache miss triggers must not
+/// stall every client (ARC-032) — and hand off to the worker, which
+/// serializes and fsyncs off the lock (ARC-003). A send fails only if the
+/// worker is gone; the shutdown save is the durability backstop.
+fn persist_state(ctx: &Ctx<'_>, persist: Option<&Sender<(SaveOrigin, PersistState)>>) {
+    if let Some(tx) = persist {
+        let capture = ctx.tree.lock().collect_persist_capture();
+        let state = capture.capture();
+        let _ = tx.send((SaveOrigin::Command, state));
     }
-    outcome.reply
 }
 
 /// Phases 2 and 3 of a two-phase spawn (ARC-022/ARC-103): spawn OFF the
@@ -422,4 +401,4 @@ fn notify_window_closes(mut outcome: Outcome, windows: &[WindowId]) -> Outcome {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

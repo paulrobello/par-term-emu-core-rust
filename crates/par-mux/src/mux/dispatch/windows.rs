@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// The window group's router; `route_command` sends only this group's
+/// variants here.
+pub(super) fn route_window_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome {
+    match command {
+        MuxCommand::NewWindow {
+            target,
+            name,
+            start_dir,
+        } => cmd_new_window(ctx, target, name, start_dir.as_deref()),
+        MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
+        MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
+        MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
+        MuxCommand::ListWindows { session } => cmd_list_windows(ctx, session),
+        MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
+        MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
+        other => unreachable!("route_command sent a non-window command: {other:?}"),
+    }
+}
+
 pub(super) fn cmd_move_window(ctx: &Ctx<'_>, source: Target<WindowId>, index: usize) -> Outcome {
     let source = {
         let guard = ctx.tree.lock();

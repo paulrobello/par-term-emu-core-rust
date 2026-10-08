@@ -548,7 +548,7 @@ fn unknown_typed_ids_are_rejected_as_missing_not_misreported() {
 
 /// Creates every pane dead (no process): the tree mechanics run for
 /// real, but no shell starts, so no `%output` races the assertions.
-struct DeadPaneFactory;
+pub(crate) struct DeadPaneFactory;
 
 impl PaneFactory for DeadPaneFactory {
     fn create_pane(

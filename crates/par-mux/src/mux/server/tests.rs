@@ -29,10 +29,11 @@ fn reply_is_error_detects_the_error_terminator() {
 #[test]
 fn held_state_replay_reports_held_panes_and_zoomed_windows() {
     use crate::mux::dispatch::{dispatch_command, Ctx};
-    use crate::mux::pane::ShellPaneFactory;
 
+    // Process-free panes: a PTY spawn that fails under descriptor
+    // pressure (a loaded full-gate run) once left the tree empty here.
     let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
-        ShellPaneFactory::default(),
+        crate::mux::dispatch::tests::DeadPaneFactory,
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
     let ctx = Ctx {
@@ -51,7 +52,8 @@ fn held_state_replay_reports_held_panes_and_zoomed_windows() {
             None,
         )
     };
-    run("new-session -s main");
+    let created = run("new-session -s main");
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
     let pane = {
         let guard = tree.lock();
         let session = guard.sessions()[0];
@@ -96,10 +98,10 @@ fn a_fresh_tree_replays_nothing() {
 fn registration_after_a_death_delivers_the_held_exit_once() {
     use crate::mux::dispatch::{dispatch_command, Ctx};
     use crate::mux::ipc::ConnectionAbort;
-    use crate::mux::pane::ShellPaneFactory;
 
+    // Process-free panes, as in the held-state replay test above.
     let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
-        ShellPaneFactory::default(),
+        crate::mux::dispatch::tests::DeadPaneFactory,
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
     let ctx = Ctx {
@@ -110,12 +112,13 @@ fn registration_after_a_death_delivers_the_held_exit_once() {
         config: None,
         client_id: None,
     };
-    dispatch_command(
+    let created = dispatch_command(
         crate::mux::command::parse_command("new-session -s main").unwrap(),
         &ctx,
         None,
         None,
     );
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
     let pane = {
         let guard = tree.lock();
         let session = guard.sessions()[0];

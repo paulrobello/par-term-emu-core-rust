@@ -4,6 +4,32 @@
 
 use super::*;
 
+/// The buffer/capture/daemon-info group's router; `route_command` sends
+/// only this group's variants here.
+pub(super) fn route_buffer_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome {
+    match command {
+        MuxCommand::CapturePane {
+            pane,
+            start_line,
+            end_line,
+            escape,
+        } => cmd_capture_pane(ctx, pane, start_line, end_line, escape),
+        MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
+        MuxCommand::SetClientColors { fg, bg } => cmd_set_client_colors(ctx, fg, bg),
+        MuxCommand::SetEnvironment {
+            session,
+            name,
+            value,
+        } => cmd_set_environment(ctx, session, &name, value.as_deref()),
+        MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
+        MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
+        MuxCommand::Version => cmd_version(ctx),
+        MuxCommand::ReloadConfig => cmd_reload_config(ctx),
+        MuxCommand::ListCommands => cmd_list_commands(ctx),
+        other => unreachable!("route_command sent a non-buffer command: {other:?}"),
+    }
+}
+
 pub(super) fn cmd_capture_pane(
     ctx: &Ctx<'_>,
     pane: Target<PaneId>,

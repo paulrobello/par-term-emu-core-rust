@@ -298,9 +298,10 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach --fix --allow-dirty --allow-staged -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python --fix --allow-dirty --allow-staged -- -D warnings
 	cargo clippy -p par-mux --all-targets --features mux-bin --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin,attach --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt --all
 
 lint-python:
@@ -311,15 +312,17 @@ lint-python:
 
 # ARC-115: the non-mutating lint gate checkall runs. `lint`/`lint-python`
 # stay the auto-fix targets; a gate reports drift instead of rewriting it.
-# Keep the clippy feature list in sync with `lint` and `clippy`.
+# Keep the clippy feature lists in sync with `lint`, `clippy`, the
+# pre-commit clippy hooks, and ci.yml's clippy steps (attach included).
 lint-check:
 	@echo "Running non-mutating lint checks (Rust fmt + clippy, Python ruff + pyright)..."
 	cargo fmt --all -- --check
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 	cargo clippy -p par-mux --all-targets -- -D warnings
 	cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin,attach -- -D warnings
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run pyright .
@@ -330,16 +333,17 @@ check:
 
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
-	cargo check --all-targets --features python,streaming,mux,mux-bin,ffi
+	cargo check --all-targets --features python,streaming,mux,mux-bin,ffi,attach
 	cargo check -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python
 	cargo check -p par-mux --all-targets --features attach
 	uv run pyright
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach -- -D warnings
 	cargo clippy -p par-term-emu-core --all-targets --features screenshot,pty_session,serde,macro-yaml,mux,ffi,python -- -D warnings
 	cargo clippy -p par-mux --all-targets --features mux-bin -- -D warnings
+	cargo clippy -p par-mux --all-targets --features mux-bin,attach -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Needs a streaming build so streaming-only classes are captured; since

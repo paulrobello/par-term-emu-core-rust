@@ -3,6 +3,30 @@
 
 use super::*;
 
+/// The session/workspace/server group's router; `route_command` sends only
+/// this group's variants here.
+pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome {
+    match command {
+        MuxCommand::NewSession {
+            name,
+            env,
+            workspace,
+        } => cmd_new_session(ctx, name, env, workspace),
+        MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
+        MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
+        MuxCommand::ListSessions { workspace } => cmd_list_sessions(ctx, workspace),
+        MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
+        MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
+        MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
+        MuxCommand::RenameWorkspace { workspace, name } => {
+            cmd_rename_workspace(ctx, workspace, name)
+        }
+        MuxCommand::KillWorkspace { workspace } => cmd_kill_workspace(ctx, workspace),
+        MuxCommand::KillServer => cmd_kill_server(ctx),
+        other => unreachable!("route_command sent a non-session command: {other:?}"),
+    }
+}
+
 pub(super) fn cmd_new_session(
     ctx: &Ctx<'_>,
     name: Option<String>,
