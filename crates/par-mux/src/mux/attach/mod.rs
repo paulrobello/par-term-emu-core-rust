@@ -280,7 +280,9 @@ enum PumpOutcome {
     DaemonExited,
 }
 
-/// tmux's default prefix, C-b.
+/// tmux's default prefix, C-b: the tests' spelling of it (the canonical
+/// default lives in `Chords::with_defaults`).
+#[cfg(test)]
 pub(crate) const C_B: u8 = 0x02;
 
 /// The live attach session: owns the connection, the target pane, and the

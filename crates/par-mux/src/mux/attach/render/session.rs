@@ -183,6 +183,49 @@ impl WindowSession {
     /// Apply the config `border-lines` spelling to the session's glyph
     /// set; reports whether the spelling was recognized (an unknown
     /// value keeps the current set — the caller warns).
+    /// Apply a resolved chord set and its file to the live session: the
+    /// keys, then the display options. The one application path for the
+    /// launch config and every reload, so a default decided in
+    /// `Chords::with_defaults` reaches the session the same way either
+    /// time (ARC-131). The side panel's width and launch visibility are
+    /// the launch path's own. Returns false when `border-lines` names no
+    /// known style (the glyphs are left as they were).
+    pub(super) fn apply_chords(
+        &mut self,
+        chords: &crate::mux::config::Chords,
+        file: &crate::mux::config::ConfigFile,
+    ) -> bool {
+        self.prefix = chords.prefix;
+        self.literal = chords.prefix;
+        self.reload_key = chords.reload;
+        self.management = chords.management;
+        self.resize_step = chords.resize_step;
+        // The border style first, the explicit `pane-borders` flag after
+        // it — the style implies a paint mode (herdr = per-pane boxes),
+        // and the explicit config key still overrides for any glyph set.
+        let known_style = self.set_border_lines(&chords.border_lines);
+        // An explicit `pane-borders` key survives every reload; an absent
+        // key follows the (possibly reloaded) border style. The chords'
+        // own bool cannot tell explicit from absent, so the raw file key
+        // decides.
+        match file.client.pane_borders {
+            Some(on) => self.set_pane_borders(on),
+            None => self.set_pane_borders(matches!(self.render_opts.glyphs, Glyphs::Herdr)),
+        }
+        self.set_show_label_in_border(chords.show_label_in_border);
+        self.set_pane_gaps(chords.pane_gaps);
+        self.set_scrollbar_gutter(chords.scrollbar_gutter);
+        self.drag_cursor_shape = chords.drag_cursor_shape;
+        let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
+        self.set_border_colors(
+            crate::mux::config::parse_hex_color(&eff.border_active_color)
+                .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+            crate::mux::config::parse_hex_color(&eff.border_color)
+                .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+        );
+        known_style
+    }
+
     pub(super) fn set_border_lines(&mut self, spec: &str) -> bool {
         let glyphs = match spec {
             "" | "unicode" => Glyphs::Unicode,

@@ -363,8 +363,11 @@ pub(crate) struct RenderOptions {
 }
 
 impl Default for RenderOptions {
-    /// The session's pre-config defaults: unicode dividers, no chrome,
-    /// a 20-column side panel when shown, built-in colors.
+    /// The chrome-free baseline a session renders with before its config
+    /// applies: unicode dividers, no borders or labels, a 20-column side
+    /// panel when shown, built-in colors. NOT the configured defaults:
+    /// those live once in `Chords::with_defaults` (herdr glyphs, labels
+    /// on) and reach the session through `render_session_inner`.
     fn default() -> Self {
         Self {
             bg: None,

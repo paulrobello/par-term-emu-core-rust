@@ -1702,6 +1702,35 @@ fn group_boundaries_groups_and_sorts_along() {
     );
 }
 
+/// ARC-131: client defaults come from one place. A fresh session's keys
+/// are `Chords::with_defaults()`'s, and applying that chord set (what an
+/// absent config file resolves to) yields its display defaults: the
+/// herdr glyphs and the label on.
+#[test]
+fn session_defaults_come_from_chords_with_defaults() {
+    let defaults = crate::mux::config::Chords::with_defaults();
+    let mut session = WindowSession::new(80, 25);
+    assert_eq!(session.prefix, defaults.prefix);
+    assert_eq!(session.literal, defaults.prefix);
+    assert_eq!(session.reload_key, defaults.reload);
+    assert_eq!(session.management, defaults.management);
+    assert_eq!(session.resize_step, defaults.resize_step);
+
+    let file = crate::mux::config::ConfigFile::default();
+    assert!(session.apply_chords(&defaults, &file));
+    assert_eq!(session.render_opts.glyphs.name(), defaults.border_lines);
+    assert_eq!(
+        session.render_opts.show_label_in_border,
+        defaults.show_label_in_border
+    );
+    assert_eq!(session.render_opts.pane_gaps, defaults.pane_gaps);
+    assert_eq!(
+        session.render_opts.scrollbar_gutter,
+        defaults.scrollbar_gutter
+    );
+    assert_eq!(session.drag_cursor_shape, defaults.drag_cursor_shape);
+}
+
 /// ARC-129: the render screen guard restores on an early `?` return —
 /// the path the old trailing manual restore skipped (a config or seed
 /// error used to leave the host in the alternate screen with mouse

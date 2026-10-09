@@ -436,13 +436,7 @@ fn render_session_inner(
     // The client configuration was resolved once for both modes
     // (`resolve_client`: CLI over file over defaults) before the
     // terminal was touched; the session seeds from it.
-    let file = &client.file;
     let chords = &client.chords;
-    session.prefix = chords.prefix;
-    session.literal = chords.prefix;
-    session.reload_key = chords.reload;
-    session.management = chords.management;
-    session.resize_step = chords.resize_step;
     session.render_opts.sidebar_width = chords.sidebar_width;
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
@@ -450,34 +444,12 @@ fn render_session_inner(
     session.sidebar_on = chords.sidebar_on_launch;
     session.chrome_geometry_changed();
     session.renderer.set_geometry(session.geometry);
-    // The border style first, the explicit `pane-borders` flag after it —
-    // the style implies a paint mode (herdr = per-pane boxes), and the
-    // explicit config key still overrides for any glyph set.
-    if !session.set_border_lines(&chords.border_lines) {
+    if !session.apply_chords(chords, &client.file) {
         eprintln!(
             "par-mux: [client] border-lines {:?} unknown — valid: unicode, double, heavy, ascii, herdr",
             chords.border_lines
         );
     }
-    // An explicit `pane-borders` key overrides the border style's
-    // implied paint mode; an absent key keeps it (herdr, the default
-    // style, implies per-pane boxes).
-    if let Some(on) = file.client.pane_borders {
-        session.set_pane_borders(on);
-    } else {
-        session.set_pane_borders(matches!(session.render_opts.glyphs, Glyphs::Herdr));
-    }
-    session.set_show_label_in_border(chords.show_label_in_border);
-    session.set_pane_gaps(chords.pane_gaps);
-    session.set_scrollbar_gutter(chords.scrollbar_gutter);
-    session.drag_cursor_shape = chords.drag_cursor_shape;
-    let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
-    session.set_border_colors(
-        crate::mux::config::parse_hex_color(&eff.border_active_color)
-            .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-        crate::mux::config::parse_hex_color(&eff.border_color)
-            .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-    );
 
     // The OSC 11 background probe: raw mode is up and the pump's stdin
     // reader has not started, so the probe is briefly the tty's only
@@ -848,8 +820,13 @@ impl PendingWork {
 
 impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
-        // The status bar starts shown and the side panel hidden (the
-        // launch config applies its width afterwards).
+        // The chords start at the canonical defaults (ARC-131: one source,
+        // `Chords::with_defaults`); the launch config overrides them. The
+        // display options start at the chrome-free RenderOptions baseline
+        // and take their configured values from the same chords in
+        // `render_session_inner`. The status bar starts shown and the side
+        // panel hidden (the launch config applies its width afterwards).
+        let chords = crate::mux::config::Chords::with_defaults();
         let geometry = geometry::FrameGeometry::new(cols, rows, true, 0);
         let (frame_w, frame_h) = geometry.frame_size();
         Self {
@@ -861,10 +838,10 @@ impl WindowSession {
             tab_strip: TabStrip::new(cols),
             status_dirty: true,
             modal: Modal::None,
-            prefix: crate::mux::attach::C_B,
-            reload_key: 0x12, // C-r
-            management: super::super::config::Management::default(),
-            resize_step: 1,
+            prefix: chords.prefix,
+            reload_key: chords.reload,
+            management: chords.management,
+            resize_step: chords.resize_step,
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar_on: false,
@@ -873,7 +850,7 @@ impl WindowSession {
             daemon_layout: Vec::new(),
             status_bar_on: true,
             stdin_primer: Vec::new(),
-            literal: crate::mux::attach::C_B,
+            literal: chords.prefix,
             flash: None,
             flash_until: None,
             cursor_placed: Some(None),

@@ -325,40 +325,15 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
-                self.prefix = chords.prefix;
-                self.reload_key = chords.reload;
-                self.management = chords.management;
-                self.resize_step = chords.resize_step;
-                if !self.set_border_lines(&chords.border_lines) {
-                    self.flash = Some(format!(
+                self.flash = Some(if self.apply_chords(&chords, &file) {
+                    "config reloaded".to_string()
+                } else {
+                    format!(
                         "border-lines {:?} unknown — using {}",
                         chords.border_lines,
                         self.render_opts.glyphs.name()
-                    ));
-                }
-                // An explicit `pane-borders` key survives every reload;
-                // an absent key follows the (possibly reloaded) border
-                // style — herdr implies per-pane boxes. The chords' own
-                // bool cannot tell explicit from absent, so the raw file
-                // key decides.
-                match file.client.pane_borders {
-                    Some(on) => self.set_pane_borders(on),
-                    None => self.set_pane_borders(matches!(self.render_opts.glyphs, Glyphs::Herdr)),
-                }
-                self.set_pane_gaps(chords.pane_gaps);
-                self.set_scrollbar_gutter(chords.scrollbar_gutter);
-                self.set_show_label_in_border(chords.show_label_in_border);
-                self.drag_cursor_shape = chords.drag_cursor_shape;
-                let eff =
-                    crate::mux::config::resolve(&file, &crate::mux::config::Overrides::default());
-                self.set_border_colors(
-                    crate::mux::config::parse_hex_color(&eff.border_active_color)
-                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-                    crate::mux::config::parse_hex_color(&eff.border_color)
-                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-                );
-                self.literal = chords.prefix;
-                self.flash = Some("config reloaded".to_string());
+                    )
+                });
             }
             Err(err) => {
                 self.flash = Some(format!("reload failed: {err}"));
