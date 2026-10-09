@@ -5,8 +5,8 @@
 //! `%output` bytes flow to stdout verbatim, stdin bytes flow to the pane as
 //! chunked `send-keys -H`, and a bottom status row is reserved with DECSTBM.
 //!
-//! Phase B adds the layout parser and pane renderer ([`layout`],
-//! [`render`]) and the [`AttachMode`] seam: [`run`] stays passthrough (the
+//! Phase B adds the layout parser and pane renderer (the crate-private
+//! `layout` and `render` modules) and the [`AttachMode`] seam: [`run`] stays passthrough (the
 //! Phase A contract), and [`run_with_mode`] selects the renderer, which
 //! mirrors every visible pane in its own core emulator and paints the
 //! window through ratatui.
