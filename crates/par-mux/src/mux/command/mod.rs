@@ -845,15 +845,12 @@ enum LeadingFlag {
     Bare(&'static str),
     /// Exactly one value word (`-t v`); a second occurrence is an error.
     Valued(&'static str),
-    /// A value word that may repeat (`-e NAME=V`).
-    #[allow(dead_code)] // reserved for QA-219's new-session -e
-    Repeated(&'static str),
 }
 
 impl LeadingFlag {
     fn name(self) -> &'static str {
         match self {
-            Self::Bare(n) | Self::Valued(n) | Self::Repeated(n) => n,
+            Self::Bare(n) | Self::Valued(n) => n,
         }
     }
 }
@@ -876,16 +873,6 @@ impl LeadingFlags<'_> {
             .rev()
             .find(|(f, _)| *f == flag)
             .and_then(|(_, v)| v.as_deref())
-    }
-
-    /// Every value given for `flag`, in line order.
-    #[allow(dead_code)] // reserved for QA-219's new-session -e
-    fn values(&self, flag: &str) -> Vec<&str> {
-        self.flags
-            .iter()
-            .filter(|(f, _)| *f == flag)
-            .filter_map(|(_, v)| v.as_deref())
-            .collect()
     }
 
     /// Whether `flag` appeared.
@@ -966,8 +953,8 @@ fn split_leading_flags<'a>(
                 lead.flags.push((flag, None));
                 pos = end;
             }
-            Some(kind @ (LeadingFlag::Valued(flag) | LeadingFlag::Repeated(flag))) => {
-                if matches!(kind, LeadingFlag::Valued(_)) && lead.has(flag) {
+            Some(LeadingFlag::Valued(flag)) => {
+                if lead.has(flag) {
                     return Err(format!("{name}: duplicate {flag}"));
                 }
                 let (value_start, value_end, unquoted) = next_shell_word(line, end)
