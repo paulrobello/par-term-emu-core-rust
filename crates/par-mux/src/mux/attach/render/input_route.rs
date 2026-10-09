@@ -530,7 +530,7 @@ impl WindowSession {
         // panel-up top-row click one panel width left, killing the +
         // button's clickability).
         let rx = x;
-        let x = x.saturating_sub(strip);
+        let (x, content_y) = self.geometry.host_to_content_clamped(x, y);
 
         // A drag in flight continues over motion/release regardless of
         // where the pointer is (a pointer that wanders onto the strip
@@ -539,7 +539,7 @@ impl WindowSession {
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
             return Hit::Drag {
                 x,
-                y: y.saturating_sub(1),
+                y: content_y,
                 release: mouse.release,
             };
         }
@@ -554,15 +554,12 @@ impl WindowSession {
         if self.help_mode {
             return help_hit(mouse);
         }
-        if y == 0 {
+        if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);
         }
         // Below the strip, content coordinates are host rows minus the
         // strip row.
-        let Some(cy) = y.checked_sub(1) else {
-            return Hit::Consumed;
-        };
-        self.pane_area_hit(mouse, x, cy)
+        self.pane_area_hit(mouse, x, content_y)
     }
 
     /// The context menu is modal for the pointer: a press on an action
@@ -862,11 +859,9 @@ impl WindowSession {
         // paint path uses, so the pane sees the cell the user actually
         // clicked (the manual-pass +1-row/+1-col report: the border ring
         // was never subtracted).
-        let x = mouse
-            .col
-            .saturating_sub(1)
-            .saturating_sub(self.renderer.sidebar_width());
-        let cy = mouse.row.saturating_sub(2);
+        let (x, cy) = self
+            .geometry
+            .host_to_content_clamped(mouse.col.saturating_sub(1), mouse.row.saturating_sub(1));
         let (inset_x, inset_y, view_w, view_h) = self.renderer.content_view(rect);
         let rel_col = x
             .saturating_sub(rect.x + inset_x)

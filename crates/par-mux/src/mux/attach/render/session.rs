@@ -125,6 +125,35 @@ impl WindowSession {
         }
     }
 
+    /// Recompute the frame geometry from the live host grid, the status
+    /// bar's visibility, and the side panel's EFFECTIVE width. The pump
+    /// calls this once per tick (and before a parked refit); the toggles
+    /// that move the chrome call it too, so their same-tick paint reads
+    /// the new layout.
+    pub(super) fn refresh_geometry(&mut self) {
+        let (cols, rows) = super::super::conn::terminal_grid();
+        self.set_geometry_host(cols, rows);
+    }
+
+    /// Recompute the frame geometry over a known `cols` x `rows` host
+    /// grid (a chrome toggle keeps the current snapshot's host size;
+    /// the pump's per-tick refresh reads the tty).
+    pub(super) fn set_geometry_host(&mut self, cols: u16, rows: u16) {
+        self.geometry = super::geometry::FrameGeometry::new(
+            cols,
+            rows,
+            self.status_bar_on,
+            self.effective_render_opts().sidebar_width,
+        );
+    }
+
+    /// Re-derive the chrome fields of the geometry (status bar, side
+    /// panel) after a toggle, keeping the snapshot's host size.
+    pub(super) fn chrome_geometry_changed(&mut self) {
+        let (cols, rows) = (self.geometry.host_cols, self.geometry.host_rows);
+        self.set_geometry_host(cols, rows);
+    }
+
     /// Replace the renderer with a fresh one over `cols` x `rows`,
     /// built from the session's effective options — the one rebuild
     /// path (resize re-fit, re-seed), so no display option can be lost
@@ -396,7 +425,7 @@ impl WindowSession {
     /// nothing paints: the row belongs to the pane grid, and the refit's
     /// full repaint is what erased the bar exactly once.
     pub(super) fn draw_status_row(&mut self) {
-        let (cols, _rows) = super::super::conn::terminal_grid();
+        let cols = self.geometry.host_cols;
         if self.status_row.cols() != cols {
             self.status_row = StatusRow::new(cols);
         }
@@ -457,11 +486,9 @@ impl WindowSession {
     /// blank-cell flush would erase the pane's freshly painted bottom
     /// row after the pane frame.
     pub(super) fn flush_status_row(&mut self, sink: &mut dyn FlushSink) -> bool {
-        if !self.status_bar_on {
+        let Some(bottom) = self.geometry.status_row() else {
             return false;
-        }
-        let (_cols, rows) = super::super::conn::terminal_grid();
-        let bottom = rows.saturating_sub(1);
+        };
         let diff = self.status_row.diff();
         if diff.is_empty() {
             return false;
@@ -568,14 +595,17 @@ impl WindowSession {
     /// host row; the strip flushes at host row 0 and the status row at
     /// the host's bottom row.
     pub(super) fn frame(&mut self, sink: &mut dyn FlushSink) {
-        const STRIP_ROWS: u16 = 1;
+        let geometry = self.geometry;
         let mut flushed = false;
         if self.renderer.needs_frame() {
             let diff = self.renderer.render_frame();
             if !diff.is_empty() {
                 let rebased: Vec<(u16, u16, RtCell)> = diff
                     .into_iter()
-                    .map(|(x, y, cell)| (x, y + STRIP_ROWS, cell))
+                    .map(|(x, y, cell)| {
+                        let (hx, hy) = geometry.frame_to_host(x, y);
+                        (hx, hy, cell)
+                    })
                     .collect();
                 sink.flush(&rebased);
                 flushed = true;
@@ -587,10 +617,10 @@ impl WindowSession {
         if self.flush_status_row(sink) {
             flushed = true;
         }
-        let mut cursor = self
-            .renderer
-            .focused_cursor()
-            .map(|(x, y, style)| (x, y + STRIP_ROWS, style));
+        let mut cursor = self.renderer.focused_cursor().map(|(x, y, style)| {
+            let (hx, hy) = geometry.frame_to_host(x, y);
+            (hx, hy, style)
+        });
         // The drag cursor shape (config `drag-cursor-shape`): while a
         // divider drag is live the host cursor carries the resize shape
         // (best-effort DECSCUSR steady block — DECSCUSR has no
@@ -618,7 +648,7 @@ impl WindowSession {
     /// strip leads with the panel's title (the lead segment the hit-test
     /// offsets through).
     pub(super) fn draw_tab_strip(&mut self) {
-        let (cols, _rows) = super::super::conn::terminal_grid();
+        let cols = self.geometry.host_cols;
         if self.tab_strip.cols() != cols {
             self.tab_strip = TabStrip::new(cols);
         }

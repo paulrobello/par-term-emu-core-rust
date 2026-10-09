@@ -155,6 +155,7 @@ impl WindowSession {
             }
             super::super::ManagementKey::StatusBar => {
                 self.status_bar_on = !self.status_bar_on;
+                self.chrome_geometry_changed();
                 // No flash cue: the flash paints ON the status row, so a
                 // hide would flash invisibly — the row's vanishing (or
                 // returning) is the feedback. The bottom row's presence

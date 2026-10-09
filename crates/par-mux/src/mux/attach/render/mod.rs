@@ -35,6 +35,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::sync::mpsc::RecvTimeoutError;
 
+mod geometry;
 mod input_route;
 mod modal;
 mod navigate;
@@ -442,9 +443,10 @@ fn render_session_inner(
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.
     session.sidebar_on = chords.sidebar_on_launch;
+    session.chrome_geometry_changed();
     session
         .renderer
-        .set_sidebar_width(session.effective_render_opts().sidebar_width);
+        .set_sidebar_width(session.geometry.sidebar_w);
     // The border style first, the explicit `pane-borders` flag after it —
     // the style implies a paint mode (herdr = per-pane boxes), and the
     // explicit config key still overrides for any glyph set.
@@ -662,6 +664,12 @@ struct WindowSession {
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
     detach_requested: bool,
+    /// The frame's chrome layout over the host grid (strip, status bar,
+    /// side panel, content) — the one owner of the host ↔ frame ↔
+    /// content mapping. Recomputed by [`Self::refresh_geometry`] at the
+    /// top of every pump tick and before every refit, so paint, hit-test,
+    /// and size report read one consistent snapshot per frame.
+    geometry: geometry::FrameGeometry,
     /// The stdin tokenizer. Session-level (not per pump call) because a
     /// paste or escape sequence can span two stdin bursts, and the pump
     /// returns between them every frame tick.
@@ -726,13 +734,13 @@ struct MenuState {
 
 impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
+        // The status bar starts shown and the side panel hidden (the
+        // launch config applies its width afterwards).
+        let geometry = geometry::FrameGeometry::new(cols, rows, true, 0);
+        let (frame_w, frame_h) = geometry.frame_size();
         Self {
             window: String::new(),
-            renderer: PaneRenderer::new(
-                cols,
-                rows.saturating_sub(2),
-                RenderOptions::default().glyphs,
-            ),
+            renderer: PaneRenderer::new(frame_w, frame_h, RenderOptions::default().glyphs),
             pending_layout: None,
             pending_follow_window: None,
             pending_follow_session: None,
@@ -777,6 +785,7 @@ impl WindowSession {
             flash_ticks: 0,
             cursor_placed: Some(None),
             detach_requested: false,
+            geometry,
             parser: InputParser::default(),
         }
     }
@@ -804,6 +813,10 @@ impl WindowSession {
         let mut prefix_pending = false;
         let mut current_size = self.renderer.window_size();
         loop {
+            // 0. This tick's frame geometry: every hit-test and paint
+            //    below reads this snapshot rather than the live tty size.
+            self.refresh_geometry();
+
             // 1. Drain daemon pushes.
             let mut disconnected = false;
             loop {
@@ -863,9 +876,11 @@ impl WindowSession {
             //     its repaint_all is what erases the vacated region.
             if self.pending_grid_refit {
                 self.pending_grid_refit = false;
-                let (host_cols, host_rows) = super::conn::terminal_grid();
-                let content_rows = host_rows.saturating_sub(1 + u16::from(self.status_bar_on));
-                self.resize_to(conn, host_cols, content_rows, sink)?;
+                // The toggle that parked this moved the status bar or the
+                // side panel: re-derive the frame before refitting to it.
+                self.refresh_geometry();
+                let (frame_w, frame_h) = self.geometry.frame_size();
+                self.resize_to(conn, frame_w, frame_h, sink)?;
                 // The refit reconstructed the renderer, dropping the
                 // strip's sections; re-query so the next frame paints
                 // them (a changed mark rides the same dirty flag).
@@ -878,11 +893,8 @@ impl WindowSession {
             //    daemon's window renders into the rows between the tab
             //    strip and the status bar, so the size report carries the
             //    content height.
-            let (host_cols, host_rows) = super::conn::terminal_grid();
-            let content = (
-                host_cols,
-                host_rows.saturating_sub(1 + u16::from(self.status_bar_on)),
-            );
+            self.refresh_geometry();
+            let content = self.geometry.frame_size();
             if content != current_size {
                 current_size = content;
                 self.resize_to(conn, content.0, content.1, sink)?;

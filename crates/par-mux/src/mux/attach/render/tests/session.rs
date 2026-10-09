@@ -743,7 +743,7 @@ fn sidebar_offset_paints_content_and_dividers_together() {
     );
 
     // The toggle: panel width on, the daemon's re-divided layout in.
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session
         .renderer
         .apply_layout(parse_layout(TWO_PANE_SIDEBAR).expect("parses"));
@@ -783,6 +783,7 @@ fn hidden_status_bar_flushes_nothing() {
     assert!(!sink.cells.is_empty());
 
     session.status_bar_on = false;
+    session.chrome_geometry_changed();
     session.draw_status_row();
     let mut sink = CellSink { cells: Vec::new() };
     assert!(
@@ -800,7 +801,7 @@ fn hidden_status_bar_flushes_nothing() {
 #[test]
 fn sidebar_clicks_land_on_the_painted_row() {
     let mut session = WindowSession::new(80, 24);
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
@@ -1329,7 +1330,7 @@ fn panel_up_menu_click_maps_raw_host_columns() {
     let (_rx, conn) = recording_conn("menuprobe");
     let mut conn = conn;
     let mut session = WindowSession::new(80, 24);
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session.window = "@0".to_string();
     session.open_menu(super::super::MenuTarget::Tab("@0".to_string()));
     let (x0, y0, inner, height) = session.renderer.overlay_geometry().expect("menu up");

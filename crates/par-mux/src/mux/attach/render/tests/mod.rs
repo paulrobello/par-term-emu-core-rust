@@ -1358,7 +1358,7 @@ fn command_menu_session(
     use crate::mux::attach::input::SgrMouse;
     let (rx, mut conn) = recording_conn(tag);
     let mut session = WindowSession::new(80, 24);
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::SidebarSection { rows: vec![] }]));
@@ -1392,6 +1392,16 @@ fn click_menu_row(
             release: false,
         },
     );
+}
+
+/// Show the side panel at its default 20 columns the way the toggle
+/// does: the session flag, the frame geometry, and the renderer's strip.
+fn show_sidebar(session: &mut WindowSession) {
+    session.sidebar_on = true;
+    session.chrome_geometry_changed();
+    session
+        .renderer
+        .set_sidebar_width(session.geometry.sidebar_w);
 }
 
 /// Every line the fake daemon recorded so far, in wire order. A

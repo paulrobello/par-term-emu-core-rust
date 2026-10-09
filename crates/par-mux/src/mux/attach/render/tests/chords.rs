@@ -1450,7 +1450,7 @@ fn mouse_owning_pane_receives_rebased_sgr_reports() {
 #[test]
 fn sidebar_pointer_lands_opens_menus_and_prompts() {
     let (rx, mut conn, mut session) = two_pane_session("m-side", FakeScript::default());
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
@@ -1665,7 +1665,7 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     );
     session.leave_menu();
 
-    session.renderer.set_sidebar_width(20);
+    show_sidebar(&mut session);
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {

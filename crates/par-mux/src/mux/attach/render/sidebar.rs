@@ -128,8 +128,8 @@ impl WindowSession {
     /// section rows.
     pub(super) fn toggle_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         self.sidebar_on = !self.sidebar_on;
-        self.renderer
-            .set_sidebar_width(self.effective_render_opts().sidebar_width);
+        self.chrome_geometry_changed();
+        self.renderer.set_sidebar_width(self.geometry.sidebar_w);
         // The refit runs on the pump (it owns the flush sink): resize_to
         // reports the new grid, then repaint_all erases the region the
         // old layout vacated — the plain %layout-change re-seed never
