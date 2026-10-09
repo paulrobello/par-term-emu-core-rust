@@ -21,6 +21,14 @@ One entry point for the most common build, test, streaming, and par-mux failures
   - [refusing to start a nested daemon](#refusing-to-start-a-nested-daemon)
   - [another server owns path](#another-server-owns-path)
   - [this pane has hook-only access](#this-pane-has-hook-only-access)
+- [Attach client](#attach-client)
+  - [multiple par-mux servers are running](#multiple-par-mux-servers-are-running)
+  - [unknown --mode](#unknown---mode)
+  - [Render mode shows the wrong background](#render-mode-shows-the-wrong-background)
+  - [Pastes arrive wrapped in 200~ and 201~](#pastes-arrive-wrapped-in-200-and-201)
+  - [par-mux attach starts a daemon instead of attaching](#par-mux-attach-starts-a-daemon-instead-of-attaching)
+  - [Cannot attach to a daemon named attach](#cannot-attach-to-a-daemon-named-attach)
+  - [Terminal stays in the alternate screen after a crash](#terminal-stays-in-the-alternate-screen-after-a-crash)
 - [Related Documentation](#related-documentation)
 
 ## Build and Install
@@ -143,6 +151,76 @@ When the restarted daemon fails to start, its stderr is in `<state file>.log` be
 **Cause:** the daemon runs with `--pane-endpoints`, so `$PAR_MUX_SOCKET` inside a pane names a hook-only endpoint that refuses control commands.
 
 **Fix:** start the daemon with `--expose-control-socket`, or pass the control socket with `--socket`. See [MUX.md Pane endpoints](MUX.md#pane-endpoints-opt-in).
+
+## Attach client
+
+These entries cover `par-mux attach`. The full reference is [MUX.md Attaching from a terminal](MUX.md#attaching-from-a-terminal).
+
+### multiple par-mux servers are running
+
+**Symptom:** `par-mux attach` exits 1 with `multiple par-mux servers are running — attach to one with par-mux attach <name|path>` and a list of the live servers.
+
+**Cause:** with no NAME and no `--socket`, attach refuses to guess when more than one daemon is live. With exactly one live daemon it attaches directly.
+
+**Fix:** pick one from the list: `par-mux attach <name>` or `par-mux attach --socket <path>`.
+
+### unknown --mode
+
+**Symptom:** `par-mux attach` exits 2 with `unknown --mode "…" — valid modes: render, passthrough`.
+
+**Cause:** the `--mode` flag only accepts `render` (the default) and `passthrough`. A misspelled flag fails rather than running the wrong mode. An unknown `[client] mode` in the config file is different: it prints `unknown [client] mode "…" — using render` and continues in render mode.
+
+**Fix:** pass `--mode render` or `--mode passthrough`, or correct `[client] mode` in the config file.
+
+### Render mode shows the wrong background
+
+**Symptom:** in render mode, empty cells (rows below the layout, short lines) use the terminal's default background instead of the theme you expect.
+
+**Cause:** the client asks the host for its background with an OSC 11 probe (`ESC ] 11 ; ? ST`, 150 ms deadline) at startup. When the host does not answer in time, as on Windows consoles and terminals that do not implement OSC 11, the fill stays at the terminal default.
+
+**Fix:** use a host terminal that answers OSC 11, such as Ghostty, iTerm2, or xterm. Over a slow SSH link, reattach once the link is idle so the reply arrives within the deadline.
+
+### Pastes arrive wrapped in 200~ and 201~
+
+**Symptom:** after a client or pane app crashes, pasting into the host shell inserts `^[[200~` before the text and `^[[201~` after it.
+
+**Cause:** an app turned on bracketed-paste mode (`ESC [ ? 2004 h`) and exited without turning it off, so the host keeps wrapping pastes. Render mode handles these markers itself (the paste body goes to the focused pane verbatim), so the leftovers only show in the host shell.
+
+**Fix:** turn the mode off in the host terminal:
+
+```bash
+printf '\e[?2004l'
+```
+
+`reset` also clears it.
+
+### par-mux attach starts a daemon instead of attaching
+
+**Symptom:** `par-mux attach` serves a new daemon named `attach`, or rejects `-t`, `--mode`, or `--prefix` as unexpected arguments. `par-mux --help` lists no `attach` command.
+
+**Cause:** the binary was built without the `attach` cargo feature, so `attach` is parsed as a daemon NAME. The published 0.58.0 crate has no `attach` feature.
+
+**Fix:** rebuild with the feature (from a source checkout until 0.58.1 is published):
+
+```bash
+cargo install --path crates/par-mux --features mux-bin,attach --locked
+```
+
+The release archives on GitHub are built with `attach`. See [MUX.md](MUX.md#standalone-binaries-github-releases).
+
+### Cannot attach to a daemon named attach
+
+**Cause:** the `attach` subcommand name shadows the positional NAME form, so `par-mux attach attach` cannot address a daemon literally named `attach`.
+
+**Fix:** pass that daemon's socket path, which it prints at startup: `par-mux attach --socket <path>`.
+
+### Terminal stays in the alternate screen after a crash
+
+**Symptom:** after a render-mode client exits abnormally (a panic, or a config error after the screen was set up), the host terminal stays in the alternate screen with mouse reporting on, so the scrollback is hidden and clicks print escape codes.
+
+**Cause:** render mode restores the alternate screen and mouse capture after its session ends normally. An abnormal exit skips that restore.
+
+**Fix:** run `reset` in the host terminal.
 
 ## Related Documentation
 
