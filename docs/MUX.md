@@ -86,14 +86,16 @@ binaries are built with):
 cargo install --path crates/par-mux --locked --features mux-bin,attach --bin par-mux
 ```
 
-or from crates.io. From the next release the daemon ships as its own
-`par-mux` crate; released versions up to 0.58.1 install it from
-`par-term-emu-core-rust`:
+or from crates.io. The latest published release, 0.58.0, ships the daemon
+from `par-term-emu-core-rust` and has no `attach` feature:
 
 ```bash
-cargo install par-mux --features mux-bin,attach --bin par-mux
-cargo install par-term-emu-core-rust --version 0.58.1 --no-default-features --features mux-bin,attach --bin par-mux
+cargo install par-term-emu-core-rust --version 0.58.0 --no-default-features --features mux-bin --bin par-mux
 ```
+
+From 0.58.1 (pending) the daemon and the attach client ship as their own
+`par-mux` crate (`cargo install par-mux --features mux-bin,attach`). Until it
+is published, use the source build above.
 
 At startup the daemon raises its `RLIMIT_NOFILE` soft limit toward the hard limit (Unix), logging the old and new values — an inherited launchd-style limit of 256 descriptors caps the daemon near 60 panes (~4 descriptors each), which the raise removes. An unbounded hard limit is treated as 8192.
 
