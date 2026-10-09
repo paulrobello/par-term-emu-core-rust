@@ -2,10 +2,10 @@
 
 use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
-use crate::pty_error::PtyError;
-use crate::pty_session::{OutputCallback, PtyInputHandle, PtySession};
-use crate::terminal::replay_snapshot::TerminalSnapshot;
-use crate::terminal::{ObserverDispatchBatch, Terminal};
+use par_term_emu_core::pty_error::PtyError;
+use par_term_emu_core::pty_session::{OutputCallback, PtyInputHandle, PtySession};
+use par_term_emu_core::terminal::replay_snapshot::TerminalSnapshot;
+use par_term_emu_core::terminal::{ObserverDispatchBatch, Terminal};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -589,8 +589,8 @@ impl MuxPane {
             .resize_with_pixels(
                 cols,
                 rows,
-                crate::pty_session::pixel_extent(cols, cell_w),
-                crate::pty_session::pixel_extent(rows, cell_h),
+                par_term_emu_core::pty_session::pixel_extent(cols, cell_w),
+                par_term_emu_core::pty_session::pixel_extent(rows, cell_h),
             )
             .map_err(MuxError::from)
     }
@@ -620,8 +620,8 @@ impl MuxPane {
         let (result, batch) = self.session.resize_with_pixels_deferred(
             cols,
             rows,
-            crate::pty_session::pixel_extent(cols, cell_w),
-            crate::pty_session::pixel_extent(rows, cell_h),
+            par_term_emu_core::pty_session::pixel_extent(cols, cell_w),
+            par_term_emu_core::pty_session::pixel_extent(rows, cell_h),
         );
         (result.map_err(MuxError::from), batch)
     }
@@ -1461,7 +1461,7 @@ mod tests {
 
         // The client mirror replays the forwarded bytes and must render the
         // same graphic — a plain Terminal, exactly what a mux client embeds.
-        let mut mirror = crate::terminal::Terminal::new(80, 24);
+        let mut mirror = par_term_emu_core::terminal::Terminal::new(80, 24);
         mirror.process(&sink_bytes.lock().clone());
         assert_eq!(
             mirror.graphics.graphics_store.all_graphics().len(),

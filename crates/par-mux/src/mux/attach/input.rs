@@ -13,7 +13,7 @@
 //! - plain byte runs (typed text, control bytes) — forwarded verbatim,
 //!   after the prefix scan, because the host already encoded them;
 //! - escape-sequence keys — decoded to a [`TermKeyEvent`] and RE-ENCODED
-//!   against the focused pane's terminal (`crate::keyboard::encode_key`
+//!   against the focused pane's terminal (`par_term_emu_core::keyboard::encode_key`
 //!   honors the pane's DECCKM application-cursor mode and kitty keyboard
 //!   flags tracked from the replay + `%output` stream), so a pane running
 //!   vim gets `ESC O A` while a plain shell gets `ESC [ A`;
@@ -34,8 +34,8 @@
 //! consumed here; the router re-frames the body for a pane that asked for
 //! bracketed paste.
 
-use crate::keyboard::{modifiers, TermKey, TermKeyEvent};
-use crate::terminal::Terminal;
+use par_term_emu_core::keyboard::{modifiers, TermKey, TermKeyEvent};
+use par_term_emu_core::terminal::Terminal;
 
 /// One parsed unit of host stdin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +88,7 @@ impl SgrMouse {
 
     /// The pressed-button index (0 left, 1 middle, 2 right); the low two
     /// bits of the button code.
+    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
     pub fn button(&self) -> u8 {
         self.cb & 0x3
     }
@@ -102,6 +103,7 @@ impl SgrMouse {
     /// The modifier bits, in the crate's [`modifiers`] order — the SGR
     /// wire puts them at shift 2 with the same bit values (shift 1, alt 2,
     /// ctrl 4).
+    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
     pub fn modifiers(&self) -> u8 {
         (self.cb >> 2) & 0x7
     }
@@ -112,7 +114,7 @@ impl SgrMouse {
     /// app negotiates (legacy pane encodings are a documented
     /// simplification).
     pub fn reencode_sgr(&self, rel_col: u16, rel_row: u16) -> Vec<u8> {
-        let event = crate::mouse::MouseEvent::new(
+        let event = par_term_emu_core::mouse::MouseEvent::new(
             self.cb,
             rel_col as usize,
             rel_row as usize,
@@ -120,8 +122,8 @@ impl SgrMouse {
             0,
         );
         event.encode(
-            crate::mouse::MouseMode::AnyEvent,
-            crate::mouse::MouseEncoding::Sgr,
+            par_term_emu_core::mouse::MouseMode::AnyEvent,
+            par_term_emu_core::mouse::MouseEncoding::Sgr,
         )
     }
 }
@@ -466,8 +468,9 @@ pub(crate) fn strip_paste_end(body: &[u8]) -> Vec<u8> {
 /// Re-encode one key event against the focused pane's tracked input state
 /// (DECCKM application cursor, kitty keyboard flags, modifyOtherKeys) and
 /// return the bytes to forward. Empty output means no encoding.
+#[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
 pub fn reencode_key(ev: &TermKeyEvent, pane: &Terminal) -> Vec<u8> {
-    crate::keyboard::encode_key(ev, pane)
+    par_term_emu_core::keyboard::encode_key(ev, pane)
 }
 
 #[cfg(test)]

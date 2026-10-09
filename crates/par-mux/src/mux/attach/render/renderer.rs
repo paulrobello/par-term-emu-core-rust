@@ -363,8 +363,11 @@ pub(crate) struct RenderOptions {
 }
 
 impl Default for RenderOptions {
-    /// The session's pre-config defaults: unicode dividers, no chrome,
-    /// a 20-column side panel when shown, built-in colors.
+    /// The chrome-free baseline a session renders with before its config
+    /// applies: unicode dividers, no borders or labels, a 20-column side
+    /// panel when shown, built-in colors. NOT the configured defaults:
+    /// those live once in `Chords::with_defaults` (herdr glyphs, labels
+    /// on) and reach the session through `render_session_inner`.
     fn default() -> Self {
         Self {
             bg: None,
@@ -847,17 +850,51 @@ impl PaneRenderer {
     /// Record a pane's effective title (the `pane-title` reply); marks
     /// dirty when it changed so the border label repaints.
     pub(crate) fn set_user_title(&mut self, pane: u32, title: &str) {
-        if self.user_titles.get(&pane).map(String::as_str) != Some(title) {
-            self.user_titles.insert(pane, title.to_string());
-            self.dirty = true;
+        let osc = self.osc_title(pane);
+        match self.user_titles.get_mut(&pane) {
+            Some((known, seen_osc)) => {
+                *seen_osc = osc;
+                if known != title {
+                    *known = title.to_string();
+                    self.dirty = true;
+                }
+            }
+            None => {
+                self.user_titles.insert(pane, (title.to_string(), osc));
+                self.dirty = true;
+            }
         }
+    }
+
+    /// Whether a pane's recorded title needs a `pane-title` re-query:
+    /// never queried, invalidated by `%pane-title-changed`, or the pane
+    /// set a new OSC title since (the effective title may follow it).
+    pub(crate) fn title_stale(&self, pane: u32) -> bool {
+        match self.user_titles.get(&pane) {
+            Some((_, seen_osc)) => *seen_osc != self.osc_title(pane),
+            None => true,
+        }
+    }
+
+    /// Forget a pane's recorded title (a `%pane-title-changed` landed),
+    /// so the next status refresh re-queries it.
+    pub(crate) fn invalidate_title(&mut self, pane: u32) {
+        self.user_titles.remove(&pane);
+    }
+
+    /// The pane emulator's own OSC 0/2 title.
+    fn osc_title(&self, pane: u32) -> String {
+        self.emulators
+            .get(&pane)
+            .map(|e| e.terminal().title().to_string())
+            .unwrap_or_default()
     }
 
     /// The pane's border label: the daemon's effective title (user label
     /// first), or the emulator's own OSC title when never queried.
     pub(super) fn border_label(&self, pane: u32) -> String {
         let raw = match self.user_titles.get(&pane) {
-            Some(title) => title.clone(),
+            Some((title, _)) => title.clone(),
             None => self
                 .emulators
                 .get(&pane)
@@ -1016,6 +1053,13 @@ impl PaneRenderer {
         }
         self.dirty = false;
 
+        // The last painted frame becomes this frame's diff baseline by a
+        // swap, not a clone (ARC-132): both buffers share the renderer's
+        // fixed area (a resize rebuilds the renderer), and the reset below
+        // clears the recycled buffer before painting. After the frame,
+        // `self.buffer` holds it for tests and callers to read.
+        std::mem::swap(&mut self.buffer, &mut self.prev_buffer);
+
         // Clear the frame to the host background BEFORE painting: every
         // cell that paint_pane skips (a short history line, the wide-char
         // spacer, past the grid edge) and every cell no pane rect covers
@@ -1058,11 +1102,6 @@ impl PaneRenderer {
             .into_iter()
             .map(|(x, y, cell)| (x, y, cell.clone()))
             .collect::<Vec<_>>();
-        // The painted frame becomes the next diff baseline. `self.buffer`
-        // keeps the frame — tests and callers can read it — and the next
-        // paint's per-cell `reset()` clears each rewritten cell, so no
-        // whole-buffer reset is needed (the layout tiles the window).
-        self.prev_buffer = self.buffer.clone();
         diff
     }
 
@@ -1104,7 +1143,7 @@ impl PaneRenderer {
             let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
             let in_history = (row as usize) < scroll;
             for col in 0..max_cols {
-                let core_cell: &crate::cell::Cell = if in_history {
+                let core_cell: &par_term_emu_core::cell::Cell = if in_history {
                     let logical = scrollback_row.max(0) as usize;
                     match grid.scrollback_line(logical) {
                         Some(line) if usize::from(col) < line.len() => &line[col as usize],

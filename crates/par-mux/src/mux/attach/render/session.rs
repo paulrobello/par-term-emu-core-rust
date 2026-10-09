@@ -183,6 +183,49 @@ impl WindowSession {
     /// Apply the config `border-lines` spelling to the session's glyph
     /// set; reports whether the spelling was recognized (an unknown
     /// value keeps the current set — the caller warns).
+    /// Apply a resolved chord set and its file to the live session: the
+    /// keys, then the display options. The one application path for the
+    /// launch config and every reload, so a default decided in
+    /// `Chords::with_defaults` reaches the session the same way either
+    /// time (ARC-131). The side panel's width and launch visibility are
+    /// the launch path's own. Returns false when `border-lines` names no
+    /// known style (the glyphs are left as they were).
+    pub(super) fn apply_chords(
+        &mut self,
+        chords: &crate::mux::config::Chords,
+        file: &crate::mux::config::ConfigFile,
+    ) -> bool {
+        self.prefix = chords.prefix;
+        self.literal = chords.prefix;
+        self.reload_key = chords.reload;
+        self.management = chords.management;
+        self.resize_step = chords.resize_step;
+        // The border style first, the explicit `pane-borders` flag after
+        // it — the style implies a paint mode (herdr = per-pane boxes),
+        // and the explicit config key still overrides for any glyph set.
+        let known_style = self.set_border_lines(&chords.border_lines);
+        // An explicit `pane-borders` key survives every reload; an absent
+        // key follows the (possibly reloaded) border style. The chords'
+        // own bool cannot tell explicit from absent, so the raw file key
+        // decides.
+        match file.client.pane_borders {
+            Some(on) => self.set_pane_borders(on),
+            None => self.set_pane_borders(matches!(self.render_opts.glyphs, Glyphs::Herdr)),
+        }
+        self.set_show_label_in_border(chords.show_label_in_border);
+        self.set_pane_gaps(chords.pane_gaps);
+        self.set_scrollbar_gutter(chords.scrollbar_gutter);
+        self.drag_cursor_shape = chords.drag_cursor_shape;
+        let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
+        self.set_border_colors(
+            crate::mux::config::parse_hex_color(&eff.border_active_color)
+                .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+            crate::mux::config::parse_hex_color(&eff.border_color)
+                .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
+        );
+        known_style
+    }
+
     pub(super) fn set_border_lines(&mut self, spec: &str) -> bool {
         let glyphs = match spec {
             "" | "unicode" => Glyphs::Unicode,
@@ -219,7 +262,7 @@ impl WindowSession {
     /// seed there is nothing to refit (the seed's report declares).
     fn chrome_changed(&mut self) {
         if !self.window.is_empty() {
-            self.pending_grid_refit = true;
+            self.pending.grid_refit = true;
         }
     }
 
@@ -435,7 +478,7 @@ impl WindowSession {
         if !self.status_bar_on {
             return;
         }
-        let scroll = if self.scroll_mode {
+        let scroll = if matches!(self.modal, Modal::Scroll) {
             self.renderer
                 .focused()
                 .map(|id| self.renderer.scroll_offset_of(id))
@@ -601,16 +644,14 @@ impl WindowSession {
         let geometry = self.geometry;
         let mut flushed = false;
         if self.renderer.needs_frame() {
-            let diff = self.renderer.render_frame();
+            let mut diff = self.renderer.render_frame();
             if !diff.is_empty() {
-                let rebased: Vec<(u16, u16, RtCell)> = diff
-                    .into_iter()
-                    .map(|(x, y, cell)| {
-                        let (hx, hy) = geometry.frame_to_host(x, y);
-                        (hx, hy, cell)
-                    })
-                    .collect();
-                sink.flush(&rebased);
+                // Rebase the owned diff in place: no second vector, no
+                // cell clones (ARC-132).
+                for (x, y, _) in &mut diff {
+                    (*x, *y) = geometry.frame_to_host(*x, *y);
+                }
+                sink.flush(&diff);
                 flushed = true;
             }
         }
@@ -636,7 +677,7 @@ impl WindowSession {
         // the pane's cursor would draw it through the panel (the
         // manual-pass report). Hide the host cursor while a modal is up;
         // the next unmodaled frame restores placement.
-        if self.renderer.overlay.is_some() || self.picker_mode {
+        if self.renderer.overlay.is_some() || self.modal.hides_cursor() {
             cursor = None;
         }
         if flushed || self.cursor_placed.as_ref() != Some(&cursor) {

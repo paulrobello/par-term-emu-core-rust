@@ -1472,7 +1472,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
 
     // The render client: the documented handshake, then the size report
     // that pulls the current layout triple.
-    let mut conn = par_mux::mux::attach::conn::AttachConn::connect(fixture.socket())
+    let mut conn = par_mux::mux::attach::test_support::AttachConn::connect(fixture.socket())
         .expect("render client connect");
     let _replay = conn.drain_pending_events();
     conn.send_checked(&format!("refresh-client -t {pane0} -C 80x24"))
@@ -1490,7 +1490,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
             _ => None,
         })
         .expect("the size report broadcast a layout change");
-    let rects = par_mux::mux::attach::layout::parse_layout_triple(
+    let rects = par_mux::mux::attach::test_support::parse_layout_triple(
         &layout_event.0,
         &layout_event.1,
         &layout_event.2,
@@ -1505,10 +1505,10 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
     );
 
     // Renderer over the daemon's layout, replays per pane.
-    let mut renderer = par_mux::mux::attach::render::PaneRenderer::new(
+    let mut renderer = par_mux::mux::attach::test_support::PaneRenderer::new(
         80,
         24,
-        par_mux::mux::attach::render::Glyphs::Unicode,
+        par_mux::mux::attach::test_support::Glyphs::Unicode,
     );
     renderer.apply_layout(rects.clone());
     for rect in &rects {

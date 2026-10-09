@@ -21,6 +21,11 @@ use std::path::{Path, PathBuf};
 
 pub use interprocess::local_socket::Stream as LocalStream;
 
+// The parsers' only consumer is the attach client; the daemon formats.
+#[cfg_attr(not(feature = "attach"), allow(dead_code))]
+pub(crate) mod rows;
+pub(crate) use rows::{AgentRow, SessionRow, WindowRow, WorkspaceRow};
+
 // Unix serves the interprocess listener as-is: its sockets honor send/recv
 // timeouts, which is what the eviction teardown's poll loop needs (ENH-012).
 // Windows must wrap the named-pipe listener instead — see `LocalListener`

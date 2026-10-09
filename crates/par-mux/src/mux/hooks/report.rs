@@ -3,7 +3,7 @@
 
 use super::{check_value_len, error_reply, is_stale, ok_reply, parse_header, record_seq};
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

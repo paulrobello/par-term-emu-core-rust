@@ -802,7 +802,10 @@ fn parses_kill_session_requiring_a_target() {
 fn parses_list_windows_and_list_sessions() {
     assert_eq!(
         parse_command("list-windows").unwrap(),
-        MuxCommand::ListWindows { session: None }
+        MuxCommand::ListWindows {
+            session: None,
+            all: false
+        }
     );
     assert_eq!(
         parse_command("list-sessions").unwrap(),
@@ -815,13 +818,15 @@ fn parses_targeted_list_windows_and_list_panes() {
     assert_eq!(
         parse_command("list-windows -t $2").unwrap(),
         MuxCommand::ListWindows {
-            session: Some(Target::Id(SessionId(2)))
+            session: Some(Target::Id(SessionId(2))),
+            all: false
         }
     );
     assert_eq!(
         parse_command("list-windows -t work").unwrap(),
         MuxCommand::ListWindows {
-            session: Some(Target::Name("work".to_string()))
+            session: Some(Target::Name("work".to_string())),
+            all: false
         }
     );
     assert_eq!(
@@ -841,12 +846,34 @@ fn parses_targeted_list_windows_and_list_panes() {
     assert_eq!(
         parse_command("list-windows -t work -F '#{window_name}'").unwrap(),
         MuxCommand::ListWindows {
-            session: Some(Target::Name("work".to_string()))
+            session: Some(Target::Name("work".to_string())),
+            all: false
         }
     );
     // A stray positional is rejected.
     assert!(parse_command("list-windows stray").is_err());
     assert!(parse_command("list-panes stray").is_err());
+}
+
+/// `list-windows -a` (ARC-125): the all-sessions form; a tmux-shaped
+/// `-F` still rides along ignored, and `-a` with `-t` is rejected.
+#[test]
+fn parses_list_windows_all() {
+    assert_eq!(
+        parse_command("list-windows -a").unwrap(),
+        MuxCommand::ListWindows {
+            session: None,
+            all: true
+        }
+    );
+    assert_eq!(
+        parse_command("list-windows -a -F '#{window_name}'").unwrap(),
+        MuxCommand::ListWindows {
+            session: None,
+            all: true
+        }
+    );
+    assert!(parse_command("list-windows -a -t $0").is_err());
 }
 
 #[test]
@@ -1747,7 +1774,10 @@ fn mutates_marks_exactly_the_structural_commands() {
             cell_pixels: None,
             chrome: None,
         },
-        MuxCommand::ListWindows { session: None },
+        MuxCommand::ListWindows {
+            session: None,
+            all: false,
+        },
         MuxCommand::ListSessions { workspace: None },
         MuxCommand::ListWorkspaces,
         MuxCommand::CapturePane {

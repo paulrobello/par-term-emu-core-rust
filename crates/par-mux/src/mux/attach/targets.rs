@@ -22,49 +22,31 @@ pub(super) fn reload_client_chords(
     crate::mux::config::reload_client_chords(&file, &current)
 }
 
-/// One `list-sessions` reply line as `(session_id, name)`. The wire shape
-/// is `$N: name` (dispatch.rs), so the id ends at the colon — a plain
-/// whitespace split keeps it (`$0:`), which the daemon's id parser then
-/// rejects. The window roster's `@N: name` lines parse the same way.
+/// One `list-sessions` reply line as `(session_id, name)`, through the
+/// shared [`SessionRow`](crate::mux::ipc::SessionRow) grammar (the id is
+/// the LAST `$N:` marker, so it never keeps the colon — the `$0:` bug).
 pub(crate) fn parse_session_line(line: &str) -> Option<(String, String)> {
-    // Workspace-aware shape: `+W: wname: $N: name` — the session id is the
-    // LAST `$N:` marker, the name is what follows it. The bare `$N: name`
-    // shape (a pre-workspaces daemon) parses identically: split at the
-    // last `: ` whose left side ends in a `$<digits>` id.
-    let idx = line.rfind("$")?;
-    let rest = &line[idx..];
-    let (id, name) = rest.split_once(": ")?;
-    let id = id.strip_prefix('$')?;
-    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some((format!("${id}"), name.to_string()))
+    crate::mux::ipc::SessionRow::parse(line).map(|row| (row.id, row.name))
 }
 
-/// One `list-workspaces` reply line as `(id, name, active)`. The wire
-/// shape is `+N: name`, with the daemon's active workspace's line
-/// ending in ` active`.
+/// One `list-workspaces` reply line as `(id, name, active)`, through the
+/// shared [`WorkspaceRow`](crate::mux::ipc::WorkspaceRow) grammar.
 pub(crate) fn parse_workspace_line(line: &str) -> Option<(String, String, bool)> {
-    let (id, rest) = line.split_once(": ")?;
-    if id.is_empty() || !id.starts_with('+') || !id[1..].bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let (name, active) = match rest.strip_suffix(" active") {
-        Some(name) => (name, true),
-        None => (rest, false),
-    };
-    Some((id.to_string(), name.to_string(), active))
+    crate::mux::ipc::WorkspaceRow::parse(line).map(|row| (row.id, row.name, row.active))
 }
 
-/// The active window of a `list-windows` reply body: the `*`-marked row
-/// (`@N * name`), else the first `@N` row. The one spelling of the
-/// active-window rule both attach modes share.
+/// The active window of a `list-windows -t` reply body: the `*`-marked
+/// row, else the first row. The one spelling of the active-window rule
+/// both attach modes share.
 pub(crate) fn active_window_row(body: &[String]) -> Option<String> {
-    body.iter()
-        .find(|l| l.split_whitespace().nth(1) == Some("*"))
-        .or_else(|| body.iter().find(|l| l.starts_with('@')))
-        .and_then(|l| l.split_whitespace().next())
-        .map(str::to_string)
+    let rows: Vec<crate::mux::ipc::WindowRow> = body
+        .iter()
+        .filter_map(|l| crate::mux::ipc::WindowRow::parse(l))
+        .collect();
+    rows.iter()
+        .find(|row| row.active)
+        .or_else(|| rows.first())
+        .map(|row| row.id.clone())
 }
 
 /// `session`'s active window id ([`active_window_row`] over its
@@ -88,9 +70,8 @@ pub(crate) fn list_window_ids(conn: &mut conn::AttachConn, session: &str) -> Vec
             reply
                 .body
                 .iter()
-                .filter_map(|l| l.split_whitespace().next())
-                .filter(|w| w.starts_with('@'))
-                .map(str::to_string)
+                .filter_map(|l| crate::mux::ipc::WindowRow::parse(l))
+                .map(|row| row.id)
                 .collect()
         })
         .unwrap_or_default()

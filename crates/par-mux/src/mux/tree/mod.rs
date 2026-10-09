@@ -5,11 +5,11 @@ mod lifecycle;
 #[cfg(test)]
 mod tests;
 
-use crate::color::Color;
 use crate::mux::ids::{AnyTarget, IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, PaneChrome, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
-use crate::terminal::ObserverDispatchBatch;
+use par_term_emu_core::color::Color;
+use par_term_emu_core::terminal::ObserverDispatchBatch;
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;

@@ -26,8 +26,8 @@ use crate::mux::server::{
     replay_pane_exited_lines, Clients,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
-use crate::tmux_control::TmuxNotification;
 use base64::Engine as _;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, SyncSender};

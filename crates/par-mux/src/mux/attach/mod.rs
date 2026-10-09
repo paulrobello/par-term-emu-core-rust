@@ -5,18 +5,32 @@
 //! `%output` bytes flow to stdout verbatim, stdin bytes flow to the pane as
 //! chunked `send-keys -H`, and a bottom status row is reserved with DECSTBM.
 //!
-//! Phase B adds the layout parser and pane renderer ([`layout`],
-//! [`render`]) and the [`AttachMode`] seam: [`run`] stays passthrough (the
+//! Phase B adds the layout parser and pane renderer (the crate-private
+//! `layout` and `render` modules) and the [`AttachMode`] seam: [`run`] stays passthrough (the
 //! Phase A contract), and [`run_with_mode`] selects the renderer, which
 //! mirrors every visible pane in its own core emulator and paints the
 //! window through ratatui.
 
-pub mod conn;
-pub mod input;
-pub mod layout;
-pub mod render;
-pub mod status;
-pub mod tabs;
+// The intended public surface is `run`, `run_with_mode`, `AttachOptions`,
+// `AttachMode`, and `AttachError` (ARC-134; see
+// crates/par-term-emu-core/DESIGN.md). The implementation modules stay
+// crate-private; `test_support` re-exports the few items the
+// integration suite drives directly.
+pub(crate) mod conn;
+pub(crate) mod input;
+pub(crate) mod layout;
+pub(crate) mod render;
+pub(crate) mod status;
+pub(crate) mod tabs;
+
+/// Internals the `tests/mux_attach.rs` integration suite drives directly
+/// (a render client over a live daemon). Not part of the supported API.
+#[doc(hidden)]
+pub mod test_support {
+    pub use super::conn::AttachConn;
+    pub use super::layout::parse_layout_triple;
+    pub use super::render::{Glyphs, PaneRenderer};
+}
 
 // Non-render scaffolding (ARC-003): panel composition (help, prompts,
 // picker, sidebar) and target/list-line parsing. The passthrough
@@ -35,7 +49,7 @@ use panels::*;
 use targets::*;
 
 use crate::mux::resolve_socket_path;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -280,7 +294,9 @@ enum PumpOutcome {
     DaemonExited,
 }
 
-/// tmux's default prefix, C-b.
+/// tmux's default prefix, C-b: the tests' spelling of it (the canonical
+/// default lives in `Chords::with_defaults`).
+#[cfg(test)]
 pub(crate) const C_B: u8 = 0x02;
 
 /// The live attach session: owns the connection, the target pane, and the
@@ -830,6 +846,11 @@ impl TerminalGuard {
                 .and_then(|()| std::io::stdout().flush());
         }
         Self { entered }
+    }
+
+    /// Whether raw mode actually came up (false without a tty).
+    pub(crate) fn entered(&self) -> bool {
+        self.entered
     }
 }
 

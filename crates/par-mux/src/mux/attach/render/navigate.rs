@@ -82,7 +82,7 @@ impl WindowSession {
             super::super::ManagementKey::SwapPrev | super::super::ManagementKey::SwapNext => {
                 // Swap with the layout-order neighbor; the %layout-change
                 // broadcast the swap queues re-seeds the window through
-                // the pump's pending_layout path. Fewer than two panes is
+                // the pump's parked-layout path (PendingWork). Fewer than two panes is
                 // a no-op.
                 let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
                 if order.len() < 2 {
@@ -161,7 +161,7 @@ impl WindowSession {
                 // returning) is the feedback. The bottom row's presence
                 // changes the content height: park a refit so the report
                 // and re-fit follow (the sidebar toggle's contract).
-                self.pending_grid_refit = true;
+                self.pending.grid_refit = true;
                 self.draw_status_row();
             }
             super::super::ManagementKey::BorderCycle => {
@@ -219,21 +219,37 @@ impl WindowSession {
         self.land_on_workspace(conn, &ws_id);
     }
 
-    /// Re-query every pane's effective title into the renderer's label
-    /// store — the border labels paint the user `-T` label when set (the
-    /// manual-pass report: prefix `$` labels never showed because the
-    /// painter read the shell's OSC title only). Called on seed and on
-    /// the throttled status refresh; a changed title marks dirty.
-    pub(super) fn refresh_pane_titles(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let panes: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+    /// Refresh the renderer's label store with each visible pane's
+    /// effective title — the border labels paint the user `-T` label when
+    /// set (the manual-pass report: prefix `$` labels never showed
+    /// because the painter read the shell's OSC title only). Called after
+    /// the throttled status refresh. The focused pane's title is the one
+    /// the status refresh just fetched; another pane is re-queried only
+    /// when its recorded title went stale (ARC-125). A changed title
+    /// marks dirty. Stops at the first query that outlives the status
+    /// bound.
+    pub(super) fn refresh_pane_titles(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> Result<(), status::StatusError> {
+        let focused = self.renderer.focused();
+        if let Some(pane) = focused {
+            let title = self.status.pane_title().trim().to_string();
+            self.renderer.set_user_title(pane, &title);
+        }
+        let panes: Vec<u32> = self
+            .renderer
+            .layout()
+            .iter()
+            .map(|r| r.pane)
+            .filter(|pane| Some(*pane) != focused && self.renderer.title_stale(*pane))
+            .collect();
         for pane in panes {
-            if let Ok(reply) = conn.send_checked(&format!("pane-title -t %{pane}")) {
-                if reply.ok {
-                    let title = reply.body.join(" ");
-                    self.renderer.set_user_title(pane, title.trim());
-                }
+            if let Some(body) = status::status_query(conn, &format!("pane-title -t %{pane}"))? {
+                self.renderer.set_user_title(pane, body.join(" ").trim());
             }
         }
+        Ok(())
     }
 
     pub(super) fn land_on_workspace(
@@ -309,40 +325,15 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
-                self.prefix = chords.prefix;
-                self.reload_key = chords.reload;
-                self.management = chords.management;
-                self.resize_step = chords.resize_step;
-                if !self.set_border_lines(&chords.border_lines) {
-                    self.flash = Some(format!(
+                self.flash = Some(if self.apply_chords(&chords, &file) {
+                    "config reloaded".to_string()
+                } else {
+                    format!(
                         "border-lines {:?} unknown — using {}",
                         chords.border_lines,
                         self.render_opts.glyphs.name()
-                    ));
-                }
-                // An explicit `pane-borders` key survives every reload;
-                // an absent key follows the (possibly reloaded) border
-                // style — herdr implies per-pane boxes. The chords' own
-                // bool cannot tell explicit from absent, so the raw file
-                // key decides.
-                match file.client.pane_borders {
-                    Some(on) => self.set_pane_borders(on),
-                    None => self.set_pane_borders(matches!(self.render_opts.glyphs, Glyphs::Herdr)),
-                }
-                self.set_pane_gaps(chords.pane_gaps);
-                self.set_scrollbar_gutter(chords.scrollbar_gutter);
-                self.set_show_label_in_border(chords.show_label_in_border);
-                self.drag_cursor_shape = chords.drag_cursor_shape;
-                let eff =
-                    crate::mux::config::resolve(&file, &crate::mux::config::Overrides::default());
-                self.set_border_colors(
-                    crate::mux::config::parse_hex_color(&eff.border_active_color)
-                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-                    crate::mux::config::parse_hex_color(&eff.border_color)
-                        .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
-                );
-                self.literal = chords.prefix;
-                self.flash = Some("config reloaded".to_string());
+                    )
+                });
             }
             Err(err) => {
                 self.flash = Some(format!("reload failed: {err}"));
@@ -491,7 +482,9 @@ impl WindowSession {
         // The cue resets with the view, then takes the new window's zoom
         // truth from the layout triple the size report queues below.
         self.zoomed = false;
-        self.scroll_mode = false;
+        if matches!(self.modal, Modal::Scroll) {
+            self.modal = Modal::None;
+        }
         if let Some((l, v, f)) =
             conn.drain_pending_events()
                 .into_iter()
@@ -535,11 +528,6 @@ impl WindowSession {
         self.draw_status_row();
         self.tab_strip.invalidate();
         self.draw_tab_strip();
-        // Stale parked state from the replaced view: a follow aimed at the
-        // old window is done (this reseed IS the follow landing), a parked
-        // layout triple was parsed against the old renderer's pane set.
-        self.pending_follow_window = None;
-        self.pending_follow_session = None;
-        self.pending_layout = None;
+        self.pending.clear_view_work();
     }
 }

@@ -112,7 +112,7 @@ impl WindowSession {
                 match self.prefix_chord(byte) {
                     PrefixChord::Reload => self.reload_config(conn),
                     PrefixChord::Management(key) => self.management_chord(key, conn),
-                    PrefixChord::Resize => self.enter_resize_mode(),
+                    PrefixChord::Resize => self.enter_resize(),
                     PrefixChord::Help => self.enter_help(),
                     PrefixChord::Picker => self.enter_picker(conn),
                     PrefixChord::Detach => return true,
@@ -122,7 +122,7 @@ impl WindowSession {
                         // the key is consumed either way.
                         if let Some(id) = self.renderer.focused() {
                             if self.renderer.enter_scroll_mode(id) {
-                                self.scroll_mode = true;
+                                self.open_modal(Modal::Scroll);
                             }
                         }
                     }
@@ -132,7 +132,7 @@ impl WindowSession {
                 }
             } else if byte == self.prefix {
                 *prefix_pending = true;
-            } else if self.scroll_mode {
+            } else if matches!(self.modal, Modal::Scroll) {
                 // Scroll mode's plain keys: q and Enter exit (the
                 // viewport is a modal view — keys do not leak into the
                 // pane).
@@ -167,7 +167,7 @@ impl WindowSession {
         prefix_pending: &mut bool,
     ) {
         *prefix_pending = false;
-        if self.feed_modal_run(body, conn) || self.scroll_mode {
+        if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Scroll) {
             return;
         }
         let Some(id) = self.renderer.focused() else {
@@ -193,41 +193,32 @@ impl WindowSession {
     /// up: the prompt, the menu, help, and the picker each eat bytes
     /// until one closes them (the closing byte and the rest of the run
     /// are dropped); resize mode exits and consumes the run whole (its
-    /// arrows arrive as Key tokens, not bytes). Returns whether a modal
-    /// owned the run.
+    /// arrows arrive as Key tokens, not bytes). The scroll viewport is
+    /// not a run owner (see [`Modal`]'s precedence note). Returns whether
+    /// a modal owned the run.
     fn feed_modal_run(
         &mut self,
         bytes: &[u8],
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> bool {
-        if self.prompt_mode {
-            for &byte in bytes {
-                if !self.prompt_byte(conn, byte) {
-                    break;
+        // The handler is fixed for the run: a byte that closes this modal
+        // ends the run.
+        let byte_handler: fn(&mut Self, &mut crate::mux::attach::conn::AttachConn, u8) -> bool =
+            match &self.modal {
+                Modal::None | Modal::Scroll => return false,
+                Modal::Resize => {
+                    self.modal = Modal::None;
+                    return true;
                 }
+                Modal::Prompt(_) => |s, conn, byte| s.prompt_byte(conn, byte),
+                Modal::Menu(_) => |s, _, byte| s.menu_byte(byte),
+                Modal::Help(_) => |s, _, byte| s.help_byte(byte),
+                Modal::Picker(_) => |s, conn, byte| s.picker_byte(conn, byte),
+            };
+        for &byte in bytes {
+            if !byte_handler(self, conn, byte) {
+                break;
             }
-        } else if self.menu.is_some() {
-            for &byte in bytes {
-                if !self.menu_byte(byte) {
-                    break;
-                }
-            }
-        } else if self.help_mode {
-            for &byte in bytes {
-                if !self.help_byte(byte) {
-                    break;
-                }
-            }
-        } else if self.picker_mode {
-            for &byte in bytes {
-                if !self.picker_byte(conn, byte) {
-                    break;
-                }
-            }
-        } else if self.resize_mode {
-            self.resize_mode = false;
-        } else {
-            return false;
         }
         true
     }
@@ -308,36 +299,21 @@ impl WindowSession {
             self.prefix_pane_arrow(conn, ev);
             return;
         }
-        if self.scroll_mode {
-            self.scroll_mode_key(ev);
-            return;
-        }
-        if self.prompt_mode {
-            self.prompt_key(conn, ev);
-            return;
-        }
-        if self.menu.is_some() {
-            self.menu_key(ev);
-            return;
-        }
-        if self.help_mode {
-            self.help_key(ev);
-            return;
-        }
-        if self.picker_mode {
-            self.picker_key(conn, ev);
-            return;
-        }
-        if self.resize_mode {
-            self.resize_mode_key(conn, ev);
-            return;
+        match &self.modal {
+            Modal::Scroll => return self.scroll_mode_key(ev),
+            Modal::Prompt(_) => return self.prompt_key(conn, ev),
+            Modal::Menu(_) => return self.menu_key(ev),
+            Modal::Help(_) => return self.help_key(ev),
+            Modal::Picker(_) => return self.picker_key(conn, ev),
+            Modal::Resize => return self.resize_key(conn, ev),
+            Modal::None => {}
         }
         let focused = self.focused_pane();
         let bytes = self
             .renderer
             .focused()
             .and_then(|id| self.renderer.pane_terminal(id))
-            .map(|term| crate::keyboard::encode_key(ev, term))
+            .map(|term| par_term_emu_core::keyboard::encode_key(ev, term))
             .unwrap_or_default();
         if !bytes.is_empty() && !focused.is_empty() {
             super::super::forward_chunked(conn, focused, &bytes);
@@ -375,7 +351,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         // Shift+arrow: swap with the pane in that direction. tmux's
         // swap-pane keeps focus following the pane's content, so no
         // re-select is needed — the %layout-change broadcast re-seeds the
@@ -383,7 +359,7 @@ impl WindowSession {
         // matched loosely (a terminal may co-report other modifiers), and
         // both outcomes flash on the status row so a no-op at an edge is
         // never silent (the manual-pass report: the chord felt dead).
-        if ev.modifiers & crate::keyboard::modifiers::SHIFT != 0 {
+        if ev.modifiers & par_term_emu_core::keyboard::modifiers::SHIFT != 0 {
             let dir = match ev.key() {
                 TermKey::Up => PaneDir::Up,
                 TermKey::Down => PaneDir::Down,
@@ -460,14 +436,18 @@ impl WindowSession {
             Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::PickerMove(delta) => self.picker_move(delta),
             Hit::PickerFilter => {
-                self.picker_filtering = true;
+                if let Modal::Picker(picker) = &mut self.modal {
+                    picker.filtering = true;
+                }
                 self.refresh_picker();
             }
             Hit::PickerRow(content) => {
                 // Move the cursor to the clicked row and activate it
                 // (start maps the windowed index onto the filtered
                 // list).
-                self.picker_selected = self.picker_start + content;
+                if let Modal::Picker(picker) = &mut self.modal {
+                    picker.selected = picker.start + content;
+                }
                 self.refresh_picker();
                 self.picker_activate(conn);
             }
@@ -511,7 +491,7 @@ impl WindowSession {
         };
         let strip = self.renderer.sidebar_width();
 
-        if self.menu.is_some() {
+        if matches!(self.modal, Modal::Menu(_)) {
             return self.menu_hit(mouse, x, y);
         }
         // The TOP row stays the tab strip's (the panel begins under it),
@@ -543,16 +523,13 @@ impl WindowSession {
                 release: mouse.release,
             };
         }
-        // The rename prompt is modal for the pointer too: every event is
-        // consumed while it is up.
-        if self.prompt_mode {
-            return Hit::Consumed;
-        }
-        if self.picker_mode {
-            return self.picker_hit(mouse, x, y);
-        }
-        if self.help_mode {
-            return help_hit(mouse);
+        match &self.modal {
+            // The rename prompt is modal for the pointer too: every event
+            // is consumed while it is up.
+            Modal::Prompt(_) => return Hit::Consumed,
+            Modal::Picker(picker) => return self.picker_hit(picker, mouse, x, y),
+            Modal::Help(_) => return help_hit(mouse),
+            Modal::None | Modal::Scroll | Modal::Menu(_) | Modal::Resize => {}
         }
         if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);
@@ -607,7 +584,7 @@ impl WindowSession {
     /// the select+resync), a click on the filter line opens the filter
     /// box, and everything else — drags, releases, the footer — is
     /// consumed. `x` is the strip-rebased column.
-    fn picker_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+    fn picker_hit(&self, picker: &PickerState, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
         if mouse.is_wheel_up() {
             return Hit::PickerMove(-1);
         }
@@ -624,13 +601,13 @@ impl WindowSession {
         // open or set; idle, content starts at row 0 (the idle
         // placeholder row the old mapping assumed is gone). The footer —
         // the panel's last row — does nothing.
-        let filtering = self.picker_filtering || !self.picker_filter.is_empty();
+        let filtering = picker.filtering || !picker.filter.is_empty();
         let filter_lines = usize::from(filtering);
         if filtering && row == 0 {
             return Hit::PickerFilter;
         }
         match row.checked_sub(filter_lines) {
-            Some(content) if content < self.picker_panel_len.saturating_sub(filter_lines + 1) => {
+            Some(content) if content < picker.panel_len.saturating_sub(filter_lines + 1) => {
                 Hit::PickerRow(content)
             }
             _ => Hit::Consumed,
@@ -735,7 +712,7 @@ impl WindowSession {
     pub(super) fn pane_owns_mouse(&self, pane: u32) -> bool {
         self.renderer
             .pane_terminal(pane)
-            .is_some_and(|t| t.mouse_mode() != crate::mouse::MouseMode::Off)
+            .is_some_and(|t| t.mouse_mode() != par_term_emu_core::mouse::MouseMode::Off)
     }
 
     /// One motion or release while a drag is in flight: motion promotes a
@@ -809,7 +786,7 @@ impl WindowSession {
     /// `resize-pane` per unapplied cell of delta, aimed at the boundary's
     /// left/top pane (the daemon re-divides the neighbor). Best-effort —
     /// the %layout-change broadcast re-seeds the window through the
-    /// pump's pending_layout path.
+    /// pump's parked-layout path (PendingWork).
     pub(super) fn apply_drag(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let Some(DragState::Active {
             divider,

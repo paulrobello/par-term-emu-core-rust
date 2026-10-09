@@ -7,8 +7,8 @@
 //! first time pane output arrived mid-command.
 
 use crate::mux::ipc::{connect_local_stream, default_socket_path, LocalStream};
-use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use interprocess::TryClone as _;
+use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -28,6 +28,11 @@ pub struct MuxClient {
     /// spawner can end what it created via [`MuxClient::kill_spawned_daemon`];
     /// `None` when the client attached to an existing server.
     spawned_daemon: Option<std::process::Child>,
+    /// Replies owed to commands whose wait timed out. The daemon answers
+    /// in order and the reply channel is FIFO, so later waits discard
+    /// this many blocks before taking their own; otherwise a late reply
+    /// would answer the following command.
+    abandoned_replies: usize,
 }
 
 impl MuxClient {
@@ -199,6 +204,7 @@ impl MuxClient {
             reply_rx,
             notifications_rx,
             spawned_daemon: None,
+            abandoned_replies: 0,
         })
     }
 
@@ -213,18 +219,36 @@ impl MuxClient {
     /// Run one command and return its reply block, including whether the
     /// daemon closed it with `%end` (success) or `%error` (failure).
     pub fn send_checked(&mut self, command: &str) -> io::Result<Reply> {
+        self.send_checked_timeout(command, REPLY_TIMEOUT)
+    }
+
+    /// [`Self::send_checked`] bounded by `timeout` instead of the 10 s
+    /// default. A timed-out command's reply is still owed: it is counted
+    /// and discarded when it arrives, so later commands keep reading
+    /// their own replies.
+    pub fn send_checked_timeout(&mut self, command: &str, timeout: Duration) -> io::Result<Reply> {
         writeln!(self.writer, "{command}")?;
         self.writer.flush()?;
-        match self.reply_rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(reply) => Ok(reply),
-            Err(RecvTimeoutError::Timeout) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("no reply block within {}s", REPLY_TIMEOUT.as_secs()),
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "server closed the connection",
-            )),
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.reply_rx.recv_timeout(remaining) {
+                Ok(_) if self.abandoned_replies > 0 => self.abandoned_replies -= 1,
+                Ok(reply) => return Ok(reply),
+                Err(RecvTimeoutError::Timeout) => {
+                    self.abandoned_replies += 1;
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("no reply block within {}ms", timeout.as_millis()),
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::ConnectionAborted,
+                        "server closed the connection",
+                    ));
+                }
+            }
         }
     }
 

@@ -161,10 +161,14 @@ pub(super) fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<Workspac
             let Some(session) = guard.session(*session_id) else {
                 continue;
             };
-            lines.push(format!(
-                "{}: {}: {}: {}",
-                ws.id, ws.name, session.id, session.name
-            ));
+            lines.push(
+                crate::mux::ipc::SessionRow {
+                    workspace: Some((ws.id.to_string(), ws.name.clone())),
+                    id: session.id.to_string(),
+                    name: session.name.clone(),
+                }
+                .to_string(),
+            );
         }
     }
     Outcome::ok(ctx, &lines.join("\n"))
@@ -225,11 +229,12 @@ pub(super) fn cmd_list_workspaces(ctx: &Ctx<'_>) -> Outcome {
         .iter()
         .filter_map(|id| guard.workspace(*id))
         .map(|ws| {
-            if Some(ws.id) == active {
-                format!("{}: {} active", ws.id, ws.name)
-            } else {
-                format!("{}: {}", ws.id, ws.name)
+            crate::mux::ipc::WorkspaceRow {
+                id: ws.id.to_string(),
+                name: ws.name.clone(),
+                active: Some(ws.id) == active,
             }
+            .to_string()
         })
         .collect::<Vec<_>>()
         .join("\n");

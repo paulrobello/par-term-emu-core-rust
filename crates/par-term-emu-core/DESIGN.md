@@ -205,11 +205,10 @@ wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`
 `mux` feature gate.
 
 - **Crate shape.** par-mux's `lib.rs` declares `#[cfg(feature = "mux")] pub
-  mod mux;` and re-exports, crate-private, the core modules the moved tree
-  names through `crate::` (`cell`, `color`, `keyboard`, `terminal`,
-  `tmux_control`, `pty_session`, `pty_error`, the `debug_*!` macros, and —
-  feature/test-gated — `mouse`, `cursor`, `zone`), so the moved tree's
-  `crate::` paths resolve with no edits. Root `lib.rs` replaces `pub mod mux;`
+  mod mux;` and nothing else. At the move it also re-exported, crate-private,
+  the core modules the moved tree named through `crate::` so those paths
+  resolved with no edits; ARC-133 rewrote every such path to
+  `par_term_emu_core::…` and deleted the shims. Root `lib.rs` replaces `pub mod mux;`
   with `#[cfg(feature = "mux")] pub use par_mux::mux;`: every
   `par_term_emu_core_rust::mux::…` path is unchanged (par-term's imports were
   checked against it).
@@ -245,6 +244,15 @@ wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`
   `par_term_emu_core_rust::mux::…` to `par_mux::mux::…`. Unlike the Phase 1
   `event_broker` pin, these are not pinned: par-term does not filter on that
   target. The `debug_*!` sites use the core's fixed target and are unchanged.
+- **`mux::attach` public surface (ARC-134).** The supported API is
+  `attach::{run, run_with_mode, AttachOptions, AttachMode, AttachError}`.
+  The implementation modules (`conn`, `input`, `layout`, `render`,
+  `status`, `tabs`) are `pub(crate)`; none existed at the published
+  `v0.58.0` tag, so narrowing them was not a semver break. The
+  `#[doc(hidden)] attach::test_support` module re-exports the few items the
+  `tests/mux_attach.rs` integration suite drives directly (`AttachConn`,
+  `parse_layout_triple`, `PaneRenderer`, `Glyphs`) and is not part of the
+  supported API. par-term imports none of these paths.
 - **Test-count preservation** (`rust-only,mux-bin,serde,attach`, all
   targets): 1019 before; after, root 64 (lib 1, `mux_feature_isolation` 1,
   the non-mux suites 62) + par-mux 955 (lib 798, bin 8, integration 149).

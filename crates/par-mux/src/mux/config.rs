@@ -525,6 +525,9 @@ pub fn socket_value_to_path(value: &str) -> PathBuf {
 /// header. Round-trips through [`load_file`].
 #[must_use]
 pub fn render(eff: &EffectiveConfig) -> String {
+    // The display defaults come from the one canonical chord set, so the
+    // generated file cannot drift from what the client applies (ARC-131).
+    let defaults = Chords::with_defaults();
     let file = ConfigFile {
         client: ClientSection {
             prefix: Some(eff.prefix.clone()),
@@ -541,7 +544,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_next: None,
             workspace_prev: None,
             help: None,
-            picker: Some("w".to_string()),
+            picker: Some(char::from(defaults.management.picker).to_string()),
             zoom: None,
             rename_window: None,
             rename_pane: None,
@@ -550,14 +553,14 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_picker: None,
             sidebar: None,
             status_bar: None,
-            sidebar_width: Some(20),
-            sidebar_on_launch: Some(true),
-            border_lines: Some("herdr".to_string()),
+            sidebar_width: Some(defaults.sidebar_width),
+            sidebar_on_launch: Some(defaults.sidebar_on_launch),
+            border_lines: Some(defaults.border_lines.clone()),
             pane_borders: None,
-            show_label_in_border: Some(true),
-            pane_gaps: Some(0),
-            scrollbar_gutter: Some(false),
-            drag_cursor_shape: Some(false),
+            show_label_in_border: Some(defaults.show_label_in_border),
+            pane_gaps: Some(defaults.pane_gaps),
+            scrollbar_gutter: Some(defaults.scrollbar_gutter),
+            drag_cursor_shape: Some(defaults.drag_cursor_shape),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
         },
@@ -1596,6 +1599,31 @@ remain-on-exit = true
             .expect("no io error")
             .expect("written file parses");
         assert_eq!(resolve(&loaded, &Overrides::default()), mutated);
+    }
+
+    /// ARC-131: every display default the generated config spells equals
+    /// `Chords::with_defaults()`, and the generated file resolves back to
+    /// exactly that chord set.
+    #[test]
+    fn gen_config_display_defaults_equal_with_defaults() {
+        let defaults = Chords::with_defaults();
+        let text = render(&EffectiveConfig::default());
+        let file: ConfigFile = toml::from_str(&text).expect("parses");
+        let c = &file.client;
+        assert_eq!(c.sidebar_width, Some(defaults.sidebar_width));
+        assert_eq!(c.sidebar_on_launch, Some(defaults.sidebar_on_launch));
+        assert_eq!(
+            c.border_lines.as_deref(),
+            Some(defaults.border_lines.as_str())
+        );
+        assert_eq!(c.show_label_in_border, Some(defaults.show_label_in_border));
+        assert_eq!(c.pane_gaps, Some(defaults.pane_gaps));
+        assert_eq!(c.scrollbar_gutter, Some(defaults.scrollbar_gutter));
+        assert_eq!(c.drag_cursor_shape, Some(defaults.drag_cursor_shape));
+        assert_eq!(
+            reload_client_chords(&file, &Chords::with_defaults()).expect("resolves"),
+            defaults
+        );
     }
 
     /// `sidebar-on-launch` resolves to true when absent, and follows an

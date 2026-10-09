@@ -2407,7 +2407,7 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
             .notifications()
             .recv_timeout(std::time::Duration::from_millis(100))
         {
-            Ok(crate::tmux_control::TmuxNotification::WindowClose { window_id }) => {
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::WindowClose { window_id }) => {
                 assert_eq!(window_id, "@0");
                 return;
             }

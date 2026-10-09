@@ -20,6 +20,7 @@
 
 use super::conn::AttachConn;
 use super::spell_key;
+use crate::mux::ipc::{AgentRow, WindowRow};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -48,6 +49,38 @@ pub(crate) enum StatusError {
     /// A query failed (transport-level); the caller keeps the stale
     /// state and retries on the next dirty mark.
     Query,
+    /// A query outlived [`STATUS_TIMEOUT`]: the refresh stopped there
+    /// (later queries would each wait as long), the stale state stands,
+    /// and the caller re-marks the status dirty for the next tick.
+    TimedOut,
+}
+
+/// Reply rows one refresh fetched that other chrome reuses instead of
+/// re-querying: the `list-workspaces` roster as `(id, name, active)`,
+/// `None` when that query failed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct RefreshRows {
+    pub workspaces: Option<Vec<(String, String, bool)>>,
+}
+
+/// The bound on each status query. The refresh runs on the input pump,
+/// so a wedged daemon must cost keystrokes at most this long, not the
+/// connection's 10 s reply timeout.
+pub(crate) const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// One bounded status query: `Ok(Some(body))` for an ok reply,
+/// `Ok(None)` for an `%error` reply or a non-timeout transport failure,
+/// `Err(TimedOut)` when the reply did not arrive within the bound.
+pub(crate) fn status_query(
+    conn: &mut AttachConn,
+    command: &str,
+) -> Result<Option<Vec<String>>, StatusError> {
+    match conn.send_checked_timeout(command, STATUS_TIMEOUT) {
+        Ok(reply) if reply.ok => Ok(Some(reply.body)),
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Err(StatusError::TimedOut),
+        Err(_) => Ok(None),
+    }
 }
 
 /// The queried status state behind the bottom row.
@@ -75,125 +108,133 @@ impl StatusState {
     /// Re-query everything over `conn` for the view showing `window`
     /// with `focused` as the focused pane id. Every field that resolves
     /// updates; a failed individual query keeps its previous value.
-    /// `Err(SessionGone)` when the reply set proves no session owns
-    /// `window` any more.
+    /// `Err(SessionGone)` when an ok reply proves no session owns
+    /// `window` any more; `Err(TimedOut)` stops at the first query that
+    /// outlives [`STATUS_TIMEOUT`].
+    ///
+    /// One round per query (ARC-125): `list-sessions`, `list-workspaces`
+    /// (its rows are returned for the side panel to reuse rather than
+    /// re-query), one `list-windows -a` that both finds the owning
+    /// session and lists its windows (a daemon without the `all` token
+    /// gets the per-session scan, reusing the owner's reply),
+    /// `pane-title` for the focused pane, and `list-agents`.
     pub(crate) fn refresh(
         &mut self,
         conn: &mut AttachConn,
         window: &str,
         focused: u32,
-    ) -> Result<(), StatusError> {
+    ) -> Result<RefreshRows, StatusError> {
         // Sessions first: their ids drive the window scan.
-        let session_rows = match conn.send_checked("list-sessions") {
-            Ok(reply) if reply.ok => reply.body,
-            Ok(_) | Err(_) => {
-                return Err(StatusError::Query);
-            }
+        let Some(session_rows) = status_query(conn, "list-sessions")? else {
+            return Err(StatusError::Query);
         };
 
         // The workspace roster: the status line's leading segment. The
         // daemon lists in id order and marks the active one, so the reply
         // order IS the display order and the active pick is one find.
-        if let Ok(reply) = conn.send_checked("list-workspaces") {
-            if reply.ok {
-                let rows: Vec<(String, String, bool)> = reply
-                    .body
-                    .iter()
-                    .filter_map(|l| super::parse_workspace_line(l))
-                    .collect();
-                self.workspaces = rows
-                    .iter()
-                    .map(|(id, name, _)| (id.clone(), name.clone()))
-                    .collect();
-                self.active_workspace = rows
-                    .iter()
-                    .find(|(_, _, active)| *active)
-                    .map(|(id, _, _)| id.clone());
-            }
+        let mut rows = RefreshRows::default();
+        if let Some(body) = status_query(conn, "list-workspaces")? {
+            let parsed: Vec<(String, String, bool)> = body
+                .iter()
+                .filter_map(|l| super::parse_workspace_line(l))
+                .collect();
+            self.workspaces = parsed
+                .iter()
+                .map(|(id, name, _)| (id.clone(), name.clone()))
+                .collect();
+            self.active_workspace = parsed
+                .iter()
+                .find(|(_, _, active)| *active)
+                .map(|(id, _, _)| id.clone());
+            rows.workspaces = Some(parsed);
         }
         self.sessions = session_rows
             .iter()
-            .filter_map(|line| {
-                // Workspace-aware shape `+W: wname: $N: name` — the shared
-                // parser extracts the session id (the last `$N:` marker).
-                super::parse_session_line(line)
-            })
+            // Workspace-aware shape `+W: wname: $N: name` — the shared
+            // parser extracts the session id (the last `$N:` marker).
+            .filter_map(|line| super::parse_session_line(line))
             .collect();
 
-        // Which session owns our window now? (It can move or vanish.)
-        let mut owner = None;
-        for (id, _) in &self.sessions {
-            let Ok(reply) = conn.send_checked(&format!("list-windows -t {id}")) else {
-                continue;
-            };
-            if !reply.ok {
-                continue;
-            }
-            if reply
-                .body
-                .iter()
-                .any(|line| line.split_whitespace().next() == Some(window))
-            {
-                owner = Some(id.clone());
-                break;
-            }
-        }
-        let Some(session_id) = owner else {
-            return Err(StatusError::SessionGone);
-        };
-        self.session_id = Some(session_id.clone());
-
-        // The shown session's windows and its active one.
-        if let Ok(reply) = conn.send_checked(&format!("list-windows -t {session_id}")) {
-            if reply.ok {
-                self.windows = reply
-                    .body
-                    .iter()
-                    .filter_map(|line| {
-                        let id = line.split_whitespace().next()?;
-                        // The name is the line remainder after "id marker".
-                        let rest = line
-                            .split_whitespace()
-                            .skip(2)
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let name = if rest.is_empty() {
-                            id.to_string()
-                        } else {
-                            rest
-                        };
-                        Some((id.to_string(), name))
-                    })
-                    .collect();
-                self.active_window = super::targets::active_window_row(&reply.body)
-                    .or_else(|| self.windows.first().map(|(id, _)| id.clone()));
-            }
-        }
+        // Which session owns our window now (it can move or vanish), and
+        // that session's window rows.
+        let (session_id, window_rows) = self.find_owner(conn, window)?;
+        self.session_id = Some(session_id);
+        self.windows = window_rows
+            .iter()
+            .filter_map(|line| WindowRow::parse(line))
+            // An unnamed window shows its id.
+            .map(|row| {
+                let name = if row.name.trim().is_empty() {
+                    row.id.clone()
+                } else {
+                    row.name.split_whitespace().collect::<Vec<_>>().join(" ")
+                };
+                (row.id, name)
+            })
+            .collect();
+        self.active_window = super::targets::active_window_row(&window_rows)
+            .or_else(|| self.windows.first().map(|(id, _)| id.clone()));
 
         // The focused pane's title.
-        if let Ok(reply) = conn.send_checked(&format!("pane-title -t %{focused}")) {
-            if reply.ok {
-                self.pane_title = reply.body.join(" ");
-            }
+        if let Some(body) = status_query(conn, &format!("pane-title -t %{focused}"))? {
+            self.pane_title = body.join(" ");
         }
 
         // The agent roster: `%N <agent> <state> <source> [key=val …]`.
-        if let Ok(reply) = conn.send_checked("list-agents") {
-            if reply.ok {
-                self.agents = reply
-                    .body
-                    .iter()
-                    .filter_map(|line| {
-                        let mut fields = line.split_whitespace();
-                        let _pane = fields.next()?;
-                        let agent = fields.next()?.to_string();
-                        let state = fields.next()?.to_string();
-                        Some((agent, state))
-                    })
-                    .collect();
+        if let Some(body) = status_query(conn, "list-agents")? {
+            self.agents = body
+                .iter()
+                .filter_map(|line| AgentRow::parse(line))
+                .map(|row| (row.agent, row.state))
+                .collect();
+        }
+        Ok(rows)
+    }
+
+    /// The session owning `window` and its `list-windows -t` rows. One
+    /// `list-windows -a` when the daemon advertises it; otherwise the
+    /// per-session `-t` scan, whose matching reply doubles as the rows.
+    /// `SessionGone` only when the replies came back and none listed the
+    /// window; a failed `-a` is `Query`.
+    fn find_owner(
+        &self,
+        conn: &mut AttachConn,
+        window: &str,
+    ) -> Result<(String, Vec<String>), StatusError> {
+        if conn.has_command_feature("list-windows", "all") {
+            let Some(body) = status_query(conn, "list-windows -a")? else {
+                return Err(StatusError::Query);
+            };
+            // `-a` rows are `$S ` + a `-t` row.
+            let tagged: Vec<(&str, &str)> = body
+                .iter()
+                .filter_map(|line| line.split_once(' '))
+                .collect();
+            let owner = tagged.iter().find_map(|(session, row)| {
+                (WindowRow::parse(row)?.id == window).then(|| session.to_string())
+            });
+            let Some(owner) = owner else {
+                return Err(StatusError::SessionGone);
+            };
+            let rows = tagged
+                .iter()
+                .filter(|(session, _)| *session == owner)
+                .map(|(_, row)| row.to_string())
+                .collect();
+            return Ok((owner, rows));
+        }
+        for (id, _) in &self.sessions {
+            let Some(body) = status_query(conn, &format!("list-windows -t {id}"))? else {
+                continue;
+            };
+            if body
+                .iter()
+                .any(|line| WindowRow::parse(line).is_some_and(|row| row.id == window))
+            {
+                return Ok((id.clone(), body));
             }
         }
-        Ok(())
+        Err(StatusError::SessionGone)
     }
 
     /// The shown session's windows as `(id, name)`, window order — the

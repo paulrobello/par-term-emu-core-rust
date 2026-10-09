@@ -42,8 +42,12 @@ pub(super) fn parse_list_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
     // `-t <session>` scopes the listing to one session (tmux's
     // `list-windows -t <session>`); the bare form stays global.
     let session = a.session("-t")?;
+    let all = a.has_flag("-a");
+    if all && session.is_some() {
+        return Err("list-windows: -a and -t are mutually exclusive".to_string());
+    }
     reject_positionals(a, LIST_WINDOWS_VALUE_FLAGS)?;
-    Ok(MuxCommand::ListWindows { session })
+    Ok(MuxCommand::ListWindows { session, all })
 }
 
 /// tmux's value-taking `list-windows` flags (QA-219's rule), same shape as

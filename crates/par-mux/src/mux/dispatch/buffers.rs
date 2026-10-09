@@ -62,9 +62,9 @@ pub(super) fn cmd_capture_pane(
                     // the tmux -S/-E range trim happens here on the
                     // composed buffer, not in Terminal.
                     let format = if escape {
-                        crate::terminal::ExportFormat::Ansi
+                        par_term_emu_core::terminal::ExportFormat::Ansi
                     } else {
-                        crate::terminal::ExportFormat::Plain
+                        par_term_emu_core::terminal::ExportFormat::Plain
                     };
                     let scrollback = term.export_scrollback(format, None);
                     let screen = if escape {
@@ -91,7 +91,7 @@ pub(super) fn cmd_set_client_colors(
     fg: Option<(u8, u8, u8)>,
     bg: Option<(u8, u8, u8)>,
 ) -> Outcome {
-    let to_color = |(r, g, b)| crate::color::Color::Rgb(r, g, b);
+    let to_color = |(r, g, b)| par_term_emu_core::color::Color::Rgb(r, g, b);
     ctx.tree
         .lock()
         .set_client_colors(fg.map(to_color), bg.map(to_color));

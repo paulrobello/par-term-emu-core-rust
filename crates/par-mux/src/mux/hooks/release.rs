@@ -2,7 +2,7 @@
 
 use super::{clear_agent_claim, error_reply, is_stale, ok_reply, parse_header};
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

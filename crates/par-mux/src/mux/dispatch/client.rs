@@ -180,32 +180,39 @@ pub(super) fn cmd_refresh_client(
     }
 }
 
-/// Format one roster row's entry (everything after the pane id): agent,
-/// state, source, then zero or more whitespace-free `key=value` tokens —
-/// `reason=<base64>` (blocked reason), `telemetry=<base64>`,
-/// `host_telemetry=<base64>`. Every token after `source` is key=value,
-/// so a consumer parses positions 1-4 then splits each remaining token
-/// on its first `=` (ARC-060: a free-text reason column was ambiguous).
-pub(super) fn roster_row_entry(
+/// Build one roster row: pane, agent, state, source, then zero or more
+/// whitespace-free `key=value` tokens — `reason=<base64>` (blocked
+/// reason), `telemetry=<base64>`, `host_telemetry=<base64>`. Every token
+/// after `source` is key=value, so a consumer parses positions 1-4 then
+/// splits each remaining token on its first `=` (ARC-060: a free-text
+/// reason column was ambiguous).
+pub(super) fn roster_row(
+    pane: PaneId,
     agent: &str,
     state: &str,
     source: &str,
     reason: Option<&str>,
     telemetry_b64: Option<&str>,
     host_telemetry_b64: Option<&str>,
-) -> String {
-    let mut entry = format!("{agent} {state} {source}");
+) -> crate::mux::ipc::AgentRow {
+    let mut extras = Vec::new();
     if let Some(reason) = reason {
         let encoded = base64::engine::general_purpose::STANDARD.encode(reason.as_bytes());
-        entry.push_str(&format!(" reason={encoded}"));
+        extras.push(("reason".to_string(), encoded));
     }
     if let Some(telemetry) = telemetry_b64 {
-        entry.push_str(&format!(" telemetry={telemetry}"));
+        extras.push(("telemetry".to_string(), telemetry.to_string()));
     }
     if let Some(host) = host_telemetry_b64 {
-        entry.push_str(&format!(" host_telemetry={host}"));
+        extras.push(("host_telemetry".to_string(), host.to_string()));
     }
-    entry
+    crate::mux::ipc::AgentRow {
+        pane: pane.to_string(),
+        agent: agent.to_string(),
+        state: state.to_string(),
+        source: source.to_string(),
+        extras,
+    }
 }
 
 pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
@@ -226,7 +233,7 @@ pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     // "idle" (the Phase 5 ruling). Fixed shape, no -F — the T4.E
     // decision.
     let guard = ctx.tree.lock();
-    let mut roster: Vec<(PaneId, String)> = guard
+    let mut roster: Vec<(PaneId, crate::mux::ipc::AgentRow)> = guard
         .sessions()
         .iter()
         .filter_map(|s| guard.session(*s))
@@ -256,14 +263,16 @@ pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.telemetry.as_ref());
             let host =
                 crate::mux::host_probe::fresh_host_telemetry_b64(pane.host_telemetry.as_ref());
-            let entry = roster_row_entry(agent, state, source, reason, telemetry, host.as_deref());
-            Some((p, entry))
+            Some((
+                p,
+                roster_row(p, agent, state, source, reason, telemetry, host.as_deref()),
+            ))
         })
         .collect();
     roster.sort_by_key(|(pane, _)| *pane);
     let body = roster
         .iter()
-        .map(|(pane, entry)| format!("{pane} {entry}"))
+        .map(|(_, row)| row.to_string())
         .collect::<Vec<_>>()
         .join("\n");
     Outcome::ok(ctx, &body)

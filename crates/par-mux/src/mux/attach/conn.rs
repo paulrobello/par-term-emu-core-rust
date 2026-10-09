@@ -8,7 +8,7 @@
 
 use crate::mux::build_stamp;
 use crate::mux::client::{MuxClient, Reply};
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
@@ -181,6 +181,12 @@ impl AttachConn {
     /// path both attach phases use beyond the handshake.
     pub fn send_checked(&mut self, command: &str) -> io::Result<Reply> {
         self.client.send_checked(command)
+    }
+
+    /// [`Self::send_checked`] bounded by `timeout`: the status refresh's
+    /// path, so a wedged daemon delays the bar instead of freezing input.
+    pub fn send_checked_timeout(&mut self, command: &str, timeout: Duration) -> io::Result<Reply> {
+        self.client.send_checked_timeout(command, timeout)
     }
 
     /// The push stream: everything the daemon sends that is not a command

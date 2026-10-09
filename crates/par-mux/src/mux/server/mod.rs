@@ -23,7 +23,7 @@ use crate::mux::ipc::{
 use crate::mux::pane::{OutputSink, ShellPaneFactory};
 use crate::mux::persist::{write_job, PersistState, SaveOrigin};
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 // The Windows LocalListener wrapper exposes accept/set_nonblocking as
 // inherent methods, so the trait import is only reachable — and only used —
 // on Unix.
@@ -487,7 +487,10 @@ impl MuxServer {
             // normally exits within one poll, but a probe blocked on a
             // wedged filesystem must not hold the daemon's exit.
             if !join_bounded(probe_worker, PROBE_JOIN_BOUND) {
-                crate::debug_error!("MUX", "host probe still running at shutdown; detached");
+                par_term_emu_core::debug_error!(
+                    "MUX",
+                    "host probe still running at shutdown; detached"
+                );
             }
         }
         // The socket file is unlinked by the mode's owner — `run` at once,
