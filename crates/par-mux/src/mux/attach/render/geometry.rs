@@ -46,6 +46,17 @@ impl FrameGeometry {
         }
     }
 
+    /// The geometry of a standalone renderer whose buffer is the frame:
+    /// `frame_w` x `frame_h` below the strip, status bar off.
+    pub fn standalone(frame_w: u16, frame_h: u16, sidebar_w: u16) -> Self {
+        Self::new(
+            frame_w,
+            frame_h.saturating_add(STRIP_ROWS),
+            false,
+            sidebar_w,
+        )
+    }
+
     /// The renderer's frame extent: full host width, the rows between
     /// the strip and the status bar.
     pub fn frame_size(&self) -> (u16, u16) {

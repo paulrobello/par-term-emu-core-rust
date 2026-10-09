@@ -411,13 +411,10 @@ impl PaneRenderer {
             focused: None,
             width,
             height,
-            // A standalone renderer's own geometry: its buffer is the
-            // frame below the strip, status bar off. A session overrides
-            // it with its own (`set_geometry`).
-            geometry: super::geometry::FrameGeometry::new(
+            // A session overrides this with its own (`set_geometry`).
+            geometry: super::geometry::FrameGeometry::standalone(
                 width,
-                height.saturating_add(super::geometry::STRIP_ROWS),
-                false,
+                height,
                 options.sidebar_width,
             ),
             sidebar_sections: None,
