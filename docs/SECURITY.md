@@ -1233,6 +1233,28 @@ The argv's provenance is the same-user hook report or the table compiled
 into the binary — a hostile value requires already having the user's
 privileges.
 
+### Attach Modes
+
+`par-mux attach` has two modes, and they trust pane output differently.
+
+- **Render mode (the default)** feeds pane output into a per-pane core
+  emulator inside the client and paints only the resulting cells:
+  characters, colors and attributes, the cursor position, and a cursor
+  shape mapped from the pane's tracked style. Pane escape sequences never
+  reach the host terminal. The mirror emulator's query replies and bells
+  are discarded (SEC-207), because the daemon's PTY session already
+  answers the pane.
+- **Passthrough mode (`--mode passthrough`)** forwards the pane's bytes
+  to the host terminal verbatim. The host terminal is the pane's
+  emulator, so whatever runs in the pane gets the host's full
+  escape-sequence capability: OSC 52 clipboard writes, OSC 8 hyperlinks,
+  window-title changes, and queries whose replies the host types back
+  into the pane's input. This is by design, matching tmux's attach model.
+  Only the client's own status row is sanitized (SEC-209).
+
+Use render mode when a pane displays untrusted output, such as a remote
+host, a downloaded file, or a log you did not write.
+
 ### See Also
 
 - [MUX.md](MUX.md) — the daemon's operational reference (paths, protocol,
