@@ -253,9 +253,8 @@ cargo install par-term-emu-core-rust --no-default-features --features streaming-
 cargo install par-term-emu-core-rust --version 0.58.0 --no-default-features --features mux-bin --bin par-mux
 ```
 
-The `par-mux attach` client and the standalone `par-mux` crate ship in 0.58.1
-(pending). Until then, build them from a source checkout (drop `,attach` for
-the daemon alone):
+The `par-mux attach` client and the standalone `par-mux` crate ship in 0.58.1 (pending).
+Until then, build them from a source checkout (drop `,attach` for the daemon alone):
 
 ```bash
 cargo install --path crates/par-mux --features mux-bin,attach --locked
