@@ -26,6 +26,12 @@ pub(super) fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListAgents)
 }
 
+pub(super) fn parse_client_snapshot(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let window = a.window("-t")?;
+    reject_positionals(a, &["-t"])?;
+    Ok(MuxCommand::ClientSnapshot { window })
+}
+
 pub(super) fn parse_kill_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillPane {
         pane: a.pane("-t")?,

@@ -1870,13 +1870,15 @@ fn status_refresh_round_trips_are_bounded() {
     session.sidebar_on = true;
     session.renderer.focus(1);
     // Steady state: every pane's title was learned on an earlier
-    // refresh; then %3's user title changes.
+    // refresh; then %3's user title is cleared (a set title patches from
+    // the payload since ENH-043; a cleared one falls back to the OSC
+    // title the payload lacks, so it re-queries).
     for pane in 1..=4 {
         session.renderer.set_user_title(pane, "t");
     }
     session.handle_event(TmuxNotification::PaneTitleChanged {
         pane_id: "%3".to_string(),
-        title: "new".to_string(),
+        title: String::new(),
     });
     drained(&rx);
 
@@ -1938,4 +1940,226 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
     // The late list-sessions reply must not answer this command.
     let reply = conn.send_checked("pane-info -t %1").expect("reply");
     assert_eq!(reply.body, vec!["%1 @0 20x24".to_string()]);
+}
+
+const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
+
+/// A fake daemon advertising `client-snapshot v1` (ENH-043), scripted
+/// with one snapshot of `@0`: 2 workspaces, 3 sessions, 2 windows, 3
+/// panes, 2 agents.
+fn snapshot_script() -> FakeScript {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-commands".to_string(),
+        "client-snapshot v1\nlist-commands\nfeatures replay-held-state\n".to_string(),
+    );
+    replies.insert(
+        "client-snapshot -t @0".to_string(),
+        [
+            "snapshot 1",
+            "workspace +0 * main",
+            "workspace +1 - side",
+            "session $0 - +0 one",
+            "session $1 * +0 two",
+            "session $2 - +1 three",
+            "window @0 * edit",
+            "window @1 - logs",
+            "pane %1 build output",
+            "pane %2 tests",
+            "pane %3",
+            "agent %1 claude working hook",
+            "agent %3 kimi blocked hook",
+        ]
+        .join("\n"),
+    );
+    FakeScript {
+        replies,
+        ..FakeScript::default()
+    }
+}
+
+/// A three-pane render session showing `@0` with the side panel up.
+fn snapshot_session() -> WindowSession {
+    let mut session = WindowSession::new(90, 26);
+    session
+        .renderer
+        .apply_layout(parse_layout(THREE_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    session.sidebar_on = true;
+    session.renderer.focus(1);
+    session
+}
+
+/// Every line the fake daemon receives within 300 ms.
+fn received_within_300ms(rx: &std::sync::mpsc::Receiver<(String, String)>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok((_, line)) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
+        lines.push(line);
+    }
+    lines
+}
+
+/// ENH-043: against a daemon advertising `client-snapshot v1`, one
+/// status refresh — bar, pane titles, and side panel — is exactly one
+/// round trip, and every fact lands from that one reply.
+#[test]
+fn snapshot_refresh_is_one_round_trip() {
+    let (rx, mut conn) = fake_daemon("snaponce", snapshot_script());
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session
+        .refresh_status_facts(&mut conn)
+        .expect("snapshot refresh");
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["client-snapshot -t @0".to_string()]
+    );
+    assert_eq!(
+        session.status.windows(),
+        &[
+            ("@0".to_string(), "edit".to_string()),
+            ("@1".to_string(), "logs".to_string()),
+        ]
+    );
+    assert_eq!(session.status.session_id.as_deref(), Some("$1"));
+    assert_eq!(session.status.pane_title(), "build output");
+    assert_eq!(session.renderer.border_label(1), "build output");
+    assert_eq!(session.renderer.border_label(2), "tests");
+    assert_eq!(session.renderer.border_label(3), "");
+    assert_eq!(
+        session.renderer.sidebar_sections,
+        Some(vec![crate::mux::attach::panels::SidebarSection {
+            rows: vec![
+                ("ws:+0".to_string(), "main".to_string(), true),
+                ("ws:+1".to_string(), "side".to_string(), false),
+            ],
+        }])
+    );
+    let text: String = session
+        .status
+        .compose(200, None, false)
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert!(text.contains("claude:working"), "{text}");
+    assert!(text.contains("kimi:blocked"), "{text}");
+    assert!(text.contains("$2:three"), "{text}");
+}
+
+/// Without the feature the legacy per-fact round still runs, and the
+/// client never sends `client-snapshot`.
+#[test]
+fn legacy_refresh_still_runs_without_the_feature() {
+    let mut script = snapshot_script();
+    script.replies.remove("list-commands");
+    script
+        .replies
+        .insert("list-sessions".to_string(), "+0: main: $0: one".to_string());
+    script
+        .replies
+        .insert("list-windows -t $0".to_string(), "@0 * edit".to_string());
+    let (rx, mut conn) = fake_daemon("snaplegacy", script);
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session
+        .refresh_status_facts(&mut conn)
+        .expect("legacy refresh");
+    let sent = received_within_300ms(&rx);
+    assert!(sent.iter().any(|l| l == "list-sessions"), "{sent:?}");
+    assert!(sent.iter().any(|l| l == "list-agents"), "{sent:?}");
+    for pane in 1..=3 {
+        let line = format!("pane-title -t %{pane}");
+        assert_eq!(
+            sent.iter().filter(|l| **l == line).count(),
+            1,
+            "one {line}: {sent:?}"
+        );
+    }
+    assert!(
+        !sent.iter().any(|l| l.starts_with("client-snapshot")),
+        "{sent:?}"
+    );
+}
+
+/// `%agent-state-changed` and `%agent-released` patch the chips from
+/// their payload: no status mark, no query.
+#[test]
+fn agent_event_patches_without_a_query() {
+    let (rx, _conn) = fake_daemon("snapagent", snapshot_script());
+    let mut session = snapshot_session();
+    session.status_dirty = false;
+    drained(&rx);
+
+    let chips = |session: &WindowSession| -> String {
+        session
+            .status
+            .compose(200, None, false)
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect()
+    };
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%2".to_string(),
+        agent: "claude".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+    });
+    assert!(!session.status_dirty);
+    assert!(
+        chips(&session).contains("claude:blocked"),
+        "{}",
+        chips(&session)
+    );
+
+    session.handle_event(TmuxNotification::AgentReleased {
+        pane_id: "%2".to_string(),
+        agent: "claude".to_string(),
+    });
+    assert!(!session.status_dirty);
+    assert!(
+        !chips(&session).contains("claude:blocked"),
+        "{}",
+        chips(&session)
+    );
+    assert!(received_within_300ms(&rx).is_empty(), "no round trip");
+}
+
+/// The bar never renders telemetry, so a telemetry sample leaves the
+/// status clean.
+#[test]
+fn telemetry_event_does_not_mark_status_dirty() {
+    let mut session = snapshot_session();
+    session.status_dirty = false;
+    session.handle_event(TmuxNotification::AgentTelemetryChanged {
+        pane_id: "%1".to_string(),
+        agent: "claude".to_string(),
+    });
+    assert!(!session.status_dirty);
+}
+
+/// `%window-renamed` and a set `%pane-title-changed` patch the tab and
+/// the focused pane's title from their payloads, no status mark.
+#[test]
+fn rename_and_title_events_patch_without_a_query() {
+    let (rx, mut conn) = fake_daemon("snaprename", snapshot_script());
+    let mut session = snapshot_session();
+    session.refresh_status_facts(&mut conn).expect("seed");
+    session.status_dirty = false;
+    drained(&rx);
+
+    session.handle_event(TmuxNotification::WindowRenamed {
+        window_id: "@1".to_string(),
+        name: "tail".to_string(),
+    });
+    session.handle_event(TmuxNotification::PaneTitleChanged {
+        pane_id: "%1".to_string(),
+        title: "deploy".to_string(),
+    });
+    assert!(!session.status_dirty);
+    assert_eq!(session.status.windows()[1].1, "tail");
+    assert_eq!(session.status.pane_title(), "deploy");
+    assert_eq!(session.renderer.border_label(1), "deploy");
+    assert!(received_within_300ms(&rx).is_empty(), "no round trip");
 }

@@ -126,6 +126,13 @@ pub enum MuxCommand {
     /// discovery, so a client built against one daemon learns what another
     /// daemon supports without probing command by command (ENH-037).
     ListCommands,
+    /// One reply carrying the attach client's whole status read for a
+    /// window: workspaces, sessions (owner marked), the owner's windows,
+    /// every pane title of the window, and the agent roster (ENH-043).
+    ClientSnapshot {
+        /// `-t <window>`: the window the client shows.
+        window: Target<WindowId>,
+    },
     /// Send keys to a pane.
     SendKeys {
         /// Target pane.
@@ -518,6 +525,7 @@ impl MuxCommand {
             MuxCommand::ListPanes { .. }
             | MuxCommand::ListAgents
             | MuxCommand::ListCommands
+            | MuxCommand::ClientSnapshot { .. }
             | MuxCommand::ListWindows { .. }
             | MuxCommand::ListSessions { .. }
             | MuxCommand::ListWorkspaces
@@ -1065,7 +1073,7 @@ type CommandParser = fn(&Args<'_>) -> Result<MuxCommand, String>;
 /// third column — the feature tokens `list-commands` (ENH-037) reports for
 /// it, so a command's parser and its advertised metadata live on one
 /// declarative row instead of parallel lists. Feature grammar: tokens are
-/// `[a-z-]+`; a client must ignore unknown tokens and lines, and a daemon
+/// `[a-z0-9-]+`; a client must ignore unknown tokens and lines, and a daemon
 /// never removes a token without a CHANGELOG "Removed" entry. Adding a tmux
 /// command is one `parse_<cmd>` function plus one row here.
 const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
@@ -1079,6 +1087,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("list-panes", parse_list_panes, &["targeted"]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),
+    ("client-snapshot", parse_client_snapshot, &["v1"]),
     ("kill-pane", parse_kill_pane, &[]),
     (
         "refresh-client",

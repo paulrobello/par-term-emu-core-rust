@@ -166,6 +166,20 @@ impl WindowSession {
     /// open, and on every status refresh while the panel is up (the
     /// `%workspaces-changed` mark rides the same throttle).
     pub(super) fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        // A `client-snapshot` daemon's refresh already carries the roster
+        // (ENH-043); query only before the first refresh filled it.
+        if conn.has_command_feature("client-snapshot", "v1") && !self.status.workspaces().is_empty()
+        {
+            let active = self.status.active_workspace().map(str::to_string);
+            let roster = self
+                .status
+                .workspaces()
+                .iter()
+                .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
+                .collect();
+            self.set_sidebar_roster(roster);
+            return;
+        }
         let roster: Vec<(String, String, bool)> = conn
             .send_checked("list-workspaces")
             .ok()

@@ -424,3 +424,136 @@ fn telemetry_serves_on_the_roster_and_pushes_identity_only() {
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut daemon);
 }
+
+/// ENH-043: `client-snapshot -t <window>` over a live daemon agrees with
+/// the individual queries it replaces, row kind by row kind.
+#[test]
+fn client_snapshot_matches_the_individual_queries() {
+    let fixture = MuxFixture::new("snapshot");
+    let path = fixture.socket();
+
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
+    control.command("new-session -s a");
+    control.command("new-session -s b");
+    let sessions = control.body_lines("list-sessions");
+    let b = {
+        let line = sessions
+            .iter()
+            .find(|l| l.ends_with(": b"))
+            .expect("session b listed");
+        let (_, rest) = line.rsplit_once(" $").expect("session id marker");
+        format!("${}", rest.split(':').next().unwrap())
+    };
+    control.command(&format!("new-window -t {b}"));
+    let b_windows = control.body_lines(&format!("list-windows -t {b}"));
+    assert_eq!(b_windows.len(), 2, "{b_windows:?}");
+    let window = b_windows[1].split(' ').next().unwrap().to_string();
+    let first_pane = control
+        .body_lines(&format!("list-panes -t {window}"))
+        .first()
+        .expect("the window has a pane")
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    control.command(&format!("split-window -t {first_pane}"));
+    control.command(&format!("select-pane -t {first_pane} -T 'my build'"));
+    let reply = hook_report(
+        path,
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{first_pane}","agent":"claude","state":"working","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(reply.contains(r#""result":"ok""#), "claimed: {reply}");
+    let _ = control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the claim broadcast",
+    );
+
+    let snapshot = control.body_lines(&format!("client-snapshot -t {window}"));
+    assert_eq!(snapshot.first().map(String::as_str), Some("snapshot 1"));
+    let rows = |kind: &str| -> Vec<String> {
+        snapshot
+            .iter()
+            .filter_map(|l| l.strip_prefix(&format!("{kind} ")).map(str::to_string))
+            .collect()
+    };
+
+    // workspace +W <*|-> <name>  <->  `+W: name[ active]`
+    let workspaces: Vec<String> = control
+        .body_lines("list-workspaces")
+        .iter()
+        .map(|l| {
+            let (id, rest) = l.split_once(": ").unwrap();
+            match rest.strip_suffix(" active") {
+                Some(name) => format!("{id} * {name}"),
+                None => format!("{id} - {rest}"),
+            }
+        })
+        .collect();
+    assert_eq!(rows("workspace"), workspaces);
+
+    // session $N <*|-> +W <name>  <->  `+W: wname: $N: name`
+    let expected_sessions: Vec<String> = control
+        .body_lines("list-sessions")
+        .iter()
+        .map(|l| {
+            let (ws, rest) = l.split_once(": ").unwrap();
+            let (_, tail) = rest.rsplit_once(" $").unwrap();
+            let (n, name) = tail.split_once(": ").unwrap();
+            let marker = if format!("${n}") == b { '*' } else { '-' };
+            format!("${n} {marker} {ws} {name}")
+        })
+        .collect();
+    assert_eq!(rows("session"), expected_sessions);
+    assert_eq!(
+        rows("session").iter().filter(|r| r.contains(" * ")).count(),
+        1
+    );
+
+    // window rows == list-windows -t <b>
+    let b_windows = control.body_lines(&format!("list-windows -t {b}"));
+    assert_eq!(rows("window"), b_windows);
+
+    // pane rows' titles == pane-title per pane of list-panes -t <window>
+    let panes: Vec<String> = control
+        .body_lines(&format!("list-panes -t {window}"))
+        .iter()
+        .map(|l| l.split_whitespace().next().unwrap().to_string())
+        .collect();
+    assert_eq!(panes.len(), 2, "{panes:?}");
+    let expected_panes: Vec<String> = panes
+        .iter()
+        .map(|pane| {
+            let title = control
+                .body_lines(&format!("pane-title -t {pane}"))
+                .join(" ");
+            if title.is_empty() {
+                pane.clone()
+            } else {
+                format!("{pane} {title}")
+            }
+        })
+        .collect();
+    assert_eq!(rows("pane"), expected_panes);
+    assert!(rows("pane").contains(&format!("{first_pane} my build")));
+
+    // agent rows == list-agents
+    let roster = control.body_lines("list-agents");
+    assert_eq!(roster.len(), 1, "{roster:?}");
+    assert_eq!(rows("agent"), roster);
+
+    let error = control.command("client-snapshot -t @999");
+    assert!(
+        error.last().is_some_and(|l| l.starts_with("%error")),
+        "{error:?}"
+    );
+    assert!(control
+        .body_lines("list-commands")
+        .contains(&"client-snapshot v1".to_string()));
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut daemon);
+}

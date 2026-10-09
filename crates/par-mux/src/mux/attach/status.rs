@@ -4,9 +4,10 @@
 //! [`StatusState`] is what the client knows (sessions, the shown
 //! session's windows, the focused pane's title, the agent roster);
 //! [`StatusState::refresh`] re-queries it over the control connection —
-//! the throttled re-query the client contract asks for on
-//! `%agent-state-changed` / `%agent-telemetry-changed` /
-//! `%sessions-changed`. [`StatusRow`] paints the composed line into a
+//! one `client-snapshot` round trip when the daemon advertises it
+//! (ENH-043), else the per-fact queries — on the events that do not carry
+//! their fact (`%sessions-changed`, `%window-add`, …). Events that do
+//! (`%agent-state-changed`, `%window-renamed`, …) patch it in place. [`StatusRow`] paints the composed line into a
 //! one-row ratatui `Buffer` and diffs it, so a status change flushes
 //! only the changed cells of the bottom row.
 //!
@@ -100,8 +101,27 @@ pub(crate) struct StatusState {
     pub active_window: Option<String>,
     /// The focused pane's title.
     pane_title: String,
-    /// The agent roster as `(agent, state)` chips, roster order.
-    agents: Vec<(String, String)>,
+    /// Every pane title of the shown window as `(pane, title)`, from the
+    /// last `client-snapshot` (empty on the legacy query path).
+    pane_titles: Vec<(u32, String)>,
+    /// The agent roster as `(pane, agent, state)`, pane-id order (the
+    /// order `list-agents` sorts by), so a payload patch keeps it.
+    agents: Vec<(u32, String, String)>,
+}
+
+/// A window row's display name: an unnamed window shows its id, and a
+/// spaced name collapses its whitespace.
+fn window_display_name(id: &str, name: &str) -> String {
+    if name.trim().is_empty() {
+        id.to_string()
+    } else {
+        name.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+/// The numeric id of a `%N` pane id.
+fn pane_number(pane: &str) -> Option<u32> {
+    pane.strip_prefix('%')?.parse().ok()
 }
 
 impl StatusState {
@@ -112,13 +132,156 @@ impl StatusState {
     /// `window` any more; `Err(TimedOut)` stops at the first query that
     /// outlives [`STATUS_TIMEOUT`].
     ///
+    /// Against a daemon advertising `client-snapshot v1` (ENH-043) the
+    /// whole read is one `client-snapshot -t <window>` round trip;
+    /// otherwise the per-fact legacy round runs.
+    pub(crate) fn refresh(
+        &mut self,
+        conn: &mut AttachConn,
+        window: &str,
+        focused: u32,
+    ) -> Result<RefreshRows, StatusError> {
+        if conn.has_command_feature("client-snapshot", "v1") {
+            self.refresh_snapshot(conn, window, focused)
+        } else {
+            self.refresh_legacy(conn, window, focused)
+        }
+    }
+
+    /// The single-round-trip refresh (ENH-043). A transport failure is
+    /// `Query`; an `%error` reply (unknown window, or no owning session)
+    /// is `SessionGone` with `session_id` left at its previous value, the
+    /// pump's landing contract.
+    fn refresh_snapshot(
+        &mut self,
+        conn: &mut AttachConn,
+        window: &str,
+        focused: u32,
+    ) -> Result<RefreshRows, StatusError> {
+        let reply = match conn
+            .send_checked_timeout(&format!("client-snapshot -t {window}"), STATUS_TIMEOUT)
+        {
+            Ok(reply) => reply,
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(StatusError::TimedOut)
+            }
+            Err(_) => return Err(StatusError::Query),
+        };
+        if !reply.ok {
+            return Err(StatusError::SessionGone);
+        }
+        let workspaces = self.apply_snapshot(&reply.body)?;
+        self.pane_title = self
+            .pane_titles
+            .iter()
+            .find(|(pane, _)| *pane == focused)
+            .map(|(_, title)| title.clone())
+            .unwrap_or_default();
+        Ok(RefreshRows {
+            workspaces: Some(workspaces),
+        })
+    }
+
+    /// Apply one `client-snapshot` reply body. Rows are classified by
+    /// their first word; unknown kinds are ignored (the additive rule).
+    /// A missing or non-`1` `snapshot` header is `Query`; no `*` session
+    /// row is `SessionGone`. Either error leaves every field untouched.
+    /// Returns the workspace roster as `(id, name, active)` for the side
+    /// panel. `pane_title` is the caller's to set from `pane_titles`.
+    fn apply_snapshot(
+        &mut self,
+        body: &[String],
+    ) -> Result<Vec<(String, String, bool)>, StatusError> {
+        if body.first().map(|l| l.trim_end()) != Some("snapshot 1") {
+            return Err(StatusError::Query);
+        }
+        let mut workspaces: Vec<(String, String, bool)> = Vec::new();
+        let mut sessions = Vec::new();
+        let mut owner = None;
+        let mut windows = Vec::new();
+        let mut active_window = None;
+        let mut pane_titles = Vec::new();
+        let mut agents = Vec::new();
+        for line in &body[1..] {
+            let Some((kind, rest)) = line.split_once(' ') else {
+                continue;
+            };
+            match kind {
+                "workspace" => {
+                    let mut parts = rest.splitn(3, ' ');
+                    let (Some(id), Some(marker)) = (parts.next(), parts.next()) else {
+                        continue;
+                    };
+                    let name = parts.next().unwrap_or_default();
+                    workspaces.push((id.to_string(), name.to_string(), marker == "*"));
+                }
+                "session" => {
+                    let mut parts = rest.splitn(4, ' ');
+                    let (Some(id), Some(marker), Some(_ws)) =
+                        (parts.next(), parts.next(), parts.next())
+                    else {
+                        continue;
+                    };
+                    let name = parts.next().unwrap_or_default();
+                    if marker == "*" {
+                        owner = Some(id.to_string());
+                    }
+                    sessions.push((id.to_string(), name.to_string()));
+                }
+                "window" => {
+                    let Some(row) = WindowRow::parse(rest) else {
+                        continue;
+                    };
+                    if row.active {
+                        active_window = Some(row.id.clone());
+                    }
+                    let name = window_display_name(&row.id, &row.name);
+                    windows.push((row.id, name));
+                }
+                "pane" => {
+                    let (id, title) = rest.split_once(' ').unwrap_or((rest, ""));
+                    if let Some(pane) = pane_number(id) {
+                        pane_titles.push((pane, title.to_string()));
+                    }
+                }
+                "agent" => {
+                    if let Some(row) = AgentRow::parse(rest) {
+                        if let Some(pane) = pane_number(&row.pane) {
+                            agents.push((pane, row.agent, row.state));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(owner) = owner else {
+            return Err(StatusError::SessionGone);
+        };
+        self.workspaces = workspaces
+            .iter()
+            .map(|(id, name, _)| (id.clone(), name.clone()))
+            .collect();
+        self.active_workspace = workspaces
+            .iter()
+            .find(|(_, _, active)| *active)
+            .map(|(id, _, _)| id.clone());
+        self.sessions = sessions;
+        self.session_id = Some(owner);
+        self.active_window = active_window.or_else(|| windows.first().map(|(id, _)| id.clone()));
+        self.windows = windows;
+        self.pane_titles = pane_titles;
+        self.agents = agents;
+        Ok(workspaces)
+    }
+
+    /// The legacy per-fact refresh, for daemons without `client-snapshot`.
     /// One round per query (ARC-125): `list-sessions`, `list-workspaces`
     /// (its rows are returned for the side panel to reuse rather than
     /// re-query), one `list-windows -a` that both finds the owning
     /// session and lists its windows (a daemon without the `all` token
     /// gets the per-session scan, reusing the owner's reply),
     /// `pane-title` for the focused pane, and `list-agents`.
-    pub(crate) fn refresh(
+    fn refresh_legacy(
         &mut self,
         conn: &mut AttachConn,
         window: &str,
@@ -162,13 +325,8 @@ impl StatusState {
         self.windows = window_rows
             .iter()
             .filter_map(|line| WindowRow::parse(line))
-            // An unnamed window shows its id.
             .map(|row| {
-                let name = if row.name.trim().is_empty() {
-                    row.id.clone()
-                } else {
-                    row.name.split_whitespace().collect::<Vec<_>>().join(" ")
-                };
+                let name = window_display_name(&row.id, &row.name);
                 (row.id, name)
             })
             .collect();
@@ -185,7 +343,7 @@ impl StatusState {
             self.agents = body
                 .iter()
                 .filter_map(|line| AgentRow::parse(line))
-                .map(|row| (row.agent, row.state))
+                .filter_map(|row| Some((pane_number(&row.pane)?, row.agent, row.state)))
                 .collect();
         }
         Ok(rows)
@@ -252,6 +410,52 @@ impl StatusState {
     /// The focused pane's user title (the rename-pane prompt's seed).
     pub(crate) fn pane_title(&self) -> &str {
         &self.pane_title
+    }
+
+    /// Replace the focused pane's title from a `%pane-title-changed`
+    /// payload, without a query.
+    pub(crate) fn set_pane_title(&mut self, title: &str) {
+        self.pane_title = title.to_string();
+    }
+
+    /// The shown window's pane titles as `(pane, title)` from the last
+    /// `client-snapshot`, layout order.
+    pub(crate) fn pane_titles(&self) -> &[(u32, String)] {
+        &self.pane_titles
+    }
+
+    /// The daemon's active workspace id, `"+N"`.
+    pub(crate) fn active_workspace(&self) -> Option<&str> {
+        self.active_workspace.as_deref()
+    }
+
+    /// Patch one pane's agent chip from a notification payload:
+    /// `Some(state)` upserts it (`%agent-state-changed`), `None` removes
+    /// it (`%agent-released`). The roster stays in pane-id order.
+    pub(crate) fn patch_agent(&mut self, pane: &str, agent: &str, state: Option<&str>) {
+        let Some(pane) = pane_number(pane) else {
+            return;
+        };
+        match state {
+            Some(state) => match self.agents.binary_search_by_key(&pane, |(p, _, _)| *p) {
+                Ok(index) => {
+                    self.agents[index] = (pane, agent.to_string(), state.to_string());
+                }
+                Err(index) => {
+                    self.agents
+                        .insert(index, (pane, agent.to_string(), state.to_string()));
+                }
+            },
+            None => self.agents.retain(|(p, _, _)| *p != pane),
+        }
+    }
+
+    /// Patch a window's tab name from a `%window-renamed` payload. A
+    /// window this view does not list is ignored.
+    pub(crate) fn patch_window_name(&mut self, window: &str, name: &str) {
+        if let Some(entry) = self.windows.iter_mut().find(|(id, _)| id == window) {
+            entry.1 = window_display_name(window, name);
+        }
     }
 
     /// Compose the status line as styled segments, truncated to `cols`
@@ -347,7 +551,7 @@ impl StatusState {
         }
         if !self.agents.is_empty() {
             push(&mut segments, " | ".to_string(), false, false, false);
-            for (index, (agent, state)) in self.agents.iter().enumerate() {
+            for (index, (_, agent, state)) in self.agents.iter().enumerate() {
                 if index > 0 {
                     push(&mut segments, " ".to_string(), false, false, false);
                 }
@@ -552,11 +756,119 @@ mod tests {
             ],
             active_window: Some("@0".to_string()),
             pane_title: "~/src".to_string(),
+            pane_titles: Vec::new(),
             agents: vec![
-                ("claude".to_string(), "working".to_string()),
-                ("kimi".to_string(), "blocked".to_string()),
+                (1, "claude".to_string(), "working".to_string()),
+                (2, "kimi".to_string(), "blocked".to_string()),
             ],
         }
+    }
+
+    fn lines(body: &[&str]) -> Vec<String> {
+        body.iter().map(|l| l.to_string()).collect()
+    }
+
+    /// The `client-snapshot` body describing [`state`].
+    fn snapshot_body() -> Vec<String> {
+        lines(&[
+            "snapshot 1",
+            "workspace +0 * alpha",
+            "workspace +1 - beta",
+            "session $0 * +0 work",
+            "session $1 - +1 play",
+            "window @0 * main",
+            "window @1 - vim",
+            "pane %1 ~/src",
+            "pane %2",
+            "agent %1 claude working hook",
+            "agent %2 kimi blocked hook reason=d2FpdA==",
+        ])
+    }
+
+    /// A full snapshot body yields the same state the legacy fixture
+    /// describes, plus every pane's title.
+    #[test]
+    fn apply_snapshot_fills_the_same_state_as_the_legacy_queries() {
+        let mut got = StatusState::default();
+        let roster = got.apply_snapshot(&snapshot_body()).expect("applies");
+        got.pane_title = "~/src".to_string();
+        let mut want = state();
+        want.pane_titles = vec![(1, "~/src".to_string()), (2, String::new())];
+        assert_eq!(got, want);
+        assert_eq!(
+            roster,
+            vec![
+                ("+0".to_string(), "alpha".to_string(), true),
+                ("+1".to_string(), "beta".to_string(), false),
+            ]
+        );
+    }
+
+    /// The additive rule: an unknown row kind is ignored.
+    #[test]
+    fn apply_snapshot_ignores_an_unknown_row_kind() {
+        let mut body = snapshot_body();
+        body.insert(3, "future x y".to_string());
+        body.push("future".to_string());
+        let mut got = StatusState::default();
+        got.apply_snapshot(&body).expect("applies");
+        let mut plain = StatusState::default();
+        plain.apply_snapshot(&snapshot_body()).unwrap();
+        assert_eq!(got, plain);
+    }
+
+    /// No `*` session row means no session owns the window: SessionGone,
+    /// and `session_id` keeps its previous value (the landing contract).
+    #[test]
+    fn apply_snapshot_without_an_owner_is_session_gone() {
+        let body: Vec<String> = snapshot_body()
+            .into_iter()
+            .map(|l| l.replace("session $0 * ", "session $0 - "))
+            .collect();
+        let mut got = state();
+        let before = got.clone();
+        assert!(matches!(
+            got.apply_snapshot(&body),
+            Err(StatusError::SessionGone)
+        ));
+        assert_eq!(got.session_id.as_deref(), Some("$0"));
+        assert_eq!(got, before, "nothing half-applied");
+    }
+
+    /// A missing or unknown-version header is a Query failure.
+    #[test]
+    fn apply_snapshot_with_a_bad_header_is_query() {
+        let mut got = state();
+        let mut body = snapshot_body();
+        body[0] = "snapshot 2".to_string();
+        assert!(matches!(got.apply_snapshot(&body), Err(StatusError::Query)));
+        body.remove(0);
+        assert!(matches!(got.apply_snapshot(&body), Err(StatusError::Query)));
+        assert!(matches!(got.apply_snapshot(&[]), Err(StatusError::Query)));
+        assert_eq!(got, state());
+    }
+
+    /// Payload patches: an agent upsert keeps pane-id order, a release
+    /// removes the chip, and a window rename updates its tab.
+    #[test]
+    fn payload_patches_update_agents_and_window_names() {
+        let mut got = state();
+        got.patch_agent("%2", "kimi", Some("working"));
+        got.patch_agent("%0", "pi", Some("blocked"));
+        assert_eq!(
+            got.agents,
+            vec![
+                (0, "pi".to_string(), "blocked".to_string()),
+                (1, "claude".to_string(), "working".to_string()),
+                (2, "kimi".to_string(), "working".to_string()),
+            ]
+        );
+        got.patch_agent("%1", "claude", None);
+        assert!(got.agents.iter().all(|(p, _, _)| *p != 1));
+        got.patch_window_name("@1", "  edit  me ");
+        assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));
+        got.patch_window_name("@9", "ignored");
+        assert_eq!(got.windows.len(), 2);
     }
 
     fn joined(segments: &[Segment]) -> String {
@@ -714,7 +1026,7 @@ mod tests {
 
         // One agent state change: only that chip's cells move.
         let mut next = state();
-        next.agents = vec![("claude".to_string(), "blocked".to_string())];
+        next.agents = vec![(1, "claude".to_string(), "blocked".to_string())];
         row.paint(&next.compose(80, None, false), None);
         let diff = row.diff();
         assert!(!diff.is_empty());

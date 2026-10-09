@@ -219,6 +219,25 @@ impl WindowSession {
         self.land_on_workspace(conn, &ws_id);
     }
 
+    /// The pump's status facts in one step: the bar's state, the side
+    /// panel's sections (reusing the refresh's workspace rows), and every
+    /// visible pane's title. Against a `client-snapshot v1` daemon this is
+    /// exactly one round trip (ENH-043). `Err` is the bar refresh's error,
+    /// or `TimedOut` when a legacy title query outlived the status bound.
+    pub(super) fn refresh_status_facts(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> Result<(), status::StatusError> {
+        let focused = self.renderer.focused().unwrap_or(0);
+        let rows = self.status.refresh(conn, &self.window, focused)?;
+        if self.sidebar_on {
+            if let Some(roster) = rows.workspaces {
+                self.set_sidebar_roster(roster);
+            }
+        }
+        self.refresh_pane_titles(conn)
+    }
+
     /// Refresh the renderer's label store with each visible pane's
     /// effective title — the border labels paint the user `-T` label when
     /// set (the manual-pass report: prefix `$` labels never showed
@@ -232,6 +251,21 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> Result<(), status::StatusError> {
+        if conn.has_command_feature("client-snapshot", "v1") {
+            // The snapshot already carried every pane's title: no query.
+            let panes: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+            for pane in panes {
+                let title = self
+                    .status
+                    .pane_titles()
+                    .iter()
+                    .find(|(p, _)| *p == pane)
+                    .map(|(_, title)| title.trim().to_string())
+                    .unwrap_or_default();
+                self.renderer.set_user_title(pane, &title);
+            }
+            return Ok(());
+        }
         let focused = self.renderer.focused();
         if let Some(pane) = focused {
             let title = self.status.pane_title().trim().to_string();

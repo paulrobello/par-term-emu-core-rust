@@ -242,9 +242,9 @@ fn route_command(
         | MuxCommand::Version
         | MuxCommand::ReloadConfig
         | MuxCommand::ListCommands) => route_buffer_command(ctx, command),
-        command @ (MuxCommand::RefreshClient { .. } | MuxCommand::ListAgents) => {
-            route_client_command(ctx, command)
-        }
+        command @ (MuxCommand::RefreshClient { .. }
+        | MuxCommand::ListAgents
+        | MuxCommand::ClientSnapshot { .. }) => route_client_command(ctx, command),
     }
 }
 

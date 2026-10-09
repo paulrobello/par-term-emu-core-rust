@@ -258,7 +258,10 @@ pub(super) fn cmd_list_windows(
 
 /// One session's `list-windows -t` rows, `@N <marker> <name>`, in the
 /// session's window order.
-fn session_window_rows(guard: &MuxTree, session: &crate::mux::tree::MuxSession) -> Vec<String> {
+pub(super) fn session_window_rows(
+    guard: &MuxTree,
+    session: &crate::mux::tree::MuxSession,
+) -> Vec<String> {
     session
         .windows
         .iter()

@@ -1203,3 +1203,105 @@ fn switch_client_mutates_only_with_a_target() {
     // must not silently become the read-only query.
     assert!(parse_command("switch-client -n").is_err());
 }
+
+/// `client-snapshot -t <window>` (ENH-043) answers the attach client's
+/// whole status read in one reply, in the fixed row order, with the owner
+/// session and the owner's active window starred and a spaced pane title
+/// carried as the rest of its row.
+#[test]
+fn client_snapshot_reports_every_status_fact_in_order() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s alpha"));
+    assert_ok(&h.run("new-session -s beta"));
+    let a = h.session_named("alpha");
+    let b = h.session_named("beta");
+    assert_ok(&h.run(&format!("new-window -t {b}")));
+    let [b0, b1] = <[_; 2]>::try_from(h.windows_of(b)).unwrap();
+    let [p1] = <[_; 1]>::try_from(h.panes_of(b1)).unwrap();
+    assert_ok(&h.run(&format!("split-window -t {p1}")));
+    let [q0, q1] = <[_; 2]>::try_from(h.panes_of(b1)).unwrap();
+    assert_ok(&h.run(&format!("select-pane -t {q1} -T 'my build'")));
+    assert_ok(&h.run(&format!("select-window -t {b0}")));
+    let (ws, ws_name, b0_name, b1_name) = {
+        let guard = h.tree.lock();
+        let ws = guard.active_workspace().unwrap();
+        (
+            ws,
+            guard.workspace(ws).unwrap().name.clone(),
+            guard.window(b0).unwrap().name.clone(),
+            guard.window(b1).unwrap().name.clone(),
+        )
+    };
+
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {b1}")));
+    assert_eq!(
+        body,
+        vec![
+            "snapshot 1".to_string(),
+            format!("workspace {ws} * {ws_name}"),
+            format!("session {a} - {ws} alpha"),
+            format!("session {b} * {ws} beta"),
+            format!("window {b0} * {b0_name}"),
+            format!("window {b1} - {b1_name}"),
+            format!("pane {q0}"),
+            format!("pane {q1} my build"),
+        ]
+    );
+}
+
+/// A title carrying line breaks still rides one `pane` row.
+#[test]
+fn client_snapshot_keeps_a_multiline_title_on_one_row() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let p = h.panes_of(w)[0];
+    // strip_controls in set_user_title would drop a raw newline, so plant
+    // the newline in the OSC title the effective title falls back to.
+    {
+        let guard = h.tree.lock();
+        let pane = guard.pane(p).unwrap();
+        pane.terminal()
+            .write()
+            .process(b"\x1b]2;line one\nline two\x07");
+    }
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    let panes: Vec<&String> = body.iter().filter(|l| l.starts_with("pane ")).collect();
+    assert_eq!(panes.len(), 1, "one pane row: {body:?}");
+    assert!(
+        !panes[0].contains('\n') && !panes[0].contains('\r'),
+        "{body:?}"
+    );
+}
+
+#[test]
+fn client_snapshot_of_an_unknown_window_is_an_error() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    assert_error(&h.run("client-snapshot -t @99"), "no such window: @99");
+}
+
+/// The `agent` rows are exactly the `list-agents` rows, `agent `-prefixed.
+#[test]
+fn client_snapshot_agent_rows_mirror_list_agents() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let p = h.panes_of(w)[0];
+    {
+        let mut guard = h.tree.lock();
+        let pane = guard.pane_mut(p).unwrap();
+        pane.set_metadata("agent", "claude");
+        pane.set_metadata("agent_state", "blocked");
+        pane.set_metadata("agent_message", "needs input");
+    }
+    let roster = assert_ok(&h.run("list-agents"));
+    assert_eq!(roster.len(), 1, "{roster:?}");
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    let agents: Vec<String> = body
+        .iter()
+        .filter_map(|l| l.strip_prefix("agent ").map(str::to_string))
+        .collect();
+    assert_eq!(agents, roster);
+    assert_eq!(body.last(), Some(&format!("agent {}", roster[0])));
+}

@@ -1,4 +1,5 @@
-//! Client-facing query and sizing handlers: refresh-client and list-agents.
+//! Client-facing query and sizing handlers: refresh-client, list-agents,
+//! and client-snapshot.
 
 use super::*;
 use crate::mux::layout::PaneChrome;
@@ -14,6 +15,7 @@ pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
             chrome,
         } => cmd_refresh_client(ctx, pane, size, cell_pixels, chrome.unwrap_or_default()),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
+        MuxCommand::ClientSnapshot { window } => cmd_client_snapshot(ctx, window),
         other => unreachable!("route_command sent a non-client command: {other:?}"),
     }
 }
@@ -233,6 +235,12 @@ pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     // "idle" (the Phase 5 ruling). Fixed shape, no -F — the T4.E
     // decision.
     let guard = ctx.tree.lock();
+    Outcome::ok(ctx, &roster_rows(&guard).join("\n"))
+}
+
+/// The roster rows `list-agents` replies with, `%N <entry>` each, sorted
+/// by pane id. Shared with `client-snapshot`'s `agent` rows (ENH-043).
+pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
     let mut roster: Vec<(PaneId, crate::mux::ipc::AgentRow)> = guard
         .sessions()
         .iter()
@@ -270,10 +278,84 @@ pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
         })
         .collect();
     roster.sort_by_key(|(pane, _)| *pane);
-    let body = roster
-        .iter()
-        .map(|(_, row)| row.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    Outcome::ok(ctx, &body)
+    roster.iter().map(|(_, row)| row.to_string()).collect()
+}
+
+/// `client-snapshot -t <window>` (ENH-043): the attach client's whole
+/// status read in one reply, taken under one tree lock so it is
+/// consistent. Wire contract, one row per line, first word the kind:
+///
+/// ```text
+/// snapshot 1
+/// workspace +W <*|-> <name>
+/// session $N <*|-> +W <name>
+/// window @N <*|-> <name>
+/// pane %N [<title>]
+/// agent %N <agent> <state> <source> [key=value…]
+/// ```
+///
+/// `workspace` rows in id order (`*` = the daemon's active workspace);
+/// `session` rows in `list-sessions` order (`*` = the session owning the
+/// window); `window` rows are the owner's windows (`*` = its active
+/// window); `pane` rows follow `Window::panes()` with every `\r`/`\n` in
+/// the title turned into a space; `agent` rows are exactly the
+/// `list-agents` rows. Additive rule: clients ignore unknown row kinds and
+/// trailing `key=value` tokens; a positional change bumps the version.
+pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
+    let guard = ctx.tree.lock();
+    let window_id = match guard.resolve_window_target(window) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    let Some(shown) = guard.window(window_id) else {
+        return Outcome::err(ctx, &MuxError::NoSuchWindow(window_id).to_string());
+    };
+    let Some(owner) = guard.session_of_window(window_id) else {
+        return Outcome::err(ctx, &format!("no session owns {window_id}"));
+    };
+    let mut lines = vec!["snapshot 1".to_string()];
+    let active_workspace = guard.active_workspace();
+    let mut workspaces = guard.workspaces();
+    workspaces.sort();
+    for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
+        let marker = if Some(ws.id) == active_workspace {
+            '*'
+        } else {
+            '-'
+        };
+        lines.push(format!("workspace {} {marker} {}", ws.id, ws.name));
+    }
+    for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
+        for session in ws.sessions.iter().filter_map(|id| guard.session(*id)) {
+            let marker = if session.id == owner { '*' } else { '-' };
+            lines.push(format!(
+                "session {} {marker} {} {}",
+                session.id, ws.id, session.name
+            ));
+        }
+    }
+    if let Some(session) = guard.session(owner) {
+        lines.extend(
+            super::windows::session_window_rows(&guard, session)
+                .into_iter()
+                .map(|row| format!("window {row}")),
+        );
+    }
+    for pane_id in shown.panes() {
+        let title = guard
+            .pane(pane_id)
+            .map(|pane| pane.effective_title().replace(['\r', '\n'], " "))
+            .unwrap_or_default();
+        if title.is_empty() {
+            lines.push(format!("pane {pane_id}"));
+        } else {
+            lines.push(format!("pane {pane_id} {title}"));
+        }
+    }
+    lines.extend(
+        roster_rows(&guard)
+            .into_iter()
+            .map(|row| format!("agent {row}")),
+    );
+    Outcome::ok(ctx, &lines.join("\n"))
 }

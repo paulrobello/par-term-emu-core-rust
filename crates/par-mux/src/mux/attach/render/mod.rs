@@ -1028,18 +1028,8 @@ impl WindowSession {
     /// bar and the strip. `End` when the shown session is gone.
     fn refresh_status(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) -> EventOutcome {
         self.status_dirty = false;
-        let focused = self.renderer.focused().unwrap_or(0);
-        match self.status.refresh(conn, &self.window, focused) {
-            Ok(rows) => {
-                if self.sidebar_on {
-                    if let Some(roster) = rows.workspaces {
-                        self.set_sidebar_roster(roster);
-                    }
-                }
-                if self.refresh_pane_titles(conn).is_err() {
-                    self.status_dirty = true;
-                }
-            }
+        match self.refresh_status_facts(conn) {
+            Ok(()) => {}
             // A wedged daemon: the stale bar stands and the next
             // tick retries, instead of the pump blocking on it.
             Err(status::StatusError::TimedOut) => self.status_dirty = true,
@@ -1128,9 +1118,11 @@ impl WindowSession {
                 EventOutcome::Continue
             }
             TmuxNotification::Exit => EventOutcome::End,
-            // The status facts: agent churn, session churn, and renames
-            // all re-query (the contract's throttled re-query; one burst
-            // of events collapses into one refresh in the pump's step 6).
+            // The status facts that the payload does not carry (session
+            // churn, window add/close, selection moves) re-query (the
+            // contract's throttled re-query; one burst of events collapses
+            // into one refresh — one `client-snapshot` round trip against
+            // a daemon that advertises it).
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
                 // An external focus move on the shown window re-points the
                 // local highlight; on any other window it is chrome-only.
@@ -1167,21 +1159,59 @@ impl WindowSession {
                 self.status_dirty = true;
                 EventOutcome::Continue
             }
-            TmuxNotification::PaneTitleChanged { pane_id, .. } => {
-                // A user title moved: re-query only that pane's title on
-                // the next refresh (the others stay cached).
-                if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+            TmuxNotification::PaneTitleChanged { pane_id, title } => {
+                let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse::<u32>().ok())
+                else {
+                    return EventOutcome::Continue;
+                };
+                let title = title.trim();
+                if title.is_empty() {
+                    // A cleared user title falls back to the program's OSC
+                    // title, which the payload does not carry: re-query
+                    // that pane on the next refresh.
                     self.renderer.invalidate_title(pane);
+                    self.status_dirty = true;
+                    return EventOutcome::Continue;
                 }
-                self.status_dirty = true;
+                // The payload IS the new effective title (a user title
+                // wins over OSC): patch it without a query (ENH-043).
+                if self.renderer.layout().iter().any(|r| r.pane == pane) {
+                    self.renderer.set_user_title(pane, title);
+                }
+                if self.renderer.focused() == Some(pane) {
+                    self.status.set_pane_title(title);
+                    self.draw_status_row();
+                }
                 EventOutcome::Continue
             }
-            TmuxNotification::AgentStateChanged { .. }
-            | TmuxNotification::AgentReleased { .. }
-            | TmuxNotification::AgentTelemetryChanged { .. }
-            | TmuxNotification::SessionsChanged
+            // Agent churn carries its own fact: patch the chip in place,
+            // no re-query (ENH-043).
+            TmuxNotification::AgentStateChanged {
+                pane_id,
+                agent,
+                state,
+                ..
+            } => {
+                self.status.patch_agent(&pane_id, &agent, Some(&state));
+                self.draw_status_row();
+                EventOutcome::Continue
+            }
+            TmuxNotification::AgentReleased { pane_id, agent } => {
+                self.status.patch_agent(&pane_id, &agent, None);
+                self.draw_status_row();
+                EventOutcome::Continue
+            }
+            // The bar renders `agent:state` chips only, never telemetry,
+            // so a telemetry sample changes nothing this client shows.
+            TmuxNotification::AgentTelemetryChanged { .. } => EventOutcome::Continue,
+            TmuxNotification::WindowRenamed { window_id, name } => {
+                self.status.patch_window_name(&window_id, &name);
+                self.draw_status_row();
+                self.draw_tab_strip();
+                EventOutcome::Continue
+            }
+            TmuxNotification::SessionsChanged
             | TmuxNotification::WorkspacesChanged
-            | TmuxNotification::WindowRenamed { .. }
             | TmuxNotification::SessionRenamed { .. }
             // A window another client added or closed changes the shown
             // session's tab roster; `new-window` sends no

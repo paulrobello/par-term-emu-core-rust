@@ -652,14 +652,18 @@ fn list_commands_reply_lists_every_command_exactly_once() {
 }
 
 /// ENH-037/ARC-094b: feature tokens live on the command's own table
-/// row; the documented wire grammar is `[a-z-]+`, and anything else
+/// row; the documented wire grammar is `[a-z0-9-]+` (numerals since
+/// ENH-043's `client-snapshot v1`), and anything else
 /// would hand clients a token they are told to treat as well-formed.
 #[test]
 fn every_command_feature_token_matches_the_wire_grammar() {
     for (name, _, features) in COMMANDS {
         for token in *features {
             assert!(
-                !token.is_empty() && token.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                !token.is_empty()
+                    && token
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
                 "command {name:?} advertises malformed feature token {token:?}"
             );
         }
@@ -882,6 +886,21 @@ fn parses_list_agents() {
         parse_command("list-agents").unwrap(),
         MuxCommand::ListAgents
     );
+}
+
+#[test]
+fn parses_client_snapshot() {
+    let cmd = parse_command("client-snapshot -t @3").unwrap();
+    assert_eq!(
+        cmd,
+        MuxCommand::ClientSnapshot {
+            window: Target::Id(WindowId(3))
+        }
+    );
+    assert!(!cmd.mutates(), "client-snapshot is a query");
+    let missing = parse_command("client-snapshot").unwrap_err();
+    assert!(missing.contains("requires -t"), "{missing}");
+    assert!(parse_command("client-snapshot -t @3 stray").is_err());
 }
 
 #[test]
