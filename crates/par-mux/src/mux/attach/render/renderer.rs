@@ -3,17 +3,12 @@
 
 use super::*;
 
-/// A boundary's style. The focus indication must FLIP when focus moves in
-/// a two-pane split — both panes share one divider, so a single accent
-/// color read identically from either side (the owner's manual pass: "the
-/// border still does not change color"). The boundary carries the accent
-/// on the side it names: bright cyan when the focused pane is the
-/// boundary's left/top pane (`a`), bright magenta when it is the
-/// right/bottom pane (`b`), dim when the boundary does not touch the
-/// focus. While a drag is live on the boundary, the style renders
-/// reversed so the edge being moved stands out.
 /// The focused boundary half's highlight (config `border-active-color`,
-/// `#rrggbb`; default the bright-cyan accent), always bold.
+/// `#rrggbb`; default the bright-cyan accent), always bold. Dividers
+/// follow the tmux half rule (see [`divider_style`]): on a divider shared
+/// by two panes, the half nearer the focused pane takes this style and
+/// the other half takes [`plain_border_style`], so the indication flips
+/// sides when focus moves. A live drag renders the boundary reversed.
 pub(super) fn active_border_style(active: Option<RtColor>) -> RtStyle {
     let style = match active {
         Some(RtColor::Rgb(r, g, b)) => RtStyle::default().fg(RtColor::Rgb(r, g, b)),
