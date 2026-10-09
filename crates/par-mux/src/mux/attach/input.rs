@@ -27,10 +27,12 @@
 //! later Phase B card (documented in docs/MUX.md).
 //!
 //! Bracketed paste (`ESC[200~` … `ESC[201~`, which a host left in DECSET
-//! 2004 mode by an earlier app sends around every paste) is treated as an
-//! opaque byte run: the body passes through verbatim — embedded prefix
+//! 2004 mode by an earlier app sends around every paste) is emitted as one
+//! [`Token::Paste`]: the body passes through verbatim — embedded prefix
 //! bytes and partial escape fragments included — because it is text the
-//! user meant to insert, not keystrokes to decode.
+//! user meant to insert, not keystrokes to decode. The markers are
+//! consumed here; the router re-frames the body for a pane that asked for
+//! bracketed paste.
 
 use crate::keyboard::{modifiers, TermKey, TermKeyEvent};
 use crate::terminal::Terminal;
@@ -49,6 +51,10 @@ pub enum Token {
     /// coordinates 1-based exactly as on the wire, `cb` the raw SGR button
     /// code (motion bit 32, wheel 64/65, modifiers above bit 2).
     Mouse(SgrMouse),
+    /// A bracketed-paste body: forwarded to the focused pane opaque, never
+    /// scanned for chords. The `ESC[200~`/`ESC[201~` markers are not part
+    /// of it.
+    Paste(Vec<u8>),
 }
 
 /// An SGR mouse report as the host terminal sent it (1-based coordinates).
@@ -151,19 +157,21 @@ impl InputParser {
         let mut i = 0;
         while i < data.len() {
             if self.paste {
-                // Opaque scan for the terminator; the body passes through
-                // verbatim as plain bytes. Held-byte accounting: the tail
-                // either stays pending (terminator may still arrive) or
-                // flushes as output at the cap — never both.
+                // Opaque scan for the terminator; the body is emitted
+                // verbatim as one Paste token. Held-byte accounting: the
+                // tail either stays pending (terminator may still arrive)
+                // or flushes as output at the cap — never both.
                 match find_subslice(&data[i..], PASTE_END) {
                     Some(rel) => {
-                        plain.extend_from_slice(&data[i..i + rel]);
+                        if rel > 0 {
+                            tokens.push(Token::Paste(data[i..i + rel].to_vec()));
+                        }
                         i += rel + PASTE_END.len();
                         self.paste = false;
                     }
                     None => {
                         if data.len() - i > PASTE_HELD_CAP {
-                            plain.extend_from_slice(&data[i..]);
+                            tokens.push(Token::Paste(data[i..].to_vec()));
                             self.paste = false;
                         } else {
                             self.pending = data[i..].to_vec();
@@ -436,6 +444,17 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// `body` with every `ESC[201~` removed, repeated until none remains (a
+/// removal can splice a new terminator out of the surrounding bytes), so
+/// pasted text cannot close the pane's bracketed paste early.
+pub(crate) fn strip_paste_end(body: &[u8]) -> Vec<u8> {
+    let mut out = body.to_vec();
+    while let Some(at) = find_subslice(&out, PASTE_END) {
+        out.drain(at..at + PASTE_END.len());
+    }
+    out
 }
 
 /// Re-encode one key event against the focused pane's tracked input state
@@ -725,11 +744,12 @@ mod tests {
         out
     }
 
-    /// Concatenate every Bytes token: the byte-accounting view of a decode.
+    /// Concatenate every Bytes and Paste token: the byte-accounting view of
+    /// a decode.
     fn bytes_of(tokens: &[Token]) -> Vec<u8> {
         let mut out = Vec::new();
         for token in tokens {
-            if let Token::Bytes(b) = token {
+            if let Token::Bytes(b) | Token::Paste(b) = token {
                 out.extend_from_slice(b);
             }
         }
@@ -753,18 +773,25 @@ mod tests {
         }
     }
 
-    /// Assert a decode is exactly one plain run equal to `body` (modulo
-    /// empty Bytes tokens, the established drop shape).
-    fn assert_single_plain_run(tokens: &[Token], body: &[u8]) {
-        let runs: Vec<&Vec<u8>> = tokens
+    /// Assert a decode is exactly one Paste token equal to `body` and no
+    /// non-empty plain run (empty Bytes tokens are the established drop
+    /// shape).
+    fn assert_single_paste(tokens: &[Token], body: &[u8]) {
+        let pastes: Vec<&Vec<u8>> = tokens
             .iter()
             .filter_map(|t| match t {
-                Token::Bytes(b) if !b.is_empty() => Some(b),
+                Token::Paste(b) => Some(b),
                 _ => None,
             })
             .collect();
-        assert_eq!(runs.len(), 1, "expected one plain run, got {tokens:?}");
-        assert_eq!(runs[0], &body, "paste body must pass through untouched");
+        assert_eq!(pastes.len(), 1, "expected one paste token, got {tokens:?}");
+        assert_eq!(pastes[0], &body, "paste body must pass through untouched");
+        assert!(
+            !tokens
+                .iter()
+                .any(|t| matches!(t, Token::Bytes(b) if !b.is_empty())),
+            "no paste byte may leak as a plain run: {tokens:?}"
+        );
     }
 
     /// After any hostile input the parser must still decode a fresh plain
@@ -784,7 +811,7 @@ mod tests {
         stream.extend_from_slice(PASTE_END);
         let mut parser = InputParser::default();
         let tokens = parser.feed(&stream);
-        assert_single_plain_run(&tokens, &body);
+        assert_single_paste(&tokens, &body);
         // Trailing input after the paste decodes normally.
         let tokens = parser.feed(b"x");
         resync_health_check(&tokens);
@@ -804,8 +831,10 @@ mod tests {
         let mut reassembled = Vec::new();
         for chunk in stream.chunks(3) {
             for token in parser.feed(chunk) {
-                if let Token::Bytes(b) = token {
-                    reassembled.extend_from_slice(&b);
+                match token {
+                    Token::Paste(b) => reassembled.extend_from_slice(&b),
+                    Token::Bytes(b) => assert!(b.is_empty(), "paste byte leaked as plain"),
+                    other => panic!("unexpected token inside a paste: {other:?}"),
                 }
             }
         }
@@ -852,10 +881,10 @@ mod tests {
                 // The complete opener as its own burst: the empty
                 // drop-shape token, paste mode armed.
                 assert_eq!(first, vec![Token::Bytes(Vec::new())], "split {k}");
-                assert_single_plain_run(&second, &body);
+                assert_single_paste(&second, &body);
             } else {
                 assert!(first.is_empty(), "split {k} held: {first:?}");
-                assert_single_plain_run(&second, &body);
+                assert_single_paste(&second, &body);
             }
         }
     }
@@ -875,12 +904,12 @@ mod tests {
         let mut parser = InputParser::default();
         let tokens = parser.feed(&stream);
         // The marker contributes an empty Bytes token (the established drop
-        // shape), so: [Bytes("before "), Bytes(empty), Bytes(body),
+        // shape), so: [Bytes("before "), Bytes(empty), Paste(body),
         // Key(Right, ctrl), Bytes(0x02 + " after")].
         assert_eq!(tokens.len(), 5, "{tokens:?}");
         assert!(matches!(tokens[0], Token::Bytes(ref b) if b == b"before "));
         assert!(matches!(tokens[1], Token::Bytes(ref b) if b.is_empty()));
-        assert_single_plain_run(&tokens[1..3], &body);
+        assert_single_paste(&tokens[1..3], &body);
         assert!(
             matches!(tokens[3], Token::Key(ref ev) if ev.key() == TermKey::Right && ev.modifiers == modifiers::CTRL)
         );

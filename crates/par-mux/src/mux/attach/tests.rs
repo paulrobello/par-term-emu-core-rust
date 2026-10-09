@@ -528,6 +528,7 @@ fn prefix_router_detaches_forwards_and_sends_literal_prefix() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     // Plain bytes forward when the pane is live.
     assert!(!session.route_bytes(b"hello"));
@@ -567,6 +568,7 @@ fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     assert!(
         !session.route_bytes(b"typed while dead"),
@@ -612,6 +614,7 @@ fn status_line_names_the_respawn_chord_when_the_pane_is_dead() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     let line = session.status_line();
     assert!(
@@ -666,6 +669,7 @@ fn resync_feeds_the_shadow_the_restore_stream_verbatim() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     session.resync();
     let cursor = session.emulator.terminal().cursor();
@@ -712,6 +716,7 @@ fn resync_size_reports_the_target_window_before_the_replay() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     session.resync();
     // The connect-time handshake sends its own target-less size report
@@ -771,6 +776,7 @@ fn status_draw_places_the_cursor_at_the_tracked_cell() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
 
     // Replay that parks the cursor (CUP row 3 col 8), then a %output
@@ -854,6 +860,7 @@ fn status_draw_keeps_the_cursor_inside_the_content_region_after_a_scroll() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     // First draw fits the shadow to the host grid's pane geometry.
     let _ = session.status_draw_bytes(24, 80);
@@ -897,6 +904,7 @@ fn status_draw_tracks_the_frozen_cell_when_the_pane_is_dead() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     session.emulator.feed(b"\x1b[5;3H");
     let bytes = session.status_draw_bytes(24, 80);
@@ -945,6 +953,7 @@ fn respawn_chord_resumes_forwarding_after_revival() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     // The fake daemon answers every unknown command with an ok empty
     // block, so respawn-pane succeeds and clears the dead flag.
@@ -1058,6 +1067,7 @@ fn management_session(tag: &str) -> (std::sync::mpsc::Receiver<(String, String)>
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     // A status draw writes to the process stdout; in tests that is
     // the captured harness. Idle both flags so route_bytes's tail
@@ -1234,6 +1244,7 @@ fn kill_of_the_last_pane_engages_the_dead_guard() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     session.drawn_size = Some((80, 24));
     assert!(!session.route_bytes(&[0x02, b'x']));
@@ -1540,6 +1551,7 @@ fn help_chord_advances_the_pane_past_the_dump() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     let expected = super::help_rows(0x02, 0x12, Default::default(), 1).len() / 2 + 1;
     session.show_help();
@@ -1929,6 +1941,7 @@ fn reload_chord_rebinds_prefix_and_sends_reload_config() {
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     // A config naming a new prefix (C-a) and a moved reload chord
     // (C-a C-s): the rebind is pure over the parsed file, so the test
@@ -2120,6 +2133,7 @@ fn scripted_passthrough(
         resize_step: 1,
         resize_mode: false,
         flash: None,
+        paste: PasteTracker::default(),
     };
     let _: Vec<String> = rx.try_iter().collect();
     (rx, session)
@@ -2274,4 +2288,69 @@ fn passthrough_workspace_switch_lands_in_the_next_workspace() {
         "an empty workspace lands nowhere: {lines:?}"
     );
     assert_eq!(session.pane, "%0");
+}
+
+/// SEC-208 (d): passthrough tracks bracketed paste over the raw stream —
+/// a paste split across two bursts forwards whole (markers included, the
+/// pane's own framing) and its embedded prefix + `x` never kills a pane.
+#[test]
+fn passthrough_paste_body_skips_the_prefix_scan() {
+    let (rx, mut session) = management_session("paste-pt");
+    assert!(!session.route_bytes(b"\x1b[200~ab"));
+    assert!(!session.route_bytes(b"\x02xcd\x1b[201~"));
+    assert!(
+        !session.prefix_pending,
+        "a pasted prefix byte never arms the prefix"
+    );
+    // After the paste closes, the prefix routes again.
+    assert!(
+        session.route_bytes(&[0x02, b'd']),
+        "prefix d detaches after the paste"
+    );
+    // `send_checked` returns after the reply, and the fake records each
+    // line before replying, so every line is already queued.
+    let lines: Vec<String> = rx.try_iter().map(|(_, line)| line).collect();
+    assert!(
+        !lines.iter().any(|l| l.starts_with("kill-pane")),
+        "the pasted chord did not fire: {lines:?}"
+    );
+    let sends: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with("send-keys"))
+        .collect();
+    assert_eq!(
+        sends,
+        vec![
+            "send-keys -t %0 -H 1b 5b 32 30 30 7e 61 62",
+            "send-keys -t %0 -H 02 78 63 64 1b 5b 32 30 31 7e",
+        ],
+        "{lines:?}"
+    );
+}
+
+/// SEC-208 (d'): a marker split across bursts still flips the paste
+/// state (the five-byte carry), and the carry stays bounded.
+#[test]
+fn passthrough_paste_markers_split_across_bursts_are_recognized() {
+    let mut tracker = PasteTracker::default();
+    for &b in b"\x1b[20" {
+        tracker.observe(b);
+    }
+    assert!(!tracker.in_paste);
+    for &b in b"0~" {
+        tracker.observe(b);
+    }
+    assert!(tracker.in_paste, "split opener recognized");
+    for &b in b"body\x1b[2" {
+        tracker.observe(b);
+    }
+    assert!(tracker.in_paste);
+    for &b in b"01~" {
+        tracker.observe(b);
+    }
+    assert!(!tracker.in_paste, "split terminator recognized");
+    assert!(
+        tracker.carry.len() < PASTE_START.len(),
+        "the carry stays bounded"
+    );
 }

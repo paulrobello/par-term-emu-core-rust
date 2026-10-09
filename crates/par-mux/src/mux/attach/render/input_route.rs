@@ -153,6 +153,42 @@ impl WindowSession {
         false
     }
 
+    /// A bracketed-paste body. It never meets the prefix scan or the
+    /// chord table: a pending prefix is cancelled (tmux's rule), and the
+    /// body forwards to the focused pane — re-framed with the pane's own
+    /// `ESC[200~`/`ESC[201~` when its emulator tracks DECSET 2004, after
+    /// stripping any embedded terminator. A modal that owns the keyboard
+    /// (the rename prompt, a menu, help, the picker) receives the body as
+    /// typed text instead; the scroll viewport consumes it.
+    pub(super) fn route_paste(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        body: &[u8],
+        prefix_pending: &mut bool,
+    ) {
+        *prefix_pending = false;
+        if self.feed_modal_run(body, conn) || self.scroll_mode {
+            return;
+        }
+        let Some(id) = self.renderer.focused() else {
+            return;
+        };
+        let body = crate::mux::attach::input::strip_paste_end(body);
+        let mut bytes = Vec::with_capacity(body.len() + 12);
+        if let Some(term) = self.renderer.pane_terminal(id) {
+            bytes.extend_from_slice(term.bracketed_paste_start());
+            bytes.extend_from_slice(&body);
+            bytes.extend_from_slice(term.bracketed_paste_end());
+        } else {
+            bytes.extend_from_slice(&body);
+        }
+        if bytes.is_empty() {
+            return;
+        }
+        self.renderer.snap_to_live(id);
+        super::super::forward_chunked(conn, self.focused_pane(), &bytes);
+    }
+
     /// Hand a plain run to the modal that owns the keyboard, if one is
     /// up: the prompt, the menu, help, and the picker each eat bytes
     /// until one closes them (the closing byte and the rest of the run

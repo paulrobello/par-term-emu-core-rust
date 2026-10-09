@@ -672,6 +672,10 @@ struct WindowSession {
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
     detach_requested: bool,
+    /// The stdin tokenizer. Session-level (not per pump call) because a
+    /// paste or escape sequence can span two stdin bursts, and the pump
+    /// returns between them every frame tick.
+    parser: InputParser,
 }
 
 /// What the modal prompt edits: rename flows seeded from the live name,
@@ -785,6 +789,7 @@ impl WindowSession {
             flash_ticks: 0,
             cursor_placed: Some(None),
             detach_requested: false,
+            parser: InputParser::default(),
         }
     }
 
@@ -1088,32 +1093,47 @@ impl WindowSession {
         stdin: &mut super::Stdin,
         prefix_pending: &mut bool,
     ) -> bool {
-        let mut parser = InputParser::default();
         loop {
             match stdin.read_available() {
                 None => return false,
                 Some(Ok(bytes)) if bytes.is_empty() => return true, // EOF
                 Some(Ok(bytes)) => {
-                    for token in parser.feed(&bytes) {
-                        match token {
-                            Token::Bytes(run) => {
-                                if self.route_plain(&run, conn, prefix_pending) {
-                                    return true;
-                                }
-                            }
-                            Token::Key(ev) => self.route_key(conn, &ev, prefix_pending),
-                            Token::Mouse(mouse) => {
-                                self.route_mouse(conn, mouse);
-                                if std::mem::take(&mut self.detach_requested) {
-                                    return true;
-                                }
-                            }
-                        }
+                    if self.route_stdin_bytes(conn, &bytes, prefix_pending) {
+                        return true;
                     }
                 }
                 Some(Err(_)) => return true,
             }
         }
+    }
+
+    /// Tokenize one stdin burst through the session's persistent parser
+    /// and route every token. Returns true to end the session.
+    fn route_stdin_bytes(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        bytes: &[u8],
+        prefix_pending: &mut bool,
+    ) -> bool {
+        let tokens = self.parser.feed(bytes);
+        for token in tokens {
+            match token {
+                Token::Bytes(run) => {
+                    if self.route_plain(&run, conn, prefix_pending) {
+                        return true;
+                    }
+                }
+                Token::Key(ev) => self.route_key(conn, &ev, prefix_pending),
+                Token::Mouse(mouse) => {
+                    self.route_mouse(conn, mouse);
+                    if std::mem::take(&mut self.detach_requested) {
+                        return true;
+                    }
+                }
+                Token::Paste(body) => self.route_paste(conn, &body, prefix_pending),
+            }
+        }
+        false
     }
 }
 

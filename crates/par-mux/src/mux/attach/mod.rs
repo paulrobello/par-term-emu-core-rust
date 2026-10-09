@@ -330,6 +330,41 @@ struct Session {
     /// cleared on the next redraw cycle (`config reloaded`, or the
     /// reload's failure text).
     flash: Option<String>,
+    /// Bracketed-paste tracking over the raw stdin stream: pasted bytes
+    /// skip the prefix scan.
+    paste: PasteTracker,
+}
+
+/// The bracketed-paste opener a host in DECSET 2004 mode sends.
+const PASTE_START: &[u8] = b"\x1b[200~";
+/// The bracketed-paste terminator.
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Passthrough's paste state. Passthrough forwards raw stdin (markers
+/// included, so the pane sees its own framing); it only needs to know
+/// whether a byte is inside a paste body. `carry` holds the last five
+/// bytes so a marker split across stdin bursts is still recognized.
+#[derive(Debug, Default)]
+struct PasteTracker {
+    in_paste: bool,
+    carry: Vec<u8>,
+}
+
+impl PasteTracker {
+    /// Account one forwarded byte, updating `in_paste` when it completes a
+    /// marker.
+    fn observe(&mut self, byte: u8) {
+        self.carry.push(byte);
+        if self.carry.ends_with(PASTE_START) {
+            self.in_paste = true;
+        } else if self.carry.ends_with(PASTE_END) {
+            self.in_paste = false;
+        }
+        let keep = PASTE_START.len() - 1;
+        if self.carry.len() > keep {
+            self.carry.drain(..self.carry.len() - keep);
+        }
+    }
 }
 
 impl Session {
@@ -374,6 +409,7 @@ impl Session {
             resize_step,
             resize_mode: false,
             flash: None,
+            paste: PasteTracker::default(),
         };
         session.resync();
         session.refresh_status();
@@ -451,8 +487,21 @@ impl Session {
         while index < bytes.len() {
             let byte = bytes[index];
             index += 1;
+            let in_paste = self.paste.in_paste;
+            self.paste.observe(byte);
+            if in_paste {
+                // A paste body is text, never a chord.
+                to_send.push(byte);
+                continue;
+            }
             if self.prefix_pending {
                 self.prefix_pending = false;
+                if byte == 0x1b && bytes[index..].starts_with(&PASTE_START[1..]) {
+                    // A paste opener cancels the pending prefix (tmux's
+                    // rule); the marker forwards as the pane's framing.
+                    to_send.push(byte);
+                    continue;
+                }
                 if byte == self.prefix {
                     // prefix prefix: forward the prefix byte itself
                     // (tmux's rule for typing a literal C-b).

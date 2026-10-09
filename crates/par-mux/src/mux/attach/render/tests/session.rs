@@ -1540,3 +1540,128 @@ fn help_overlay_paints_a_scrollbar_thumb_when_it_overflows() {
             .is_some_and(|c| c.symbol() != "┃"))
     );
 }
+
+/// The `send-keys -H` hex spelling of `bytes` (what `forward_chunked`
+/// puts on the wire for one chunk).
+fn hex_wire(pane: &str, bytes: &[u8]) -> String {
+    let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("send-keys -t {pane} -H {}", hex.join(" "))
+}
+
+/// A two-pane session over a recording conn, focused on pane 1.
+fn paste_session(
+    tag: &str,
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let (rx, conn) = recording_conn(tag);
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    session.renderer.focus(1);
+    drained(&rx);
+    (rx, conn, session)
+}
+
+/// SEC-208 (a): an SGR mouse report split across two stdin bursts (two
+/// pump ticks) is one mouse route — the session's parser holds the
+/// partial — and no fragment of it reaches the pane as typed text.
+#[test]
+fn split_mouse_report_across_pump_ticks_routes_once() {
+    let (rx, mut conn, mut session) = paste_session("split-mouse");
+    session.renderer.focus(2);
+    let mut prefix_pending = false;
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[<0;10;", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"5M", &mut prefix_pending));
+    assert_eq!(
+        session.renderer.focused(),
+        Some(1),
+        "the reassembled press focused the pane under the pointer"
+    );
+    let lines = drained(&rx);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("select-pane"))
+            .count(),
+        1,
+        "exactly one mouse route: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.starts_with("send-keys")),
+        "no mouse fragment forwarded as text: {lines:?}"
+    );
+}
+
+/// SEC-208 (b): a bracketed paste split across two pump ticks forwards
+/// its body opaque — the embedded prefix + `x` never kills the pane — and
+/// a pane that enabled DECSET 2004 gets the body re-framed.
+#[test]
+fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
+    let (rx, mut conn, mut session) = paste_session("split-paste");
+    session.renderer.feed_output(1, b"\x1b[?2004h");
+    let mut prefix_pending = false;
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[200~ab", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~", &mut prefix_pending));
+    assert!(
+        !prefix_pending,
+        "a pasted prefix byte never arms the prefix"
+    );
+    let lines = drained(&rx);
+    assert!(
+        !lines.iter().any(|l| l.starts_with("kill-pane")),
+        "the pasted chord did not fire: {lines:?}"
+    );
+    assert_eq!(
+        lines,
+        vec![hex_wire("%1", b"\x1b[200~ab\x02xcd\x1b[201~")],
+        "the body forwards whole, framed for the bracketed-paste pane"
+    );
+}
+
+/// SEC-208 (b'): the same paste into a pane WITHOUT bracketed paste
+/// forwards the body bare (no framing the app did not ask for).
+#[test]
+fn paste_into_a_plain_pane_forwards_the_body_bare() {
+    let (rx, mut conn, mut session) = paste_session("plain-paste");
+    let mut prefix_pending = false;
+    session.route_stdin_bytes(
+        &mut conn,
+        b"\x1b[200~ab\x02xcd\x1b[201~",
+        &mut prefix_pending,
+    );
+    assert_eq!(drained(&rx), vec![hex_wire("%1", b"ab\x02xcd")]);
+}
+
+/// SEC-208: a paste cancels a pending prefix (tmux's rule), so the
+/// paste's first byte is not taken as a chord key.
+#[test]
+fn paste_cancels_a_pending_prefix() {
+    let (rx, mut conn, mut session) = paste_session("paste-prefix");
+    let mut prefix_pending = false;
+    session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B], &mut prefix_pending);
+    assert!(prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~", &mut prefix_pending);
+    assert!(!prefix_pending);
+    let lines = drained(&rx);
+    assert_eq!(lines, vec![hex_wire("%1", b"xd")], "{lines:?}");
+}
+
+/// SEC-208 (c): an embedded terminator in a paste body is stripped
+/// before the re-frame, so pasted text cannot close the pane's paste
+/// early — including a terminator spliced together by the removal.
+#[test]
+fn embedded_paste_terminator_is_stripped() {
+    let (rx, mut conn, mut session) = paste_session("paste-strip");
+    session.renderer.feed_output(1, b"\x1b[?2004h");
+    let mut prefix_pending = false;
+    session.route_paste(
+        &mut conn,
+        b"a\x1b[201~b\x1b[201\x1b[201~~c",
+        &mut prefix_pending,
+    );
+    assert_eq!(drained(&rx), vec![hex_wire("%1", b"\x1b[200~abc\x1b[201~")]);
+}
