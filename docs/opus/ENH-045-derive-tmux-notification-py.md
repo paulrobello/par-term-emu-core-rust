@@ -145,6 +145,10 @@ All anchors are at HEAD `2cf0957`.
 - `git diff --stat -- derive/ Cargo.toml crates/par-term-emu-core/Cargo.toml` is empty: no derive-crate change, no new dependency, no version bump.
 - `make derive-version-check` exits 0.
 - Adding a throwaway variant to `TmuxNotification` locally (not committed) makes `cargo check --lib --no-default-features --features python-test` fail with a non-exhaustive-match error pointing into `notification.rs`. Revert it after the check.
+- Adding a throwaway variant to `TmuxNotification` also requires a temporary arm in the core
+  crate's own `notification_type()` match (`crates/par-term-emu-core/src/tmux_control.rs`),
+  which fails first; stub both, confirm the bindings error is E0004 pointing into
+  `notification.rs`, then revert both.
 - `make checkall` exits 0.
 
 ## Rollback
