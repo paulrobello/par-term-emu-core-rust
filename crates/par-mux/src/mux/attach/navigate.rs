@@ -46,35 +46,15 @@ impl Session {
         let Some(session) = self.session_id.clone() else {
             return;
         };
-        let Ok(reply) = self
-            .conn
-            .send_checked(&format!("list-windows -t {session}"))
-        else {
+        let windows = list_window_ids(&mut self.conn, &session);
+        let Some(window) = next_in_cycle(&windows, &self.window, direction > 0).cloned() else {
             return;
         };
-        if !reply.ok {
+        if !self.land(&window) {
             return;
         }
-        let windows: Vec<String> = reply
-            .body
-            .iter()
-            .filter_map(|l| l.split_whitespace().next())
-            .filter(|w| w.starts_with('@'))
-            .map(str::to_string)
-            .collect();
-        let Some(position) = windows.iter().position(|w| *w == self.window) else {
-            return;
-        };
-        let next = (position as i32 + direction).rem_euclid(windows.len() as i32) as usize;
-        let window = &windows[next];
-        if self
-            .conn
-            .send_checked(&format!("select-window -t {window}"))
-            .is_ok_and(|reply| reply.ok)
-        {
-            self.window = window.clone();
-            self.attach_window_active_pane(window);
-        }
+        self.window = window.clone();
+        self.attach_window_active_pane(&window);
     }
 
     /// prefix ( / ): the previous/next session in list-sessions order;
@@ -91,39 +71,27 @@ impl Session {
             .iter()
             .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
             .collect();
-        let Some(current) = sessions
-            .iter()
-            .position(|s| Some(s) == self.session_id.as_ref())
-        else {
+        let Some(current) = self.session_id.clone() else {
             return;
         };
-        let next = (current as i32 + direction).rem_euclid(sessions.len() as i32) as usize;
-        let session = &sessions[next];
-        let Ok(windows) = self
-            .conn
-            .send_checked(&format!("list-windows -t {session}"))
-        else {
+        let Some(session) = next_in_cycle(&sessions, &current, direction > 0).cloned() else {
             return;
         };
-        if !windows.ok {
+        self.land_in_session(&session);
+    }
+
+    /// Land the pump on `session`'s active window's active pane. Local
+    /// state moves only once the daemon accepted the landing.
+    fn land_in_session(&mut self, session: &str) {
+        let Some(window) = session_active_window(&mut self.conn, session) else {
+            return;
+        };
+        if !self.land(&window) {
             return;
         }
-        // The marked `*` window is the session's active one.
-        let window = windows
-            .body
-            .iter()
-            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-            .or_else(|| windows.body.first())
-            .and_then(|l| l.split_whitespace().next());
-        let Some(window) = window else {
-            return;
-        };
-        let _ = self
-            .conn
-            .send_checked(&format!("select-window -t {window}"));
-        self.window = window.to_string();
-        self.session_id = Some(session.clone());
-        self.attach_window_active_pane(window);
+        self.window = window.clone();
+        self.session_id = Some(session.to_string());
+        self.attach_window_active_pane(&window);
     }
 
     /// prefix W / C-w: the next/previous workspace in id order —
@@ -139,23 +107,13 @@ impl Session {
         if !reply.ok {
             return;
         }
-        let rows: Vec<(String, String, bool)> = reply
-            .body
-            .iter()
-            .filter_map(|l| parse_workspace_line(l))
-            .collect();
-        if rows.is_empty() {
-            return;
-        }
-        let Some(current) = rows.iter().position(|(_, _, active)| *active) else {
+        let Some(ws_id) = next_workspace(&reply.body, direction > 0) else {
             return;
         };
-        let next = (current as i32 + direction).rem_euclid(rows.len() as i32) as usize;
-        let (ws_id, _, _) = &rows[next];
         let _ = self
             .conn
             .send_checked(&format!("select-workspace -t {ws_id}"));
-        self.land_in_workspace(ws_id);
+        self.land_in_workspace(&ws_id);
     }
 
     /// After a workspace select, land the pump on the workspace's
@@ -179,30 +137,27 @@ impl Session {
             self.draw_status();
             return;
         };
-        let Ok(windows) = self
-            .conn
-            .send_checked(&format!("list-windows -t {session}"))
-        else {
-            return;
-        };
-        if !windows.ok {
-            return;
-        }
-        let window = windows
-            .body
-            .iter()
-            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-            .or_else(|| windows.body.first())
-            .and_then(|l| l.split_whitespace().next());
-        let Some(window) = window else {
-            return;
-        };
-        let _ = self
-            .conn
-            .send_checked(&format!("select-window -t {window}"));
-        self.window = window.to_string();
-        self.session_id = Some(session);
-        self.attach_window_active_pane(window);
+        self.land_in_session(&session);
+    }
+
+    /// A user-initiated landing on `window`: `switch-client -t <window>`
+    /// selects it AND makes its session the daemon's displayed one (the
+    /// persisted pointer the next no-target attach and a restore read —
+    /// card 01a11bd1), falling back to `select-window` for a daemon
+    /// without `switch-client`. Returns whether either landed; callers
+    /// mutate local state only on `true`, so a refused landing never
+    /// desyncs the view. The render mode's `land_window` follows the same
+    /// rule.
+    pub(super) fn land(&mut self, window: &str) -> bool {
+        let landed =
+            |reply: std::io::Result<crate::mux::client::Reply>| reply.is_ok_and(|reply| reply.ok);
+        landed(
+            self.conn
+                .send_checked(&format!("switch-client -t {window}")),
+        ) || landed(
+            self.conn
+                .send_checked(&format!("select-window -t {window}")),
+        )
     }
 
     /// Make `window`'s active pane (its `*` marker in `list-panes -t`) the

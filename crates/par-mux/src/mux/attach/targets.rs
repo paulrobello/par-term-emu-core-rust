@@ -56,6 +56,77 @@ pub(crate) fn parse_workspace_line(line: &str) -> Option<(String, String, bool)>
     Some((id.to_string(), name.to_string(), active))
 }
 
+/// The active window of a `list-windows` reply body: the `*`-marked row
+/// (`@N * name`), else the first `@N` row. The one spelling of the
+/// active-window rule both attach modes share.
+pub(crate) fn active_window_row(body: &[String]) -> Option<String> {
+    body.iter()
+        .find(|l| l.split_whitespace().nth(1) == Some("*"))
+        .or_else(|| body.iter().find(|l| l.starts_with('@')))
+        .and_then(|l| l.split_whitespace().next())
+        .map(str::to_string)
+}
+
+/// `session`'s active window id ([`active_window_row`] over its
+/// `list-windows` reply), or `None` when the session no longer exists
+/// or has no windows.
+pub(crate) fn session_active_window(conn: &mut conn::AttachConn, session: &str) -> Option<String> {
+    let reply = conn
+        .send_checked(&format!("list-windows -t {session}"))
+        .ok()
+        .filter(|reply| reply.ok)?;
+    active_window_row(&reply.body)
+}
+
+/// `session`'s window ids (`@N`) in the daemon's order — empty when the
+/// query fails or the session is gone.
+pub(crate) fn list_window_ids(conn: &mut conn::AttachConn, session: &str) -> Vec<String> {
+    conn.send_checked(&format!("list-windows -t {session}"))
+        .ok()
+        .filter(|reply| reply.ok)
+        .map(|reply| {
+            reply
+                .body
+                .iter()
+                .filter_map(|l| l.split_whitespace().next())
+                .filter(|w| w.starts_with('@'))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The id after (`forward`) or before `current` in `ids`, wrapping at
+/// both ends; `None` when `current` is not in `ids`. The cycle rule every
+/// window/session/workspace switch in both attach modes follows.
+pub(crate) fn next_in_cycle<'a>(
+    ids: &'a [String],
+    current: &str,
+    forward: bool,
+) -> Option<&'a String> {
+    let position = ids.iter().position(|id| id == current)?;
+    let len = ids.len();
+    let next = if forward {
+        (position + 1) % len
+    } else {
+        (position + len - 1) % len
+    };
+    ids.get(next)
+}
+
+/// The workspace after (`forward`) or before the daemon's active one in
+/// a `list-workspaces` reply body, wrapping; `None` when the roster is
+/// empty or names no active workspace.
+pub(crate) fn next_workspace(body: &[String], forward: bool) -> Option<String> {
+    let rows: Vec<(String, String, bool)> = body
+        .iter()
+        .filter_map(|l| parse_workspace_line(l))
+        .collect();
+    let active = rows.iter().find(|(_, _, active)| *active)?.0.clone();
+    let ids: Vec<String> = rows.into_iter().map(|(id, _, _)| id).collect();
+    next_in_cycle(&ids, &active, forward).cloned()
+}
+
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane
 /// title name) goes straight to the daemon's matcher via `pane-info`; a
 /// window (`@N`/name) or session (`$N`/name) target narrows through the

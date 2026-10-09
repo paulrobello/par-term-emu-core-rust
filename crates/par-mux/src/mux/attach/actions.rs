@@ -247,15 +247,12 @@ impl Session {
         let Some(window) = reply.body.first() else {
             return;
         };
-        let window = window.trim();
-        if self
-            .conn
-            .send_checked(&format!("select-window -t {window}"))
-            .is_ok_and(|reply| reply.ok)
-        {
-            self.window = window.to_string();
-            self.attach_window_active_pane(window);
+        let window = window.trim().to_string();
+        if !self.land(&window) {
+            return;
         }
+        self.window = window.clone();
+        self.attach_window_active_pane(&window);
     }
 
     /// The reload chord: re-read the config file, rebind the prefix and
@@ -265,19 +262,14 @@ impl Session {
     /// parse error in the re-read file shows on the status row instead
     /// of detaching.
     pub(super) fn reload_config(&mut self) {
+        // Passthrough paints no render chrome: the display fields are the
+        // built-in defaults, only the chords below are live.
         match reload_client_chords(crate::mux::config::Chords {
             prefix: self.prefix,
             reload: self.reload_key,
             management: self.management,
             resize_step: self.resize_step,
-            pane_borders: false,
-            show_label_in_border: false,
-            pane_gaps: 0,
-            scrollbar_gutter: false,
-            sidebar_width: 20,
-            sidebar_on_launch: true,
-            drag_cursor_shape: false,
-            border_lines: "unicode".to_string(),
+            ..crate::mux::config::Chords::with_defaults()
         }) {
             Ok(new_chords) => {
                 self.prefix = new_chords.prefix;

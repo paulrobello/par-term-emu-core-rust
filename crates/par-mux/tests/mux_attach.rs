@@ -4078,6 +4078,56 @@ fn render_mode_landing_survives_a_restart_for_the_next_attach() {
     c.killer.kill().ok();
 }
 
+/// ARC-124: the passthrough half of card 01a11bd1. A passthrough session
+/// switch (prefix `(`) must land through `switch-client`, so the
+/// daemon's persisted displayed-session pointer follows; after a restart
+/// the next no-target attach shows the session passthrough landed on.
+/// (A bare `select-window` on a background session never moved the
+/// pointer, so the restored daemon still named the old session.)
+#[cfg(unix)]
+#[test]
+fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
+    let (fixture, mut daemon, client) = fixture_two_session_workspace("passrestart");
+    drop(client);
+    let (mut a, a_err) = spawn_attach(&fixture, &[]);
+    let _ = wait_for_output(&a, b"SOLO-MARK", Duration::from_secs(10));
+    a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
+    a.to_child.flush().ok();
+    let landed = wait_for_output(&a, b"MULTI-", Duration::from_secs(10));
+    assert!(
+        landed.windows(b"MULTI-".len()).any(|w| w == b"MULTI-"),
+        "passthrough lands on the multi-pane session. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    a.to_child.write_all(&[0x02, b'd']).expect("prefix d");
+    a.to_child.flush().ok();
+    assert_eq!(child_exit(&mut a, Duration::from_secs(10)), Some(0));
+
+    common::sigterm_clean(&mut daemon);
+    let _restarted = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+
+    let mut query = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    let displayed = query
+        .send("switch-client")
+        .expect("displayed-session query");
+    assert_eq!(
+        displayed.join("").trim(),
+        "$1",
+        "the restored daemon's displayed session is the passthrough landing"
+    );
+    let (mut c, c_err) = spawn_attach_render(&fixture, &[]);
+    let mut c_all = Vec::new();
+    let shown = screen_until(&c, &mut c_all, Duration::from_secs(10), shows_multi);
+    assert!(
+        shows_multi(&shown) && !shown.contains("SOLO-MARK"),
+        "the first attach after a restore must show the session passthrough \
+         last landed on. screen:\n{shown}\nstderr: {}",
+        c_err.lock().unwrap()
+    );
+    c.killer.kill().ok();
+}
+
 /// Card 01a11bd1 symptom 3, the landing half: client A's prefix `c` in
 /// a sibling session it landed on moves the display there too, so B —
 /// on the session the pointer used to name — follows to A's new tab.

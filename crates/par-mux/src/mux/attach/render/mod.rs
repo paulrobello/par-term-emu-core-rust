@@ -20,6 +20,9 @@ use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
+use crate::mux::attach::targets::{
+    active_window_row, list_window_ids, next_in_cycle, next_workspace, session_active_window,
+};
 use crate::mux::attach::{layout, HelpRow, ManagementKey};
 use crate::mux::layout::PaneChrome;
 use crate::terminal::Terminal;
@@ -1120,24 +1123,6 @@ impl WindowSession {
         }
         false
     }
-}
-
-/// `session`'s active window id (its `*`-marked `list-windows` row, else
-/// the first), or `None` when the session no longer exists.
-fn session_active_window(
-    conn: &mut crate::mux::attach::conn::AttachConn,
-    session: &str,
-) -> Option<String> {
-    let windows = conn
-        .send_checked(&format!("list-windows -t {session}"))
-        .ok()
-        .filter(|reply| reply.ok)?;
-    windows
-        .body
-        .iter()
-        .find(|l| l.split_whitespace().nth(1) == Some("*"))
-        .or_else(|| windows.body.first())
-        .and_then(|l| l.split_whitespace().next().map(str::to_string))
 }
 
 /// What handling one event told the pump.

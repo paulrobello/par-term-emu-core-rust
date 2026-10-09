@@ -481,14 +481,7 @@ impl WindowSession {
         if !reply.ok {
             return;
         }
-        let survivor = reply
-            .body
-            .iter()
-            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-            .or_else(|| reply.body.first())
-            .and_then(|l| l.split_whitespace().next())
-            .map(str::to_string);
-        let Some(survivor) = survivor else {
+        let Some(survivor) = active_window_row(&reply.body) else {
             // The session died with the window: the next status refresh
             // reports SessionGone and the view ends cleanly.
             self.status_dirty = true;

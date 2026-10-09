@@ -1262,7 +1262,7 @@ fn kill_of_the_last_pane_engages_the_dead_guard() {
 }
 
 /// prefix c: `new-window -t $0` rides the wire, the fresh window is
-/// selected, and the pump attaches to its active pane — the same
+/// landed on (`switch-client`, ARC-124), and the pump attaches to its active pane — the same
 /// follow the window-switch chords make.
 #[test]
 fn new_window_chord_follows_the_new_windows_active_pane() {
@@ -1278,14 +1278,14 @@ fn new_window_chord_follows_the_new_windows_active_pane() {
             "set-client-colors",
             "refresh-client",
             "new-window",
-            "select-window",
+            "switch-client",
             "list-panes",
         ],
-        "new-window, select, active-pane lookup: {lines:?}"
+        "new-window, landing, active-pane lookup: {lines:?}"
     );
     assert_eq!(lines[4].1, "new-window -t $0");
     assert_eq!(
-        lines[5].1, "select-window -t @1",
+        lines[5].1, "switch-client -t @1",
         "the fresh window: {lines:?}"
     );
     // The active-pane lookup ran against the NEW window (its marked
@@ -2104,8 +2104,11 @@ fn scripted_passthrough(
             };
             number += 1;
             tx.send(trimmed.to_owned()).ok();
+            // A scripted `!err` reply answers with an error block.
+            let ok = reply != "!err";
+            let reply = if ok { reply } else { String::new() };
             writer
-                .write_all(emit_block(number, &reply, true).as_bytes())
+                .write_all(emit_block(number, &reply, ok).as_bytes())
                 .ok();
             writer.flush().ok();
         }
@@ -2145,6 +2148,7 @@ fn switch_lines(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
     rx.try_iter()
         .filter(|l| {
             l.starts_with("select-")
+                || l.starts_with("switch-client")
                 || l.starts_with("list-panes -t")
                 || l.starts_with("list-windows -t")
                 || l.starts_with("list-sessions -t")
@@ -2153,7 +2157,7 @@ fn switch_lines(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
 }
 
 /// Passthrough prefix n / p: the neighbor window (wrapping) is
-/// selected and the pump attaches its `*`-marked pane; an unlisted
+/// landed on (`switch-client`, ARC-124) and the pump attaches its `*`-marked pane; an unlisted
 /// shown window moves nowhere.
 #[test]
 fn passthrough_window_switch_wraps_and_attaches_the_marked_pane() {
@@ -2171,7 +2175,7 @@ fn passthrough_window_switch_wraps_and_attaches_the_marked_pane() {
         switch_lines(&rx)[..4].to_vec(),
         vec![
             "list-windows -t $0",
-            "select-window -t @2",
+            "switch-client -t @2",
             "list-panes -t @2",
             "select-pane -t %5"
         ],
@@ -2206,7 +2210,7 @@ fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
         lines[..3].to_vec(),
         vec![
             "list-windows -t $1",
-            "select-window -t @4",
+            "switch-client -t @4",
             "list-panes -t @4"
         ],
         "( from the head wraps to $1: {lines:?}"
@@ -2219,6 +2223,37 @@ fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
     assert!(!session.route_bytes(&[0x02, b')']));
     assert!(switch_lines(&rx).is_empty(), "an unknown session: no move");
     assert_eq!(session.pane, "%8");
+}
+
+/// ARC-124: a landing the daemon refuses (`switch-client` AND the
+/// `select-window` fallback both error) leaves the pump's window,
+/// session, and pane put — the session switch used to discard the
+/// select reply and move local state anyway.
+#[test]
+fn passthrough_refused_landing_leaves_local_state_put() {
+    let (rx, mut session) = scripted_passthrough(
+        "pt-refused",
+        &[
+            ("list-sessions", "$0: work\n$1: lab"),
+            ("list-windows -t $1", "@4 * y"),
+            ("switch-client -t @4", "!err"),
+            ("select-window -t @4", "!err"),
+        ],
+    );
+    assert!(!session.route_bytes(&[0x02, b')']));
+    let lines = switch_lines(&rx);
+    assert_eq!(
+        lines,
+        vec![
+            "list-windows -t $1",
+            "switch-client -t @4",
+            "select-window -t @4"
+        ],
+        "both landings tried, nothing after: {lines:?}"
+    );
+    assert_eq!(session.session_id.as_deref(), Some("$0"));
+    assert_eq!(session.window, "@0");
+    assert_eq!(session.pane, "%0");
 }
 
 /// Passthrough prefix o: the next pane of the window (wrapping) by
@@ -2264,7 +2299,7 @@ fn passthrough_workspace_switch_lands_in_the_next_workspace() {
             "select-workspace -t +1",
             "list-sessions -t +1",
             "list-windows -t $2",
-            "select-window -t @6",
+            "switch-client -t @6",
             "list-panes -t @6"
         ]
     );
@@ -2433,4 +2468,70 @@ fn resolve_client_rejects_a_malformed_prefix() {
         }
         other => panic!("expected a handshake error, got {other:?}"),
     }
+}
+
+fn ids(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+/// ARC-124: the shared cycle rule — forward/back step, wrap at both
+/// ends, a one-element ring stays put, a missing current is `None`.
+#[test]
+fn next_in_cycle_steps_wraps_and_rejects_a_missing_current() {
+    let ring = ids(&["@0", "@1", "@2"]);
+    assert_eq!(
+        next_in_cycle(&ring, "@0", true).map(String::as_str),
+        Some("@1")
+    );
+    assert_eq!(
+        next_in_cycle(&ring, "@1", false).map(String::as_str),
+        Some("@0")
+    );
+    assert_eq!(
+        next_in_cycle(&ring, "@2", true).map(String::as_str),
+        Some("@0"),
+        "wraps forward"
+    );
+    assert_eq!(
+        next_in_cycle(&ring, "@0", false).map(String::as_str),
+        Some("@2"),
+        "wraps back"
+    );
+    assert_eq!(
+        next_in_cycle(&ids(&["$3"]), "$3", true).map(String::as_str),
+        Some("$3")
+    );
+    assert_eq!(next_in_cycle(&ring, "@9", true), None, "missing current");
+    assert_eq!(next_in_cycle(&[], "@0", true), None, "empty ring");
+}
+
+/// ARC-124: the active-window rule both modes share — the `*` row,
+/// else the first `@` row, else `None`.
+#[test]
+fn active_window_row_takes_the_marked_row_else_the_first_window() {
+    assert_eq!(
+        active_window_row(&ids(&["@0 - main", "@1 * vim"])).as_deref(),
+        Some("@1")
+    );
+    assert_eq!(
+        active_window_row(&ids(&["noise", "@4 - a", "@5 - b"])).as_deref(),
+        Some("@4")
+    );
+    assert_eq!(active_window_row(&[]), None);
+}
+
+/// ARC-124: the workspace cycle steps from the ACTIVE row of the
+/// `list-workspaces` reply (`+W: name [active]`), wrapping.
+#[test]
+fn next_workspace_steps_from_the_active_row() {
+    let body = ids(&["+0: main", "+1: lab active", "+2: ops"]);
+    assert_eq!(next_workspace(&body, true).as_deref(), Some("+2"));
+    assert_eq!(next_workspace(&body, false).as_deref(), Some("+0"));
+    let last = ids(&["+0: main", "+1: lab active"]);
+    assert_eq!(next_workspace(&last, true).as_deref(), Some("+0"), "wraps");
+    assert_eq!(
+        next_workspace(&ids(&["+0: main"]), true),
+        None,
+        "no active row"
+    );
 }

@@ -165,12 +165,7 @@ impl StatusState {
                         Some((id.to_string(), name))
                     })
                     .collect();
-                self.active_window = reply
-                    .body
-                    .iter()
-                    .find(|line| line.split_whitespace().nth(1) == Some("*"))
-                    .and_then(|line| line.split_whitespace().next())
-                    .map(str::to_string)
+                self.active_window = super::targets::active_window_row(&reply.body)
                     .or_else(|| self.windows.first().map(|(id, _)| id.clone()));
             }
         }

@@ -211,21 +211,11 @@ impl WindowSession {
         if !reply.ok {
             return;
         }
-        let rows: Vec<(String, String, bool)> = reply
-            .body
-            .iter()
-            .filter_map(|l| super::super::parse_workspace_line(l))
-            .collect();
-        if rows.is_empty() {
-            return;
-        }
-        let Some(current) = rows.iter().position(|(_, _, active)| *active) else {
+        let Some(ws_id) = next_workspace(&reply.body, direction > 0) else {
             return;
         };
-        let next = (current as i32 + direction).rem_euclid(rows.len() as i32) as usize;
-        let (ws_id, _, _) = &rows[next];
         let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
-        self.land_on_workspace(conn, ws_id);
+        self.land_on_workspace(conn, &ws_id);
     }
 
     /// Re-query every pane's effective title into the renderer's label
@@ -278,22 +268,10 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         };
-        let Ok(windows) = conn.send_checked(&format!("list-windows -t {session}")) else {
+        let Some(window) = session_active_window(conn, &session) else {
             return;
         };
-        if !windows.ok {
-            return;
-        }
-        let window = windows
-            .body
-            .iter()
-            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-            .or_else(|| windows.body.first())
-            .and_then(|l| l.split_whitespace().next());
-        let Some(window) = window else {
-            return;
-        };
-        self.land_window(conn, window);
+        self.land_window(conn, &window);
     }
 
     /// The reload chord in render mode: the same client-side rebind the
@@ -398,32 +376,15 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         direction: i32,
     ) {
-        // The status state knows the shown session's windows.
-        if self.status.session_id.is_none() {
-            return;
-        }
-        // Re-query for the fresh order: the status state may be stale.
-        let Ok(reply) = conn.send_checked(&format!(
-            "list-windows -t {}",
-            self.status.session_id.clone().unwrap_or_default()
-        )) else {
+        // The status state knows the shown session; re-query its windows
+        // for the fresh order (the status state may be stale).
+        let Some(session) = self.status.session_id.clone() else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
-        let windows: Vec<String> = reply
-            .body
-            .iter()
-            .filter_map(|l| l.split_whitespace().next())
-            .filter(|w| w.starts_with('@'))
-            .map(str::to_string)
-            .collect();
-        let Some(position) = windows.iter().position(|w| *w == self.window) else {
+        let windows = list_window_ids(conn, &session);
+        let Some(next) = next_in_cycle(&windows, &self.window, direction > 0).cloned() else {
             return;
         };
-        let next = windows[(position as i32 + direction).rem_euclid(windows.len() as i32) as usize]
-            .clone();
         self.land_window(conn, &next);
     }
 
@@ -448,48 +409,23 @@ impl WindowSession {
         if sessions.is_empty() {
             return;
         }
-        // Which session owns the shown window right now?
-        let Ok(windows) = conn.send_checked(&format!(
-            "list-windows -t {}",
-            self.status.session_id.clone().unwrap_or_default()
-        )) else {
-            return;
-        };
-        let owns_window = windows
-            .body
-            .iter()
-            .any(|l| l.split_whitespace().next() == Some(self.window.as_str()));
+        // Which session owns the shown window right now? Stale state
+        // falls back to the head so a direction still moves somewhere
+        // deterministic.
+        let shown = self.status.session_id.clone().unwrap_or_default();
+        let owns_window = list_window_ids(conn, &shown).contains(&self.window);
         let current = if owns_window {
-            sessions
-                .iter()
-                .position(|s| Some(s.as_str()) == self.status.session_id.as_deref())
+            shown
         } else {
-            // Stale state: fall back to the head so a direction still
-            // moves somewhere deterministic.
-            Some(0)
+            sessions[0].clone()
         };
-        let Some(current) = current else {
+        let Some(next) = next_in_cycle(&sessions, &current, direction > 0).cloned() else {
             return;
         };
-        let next = sessions
-            [(current as i32 + direction).rem_euclid(sessions.len() as i32) as usize]
-            .clone();
-        let Ok(windows) = conn.send_checked(&format!("list-windows -t {next}")) else {
+        let Some(window) = session_active_window(conn, &next) else {
             return;
         };
-        if !windows.ok {
-            return;
-        }
-        let window = windows
-            .body
-            .iter()
-            .find(|l| l.split_whitespace().nth(1) == Some("*"))
-            .or_else(|| windows.body.first())
-            .and_then(|l| l.split_whitespace().next());
-        let Some(window) = window else {
-            return;
-        };
-        self.land_window(conn, window);
+        self.land_window(conn, &window);
     }
 
     /// A user-initiated landing on `window`: `switch-client -t <window>`

@@ -53,15 +53,9 @@ pub(super) fn resolve_window_and_pane(
             let windows = conn
                 .send_checked(&format!("list-windows -t {session}"))
                 .map_err(|err| format!("list-windows failed: {err}"))?;
-            let window = windows
-                .body
-                .iter()
-                .find(|l| l.split_whitespace().nth(1) == Some("*"))
-                .or_else(|| windows.body.iter().find(|l| l.starts_with('@')))
-                .and_then(|l| l.split_whitespace().next())
-                .ok_or("the session has no windows")?;
-            let pane = marked_pane_of(conn, window)?;
-            Ok((window.to_string(), pane))
+            let window = active_window_row(&windows.body).ok_or("the session has no windows")?;
+            let pane = marked_pane_of(conn, &window)?;
+            Ok((window, pane))
         }
         Some(target) => {
             // A pane: pane-info's second field names the window.
@@ -87,15 +81,10 @@ pub(super) fn resolve_window_and_pane(
             // A session: its active window.
             if let Ok(reply) = conn.send_checked(&format!("list-windows -t {target}")) {
                 if reply.ok {
-                    let window = reply
-                        .body
-                        .iter()
-                        .find(|l| l.split_whitespace().nth(1) == Some("*"))
-                        .or_else(|| reply.body.iter().find(|l| l.starts_with('@')))
-                        .and_then(|l| l.split_whitespace().next())
-                        .ok_or("the session has no windows")?;
-                    let pane = marked_pane_of(conn, window)?;
-                    return Ok((window.to_string(), pane));
+                    let window =
+                        active_window_row(&reply.body).ok_or("the session has no windows")?;
+                    let pane = marked_pane_of(conn, &window)?;
+                    return Ok((window, pane));
                 }
             }
             Err(format!("no such target: {target}"))
