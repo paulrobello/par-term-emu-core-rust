@@ -49,6 +49,9 @@ use renderer::*;
 /// output floods coalesce into. Matches Phase A's pump poll interval.
 pub const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
+/// How long a status-row flash stays up.
+const FLASH_LIFETIME: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The glyph set dividers draw with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyphs {
@@ -652,8 +655,11 @@ struct WindowSession {
     /// A transient confirmation/error cue drawn in place of the status
     /// line's head and cleared after about a second.
     flash: Option<String>,
-    /// The flash's remaining lifetime in frame ticks.
-    flash_ticks: u32,
+    /// When the current flash clears: armed by the first frame tick that
+    /// sees it, so every `self.flash = Some(..)` site stays a plain
+    /// assignment. Wall-clock, not a tick count: a pump woken early by a
+    /// burst of events would burn a tick budget in milliseconds (QA-235).
+    flash_until: Option<std::time::Instant>,
     /// The cursor state the last `place_cursor` reported, `Some(None)`
     /// initially (repaint_all hides the cursor): the guard that keeps a
     /// quiet pump from re-emitting identical cursor escapes every frame
@@ -782,7 +788,7 @@ impl WindowSession {
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
             flash: None,
-            flash_ticks: 0,
+            flash_until: None,
             cursor_placed: Some(None),
             detach_requested: false,
             geometry,
@@ -947,16 +953,9 @@ impl WindowSession {
 
             // 4. Frame whatever accumulated (panes + the status row's own
             //    diff), then wait for the next push — the frame cadence
-            //    floods coalesce into. The reload flash rides the frame
-            //    cadence and clears after about a second of ticks.
-            if self.flash.is_some() {
-                self.flash_ticks += 1;
-                if self.flash_ticks > 60 {
-                    self.flash = None;
-                    self.flash_ticks = 0;
-                    self.draw_status_row();
-                }
-            }
+            //    floods coalesce into. The flash clears about a second
+            //    after it first rides a frame.
+            self.tick_flash(std::time::Instant::now());
             // 3c. Divider drag: apply the accumulated delta at frame
             //     cadence — one resize-pane per unapplied cell.
             self.apply_drag(conn);
@@ -970,6 +969,22 @@ impl WindowSession {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
+        }
+    }
+
+    /// The flash's frame tick at `now` (injected so tests drive the
+    /// clock): arm the deadline the first time a flash is seen, clear the
+    /// flash and repaint the status row once it passes.
+    fn tick_flash(&mut self, now: std::time::Instant) {
+        if self.flash.is_none() {
+            self.flash_until = None;
+            return;
+        }
+        let until = *self.flash_until.get_or_insert(now + FLASH_LIFETIME);
+        if now >= until {
+            self.flash = None;
+            self.flash_until = None;
+            self.draw_status_row();
         }
     }
 
