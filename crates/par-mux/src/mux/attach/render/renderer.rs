@@ -511,6 +511,18 @@ impl PaneRenderer {
         self.dirty = true;
     }
 
+    /// Forget the last painted frame so the next frame's diff emits every
+    /// cell: the host screen no longer holds that frame (a `repaint_all`
+    /// cleared it, or the view switched windows).
+    /// `render_frame` swaps the buffers first, so the baseline the next
+    /// diff reads is the current `buffer`; both are cleared.
+    pub fn invalidate_frame(&mut self) {
+        let area = RtRect::new(0, 0, self.width, self.height);
+        self.buffer = Buffer::empty(area);
+        self.prev_buffer = Buffer::empty(area);
+        self.dirty = true;
+    }
+
     /// The window extent the daemon divides: the renderer's full width
     /// less the side panel's strip (the panel is a client-only overlay —
     /// the daemon never learns of it), full height.

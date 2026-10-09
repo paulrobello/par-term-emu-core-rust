@@ -159,8 +159,15 @@ impl WindowSession {
     /// width. Emulators, titles, sections, the overlay, and every display
     /// option stay on the live renderer, so a refit can drop none of them
     /// (the ARC-122 class of regression).
+    ///
+    /// The frame's diff baseline is dropped even when the size is
+    /// unchanged: a refit is followed by a full repaint (`resize_to`'s
+    /// `repaint_all` clears the host; a re-seed shows another view), and a
+    /// diff against the stale frame would skip every unchanged cell and
+    /// leave the cleared host blank there.
     pub(super) fn refit_renderer(&mut self, cols: u16, rows: u16) {
         self.renderer.resize(cols, rows);
+        self.renderer.invalidate_frame();
         let mut geometry = self.geometry;
         geometry.sidebar_w = self.effective_render_opts().sidebar_width;
         self.renderer.set_geometry(geometry);

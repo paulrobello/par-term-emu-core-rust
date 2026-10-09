@@ -2031,6 +2031,40 @@ fn reseed_to_another_window_replays_every_pane() {
     );
 }
 
+/// ENH-044 follow-up: a refit repaints the WHOLE frame even at an
+/// unchanged size. `resize_to` clears the host (`repaint_all`), so a
+/// diff against the stale last frame would skip the unchanged pane
+/// content and leave it blank on the host (the `mux_attach`
+/// workspace-click and session-landing regressions).
+#[test]
+fn same_size_refit_reemits_unchanged_content() {
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "enh044-repaint",
+        FakeScript {
+            notify: two_pane_notify(80, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.feed_output(1, b"KEEP-ME");
+    let mut first = RecordingSink::default();
+    session.frame(&mut first);
+    assert!(first.cells.iter().any(|(_, _, c)| c.symbol() == "K"));
+    let mut sink = RecordingSink::default();
+    session
+        .resize_to(&mut conn, 80, 23, &mut sink)
+        .expect("refit");
+    let text: String = sink
+        .cells
+        .iter()
+        .filter(|(_, y, _)| *y == 1)
+        .map(|(_, _, c)| c.symbol().to_string())
+        .collect();
+    assert!(
+        text.contains("KEEP-ME"),
+        "the refit must re-emit the unchanged pane row: {text:?}"
+    );
+}
+
 /// ENH-044: an open modal overlay survives a host resize (the old
 /// renderer rebuild dropped it while the session still believed it was up).
 #[test]
