@@ -119,16 +119,13 @@ pub(super) fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Out
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
-    // The same line order kill-window's cascade produces: one
-    // %window-close per killed window, then the session-set cue —
-    // plus the workspace cue when the session's death emptied its
+    // The workspace cue only when the session's death emptied its
     // workspace away.
-    let mut outcome = notify_window_closes(Outcome::ok(ctx, ""), &killed.removed)
-        .notifying(TmuxNotification::SessionsChanged);
-    if killed.workspaces_changed {
-        outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
-    }
-    outcome
+    notify_kill_cascade(
+        Outcome::ok(ctx, ""),
+        &killed.removed,
+        killed.workspaces_changed,
+    )
 }
 
 pub(super) fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> Outcome {
@@ -425,13 +422,9 @@ pub(super) fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) 
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
-    // kill-session's line order, workspace-flavored: one
-    // %window-close per killed window, then the session-set cue,
-    // then the workspace-roster cue — unconditional, since the killed
-    // workspace itself left the roster.
-    notify_window_closes(Outcome::ok(ctx, ""), &killed.removed)
-        .notifying(TmuxNotification::SessionsChanged)
-        .notifying(TmuxNotification::WorkspacesChanged)
+    // The workspace-roster cue is unconditional: the killed workspace
+    // itself left the roster.
+    notify_kill_cascade(Outcome::ok(ctx, ""), &killed.removed, true)
 }
 
 /// Snapshot the workspace roster for [`workspace_roster_changed`]: the

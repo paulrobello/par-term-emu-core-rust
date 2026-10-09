@@ -402,5 +402,23 @@ fn notify_window_closes(mut outcome: Outcome, windows: &[WindowId]) -> Outcome {
     outcome
 }
 
+/// The kill cascade's notification tail, shared by kill-window,
+/// kill-session, and kill-workspace (QA-242): one `%window-close` per
+/// killed window, then the session-set cue, then the workspace-roster cue
+/// when the roster changed — the one line order every kill emits.
+fn notify_kill_cascade(
+    outcome: Outcome,
+    windows: &[WindowId],
+    workspaces_changed: bool,
+) -> Outcome {
+    let outcome =
+        notify_window_closes(outcome, windows).notifying(TmuxNotification::SessionsChanged);
+    if workspaces_changed {
+        outcome.notifying(TmuxNotification::WorkspacesChanged)
+    } else {
+        outcome
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests;
