@@ -234,64 +234,13 @@ impl PtySession {
         batch
     }
 
-    /// The PTY half of [`Self::resize_deferred`]: kernel winsize, then
-    /// SIGWINCH.
+    /// The PTY half of [`Self::resize_deferred`]: the pixel-aware PTY
+    /// resize at the tracked cell pixel size (updated by
+    /// `resize_with_pixels`; the construction default until one runs).
     fn resize_pty(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        // Resize the PTY (sends SIGWINCH to child)
-        if let Some(ref master) = self.pty_master {
-            // Use the tracked cell pixel size (updated by `resize_with_pixels`).
-            // Falls back to the construction default if no pixel-aware resize
-            // has been called yet.
-            let pty_size = PtySize {
-                rows,
-                cols,
-                pixel_width: pixel_extent(cols, self.cell_pixel_width),
-                pixel_height: pixel_extent(rows, self.cell_pixel_height),
-            };
-            debug::log(
-                debug::DebugLevel::Debug,
-                "PTY_RESIZE",
-                &format!("Calling master.resize({}, {})", cols, rows),
-            );
-            debug::log(
-                debug::DebugLevel::Trace,
-                "PTY_RESIZE",
-                &format!(
-                    "PtySize {{ rows: {}, cols: {}, pixel_width: {}, pixel_height: {} }}",
-                    pty_size.rows, pty_size.cols, pty_size.pixel_width, pty_size.pixel_height
-                ),
-            );
-            master.resize(pty_size).map_err(|e| {
-                debug::log(
-                    debug::DebugLevel::Error,
-                    "PTY_RESIZE",
-                    &format!("Failed to resize PTY: {}", e),
-                );
-                PtyError::ResizeError(e.to_string())
-            })?;
-            debug::log(
-                debug::DebugLevel::Debug,
-                "PTY_RESIZE",
-                "master.resize() completed successfully",
-            );
-            debug::log(
-                debug::DebugLevel::Trace,
-                "PTY_RESIZE",
-                &format!(
-                    "PTY resize complete: internal state now cols={}, rows={}",
-                    self.cols, self.rows
-                ),
-            );
-        }
-
-        // Manually deliver SIGWINCH after the pty resize: portable-pty's
-        // resize() updates the kernel winsize but may not reliably deliver
-        // the signal in all scenarios. Group-then-PID delivery lives in
-        // [`send_sigwinch`].
-        #[cfg(unix)]
-        self.signal_winch("PTY_RESIZE", &format!("resize {cols}x{rows}"));
-
-        Ok(())
+        let pixel_width = pixel_extent(cols, self.cell_pixel_width);
+        let pixel_height = pixel_extent(rows, self.cell_pixel_height);
+        self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height)
     }
 
     /// Resize the PTY and terminal, including pixel dimensions
@@ -403,8 +352,10 @@ impl PtySession {
             );
         }
 
-        // Manually deliver SIGWINCH after the pty resize (as in resize());
-        // delivery and failure logging live in [`send_sigwinch`].
+        // Manually deliver SIGWINCH after the pty resize: portable-pty's
+        // resize() updates the kernel winsize but may not reliably deliver
+        // the signal in all scenarios. Group-then-PID delivery and failure
+        // logging live in [`send_sigwinch`].
         #[cfg(unix)]
         self.signal_winch(
             "PTY_RESIZE",
