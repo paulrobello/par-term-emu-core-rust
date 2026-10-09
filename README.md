@@ -106,6 +106,7 @@ Every other release is documented in [CHANGELOG.md](CHANGELOG.md).
 - **Real-Time Push** - Pane output streams to clients as bytes arrive; no polling
 - **Agent Awareness** - Panes report agent state over the same socket (JSON hook reports), with a scrape fallback for agents without hooks and an agent roster query
 - **Session Resume** - Agent session identity persists across daemon restarts; agent panes respawn through their resume invocations
+- **Attach Client** - `par-mux attach` renders sessions in your terminal (render mode, the default) or byte-pumps one pane (passthrough), with workspaces, a sidebar, and a config file; see [docs/MUX.md](docs/MUX.md#attaching-from-a-terminal)
 - **Crash-Safe State** - Atomic saves with quarantine of unreadable state files; a clean SIGTERM never loses the last window
 
 ### Screenshots and Export
