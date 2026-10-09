@@ -185,7 +185,7 @@ pub struct MuxPane {
     /// endpoint's socket file when the pane is killed or respawned; a crash
     /// leaves the remnant for the daemon's startup sweep. Held for its
     /// `Drop` side effect only — nothing reads the value.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "held only for its Drop (endpoint teardown)")]
     pub(crate) pane_endpoint: Option<crate::mux::server::PaneEndpoint>,
 }
 
