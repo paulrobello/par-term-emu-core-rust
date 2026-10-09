@@ -171,18 +171,13 @@ pub(super) fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcom
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
-    let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
-        window_id: killed.id.to_string(),
-    });
-    if killed.removed.is_some() {
-        // The cascade reached the session — same argument-less
-        // cue kill-pane's cascade sends, so one handler covers both.
-        outcome = outcome.notifying(TmuxNotification::SessionsChanged);
-        if killed.workspaces_changed {
-            outcome = outcome.notifying(TmuxNotification::WorkspacesChanged);
-        }
+    let windows = [killed.id];
+    if killed.removed.is_none() {
+        return notify_window_closes(Outcome::ok(ctx, ""), &windows);
     }
-    outcome
+    // The cascade reached the session — same argument-less cue
+    // kill-pane's cascade sends, so one handler covers both.
+    notify_kill_cascade(Outcome::ok(ctx, ""), &windows, killed.workspaces_changed)
 }
 
 pub(super) fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> Outcome {

@@ -1481,3 +1481,113 @@ fn sgr(cb: u8, col: u16, row: u16, release: bool) -> SgrMouse {
         release,
     }
 }
+
+fn rect(pane: u32, x: u16, y: u16, width: u16, height: u16) -> PaneRect {
+    PaneRect {
+        pane,
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// `collect_boundaries` (QA-236), table-driven: each layout's
+/// `(vertical, horizontal)` boundary cells, `(boundary, along, a, b)`.
+#[test]
+fn collect_boundaries_finds_every_divider_cell() {
+    let vertical_split = vec![rect(0, 0, 0, 5, 3), rect(1, 5, 0, 5, 3)];
+    let horizontal_split = vec![rect(0, 0, 0, 4, 2), rect(1, 0, 2, 4, 2)];
+    // Left pane beside a right column split top/bottom.
+    let nested = vec![
+        rect(0, 0, 0, 4, 4),
+        rect(1, 4, 0, 4, 2),
+        rect(2, 4, 2, 4, 2),
+    ];
+    let v = |b, along: std::ops::Range<u16>, a, c| -> Vec<BoundaryCell> {
+        along.map(|i| (b, i, a, c)).collect()
+    };
+    /// (name, layout, sidebar_w, want vertical, want horizontal)
+    type Case = (
+        &'static str,
+        Vec<PaneRect>,
+        u16,
+        Vec<BoundaryCell>,
+        Vec<BoundaryCell>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "single vertical split",
+            vertical_split.clone(),
+            0,
+            v(4, 0..3, 0, 1),
+            vec![],
+        ),
+        (
+            "single horizontal split",
+            horizontal_split,
+            0,
+            vec![],
+            v(1, 0..4, 0, 1),
+        ),
+        (
+            "nested splits",
+            nested,
+            0,
+            [v(3, 0..2, 0, 1), v(3, 2..4, 0, 2)].concat(),
+            v(1, 4..8, 1, 2),
+        ),
+        (
+            "sidebar offset shifts columns, not rows",
+            vertical_split.clone(),
+            20,
+            v(24, 0..3, 0, 1),
+            vec![],
+        ),
+        (
+            "listed right-to-left still orders left/top first",
+            vec![rect(1, 5, 0, 5, 3), rect(0, 0, 0, 5, 3)],
+            0,
+            v(4, 0..3, 0, 1),
+            vec![],
+        ),
+        (
+            "a single pane has none",
+            vec![rect(0, 0, 0, 10, 3)],
+            0,
+            vec![],
+            vec![],
+        ),
+    ];
+    for (name, layout, sidebar_w, want_v, want_h) in cases {
+        let (got_v, got_h) = collect_boundaries(&layout, sidebar_w);
+        assert_eq!(got_v, want_v, "{name}: vertical");
+        assert_eq!(got_h, want_h, "{name}: horizontal");
+    }
+}
+
+/// Dividers never read `pane-gaps` (the gap band insets the pane's
+/// paint, not the boundary): the same layout yields the same cells.
+#[test]
+fn collect_boundaries_ignores_pane_gaps() {
+    let layout = vec![rect(0, 0, 0, 5, 3), rect(1, 5, 0, 5, 3)];
+    let mut renderer = PaneRenderer::new(10, 3, Glyphs::Unicode);
+    renderer.apply_layout(layout.clone());
+    let before = collect_boundaries(renderer.layout(), 0);
+    renderer.set_pane_gaps(1);
+    assert_eq!(collect_boundaries(renderer.layout(), 0), before);
+}
+
+/// `group_boundaries` keys per divider in first-seen order and sorts
+/// each divider's cells along its length.
+#[test]
+fn group_boundaries_groups_and_sorts_along() {
+    let cells: Vec<BoundaryCell> = vec![(4, 2, 0, 1), (9, 0, 1, 2), (4, 0, 0, 1), (4, 1, 0, 3)];
+    assert_eq!(
+        group_boundaries(&cells),
+        vec![
+            (4, vec![(0, 0, 1), (1, 0, 3), (2, 0, 1)]),
+            (9, vec![(0, 1, 2)]),
+        ]
+    );
+}

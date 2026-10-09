@@ -205,6 +205,51 @@ fn wait_for_output(host: &AttachHost, needle: &[u8], deadline: Duration) -> Vec<
     }
 }
 
+/// [`wait_for_output`] as a barrier (QA-232): panics naming `what` when
+/// `needle` never arrives, so a missed barrier fails at its own line rather
+/// than as a confusing assertion further down.
+///
+/// The needle matches the raw bytes OR the escape-stripped text: render
+/// mode paints cell by cell (one CUP+SGR run per cell), so a multi-char
+/// marker only exists in [`plain_text`].
+fn expect_output(host: &AttachHost, needle: &[u8], deadline: Duration, what: &str) -> Vec<u8> {
+    let text_needle = String::from_utf8_lossy(needle).into_owned();
+    let seen = |bytes: &[u8]| {
+        bytes.windows(needle.len()).any(|w| w == needle) || plain_text(bytes).contains(&text_needle)
+    };
+    let end = Instant::now() + deadline;
+    let mut collected: Vec<u8> = Vec::new();
+    loop {
+        if seen(&collected) {
+            return collected;
+        }
+        let left = end.saturating_duration_since(Instant::now());
+        assert!(
+            !left.is_zero(),
+            "{what}: {text_needle:?} not seen within {deadline:?}; collected: {}",
+            String::from_utf8_lossy(&collected)
+        );
+        match host
+            .output_rx
+            .recv_timeout(left.min(Duration::from_millis(50)))
+        {
+            Ok(bytes) => collected.extend_from_slice(&bytes),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(
+                "{what}: the client exited before {text_needle:?}; collected: {}",
+                String::from_utf8_lossy(&collected)
+            ),
+        }
+    }
+}
+
+/// A pane's visible screen has the EXECUTED output of `echo <marker>`: the
+/// typed command line carries the marker once, so the output is the second
+/// occurrence.
+fn echoed(marker: &str) -> impl Fn(&str) -> bool + '_ {
+    move |screen: &str| screen.matches(marker).count() >= 2
+}
+
 /// The visible text of a captured byte stream (ESC sequences stripped):
 /// the status row and modal overlays flush per-cell (one CUP+SGR run per
 /// cell), so multi-character matches must run over the plain text, not
@@ -305,7 +350,12 @@ fn escape_sequence_payload_round_trips_byte_identical() {
     // after this point is the LIVE %output path (the criterion: the raw
     // pane bytes survive the daemon's octal %output escaping AND the
     // client's octal decode, byte-identical).
-    let _ = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough status-row reserve",
+    );
 
     // Emit the payload. Base64 carries the bytes through both quoting
     // layers untouched (the daemon's bounded grammar and the pane shell's
@@ -363,7 +413,12 @@ fn prefix_d_detaches_and_leaves_the_pane_running() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("press Enter");
-    let _ = wait_for_output(&host, b"attach-detach-marker", Duration::from_secs(15));
+    expect_output(
+        &host,
+        b"attach-detach-marker",
+        Duration::from_secs(15),
+        "attach-detach-marker on the host screen",
+    );
 
     // Prefix d = C-b 0x02 then 'd'.
     host.to_child.write_all(&[0x02, b'd']).expect("prefix d");
@@ -404,7 +459,12 @@ fn render_mode_prefix_flag_rebinds_the_detach_chord() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane, "--prefix", "C-a"]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // The old prefix is an ordinary key now: no detach.
     host.to_child.write_all(&[0x02, b'd']).expect("C-b d");
@@ -504,7 +564,7 @@ fn detach_restores_the_terminal_region() {
         );
     }
     let _ = client.send(&format!("send-keys -t {pane} -l x Enter"));
-    let _ = wait_for_output(&host, b"x", Duration::from_secs(5));
+    expect_output(&host, b"x", Duration::from_secs(5), "typed byte echoed");
 
     host.to_child.write_all(&[0x02, b'd']).expect("prefix d");
     host.to_child.flush().ok();
@@ -566,12 +626,23 @@ fn prefix_o_switches_panes_and_resyncs() {
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("press Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane_b}"),
+        echoed("PANE-B-MARKER"),
+        Duration::from_secs(10),
+        "PANE-B-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane_a]);
     // Attach to pane A: settling output arrives; B's marker must NOT be
     // the reason we proceed (B is a different pane).
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough client up (status row reserved)",
+    );
 
     // Prefix o cycles to pane B; the resync redraw carries B's marker.
     host.to_child.write_all(&[0x02, b'o']).expect("prefix o");
@@ -607,7 +678,12 @@ fn split_chord_lands_the_client_on_the_new_pane() {
         .to_string();
 
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough client up (status row reserved)",
+    );
 
     // Prefix % splits right; the client lands on the new pane. The pane
     // starts a fresh shell, whose prompt is the landing evidence — but
@@ -615,7 +691,15 @@ fn split_chord_lands_the_client_on_the_new_pane() {
     // directly: typing AFTER the chord reaches the fresh pane only.
     host.to_child.write_all(&[0x02, b'%']).expect("prefix %");
     host.to_child.flush().ok();
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        "list-panes",
+        |reply| common::pane_ids(reply).len() == 2,
+        Duration::from_secs(10),
+        "the split chord created a second pane",
+    );
+    // input spacing: the client's landing follows the daemon's split reply
+    std::thread::sleep(Duration::from_millis(200));
     host.to_child
         .write_all(b"echo SPLIT-LANDED-MARKER\n")
         .expect("type into the new pane");
@@ -669,7 +753,13 @@ fn render_mode_zoom_rename_border_chords() {
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane_b}"),
+        echoed("PANE-B-CHORD"),
+        Duration::from_secs(10),
+        "PANE-B-CHORD executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     let boot = wait_for_output(&host, b"PANE-B-CHORD", Duration::from_secs(10));
@@ -747,6 +837,7 @@ fn render_mode_zoom_rename_border_chords() {
     host.to_child.flush().ok();
     host.to_child.write_all(&[0x1b]).expect("escape");
     host.to_child.flush().ok();
+    // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_millis(400));
     let title = client
         .send(&format!("pane-title -t {pane_a}"))
@@ -831,6 +922,7 @@ fn render_mode_zoom_rename_border_chords() {
     );
     host.to_child.write_all(&[0x1b]).expect("escape picker");
     host.to_child.flush().ok();
+    // input spacing
     std::thread::sleep(Duration::from_millis(300));
 
     // prefix s toggles the side panel: the strip paints the workspaces
@@ -880,21 +972,12 @@ fn render_mode_zoom_rename_border_chords() {
     host.to_child.write_all(&[0x02]).expect("prefix");
     host.to_child.write_all(b"\x1b[1;2D").expect("shift-left");
     host.to_child.flush().ok();
-    std::thread::sleep(Duration::from_millis(600));
-    let first_after = client
-        .send("list-panes")
-        .expect("roster")
-        .iter()
-        .find_map(|l| {
-            l.split_whitespace()
-                .next()
-                .filter(|p| p.starts_with('%'))
-                .map(str::to_string)
-        })
-        .expect("a pane id");
-    assert_ne!(
-        first_before, first_after,
-        "the shift-arrow swap must exchange the two panes' layout cells"
+    common::wait_daemon(
+        fixture.socket(),
+        "list-panes",
+        |reply| common::pane_ids(reply).first() != Some(&first_before),
+        Duration::from_secs(10),
+        "the shift-arrow swap must exchange the two panes' layout cells",
     );
     host.killer.kill().ok();
 }
@@ -924,10 +1007,21 @@ fn kill_chord_lands_the_client_on_the_survivor() {
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane_b}"),
+        echoed("SURVIVOR-MARKER"),
+        Duration::from_secs(10),
+        "SURVIVOR-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough client up (status row reserved)",
+    );
 
     // Prefix x kills pane A; the pump must land on the survivor B and
     // resync its marker in.
@@ -1041,6 +1135,7 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
         .write_all(b"garbage typing \x1b[A x")
         .expect("type");
     host.to_child.flush().ok();
+    // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_millis(500));
     let mut after = startup.clone();
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -1164,7 +1259,13 @@ fn status_draw_tracks_the_cursor_under_output_flood() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(600));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        |s| s.contains("FLOOD-LINE-60"),
+        Duration::from_secs(10),
+        "the FLOOD-LINE loop ran to its last line",
+    );
 
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
     let startup = wait_for_output(&host, b"FLOOD-LINE-60", Duration::from_secs(15));
@@ -1175,6 +1276,7 @@ fn status_draw_tracks_the_cursor_under_output_flood() {
     );
     // The settle-redraw draws AFTER the flood's last line; give it time to
     // flow, then join what followed so the scan sees whole draw blocks.
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(700));
     let mut b = startup;
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -1269,9 +1371,15 @@ fn target_resolution_and_clean_failure() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("press Enter");
-    // Let the echo land on the pane screen BEFORE attach starts: the
+    // The echo lands on the pane screen BEFORE attach starts: the
     // assertion is about the resync replay, not a race with %output.
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        echoed("TARGETED-MARKER"),
+        Duration::from_secs(10),
+        "TARGETED-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
     let got = wait_for_output(&host, b"TARGETED-MARKER", Duration::from_secs(15));
@@ -1350,9 +1458,17 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
     client
         .send(&format!("send-keys -t {pane1} Enter"))
         .expect("enter right");
-    // Let the echoes land on the pane screens BEFORE the replay: the
+    // The echoes land on the pane screens BEFORE the replay: the
     // assertion is about the replay seeding, not a race with %output.
-    std::thread::sleep(Duration::from_millis(500));
+    for (pane, marker) in [(&pane0, "LEFT-MARKER"), (&pane1, "RIGHT-MARKER")] {
+        common::wait_daemon(
+            fixture.socket(),
+            &format!("capture-pane -t {pane}"),
+            echoed(marker),
+            Duration::from_secs(10),
+            &format!("{marker} executed on the pane screen"),
+        );
+    }
 
     // The render client: the documented handshake, then the size report
     // that pulls the current layout triple.
@@ -1558,12 +1674,28 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(800));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        |s| s.contains("HISTLINE-40"),
+        Duration::from_secs(10),
+        "the HISTLINE loop ran to its last line",
+    );
 
     let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
     // Settle on the live paint.
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"HISTLINE-40", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"HISTLINE-40",
+        Duration::from_secs(10),
+        "HISTLINE-40 on the host screen",
+    );
     // Drain the settle paint so the post-wheel read is wheel-attributable.
     while host.output_rx.try_recv().is_ok() {}
 
@@ -1840,7 +1972,12 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
     // Settle: alt-screen enter + first frame.
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
 
     // Agent churn: a hook report claims the pane; %agent-state-changed
     // marks the status stale and the throttled re-query pulls the chip
@@ -1857,6 +1994,7 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
     );
     // The refresh runs at the next pump pass (16 ms cadence); give it a
     // generous beat, then reconstruct the row from everything received.
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_secs(2));
     let mut all = Vec::new();
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -1922,13 +2060,34 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
     client
         .send(&format!("send-keys -t {pane1} Enter"))
         .expect("enter right");
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane1}"),
+        echoed("RIGHT-MARKER"),
+        Duration::from_secs(10),
+        "RIGHT-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane0]);
     // Settle: mouse capture + first frame with both panes painted.
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"LEFT-MARKER", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"RIGHT-MARKER", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"LEFT-MARKER",
+        Duration::from_secs(10),
+        "LEFT-MARKER on the host screen",
+    );
+    expect_output(
+        &host,
+        b"RIGHT-MARKER",
+        Duration::from_secs(10),
+        "RIGHT-MARKER on the host screen",
+    );
     while host.output_rx.try_recv().is_ok() {}
 
     // Resize the host terminal: 24x80 -> 30x100. Everything the host
@@ -1985,6 +2144,7 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
     // session on row 30. The repaint may straddle the needle read, so the
     // reconstruction joins the needle-read bytes with what followed; give
     // the re-seed + repaint a beat to finish flowing before draining.
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(1500));
     let mut all = got;
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -2073,13 +2233,29 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        echoed("SURVIVOR-MARKER"),
+        Duration::from_secs(10),
+        "SURVIVOR-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
     // Settle on the 24-row handshake grid: mouse capture + the seeded
     // marker painted.
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"SURVIVOR-MARKER", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"SURVIVOR-MARKER",
+        Duration::from_secs(10),
+        "SURVIVOR-MARKER on the host screen",
+    );
     // Drain the settle paint so everything read next is resize-attributable.
     while host.output_rx.try_recv().is_ok() {}
 
@@ -2106,6 +2282,7 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
 
     // Give the re-seed + full repaint a beat to finish flowing, then
     // collect everything the host received after the resize.
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(1500));
     let mut all = got;
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -2235,7 +2412,13 @@ fn render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split() {
     client
         .send(&format!("send-keys -t {pane1} Enter"))
         .expect("enter right");
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane1}"),
+        echoed("RIGHT-MARKER"),
+        Duration::from_secs(10),
+        "RIGHT-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane0]);
     // Settle: the split view with both panes painted.
@@ -2330,11 +2513,27 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(800));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        |s| s.contains("HISTLINE-40"),
+        Duration::from_secs(10),
+        "the HISTLINE loop ran to its last line",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"HISTLINE-40", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"HISTLINE-40",
+        Duration::from_secs(10),
+        "HISTLINE-40 on the host screen",
+    );
     while host.output_rx.try_recv().is_ok() {}
 
     // prefix [ (C-b then '['). The viewport jumps one viewport up and the
@@ -2366,7 +2565,12 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
         .write_all(b"echo POST-SCROLL-MARKER\r")
         .expect("type after exit");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"POST-SCROLL-MARKER", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"POST-SCROLL-MARKER",
+        Duration::from_secs(10),
+        "POST-SCROLL-MARKER on the host screen",
+    );
     let capture = client
         .send(&format!("capture-pane -t {pane}"))
         .expect("capture");
@@ -2394,10 +2598,27 @@ fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
         .next()
         .expect("a pane")
         .to_string();
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        |screen| {
+            screen
+                .lines()
+                .any(|l| !l.trim().is_empty() && !l.starts_with('%'))
+        },
+        Duration::from_secs(10),
+        "the pane's shell drew its prompt",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: the replay's frame lands before the drain
+    std::thread::sleep(Duration::from_millis(300));
     while host.output_rx.try_recv().is_ok() {}
 
     // prefix % splits right; the re-seed paints two panes (a vertical
@@ -2413,11 +2634,14 @@ fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
         String::from_utf8_lossy(&divider)
     );
     // Two panes exist daemon-side, and the fresh pane renders a prompt.
-    let roster = client.send("list-panes").expect("roster");
-    assert!(
-        roster.len() >= 2,
-        "the split created a second pane: {roster:?}"
+    let roster = common::wait_daemon(
+        fixture.socket(),
+        "list-panes",
+        |reply| common::pane_ids(reply).len() >= 2,
+        Duration::from_secs(10),
+        "the split created a second pane",
     );
+    let roster = common::pane_ids(&roster);
     // Typing after the chord reaches the FRESH pane: an echo there runs
     // in the split (asserted daemon-side — render frames paint per-cell
     // diffs, so the marker never appears as one raw substring in the
@@ -2478,7 +2702,13 @@ fn render_mode_without_target_attaches_the_newest_session() {
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("enter");
-    std::thread::sleep(Duration::from_millis(600));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        echoed("NO-TARGET-MARKER"),
+        Duration::from_secs(10),
+        "NO-TARGET-MARKER executed on the pane screen",
+    );
 
     // No -t anywhere: resolution is entirely the client's job.
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
@@ -2505,7 +2735,12 @@ fn render_mode_without_target_attaches_the_newest_session() {
         .write_all(b"echo STILL-UP-MARKER\r")
         .expect("type");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"STILL-UP-MARKER", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"STILL-UP-MARKER",
+        Duration::from_secs(10),
+        "STILL-UP-MARKER on the host screen",
+    );
     let capture = client
         .send(&format!("capture-pane -t {pane}"))
         .expect("capture");
@@ -2527,26 +2762,10 @@ fn render_mode_without_target_picks_the_newest_session() {
         .send("new-session -s second")
         .expect("second session");
     // The bare global roster's order is unspecified; find each session's
-    // pane by querying per session.
-    let sessions = client.send("list-sessions").expect("sessions").join("\n");
-    let first_pane = client
-        .send("list-panes -t $0")
-        .expect("panes of $0")
-        .join("");
-    let first_pane = first_pane
-        .split_whitespace()
-        .next()
-        .expect("pane of $0")
-        .to_string();
-    let second_pane = client
-        .send("list-panes -t $1")
-        .expect("panes of $1")
-        .join("");
-    let second_pane = second_pane
-        .split_whitespace()
-        .next()
-        .expect("pane of $1")
-        .to_string();
+    // pane through its window (`list-panes -t` takes a window, not a
+    // session — a `$N` target answers `no such window`).
+    let first_pane = session_first_pane(&mut client, "$0");
+    let second_pane = session_first_pane(&mut client, "$1");
     client
         .send(&format!(
             "send-keys -t {first_pane} -l 'echo OLDEST-MARKER'"
@@ -2563,8 +2782,13 @@ fn render_mode_without_target_picks_the_newest_session() {
     client
         .send(&format!("send-keys -t {second_pane} Enter"))
         .expect("enter newest");
-    std::thread::sleep(Duration::from_millis(600));
-    let _ = sessions;
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {second_pane}"),
+        echoed("NEWEST-MARKER"),
+        Duration::from_secs(10),
+        "NEWEST-MARKER executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
     let got = wait_for_output(&host, b"NEWEST-MARKER", Duration::from_secs(15));
@@ -2598,11 +2822,22 @@ fn render_mode_tab_click_switches_the_active_window() {
     client.send("rename-window -t @0 one").expect("rename @0");
     client.send("rename-window -t @1 two").expect("rename @1");
     client.send("select-window -t @0").expect("back to @0");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(400));
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", "@0"]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"one", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"one",
+        Duration::from_secs(10),
+        "tab strip names window one",
+    );
     // Drain the settle paint so the post-click reads are click-attributable.
     while host.output_rx.try_recv().is_ok() {}
 
@@ -2674,6 +2909,7 @@ fn render_mode_workspace_chord_selects_and_lands() {
     client
         .send("select-workspace -t main")
         .expect("select main");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(300));
 
     // The rosters: `list-panes -t` takes a window or pane target, not a
@@ -2694,8 +2930,18 @@ fn render_mode_workspace_chord_selects_and_lands() {
         .expect("Enter");
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"main", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"main",
+        Duration::from_secs(10),
+        "status row names the main workspace",
+    );
     // Drain the settle paint so the post-chord reads are attributable.
     while host.output_rx.try_recv().is_ok() {}
 
@@ -2754,14 +3000,25 @@ fn render_mode_workspace_chord_selects_and_lands() {
 fn render_mode_workspaces_changed_refreshes_the_status_segment() {
     let (fixture, _daemon, mut client) = fixture_with_session("wsstatus");
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"$0:att", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"$0:att",
+        Duration::from_secs(10),
+        "status row names the attached session",
+    );
     // Drain the settle paint so the post-broadcast reads are
     // broadcast-attributable.
     while host.output_rx.try_recv().is_ok() {}
 
     // Workspace churn: a new workspace rides %workspaces-changed.
     client.send("new-workspace -n beta").expect("new-workspace");
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_secs(2));
     let mut all = Vec::new();
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -2788,6 +3045,7 @@ fn passthrough_status_line_carries_the_workspaces_segment() {
     client
         .send("new-session -s work -t lab")
         .expect("session in lab");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(300));
 
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
@@ -2816,16 +3074,34 @@ fn passthrough_workspace_chord_selects_and_lands() {
     client
         .send("select-workspace -t main")
         .expect("select main");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(300));
 
     let (mut host, stderr) = spawn_attach(&fixture, &[]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(2));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough client up (status row reserved)",
+    );
 
     // Prefix W: next workspace (main -> lab). Typing AFTER the chord
     // reaches the lab session's pane only — the landing evidence.
     host.to_child.write_all(&[0x02, b'W']).expect("prefix W");
     host.to_child.flush().ok();
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        "list-workspaces",
+        |reply| {
+            reply
+                .lines()
+                .any(|l| l.starts_with("+1:") && l.contains(" active"))
+        },
+        Duration::from_secs(10),
+        "the chord must move the daemon's active-workspace marker",
+    );
+    // input spacing: the client's landing follows the daemon's reply
+    std::thread::sleep(Duration::from_millis(200));
     host.to_child
         .write_all(b"echo WS-LANDED-MARKER\n")
         .expect("type into the landed pane");
@@ -2877,10 +3153,21 @@ fn render_mode_sidebar_toggle_minimal() {
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane_b}"),
+        echoed("SIDEBAR-MINI-MARK"),
+        Duration::from_secs(10),
+        "SIDEBAR-MINI-MARK executed on the pane screen",
+    );
 
     let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"SIDEBAR-MINI-MARK", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"SIDEBAR-MINI-MARK",
+        Duration::from_secs(10),
+        "SIDEBAR-MINI-MARK on the host screen",
+    );
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
@@ -3070,7 +3357,13 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane_b}"),
+        echoed("GEO-MARK-42"),
+        Duration::from_secs(10),
+        "GEO-MARK-42 executed on the pane screen",
+    );
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     let pre = wait_for_output(&host, b"GEO-MARK-42", Duration::from_secs(10));
@@ -3156,8 +3449,29 @@ fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -
     client
         .send(&format!("send-keys -t {pane_b} Enter"))
         .expect("Enter");
-    std::thread::sleep(Duration::from_millis(300));
+    wait_pane_echo(client, &pane_b, marker);
     pane_a
+}
+
+/// Poll `capture-pane` over `client` until `echo <marker>` executed on
+/// `pane` (QA-232's capture barrier for helpers holding only the client).
+#[cfg(unix)]
+fn wait_pane_echo(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str) {
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        let screen = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture-pane")
+            .join("\n");
+        if echoed(marker)(&screen) {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "{marker} never executed on {pane}: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// `sidebar-on-launch` absent (the default, true): with no chord sent the
@@ -3259,7 +3573,12 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
         .expect("a pane")
         .to_string();
     let (mut host, _stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
@@ -3399,11 +3718,22 @@ fn render_mode_panel_menu_chip_detaches() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"sidebar on",
+        Duration::from_secs(10),
+        "side panel toggled on",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(600));
     // The panel's footer row is the 22-row content area's last row
     // (host row 22, SGR row 23); ` menu ` spans 0-based cols 13..19.
@@ -3461,13 +3791,24 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // Panel up, then a right-press on the shown window's tab opens the
     // tab menu.
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"sidebar on",
+        Duration::from_secs(10),
+        "side panel toggled on",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(600));
     // With the panel up the tabs start at the panel's right edge
     // (strip col 20): the shown window's herdr block (`  att  `, width
@@ -3529,13 +3870,24 @@ fn render_mode_plus_click_works_with_the_panel_up() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // Panel up (the manual-pass reporter's state): the top row stays a
     // tab-strip row and the + keeps its reservation.
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"sidebar on", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"sidebar on",
+        Duration::from_secs(10),
+        "side panel toggled on",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(600));
     let press: &[u8] = b"\x1b[<0;79;1M";
     host.to_child.write_all(press).expect("plus press");
@@ -3568,7 +3920,12 @@ fn render_mode_plus_click_works_on_a_wide_host() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // A live terminal is much wider than the harness's 80 columns: the
     // manual-pass report could not click the + there. Widen the host and
@@ -3581,6 +3938,7 @@ fn render_mode_plus_click_works_on_a_wide_host() {
             pixel_height: 0,
         })
         .expect("resize");
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(600));
     let press: &[u8] = b"\x1b[<0;199;1M";
     host.to_child.write_all(press).expect("plus press");
@@ -3616,7 +3974,12 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // The ` + ` button owns the strip's reserved right edge: on an
     // 80-col host the reservation spans strip cols 77..79 and the `+`
@@ -3646,6 +4009,7 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
     // unchanged after the prompt closes.
     host.to_child.write_all(&[0x1b]).expect("esc");
     host.to_child.flush().ok();
+    // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_millis(300));
     let after_cancel = client.send("list-windows").expect("list").join("");
     assert_eq!(
@@ -3659,6 +4023,7 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
     // instead of waiting on the title needle.
     host.to_child.write_all(press).expect("plus press");
     host.to_child.flush().ok();
+    // input spacing
     std::thread::sleep(Duration::from_millis(300));
     host.to_child.write_all(b"notes").expect("name");
     host.to_child.flush().ok();
@@ -3670,11 +4035,12 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
     );
     host.to_child.write_all(b"\r").expect("enter");
     host.to_child.flush().ok();
-    std::thread::sleep(Duration::from_millis(500));
-    let created = client.send("list-windows").expect("list").join("");
-    assert!(
-        created.contains("notes"),
-        "the named window exists: {created}"
+    common::wait_daemon(
+        fixture.socket(),
+        "list-windows",
+        |reply| reply.contains("notes"),
+        Duration::from_secs(10),
+        "the named window exists",
     );
     host.killer.kill().ok();
 }
@@ -3764,7 +4130,12 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
         .expect("Enter");
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"GEO-MARK-42", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"GEO-MARK-42",
+        Duration::from_secs(10),
+        "GEO-MARK-42 on the host screen",
+    );
 
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
@@ -3841,7 +4212,12 @@ fn render_mode_border_label_paints_the_user_title() {
         .expect("label b");
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    let _ = wait_for_output(&host, b"$", Duration::from_secs(5));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
 
     // Cycle to herdr: the per-pane-box mode labels paint in.
     for _ in 0..4 {
@@ -3953,6 +4329,7 @@ fn render_mode_no_target_attach_lands_on_the_displayed_session() {
     client
         .send("select-workspace -t main")
         .expect("back to main");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
@@ -3981,7 +4358,13 @@ fn fixture_two_session_workspace(
         .expect("second session in demo");
     let solo = session_first_pane(&mut client, "$2");
     echo_marker(&mut client, &solo, "SOLO-MARK");
-    std::thread::sleep(Duration::from_millis(500));
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {solo}"),
+        echoed("SOLO-MARK"),
+        Duration::from_secs(10),
+        "SOLO-MARK executed on the pane screen",
+    );
     (fixture, daemon, client)
 }
 
@@ -4007,6 +4390,7 @@ fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() 
         shown.contains("SOLO-MARK"),
         "B seeds on the displayed solo session:\n{shown}"
     );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(300));
     while b.output_rx.try_recv().is_ok() {}
     b_all.clear();
@@ -4090,7 +4474,12 @@ fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
     let (fixture, mut daemon, client) = fixture_two_session_workspace("passrestart");
     drop(client);
     let (mut a, a_err) = spawn_attach(&fixture, &[]);
-    let _ = wait_for_output(&a, b"SOLO-MARK", Duration::from_secs(10));
+    expect_output(
+        &a,
+        b"SOLO-MARK",
+        Duration::from_secs(10),
+        "SOLO-MARK on the host screen",
+    );
     a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
     a.to_child.flush().ok();
     let landed = wait_for_output(&a, b"MULTI-", Duration::from_secs(10));
@@ -4150,6 +4539,7 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
     a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
     a.to_child.flush().ok();
     let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), shows_multi);
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(500));
     while b.output_rx.try_recv().is_ok() {}
     b_all.clear();
@@ -4187,8 +4577,19 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
 fn render_mode_window_add_elsewhere_refreshes_the_tab_strip() {
     let (fixture, _daemon, mut client) = fixture_with_session("tabadd");
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
-    let _ = wait_for_output(&host, b"\x1b[?1002h", Duration::from_secs(10));
-    let _ = wait_for_output(&host, b"$0:att", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    expect_output(
+        &host,
+        b"$0:att",
+        Duration::from_secs(10),
+        "status row names the attached session",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(300));
     while host.output_rx.try_recv().is_ok() {}
 
@@ -4260,6 +4661,7 @@ fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
         .next()
         .expect("a window")
         .to_string();
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
     let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
@@ -4268,6 +4670,7 @@ fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
     let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
     let mut b_all = Vec::new();
     let _ = screen_until(&b, &mut b_all, Duration::from_secs(10), shows_multi);
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(500));
     while client.notifications().try_recv().is_ok() {}
 
@@ -4291,6 +4694,7 @@ fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
 
     // Both clients must survive the removal (give the status refresh and
     // reseed time to run their course).
+    // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(
         child_exit(&mut a, Duration::from_millis(200)),
@@ -4343,12 +4747,24 @@ fn render_mode_ctrl_d_on_the_last_pane_ends_both_clients() {
     // clients' end comes from their own session vanishing.
     let pane = session_first_pane(&mut client, "$0");
     client.send("new-session -s other").expect("second session");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
     let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&a, b"\x1b[?1002h", Duration::from_secs(10));
+    expect_output(
+        &a,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
     let (mut b, b_err) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&b, b"\x1b[?1002h", Duration::from_secs(10));
+    expect_output(
+        &b,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(800));
     while client.notifications().try_recv().is_ok() {}
 
@@ -4397,12 +4813,24 @@ fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
     client
         .send(&format!("select-window -t {doomed_window}"))
         .expect("select-window");
+    // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
     let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
-    let _ = wait_for_output(&a, b"\x1b[?1002h", Duration::from_secs(10));
+    expect_output(
+        &a,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
     let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
-    let _ = wait_for_output(&b, b"\x1b[?1002h", Duration::from_secs(10));
+    expect_output(
+        &b,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(800));
     while a.output_rx.try_recv().is_ok() {}
     while b.output_rx.try_recv().is_ok() {}
@@ -4429,6 +4857,7 @@ fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(
         child_exit(&mut a, Duration::from_millis(200)),
@@ -4663,7 +5092,12 @@ fn passthrough_output_after_a_scroll_reaches_the_host_scrollback() {
     let (fixture, _daemon, mut client) = fixture_with_session("ptscroll");
     let pane = session_first_pane(&mut client, "$0");
     let (mut host, stderr) = spawn_attach(&fixture, &["-t", &pane]);
-    let _ = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough status-row reserve",
+    );
 
     // A scroll flood, a pause long enough for status draws to land with
     // the pane scrolled, then numbered paragraphs (the `%s` split keeps
@@ -4679,6 +5113,7 @@ fn passthrough_output_after_a_scroll_reaches_the_host_scrollback() {
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("Enter");
     let got = wait_for_output(&host, b"PARAS-DONE", Duration::from_secs(30));
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(700));
     let mut host_bytes = got;
     while let Ok(bytes) = host.output_rx.try_recv() {
@@ -4804,7 +5239,12 @@ fn passthrough_flood_round_trip(shape: HostShape) {
             std::sync::Arc::new(std::sync::Mutex::new(String::new())),
         ),
     };
-    let _ = wait_for_output(&host, b"\x1b[1;23r", Duration::from_secs(10));
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough status-row reserve",
+    );
 
     client
         .send(&format!(
@@ -4818,6 +5258,7 @@ fn passthrough_flood_round_trip(shape: HostShape) {
 
     let got = wait_for_output(&host, END, Duration::from_secs(60));
     // Let the tail (and any trailing status draw) land.
+    // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(300));
     let mut host_bytes = got;
     while let Ok(bytes) = host.output_rx.try_recv() {

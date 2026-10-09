@@ -406,7 +406,12 @@ impl PaneRenderer {
             focused: None,
             width,
             height,
-            sidebar_w: options.sidebar_width,
+            // A session overrides this with its own (`set_geometry`).
+            geometry: super::geometry::FrameGeometry::standalone(
+                width,
+                height,
+                options.sidebar_width,
+            ),
             sidebar_sections: None,
             user_titles: HashMap::new(),
             glyphs: options.glyphs,
@@ -437,7 +442,7 @@ impl PaneRenderer {
             show_label_in_border: self.show_label_in_border,
             pane_gaps: self.pane_gaps,
             scrollbar_gutter: self.scrollbar_gutter,
-            sidebar_width: self.sidebar_w,
+            sidebar_width: self.geometry.sidebar_w,
             border_active: self.border_active,
             border_plain: self.border_plain,
         }
@@ -487,7 +492,10 @@ impl PaneRenderer {
     /// less the side panel's strip (the panel is a client-only overlay —
     /// the daemon never learns of it), full height.
     pub fn window_size(&self) -> (u16, u16) {
-        (self.width.saturating_sub(self.sidebar_w), self.height)
+        (
+            self.width.saturating_sub(self.geometry.sidebar_w),
+            self.height,
+        )
     }
 
     /// One painted cell of the last frame — the test/introspection read
@@ -587,19 +595,20 @@ impl PaneRenderer {
     pub(crate) fn overlay_row_at(&self, x: u16, y: u16) -> Option<usize> {
         let (x0, y0, inner, height) = self.overlay_geometry()?;
         let x = usize::from(x);
-        let y = usize::from(y);
         if x < x0 + 1 || x > x0 + inner {
             return None;
         }
-        // The overlay paints at buffer rows y0..y0+height+1, and the
-        // frame flushes buffer row b at HOST row b+1 (the strip-row
-        // rebase) — so panel row r sits at host y0+2+r. The old mapping
+        // The overlay paints at buffer rows y0..y0+height+1 (its top
+        // border at y0, panel row r at y0+1+r); the host row maps into
+        // the buffer through the geometry's strip rebase. The old mapping
         // dropped that rebase and read every click one row low (the
         // manual-pass round-8 report: menu actions fired the neighbor).
-        if y < y0 + 2 || y > y0 + height + 1 {
+        let (_, frame_y) = self.geometry.host_to_frame(0, y)?;
+        let frame_y = usize::from(frame_y);
+        if frame_y < y0 + 1 || frame_y > y0 + height {
             return None;
         }
-        Some(y - y0 - 2)
+        Some(frame_y - y0 - 1)
     }
 
     /// Set (or clear) the modal overlay's title, rows, and scroll state.
@@ -723,11 +732,10 @@ impl PaneRenderer {
         if col >= usize::from(view_w) || row >= usize::from(view_h) {
             return None;
         }
-        Some((
-            rect.x + self.sidebar_w + inset_x + col as u16,
-            rect.y + inset_y + row as u16,
-            cursor.style,
-        ))
+        let (x, y) = self
+            .geometry
+            .content_to_frame(rect.x + inset_x + col as u16, rect.y + inset_y + row as u16);
+        Some((x, y, cursor.style))
     }
 
     /// The rect the pane's chrome and content paint into: the layout
@@ -740,12 +748,14 @@ impl PaneRenderer {
             ..PaneChrome::default()
         };
         let (gap, _, width, height) = gaps_only.interior(rect.width, rect.height);
-        let mut r = *rect;
-        r.x += gap + self.sidebar_w;
-        r.y += gap;
-        r.width = width;
-        r.height = height;
-        r
+        let (x, y) = self.geometry.content_to_frame(rect.x + gap, rect.y + gap);
+        PaneRect {
+            x,
+            y,
+            width,
+            height,
+            ..*rect
+        }
     }
 
     /// The per-pane chrome this renderer paints (`pane-borders`,
@@ -1084,9 +1094,10 @@ impl PaneRenderer {
         // The clamp counts the side panel's offset: a layout broadcast
         // racing the toggle still carries full-width rects, and painting
         // them offset would run past the buffer's right edge.
-        let max_cols = view_w
-            .min(grid.cols() as u16)
-            .min(self.width.saturating_sub(rect.x + self.sidebar_w + inset_x));
+        let max_cols = view_w.min(grid.cols() as u16).min(
+            self.width
+                .saturating_sub(rect.x + self.geometry.sidebar_w + inset_x),
+        );
         for row in 0..max_rows {
             // View row r: live grid row r - S when r >= S; otherwise the
             // scrollback line S_len - S + r (newest history first).
@@ -1110,7 +1121,7 @@ impl PaneRenderer {
                     }
                 };
                 let (x, y) = (
-                    rect.x + self.sidebar_w + inset_x + col,
+                    rect.x + self.geometry.sidebar_w + inset_x + col,
                     rect.y + inset_y + row,
                 );
                 // The wide base already marked this spacer skip; painting
@@ -1155,7 +1166,7 @@ impl PaneRenderer {
         // scroll offset is > 0 — one `▐` at the view top's proportional
         // depth into the history.
         if (self.scrollbar_gutter || scroll > 0) && view_h > 0 {
-            let gx = rect.x + self.sidebar_w + inset_x + view_w;
+            let gx = rect.x + self.geometry.sidebar_w + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
                     / (scroll.min(u16::MAX as usize) as u32 + u32::from(view_h));
@@ -1187,143 +1198,90 @@ impl PaneRenderer {
         if self.layout.len() < 2 {
             return;
         }
-        // (x, y, left/top pane, right/bottom pane) per boundary cell; the
-        // pane ids drive the focus-side style and the drag highlight.
-        let mut vertical: Vec<(u16, u16, u32, u32)> = Vec::new();
-        let mut horizontal: Vec<(u16, u16, u32, u32)> = Vec::new();
-        for (i, a) in self.layout.iter().enumerate() {
-            for b in self.layout.iter().skip(i + 1) {
-                // `a` ends where `b` starts along x, with row overlap: a
-                // vertical boundary (divider cell in a's last column).
-                if a.x + a.width == b.x && rows_overlap(a, b) {
-                    for y in row_overlap(a, b) {
-                        vertical.push((b.x.saturating_sub(1) + self.sidebar_w, y, a.pane, b.pane));
-                    }
-                }
-                if b.x + b.width == a.x && rows_overlap(a, b) {
-                    for y in row_overlap(a, b) {
-                        vertical.push((a.x.saturating_sub(1) + self.sidebar_w, y, b.pane, a.pane));
-                    }
-                }
-                // Same along y for a horizontal boundary. (boundary, along)
-                // — the same order vertical pushes, so the grouping below
-                // keys on the boundary coordinate for both.
-                if a.y + a.height == b.y && cols_overlap(a, b) {
-                    for x in col_overlap(a, b) {
-                        horizontal.push((
-                            b.y.saturating_sub(1),
-                            x + self.sidebar_w,
-                            a.pane,
-                            b.pane,
-                        ));
-                    }
-                }
-                if b.y + b.height == a.y && cols_overlap(a, b) {
-                    for x in col_overlap(a, b) {
-                        horizontal.push((
-                            a.y.saturating_sub(1),
-                            x + self.sidebar_w,
-                            b.pane,
-                            a.pane,
-                        ));
-                    }
-                }
-            }
+        let (vertical, horizontal) = collect_boundaries(&self.layout, self.geometry.sidebar_w);
+        for group in group_boundaries(&vertical) {
+            self.paint_boundary_group(Axis::Vertical, &group, &vertical);
         }
-        // Group the flat boundary cells per divider so each cell knows its
-        // position along the divider's length — the tmux half rule (the
-        // active pane's half of the shared divider carries the highlight).
-        type BoundaryCell = (u16, u16, u32, u32);
-        type BoundaryGroup = (u16, Vec<(u16, u32, u32)>);
-        let group = |cells: &[BoundaryCell]| -> Vec<BoundaryGroup> {
-            let mut groups: Vec<BoundaryGroup> = Vec::new();
-            for (coord, along, a, b) in cells {
-                match groups.iter_mut().find(|(k, _)| *k == *coord) {
-                    Some((_, entries)) => entries.push((*along, *a, *b)),
-                    None => groups.push((*coord, vec![(*along, *a, *b)])),
-                }
+        for group in group_boundaries(&horizontal) {
+            self.paint_boundary_group(Axis::Horizontal, &group, &vertical);
+        }
+    }
+
+    /// Paint one divider: each cell's glyph and the focus-half / drag
+    /// style by its position along the divider. `vertical` is every
+    /// vertical boundary cell — a horizontal cell on one becomes the
+    /// junction glyph.
+    fn paint_boundary_group(
+        &mut self,
+        axis: Axis,
+        (boundary, cells): &BoundaryGroup,
+        vertical: &[BoundaryCell],
+    ) {
+        let len = cells.len() as u16;
+        for (index, &(along, a, b)) in cells.iter().enumerate() {
+            let (x, y) = axis.cell(*boundary, along);
+            if x >= self.width || y >= self.height {
+                continue; // a stale layout racing a shrink can overflow
             }
-            groups
-        };
-        for (x, mut cells) in group(&vertical) {
-            cells.sort_by_key(|(y, _, _)| *y);
-            let len = cells.len() as u16;
-            for (index, (y, a, b)) in cells.iter().enumerate() {
-                if x >= self.width || *y >= self.height {
-                    continue; // a stale layout racing a shrink can overflow
-                }
-                // The scrollbar gutter owns the left/top pane's last column
-                // when reserved (config `scrollbar-gutter`): the boundary
-                // divider yields the cell so the gutter's indicator stays
-                // visible. The boundary stays a drag handle (`divider_near`
-                // reads the layout geometry, not the paint).
-                let a_scrolled = self.emulators.get(a).is_some_and(|e| e.scroll_offset() > 0);
-                if (self.scrollbar_gutter || a_scrolled)
+            if self.gutter_owns(axis, x, y, a) {
+                continue;
+            }
+            let is_vertical = axis == Axis::Vertical;
+            if !is_vertical && vertical.iter().any(|&(vx, vy, _, _)| vx == x && vy == y) {
+                self.buffer[(x, y)].set_symbol(self.glyphs.cross());
+                continue;
+            }
+            let glyph = if is_vertical {
+                self.glyphs.vertical()
+            } else {
+                self.glyphs.horizontal()
+            };
+            let style = divider_style(
+                self.focused,
+                self.drag_divider,
+                is_vertical,
+                a,
+                b,
+                index as u16,
+                len,
+                self.border_active,
+                self.border_plain,
+            );
+            let cell = &mut self.buffer[(x, y)];
+            cell.reset();
+            if let Some(bg) = self.bg {
+                cell.set_bg(bg);
+            }
+            cell.set_symbol(glyph);
+            cell.set_style(style);
+        }
+    }
+
+    /// The scrollbar gutter owns the left/top pane's last column/row when
+    /// reserved (config `scrollbar-gutter`): the boundary divider yields
+    /// the cell so the gutter's indicator stays visible. The boundary
+    /// stays a drag handle (`divider_near` reads the layout geometry, not
+    /// the paint). A vertical boundary also yields while pane `a` is
+    /// scrolled (its indicator shows without the reserved gutter).
+    fn gutter_owns(&self, axis: Axis, x: u16, y: u16, a: u32) -> bool {
+        match axis {
+            Axis::Vertical => {
+                let a_scrolled = self
+                    .emulators
+                    .get(&a)
+                    .is_some_and(|e| e.scroll_offset() > 0);
+                (self.scrollbar_gutter || a_scrolled)
                     && self
                         .layout
                         .iter()
-                        .any(|r| r.pane == *a && x == self.sidebar_w + r.x + r.width - 1)
-                {
-                    continue;
-                }
-                let cell = &mut self.buffer[(x, *y)];
-                cell.reset();
-                if let Some(bg) = self.bg {
-                    cell.set_bg(bg);
-                }
-                cell.set_symbol(self.glyphs.vertical());
-                cell.set_style(divider_style(
-                    self.focused,
-                    self.drag_divider,
-                    true,
-                    *a,
-                    *b,
-                    index as u16,
-                    len,
-                    self.border_active,
-                    self.border_plain,
-                ));
+                        .any(|r| r.pane == a && x == self.geometry.sidebar_w + r.x + r.width - 1)
             }
-        }
-        for (y, mut cells) in group(&horizontal) {
-            cells.sort_by_key(|(x, _, _)| *x);
-            let len = cells.len() as u16;
-            for (index, (x, a, b)) in cells.iter().enumerate() {
-                if *x >= self.width || y >= self.height {
-                    continue; // a stale layout racing a shrink can overflow
-                }
-                // Same yield for the top pane's last ROW.
-                if self.scrollbar_gutter
+            Axis::Horizontal => {
+                self.scrollbar_gutter
                     && self
                         .layout
                         .iter()
-                        .any(|r| r.pane == *a && y == r.y + r.height - 1)
-                {
-                    continue;
-                }
-                // A cell that is also a vertical boundary becomes the junction.
-                if vertical.iter().any(|(vx, vy, _, _)| *vx == *x && *vy == y) {
-                    let cell = &mut self.buffer[(*x, y)];
-                    cell.set_symbol(self.glyphs.cross());
-                } else {
-                    let cell = &mut self.buffer[(*x, y)];
-                    cell.reset();
-                    if let Some(bg) = self.bg {
-                        cell.set_bg(bg);
-                    }
-                    cell.set_symbol(self.glyphs.horizontal());
-                    cell.set_style(divider_style(
-                        self.focused,
-                        self.drag_divider,
-                        false,
-                        *a,
-                        *b,
-                        index as u16,
-                        len,
-                        self.border_active,
-                        self.border_plain,
-                    ));
-                }
+                        .any(|r| r.pane == a && y == r.y + r.height - 1)
             }
         }
     }
@@ -1557,4 +1515,84 @@ impl PaneRenderer {
         }
         false
     }
+}
+
+/// A divider's orientation: `Vertical` boundaries are columns between
+/// side-by-side panes, `Horizontal` ones rows between stacked panes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Axis {
+    Vertical,
+    Horizontal,
+}
+
+impl Axis {
+    /// The frame cell of a `(boundary, along)` pair: a vertical
+    /// boundary is a column, a horizontal one a row.
+    fn cell(self, boundary: u16, along: u16) -> (u16, u16) {
+        match self {
+            Axis::Vertical => (boundary, along),
+            Axis::Horizontal => (along, boundary),
+        }
+    }
+}
+
+/// One boundary cell: `(boundary, along, a, b)` — the divider's
+/// column (vertical) or row (horizontal), the cell's position along it,
+/// and the left/top and right/bottom pane ids (they drive the
+/// focus-side style and the drag highlight). Frame coordinates.
+pub(super) type BoundaryCell = (u16, u16, u32, u32);
+
+/// One divider: its boundary coordinate and its `(along, a, b)` cells
+/// sorted along its length.
+pub(super) type BoundaryGroup = (u16, Vec<(u16, u32, u32)>);
+
+/// Every boundary cell of `layout`, `(vertical, horizontal)`. Dividers
+/// draw on the left/top pane's last column/row; content x shifts right
+/// by the side panel's `sidebar_w` columns.
+pub(super) fn collect_boundaries(
+    layout: &[PaneRect],
+    sidebar_w: u16,
+) -> (Vec<BoundaryCell>, Vec<BoundaryCell>) {
+    let mut vertical = Vec::new();
+    let mut horizontal = Vec::new();
+    for (i, first) in layout.iter().enumerate() {
+        for second in layout.iter().skip(i + 1) {
+            for (l, r) in [(first, second), (second, first)] {
+                if l.x + l.width == r.x && rows_overlap(l, r) {
+                    let boundary = r.x.saturating_sub(1) + sidebar_w;
+                    vertical.extend(
+                        row_overlap(l, r)
+                            .into_iter()
+                            .map(|y| (boundary, y, l.pane, r.pane)),
+                    );
+                }
+                if l.y + l.height == r.y && cols_overlap(l, r) {
+                    let boundary = r.y.saturating_sub(1);
+                    horizontal.extend(
+                        col_overlap(l, r)
+                            .into_iter()
+                            .map(|x| (boundary, x + sidebar_w, l.pane, r.pane)),
+                    );
+                }
+            }
+        }
+    }
+    (vertical, horizontal)
+}
+
+/// Group boundary cells per divider (first-seen order), each sorted
+/// along its length — the position the tmux half rule reads (the active
+/// pane's half of a shared divider carries the highlight).
+pub(super) fn group_boundaries(cells: &[BoundaryCell]) -> Vec<BoundaryGroup> {
+    let mut groups: Vec<BoundaryGroup> = Vec::new();
+    for &(boundary, along, a, b) in cells {
+        match groups.iter_mut().find(|(k, _)| *k == boundary) {
+            Some((_, entries)) => entries.push((along, a, b)),
+            None => groups.push((boundary, vec![(along, a, b)])),
+        }
+    }
+    for (_, entries) in &mut groups {
+        entries.sort_by_key(|&(along, _, _)| along);
+    }
+    groups
 }

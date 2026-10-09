@@ -6,6 +6,7 @@
 //! engine (`TriggerEngine::scan_rows` takes `&mut Terminal`) on departing
 //! rows before the grid moves them.
 
+use super::count_param;
 use crate::grid::Grid;
 use crate::terminal::Terminal;
 use vte::Params;
@@ -18,21 +19,6 @@ pub(crate) fn handle_ich(grid: &mut Grid, cursor_col: usize, cursor_row: usize, 
 /// DCH (`CSI P`): delete `n` characters at the cursor.
 pub(crate) fn handle_dch(grid: &mut Grid, cursor_col: usize, cursor_row: usize, params: &Params) {
     grid.delete_characters(cursor_col, cursor_row, count_param(params));
-}
-
-/// First parameter as a count; 0 or missing means 1.
-fn count_param(params: &Params) -> usize {
-    let n = params
-        .iter()
-        .next()
-        .and_then(|p| p.first())
-        .copied()
-        .unwrap_or(1) as usize;
-    if n == 0 {
-        1
-    } else {
-        n
-    }
 }
 
 impl Terminal {

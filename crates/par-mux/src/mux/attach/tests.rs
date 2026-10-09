@@ -507,7 +507,7 @@ fn explicit_targets_resolve_through_the_daemon() {
 #[test]
 fn prefix_router_detaches_forwards_and_sends_literal_prefix() {
     let mut session = Session {
-        conn: test_dead_conn(),
+        conn: test_dead_conn("router"),
         socket_path: PathBuf::from("/nonexistent"),
         pane: "%0".to_string(),
         emulator: render::PaneEmulator::new(0, 80, 24),
@@ -547,7 +547,7 @@ fn prefix_router_detaches_forwards_and_sends_literal_prefix() {
 #[test]
 fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
     let mut session = Session {
-        conn: test_dead_conn(),
+        conn: test_dead_conn("deadpane-stdin"),
         socket_path: PathBuf::from("/nonexistent"),
         pane: "%0".to_string(),
         emulator: render::PaneEmulator::new(0, 80, 24),
@@ -590,7 +590,7 @@ fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
 #[test]
 fn status_line_names_the_respawn_chord_when_the_pane_is_dead() {
     let mut session = Session {
-        conn: test_dead_conn(),
+        conn: test_dead_conn("deadpane-status"),
         socket_path: PathBuf::from("/nonexistent"),
         pane: "%0".to_string(),
         emulator: render::PaneEmulator::new(0, 80, 24),
@@ -1886,8 +1886,8 @@ fn management_chord_override_errors_on_malformed_spelling() {
 
 /// A Session for routing tests only: its connection is a closed
 /// channel pair, so sends fail silently (routing logic does not care).
-fn test_dead_conn() -> conn::AttachConn {
-    let path = test_socket("deadconn");
+fn test_dead_conn(tag: &str) -> conn::AttachConn {
+    let path = test_socket(&format!("deadconn-{tag}"));
     let _ = std::fs::remove_file(&path);
     // connect() fails without a listener, which is exactly the "dead"
     // connection a routing test wants — but Session needs a value.

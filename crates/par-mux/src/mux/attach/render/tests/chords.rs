@@ -1928,3 +1928,35 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     session.reload_key = b'%';
     assert_eq!(session.prefix_chord(b'%'), PrefixChord::Reload);
 }
+
+/// The flash lives about a second of wall clock, however fast the pump
+/// spins (QA-235): 200 immediate ticks used to burn the old 60-tick
+/// budget in milliseconds under an event flood.
+#[test]
+fn flash_survives_a_fast_pump_and_clears_after_its_deadline() {
+    use std::time::{Duration, Instant};
+    let mut session = WindowSession::new(80, 25);
+    session.flash = Some("config reloaded".to_string());
+    let start = Instant::now();
+    for _ in 0..200 {
+        session.tick_flash(start);
+    }
+    assert_eq!(
+        session.flash.as_deref(),
+        Some("config reloaded"),
+        "200 immediate ticks must not clear the flash"
+    );
+    session.tick_flash(start + FLASH_LIFETIME - Duration::from_millis(1));
+    assert!(session.flash.is_some(), "still up just before the deadline");
+    session.tick_flash(start + FLASH_LIFETIME);
+    assert_eq!(session.flash, None, "cleared at the deadline");
+    assert_eq!(session.flash_until, None, "the deadline disarms with it");
+
+    // A fresh flash re-arms from its own first tick, not the old deadline.
+    session.flash = Some("labels on".to_string());
+    session.tick_flash(start + Duration::from_secs(5));
+    assert!(
+        session.flash.is_some(),
+        "a new flash survives its first tick"
+    );
+}

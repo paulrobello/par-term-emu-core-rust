@@ -701,6 +701,31 @@ unsafe fn write_ranges(
     total
 }
 
+/// The shared body of the three `*_dirty_ranges*` exports (QA-241): a
+/// NULL `term` reports 0; otherwise `each` visits the terminal's ranges
+/// into [`write_ranges`].
+///
+/// # Safety
+/// `term` must be NULL or point to a live `Terminal` not mutably borrowed
+/// elsewhere; `out` must be NULL or valid for writes of `cap`
+/// `TermRowRange` values.
+unsafe fn dirty_ranges_export(
+    term: *const Terminal,
+    out: *mut TermRowRange,
+    cap: u32,
+    each: impl FnOnce(&Terminal, &mut dyn FnMut(u32, u32)),
+) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+    let term_ref = unsafe { &*term };
+    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+    // which is `write_ranges`' contract.
+    unsafe { write_ranges(out, cap, |f| each(term_ref, f)) }
+}
+
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
 /// the cbindgen-generated include/terminal_core.h); bump both on any layout
@@ -836,15 +861,8 @@ pub unsafe extern "C" fn ptec_terminal_dirty_ranges(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    if term.is_null() {
-        return 0;
-    }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
-    // which is `write_ranges`' contract.
-    unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range(f)) }
+    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
+    unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range(f)) }
 }
 
 /// Current damage generation. A renderer remembers this value between
@@ -882,15 +900,8 @@ pub unsafe extern "C" fn ptec_terminal_dirty_ranges_since(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    if term.is_null() {
-        return 0;
-    }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
-    // which is `write_ranges`' contract.
-    unsafe { write_ranges(out, cap, |f| term_ref.for_each_dirty_range_since(gen, f)) }
+    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
+    unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range_since(gen, f)) }
 }
 
 /// Scroll-aware damage since generation `gen` (ENH-038): writes how the
@@ -951,17 +962,10 @@ pub unsafe extern "C" fn ptec_terminal_content_dirty_ranges_since(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    if term.is_null() {
-        return 0;
-    }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
-    // which is `write_ranges`' contract.
+    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
     unsafe {
-        write_ranges(out, cap, |f| {
-            term_ref.for_each_content_dirty_range_since(gen, f)
+        dirty_ranges_export(term, out, cap, |t, f| {
+            t.for_each_content_dirty_range_since(gen, f)
         })
     }
 }

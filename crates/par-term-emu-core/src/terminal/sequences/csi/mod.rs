@@ -15,6 +15,22 @@ use crate::debug;
 use crate::terminal::Terminal;
 use vte::Params;
 
+/// First parameter as a count; 0 or missing means 1 (the VT default the
+/// cursor-motion and insert/delete handlers share).
+pub(super) fn count_param(params: &Params) -> usize {
+    let n = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(1) as usize;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
 impl Terminal {
     /// VTE CSI dispatch - handle CSI sequences
     pub(in crate::terminal) fn csi_dispatch_impl(
@@ -213,3 +229,28 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod count_param_tests {
+    use super::count_param;
+
+    /// The first CSI's params, through a real vte parse.
+    fn first_param_count(seq: &[u8]) -> usize {
+        struct Capture(Option<usize>);
+        impl vte::Perform for Capture {
+            fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, _: char) {
+                self.0.get_or_insert(count_param(params));
+            }
+        }
+        let mut capture = Capture(None);
+        vte::Parser::new().advance(&mut capture, seq);
+        capture.0.expect("a CSI dispatched")
+    }
+
+    #[test]
+    fn zero_and_missing_mean_one() {
+        assert_eq!(first_param_count(b"\x1b[0A"), 1, "param 0");
+        assert_eq!(first_param_count(b"\x1b[A"), 1, "missing param");
+        assert_eq!(first_param_count(b"\x1b[5A"), 5, "param 5");
+    }
+}

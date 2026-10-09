@@ -407,9 +407,10 @@ pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
     (None, Vec::new())
 }
 
-/// The host terminal's per-cell pixel size. TODO(attach Phase A): XTWINOPS
-/// `CSI 16 t` probe with the same raw reader; until then the 10x20
-/// construction default the daemon itself assumes.
+/// The host terminal's per-cell pixel size.
+/// TODO(attach: XTWINOPS CSI 16 t probe, card 01a11e5909d87377878bfc2077236c8b)
+/// Probe with the same raw reader `probe_background` uses; until then the
+/// 10x20 construction default the daemon itself assumes.
 fn cell_pixels() -> (u16, u16) {
     (10, 20)
 }

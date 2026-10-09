@@ -397,6 +397,35 @@ pub fn wait_until(
     }
 }
 
+/// Poll the daemon at `socket` with `cmd` over a fresh control connection
+/// until `pred(&reply)` holds, and return that reply; panics naming `what`
+/// with the last reply once `deadline` passes (QA-232). The daemon-state
+/// barrier that replaces a fixed sleep after a chord or a send-keys.
+pub fn wait_daemon(
+    socket: &Path,
+    cmd: &str,
+    pred: impl Fn(&str) -> bool,
+    deadline: Duration,
+    what: &str,
+) -> String {
+    use interprocess::TryClone as _;
+    let stream = connect_local_stream(socket).expect("connect for wait_daemon");
+    let mut writer = stream.try_clone().expect("clone wait_daemon stream");
+    let mut reader = std::io::BufReader::new(stream);
+    let end = Instant::now() + deadline;
+    loop {
+        let reply = command(&mut writer, &mut reader, cmd).join("");
+        if pred(&reply) {
+            return reply;
+        }
+        assert!(
+            Instant::now() < end,
+            "{what}: {cmd:?} never satisfied within {deadline:?}; last reply: {reply}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// [`wait_until`] on a plain marker.
 pub fn wait_for(
     stream: &mut impl Write,

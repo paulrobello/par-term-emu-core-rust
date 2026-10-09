@@ -160,6 +160,9 @@ impl WindowSession {
     /// across a rebuild.
     pub(super) fn rebuild_renderer(&mut self, cols: u16, rows: u16) {
         self.renderer = PaneRenderer::with_options(cols, rows, &self.effective_render_opts());
+        let mut geometry = self.geometry;
+        geometry.sidebar_w = self.renderer.sidebar_width();
+        self.renderer.set_geometry(geometry);
     }
 
     /// Record the session's resolved background (the renderer paints
