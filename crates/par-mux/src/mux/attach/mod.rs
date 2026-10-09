@@ -11,12 +11,26 @@
 //! mirrors every visible pane in its own core emulator and paints the
 //! window through ratatui.
 
-pub mod conn;
-pub mod input;
-pub mod layout;
-pub mod render;
-pub mod status;
-pub mod tabs;
+// The intended public surface is `run`, `run_with_mode`, `AttachOptions`,
+// `AttachMode`, and `AttachError` (ARC-134; see
+// crates/par-term-emu-core/DESIGN.md). The implementation modules stay
+// crate-private; `test_support` re-exports the few items the
+// integration suite drives directly.
+pub(crate) mod conn;
+pub(crate) mod input;
+pub(crate) mod layout;
+pub(crate) mod render;
+pub(crate) mod status;
+pub(crate) mod tabs;
+
+/// Internals the `tests/mux_attach.rs` integration suite drives directly
+/// (a render client over a live daemon). Not part of the supported API.
+#[doc(hidden)]
+pub mod test_support {
+    pub use super::conn::AttachConn;
+    pub use super::layout::parse_layout_triple;
+    pub use super::render::{Glyphs, PaneRenderer};
+}
 
 // Non-render scaffolding (ARC-003): panel composition (help, prompts,
 // picker, sidebar) and target/list-line parsing. The passthrough

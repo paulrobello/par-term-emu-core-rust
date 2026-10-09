@@ -88,6 +88,7 @@ impl SgrMouse {
 
     /// The pressed-button index (0 left, 1 middle, 2 right); the low two
     /// bits of the button code.
+    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
     pub fn button(&self) -> u8 {
         self.cb & 0x3
     }
@@ -102,6 +103,7 @@ impl SgrMouse {
     /// The modifier bits, in the crate's [`modifiers`] order — the SGR
     /// wire puts them at shift 2 with the same bit values (shift 1, alt 2,
     /// ctrl 4).
+    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
     pub fn modifiers(&self) -> u8 {
         (self.cb >> 2) & 0x7
     }
@@ -466,6 +468,7 @@ pub(crate) fn strip_paste_end(body: &[u8]) -> Vec<u8> {
 /// Re-encode one key event against the focused pane's tracked input state
 /// (DECCKM application cursor, kitty keyboard flags, modifyOtherKeys) and
 /// return the bytes to forward. Empty output means no encoding.
+#[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
 pub fn reencode_key(ev: &TermKeyEvent, pane: &Terminal) -> Vec<u8> {
     par_term_emu_core::keyboard::encode_key(ev, pane)
 }
