@@ -7,24 +7,10 @@
 //! print path), and the remaining arms (DECSCUSR + DECSWBV, SCOSC/SCORC +
 //! DECSMBV, TBC) each touch one or two loose `Terminal` fields.
 
+use super::count_param;
 use crate::cursor::Cursor;
 use crate::terminal::{MarginState, Terminal};
 use vte::Params;
-
-/// First parameter as a count; 0 or missing means 1.
-fn count_param(params: &Params) -> usize {
-    let n = params
-        .iter()
-        .next()
-        .and_then(|p| p.first())
-        .copied()
-        .unwrap_or(1) as usize;
-    if n == 0 {
-        1
-    } else {
-        n
-    }
-}
 
 /// Cursor motion sequences. Returns `false` (and changes nothing) for an
 /// action this function does not handle. `size` is the active screen's
