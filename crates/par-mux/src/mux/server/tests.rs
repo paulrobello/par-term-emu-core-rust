@@ -442,7 +442,7 @@ fn graceful_shutdown_pushes_exit_to_clients_before_closing() {
 }
 
 /// Card 01a0d9b47b26, exit-when-empty: a persisting daemon holding zero
-/// sessions and zero clients exits through the ordinary shutdown path,
+/// sessions (no client attached here) exits through the ordinary shutdown path,
 /// and its final save is deliberate — an existing last-good snapshot is
 /// cleared, so the next start is fresh rather than a resurrection.
 #[cfg(unix)]

@@ -301,8 +301,9 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub remain_on_exit: Option<bool>,
-    /// Exit the daemon when it holds zero sessions and zero clients,
-    /// after a short grace (tmux's `exit-empty`). `true` (the default)
+    /// Exit the daemon once it holds no sessions (or only dead panes)
+    /// for the 5 s grace (tmux's `exit-empty`); attached clients do not
+    /// hold it. `true` (the default)
     /// matches the built-in behavior; `false` keeps a persisting daemon
     /// alive however long it sits empty.
     #[serde(
@@ -339,8 +340,9 @@ pub struct EffectiveConfig {
     /// once (it takes effect at the next observed death), everything
     /// else is restart-required.
     pub remain_on_exit: bool,
-    /// Exit the daemon when it holds zero sessions and zero clients,
-    /// after a short grace. The second live daemon setting: the accept
+    /// Exit the daemon once it holds no sessions (or only dead panes)
+    /// for the 5 s grace; attached clients do not hold it. The second
+    /// live daemon setting: the accept
     /// loop re-reads the applied copy every tick, so `reload-config`
     /// applies a changed value without a restart.
     pub exit_empty: bool,

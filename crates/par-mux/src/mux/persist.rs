@@ -1023,8 +1023,8 @@ pub enum SaveOrigin {
     /// snapshot; empty leaves it alone, because the emptiness may be the
     /// race above rather than the user's intent.
     Shutdown,
-    /// The final save of an exit-when-empty daemon: no clients, and either
-    /// zero sessions or every pane dead, held past the grace period with no
+    /// The final save of an exit-when-empty daemon: zero sessions or every
+    /// pane dead (attached clients do not count), held past the grace with no
     /// shutdown signal received. An empty tree clears the snapshot (the
     /// user closed everything, so the next start is fresh). An all-dead
     /// tree is pane-bearing and refreshes it, so the next start respawns
