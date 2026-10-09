@@ -65,7 +65,7 @@ help:
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
-	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; then runs the script's --self-test (release-time only, not part of checkall)"
+	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; also lints that section's structure (duplicate subsections, detached bullets, <this>, stale paths, [Unreleased] link base); then runs the script's --self-test (release-time only, not part of checkall)"
 	@echo "  audit-deps      - cargo deny + bun audit + pip-audit across Rust, web frontend and Python (needs network; not part of checkall)"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"

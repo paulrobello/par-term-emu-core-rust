@@ -105,7 +105,7 @@ When bumping the project version, update all three files to the same value in on
 
 Also update `CHANGELOG.md` and note breaking changes in both `CHANGELOG.md` and the README "What's New" section.
 
-Before tagging, `make release-check` must pass; then run `python3 scripts/check_release_notes.py --write` for the compare link.
+Before tagging, run `python3 scripts/check_release_notes.py --write` (compare links), then `make release-check`, which must pass. It also lints the checked CHANGELOG section's structure: one subsection per Keep-a-Changelog type, no detached bullets, no `` `<this>` `` placeholders, existing paths, and an `[Unreleased]` link based on the newest version.
 
 ## Rust to Python Binding Sync
 

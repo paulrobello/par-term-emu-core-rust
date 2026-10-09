@@ -8,10 +8,17 @@ trailer are exempt.
 
 With ``--write`` it also maintains the top compare-link definitions
 (``[<ver>]:``, plus ``[Unreleased]:`` when that heading exists). Backfilling
-older links is DOC-126 and stays out of scope.
+older links is DOC-126 and stays out of scope. The links are written before
+the check runs, so the ``[Unreleased]`` link rule sees the fixed link.
 
-Exit codes: 0 clean, 1 missing entries, 2 infrastructure error (missing base
-tag, no derivable base, git failure).
+ENH-048 also lints the checked section's structure: each Keep-a-Changelog
+subsection at most once, no bullet detached from its ``###`` by a blank line,
+no ``Commit `<this>``` placeholders, backticked repo paths that exist at the
+head ref, and an ``[Unreleased]:`` link based on the newest version heading.
+``--no-structure`` skips that lint (historical audits only).
+
+Exit codes: 0 clean, 1 missing entries or structure problems, 2
+infrastructure error (missing base tag, no derivable base, git failure).
 """
 
 from __future__ import annotations
@@ -29,6 +36,17 @@ SUBJECT_RE = re.compile(r"^(feat|fix)(\([^)]*\))?!?:")
 CARD_ID_RE = re.compile(r"\b((?:ENH|QA|SEC|ARC|DOC)-\d+)\b")
 SHA_TOKEN_RE = re.compile(r"`([0-9a-f]{7,40})`")
 RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+KAC_SUBSECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+SUBSECTION_RE = re.compile(r"^### (.+?)\s*$")
+PLACEHOLDER = "`<this>`"
+# A backticked token containing `/` with no placeholder/glob/shell chars;
+# only tokens whose first segment is a top-level path at the head ref count.
+PATH_TOKEN_RE = re.compile(r"`([^`\s<>*{}$~]+/[^`\s<>*{}$~]*)`")
+LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+UNRELEASED_LINK_RE = re.compile(
+    r"^\[Unreleased\]: \S+/compare/(v[^.\s]+\.[^.\s]+\.[^.\s]+)\.\.\.HEAD\s*$",
+    re.MULTILINE,
+)
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -229,7 +247,108 @@ def write_links(changelog: Path, text: str, root: Path) -> str:
     return new_text
 
 
-def check(root: Path, base: str | None, head: str | None) -> int:
+def head_tree(root: Path, head: str) -> tuple[set[str], set[str]]:
+    """Files at ``head`` and every directory prefix (with a trailing ``/``).
+
+    Reads the head ref's tree rather than the working tree so a ``--head``
+    run is reproducible.
+    """
+    files = set(run_git(root, "ls-tree", "-r", "--name-only", head).splitlines())
+    dirs: set[str] = set()
+    for f in files:
+        parts = f.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            dirs.add("/".join(parts[:i]) + "/")
+    return files, dirs
+
+
+def structure_problems(text: str, checked: str, head: str, root: Path) -> list[str]:
+    """Shape problems in the checked section (ENH-048 rules 1-4)."""
+    sections = parse_sections(text)
+    names = [n for n, _ in sections]
+    start = sections[names.index(checked)][1]
+    body = section_text(text, start)
+    first = text[:start].count("\n") + 1
+    lines = body.split("\n")
+    problems: list[str] = []
+    seen: dict[str, int] = {}
+    current: str | None = None
+    prev: str | None = None  # "H" after a ### line, "" after a blank line
+    for off, line in enumerate(lines[1:], 1):
+        n = first + off
+        m = SUBSECTION_RE.match(line)
+        if m:
+            name = m.group(1)
+            if name in KAC_SUBSECTIONS and name in seen:
+                problems.append(
+                    f"CHANGELOG.md:{n}: duplicate `### {name}` in [{checked}] "
+                    f"(first at :{seen[name]})"
+                )
+            seen.setdefault(name, n)
+            current, prev = name, "H"
+            continue
+        if line.startswith("- "):
+            if current is None:
+                problems.append(
+                    f"CHANGELOG.md:{n}: bullet outside any ### subsection in "
+                    f"[{checked}]"
+                )
+            elif prev == "":
+                problems.append(
+                    f"CHANGELOG.md:{n}: bullet run detached from `### {current}` "
+                    f"by a blank line in [{checked}] (merge it or give it its "
+                    "own heading)"
+                )
+        prev = line if line.strip() else ""
+        if PLACEHOLDER in line:
+            problems.append(
+                f"CHANGELOG.md:{n}: `Commit {PLACEHOLDER}` placeholder in "
+                f"[{checked}] (cite the short SHA or drop the clause)"
+            )
+    files, dirs = head_tree(root, head)
+    top = {f.split("/")[0] for f in files}
+    reported: set[str] = set()
+    for off, line in enumerate(lines):
+        for token in PATH_TOKEN_RE.findall(line):
+            path = LINE_SUFFIX_RE.sub("", token)
+            if path.split("/")[0] not in top or path in reported:
+                continue
+            if path in files or (path if path.endswith("/") else path + "/") in dirs:
+                continue
+            reported.add(path)
+            problems.append(
+                f"CHANGELOG.md:{first + off}: path `{path}` does not exist at "
+                f"{head} in [{checked}]"
+            )
+    return problems
+
+
+def link_problem(text: str) -> str | None:
+    """ENH-048 rule 5: the ``[Unreleased]:`` link compares from the newest version."""
+    sections = parse_sections(text)
+    if not any(n == "Unreleased" for n, _ in sections):
+        return None
+    newest = next((n for n, _ in sections if n != "Unreleased"), None)
+    if newest is None:
+        return None
+    m = UNRELEASED_LINK_RE.search(text)
+    if m is None:
+        return (
+            "CHANGELOG.md: no `[Unreleased]: …/compare/vX.Y.Z...HEAD` link "
+            "(run --write)"
+        )
+    base = m.group(1)
+    if base != f"v{newest}":
+        return (
+            f"CHANGELOG.md: [Unreleased] link compares from {base}, but the "
+            f"newest version heading is [{newest}] (run --write)"
+        )
+    return None
+
+
+def check(
+    root: Path, base: str | None, head: str | None, structure: bool = True
+) -> int:
     changelog = root / "CHANGELOG.md"
     text = changelog.read_text()
     checked, derived_base, derived_head, _ = derive_checked_section(text, root)
@@ -246,9 +365,16 @@ def check(root: Path, base: str | None, head: str | None) -> int:
         if not referenced(section, sha, subject)
     ]
 
+    problems: list[str] = []
+    if structure:
+        problems = structure_problems(text, checked, head, root)
+        link = link_problem(text)
+        if link is not None:
+            problems.append(link)
+
     print(
         f"release-check: {base}..{head} — checking [{checked}] against "
-        f"{len(commits)} feat/fix commit(s)"
+        f"{len(commits)} feat/fix commit(s), {len(problems)} structure problem(s)"
     )
     for sha, subject in missing:
         print(f"MISSING {sha[:7]} {subject}")
@@ -258,7 +384,15 @@ def check(root: Path, base: str | None, head: str | None) -> int:
             "a `Changelog: skip` trailer with `git commit --amend` before "
             "tagging"
         )
-    return 1 if missing else 0
+    for problem in problems:
+        print(f"STRUCTURE {problem}")
+    if problems:
+        print(
+            "hint: fix the CHANGELOG shape: one ### per Keep-a-Changelog "
+            "subsection, no detached bullets, no `<this>`, paths that exist at "
+            "head, [Unreleased] based on the newest version"
+        )
+    return 1 if (missing or problems) else 0
 
 
 def self_test() -> int:
@@ -406,6 +540,84 @@ def self_test() -> int:
             r.stdout,
         )
 
+        def structure_lines(out: str) -> list[str]:
+            return [ln for ln in out.splitlines() if ln.startswith("STRUCTURE")]
+
+        link_line = (
+            f"[Unreleased]: https://github.com/{REPO_SLUG}/compare/v0.2.0...HEAD"
+        )
+        added = f"### Added\n- post release feature (`{uncited2[:7]}`) `f.txt`\n"
+        clean = (
+            "# Changelog\n\n## [Unreleased]\n\n"
+            f"{added}\n"
+            "## [0.2.0]\n\n### Added\n- released\n\n"
+            f"{link_line}\n"
+        )
+
+        print("scenario: clean CHANGELOG shape passes the structure lint")
+        changelog.write_text(clean)
+        r = run_in_root()
+        expect(r.returncode == 0, "exit 0 on a clean shape", r.stdout + r.stderr)
+        expect(not structure_lines(r.stdout), "no STRUCTURE line", r.stdout)
+
+        mutations = [
+            ("duplicate", added, added + "\n### Added\n- dup\n", "duplicate"),
+            ("detached", added, added + "\n- detached\n", "detached"),
+            (
+                "placeholder",
+                added,
+                added + "- x Commit `<this>`.\n",
+                "placeholder",
+            ),
+            (
+                "path",
+                added,
+                added + "- see `scripts/missing.py`\n",
+                "path `scripts/missing.py` does not exist",
+            ),
+            (
+                "link",
+                link_line,
+                link_line.replace("v0.2.0...HEAD", "v0.1.0...HEAD"),
+                "newest version heading is [0.2.0]",
+            ),
+        ]
+        for label, old, new, needle in mutations:
+            print(f"scenario: structure rule bites ({label})")
+            changelog.write_text(clean.replace(old, new, 1))
+            r = run_in_root()
+            expect(r.returncode == 1, f"{label}: exit 1", r.stdout + r.stderr)
+            expect(
+                any(needle in ln for ln in structure_lines(r.stdout)),
+                f"{label}: STRUCTURE line names `{needle}`",
+                r.stdout,
+            )
+
+        print("scenario: --write fixes the [Unreleased] link before checking")
+        r = run_in_root("--write")
+        expect(
+            r.returncode == 0,
+            "write-fixes-link: exit 0 after --write",
+            r.stdout + r.stderr,
+        )
+        expect(
+            link_line in changelog.read_text().splitlines(),
+            "write-fixes-link: [Unreleased] compares from v0.2.0",
+            changelog.read_text(),
+        )
+
+        print("scenario: bullet outside any ### subsection")
+        changelog.write_text(
+            clean.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n- orphan\n\n", 1)
+        )
+        r = run_in_root()
+        expect(r.returncode == 1, "outside-subsection: exit 1", r.stdout + r.stderr)
+        expect(
+            any("outside any ### subsection" in ln for ln in structure_lines(r.stdout)),
+            "outside-subsection: STRUCTURE line reported",
+            r.stdout,
+        )
+
     if failures:
         print(f"self-test FAILED: {failures}")
         return 1
@@ -431,6 +643,11 @@ def main() -> None:
         help="also maintain the top compare-link definitions",
     )
     parser.add_argument(
+        "--no-structure",
+        action="store_true",
+        help="skip the CHANGELOG structure lint (historical audits only)",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="run the built-in throwaway-repo test suite",
@@ -442,13 +659,14 @@ def main() -> None:
 
     root: Path = args.root.resolve()
     try:
-        status = check(root, args.base, args.head)
+        # Write first so the [Unreleased] link rule sees the fixed link.
         if args.write:
             write_links(
                 root / "CHANGELOG.md",
                 (root / "CHANGELOG.md").read_text(),
                 root,
             )
+        status = check(root, args.base, args.head, structure=not args.no_structure)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
