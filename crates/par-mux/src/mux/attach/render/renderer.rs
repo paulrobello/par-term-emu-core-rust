@@ -867,8 +867,9 @@ impl PaneRenderer {
     }
 
     /// Whether a pane's recorded title needs a `pane-title` re-query:
-    /// never queried, invalidated by `%pane-title-changed`, or the pane
-    /// set a new OSC title since (the effective title may follow it).
+    /// never queried, invalidated by a clearing `%pane-title-changed`, or
+    /// the pane set a new OSC title since (the effective title may follow
+    /// it).
     pub(crate) fn title_stale(&self, pane: u32) -> bool {
         match self.user_titles.get(&pane) {
             Some((_, seen_osc)) => *seen_osc != self.osc_title(pane),
@@ -876,8 +877,9 @@ impl PaneRenderer {
         }
     }
 
-    /// Forget a pane's recorded title (a `%pane-title-changed` landed),
-    /// so the next status refresh re-queries it.
+    /// Forget a pane's recorded title (a `%pane-title-changed` cleared the
+    /// user title, so the effective title falls back to an OSC title the
+    /// payload lacks), so the next status refresh re-queries it.
     pub(crate) fn invalidate_title(&mut self, pane: u32) {
         self.user_titles.remove(&pane);
     }

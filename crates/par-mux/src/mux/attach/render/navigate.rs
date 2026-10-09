@@ -242,9 +242,11 @@ impl WindowSession {
     /// effective title — the border labels paint the user `-T` label when
     /// set (the manual-pass report: prefix `$` labels never showed
     /// because the painter read the shell's OSC title only). Called after
-    /// the throttled status refresh. The focused pane's title is the one
-    /// the status refresh just fetched; another pane is re-queried only
-    /// when its recorded title went stale (ARC-125). A changed title
+    /// the throttled status refresh. Against a `client-snapshot v1` daemon
+    /// every title comes from the snapshot, no query. Otherwise the
+    /// focused pane's title is the one the status refresh just fetched;
+    /// another pane is re-queried only when its recorded title went stale
+    /// (ARC-125). A changed title
     /// marks dirty. Stops at the first query that outlives the status
     /// bound.
     pub(super) fn refresh_pane_titles(

@@ -944,10 +944,10 @@ impl WindowSession {
                 self.draw_tab_strip();
             }
 
-            // 6. Status: the throttled re-query. Any %agent-state-changed
-            //     / %agent-telemetry-changed / %sessions-changed (and
-            //     renames) marked the state stale; one re-query per burst
-            //     serves them all. The shown session being gone ends the
+            // 6. Status: the throttled re-query. Any %sessions-changed /
+            //     %window-add / %window-close (and the other events whose
+            //     payload lacks the fact) marked the state stale; one
+            //     re-query per burst serves them all. The shown session being gone ends the
             //     view (docs/MUX.md's %sessions-changed client contract);
             //     only the shown WINDOW being gone (its last pane exited
             //     or was killed) lands on the session's active window
