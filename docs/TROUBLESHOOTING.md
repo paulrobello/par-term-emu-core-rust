@@ -184,7 +184,7 @@ These entries cover `par-mux attach`. The full reference is [MUX.md Attaching fr
 
 **Symptom:** after a client or pane app crashes, pasting into the host shell inserts `^[[200~` before the text and `^[[201~` after it.
 
-**Cause:** an app turned on bracketed-paste mode (`ESC [ ? 2004 h`) and exited without turning it off, so the host keeps wrapping pastes. Render mode handles these markers itself (the paste body goes to the focused pane verbatim), so the leftovers only show in the host shell.
+**Cause:** an app turned on bracketed-paste mode (`ESC [ ? 2004 h`) and exited without turning it off, so the host keeps wrapping pastes. The attach client handles these markers itself (render mode consumes them and re-frames the body only for a pane that has bracketed paste on), so the leftovers only show in the host shell.
 
 **Fix:** turn the mode off in the host terminal:
 
@@ -206,7 +206,7 @@ printf '\e[?2004l'
 cargo install --path crates/par-mux --features mux-bin,attach --locked
 ```
 
-The release archives on GitHub are built with `attach`. See [MUX.md](MUX.md#standalone-binaries-github-releases).
+From 0.58.1, the GitHub release archives are built with `attach`. See [MUX.md](MUX.md#standalone-binaries-github-releases).
 
 ### Cannot attach to a daemon named attach
 
