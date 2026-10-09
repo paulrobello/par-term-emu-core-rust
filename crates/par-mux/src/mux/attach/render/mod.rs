@@ -423,15 +423,14 @@ fn render_session_inner(
     // screen + mouse capture: unlike passthrough, the renderer owns the
     // whole screen and routes mouse events itself. SGR+motion capture
     // (1002 + 1006) is what the host can report; panes that negotiate
-    // any-event tracking get drags through the same path. Restored on
-    // every exit path below.
+    // any-event tracking get drags through the same path. Both guards
+    // restore on every exit path, `?` and unwind included. Locals drop in
+    // reverse declaration order, so the screen guard (declared second)
+    // leaves the alternate screen BEFORE the terminal guard leaves raw
+    // mode.
     let (cols, rows) = super::conn::terminal_grid();
-    let _guard = super::TerminalGuard::enter();
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
-    );
+    let terminal_guard = super::TerminalGuard::enter();
+    let _screen_guard = RenderScreenGuard::enter(terminal_guard.entered());
 
     let mut session = WindowSession::new(cols, rows);
     // The client configuration was resolved once for both modes
@@ -497,18 +496,63 @@ fn render_session_inner(
     // being eaten.
     session.stdin_primer = probe.1;
 
-    let outcome = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
+    session.run(&mut conn, options.target.as_deref(), &mut StdoutSink)
+}
 
-    // Restore: leave the alt screen, release the mouse, show the cursor.
-    // The TerminalGuard (raw mode) drops after.
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        crossterm::event::DisableMouseCapture,
-        crossterm::terminal::LeaveAlternateScreen,
-        crossterm::cursor::Show
-    );
-    outcome?;
-    Ok(())
+/// RAII owner of the render client's alternate screen and mouse
+/// capture: entering switches to the alternate screen and enables SGR
+/// mouse capture; dropping releases the mouse, leaves the alternate
+/// screen, and shows the cursor, ignoring errors. Without a tty (raw
+/// mode never came up) it emits nothing.
+pub(crate) struct RenderScreenGuard {
+    active: bool,
+}
+
+impl RenderScreenGuard {
+    fn enter(tty: bool) -> Self {
+        if tty {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture
+            );
+        }
+        Self { active: tty }
+    }
+}
+
+impl Drop for RenderScreenGuard {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        screen_guard_drops::record();
+        if self.active {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::cursor::Show
+            );
+        }
+    }
+}
+
+/// Per-thread count of [`RenderScreenGuard`] drops, so a test can prove
+/// the guard restores on an early error return.
+#[cfg(test)]
+pub(super) mod screen_guard_drops {
+    use std::cell::Cell;
+
+    thread_local! {
+        static DROPS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record() {
+        DROPS.with(|d| d.set(d.get() + 1));
+    }
+
+    pub(crate) fn count() -> usize {
+        DROPS.with(Cell::get)
+    }
 }
 
 /// A divider drag in flight. `Pending` is a press near a divider that has

@@ -1701,3 +1701,31 @@ fn group_boundaries_groups_and_sorts_along() {
         ]
     );
 }
+
+/// ARC-129: the render screen guard restores on an early `?` return —
+/// the path the old trailing manual restore skipped (a config or seed
+/// error used to leave the host in the alternate screen with mouse
+/// capture on). Headless (`tty: false`) it emits nothing but still drops.
+#[test]
+fn render_screen_guard_drops_on_early_error() {
+    fn guarded(fail: bool) -> Result<(), String> {
+        let _screen_guard = RenderScreenGuard::enter(false);
+        if fail {
+            Err("seed failed".to_string())?;
+        }
+        Ok(())
+    }
+    let before = super::screen_guard_drops::count();
+    assert!(guarded(true).is_err());
+    assert_eq!(
+        super::screen_guard_drops::count(),
+        before + 1,
+        "dropped on Err"
+    );
+    assert!(guarded(false).is_ok());
+    assert_eq!(
+        super::screen_guard_drops::count(),
+        before + 2,
+        "dropped on Ok"
+    );
+}

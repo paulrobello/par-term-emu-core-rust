@@ -831,6 +831,11 @@ impl TerminalGuard {
         }
         Self { entered }
     }
+
+    /// Whether raw mode actually came up (false without a tty).
+    pub(crate) fn entered(&self) -> bool {
+        self.entered
+    }
 }
 
 impl Drop for TerminalGuard {
