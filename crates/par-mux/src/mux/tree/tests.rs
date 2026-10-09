@@ -1748,6 +1748,30 @@ fn rename_strips_control_characters_from_every_tree_name() {
     assert_eq!(tree.workspace(workspace).unwrap().name, "fresh");
 }
 
+/// SEC-209: break-pane's new window name strips controls at entry.
+#[test]
+fn break_pane_strips_control_characters_from_the_window_name() {
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let first_window = tree.session(session_id).unwrap().windows[0];
+    let first = tree.window(first_window).unwrap().panes()[0];
+    tree.split_pane(first, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let (new_window, _, _) = tree.break_pane(first, "b\x1b[2Jk").unwrap();
+    assert_eq!(tree.window(new_window).unwrap().name, "b[2Jk");
+}
+
+/// SEC-209: a session spawn's explicit first-window name strips controls.
+#[test]
+fn with_window_name_strips_control_characters() {
+    let mut tree = tree();
+    let workspace = tree.new_workspace("ws");
+    let plan = tree
+        .begin_session_at(workspace, "s", 80, 24, &Default::default())
+        .with_window_name("w\x07\u{9b}1");
+    assert_eq!(plan.window_name.as_deref(), Some("w1"));
+}
+
 #[test]
 fn rename_window_rejects_an_unknown_window() {
     let mut tree = tree();

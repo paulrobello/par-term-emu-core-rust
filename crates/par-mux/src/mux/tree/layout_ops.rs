@@ -269,7 +269,7 @@ impl MuxTree {
             session_id,
             MuxWindow {
                 id: window_id,
-                name: name.to_string(),
+                name: crate::mux::strip_controls(name).into_owned(),
                 layout: LayoutTree::leaf(pane),
                 active: pane,
                 cols,

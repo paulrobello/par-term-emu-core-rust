@@ -405,6 +405,19 @@ fn focus_highlights_adjacent_dividers() {
     assert_eq!(renderer.focused(), Some(2));
 }
 
+/// SEC-209: the render chrome's border label strips control characters
+/// from both sources — the daemon's title reply and the mirror's own OSC
+/// 0/2 title.
+#[test]
+fn border_label_strips_control_characters() {
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    renderer.feed_output(1, b"\x1b]2;osc\x7ftitle\x07");
+    assert_eq!(renderer.border_label(1), "osctitle");
+    renderer.set_user_title(2, "u\x1b[2Jt");
+    assert_eq!(renderer.border_label(2), "u[2Jt");
+}
+
 /// Wide characters: a CJK cell occupies its rect cell and marks the
 /// right spacer skip, and the neighbor's content still lands.
 #[test]

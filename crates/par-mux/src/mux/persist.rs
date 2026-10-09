@@ -791,7 +791,7 @@ impl MuxTree {
                 }
                 session_windows.push(MuxWindow {
                     id: WindowId(window.id),
-                    name: window.name.clone(),
+                    name: crate::mux::strip_controls(&window.name).into_owned(),
                     layout: window.layout.clone(),
                     active: PaneId(window.active_pane),
                     cols,
@@ -805,7 +805,7 @@ impl MuxTree {
             sessions.push((
                 MuxSession {
                     id: SessionId(session.id),
-                    name: session.name.clone(),
+                    name: crate::mux::strip_controls(&session.name).into_owned(),
                     windows: Vec::new(),
                     active: session.active_window_index,
                     env: session.env.clone(),
@@ -851,7 +851,7 @@ impl MuxTree {
                 workspace_id,
                 MuxWorkspace {
                     id: workspace_id,
-                    name: workspace.name.clone(),
+                    name: crate::mux::strip_controls(&workspace.name).into_owned(),
                     sessions,
                     active,
                 },
@@ -1596,6 +1596,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// SEC-209: names in a (hand-edited or older) save file are assigned
+    /// directly on restore, so restore strips them too.
+    #[test]
+    fn restore_strips_control_characters_from_tree_names() {
+        let mut tree = tree();
+        let workspace = tree.new_workspace("ws");
+        let session = tree.new_session("s", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let mut state = tree.to_persist_state();
+        for ws in &mut state.workspaces {
+            ws.name = "w\x1bs".to_string();
+        }
+        for s in &mut state.sessions {
+            s.name = "s\x07n".to_string();
+            for w in &mut s.windows {
+                w.name = "w\u{9b}n".to_string();
+            }
+        }
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_eq!(restored.workspace(workspace).unwrap().name, "ws");
+        assert_eq!(restored.session(session).unwrap().name, "sn");
+        assert_eq!(restored.window(window).unwrap().name, "wn");
     }
 
     #[test]

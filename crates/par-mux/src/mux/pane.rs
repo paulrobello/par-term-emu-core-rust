@@ -317,11 +317,14 @@ impl MuxPane {
 
     /// The title clients should display for this pane: the user title when
     /// one is set, else the pane terminal's current OSC 0/2 title (empty
-    /// when the program set neither).
+    /// when the program set neither). Control characters are stripped:
+    /// the OSC title is pane output, and this value reaches `par-mux -c`
+    /// stdout and every client's chrome.
     pub fn effective_title(&self) -> String {
-        self.user_title
-            .clone()
-            .unwrap_or_else(|| self.session.terminal().read().title().to_string())
+        match &self.user_title {
+            Some(title) => title.clone(),
+            None => crate::mux::strip_controls(self.session.terminal().read().title()).into_owned(),
+        }
     }
 
     /// The terminal emulator backing this pane. Mutate through
@@ -1747,6 +1750,21 @@ mod tests {
         // A title of only control characters clears, like an empty one.
         assert!(pane.set_user_title("\x1b\x07"));
         assert!(pane.user_title().is_none());
+    }
+
+    /// SEC-209: the OSC 0/2 title is pane output; `effective_title` (the
+    /// `pane-title` reply `par-mux -c` prints and every client's chrome
+    /// reads) strips its control characters.
+    #[test]
+    fn effective_title_strips_control_characters_from_the_osc_title() {
+        let factory = ShellPaneFactory::default();
+        let pane = factory
+            .create_pane(PaneId(11), 80, 24, None, &SpawnContext::default())
+            .unwrap();
+        pane.terminal()
+            .write()
+            .set_title("p\x1b]52;c;aGk=\x07\u{9b}\x7fq".to_string());
+        assert_eq!(pane.effective_title(), "p]52;c;aGk=q");
     }
 
     #[test]

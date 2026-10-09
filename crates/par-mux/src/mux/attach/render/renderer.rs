@@ -766,13 +766,15 @@ impl PaneRenderer {
     /// The pane's border label: the daemon's effective title (user label
     /// first), or the emulator's own OSC title when never queried.
     pub(super) fn border_label(&self, pane: u32) -> String {
-        if let Some(title) = self.user_titles.get(&pane) {
-            return title.trim().to_string();
-        }
-        self.emulators
-            .get(&pane)
-            .map(|e| e.terminal().title().trim().to_string())
-            .unwrap_or_default()
+        let raw = match self.user_titles.get(&pane) {
+            Some(title) => title.clone(),
+            None => self
+                .emulators
+                .get(&pane)
+                .map(|e| e.terminal().title().to_string())
+                .unwrap_or_default(),
+        };
+        crate::mux::strip_controls(&raw).trim().to_string()
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does

@@ -210,7 +210,7 @@ impl RespawnSpawn {
 impl SessionSpawn {
     /// Name the first window `name` instead of after the session.
     pub fn with_window_name(mut self, name: &str) -> Self {
-        self.window_name = Some(name.to_string());
+        self.window_name = Some(crate::mux::strip_controls(name).into_owned());
         self
     }
 
