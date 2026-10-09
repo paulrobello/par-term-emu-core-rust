@@ -1,5 +1,9 @@
 # par-term-emu-core — workspace member design (ARC-007, option O2)
 
+> Status: phases 1–3 complete (phase 1 `402a7ae`, phase 2 `f6d7433`, phase 3
+> through `31d7849`). This document records the design as executed; paths
+> below are the post-split locations unless a passage says otherwise.
+
 Decision (2026-10-07, card `01a1144d7bd576f5878df431e735a833`): split the
 single `par-term-emu-core-rust` crate into a layered Cargo workspace with
 **zero public-path breaks**. Every path an embedder or the Python package
@@ -63,11 +67,11 @@ census of `src/` at f96a2e8.
 | `tmux_control` | yes | see deviation above |
 | `prelude` | no | root API-tier surface that re-exports core, mux, python and streaming items |
 | `ffi` | no | C ABI; root feature `ffi`, cbindgen crate |
-| `python_bindings`, `streaming`, `mux`, `bin/*` | no | root shell (mux moves to par-mux in Phase 2) |
+| `python_bindings`, `streaming`, `mux`, `bin/*` | no | root shell (mux moved to par-mux in Phase 2) |
 
-`terminal/tests/ffi_tests.rs` is the one test file that leaves the subtree: it
-exercises `crate::ffi::SharedState`, so it stays in the root
-(`src/ffi_tests.rs`, wired from root `lib.rs`).
+`src/ffi_tests.rs` (formerly the terminal tests' `ffi_tests` module) is the
+one test file that left the subtree: it exercises `crate::ffi::SharedState`,
+so it stays in the root, wired from root `lib.rs`.
 
 Root `src/lib.rs` keeps every historical path as a re-export:
 `pub use par_term_emu_core::{terminal, grid, cell, …};` module by module, the
@@ -180,13 +184,15 @@ the documented API; they are the root's private reach into the core.
 | `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (+ its 4 fields) | python_bindings graphics |
 
 Not promoted: `Cell::{combining, fg, bg, underline_color}`. One root test
-helper (`mux/persist.rs` `marker_cell`) built a `Cell` with a
+helper (`crates/par-mux/src/mux/persist.rs` `marker_cell`, in the root at
+the time) built a `Cell` with a
 functional-update literal, which needs every field visible; promoting those
 four would leak the crate-private `PackedColor` types. The helper now builds
 the cell with `Cell::default()` and sets `c` (same value).
 
 Root-side edits outside the move: `src/lib.rs` (re-exports, `ffi_tests`
-wiring, the PyErr impls moved out), `src/mux/persist.rs` (the helper above),
+wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`
+(the helper above; `src/mux/persist.rs` before Phase 2),
 `Cargo.toml` (member dep, forwarded features, core-only deps and the
 `proptest` dev-dep removed), `cbindgen.toml` (`parse_deps`).
 
@@ -245,7 +251,7 @@ wiring, the PyErr impls moved out), `src/mux/persist.rs` (the helper above),
 
 ## Follow-on phases (O2)
 
-- **Phase 3 — root shell cleanup.** Root keeps only `streaming`,
-  `python_bindings`, `ffi`, `prelude`, binaries, and re-exports; publish
-  workflow gains the par-mux step; docs (ARCHITECTURE.md crate diagram)
-  updated.
+- **Phase 3 — root shell cleanup (done).** Root keeps only `streaming`,
+  `python_bindings`, `ffi`, `prelude`, binaries, and re-exports; the publish
+  workflow gained the par-mux step; docs (ARCHITECTURE.md crate diagram)
+  were updated.
