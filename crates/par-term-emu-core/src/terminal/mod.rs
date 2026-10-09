@@ -54,7 +54,16 @@ pub use event::{BellEvent, CwdChange, ShellEvent, TerminalEvent, TerminalEventKi
 pub(crate) use event_broker::EventBroker;
 pub use event_broker::ObserverDispatchBatch;
 #[cfg(test)]
-pub(crate) use event_broker::MAX_TERMINAL_EVENTS;
+pub(crate) use event_broker::{MAX_BELL_EVENTS, MAX_TERMINAL_EVENTS};
+
+/// Maximum undrained device-query response bytes retained (SEC-207). A
+/// parse pass that would grow the queue past this drops the replies it
+/// generated beyond it, so a query flood (`ESC[6n` …) into a terminal whose
+/// host never drains responses cannot grow memory without bound. Bytes the
+/// embedder pushes (`push_response`, uploads) are never dropped. A host that
+/// drains every read never reaches it.
+/// cap: Undrained device-query response bytes retained from processed output.
+pub(crate) const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 pub use file_transfer::{
     FileTransfer, FileTransferManager, TransferDirection, TransferId, TransferStatus,
 };
@@ -1132,7 +1141,8 @@ pub struct Terminal {
     pub(crate) tab_stops: Vec<bool>,
     /// Keyboard protocol flags, stacks, modifyOtherKeys mode (ARC-001 sub-struct)
     pub(crate) keyboard_state: KeyboardState,
-    /// Response buffer for device queries (DA/DSR/etc)
+    /// Response buffer for device queries (DA/DSR/etc). Parse-generated
+    /// replies are capped at [`MAX_RESPONSE_BYTES`] per parse pass.
     pub(crate) response_buffer: Vec<u8>,
     /// Hyperlinks map, current ID, next ID (ARC-001 sub-struct)
     pub(crate) hyperlink_state: HyperlinkState,
@@ -2965,6 +2975,17 @@ impl Terminal {
         self.cap_terminal_events();
     }
 
+    /// Drop the replies a parse pass added past [`MAX_RESPONSE_BYTES`].
+    /// `before` is the buffer length when the pass began: bytes already
+    /// queued (embedder pushes, earlier passes) are never removed, so only
+    /// output-driven growth is bounded. The escape-sequence handlers write
+    /// `response_buffer` directly (they take it as a `&mut Vec<u8>`
+    /// capability), so every parse entry point ends here.
+    pub(crate) fn cap_parsed_responses(&mut self, before: usize) {
+        self.response_buffer
+            .truncate(before.max(MAX_RESPONSE_BYTES));
+    }
+
     /// Process incoming data from the PTY without invoking observer
     /// callbacks synchronously (ARC-001).
     ///
@@ -2999,6 +3020,7 @@ impl Terminal {
     /// original early return when data is being buffered for synchronized-
     /// update coalescing rather than parsed immediately.
     fn process_internal(&mut self, data: &[u8]) -> bool {
+        let responses_before = self.response_buffer.len();
         if self.recording_state.is_recording {
             self.record_event(RecordingEventType::Output, data.to_vec());
         }
@@ -3037,6 +3059,7 @@ impl Terminal {
             // Process as standard terminal output (with Kitty APC pre-filtering)
             self.filter_apc_and_advance(data);
         }
+        self.cap_parsed_responses(responses_before);
 
         true
     }

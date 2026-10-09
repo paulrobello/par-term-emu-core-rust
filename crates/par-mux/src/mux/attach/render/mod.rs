@@ -226,6 +226,11 @@ impl PaneEmulator {
     /// scrollback extent instead.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.term.process(bytes);
+        // The daemon's PTY session already answers the pane's queries and
+        // owns its bells; a mirror must never answer on its behalf, and
+        // undrained queues would grow with the pane's output (SEC-207).
+        let _ = self.term.drain_responses();
+        let _ = self.term.drain_bell_events();
         if self.hold_scroll {
             let max = self.term.active_grid().scrollback_len();
             self.scroll = self.scroll.min(max);

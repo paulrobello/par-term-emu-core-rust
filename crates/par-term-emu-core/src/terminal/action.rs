@@ -192,8 +192,10 @@ impl Terminal {
     pub fn apply_action(&mut self, action: TerminalAction) {
         let bytes = action.to_bytes();
         if !bytes.is_empty() {
+            let responses_before = self.response_buffer.len();
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.cap_parsed_responses(responses_before);
             self.finish_applied_actions();
         }
     }
@@ -210,8 +212,10 @@ impl Terminal {
     {
         let bytes: Vec<u8> = actions.into_iter().flat_map(|a| a.to_bytes()).collect();
         if !bytes.is_empty() {
+            let responses_before = self.response_buffer.len();
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.cap_parsed_responses(responses_before);
             self.finish_applied_actions();
         }
     }

@@ -561,6 +561,17 @@ fn emulator_tracks_input_modes_and_feed_resets_scroll() {
     assert_eq!(emulator.scroll_offset(), 0);
 }
 
+/// SEC-207: a mirror emulator never queues answers or bells on the
+/// pane's behalf — the daemon's PTY session owns both — so the pane's
+/// query and BEL output cannot grow the attach client's memory.
+#[test]
+fn emulator_feed_discards_responses_and_bells() {
+    let mut emulator = PaneEmulator::new(7, 80, 24);
+    emulator.feed(b"\x07\x1b[6n");
+    assert!(!emulator.term.has_pending_responses());
+    assert!(emulator.term.drain_bell_events().is_empty());
+}
+
 /// The mode-aware key re-encode through the renderer's pane terminal:
 /// the pane's DECCKM state decides the arrow spelling (criterion 1's
 /// unit-level pin; the parser-level one is in `attach::input`).

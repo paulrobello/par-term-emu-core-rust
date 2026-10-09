@@ -1286,13 +1286,15 @@ sections; the numbers live here.
 | `MAX_KITTY_APC_BYTES` | 96 MiB | `crates/par-term-emu-core/src/terminal/apc_filter.rs:56` | Bytes one Kitty APC payload may accumulate on the wire (SEC-116) |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `crates/par-term-emu-core/src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
+| `MAX_BELL_EVENTS` | 1,024 | `crates/par-term-emu-core/src/terminal/event_broker.rs:27` | Undrained bell events retained from processed output. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/mod.rs:165` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/mod.rs:167` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:169` | Bytes retained for one queued clipboard sync event. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:173` | Clipboard content bytes accepted from an OSC 52 sequence. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:1022` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:65` | Undrained device-query response bytes retained from processed output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/mod.rs:174` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/mod.rs:176` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:178` | Bytes retained for one queued clipboard sync event. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:182` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:1031` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |

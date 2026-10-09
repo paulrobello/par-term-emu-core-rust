@@ -10,7 +10,7 @@
 
 use crate::observer::{ObserverEntry, ObserverId, TerminalObserver};
 use crate::terminal::{BellEvent, TerminalEvent, TerminalEventKind};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 /// Maximum number of unpolled terminal events retained (ARC-006). Past this,
@@ -20,11 +20,18 @@ use std::sync::Arc;
 /// cap: Unpolled terminal events retained from processed output.
 pub(crate) const MAX_TERMINAL_EVENTS: usize = 10_000;
 
+/// Maximum number of undrained bell events retained (SEC-207). Past this the
+/// oldest bell is dropped, so a BEL flood into a terminal whose host never
+/// drains bells cannot grow memory without bound. `Terminal::bell_count`
+/// still counts every bell.
+/// cap: Undrained bell events retained from processed output.
+pub(crate) const MAX_BELL_EVENTS: usize = 1_024;
+
 /// Terminal event queue, bell queue, observer registry, dispatch index, and
 /// zone/observer ID counters.
 pub(crate) struct EventBroker {
-    /// Bell events buffer
-    bell_events: Vec<BellEvent>,
+    /// Bell events buffer, capped at [`MAX_BELL_EVENTS`]
+    bell_events: VecDeque<BellEvent>,
     /// Terminal events buffer
     pub(super) terminal_events: Vec<TerminalEvent>,
     /// Index of the next event to dispatch to observers (prevents duplicate dispatch)
@@ -42,7 +49,7 @@ pub(crate) struct EventBroker {
 impl Default for EventBroker {
     fn default() -> Self {
         Self {
-            bell_events: Vec::new(),
+            bell_events: VecDeque::new(),
             terminal_events: Vec::new(),
             events_dispatched_up_to: 0,
             observers: Vec::new(),
@@ -61,14 +68,18 @@ impl EventBroker {
     }
 
     /// Queue a bell event (drained separately via [`EventBroker::drain_bells`]).
+    /// At [`MAX_BELL_EVENTS`] the oldest pending bell is dropped first.
     #[inline]
     pub(crate) fn push_bell(&mut self, event: BellEvent) {
-        self.bell_events.push(event);
+        if self.bell_events.len() >= MAX_BELL_EVENTS {
+            self.bell_events.pop_front();
+        }
+        self.bell_events.push_back(event);
     }
 
-    /// Take all pending bell events.
+    /// Take all pending bell events, oldest first.
     pub(crate) fn drain_bells(&mut self) -> Vec<BellEvent> {
-        std::mem::take(&mut self.bell_events)
+        self.bell_events.drain(..).collect()
     }
 
     /// Allocate the next semantic-zone ID.

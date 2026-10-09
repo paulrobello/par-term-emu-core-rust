@@ -2715,6 +2715,67 @@ fn test_bell_events() {
     assert_eq!(term.drain_bell_events().len(), 3);
 }
 
+/// SEC-207: a BEL flood into a terminal nobody drains keeps at most
+/// MAX_BELL_EVENTS pending, while bell_count still counts every bell.
+#[test]
+fn test_bell_events_are_capped_and_bell_count_keeps_the_total() {
+    use crate::terminal::MAX_BELL_EVENTS;
+    let mut term = Terminal::new(80, 24);
+    term.process(&[0x07; 10_000]);
+    assert_eq!(term.drain_bell_events().len(), MAX_BELL_EVENTS);
+    assert_eq!(term.bell_count(), 10_000);
+}
+
+/// SEC-207: a device-query flood into a terminal nobody drains keeps at
+/// most MAX_RESPONSE_BYTES pending — chunked or in one `process` call —
+/// and the replies past the cap are the ones dropped, so the queue still
+/// starts on a reply boundary.
+#[test]
+fn test_response_buffer_is_capped_without_a_drain() {
+    use crate::terminal::MAX_RESPONSE_BYTES;
+    let flood = b"\x1b[6n".repeat(20_000);
+    let mut chunked = Terminal::new(80, 24);
+    for chunk in flood.chunks(4096) {
+        chunked.process(chunk);
+    }
+    let mut whole = Terminal::new(80, 24);
+    whole.process(&flood);
+    for term in [&mut chunked, &mut whole] {
+        let responses = term.drain_responses();
+        assert!(
+            responses.len() <= MAX_RESPONSE_BYTES,
+            "{} bytes pending",
+            responses.len()
+        );
+        assert!(
+            responses.starts_with(b"\x1b[1;1R"),
+            "kept replies are whole"
+        );
+    }
+}
+
+/// SEC-207: the cap bounds what PARSING adds, never embedder pushes. An
+/// iTerm2 upload reply larger than the cap stays intact through a later
+/// parse pass that also queues a reply.
+#[test]
+fn test_response_cap_never_truncates_an_embedder_upload() {
+    use crate::terminal::MAX_RESPONSE_BYTES;
+    use base64::Engine;
+    let mut term = Terminal::new(80, 24);
+    let data = vec![b'a'; 100_000];
+    term.send_upload_data(&data);
+    term.process(b"x\x1b[6n");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    let expected = format!("ok\n{encoded}\n\n").into_bytes();
+    assert!(expected.len() > MAX_RESPONSE_BYTES);
+    // The upload survives whole; the DSR reply that pass generated is the
+    // one dropped, since the queue was already past the cap.
+    assert_eq!(term.drain_responses(), expected);
+    // Once drained, parsing answers normally again.
+    term.process(b"\x1b[6n");
+    assert_eq!(term.drain_responses(), b"\x1b[1;2R");
+}
+
 #[test]
 fn test_mode_introspection() {
     let mut term = Terminal::new(80, 24);
