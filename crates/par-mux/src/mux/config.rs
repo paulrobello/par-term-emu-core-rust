@@ -250,7 +250,8 @@ pub struct ClientSection {
     )]
     pub drag_cursor_shape: Option<bool>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
-    /// = the built-in accent (bright cyan).
+    /// = the built-in accent (bright cyan). Config-file only, like the
+    /// other `[client]` display options.
     #[serde(
         default,
         rename = "border-active-color",
@@ -258,7 +259,7 @@ pub struct ClientSection {
     )]
     pub border_active_color: Option<String>,
     /// Unfocused border/divider color, `#rrggbb` hex. Empty = the
-    /// built-in dim look.
+    /// built-in dim look. Config-file only.
     #[serde(
         default,
         rename = "border-color",
@@ -343,11 +344,13 @@ pub struct EffectiveConfig {
     /// loop re-reads the applied copy every tick, so `reload-config`
     /// applies a changed value without a restart.
     pub exit_empty: bool,
-    /// The focused pane's border/divider highlight, `#rrggbb` hex;
-    /// empty = the built-in accent (bright cyan).
+    /// The focused pane's border/divider highlight (`[client]
+    /// border-active-color`, `#rrggbb` hex); empty = the built-in accent
+    /// (bright cyan). File-only: no attach flag sets it.
     pub border_active_color: String,
-    /// Unfocused border/divider color, `#rrggbb` hex; empty = the
-    /// built-in dim look.
+    /// Unfocused border/divider color (`[client] border-color`,
+    /// `#rrggbb` hex); empty = the built-in dim look. File-only: no
+    /// attach flag sets it.
     pub border_color: String,
 }
 
@@ -390,10 +393,6 @@ pub struct Overrides {
     pub expose_control_socket: Option<bool>,
     /// `$PAR_MUX_SOCKET` (non-empty), the env tier of the socket target.
     pub env_socket: Option<String>,
-    /// `--border-active-color` (attach), the flag tier.
-    pub border_active_color: Option<String>,
-    /// `--border-color` (attach), the flag tier.
-    pub border_color: Option<String>,
 }
 
 /// Merge the tiers: each setting takes the first tier that speaks, ending
@@ -439,18 +438,12 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     if let Some(v) = file.daemon.exit_empty {
         eff.exit_empty = v;
     }
-    if let Some(v) = o
-        .border_active_color
-        .as_ref()
-        .or(file.client.border_active_color.as_ref())
-    {
+    // The border colors are file-only `[client]` options, like every
+    // other client display option.
+    if let Some(v) = file.client.border_active_color.as_ref() {
         eff.border_active_color = v.clone();
     }
-    if let Some(v) = o
-        .border_color
-        .as_ref()
-        .or(file.client.border_color.as_ref())
-    {
+    if let Some(v) = file.client.border_color.as_ref() {
         eff.border_color = v.clone();
     }
     eff
