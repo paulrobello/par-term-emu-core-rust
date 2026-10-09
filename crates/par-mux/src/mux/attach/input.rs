@@ -299,7 +299,11 @@ impl InputParser {
             while i < data.len() {
                 match data[i] {
                     b';' => field = (field + 1).min(2),
-                    b'0'..=b'9' => fields[field] = fields[field] * 10 + u32::from(data[i] - b'0'),
+                    b'0'..=b'9' => {
+                        fields[field] = fields[field]
+                            .saturating_mul(10)
+                            .saturating_add(u32::from(data[i] - b'0'))
+                    }
                     b'M' | b'm' => {
                         release = data[i] == b'm';
                         i += 1;
@@ -572,6 +576,21 @@ mod tests {
         if let Token::Key(ev) = &tokens[0] {
             assert_eq!(ev.modifiers, modifiers::CTRL);
         }
+    }
+
+    #[test]
+    fn sgr_mouse_huge_fields_saturate_instead_of_overflowing() {
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(b"\x1b[<99999999999;99999999999;99999999999M");
+        assert_eq!(
+            tokens,
+            vec![Token::Mouse(SgrMouse {
+                cb: u8::MAX,
+                col: u16::MAX,
+                row: u16::MAX,
+                release: false
+            })]
+        );
     }
 
     #[test]
