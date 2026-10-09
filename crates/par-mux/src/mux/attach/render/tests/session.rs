@@ -1665,3 +1665,155 @@ fn embedded_paste_terminator_is_stripped() {
     );
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"\x1b[200~abc\x1b[201~")]);
 }
+
+/// ARC-122: the ring colors read off the focused pane's right ring
+/// edge (`active`) and the unfocused pane's (`plain`) after the session
+/// re-laid a `{cols/2 | cols/2}` split; `x0` is the panes' left offset
+/// (the side panel's width).
+fn assert_ring_colors(
+    session: &mut WindowSession,
+    x0: u16,
+    cols: u16,
+    active: RtColor,
+    plain: RtColor,
+) {
+    session.renderer.focus(1);
+    session.renderer.render_frame();
+    let half = cols / 2;
+    assert_eq!(
+        session.renderer.cell(x0 + half - 1, 5).expect("c").fg,
+        active,
+        "the focused ring keeps border-active-color"
+    );
+    assert_eq!(
+        session.renderer.cell(x0 + cols - 1, 5).expect("c").fg,
+        plain,
+        "the unfocused ring keeps border-color"
+    );
+}
+
+/// The `%layout-change` a size report of `cols`x`rows` against `%1`
+/// queues: an even two-pane split of `@0`.
+fn two_pane_notify(cols: u16, rows: u16) -> std::collections::HashMap<String, String> {
+    let half = cols / 2;
+    let layout = format!("0000,{cols}x{rows},0,0{{{half}x{rows},0,0,1,{half}x{rows},{half},0,2}}");
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        format!("refresh-client -t %1 -C {cols}x{rows}"),
+        format!("%layout-change @0 {layout} {layout} *"),
+    );
+    notify
+}
+
+/// ARC-122: `with_options` applies every option and `options` reads
+/// them all back — a field one side forgets fails here.
+#[test]
+fn render_options_round_trip_through_the_renderer() {
+    let opts = RenderOptions {
+        bg: Some(RtColor::Rgb(9, 9, 9)),
+        glyphs: Glyphs::Heavy,
+        pane_borders: true,
+        show_label_in_border: true,
+        pane_gaps: 2,
+        scrollbar_gutter: true,
+        sidebar_width: 17,
+        border_active: Some(RtColor::Rgb(1, 2, 3)),
+        border_plain: Some(RtColor::Rgb(4, 5, 6)),
+    };
+    assert_eq!(PaneRenderer::with_options(80, 24, &opts).options(), opts);
+    assert_eq!(
+        PaneRenderer::new(80, 24, Glyphs::Ascii).options(),
+        RenderOptions {
+            glyphs: Glyphs::Ascii,
+            sidebar_width: 0,
+            ..RenderOptions::default()
+        },
+        "new() keeps no side panel"
+    );
+}
+
+/// ARC-122: the session's effective options hide the configured panel
+/// width while the panel is off.
+#[test]
+fn effective_render_opts_zero_the_hidden_sidebar() {
+    let mut session = WindowSession::new(80, 25);
+    assert_eq!(session.render_opts.sidebar_width, 20);
+    assert_eq!(session.effective_render_opts().sidebar_width, 0);
+    session.sidebar_on = true;
+    assert_eq!(session.effective_render_opts().sidebar_width, 20);
+}
+
+/// ARC-122: a host resize rebuilds the renderer; the configured border
+/// colors survive the rebuild (they used to revert to cyan/dim).
+#[test]
+fn border_colors_survive_a_resize_rebuild() {
+    let active = RtColor::Rgb(1, 2, 3);
+    let plain = RtColor::Rgb(4, 5, 6);
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "arc122-resize",
+        FakeScript {
+            notify: two_pane_notify(100, 40),
+            ..FakeScript::default()
+        },
+    );
+    session.set_pane_borders(true);
+    session.set_border_colors(Some(active), Some(plain));
+    session
+        .resize_to(&mut conn, 100, 40, &mut RecordingSink::default())
+        .expect("resize");
+    assert_eq!(session.renderer.layout().len(), 2, "the rebuild re-laid");
+    assert_ring_colors(&mut session, 0, 100, active, plain);
+}
+
+/// ARC-122: a window re-seed rebuilds the renderer too; the colors
+/// survive it.
+#[test]
+fn border_colors_survive_a_reseed_rebuild() {
+    let active = RtColor::Rgb(1, 2, 3);
+    let plain = RtColor::Rgb(4, 5, 6);
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 * main", "@0", "%1\n%2");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "arc122-reseed",
+        FakeScript {
+            replies,
+            notify: two_pane_notify(80, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.set_pane_borders(true);
+    session.set_border_colors(Some(active), Some(plain));
+    session.reseed_window(&mut conn, "@0");
+    assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
+    assert_ring_colors(&mut session, 0, 80, active, plain);
+}
+
+/// ARC-122: toggling the side panel (which parks a refit the pump runs
+/// as a resize rebuild) keeps the colors, and the configured panel
+/// width rides the rebuild.
+#[test]
+fn border_colors_survive_a_sidebar_toggle_refit() {
+    let active = RtColor::Rgb(1, 2, 3);
+    let plain = RtColor::Rgb(4, 5, 6);
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "arc122-sidebar",
+        FakeScript {
+            notify: two_pane_notify(60, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.set_pane_borders(true);
+    session.set_border_colors(Some(active), Some(plain));
+    session.toggle_sidebar(&mut conn);
+    assert!(session.pending_grid_refit);
+    session
+        .resize_to(&mut conn, 80, 23, &mut RecordingSink::default())
+        .expect("refit");
+    assert_eq!(
+        session.renderer.sidebar_width(),
+        20,
+        "the panel width survives"
+    );
+    assert_eq!(session.renderer.layout().len(), 2, "the refit re-laid");
+    assert_ring_colors(&mut session, 20, 60, active, plain);
+}

@@ -437,14 +437,14 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     .map_err(|err| format!("config: {err}"))?;
     session.management = chords.management;
     session.resize_step = chords.resize_step;
-    session.sidebar_width = chords.sidebar_width;
+    session.render_opts.sidebar_width = chords.sidebar_width;
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.
     session.sidebar_on = chords.sidebar_on_launch;
-    if session.sidebar_on {
-        session.renderer.set_sidebar_width(session.sidebar_width);
-    }
+    session
+        .renderer
+        .set_sidebar_width(session.effective_render_opts().sidebar_width);
     // The border style first, the explicit `pane-borders` flag after it —
     // the style implies a paint mode (herdr = per-pane boxes), and the
     // explicit config key still overrides for any glyph set.
@@ -460,7 +460,7 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     if let Some(on) = file.client.pane_borders {
         session.set_pane_borders(on);
     } else {
-        session.set_pane_borders(matches!(session.border_glyphs, Glyphs::Herdr));
+        session.set_pane_borders(matches!(session.render_opts.glyphs, Glyphs::Herdr));
     }
     session.set_show_label_in_border(chords.show_label_in_border);
     session.set_pane_gaps(chords.pane_gaps);
@@ -607,34 +607,22 @@ struct WindowSession {
     picker_workspaces: Option<Vec<(String, String, bool)>>,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
-    /// The session's resolved background (the OSC 11 probe result), kept
-    /// OUTSIDE the renderer so a re-seed or resize re-fit — which rebuild
-    /// the renderer — re-applies it instead of silently dropping back to
-    /// the terminal-default fill (the round-3 prefix n/p black band).
-    bg: Option<RtColor>,
-    /// The session's pane-border display options (config), session-level
-    /// like the background so renderer reconstruction re-applies them.
-    pane_borders: bool,
-    show_label_in_border: bool,
-    /// The herdr-parity display options (config), session-level like the
-    /// background so renderer reconstruction re-applies them.
-    pane_gaps: u16,
-    scrollbar_gutter: bool,
-    /// The side panel's state (config `sidebar-width`, toggled by the
-    /// `sidebar` chord), session-level like the background so renderer
-    /// reconstruction re-applies it.
+    /// The session's configured display options (background probe,
+    /// glyphs, pane chrome, side-panel width, border colors), kept
+    /// OUTSIDE the renderer: every renderer rebuild (resize re-fit,
+    /// re-seed) constructs from [`Self::effective_render_opts`], so no
+    /// option can be dropped by a rebuild. Setters update this first,
+    /// then the live renderer.
+    render_opts: RenderOptions,
+    /// Whether the side panel is shown (toggled by the `sidebar`
+    /// chord); its width is `render_opts.sidebar_width`.
     sidebar_on: bool,
-    sidebar_width: u16,
     /// The pump refits the grid (resize_to + full repaint) on the next
     /// loop — set by the sidebar toggle, whose chord has no sink.
     pending_grid_refit: bool,
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     drag_cursor_shape: bool,
-    /// The divider/border glyph set (config `border-lines`, cycled live
-    /// by the border chord), session-level like the background so
-    /// renderer reconstruction re-applies it.
-    border_glyphs: Glyphs,
     /// The zoom cue (the daemon's `resize-pane -Z` state, as the chord
     /// last saw it) — bolds a ` Z |` head on the status row. The daemon
     /// holds the truth; a window switch resets the cue.
@@ -743,7 +731,11 @@ impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
         Self {
             window: String::new(),
-            renderer: PaneRenderer::new(cols, rows.saturating_sub(2), Glyphs::Unicode),
+            renderer: PaneRenderer::new(
+                cols,
+                rows.saturating_sub(2),
+                RenderOptions::default().glyphs,
+            ),
             pending_layout: None,
             pending_follow_window: None,
             pending_follow_session: None,
@@ -771,16 +763,10 @@ impl WindowSession {
             picker_panel_len: 0,
             picker_workspaces: None,
             drag: None,
-            bg: None,
-            pane_borders: false,
-            show_label_in_border: false,
-            pane_gaps: 0,
-            scrollbar_gutter: false,
+            render_opts: RenderOptions::default(),
             sidebar_on: false,
-            sidebar_width: 20,
             pending_grid_refit: false,
             drag_cursor_shape: false,
-            border_glyphs: Glyphs::Unicode,
             zoomed: false,
             daemon_layout: Vec::new(),
             prompt_mode: false,

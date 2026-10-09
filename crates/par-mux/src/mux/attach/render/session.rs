@@ -122,13 +122,41 @@ pub(super) fn marked_pane_of(
 }
 
 impl WindowSession {
-    /// Record the session's resolved background: the renderer carries it
-    /// AND the session keeps a copy so renderer reconstruction (re-seed,
-    /// resize re-fit) re-applies at the next paint. `None` = the probe
-    /// failed; the fill stays terminal-default.
+    /// The display options a renderer built NOW paints with: the
+    /// configured [`RenderOptions`], the side-panel width zeroed while
+    /// the panel is hidden.
+    pub(super) fn effective_render_opts(&self) -> RenderOptions {
+        RenderOptions {
+            sidebar_width: if self.sidebar_on {
+                self.render_opts.sidebar_width
+            } else {
+                0
+            },
+            ..self.render_opts.clone()
+        }
+    }
+
+    /// Replace the renderer with a fresh one over `cols` x `rows`,
+    /// built from the session's effective options — the one rebuild
+    /// path (resize re-fit, re-seed), so no display option can be lost
+    /// across a rebuild.
+    pub(super) fn rebuild_renderer(&mut self, cols: u16, rows: u16) {
+        self.renderer = PaneRenderer::with_options(cols, rows, &self.effective_render_opts());
+    }
+
+    /// Record the session's resolved background (the renderer paints
+    /// it; the session's options keep it across rebuilds). `None` = the
+    /// probe failed; the fill stays terminal-default.
     pub(super) fn set_background(&mut self, bg: Option<RtColor>) {
-        self.bg = bg;
+        self.render_opts.bg = bg;
         self.renderer.set_background(bg);
+    }
+
+    /// Set the divider/border glyph set (the `border-lines` config and
+    /// the border-cycle chord).
+    pub(super) fn set_glyphs(&mut self, glyphs: Glyphs) {
+        self.render_opts.glyphs = glyphs;
+        self.renderer.set_glyphs(glyphs);
     }
 
     /// Apply the config `border-lines` spelling to the session's glyph
@@ -143,8 +171,7 @@ impl WindowSession {
             "herdr" => Glyphs::Herdr,
             _ => return false,
         };
-        self.border_glyphs = glyphs;
-        self.renderer.set_glyphs(glyphs);
+        self.set_glyphs(glyphs);
         // The style owns the paint mode: herdr draws every pane its own
         // complete box, the rest the shared dividers. Applied before the
         // config's explicit `pane-borders` at the init/reload sites, so
@@ -155,13 +182,12 @@ impl WindowSession {
 
     /// The session's pane-border mode (config `pane-borders`): each pane
     /// renders its own complete box with the content inset by the border
-    /// cells, replacing the shared-divider look. Session-level like the
-    /// background so renderer reconstruction re-applies it.
+    /// cells, replacing the shared-divider look.
     pub(super) fn set_pane_borders(&mut self, on: bool) {
-        if self.pane_borders != on {
+        if self.render_opts.pane_borders != on {
             self.chrome_changed();
         }
-        self.pane_borders = on;
+        self.render_opts.pane_borders = on;
         self.renderer.set_pane_borders(on);
     }
 
@@ -197,36 +223,36 @@ impl WindowSession {
 
     /// The session's border colors (config `border-active-color` /
     /// `border-color`, `#rrggbb` hex; `None` keeps the built-ins).
-    /// Session-level like the background so renderer reconstruction
-    /// re-applies it.
     pub(super) fn set_border_colors(&mut self, active: Option<RtColor>, plain: Option<RtColor>) {
+        self.render_opts.border_active = active;
+        self.render_opts.border_plain = plain;
         self.renderer.set_border_colors(active, plain);
     }
 
     /// The session's label-in-border mode (config `show-label-in-border`):
     /// each pane's user title renders embedded in its top border edge.
     pub(super) fn set_show_label_in_border(&mut self, on: bool) {
-        self.show_label_in_border = on;
+        self.render_opts.show_label_in_border = on;
         self.renderer.set_show_label_in_border(on);
     }
 
     /// The session's gap-band mode (config `pane-gaps`): theme-bg gap
     /// bands between panes, the renderer insetting each pane's rect.
     pub(super) fn set_pane_gaps(&mut self, gaps: u16) {
-        if self.pane_gaps != gaps {
+        if self.render_opts.pane_gaps != gaps {
             self.chrome_changed();
         }
-        self.pane_gaps = gaps;
+        self.render_opts.pane_gaps = gaps;
         self.renderer.set_pane_gaps(gaps);
     }
 
     /// The session's scrollbar-gutter mode (config `scrollbar-gutter`):
     /// a right-edge gutter column reserved in every pane rect.
     pub(super) fn set_scrollbar_gutter(&mut self, on: bool) {
-        if self.scrollbar_gutter != on {
+        if self.render_opts.scrollbar_gutter != on {
             self.chrome_changed();
         }
-        self.scrollbar_gutter = on;
+        self.render_opts.scrollbar_gutter = on;
         self.renderer.set_scrollbar_gutter(on);
     }
 
@@ -483,21 +509,8 @@ impl WindowSession {
         }
         // Reconstruct FIRST: the report below reads the fresh renderer's
         // window_size (the new host grid less the side panel), and the
-        // reconstruction re-applies the panel width it depends on.
-        self.renderer = PaneRenderer::new(cols, rows, self.border_glyphs);
-        // Same reconstruction reset as reseed_window: re-apply the theme
-        // and display options the fresh renderer dropped.
-        self.renderer.set_background(self.bg);
-        self.renderer.set_pane_borders(self.pane_borders);
-        self.renderer
-            .set_show_label_in_border(self.show_label_in_border);
-        self.renderer.set_pane_gaps(self.pane_gaps);
-        self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
-        self.renderer.set_sidebar_width(if self.sidebar_on {
-            self.sidebar_width
-        } else {
-            0
-        });
+        // reconstruction carries the panel width it depends on.
+        self.rebuild_renderer(cols, rows);
         let report = self.size_report(conn, &pane);
         conn.send_checked(&report)
             .map_err(|err| format!("resize report failed: {err}"))?;

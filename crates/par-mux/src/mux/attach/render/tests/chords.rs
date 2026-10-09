@@ -253,12 +253,15 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     );
     for expected in ["double", "heavy", "ascii"] {
         chord(&mut session, &mut conn, b'B');
-        assert_eq!(session.border_glyphs.name(), expected);
-        assert!(!session.pane_borders, "{expected}: shared dividers");
+        assert_eq!(session.render_opts.glyphs.name(), expected);
+        assert!(
+            !session.render_opts.pane_borders,
+            "{expected}: shared dividers"
+        );
     }
     chord(&mut session, &mut conn, b'B');
-    assert_eq!(session.border_glyphs, Glyphs::Herdr);
-    assert!(session.pane_borders && session.renderer.pane_borders);
+    assert_eq!(session.render_opts.glyphs, Glyphs::Herdr);
+    assert!(session.render_opts.pane_borders && session.renderer.pane_borders);
     assert_eq!(session.flash.as_deref(), Some("border style: herdr"));
     session.reseed_window(&mut conn, "@0");
     assert!(
@@ -266,7 +269,11 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
         "the rebuilt renderer keeps the herdr boxes"
     );
     chord(&mut session, &mut conn, b'B');
-    assert_eq!(session.border_glyphs, Glyphs::Unicode, "the cycle wraps");
+    assert_eq!(
+        session.render_opts.glyphs,
+        Glyphs::Unicode,
+        "the cycle wraps"
+    );
     assert!(!session.renderer.pane_borders);
 }
 
@@ -302,7 +309,7 @@ fn border_toggle_redeclares_chrome_on_the_next_size_report() {
         },
     );
     session.set_border_lines("herdr");
-    assert!(session.pane_borders);
+    assert!(session.render_opts.pane_borders);
     let mut sink = RecordingSink::default();
     session
         .resize_to(&mut conn, 80, 23, &mut sink)
@@ -315,7 +322,7 @@ fn border_toggle_redeclares_chrome_on_the_next_size_report() {
 
     // herdr -> unicode: the ring goes away and a refit is parked.
     chord(&mut session, &mut conn, b'B');
-    assert!(!session.pane_borders);
+    assert!(!session.render_opts.pane_borders);
     assert!(
         session.pending_grid_refit,
         "the chrome change parks a refit"
@@ -361,10 +368,10 @@ fn toggle_chords_flip_their_state_and_park_refits() {
         },
     );
     chord(&mut session, &mut conn, b'l');
-    assert!(session.show_label_in_border);
+    assert!(session.render_opts.show_label_in_border);
     assert_eq!(session.flash.as_deref(), Some("labels on"));
     chord(&mut session, &mut conn, b'l');
-    assert!(!session.show_label_in_border);
+    assert!(!session.render_opts.show_label_in_border);
     assert_eq!(session.flash.as_deref(), Some("labels off"));
 
     chord(&mut session, &mut conn, b'S');

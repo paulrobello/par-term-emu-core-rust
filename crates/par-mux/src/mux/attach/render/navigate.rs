@@ -164,16 +164,16 @@ impl WindowSession {
                 self.draw_status_row();
             }
             super::super::ManagementKey::BorderCycle => {
-                self.border_glyphs = self.border_glyphs.next();
-                self.renderer.set_glyphs(self.border_glyphs);
+                let glyphs = self.render_opts.glyphs.next();
+                self.set_glyphs(glyphs);
                 // herdr style: every pane draws its own complete box, not
                 // the shared dividers — the style owns the paint mode.
                 // Through the session-level setter: the chord used to
                 // flip the renderer's flag only, so every re-seed (a
                 // split is one) restored the session flag and reverted
                 // the boxes to shared dividers (the manual-pass report).
-                self.set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr));
-                self.flash = Some(format!("border style: {}", self.border_glyphs.name()));
+                self.set_pane_borders(matches!(glyphs, Glyphs::Herdr));
+                self.flash = Some(format!("border style: {}", glyphs.name()));
                 self.draw_status_row();
             }
             super::super::ManagementKey::WorkspacePicker => {
@@ -186,7 +186,7 @@ impl WindowSession {
                 // Toggle each pane's title in its border: the session's
                 // bool flips, the flash cue confirms the new state, and
                 // the next frame repaints the borders.
-                let on = !self.show_label_in_border;
+                let on = !self.render_opts.show_label_in_border;
                 self.set_show_label_in_border(on);
                 self.flash = Some(if on { "labels on" } else { "labels off" }.to_string());
                 self.draw_status_row();
@@ -317,13 +317,13 @@ impl WindowSession {
                 reload: self.reload_key,
                 management: self.management,
                 resize_step: self.resize_step,
-                pane_borders: self.pane_borders,
-                show_label_in_border: self.show_label_in_border,
-                pane_gaps: self.pane_gaps,
-                scrollbar_gutter: self.scrollbar_gutter,
+                pane_borders: self.render_opts.pane_borders,
+                show_label_in_border: self.render_opts.show_label_in_border,
+                pane_gaps: self.render_opts.pane_gaps,
+                scrollbar_gutter: self.render_opts.scrollbar_gutter,
                 drag_cursor_shape: self.drag_cursor_shape,
-                border_lines: self.border_glyphs.name().to_string(),
-                sidebar_width: self.sidebar_width,
+                border_lines: self.render_opts.glyphs.name().to_string(),
+                sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: resolved for the shape, never applied to
                 // the live panel below.
                 sidebar_on_launch: self.sidebar_on,
@@ -338,7 +338,7 @@ impl WindowSession {
                     self.flash = Some(format!(
                         "border-lines {:?} unknown — using {}",
                         chords.border_lines,
-                        self.border_glyphs.name()
+                        self.render_opts.glyphs.name()
                     ));
                 }
                 // An explicit `pane-borders` key survives every reload;
@@ -348,7 +348,7 @@ impl WindowSession {
                 // key decides.
                 match file.client.pane_borders {
                     Some(on) => self.set_pane_borders(on),
-                    None => self.set_pane_borders(matches!(self.border_glyphs, Glyphs::Herdr)),
+                    None => self.set_pane_borders(matches!(self.render_opts.glyphs, Glyphs::Herdr)),
                 }
                 self.set_pane_gaps(chords.pane_gaps);
                 self.set_scrollbar_gutter(chords.scrollbar_gutter);
@@ -537,26 +537,12 @@ impl WindowSession {
         // then shrinking again (the manual-pass click-shrinks-the-panes
         // report).
         let (host_cols, host_rows) = self.renderer.frame_size();
-        self.renderer = PaneRenderer::new(host_cols, host_rows, self.border_glyphs);
-        // Renderer reconstruction resets the theme and display options:
-        // re-apply the session's resolved background and pane-border/
-        // label flags so a re-seed does not paint a black band or drop
-        // the border mode (the round-3 prefix n/p defects).
-        self.renderer.set_background(self.bg);
-        self.renderer.set_pane_borders(self.pane_borders);
-        self.renderer
-            .set_show_label_in_border(self.show_label_in_border);
-        self.renderer.set_pane_gaps(self.pane_gaps);
-        self.renderer.set_scrollbar_gutter(self.scrollbar_gutter);
-        // The side panel is renderer state too: without its width the
-        // fresh renderer reports a FULL-width grid on the next size
-        // report and paints panes unshifted under the panel (the
-        // manual-pass split-while-panel-open reports).
-        self.renderer.set_sidebar_width(if self.sidebar_on {
-            self.sidebar_width
-        } else {
-            0
-        });
+        // The rebuild carries every session display option (background,
+        // borders, labels, chrome, the side panel's effective width,
+        // border colors): a hand re-apply list here dropped options three
+        // times before (the round-3 prefix n/p black band and border
+        // mode, the split-while-panel-open width, ARC-122's colors).
+        self.rebuild_renderer(host_cols, host_rows);
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }

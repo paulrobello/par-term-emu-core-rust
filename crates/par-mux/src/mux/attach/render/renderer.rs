@@ -333,9 +333,77 @@ pub(super) fn write_color(out: &mut String, color: RtColor, fg: bool) {
     }
 }
 
+/// Every display option a [`PaneRenderer`] paints with — the one value
+/// a renderer rebuild (host resize, sidebar refit, window re-seed)
+/// reconstructs from, so an option added here survives every rebuild
+/// without a per-site re-apply list. The session owns the configured
+/// value; [`PaneRenderer::with_options`] applies it whole.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RenderOptions {
+    /// The host background fill (the OSC 11 probe; `None` = terminal
+    /// default).
+    pub bg: Option<RtColor>,
+    /// The divider/border glyph set (config `border-lines`).
+    pub glyphs: Glyphs,
+    /// Per-pane border boxes (config `pane-borders`).
+    pub pane_borders: bool,
+    /// The pane title embedded in its top border (config
+    /// `show-label-in-border`).
+    pub show_label_in_border: bool,
+    /// Theme-bg gap bands per pane side (config `pane-gaps`).
+    pub pane_gaps: u16,
+    /// A reserved right-edge gutter column (config `scrollbar-gutter`).
+    pub scrollbar_gutter: bool,
+    /// The side panel's width. In the session's stored value this is
+    /// the CONFIGURED width (config `sidebar-width`); the session's
+    /// effective options zero it while the panel is hidden, and the
+    /// renderer paints exactly what it is given.
+    pub sidebar_width: u16,
+    /// The focused border color (config `border-active-color`; `None`
+    /// = the bright-cyan built-in).
+    pub border_active: Option<RtColor>,
+    /// The unfocused border color (config `border-color`; `None` = the
+    /// dim built-in).
+    pub border_plain: Option<RtColor>,
+}
+
+impl Default for RenderOptions {
+    /// The session's pre-config defaults: unicode dividers, no chrome,
+    /// a 20-column side panel when shown, built-in colors.
+    fn default() -> Self {
+        Self {
+            bg: None,
+            glyphs: Glyphs::Unicode,
+            pane_borders: false,
+            show_label_in_border: false,
+            pane_gaps: 0,
+            scrollbar_gutter: false,
+            sidebar_width: 20,
+            border_active: None,
+            border_plain: None,
+        }
+    }
+}
+
 impl PaneRenderer {
-    /// A renderer over a `width` x `height` window with no layout yet.
+    /// A renderer over a `width` x `height` window with no layout yet,
+    /// default display options, and no side panel.
     pub fn new(width: u16, height: u16, glyphs: Glyphs) -> Self {
+        Self::with_options(
+            width,
+            height,
+            &RenderOptions {
+                glyphs,
+                sidebar_width: 0,
+                ..RenderOptions::default()
+            },
+        )
+    }
+
+    /// A renderer over a `width` x `height` window with no layout yet,
+    /// painting with `options` (its `sidebar_width` taken as the
+    /// effective panel width).
+    pub(crate) fn with_options(width: u16, height: u16, options: &RenderOptions) -> Self {
         let area = RtRect::new(0, 0, width, height);
         Self {
             emulators: HashMap::new(),
@@ -343,23 +411,40 @@ impl PaneRenderer {
             focused: None,
             width,
             height,
-            sidebar_w: 0,
+            sidebar_w: options.sidebar_width,
             sidebar_sections: None,
             user_titles: HashMap::new(),
-            glyphs,
-            bg: None,
+            glyphs: options.glyphs,
+            bg: options.bg,
             drag_divider: None,
             overlay: None,
-            pane_borders: false,
-            show_label_in_border: false,
-            pane_gaps: 0,
-            scrollbar_gutter: false,
+            pane_borders: options.pane_borders,
+            show_label_in_border: options.show_label_in_border,
+            pane_gaps: options.pane_gaps,
+            scrollbar_gutter: options.scrollbar_gutter,
             reserved_chrome: false,
             buffer: Buffer::empty(area),
             prev_buffer: Buffer::empty(area),
-            border_active: None,
-            border_plain: None,
+            border_active: options.border_active,
+            border_plain: options.border_plain,
             dirty: true,
+        }
+    }
+
+    /// The display options this renderer currently paints with (the
+    /// sidebar width is the effective one).
+    #[cfg(test)]
+    pub(crate) fn options(&self) -> RenderOptions {
+        RenderOptions {
+            bg: self.bg,
+            glyphs: self.glyphs,
+            pane_borders: self.pane_borders,
+            show_label_in_border: self.show_label_in_border,
+            pane_gaps: self.pane_gaps,
+            scrollbar_gutter: self.scrollbar_gutter,
+            sidebar_width: self.sidebar_w,
+            border_active: self.border_active,
+            border_plain: self.border_plain,
         }
     }
 
