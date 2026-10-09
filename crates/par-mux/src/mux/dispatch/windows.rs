@@ -264,12 +264,15 @@ fn session_window_rows(guard: &MuxTree, session: &crate::mux::tree::MuxSession) 
         .iter()
         .enumerate()
         .map(|(index, window_id)| {
-            let marker = if index == session.active { '*' } else { '-' };
-            let name = guard
-                .window(*window_id)
-                .map(|w| w.name.as_str())
-                .unwrap_or_default();
-            format!("{window_id} {marker} {name}")
+            crate::mux::ipc::WindowRow {
+                id: window_id.to_string(),
+                active: index == session.active,
+                name: guard
+                    .window(*window_id)
+                    .map(|w| w.name.clone())
+                    .unwrap_or_default(),
+            }
+            .to_string()
         })
         .collect()
 }

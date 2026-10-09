@@ -20,6 +20,7 @@
 
 use super::conn::AttachConn;
 use super::spell_key;
+use crate::mux::ipc::{AgentRow, WindowRow};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -160,20 +161,15 @@ impl StatusState {
         self.session_id = Some(session_id);
         self.windows = window_rows
             .iter()
-            .filter_map(|line| {
-                let id = line.split_whitespace().next()?;
-                // The name is the line remainder after "id marker".
-                let rest = line
-                    .split_whitespace()
-                    .skip(2)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let name = if rest.is_empty() {
-                    id.to_string()
+            .filter_map(|line| WindowRow::parse(line))
+            // An unnamed window shows its id.
+            .map(|row| {
+                let name = if row.name.trim().is_empty() {
+                    row.id.clone()
                 } else {
-                    rest
+                    row.name.split_whitespace().collect::<Vec<_>>().join(" ")
                 };
-                Some((id.to_string(), name))
+                (row.id, name)
             })
             .collect();
         self.active_window = super::targets::active_window_row(&window_rows)
@@ -188,13 +184,8 @@ impl StatusState {
         if let Some(body) = status_query(conn, "list-agents")? {
             self.agents = body
                 .iter()
-                .filter_map(|line| {
-                    let mut fields = line.split_whitespace();
-                    let _pane = fields.next()?;
-                    let agent = fields.next()?.to_string();
-                    let state = fields.next()?.to_string();
-                    Some((agent, state))
-                })
+                .filter_map(|line| AgentRow::parse(line))
+                .map(|row| (row.agent, row.state))
                 .collect();
         }
         Ok(rows)
@@ -214,20 +205,21 @@ impl StatusState {
             let Some(body) = status_query(conn, "list-windows -a")? else {
                 return Err(StatusError::Query);
             };
-            let owner = body.iter().find_map(|line| {
-                let mut fields = line.split_whitespace();
-                let session = fields.next()?;
-                (fields.next() == Some(window)).then(|| session.to_string())
+            // `-a` rows are `$S ` + a `-t` row.
+            let tagged: Vec<(&str, &str)> = body
+                .iter()
+                .filter_map(|line| line.split_once(' '))
+                .collect();
+            let owner = tagged.iter().find_map(|(session, row)| {
+                (WindowRow::parse(row)?.id == window).then(|| session.to_string())
             });
             let Some(owner) = owner else {
                 return Err(StatusError::SessionGone);
             };
-            let rows = body
+            let rows = tagged
                 .iter()
-                .filter_map(|line| {
-                    let (session, row) = line.split_once(' ')?;
-                    (session == owner).then(|| row.to_string())
-                })
+                .filter(|(session, _)| *session == owner)
+                .map(|(_, row)| row.to_string())
                 .collect();
             return Ok((owner, rows));
         }
@@ -237,7 +229,7 @@ impl StatusState {
             };
             if body
                 .iter()
-                .any(|line| line.split_whitespace().next() == Some(window))
+                .any(|line| WindowRow::parse(line).is_some_and(|row| row.id == window))
             {
                 return Ok((id.clone(), body));
             }
