@@ -1362,6 +1362,11 @@ Immutable snapshot of screen state.
 - `lines -> list`: List of screen lines (each line is a list of `(char, fg_rgb, bg_rgb, Attributes)` tuples)
 - `cursor_pos -> tuple[int, int]`: Cursor position `(col, row)` at snapshot time
 - `size -> tuple[int, int]`: Terminal dimensions `(cols, rows)`
+- `wrapped_lines -> list[bool]`: Per-line wrap state (`True` means the line continues on the next row)
+- `cursor_visible -> bool`: Cursor visibility at snapshot time
+- `cursor_style -> CursorStyle`: Cursor style at snapshot time
+- `is_alt_screen -> bool`: `True` if the alternate screen was active
+- `generation -> int`: Terminal generation counter at snapshot time
 
 **Methods:**
 - `get_line(row: int) -> list`: Get a single line's cell data (filtered for control characters)
@@ -1406,20 +1411,17 @@ Notification event information.
 Session recording metadata.
 
 **Properties:**
-- `start_time: int`: Recording start timestamp (milliseconds)
+- `created_at: int`: Recording start time (Unix epoch milliseconds)
 - `initial_size: tuple[int, int]`: Initial terminal dimensions (cols, rows)
 - `duration: int`: Recording duration in milliseconds
 - `event_count: int`: Number of recorded events
 - `title: str | None`: Session title
+- `events: list[RecordingEvent]`: All recorded events
+- `env: dict[str, str]`: Environment variables captured during recording
 
 **Methods:**
 - `get_size() -> tuple[int, int]`: Get recording size (cols, rows)
 - `get_duration_seconds() -> float`: Get recording duration in seconds
-
-**Additional properties:**
-- `created_at: int`: Recording creation timestamp (milliseconds)
-- `events: list[RecordingEvent]`: All recorded events
-- `env: dict[str, str]`: Environment variables captured during recording
 
 ### RecordingEvent
 
@@ -1499,21 +1501,24 @@ Event in a macro recording.
 Result from a single benchmark test.
 
 **Properties:**
+- `category: str`: Benchmark category (e.g. `"parsing"`, `"rendering"`)
 - `name: str`: Benchmark name
-- `duration_ms: int`: Test duration in milliseconds
 - `iterations: int`: Number of iterations performed
+- `total_time_us: int`: Total benchmark time in microseconds
+- `avg_time_us: int`: Average iteration time in microseconds
+- `min_time_us: int`: Fastest iteration time in microseconds
+- `max_time_us: int`: Slowest iteration time in microseconds
 - `ops_per_sec: float`: Operations per second
-- `avg_time_us: float`: Average time per operation in microseconds
+- `memory_bytes: int | None`: Peak memory used during the benchmark, in bytes (if measured)
 
 ### BenchmarkSuite
 
 Results from comprehensive benchmark suite.
 
 **Properties:**
-- `rendering: BenchmarkResult`: Rendering benchmark results
-- `parsing: BenchmarkResult`: Parsing benchmark results
-- `grid_ops: BenchmarkResult`: Grid operations benchmark results
-- `total_duration_ms: int`: Total suite duration in milliseconds
+- `suite_name: str`: Suite name
+- `results: list[BenchmarkResult]`: Individual benchmark results
+- `total_time_ms: int`: Total suite wall time in milliseconds
 
 ### ComplianceTest
 
@@ -1521,20 +1526,23 @@ Individual VT compliance test result.
 
 **Properties:**
 - `name: str`: Test name
+- `category: str`: Test category
 - `passed: bool`: Whether test passed
-- `description: str`: Test description
-- `expected: str | None`: Expected behavior
-- `actual: str | None`: Actual behavior
+- `expected: str`: Expected value
+- `actual: str`: Actual value
+- `notes: str | None`: Additional notes about the test
 
 ### ComplianceReport
 
 Complete VT compliance test report.
 
 **Properties:**
-- `total_tests: int`: Total number of tests
-- `passed_tests: int`: Number of passed tests
-- `failed_tests: int`: Number of failed tests
+- `terminal_info: str`: Description of the terminal under test
+- `level: str`: VT conformance level tested against
 - `tests: list[ComplianceTest]`: Individual test results
+- `passed: int`: Number of passed tests
+- `failed: int`: Number of failed tests
+- `compliance_percent: float`: Percentage of tests passed (0.0-100.0)
 
 ### CommandExecution
 
@@ -1556,7 +1564,7 @@ Command execution record from shell integration.
 Working directory change event.
 
 **Properties:**
-- `cwd: str`: New working directory path
+- `new_cwd: str`: New working directory path
 - `old_cwd: str | None`: Previous working directory (if any)
 - `hostname: str | None`: Hostname associated with the new path (None for localhost)
 - `username: str | None`: Username from `user@host` portion of OSC 7 (if provided)
@@ -1567,10 +1575,10 @@ Working directory change event.
 Screen region that needs redrawing.
 
 **Properties:**
-- `x: int`: X coordinate
-- `y: int`: Y coordinate
-- `width: int`: Region width
-- `height: int`: Region height
+- `left: int`: Left column (inclusive)
+- `top: int`: Top row (inclusive)
+- `right: int`: Right column (exclusive)
+- `bottom: int`: Bottom row (exclusive)
 
 ### DetectedItem
 
@@ -1650,7 +1658,7 @@ Logical line formed by joining wrapped lines.
 - `text: str`: Combined text content
 - `start_row: int`: Starting row
 - `end_row: int`: Ending row
-- `line_count: int`: Number of physical lines
+- `lines_joined: int`: Number of physical rows joined
 
 ### LineDiff
 
@@ -1818,8 +1826,8 @@ Shell integration statistics.
 - `total_commands: int`: Total commands executed
 - `successful_commands: int`: Commands with exit code 0
 - `failed_commands: int`: Commands with non-zero exit code
-- `avg_command_duration_ms: float`: Average command duration
-- `cwd_changes: int`: Number of directory changes
+- `avg_duration_ms: float`: Average command duration in milliseconds
+- `total_duration_ms: int`: Total command time in milliseconds
 
 ### SnapshotDiff
 
@@ -1866,6 +1874,7 @@ A registered trigger pattern.
 - `name: str`: Trigger name
 - `pattern: str`: Regex pattern string
 - `enabled: bool`: Whether the trigger is active
+- `fire_once_per_line: bool`: Whether the trigger fires at most once per line
 - `match_count: int`: Number of times this trigger has matched
 
 ### TriggerAction
@@ -1920,6 +1929,10 @@ Unicode standard version for character width tables.
 - `UnicodeVersion.Unicode16`: Unicode 16.0 (latest pinned)
 - `UnicodeVersion.Auto`: Use the latest available Unicode version (default)
 
+**Methods:**
+- `version_string() -> str`: Human-readable version string
+- `is_auto() -> bool`: Whether this is the `Auto` setting
+
 ### AmbiguousWidth
 
 Treatment of East Asian Ambiguous-width characters.
@@ -1927,6 +1940,11 @@ Treatment of East Asian Ambiguous-width characters.
 **Values:**
 - `AmbiguousWidth.Narrow`: Treat ambiguous as narrow (1 cell) — Western/default behavior
 - `AmbiguousWidth.Wide`: Treat ambiguous as wide (2 cells) — CJK terminal behavior
+
+**Methods:**
+- `width() -> int`: Cell width for ambiguous characters (1 or 2)
+- `is_narrow() -> bool`: Whether this is the `Narrow` setting
+- `is_wide() -> bool`: Whether this is the `Wide` setting
 
 ### WidthConfig
 
@@ -1937,8 +1955,8 @@ Character width configuration combining Unicode version and ambiguous-width trea
 - `ambiguous_width: AmbiguousWidth`: Treatment of ambiguous characters (default: Narrow)
 
 **Static constructors:**
-- `WidthConfig.cjk() -> WidthConfig`: CJK defaults (wide ambiguous)
-- `WidthConfig.western() -> WidthConfig`: Western defaults (narrow ambiguous)
+- `cjk() -> WidthConfig`: CJK defaults (wide ambiguous), called as `WidthConfig.cjk()`
+- `western() -> WidthConfig`: Western defaults (narrow ambiguous), called as `WidthConfig.western()`
 
 ### CoprocessConfig
 
@@ -1975,54 +1993,53 @@ HSV color representation.
 
 ### ColorPalette
 
-Terminal color palette.
+Generated color palette.
 
 **Properties:**
-- `ansi_colors: list[tuple[int, int, int]]`: 16 ANSI colors (RGB)
-- `default_fg: tuple[int, int, int]`: Default foreground color
-- `default_bg: tuple[int, int, int]`: Default background color
-- `cursor_color: tuple[int, int, int]`: Cursor color
+- `base: tuple[int, int, int]`: Base color the palette was generated from (RGB)
+- `colors: list[tuple[int, int, int]]`: Generated palette colors (RGB)
+- `mode: str`: Palette generation mode
 
 ### Bookmark
 
 Terminal bookmark.
 
 **Properties:**
-- `row: int`: Bookmarked row
-- `label: str | None`: Optional label
-- `timestamp: int`: Creation timestamp (Unix timestamp in seconds)
+- `id: int`: Bookmark ID
+- `row: int`: Row index (negative for scrollback, 0+ for the visible screen)
+- `label: str`: Bookmark label
 
 ### ClipboardHistoryEntry
 
 Clipboard history entry with sync metadata.
 
 **Properties:**
-- `slot: str`: Clipboard slot name
+- `target: str`: Clipboard target this entry came from
 - `content: str`: Clipboard content
-- `timestamp: int`: Entry timestamp (Unix timestamp in seconds)
-- `source: str`: Source of clipboard change
+- `timestamp: int`: Capture time (Unix epoch milliseconds)
+- `source: str | None`: Optional origin description
 
 ### ClipboardSyncEvent
 
 Clipboard synchronization event.
 
 **Properties:**
-- `slot: str`: Clipboard slot
-- `content: str`: Synced content
-- `timestamp: int`: Sync timestamp (Unix timestamp in seconds)
-- `direction: str`: Sync direction ("to_system", "from_system")
+- `target: str`: Clipboard target (e.g. `"system"`, `"terminal"`)
+- `operation: str`: Sync operation kind (e.g. `"set"`, `"request"`)
+- `content: str | None`: Clipboard content (`None` for clears and requests)
+- `is_write: bool`: `True` for writes, `False` for reads
+- `timestamp: int`: Event time (Unix epoch milliseconds)
+- `is_remote: bool`: `True` if the sync originated from a remote host
 
 ### SearchMatch
 
-Text search match result (alias for RegexMatch with additional context).
+Text search match result.
 
 **Properties:**
-- `start_col: int`: Match start column
-- `start_row: int`: Match start row
-- `end_col: int`: Match end column
-- `end_row: int`: Match end row
+- `row: int`: Row index (negative for scrollback, 0+ for the visible screen)
+- `col: int`: Match start column
+- `length: int`: Length of the match
 - `text: str`: Matched text
-- `line_context: str | None`: Context line containing match
 
 ## Enumerations
 

@@ -19,6 +19,9 @@ subsections are checked bidirectionally against the stub's properties:
 every documented name must be a stub property, and every stub property of
 a class that has a Properties section must be documented.
 
+DOC-134: a ``**Properties:**`` bold label (the Data Classes section's format)
+opens a property section the same way; the next bold label or heading ends it.
+
 For every ``- `name(args)``` list item, the parameter names (order-sensitive,
 defaults and annotations stripped) must match the stub's signature for the
 enclosing class — or, failing that, a module-level function, since some
@@ -73,6 +76,13 @@ CTOR_LINE = re.compile(r"^([A-Za-z_]\w*)\((.*)$")
 PROPERTY_LINE = re.compile(r"^- `([A-Za-z_]\w*)")
 # Table first column naming a property (``| `name` | … ``).
 PROPERTY_TABLE_LINE = re.compile(r"^\|\s*`([A-Za-z_]\w*)`\s*\|")
+# DOC-134: the Data Classes section labels property lists with a bold
+# `**Properties:**` line (also `**Properties (all get/set):**` and
+# `**Additional properties:**`) rather than a `### Properties` heading.
+PROPERTY_LABEL = re.compile(r"^\*\*(?:Additional )?[Pp]roperties\b[^*]*:\*\*\s*$")
+# Any bold label (`**Methods:**`, `**Constructor:** `X(...)``) ends a
+# property list that a PROPERTY_LABEL opened.
+BOLD_LABEL = re.compile(r"^\*\*[^*]+:\*\*")
 FENCE = re.compile(r"^```")
 
 # Stub properties intentionally absent from a `### Properties` section.
@@ -284,12 +294,12 @@ def iter_doc_signatures(path: Path):
 
 def iter_doc_properties(path: Path):
     """Yield (section_lineno, line_number, class, property_name) under
-    ``### Properties`` subsections (ENH-030). Bullets and table
-    first-columns count."""
+    ``### Properties`` subsections (ENH-030) and ``**Properties:**`` bold
+    labels (DOC-134). Bullets and table first-columns count."""
     in_props = False
     prop_cls: str | None = None
     heading_lineno = 0
-    for lineno, scope, line, _in_fence in iter_doc_lines(path):
+    for lineno, scope, line, in_fence in iter_doc_lines(path):
         h3 = HEADING3.match(line)
         if h3:
             in_props = h3.group(1).strip().startswith("Properties")
@@ -301,6 +311,20 @@ def iter_doc_properties(path: Path):
             continue
         h2 = HEADING2.match(line)
         if h2:
+            in_props = False
+            continue
+        if not in_fence and PROPERTY_LABEL.match(line):
+            in_props = scope not in (None, "module")
+            if in_props:
+                # A second label (`**Additional properties:**`) in the same
+                # class keeps reporting against the first label's line.
+                if prop_cls != scope:
+                    heading_lineno = lineno
+                prop_cls = scope
+            else:
+                prop_cls = None
+            continue
+        if not in_fence and BOLD_LABEL.match(line):
             in_props = False
             continue
         if not in_props or prop_cls is None:
