@@ -1190,6 +1190,9 @@ struct FakeScript {
     replies: std::collections::HashMap<String, String>,
     failing: std::collections::HashSet<String>,
     notify: std::collections::HashMap<String, String>,
+    /// Per-line reply delays: the fake sleeps this long before the
+    /// line's reply block (a wedged daemon, for the status bound).
+    delays: std::collections::HashMap<String, std::time::Duration>,
 }
 
 fn fake_daemon(
@@ -1203,6 +1206,7 @@ fn fake_daemon(
         replies,
         failing,
         notify,
+        delays,
     } = script;
     let mut path = std::env::temp_dir();
     path.push(format!("par-mux-render-{tag}-{}.sock", std::process::id()));
@@ -1245,6 +1249,9 @@ fn fake_daemon(
             tx.send((name, trimmed.to_owned())).ok();
             if let Some(note) = notify.get(trimmed) {
                 writer.write_all(format!("{note}\n").as_bytes()).ok();
+            }
+            if let Some(delay) = delays.get(trimmed) {
+                std::thread::sleep(*delay);
             }
             let ok = !failing.contains(trimmed);
             writer

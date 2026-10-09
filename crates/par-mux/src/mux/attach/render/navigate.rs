@@ -219,21 +219,37 @@ impl WindowSession {
         self.land_on_workspace(conn, &ws_id);
     }
 
-    /// Re-query every pane's effective title into the renderer's label
-    /// store — the border labels paint the user `-T` label when set (the
-    /// manual-pass report: prefix `$` labels never showed because the
-    /// painter read the shell's OSC title only). Called on seed and on
-    /// the throttled status refresh; a changed title marks dirty.
-    pub(super) fn refresh_pane_titles(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let panes: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+    /// Refresh the renderer's label store with each visible pane's
+    /// effective title — the border labels paint the user `-T` label when
+    /// set (the manual-pass report: prefix `$` labels never showed
+    /// because the painter read the shell's OSC title only). Called after
+    /// the throttled status refresh. The focused pane's title is the one
+    /// the status refresh just fetched; another pane is re-queried only
+    /// when its recorded title went stale (ARC-125). A changed title
+    /// marks dirty. Stops at the first query that outlives the status
+    /// bound.
+    pub(super) fn refresh_pane_titles(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> Result<(), status::StatusError> {
+        let focused = self.renderer.focused();
+        if let Some(pane) = focused {
+            let title = self.status.pane_title().trim().to_string();
+            self.renderer.set_user_title(pane, &title);
+        }
+        let panes: Vec<u32> = self
+            .renderer
+            .layout()
+            .iter()
+            .map(|r| r.pane)
+            .filter(|pane| Some(*pane) != focused && self.renderer.title_stale(*pane))
+            .collect();
         for pane in panes {
-            if let Ok(reply) = conn.send_checked(&format!("pane-title -t %{pane}")) {
-                if reply.ok {
-                    let title = reply.body.join(" ");
-                    self.renderer.set_user_title(pane, title.trim());
-                }
+            if let Some(body) = status::status_query(conn, &format!("pane-title -t %{pane}"))? {
+                self.renderer.set_user_title(pane, body.join(" ").trim());
             }
         }
+        Ok(())
     }
 
     pub(super) fn land_on_workspace(

@@ -14,7 +14,7 @@ pub(super) fn route_window_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
         MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
-        MuxCommand::ListWindows { session } => cmd_list_windows(ctx, session),
+        MuxCommand::ListWindows { session, all } => cmd_list_windows(ctx, session, all),
         MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
         MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
         other => unreachable!("route_command sent a non-window command: {other:?}"),
@@ -197,7 +197,11 @@ pub(super) fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: S
     }
 }
 
-pub(super) fn cmd_list_windows(ctx: &Ctx<'_>, session: Option<Target<SessionId>>) -> Outcome {
+pub(super) fn cmd_list_windows(
+    ctx: &Ctx<'_>,
+    session: Option<Target<SessionId>>,
+    all: bool,
+) -> Outcome {
     // Wire contract: the bare form replies one line per window, globally,
     // as `@N: name` — the shape every existing client parses.
     //
@@ -208,7 +212,27 @@ pub(super) fn cmd_list_windows(ctx: &Ctx<'_>, session: Option<Target<SessionId>>
     // session's active window, `-` otherwise; the name is the line
     // remainder so a spaced name survives (same rule as the roster's
     // entry and `@N: name`'s own split-on-first-colon). No -F.
+    //
+    // `list-windows -a` (ARC-125): every session's windows in session-id then
+    // window order, each `-t` row prefixed with its session id —
+    // `$S @N <marker> <name>` — so a client finds a window's owning
+    // session in one round trip.
     let guard = ctx.tree.lock();
+    if all {
+        let mut sessions = guard.sessions();
+        sessions.sort();
+        let body = sessions
+            .iter()
+            .filter_map(|s| guard.session(*s))
+            .flat_map(|session| {
+                session_window_rows(&guard, session)
+                    .into_iter()
+                    .map(move |row| format!("{} {row}", session.id))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Outcome::ok(ctx, &body);
+    }
     let Some(session_id) = session.map(|target| guard.resolve_session_target(target)) else {
         let body = guard
             .sessions()
@@ -228,7 +252,14 @@ pub(super) fn cmd_list_windows(ctx: &Ctx<'_>, session: Option<Target<SessionId>>
     let Some(session) = guard.session(session_id) else {
         return Outcome::err(ctx, &MuxError::NoSuchSession(session_id).to_string());
     };
-    let body = session
+    let body = session_window_rows(&guard, session).join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+/// One session's `list-windows -t` rows, `@N <marker> <name>`, in the
+/// session's window order.
+fn session_window_rows(guard: &MuxTree, session: &crate::mux::tree::MuxSession) -> Vec<String> {
+    session
         .windows
         .iter()
         .enumerate()
@@ -240,7 +271,5 @@ pub(super) fn cmd_list_windows(ctx: &Ctx<'_>, session: Option<Target<SessionId>>
                 .unwrap_or_default();
             format!("{window_id} {marker} {name}")
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Outcome::ok(ctx, &body)
+        .collect()
 }

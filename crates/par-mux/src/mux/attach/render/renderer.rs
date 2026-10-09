@@ -847,17 +847,51 @@ impl PaneRenderer {
     /// Record a pane's effective title (the `pane-title` reply); marks
     /// dirty when it changed so the border label repaints.
     pub(crate) fn set_user_title(&mut self, pane: u32, title: &str) {
-        if self.user_titles.get(&pane).map(String::as_str) != Some(title) {
-            self.user_titles.insert(pane, title.to_string());
-            self.dirty = true;
+        let osc = self.osc_title(pane);
+        match self.user_titles.get_mut(&pane) {
+            Some((known, seen_osc)) => {
+                *seen_osc = osc;
+                if known != title {
+                    *known = title.to_string();
+                    self.dirty = true;
+                }
+            }
+            None => {
+                self.user_titles.insert(pane, (title.to_string(), osc));
+                self.dirty = true;
+            }
         }
+    }
+
+    /// Whether a pane's recorded title needs a `pane-title` re-query:
+    /// never queried, invalidated by `%pane-title-changed`, or the pane
+    /// set a new OSC title since (the effective title may follow it).
+    pub(crate) fn title_stale(&self, pane: u32) -> bool {
+        match self.user_titles.get(&pane) {
+            Some((_, seen_osc)) => *seen_osc != self.osc_title(pane),
+            None => true,
+        }
+    }
+
+    /// Forget a pane's recorded title (a `%pane-title-changed` landed),
+    /// so the next status refresh re-queries it.
+    pub(crate) fn invalidate_title(&mut self, pane: u32) {
+        self.user_titles.remove(&pane);
+    }
+
+    /// The pane emulator's own OSC 0/2 title.
+    fn osc_title(&self, pane: u32) -> String {
+        self.emulators
+            .get(&pane)
+            .map(|e| e.terminal().title().to_string())
+            .unwrap_or_default()
     }
 
     /// The pane's border label: the daemon's effective title (user label
     /// first), or the emulator's own OSC title when never queried.
     pub(super) fn border_label(&self, pane: u32) -> String {
         let raw = match self.user_titles.get(&pane) {
-            Some(title) => title.clone(),
+            Some((title, _)) => title.clone(),
             None => self
                 .emulators
                 .get(&pane)

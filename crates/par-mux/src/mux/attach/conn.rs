@@ -183,6 +183,12 @@ impl AttachConn {
         self.client.send_checked(command)
     }
 
+    /// [`Self::send_checked`] bounded by `timeout`: the status refresh's
+    /// path, so a wedged daemon delays the bar instead of freezing input.
+    pub fn send_checked_timeout(&mut self, command: &str, timeout: Duration) -> io::Result<Reply> {
+        self.client.send_checked_timeout(command, timeout)
+    }
+
     /// The push stream: everything the daemon sends that is not a command
     /// reply, already parsed. `Err(Disconnected)` (recv family) is the
     /// connection-ended signal.

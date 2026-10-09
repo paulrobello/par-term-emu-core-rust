@@ -166,7 +166,7 @@ impl WindowSession {
     /// open, and on every status refresh while the panel is up (the
     /// `%workspaces-changed` mark rides the same throttle).
     pub(super) fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let rows: Vec<(String, String, bool)> = conn
+        let roster: Vec<(String, String, bool)> = conn
             .send_checked("list-workspaces")
             .ok()
             .filter(|reply| reply.ok)
@@ -175,10 +175,20 @@ impl WindowSession {
                     .body
                     .iter()
                     .filter_map(|l| super::super::parse_workspace_line(l))
-                    .map(|(id, name, active)| (format!("ws:{id}"), name, active))
                     .collect()
             })
             .unwrap_or_default();
+        self.set_sidebar_roster(roster);
+    }
+
+    /// Fill the panel's sections from an already-fetched workspace
+    /// roster `(id, name, active)` — the status refresh's own
+    /// `list-workspaces` rows, so one refresh queries the roster once.
+    pub(super) fn set_sidebar_roster(&mut self, roster: Vec<(String, String, bool)>) {
+        let rows: Vec<(String, String, bool)> = roster
+            .into_iter()
+            .map(|(id, name, active)| (format!("ws:{id}"), name, active))
+            .collect();
         if rows.is_empty() {
             self.renderer.set_sidebar_sections(None);
             return;

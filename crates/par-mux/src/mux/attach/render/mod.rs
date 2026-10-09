@@ -347,8 +347,10 @@ pub struct PaneRenderer {
     /// Per-pane effective titles (`pane-title`: the user `-T` label when
     /// set, else the pane's OSC title) — what border labels paint. The
     /// daemon is authoritative; the client re-queries on the throttled
-    /// status refresh.
-    user_titles: HashMap<u32, String>,
+    /// status refresh only for panes whose title went stale. Each entry
+    /// pairs the title with the emulator's OSC title as of the query, so
+    /// a later OSC change marks the entry stale.
+    user_titles: HashMap<u32, (String, String)>,
     /// Reserve a right-edge gutter column in each pane rect (config
     /// `scrollbar-gutter`): content narrows by one; the gutter renders a
     /// minimal position indicator while the pane's client scroll offset
@@ -918,36 +920,8 @@ impl WindowSession {
             //     only the shown WINDOW being gone (its last pane exited
             //     or was killed) lands on the session's active window
             //     instead — tmux semantics: the session outlives a tab.
-            if self.status_dirty {
-                self.status_dirty = false;
-                let focused = self.renderer.focused().unwrap_or(0);
-                match self.status.refresh(conn, &self.window, focused) {
-                    Ok(()) => {
-                        self.refresh_pane_titles(conn);
-                        if self.sidebar_on {
-                            self.refresh_sidebar(conn);
-                        }
-                    }
-                    Err(status::StatusError::SessionGone) => {
-                        let landing = self
-                            .status
-                            .session_id
-                            .clone()
-                            .and_then(|session| session_active_window(conn, &session));
-                        match landing {
-                            // The reseed refreshes the status itself.
-                            Some(window) if window != self.window => {
-                                self.reseed_window(conn, &window);
-                            }
-                            _ => return Ok(()),
-                        }
-                    }
-                    Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
-                }
-                self.draw_status_row();
-                // The strip rides the same queried state: window
-                // add/close/rename refreshes it here.
-                self.draw_tab_strip();
+            if self.status_dirty && self.refresh_status(conn) == EventOutcome::End {
+                return Ok(());
             }
 
             // 4. Frame whatever accumulated (panes + the status row's own
@@ -969,6 +943,49 @@ impl WindowSession {
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
         }
+    }
+
+    /// The pump's throttled status step: re-query the bar's facts, reuse
+    /// the reply rows for the side panel and pane titles, and repaint the
+    /// bar and the strip. `End` when the shown session is gone.
+    fn refresh_status(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) -> EventOutcome {
+        self.status_dirty = false;
+        let focused = self.renderer.focused().unwrap_or(0);
+        match self.status.refresh(conn, &self.window, focused) {
+            Ok(rows) => {
+                if self.sidebar_on {
+                    if let Some(roster) = rows.workspaces {
+                        self.set_sidebar_roster(roster);
+                    }
+                }
+                if self.refresh_pane_titles(conn).is_err() {
+                    self.status_dirty = true;
+                }
+            }
+            // A wedged daemon: the stale bar stands and the next
+            // tick retries, instead of the pump blocking on it.
+            Err(status::StatusError::TimedOut) => self.status_dirty = true,
+            Err(status::StatusError::SessionGone) => {
+                let landing = self
+                    .status
+                    .session_id
+                    .clone()
+                    .and_then(|session| session_active_window(conn, &session));
+                match landing {
+                    // The reseed refreshes the status itself.
+                    Some(window) if window != self.window => {
+                        self.reseed_window(conn, &window);
+                    }
+                    _ => return EventOutcome::End,
+                }
+            }
+            Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
+        }
+        self.draw_status_row();
+        // The strip rides the same queried state: window
+        // add/close/rename refreshes it here.
+        self.draw_tab_strip();
+        EventOutcome::Continue
     }
 
     /// The flash's frame tick at `now` (injected so tests drive the
@@ -1069,6 +1086,15 @@ impl WindowSession {
                 // window by query and reseeds. Re-selecting here would
                 // echo the notification back into a loop.
                 self.pending_follow_session = Some(session_id.clone());
+                self.status_dirty = true;
+                EventOutcome::Continue
+            }
+            TmuxNotification::PaneTitleChanged { pane_id, .. } => {
+                // A user title moved: re-query only that pane's title on
+                // the next refresh (the others stay cached).
+                if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                    self.renderer.invalidate_title(pane);
+                }
                 self.status_dirty = true;
                 EventOutcome::Continue
             }

@@ -220,6 +220,10 @@ pub enum MuxCommand {
         /// window across every session (the global wire shape clients
         /// already parse).
         session: Option<Target<SessionId>>,
+        /// `-a`: every session's windows, each row prefixed with its
+        /// session id (`$S @N <marker> <name>`), so a client finds a
+        /// window's owner in one round trip. Not combinable with `-t`.
+        all: bool,
     },
     /// List sessions — every workspace's when bare, one workspace's when
     /// `-t` names one. The reply line shape carries the workspace prefix;
@@ -1086,7 +1090,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-window", parse_select_window, &[]),
     ("kill-window", parse_kill_window, &[]),
     ("rename-window", parse_rename_window, &[]),
-    ("list-windows", parse_list_windows, &["targeted"]),
+    ("list-windows", parse_list_windows, &["targeted", "all"]),
     ("list-sessions", parse_list_sessions, &["workspace"]),
     ("kill-server", parse_kill_server, &[]),
     ("rename-session", parse_rename_session, &[]),

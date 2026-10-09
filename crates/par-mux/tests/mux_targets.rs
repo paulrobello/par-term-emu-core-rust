@@ -317,6 +317,23 @@ fn targeted_list_windows_and_list_panes_reconstruct_the_tree() {
     );
 
     // Wrong session name: an error block.
+    // list-windows -a (ARC-125): every session's `-t` rows, each prefixed
+    // with its owning session id, in session then window order; a spaced
+    // name survives as the line remainder.
+    command(&mut writer, &mut reader, "rename-window -t bwin b win");
+    let all = ask(&mut writer, &mut reader, "list-windows -a");
+    assert_eq!(
+        body_lines(&all),
+        vec![
+            "$0 @0 - alpha",
+            "$0 @1 * two",
+            "$0 @2 - third",
+            "$1 @3 * beta",
+            "$1 @4 - b win",
+        ],
+        "all-sessions rows carry the session id: {all}"
+    );
+
     let missing = ask(&mut writer, &mut reader, "list-windows -t nosuch");
     assert!(
         missing.contains("%error") && missing.contains("no such session: nosuch"),

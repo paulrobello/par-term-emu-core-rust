@@ -1818,3 +1818,124 @@ fn border_colors_survive_a_sidebar_toggle_refit() {
     assert_eq!(session.renderer.layout().len(), 2, "the refit re-laid");
     assert_ring_colors(&mut session, 20, 60, active, plain);
 }
+
+/// Four side-by-side panes (%1..%4) over an 80-col window.
+const FOUR_PANE: &str = "0000,80x24,0,0{20x24,0,0,1,20x24,20,0,2,20x24,40,0,3,20x24,60,0,4}";
+
+/// A fake daemon advertising `list-windows all`, scripted with five
+/// sessions whose `-a` rows put `@0` in `$4`.
+fn five_session_script() -> FakeScript {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-commands".to_string(),
+        "list-windows targeted all\nfeatures replay-held-state".to_string(),
+    );
+    replies.insert(
+        "list-sessions".to_string(),
+        (0..5)
+            .map(|n| format!("+0: main: ${n}: s{n}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    replies.insert("list-workspaces".to_string(), "+0: main active".to_string());
+    replies.insert(
+        "list-windows -a".to_string(),
+        (0..5)
+            .map(|n| format!("${n} @{} * w{n}", (n + 1) % 5))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    replies.insert("pane-title -t %1".to_string(), "one".to_string());
+    FakeScript {
+        replies,
+        ..FakeScript::default()
+    }
+}
+
+/// ARC-125's round-trip bound: one status refresh over five sessions
+/// and four visible panes, with the side panel up and one pane's title
+/// marked stale by `%pane-title-changed`, costs at most six commands
+/// (it was 5 + 4 + 6). One `list-windows -a` finds the owner and its
+/// windows, the side panel reuses the refresh's `list-workspaces`, the
+/// focused pane's title rides the bar's own query, and only the stale
+/// pane is re-queried.
+#[test]
+fn status_refresh_round_trips_are_bounded() {
+    let (rx, mut conn) = fake_daemon("rtcount", five_session_script());
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(FOUR_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    session.sidebar_on = true;
+    session.renderer.focus(1);
+    // Steady state: every pane's title was learned on an earlier
+    // refresh; then %3's user title changes.
+    for pane in 1..=4 {
+        session.renderer.set_user_title(pane, "t");
+    }
+    session.handle_event(TmuxNotification::PaneTitleChanged {
+        pane_id: "%3".to_string(),
+        title: "new".to_string(),
+    });
+    drained(&rx);
+
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    let sent = drained(&rx);
+    assert_eq!(
+        sent,
+        vec![
+            "list-sessions",
+            "list-workspaces",
+            "list-windows -a",
+            "pane-title -t %1",
+            "list-agents",
+            "pane-title -t %3",
+        ],
+        "one refresh's wire"
+    );
+    assert!(sent.len() <= 6);
+    assert_eq!(session.status.session_id.as_deref(), Some("$4"));
+    assert!(!session.status_dirty);
+}
+
+/// A daemon that stops answering costs the pump at most the status
+/// bound, not the 10 s reply timeout: the refresh stops at the first
+/// late query, keeps the stale bar, and re-marks the status dirty. The
+/// late reply is discarded, so the next command reads its own.
+#[test]
+fn status_refresh_times_out_and_keeps_replies_aligned() {
+    let mut script = five_session_script();
+    script.delays.insert(
+        "list-sessions".to_string(),
+        std::time::Duration::from_millis(900),
+    );
+    script
+        .replies
+        .insert("pane-info -t %1".to_string(), "%1 @0 20x24".to_string());
+    let (rx, mut conn) = fake_daemon("rttimeout", script);
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(FOUR_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    drained(&rx);
+
+    let started = std::time::Instant::now();
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_millis(800),
+        "bounded by the status timeout: {took:?}"
+    );
+    assert!(session.status_dirty, "the next tick retries");
+    assert_eq!(
+        drained(&rx),
+        vec!["list-sessions"],
+        "stopped at the timeout"
+    );
+
+    // The late list-sessions reply must not answer this command.
+    let reply = conn.send_checked("pane-info -t %1").expect("reply");
+    assert_eq!(reply.body, vec!["%1 @0 20x24".to_string()]);
+}
