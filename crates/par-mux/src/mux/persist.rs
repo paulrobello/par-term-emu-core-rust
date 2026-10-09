@@ -1043,6 +1043,10 @@ pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
 /// [`save_to`] with an explicit origin. The whole save — capture, cwd
 /// syscalls, serialization, fsync — runs while the caller holds `tree`;
 /// a caller with the tree behind a mutex should prefer [`save_off_lock`].
+#[deprecated(
+    since = "0.58.1",
+    note = "holds the tree lock across fsync; use save_off_lock (ARC-119)"
+)]
 pub fn save_to_with_origin(
     tree: &MuxTree,
     target: &Path,
