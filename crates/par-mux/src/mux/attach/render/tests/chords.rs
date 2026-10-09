@@ -324,7 +324,7 @@ fn border_toggle_redeclares_chrome_on_the_next_size_report() {
     chord(&mut session, &mut conn, b'B');
     assert!(!session.render_opts.pane_borders);
     assert!(
-        session.pending_grid_refit,
+        session.pending.grid_refit,
         "the chrome change parks a refit"
     );
     drained(&rx);
@@ -376,7 +376,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
 
     chord(&mut session, &mut conn, b'S');
     assert!(!session.status_bar_on);
-    assert!(session.pending_grid_refit);
+    assert!(session.pending.grid_refit);
     let mut sink = RecordingSink::default();
     assert!(
         !session.flush_status_row(&mut sink),
@@ -384,11 +384,11 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     );
     chord(&mut session, &mut conn, b'S');
     assert!(session.status_bar_on);
-    session.pending_grid_refit = false;
+    session.pending.grid_refit = false;
     assert!(drained(&rx).is_empty(), "the local toggles touch no wire");
 
     chord(&mut session, &mut conn, b's');
-    assert!(session.sidebar_on && session.pending_grid_refit);
+    assert!(session.sidebar_on && session.pending.grid_refit);
     assert_eq!(session.renderer.sidebar_width(), 20);
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     assert_eq!(
@@ -420,20 +420,20 @@ fn rename_chords_open_seeded_prompts() {
     );
     session.status.refresh(&mut conn, "@0", 1).expect("refresh");
     chord(&mut session, &mut conn, b',');
-    assert!(session.prompt_mode);
+    assert!(session.is_prompt());
     assert_eq!(
-        session.prompt_target,
+        session.prompt().target,
         PromptTarget::Window("@0".to_string())
     );
-    assert_eq!(session.prompt_text, "editor");
+    assert_eq!(session.prompt().text, "editor");
     assert_eq!(
         session.renderer.overlay.as_ref().map(|o| o.0),
         Some(crate::mux::attach::PROMPT_WINDOW_OVERLAY_TITLE)
     );
     session.leave_prompt();
     chord(&mut session, &mut conn, b'$');
-    assert_eq!(session.prompt_target, PromptTarget::Pane);
-    assert_eq!(session.prompt_text, "build");
+    assert_eq!(session.prompt().target, PromptTarget::Pane);
+    assert_eq!(session.prompt().text, "build");
 }
 
 /// Workspace next/prev: the active roster entry's neighbor (wrapping)
@@ -578,8 +578,12 @@ fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
         },
     );
     chord(&mut session, &mut conn, b'g');
-    assert!(session.picker_mode);
-    assert_eq!(session.picker_selected, 1, "opens on the active workspace");
+    assert!(session.is_picker());
+    assert_eq!(
+        session.picker().selected,
+        1,
+        "opens on the active workspace"
+    );
     assert_eq!(
         session.renderer.overlay.as_ref().map(|o| o.0),
         Some(crate::mux::attach::WORKSPACE_PICKER_OVERLAY_TITLE)
@@ -593,13 +597,15 @@ fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
     drained(&rx);
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker_mode && session.picker_workspaces.is_none());
+    // Closing the picker drops its workspace roster with it (the state
+    // lives in the closed Modal::Picker).
+    assert!(!session.is_picker());
     let lines = drained(&rx);
     assert_eq!(lines[0], "select-workspace -t +2", "{lines:?}");
 
     let (rx, mut conn, mut session) = two_pane_session("wspick-none", FakeScript::default());
     chord(&mut session, &mut conn, b'g');
-    assert!(!session.picker_mode, "no workspaces: no picker");
+    assert!(!session.is_picker(), "no workspaces: no picker");
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
 }
 
@@ -632,7 +638,7 @@ fn prompt_commits_send_each_targets_wire_spelling() {
         session.status_dirty = false;
         type_and_commit(&mut session, &mut conn, typed);
         assert_eq!(drained(&rx), vec![wire.to_string()], "{target:?}");
-        assert!(!session.prompt_mode, "{target:?}: the commit closes");
+        assert!(!session.is_prompt(), "{target:?}: the commit closes");
         assert_eq!(session.renderer.overlay, None);
         assert!(session.status_dirty, "{target:?}: the status re-queries");
     }
@@ -645,7 +651,7 @@ fn whitespace_only_prompt_cancels_without_sending() {
     let (rx, mut conn, mut session) = two_pane_session("prompt-empty", FakeScript::default());
     session.enter_prompt(PromptTarget::Window("@0".to_string()));
     type_and_commit(&mut session, &mut conn, "   ");
-    assert!(!session.prompt_mode);
+    assert!(!session.is_prompt());
     assert!(drained(&rx).is_empty());
 }
 
@@ -656,23 +662,23 @@ fn whitespace_only_prompt_cancels_without_sending() {
 fn prompt_bytes_edit_the_buffer_and_escape_cancels() {
     let (rx, mut conn, mut session) = two_pane_session("prompt-edit", FakeScript::default());
     session.enter_prompt(PromptTarget::Window("@0".to_string()));
-    session.prompt_text.clear();
+    session.prompt_mut().text.clear();
     for &b in b"abc" {
         assert!(session.prompt_byte(&mut conn, b));
     }
     assert!(session.prompt_byte(&mut conn, 0x7f));
-    assert_eq!(session.prompt_text, "ab");
+    assert_eq!(session.prompt().text, "ab");
     assert!(
         overlay_text(&session).join("\n").contains("ab"),
         "the overlay mirrors the buffer"
     );
     assert!(session.prompt_byte(&mut conn, 0x01), "^A is ignored");
-    assert_eq!(session.prompt_text, "ab");
+    assert_eq!(session.prompt().text, "ab");
     assert!(session.prompt_byte(&mut conn, 0x03));
-    assert_eq!(session.prompt_text, "", "^C clears the input");
+    assert_eq!(session.prompt().text, "", "^C clears the input");
     session.prompt_byte(&mut conn, b'z');
     assert!(!session.prompt_byte(&mut conn, 0x1b), "Escape closes");
-    assert!(!session.prompt_mode);
+    assert!(!session.is_prompt());
     assert!(drained(&rx).is_empty(), "a cancel sends nothing");
 }
 
@@ -683,10 +689,10 @@ fn prompt_bytes_edit_the_buffer_and_escape_cancels() {
 fn prompt_keys_append_chars_and_swallow_the_mouse() {
     let (rx, mut conn, mut session) = two_pane_session("prompt-key", FakeScript::default());
     session.enter_prompt(PromptTarget::Pane);
-    session.prompt_text.clear();
+    session.prompt_mut().text.clear();
     session.prompt_key(&mut conn, &TermKeyEvent::char_('é', 0));
     session.prompt_key(&mut conn, &TermKeyEvent::functional(TermKey::Left, 0));
-    assert_eq!(session.prompt_text, "é");
+    assert_eq!(session.prompt().text, "é");
     session.route_mouse(
         &mut conn,
         SgrMouse {
@@ -697,10 +703,10 @@ fn prompt_keys_append_chars_and_swallow_the_mouse() {
         },
     );
     assert_eq!(session.renderer.focused(), Some(1));
-    assert!(session.prompt_mode, "the click did not dismiss it");
+    assert!(session.is_prompt(), "the click did not dismiss it");
     assert!(drained(&rx).is_empty(), "the click selected nothing");
     session.prompt_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.prompt_mode);
+    assert!(!session.is_prompt());
 }
 
 /// The new-tab prompt seeds the next free index; its commit creates
@@ -722,7 +728,8 @@ fn new_window_prompt_creates_and_lands_on_the_window() {
     drained(&rx);
     session.enter_prompt(PromptTarget::NewWindow);
     assert_eq!(
-        session.prompt_text, "4",
+        session.prompt().text,
+        "4",
         "one past the highest window ordinal (@3)"
     );
     assert_eq!(
@@ -740,7 +747,7 @@ fn new_window_prompt_creates_and_lands_on_the_window() {
     drained(&rx);
     orphan.enter_prompt(PromptTarget::NewWindow);
     type_and_commit(&mut orphan, &mut conn, "x");
-    assert!(!orphan.prompt_mode);
+    assert!(!orphan.is_prompt());
     assert!(drained(&rx).is_empty());
 }
 
@@ -783,7 +790,7 @@ fn new_workspace_prompt_creates_and_lands_or_stops_on_error() {
     session.enter_prompt(PromptTarget::NewWorkspace);
     type_and_commit(&mut session, &mut conn, "ops");
     assert_eq!(drained(&rx), vec!["new-workspace -n 'ops'".to_string()]);
-    assert!(!session.prompt_mode);
+    assert!(!session.is_prompt());
 }
 
 /// The tab menu's close on a window the view is NOT showing: only
@@ -794,7 +801,7 @@ fn closing_an_unshown_tab_only_kills_it() {
     session.status_dirty = false;
     session.open_menu(MenuTarget::Tab("@7".to_string()));
     session.menu_click(&mut conn, 2);
-    assert!(session.menu.is_none());
+    assert!(session.menu().is_none());
     assert_eq!(drained(&rx), vec!["kill-window -t @7".to_string()]);
     assert_eq!(session.window, "@0");
     assert!(session.status_dirty);
@@ -958,9 +965,9 @@ fn menu_rows_open_their_prompts_and_q_or_escape_close() {
     ] {
         session.open_menu(target.clone());
         session.menu_click(&mut conn, row);
-        assert!(session.menu.is_none());
-        assert!(session.prompt_mode, "{target:?} row {row}");
-        assert_eq!(session.prompt_target, expected);
+        assert!(session.menu().is_none());
+        assert!(session.is_prompt(), "{target:?} row {row}");
+        assert_eq!(session.prompt().target, expected);
         session.leave_prompt();
     }
     assert!(drained(&rx).is_empty(), "opening prompts sends nothing");
@@ -972,16 +979,16 @@ fn menu_rows_open_their_prompts_and_q_or_escape_close() {
         "an unknown window's menu names its id"
     );
     session.menu_click(&mut conn, 9);
-    assert!(session.menu.is_some(), "an off-panel row is consumed");
+    assert!(session.menu().is_some(), "an off-panel row is consumed");
     assert!(session.menu_byte(b'x'), "other bytes leave it up");
     session.menu_key(&TermKeyEvent::functional(TermKey::Down, 0));
-    assert!(session.menu.is_some());
+    assert!(session.menu().is_some());
     session.menu_key(&TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(session.menu.is_none());
+    assert!(session.menu().is_none());
     session.open_menu(MenuTarget::Commands);
     let mut prefix_pending = false;
     session.route_plain(b"aq", &mut conn, &mut prefix_pending);
-    assert!(session.menu.is_none(), "q in a plain run closes the menu");
+    assert!(session.menu().is_none(), "q in a plain run closes the menu");
     assert!(drained(&rx).is_empty(), "nothing leaked into the pane");
 }
 
@@ -1144,9 +1151,9 @@ fn plain_router_forwards_literals_and_consumes_unbound_keys() {
         "d detaches"
     );
 
-    session.resize_mode = true;
+    session.modal = Modal::Resize;
     assert!(!session.route_plain(b"xyz", &mut conn, &mut pending));
-    assert!(!session.resize_mode, "a typed run leaves resize mode");
+    assert!(!session.is_resize(), "a typed run leaves resize mode");
     assert!(drained(&rx).is_empty(), "and nothing leaks into the pane");
 }
 
@@ -1213,7 +1220,7 @@ fn scroll_mode_keys_move_the_viewport_and_exit() {
         .scrollback_len();
     assert!(history > 0);
     assert!(session.renderer.enter_scroll_mode(1));
-    session.scroll_mode = true;
+    session.modal = Modal::Scroll;
     let start = session.renderer.scroll_offset_of(1);
     session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Up, 0));
     assert_eq!(session.renderer.scroll_offset_of(1), start + 1);
@@ -1238,14 +1245,14 @@ fn scroll_mode_keys_move_the_viewport_and_exit() {
         "the top of history"
     );
     session.scroll_mode_key(&TermKeyEvent::functional(TermKey::End, 0));
-    assert!(!session.scroll_mode);
+    assert!(!session.is_scroll());
     assert!(!session.renderer.scroll_mode_active(1));
     assert_eq!(session.renderer.scroll_offset_of(1), 0);
 
     assert!(session.renderer.enter_scroll_mode(1));
-    session.scroll_mode = true;
+    session.modal = Modal::Scroll;
     session.scroll_mode_key(&TermKeyEvent::char_('q', 0));
-    assert!(!session.scroll_mode, "q leaves too");
+    assert!(!session.is_scroll(), "q leaves too");
 }
 
 /// prefix [ enters scroll mode only when the focused pane has
@@ -1255,20 +1262,20 @@ fn scroll_mode_keys_move_the_viewport_and_exit() {
 fn scroll_chord_needs_history_and_owns_typed_bytes() {
     let (rx, mut conn, mut session) = two_pane_session("scrollchord", FakeScript::default());
     chord(&mut session, &mut conn, b'[');
-    assert!(!session.scroll_mode, "no history: nothing to scroll");
+    assert!(!session.is_scroll(), "no history: nothing to scroll");
     for i in 0..40 {
         session
             .renderer
             .feed_output(1, format!("l{i}\r\n").as_bytes());
     }
     chord(&mut session, &mut conn, b'[');
-    assert!(session.scroll_mode);
+    assert!(session.is_scroll());
     let mut pending = false;
     session.route_plain(b"abc", &mut conn, &mut pending);
-    assert!(session.scroll_mode);
+    assert!(session.is_scroll());
     assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
     session.route_plain(b"q", &mut conn, &mut pending);
-    assert!(!session.scroll_mode);
+    assert!(!session.is_scroll());
 }
 
 /// The help panel's key path: j/k and arrows scroll (clamped at the
@@ -1279,41 +1286,44 @@ fn help_keys_scroll_filter_and_close() {
     let (_rx, _conn, mut session) = two_pane_session("helpkeys", FakeScript::default());
     session.enter_help();
     session.help_key(&TermKeyEvent::char_('k', 0));
-    assert_eq!(session.help_scroll, 0, "clamped at the top");
+    assert_eq!(session.help().scroll, 0, "clamped at the top");
     session.help_key(&TermKeyEvent::char_('j', 0));
     session.help_key(&TermKeyEvent::functional(TermKey::Down, 0));
-    assert_eq!(session.help_scroll, 2);
+    assert_eq!(session.help().scroll, 2);
     session.help_key(&TermKeyEvent::functional(TermKey::Up, 0));
     session.help_key(&TermKeyEvent::functional(TermKey::PageDown, 0));
-    assert_eq!(session.help_scroll, 11);
+    assert_eq!(session.help().scroll, 11);
     session.help_key(&TermKeyEvent::functional(TermKey::PageUp, 0));
-    assert_eq!(session.help_scroll, 1);
+    assert_eq!(session.help().scroll, 1);
     session.help_key(&TermKeyEvent::char_('/', 0));
-    assert!(session.help_filtering);
+    assert!(session.help().filtering);
     for c in "zoom".chars() {
         session.help_key(&TermKeyEvent::char_(c, 0));
     }
-    assert_eq!(session.help_filter, "zoom");
+    assert_eq!(session.help().filter, "zoom");
     assert!(overlay_text(&session).join("\n").contains("zoom"));
     session.help_key(&TermKeyEvent::functional(TermKey::Down, 0));
-    assert!(!session.help_filtering, "a non-char key commits the filter");
-    assert_eq!(session.help_filter, "zoom", "the filter is kept");
-    assert!(session.help_mode);
+    assert!(
+        !session.help().filtering,
+        "a non-char key commits the filter"
+    );
+    assert_eq!(session.help().filter, "zoom", "the filter is kept");
+    assert!(session.is_help());
     session.help_key(&TermKeyEvent::functional(TermKey::Tab, 0));
-    assert!(!session.help_mode, "an unbound key closes");
+    assert!(!session.is_help(), "an unbound key closes");
     assert_eq!(session.renderer.overlay, None);
 
     session.enter_help();
     session.help_key(&TermKeyEvent::char_('/', 0));
     session.help_key(&TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.help_mode, "Escape in the filter closes the panel");
+    assert!(!session.is_help(), "Escape in the filter closes the panel");
     session.enter_help();
     session.help_byte(b'/');
     session.help_byte(b'a');
     session.help_byte(0x7f);
-    assert_eq!(session.help_filter, "", "Backspace pops the filter");
+    assert_eq!(session.help().filter, "", "Backspace pops the filter");
     session.help_byte(b'\r');
-    assert!(!session.help_filtering && session.help_mode);
+    assert!(!session.help().filtering && session.is_help());
 }
 
 /// The picker's key and byte paths: j/k/arrows move (wrapping), `/`
@@ -1334,41 +1344,45 @@ fn picker_keys_move_filter_and_close() {
         },
     );
     chord(&mut session, &mut conn, b'w');
-    assert!(session.picker_mode);
-    let count = session.picker_refs.len();
+    assert!(session.is_picker());
+    let count = session.picker().refs.len();
     assert_eq!(count, 4, "two sessions with one window each");
-    assert_eq!(session.picker_selected, 0, "opens on the current session");
+    assert_eq!(session.picker().selected, 0, "opens on the current session");
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
-    assert_eq!(session.picker_selected, count - 1, "Up wraps to the bottom");
+    assert_eq!(
+        session.picker().selected,
+        count - 1,
+        "Up wraps to the bottom"
+    );
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     session.picker_key(&mut conn, &TermKeyEvent::char_('j', 0));
     session.picker_key(&mut conn, &TermKeyEvent::char_('k', 0));
-    assert_eq!(session.picker_selected, 0);
+    assert_eq!(session.picker().selected, 0);
     session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
     for c in "logs".chars() {
         session.picker_key(&mut conn, &TermKeyEvent::char_(c, 0));
     }
-    assert_eq!(session.picker_filter, "logs");
+    assert_eq!(session.picker().filter, "logs");
     let text = overlay_text(&session).join("\n");
     assert!(text.contains("logs") && !text.contains("main"), "{text}");
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
-    assert!(!session.picker_filtering, "a non-char key commits");
+    assert!(!session.picker().filtering, "a non-char key commits");
     session.picker_byte(&mut conn, b'/');
     session.picker_byte(&mut conn, 0x7f);
-    assert_eq!(session.picker_filter, "log");
+    assert_eq!(session.picker().filter, "log");
     session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker_filtering && session.picker_mode);
+    assert!(!session.picker().filtering && session.is_picker());
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
-    assert!(!session.picker_mode, "an unbound key closes");
+    assert!(!session.is_picker(), "an unbound key closes");
 
     chord(&mut session, &mut conn, b'w');
     session.picker_byte(&mut conn, b'/');
     assert!(!session.picker_byte(&mut conn, 0x1b), "Escape closes");
-    assert!(!session.picker_mode);
+    assert!(!session.is_picker());
     chord(&mut session, &mut conn, b'w');
     session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.picker_mode);
+    assert!(!session.is_picker());
 }
 
 /// Coordinates SGR never sends (column or row 0) are dropped
@@ -1462,7 +1476,7 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     // Host row 2 (1-based 3) is the second workspace row.
     session.route_mouse(&mut conn, sgr(2, 3, 3, false));
     assert_eq!(
-        session.menu.as_ref().map(|m| m.target.clone()),
+        session.menu().map(|m| m.target.clone()),
         Some(MenuTarget::Workspace("+1".to_string()))
     );
     assert!(drained(&rx).is_empty(), "opening the menu sends nothing");
@@ -1478,8 +1492,8 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     // The ` new ` chip: the 23-row renderer's footer row is host
     // row 23 (SGR 24); col 2.
     session.route_mouse(&mut conn, sgr(0, 3, 24, false));
-    assert!(session.prompt_mode);
-    assert_eq!(session.prompt_target, PromptTarget::NewWorkspace);
+    assert!(session.is_prompt());
+    assert_eq!(session.prompt().target, PromptTarget::NewWorkspace);
 }
 
 /// The tab strip's right press opens that tab's context menu; a
@@ -1504,10 +1518,10 @@ fn tab_strip_right_press_opens_the_tab_menu() {
     session.draw_tab_strip();
     drained(&rx);
     session.route_mouse(&mut conn, sgr(2, 9, 1, false));
-    assert!(session.menu.is_none(), "the gap column opens nothing");
+    assert!(session.menu().is_none(), "the gap column opens nothing");
     session.route_mouse(&mut conn, sgr(2, 13, 1, false));
     assert_eq!(
-        session.menu.as_ref().map(|m| m.target.clone()),
+        session.menu().map(|m| m.target.clone()),
         Some(MenuTarget::Tab("@1".to_string()))
     );
     assert_eq!(overlay_text(&session)[0], " vim ", "the menu names the tab");
@@ -1522,8 +1536,8 @@ fn tab_strip_right_press_opens_the_tab_menu() {
         .find(|x| session.tab_strip.plus_hit(*x))
         .expect("the strip paints a + button");
     session.route_mouse(&mut conn, sgr(0, plus + 1, 1, false));
-    assert!(session.prompt_mode);
-    assert_eq!(session.prompt_target, PromptTarget::NewWindow);
+    assert!(session.is_prompt());
+    assert_eq!(session.prompt().target, PromptTarget::NewWindow);
 }
 
 /// The pickers are modal for the pointer: wheels move the selection,
@@ -1547,37 +1561,40 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     chord(&mut session, &mut conn, b'g');
     drained(&rx);
     session.route_mouse(&mut conn, sgr(65, 40, 10, false));
-    assert_eq!(session.picker_selected, 1, "wheel down moves down");
+    assert_eq!(session.picker().selected, 1, "wheel down moves down");
     session.route_mouse(&mut conn, sgr(64, 40, 10, false));
-    assert_eq!(session.picker_selected, 0, "wheel up moves up");
+    assert_eq!(session.picker().selected, 0, "wheel up moves up");
     session.route_mouse(&mut conn, sgr(32, 40, 10, false));
     session.route_mouse(&mut conn, sgr(0, 40, 10, true));
-    assert!(session.picker_mode, "drags and releases do nothing");
+    assert!(session.is_picker(), "drags and releases do nothing");
 
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     // The footer (the panel's last row; panel row r sits at SGR row
     // y0 + 3 + r): consumed.
-    let footer = session.picker_panel_len - 1;
+    let footer = session.picker().panel_len - 1;
     session.route_mouse(
         &mut conn,
         sgr(0, (x0 + 4) as u16, (y0 + 3 + footer) as u16, false),
     );
-    assert!(session.picker_mode, "the footer does nothing");
+    assert!(session.is_picker(), "the footer does nothing");
     assert!(drained(&rx).is_empty());
 
     // Filtering: panel row 0 is the filter line.
     session.picker_byte(&mut conn, b'/');
     session.picker_byte(&mut conn, b'a');
     session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker_filtering);
+    assert!(!session.picker().filtering);
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false));
-    assert!(session.picker_filtering, "the filter line re-opens the box");
+    assert!(
+        session.picker().filtering,
+        "the filter line re-opens the box"
+    );
     assert!(drained(&rx).is_empty());
     // "a" keeps all three rows: panel row 3 is the third content
     // row (gamma).
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 6) as u16, false));
-    assert!(!session.picker_mode, "a content click activates");
+    assert!(!session.is_picker(), "a content click activates");
     assert_eq!(drained(&rx)[0], "select-workspace -t +2");
 }
 
@@ -1595,8 +1612,8 @@ fn open_menu_swallows_non_press_pointer_events() {
     ] {
         session.route_mouse(&mut conn, event);
     }
-    assert!(session.menu.is_some(), "still up");
-    assert!(!session.detach_requested && !session.help_mode);
+    assert!(session.menu().is_some(), "still up");
+    assert!(!session.detach_requested && !session.is_help());
     assert!(drained(&rx).is_empty());
     assert_eq!(session.renderer.focused(), Some(1), "no click-through");
 }
@@ -1608,12 +1625,12 @@ fn help_panel_pointer_scrolls_and_swallows_presses() {
     let (rx, mut conn, mut session) = two_pane_session("m-help", FakeScript::default());
     session.enter_help();
     session.route_mouse(&mut conn, sgr(65, 61, 6, false));
-    assert_eq!(session.help_scroll, 3);
+    assert_eq!(session.help().scroll, 3);
     session.route_mouse(&mut conn, sgr(64, 61, 6, false));
     session.route_mouse(&mut conn, sgr(64, 61, 6, false));
-    assert_eq!(session.help_scroll, 0);
+    assert_eq!(session.help().scroll, 0);
     session.route_mouse(&mut conn, sgr(0, 61, 6, false));
-    assert!(session.help_mode);
+    assert!(session.is_help());
     assert_eq!(session.renderer.focused(), Some(1));
     assert!(drained(&rx).is_empty());
 }
@@ -1737,11 +1754,14 @@ fn mouse_hit_maps_drags_and_the_pointer_modals() {
     );
     session.drag = None;
 
-    session.prompt_mode = true;
+    session.modal = Modal::Prompt(PromptState {
+        text: String::new(),
+        target: PromptTarget::Pane,
+    });
     assert_eq!(session.mouse_hit(&sgr(0, 10, 6, false)), Hit::Consumed);
-    session.prompt_mode = false;
+    session.modal = Modal::None;
 
-    session.help_mode = true;
+    session.modal = Modal::Help(HelpState::default());
     assert_eq!(
         session.mouse_hit(&sgr(64, 10, 6, false)),
         Hit::HelpScroll(-3)
@@ -1751,10 +1771,10 @@ fn mouse_hit_maps_drags_and_the_pointer_modals() {
         Hit::HelpScroll(3)
     );
     assert_eq!(session.mouse_hit(&sgr(0, 10, 6, false)), Hit::Consumed);
-    session.help_mode = false;
+    session.modal = Modal::None;
 
-    session.picker_mode = true;
-    session.picker_entries = vec![super::super::super::PickerEntry {
+    session.modal = Modal::Picker(PickerState::default());
+    session.picker_mut().entries = vec![super::super::super::PickerEntry {
         session_id: "$0".to_string(),
         session_name: "work".to_string(),
         windows: vec![("@0".to_string(), "main".to_string())],
@@ -1777,13 +1797,13 @@ fn mouse_hit_maps_drags_and_the_pointer_modals() {
         session.mouse_hit(&sgr(0, col, (y0 + 3 + 1) as u16, false)),
         Hit::PickerRow(1)
     );
-    let footer = session.picker_panel_len - 1;
+    let footer = session.picker().panel_len - 1;
     assert_eq!(
         session.mouse_hit(&sgr(0, col, (y0 + 3 + footer) as u16, false)),
         Hit::Consumed,
         "the footer does nothing"
     );
-    session.picker_filtering = true;
+    session.picker_mut().filtering = true;
     session.refresh_picker();
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     assert_eq!(

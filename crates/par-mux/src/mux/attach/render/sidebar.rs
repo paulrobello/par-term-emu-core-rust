@@ -147,7 +147,7 @@ impl WindowSession {
         // reports the new grid, then repaint_all erases the region the
         // old layout vacated — the plain %layout-change re-seed never
         // clears those host cells (the manual-pass ghost-pane report).
-        self.pending_grid_refit = true;
+        self.pending.grid_refit = true;
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }

@@ -1162,6 +1162,109 @@ fn frame_replaces_cursor_after_flush_and_quiets_when_idle() {
     assert_eq!(sink.placements[2], None);
 }
 
+/// Test-side reads of the open modal's state (ARC-127): each panics
+/// when a different modal is up, so an assertion on the state also
+/// asserts which modal owns input.
+impl WindowSession {
+    fn is_prompt(&self) -> bool {
+        matches!(self.modal, Modal::Prompt(_))
+    }
+    fn is_help(&self) -> bool {
+        matches!(self.modal, Modal::Help(_))
+    }
+    fn is_picker(&self) -> bool {
+        matches!(self.modal, Modal::Picker(_))
+    }
+    fn is_resize(&self) -> bool {
+        matches!(self.modal, Modal::Resize)
+    }
+    fn is_scroll(&self) -> bool {
+        matches!(self.modal, Modal::Scroll)
+    }
+    fn menu(&self) -> Option<&MenuState> {
+        match &self.modal {
+            Modal::Menu(menu) => Some(menu),
+            _ => None,
+        }
+    }
+    fn prompt(&self) -> &PromptState {
+        match &self.modal {
+            Modal::Prompt(prompt) => prompt,
+            other => panic!("no prompt up: {other:?}"),
+        }
+    }
+    fn prompt_mut(&mut self) -> &mut PromptState {
+        match &mut self.modal {
+            Modal::Prompt(prompt) => prompt,
+            other => panic!("no prompt up: {other:?}"),
+        }
+    }
+    fn help(&self) -> &HelpState {
+        match &self.modal {
+            Modal::Help(help) => help,
+            other => panic!("no help panel up: {other:?}"),
+        }
+    }
+    fn picker(&self) -> &PickerState {
+        match &self.modal {
+            Modal::Picker(picker) => picker,
+            other => panic!("no picker up: {other:?}"),
+        }
+    }
+    fn picker_mut(&mut self) -> &mut PickerState {
+        match &mut self.modal {
+            Modal::Picker(picker) => picker,
+            other => panic!("no picker up: {other:?}"),
+        }
+    }
+}
+
+/// Every modal that paints an overlay or owns the keys hides the host
+/// cursor; no modal and the scroll viewport keep it.
+#[test]
+fn modal_hides_cursor_per_variant() {
+    let prompt = Modal::Prompt(PromptState {
+        text: String::new(),
+        target: PromptTarget::Pane,
+    });
+    let menu = Modal::Menu(MenuState {
+        target: MenuTarget::Commands,
+        actions: Vec::new(),
+    });
+    assert!(!Modal::None.hides_cursor());
+    assert!(!Modal::Scroll.hides_cursor());
+    assert!(prompt.hides_cursor());
+    assert!(menu.hides_cursor());
+    assert!(Modal::Help(HelpState::default()).hides_cursor());
+    assert!(Modal::Picker(PickerState::default()).hides_cursor());
+    assert!(Modal::Resize.hides_cursor());
+}
+
+/// Opening a modal replaces the one that was up: two open modals are
+/// unrepresentable, and a replaced scroll viewport releases its hold.
+#[test]
+fn opening_a_modal_replaces_the_open_one() {
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    for i in 0..40 {
+        session
+            .renderer
+            .feed_output(1, format!("line{i}\r\n").as_bytes());
+    }
+    assert!(session.renderer.enter_scroll_mode(1));
+    session.open_modal(Modal::Scroll);
+    session.enter_help();
+    assert!(session.is_help());
+    assert!(
+        !session.renderer.scroll_mode_active(1),
+        "the replaced viewport released its hold"
+    );
+    session.enter_prompt(PromptTarget::Pane);
+    assert!(session.is_prompt() && !session.is_help());
+}
+
 /// `recording_conn` with per-command canned replies: the fake daemon
 /// answers the exact command line with the body, everything else
 /// with an ok empty reply.
@@ -1472,7 +1575,7 @@ fn type_and_commit(
     conn: &mut crate::mux::attach::conn::AttachConn,
     text: &str,
 ) {
-    session.prompt_text.clear();
+    session.prompt_mut().text.clear();
     let mut bytes = text.as_bytes().to_vec();
     bytes.push(b'\r');
     let mut prefix_pending = false;

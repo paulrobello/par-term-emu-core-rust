@@ -219,7 +219,7 @@ impl WindowSession {
     /// seed there is nothing to refit (the seed's report declares).
     fn chrome_changed(&mut self) {
         if !self.window.is_empty() {
-            self.pending_grid_refit = true;
+            self.pending.grid_refit = true;
         }
     }
 
@@ -435,7 +435,7 @@ impl WindowSession {
         if !self.status_bar_on {
             return;
         }
-        let scroll = if self.scroll_mode {
+        let scroll = if matches!(self.modal, Modal::Scroll) {
             self.renderer
                 .focused()
                 .map(|id| self.renderer.scroll_offset_of(id))
@@ -636,7 +636,7 @@ impl WindowSession {
         // the pane's cursor would draw it through the panel (the
         // manual-pass report). Hide the host cursor while a modal is up;
         // the next unmodaled frame restores placement.
-        if self.renderer.overlay.is_some() || self.picker_mode {
+        if self.renderer.overlay.is_some() || self.modal.hides_cursor() {
             cursor = None;
         }
         if flushed || self.cursor_placed.as_ref() != Some(&cursor) {

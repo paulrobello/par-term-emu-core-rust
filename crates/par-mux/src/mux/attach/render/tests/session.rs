@@ -345,16 +345,16 @@ fn render_resize_chord_sends_for_the_focused_pane() {
         ),
         "the resize chord enters the mode"
     );
-    assert!(session.resize_mode);
-    session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+    assert!(session.is_resize());
+    session.resize_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
     assert_eq!(
         wait_recorded(&rx, "resize-pane"),
         "resize-pane -t %1 -R 1",
         "the arrow resizes the focused pane (the layout's first leaf)"
     );
     // Any other key leaves the mode, consumed.
-    session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.resize_mode);
+    session.resize_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
+    assert!(!session.is_resize());
 
     // The RIGHT pane focused: the arrows move the shared divider in
     // the pressed direction, so the wire direction inverts (the wire
@@ -369,7 +369,7 @@ fn render_resize_chord_sends_for_the_focused_pane() {
         ),
         "the resize chord re-enters the mode"
     );
-    session.resize_mode_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+    session.resize_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
     assert_eq!(
         wait_recorded(&rx, "resize-pane"),
         "resize-pane -t %2 -L 1",
@@ -403,7 +403,7 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
         ),
         "the help chord opens the panel"
     );
-    assert!(session.help_mode);
+    assert!(session.is_help());
     let overlay = session.renderer.overlay.clone().expect("the overlay is up");
     let joined = overlay
         .1
@@ -445,7 +445,7 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
         !session.help_byte(b'q'),
         "q closed the panel (the return is still-open)"
     );
-    assert!(!session.help_mode);
+    assert!(!session.is_help());
     assert_eq!(session.renderer.overlay, None);
     session.frame(&mut sink);
     let left: String = (0..4)
@@ -490,7 +490,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
         ),
         "the picker chord opens the modal"
     );
-    assert!(session.picker_mode);
+    assert!(session.is_picker());
     let (overlay, _, _) = session.renderer.overlay.clone().expect("the overlay is up");
     assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
     let joined = overlay_text(&session).join("\n");
@@ -509,7 +509,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker_mode, "activation dismisses the modal");
+    assert!(!session.is_picker(), "activation dismisses the modal");
     assert_eq!(
         wait_recorded(&rx, "switch-client"),
         "switch-client -t @1",
@@ -525,9 +525,9 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
         &mut conn,
         &mut prefix_pending
     ));
-    assert!(session.picker_mode);
+    assert!(session.is_picker());
     assert!(!session.picker_byte(&mut conn, b'q'));
-    assert!(!session.picker_mode);
+    assert!(!session.is_picker());
 }
 
 /// The `pane-gaps` option: each pane's content insets by the gap and
@@ -953,7 +953,7 @@ fn help_open_consumes_wheel_events() {
             release: false,
         },
     );
-    assert_eq!(session.help_scroll, 3, "the wheel scrolls the panel");
+    assert_eq!(session.help().scroll, 3, "the wheel scrolls the panel");
     session.route_mouse(
         &mut conn,
         SgrMouse {
@@ -963,7 +963,7 @@ fn help_open_consumes_wheel_events() {
             release: false,
         },
     );
-    assert_eq!(session.help_scroll, 0, "wheel up scrolls back");
+    assert_eq!(session.help().scroll, 0, "wheel up scrolls back");
     assert_eq!(
         session.renderer.scroll_offset_of(1),
         0,
@@ -1345,13 +1345,13 @@ fn panel_up_menu_click_maps_raw_host_columns() {
     };
     session.route_mouse(&mut conn, click);
     println!(
-        "AFTER prompt_mode={} menu={:?} overlay_title={:?}",
-        session.prompt_mode,
-        session.menu.is_some(),
+        "AFTER prompt={} menu={:?} overlay_title={:?}",
+        session.is_prompt(),
+        session.menu().is_some(),
         session.renderer.overlay.as_ref().map(|o| o.0)
     );
     assert!(
-        session.prompt_mode,
+        session.is_prompt(),
         "the raw-column click must open the rename prompt"
     );
 }
@@ -1384,7 +1384,7 @@ fn compose_command_menu_maps_rows_to_actions() {
 fn menu_chip_opens_the_command_menu() {
     let (_rx, _conn, session) = command_menu_session("cmdmenu-open");
     assert_eq!(
-        session.menu.as_ref().map(|m| m.target.clone()),
+        session.menu().map(|m| m.target.clone()),
         Some(MenuTarget::Commands),
         "the chip opens the command menu"
     );
@@ -1398,8 +1398,8 @@ fn menu_chip_opens_the_command_menu() {
 fn command_menu_keybinds_opens_help() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-help");
     click_menu_row(&mut session, &mut conn, 1);
-    assert!(session.menu.is_none(), "the menu closed");
-    assert!(session.help_mode, "keybinds opened the help panel");
+    assert!(session.menu().is_none(), "the menu closed");
+    assert!(session.is_help(), "keybinds opened the help panel");
     assert_eq!(
         session.renderer.overlay.as_ref().map(|o| o.0),
         Some(super::super::super::HELP_OVERLAY_TITLE)
@@ -1412,7 +1412,7 @@ fn command_menu_keybinds_opens_help() {
 fn command_menu_reload_sends_reload_config() {
     let (rx, mut conn, mut session) = command_menu_session("cmdmenu-reload");
     click_menu_row(&mut session, &mut conn, 2);
-    assert!(session.menu.is_none(), "the menu closed");
+    assert!(session.menu().is_none(), "the menu closed");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert!(session.flash.is_some(), "the reload flashes its outcome");
 }
@@ -1423,10 +1423,10 @@ fn command_menu_reload_sends_reload_config() {
 fn command_menu_detach_requests_exit() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-detach");
     click_menu_row(&mut session, &mut conn, 0);
-    assert!(session.menu.is_some(), "the header consumes the click");
+    assert!(session.menu().is_some(), "the header consumes the click");
     assert!(!session.detach_requested);
     click_menu_row(&mut session, &mut conn, 3);
-    assert!(session.menu.is_none(), "the menu closed");
+    assert!(session.menu().is_none(), "the menu closed");
     assert!(session.detach_requested, "detach was requested");
 }
 
@@ -1806,7 +1806,7 @@ fn border_colors_survive_a_sidebar_toggle_refit() {
     session.set_pane_borders(true);
     session.set_border_colors(Some(active), Some(plain));
     session.toggle_sidebar(&mut conn);
-    assert!(session.pending_grid_refit);
+    assert!(session.pending.grid_refit);
     session
         .resize_to(&mut conn, 80, 23, &mut RecordingSink::default())
         .expect("refit");

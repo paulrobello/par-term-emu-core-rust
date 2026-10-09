@@ -66,12 +66,24 @@ pub(super) fn compose_menu_panel(
 }
 
 impl WindowSession {
+    /// Make `modal` the one that owns input, replacing any other. A
+    /// replaced scroll viewport releases its hold on the focused pane
+    /// (snapping it to live), since nothing would be left to exit it.
+    pub(super) fn open_modal(&mut self, modal: Modal) {
+        if matches!(self.modal, Modal::Scroll) && !matches!(modal, Modal::Scroll) {
+            if let Some(id) = self.renderer.focused() {
+                self.renderer.exit_scroll_mode(id);
+            }
+        }
+        self.modal = modal;
+    }
+
     /// Enter the sticky resize mode (the `resize` chord): arrows adjust
     /// the focused pane's edges until Enter/Escape/`q` — tmux's resize
     /// step with an explicit mode instead of repeat-time. The flash cue
     /// rides the frame cadence on the status row.
-    pub(super) fn enter_resize_mode(&mut self) {
-        self.resize_mode = true;
+    pub(super) fn enter_resize(&mut self) {
+        self.open_modal(Modal::Resize);
         self.flash = Some(format!(
             "resize — arrows move the edge by {}, Enter/q exits",
             self.resize_step
@@ -85,22 +97,25 @@ impl WindowSession {
     /// and pgup/pgdn scroll, esc/Enter/q close and the prior frame
     /// repaints. Keys never reach the pane while it is up.
     pub(super) fn enter_help(&mut self) {
-        self.help_mode = true;
-        self.help_filter.clear();
-        self.help_filtering = false;
-        self.help_scroll = 0;
+        self.open_modal(Modal::Help(HelpState::default()));
         self.refresh_help();
     }
 
     /// Dismiss the help panel: the next frame's pane repaint restores the
     /// covered cells (the frame buffer resets, then panes repaint).
     pub(super) fn leave_help(&mut self) {
-        self.help_mode = false;
+        if matches!(self.modal, Modal::Help(_)) {
+            self.modal = Modal::None;
+        }
         self.renderer.set_overlay(None);
     }
 
     /// Re-compose the overlay from the live panel state (filter/scroll).
     pub(super) fn refresh_help(&mut self) {
+        let Modal::Help(help) = &self.modal else {
+            return;
+        };
+        let (filter, filtering, scroll) = (help.filter.clone(), help.filtering, help.scroll);
         let rows = super::super::help_rows(
             self.prefix,
             self.reload_key,
@@ -111,8 +126,7 @@ impl WindowSession {
         // the content window; the filter line joins them only while a
         // filter is open or set (the footer already advertises
         // `search /` — no idle placeholder row).
-        let filtering = self.help_filtering || !self.help_filter.is_empty();
-        let filter_lines = usize::from(filtering);
+        let filter_lines = usize::from(filtering || !filter.is_empty());
         let visible = usize::from(
             self.renderer
                 .window_size()
@@ -120,15 +134,9 @@ impl WindowSession {
                 .saturating_sub(3 + filter_lines as u16),
         )
         .max(1);
-        let content_len = super::super::help_content(&rows, &self.help_filter).len();
-        let start = super::super::help_window_start(content_len, visible, self.help_scroll);
-        let lines = super::super::compose_help_panel(
-            &rows,
-            &self.help_filter,
-            self.help_filtering,
-            visible,
-            self.help_scroll,
-        );
+        let content_len = super::super::help_content(&rows, &filter).len();
+        let start = super::super::help_window_start(content_len, visible, scroll);
+        let lines = super::super::compose_help_panel(&rows, &filter, filtering, visible, scroll);
         self.renderer.set_overlay(Some((
             super::super::HELP_OVERLAY_TITLE,
             lines,
@@ -142,25 +150,28 @@ impl WindowSession {
     /// key is consumed — nothing leaks into the pane.
     pub(super) fn help_key(&mut self, ev: &TermKeyEvent) {
         use crate::keyboard::TermKey;
-        if self.help_filtering {
+        let Modal::Help(help) = &mut self.modal else {
+            return;
+        };
+        if help.filtering {
             match ev.key() {
                 TermKey::Char => {
                     if let Some(ch) = char::from_u32(ev.codepoint) {
-                        self.help_filter.push(ch);
+                        help.filter.push(ch);
                     }
                 }
                 TermKey::Escape => {
                     self.leave_help();
                     return;
                 }
-                _ => self.help_filtering = false,
+                _ => help.filtering = false,
             }
             self.refresh_help();
             return;
         }
         match (ev.key(), ev.modifiers) {
             (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => {
-                self.help_filtering = true;
+                help.filtering = true;
                 self.refresh_help();
             }
             (TermKey::Char, 0) if ev.codepoint == u32::from(b'j') => self.help_scroll_by(1),
@@ -178,7 +189,9 @@ impl WindowSession {
 
     /// Scroll the help panel's content window (clamped by the compose).
     pub(super) fn help_scroll_by(&mut self, delta: isize) {
-        self.help_scroll = (self.help_scroll as isize + delta).max(0) as usize;
+        if let Modal::Help(help) = &mut self.modal {
+            help.scroll = (help.scroll as isize + delta).max(0) as usize;
+        }
         self.refresh_help();
     }
 
@@ -186,30 +199,33 @@ impl WindowSession {
     /// key path takes, for the byte spellings (Backspace pops the filter,
     /// `/` opens it, Enter commits or closes, `q` closes).
     pub(super) fn help_byte(&mut self, byte: u8) -> bool {
-        if self.help_filtering {
+        let Modal::Help(help) = &mut self.modal else {
+            return false;
+        };
+        if help.filtering {
             match byte {
                 0x7f => {
-                    self.help_filter.pop();
+                    help.filter.pop();
                     self.refresh_help();
                 }
-                b'\r' => self.help_filtering = false,
+                b'\r' => help.filtering = false,
                 b if byte != 0x1b && (b.is_ascii_graphic() || b == b' ') => {
-                    self.help_filter.push(b as char);
+                    help.filter.push(b as char);
                     self.refresh_help();
                 }
                 _ => {}
             }
-            return self.help_mode;
+            return matches!(self.modal, Modal::Help(_));
         }
         match byte {
             b'/' => {
-                self.help_filtering = true;
+                help.filtering = true;
                 self.refresh_help();
             }
             b'q' | b'\r' => self.leave_help(),
             _ => {}
         }
-        self.help_mode
+        matches!(self.modal, Modal::Help(_))
     }
 
     /// Open the session/window picker (the `picker` chord): the daemon\'s
@@ -263,20 +279,18 @@ impl WindowSession {
         if entries.is_empty() {
             return;
         }
-        self.picker_entries = entries;
-        self.picker_filter.clear();
-        self.picker_filtering = false;
-        self.picker_start = 0;
-        self.picker_mode = true;
         // The selection opens on the current session\'s header row (or the
         // first row when the view\'s session is unknown to the roster).
-        let (_rows, refs) = super::super::picker_rows(&self.picker_entries, Some(&self.window));
-        self.picker_selected = refs
+        let (_rows, refs) = super::super::picker_rows(&entries, Some(&self.window));
+        let selected = refs
             .iter()
-            .position(
-                |r| matches!(r, super::super::PickerRef::Session(i) if self.picker_entries[*i].current),
-            )
+            .position(|r| matches!(r, super::super::PickerRef::Session(i) if entries[*i].current))
             .unwrap_or(0);
+        self.open_modal(Modal::Picker(PickerState {
+            entries,
+            selected,
+            ..PickerState::default()
+        }));
         self.refresh_picker();
     }
 
@@ -301,20 +315,20 @@ impl WindowSession {
             return;
         }
         let open_on = workspaces.iter().position(|(_, _, active)| *active);
-        self.picker_workspaces = Some(workspaces);
-        self.picker_filter.clear();
-        self.picker_filtering = false;
-        self.picker_start = 0;
-        self.picker_mode = true;
-        self.picker_selected = open_on.unwrap_or(0);
+        self.open_modal(Modal::Picker(PickerState {
+            selected: open_on.unwrap_or(0),
+            workspaces: Some(workspaces),
+            ..PickerState::default()
+        }));
         self.refresh_ws_picker();
     }
 
     /// Dismiss the picker: the next frame\'s pane repaint restores the
     /// covered cells.
     pub(super) fn leave_picker(&mut self) {
-        self.picker_mode = false;
-        self.picker_workspaces = None;
+        if matches!(self.modal, Modal::Picker(_)) {
+            self.modal = Modal::None;
+        }
         self.renderer.set_overlay(None);
     }
 
@@ -344,16 +358,16 @@ impl WindowSession {
                 super::super::next_workspace_name(self.status.workspaces())
             }
         };
-        self.prompt_target = target;
-        self.prompt_text = seed;
-        self.prompt_mode = true;
+        self.open_modal(Modal::Prompt(PromptState { text: seed, target }));
         self.refresh_prompt();
     }
 
     /// Dismiss the prompt: the next frame's pane repaint restores the
     /// covered cells.
     pub(super) fn leave_prompt(&mut self) {
-        self.prompt_mode = false;
+        if matches!(self.modal, Modal::Prompt(_)) {
+            self.modal = Modal::None;
+        }
         self.renderer.set_overlay(None);
     }
 
@@ -380,14 +394,16 @@ impl WindowSession {
             MenuTarget::Commands => COMMAND_MENU_HEADER.to_string(),
         };
         let (rows, actions) = compose_menu_panel(&target, &name);
-        self.menu = Some(MenuState { target, actions });
+        self.open_modal(Modal::Menu(MenuState { target, actions }));
         self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
     }
 
     /// Dismiss the menu: the next frame's pane repaint restores the
     /// covered cells.
     pub(super) fn leave_menu(&mut self) {
-        self.menu = None;
+        if matches!(self.modal, Modal::Menu(_)) {
+            self.modal = Modal::None;
+        }
         self.renderer.set_overlay(None);
     }
 
@@ -406,7 +422,7 @@ impl WindowSession {
         if byte == b'q' || byte == 0x1b {
             self.leave_menu();
         }
-        self.menu.is_some()
+        matches!(self.modal, Modal::Menu(_))
     }
 
     /// One press click while the menu is up, at overlay row `row` (the
@@ -418,7 +434,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         row: usize,
     ) {
-        let Some(state) = self.menu.as_ref() else {
+        let Modal::Menu(state) = &self.modal else {
             return;
         };
         let Some(action) = state.actions.get(row).copied().flatten() else {
@@ -543,20 +559,23 @@ impl WindowSession {
 
     /// Re-compose the prompt overlay from the edit buffer.
     pub(super) fn refresh_prompt(&mut self) {
-        let title = match &self.prompt_target {
+        let Modal::Prompt(prompt) = &self.modal else {
+            return;
+        };
+        let title = match &prompt.target {
             PromptTarget::Pane => super::super::PROMPT_PANE_OVERLAY_TITLE,
             PromptTarget::Window(_) => super::super::PROMPT_WINDOW_OVERLAY_TITLE,
             PromptTarget::NewWindow => super::super::PROMPT_NEW_WINDOW_OVERLAY_TITLE,
             PromptTarget::Workspace(_) => super::super::PROMPT_WORKSPACE_OVERLAY_TITLE,
             PromptTarget::NewWorkspace => super::super::PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
         };
-        let footer = match self.prompt_target {
+        let footer = match prompt.target {
             PromptTarget::NewWindow | PromptTarget::NewWorkspace => super::super::NEW_PROMPT_FOOTER,
             _ => super::super::PROMPT_FOOTER,
         };
         self.renderer.set_overlay(Some((
             title,
-            super::super::compose_prompt_panel(&self.prompt_text, footer),
+            super::super::compose_prompt_panel(&prompt.text, footer),
             None,
         )));
     }
@@ -574,20 +593,26 @@ impl WindowSession {
             0x1b => self.leave_prompt(),
             b'\r' => self.commit_prompt(conn),
             0x03 => {
-                self.prompt_text.clear();
+                if let Modal::Prompt(prompt) = &mut self.modal {
+                    prompt.text.clear();
+                }
                 self.refresh_prompt();
             }
             0x7f => {
-                self.prompt_text.pop();
+                if let Modal::Prompt(prompt) = &mut self.modal {
+                    prompt.text.pop();
+                }
                 self.refresh_prompt();
             }
             b if b.is_ascii_graphic() || b == b' ' => {
-                self.prompt_text.push(b as char);
+                if let Modal::Prompt(prompt) = &mut self.modal {
+                    prompt.text.push(b as char);
+                }
                 self.refresh_prompt();
             }
             _ => {}
         }
-        self.prompt_mode
+        matches!(self.modal, Modal::Prompt(_))
     }
 
     /// One key event while the prompt is up: characters append, Escape
@@ -602,8 +627,10 @@ impl WindowSession {
         use crate::keyboard::TermKey;
         match ev.key() {
             TermKey::Char => {
-                if let Some(ch) = char::from_u32(ev.codepoint) {
-                    self.prompt_text.push(ch);
+                if let (Some(ch), Modal::Prompt(prompt)) =
+                    (char::from_u32(ev.codepoint), &mut self.modal)
+                {
+                    prompt.text.push(ch);
                 }
             }
             TermKey::Escape => {
@@ -612,9 +639,7 @@ impl WindowSession {
             }
             _ => {}
         }
-        if self.prompt_mode {
-            self.refresh_prompt();
-        }
+        self.refresh_prompt();
     }
 
     /// Commit the prompt: the pane spelling sets the sticky user title
@@ -624,12 +649,15 @@ impl WindowSession {
     /// an empty input cancels (an empty name is not expressible on the
     /// wire — the parses require one).
     pub(super) fn commit_prompt(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let text = self.prompt_text.trim().to_string();
+        let Modal::Prompt(prompt) = &self.modal else {
+            return;
+        };
+        let text = prompt.text.trim().to_string();
+        let target = prompt.target.clone();
         if text.is_empty() {
             self.leave_prompt();
             return;
         }
-        let target = self.prompt_target.clone();
         match target {
             PromptTarget::Pane => {
                 let _ = conn.send_checked(&format!(
@@ -701,24 +729,25 @@ impl WindowSession {
     /// selection, pan). The workspace picker composes its own rows and
     /// rides the same filter/window/footer machinery.
     pub(super) fn refresh_picker(&mut self) {
-        if self.picker_workspaces.is_some() {
+        let Modal::Picker(picker) = &self.modal else {
+            return;
+        };
+        if picker.workspaces.is_some() {
             self.refresh_ws_picker();
             return;
         }
-        let (rows, refs) = super::super::picker_rows(&self.picker_entries, Some(&self.window));
+        let (rows, refs) = super::super::picker_rows(&picker.entries, Some(&self.window));
         let visible = self.picker_visible();
         let (lines, filtered_refs, start) = super::super::compose_picker_panel(
             &rows,
             &refs,
-            &self.picker_filter,
-            self.picker_filtering,
-            self.picker_selected,
+            &picker.filter,
+            picker.filtering,
+            picker.selected,
             visible,
-            self.picker_start,
+            picker.start,
         );
-        self.picker_refs = filtered_refs;
-        self.picker_start = start;
-        self.picker_panel_len = lines.len();
+        self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer
             .set_overlay(Some((super::super::PICKER_OVERLAY_TITLE, lines, None)));
     }
@@ -727,7 +756,10 @@ impl WindowSession {
     /// compose uses; the filter line joins the chrome only while a
     /// filter is open or set).
     pub(super) fn picker_visible(&self) -> usize {
-        let filtering = self.picker_filtering || !self.picker_filter.is_empty();
+        let filtering = match &self.modal {
+            Modal::Picker(picker) => picker.filtering || !picker.filter.is_empty(),
+            _ => false,
+        };
         let filter_lines = usize::from(filtering);
         usize::from(
             self.renderer
@@ -741,12 +773,14 @@ impl WindowSession {
     /// Move the picker\'s selection cursor by `delta` content rows (the
     /// cursor wraps at the ends of the filtered list) and re-compose.
     pub(super) fn picker_move(&mut self, delta: isize) {
-        let count = self.picker_refs.len();
+        let Modal::Picker(picker) = &mut self.modal else {
+            return;
+        };
+        let count = picker.refs.len();
         if count == 0 {
             return;
         }
-        self.picker_selected =
-            (self.picker_selected as isize + delta).rem_euclid(count as isize) as usize;
+        picker.selected = (picker.selected as isize + delta).rem_euclid(count as isize) as usize;
         self.refresh_picker();
     }
 
@@ -755,16 +789,17 @@ impl WindowSession {
     /// row lands on that window — daemon-side `select-window`, then the
     /// select+resync re-seed every switch follows.
     pub(super) fn picker_activate(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let idx = self
-            .picker_selected
-            .min(self.picker_refs.len().saturating_sub(1));
-        let Some(item) = self.picker_refs.get(idx).copied() else {
+        let Modal::Picker(picker) = &self.modal else {
+            return;
+        };
+        let idx = picker.selected.min(picker.refs.len().saturating_sub(1));
+        let Some(item) = picker.refs.get(idx).copied() else {
             return;
         };
         let super::super::PickerRef::Workspace(index) = item else {
             return self.ws_picker_activate(conn, item);
         };
-        let Some(workspaces) = self.picker_workspaces.clone() else {
+        let Some(workspaces) = picker.workspaces.clone() else {
             return;
         };
         let Some((id, _, _)) = workspaces.get(index) else {
@@ -787,7 +822,10 @@ impl WindowSession {
             super::super::PickerRef::Session(i) | super::super::PickerRef::Window(i, _) => i,
             super::super::PickerRef::Workspace(_) => return,
         };
-        let entry = &self.picker_entries[entry_index];
+        let Modal::Picker(picker) = &self.modal else {
+            return;
+        };
+        let entry = &picker.entries[entry_index];
         let window = match item {
             // Unreachable: ws_picker_activate returned early on Workspace.
             super::super::PickerRef::Workspace(_) => None,
@@ -810,7 +848,10 @@ impl WindowSession {
     /// (`>`- and `*`-marked when active), through the same filter,
     /// cursor, windowing, and footer machinery as the session picker.
     pub(super) fn refresh_ws_picker(&mut self) {
-        let Some(workspaces) = self.picker_workspaces.clone() else {
+        let Modal::Picker(picker) = &self.modal else {
+            return;
+        };
+        let Some(workspaces) = &picker.workspaces else {
             return;
         };
         let mut rows: Vec<super::super::HelpRow> = Vec::new();
@@ -829,15 +870,13 @@ impl WindowSession {
         let (lines, filtered_refs, start) = super::super::compose_picker_panel(
             &rows,
             &refs,
-            &self.picker_filter,
-            self.picker_filtering,
-            self.picker_selected,
+            &picker.filter,
+            picker.filtering,
+            picker.selected,
             visible,
-            self.picker_start,
+            picker.start,
         );
-        self.picker_refs = filtered_refs;
-        self.picker_start = start;
-        self.picker_panel_len = lines.len();
+        self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer.set_overlay(Some((
             super::super::WORKSPACE_PICKER_OVERLAY_TITLE,
             lines,
@@ -855,27 +894,28 @@ impl WindowSession {
     ) {
         let _ = conn;
         use crate::keyboard::TermKey;
-        if self.picker_filtering {
+        let Modal::Picker(picker) = &mut self.modal else {
+            return;
+        };
+        if picker.filtering {
             match ev.key() {
                 TermKey::Char => {
                     if let Some(ch) = char::from_u32(ev.codepoint) {
-                        self.picker_filter.push(ch);
+                        picker.filter.push(ch);
                     }
                 }
                 TermKey::Escape => {
                     self.leave_picker();
                     return;
                 }
-                _ => self.picker_filtering = false,
+                _ => picker.filtering = false,
             }
-            if self.picker_mode {
-                self.refresh_picker();
-            }
+            self.refresh_picker();
             return;
         }
         match (ev.key(), ev.modifiers) {
             (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => {
-                self.picker_filtering = true;
+                picker.filtering = true;
                 self.refresh_picker();
             }
             (TermKey::Char, 0) if ev.codepoint == u32::from(b'j') => self.picker_move(1),
@@ -894,28 +934,31 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         byte: u8,
     ) -> bool {
-        if self.picker_filtering {
+        let Modal::Picker(picker) = &mut self.modal else {
+            return false;
+        };
+        if picker.filtering {
             match byte {
                 0x7f => {
-                    self.picker_filter.pop();
+                    picker.filter.pop();
                     self.refresh_picker();
                 }
                 0x1b => {
                     self.leave_picker();
                     return false;
                 }
-                b'\r' => self.picker_filtering = false,
+                b'\r' => picker.filtering = false,
                 b if b.is_ascii_graphic() || b == b' ' => {
-                    self.picker_filter.push(b as char);
+                    picker.filter.push(b as char);
                     self.refresh_picker();
                 }
                 _ => {}
             }
-            return self.picker_mode;
+            return matches!(self.modal, Modal::Picker(_));
         }
         match byte {
             b'/' => {
-                self.picker_filtering = true;
+                picker.filtering = true;
                 self.refresh_picker();
             }
             b'j' => self.picker_move(1),
@@ -924,7 +967,23 @@ impl WindowSession {
             b'q' | 0x1b => self.leave_picker(),
             _ => {}
         }
-        self.picker_mode
+        matches!(self.modal, Modal::Picker(_))
+    }
+
+    /// Record a picker compose's results on the open picker: the
+    /// filtered refs (the selection/click map), the panned window start,
+    /// and the panel length (the click hit-test's footer boundary).
+    fn store_picker_compose(
+        &mut self,
+        refs: Vec<super::super::PickerRef>,
+        start: usize,
+        len: usize,
+    ) {
+        if let Modal::Picker(picker) = &mut self.modal {
+            picker.refs = refs;
+            picker.start = start;
+            picker.panel_len = len;
+        }
     }
 
     /// One key while resize mode is up: arrows send one resize step for
@@ -932,7 +991,7 @@ impl WindowSession {
     /// wire's relative form); Escape and `q` exit; every other key exits
     /// the mode and is consumed (keys must not leak into the pane during
     /// a modal chord).
-    pub(super) fn resize_mode_key(
+    pub(super) fn resize_key(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
@@ -945,13 +1004,13 @@ impl WindowSession {
             TermKey::Left if ev.modifiers == 0 => self.send_resize(conn, "-L"),
             // Escape, q, Enter (as bytes via route_plain), or anything
             // else: the mode exits and the key is consumed.
-            _ => self.resize_mode = false,
+            _ => self.modal = Modal::None,
         }
     }
 
     /// One resize step for the focused pane, the wire's relative form.
     /// Best-effort — the %layout-change broadcast the resize queues
-    /// re-seeds the window through the pump's pending_layout path.
+    /// re-seeds the window through the pump's parked-layout path (PendingWork).
     pub(super) fn send_resize(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -997,7 +1056,9 @@ impl WindowSession {
     /// Leave scroll mode: clear the hold and snap the focused pane to
     /// live.
     pub(super) fn leave_scroll_mode(&mut self) {
-        self.scroll_mode = false;
+        if matches!(self.modal, Modal::Scroll) {
+            self.modal = Modal::None;
+        }
         if let Some(id) = self.renderer.focused() {
             self.renderer.exit_scroll_mode(id);
         }

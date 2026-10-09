@@ -82,7 +82,7 @@ impl WindowSession {
             super::super::ManagementKey::SwapPrev | super::super::ManagementKey::SwapNext => {
                 // Swap with the layout-order neighbor; the %layout-change
                 // broadcast the swap queues re-seeds the window through
-                // the pump's pending_layout path. Fewer than two panes is
+                // the pump's parked-layout path (PendingWork). Fewer than two panes is
                 // a no-op.
                 let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
                 if order.len() < 2 {
@@ -161,7 +161,7 @@ impl WindowSession {
                 // returning) is the feedback. The bottom row's presence
                 // changes the content height: park a refit so the report
                 // and re-fit follow (the sidebar toggle's contract).
-                self.pending_grid_refit = true;
+                self.pending.grid_refit = true;
                 self.draw_status_row();
             }
             super::super::ManagementKey::BorderCycle => {
@@ -507,7 +507,9 @@ impl WindowSession {
         // The cue resets with the view, then takes the new window's zoom
         // truth from the layout triple the size report queues below.
         self.zoomed = false;
-        self.scroll_mode = false;
+        if matches!(self.modal, Modal::Scroll) {
+            self.modal = Modal::None;
+        }
         if let Some((l, v, f)) =
             conn.drain_pending_events()
                 .into_iter()
@@ -551,11 +553,6 @@ impl WindowSession {
         self.draw_status_row();
         self.tab_strip.invalidate();
         self.draw_tab_strip();
-        // Stale parked state from the replaced view: a follow aimed at the
-        // old window is done (this reseed IS the follow landing), a parked
-        // layout triple was parsed against the old renderer's pane set.
-        self.pending_follow_window = None;
-        self.pending_follow_session = None;
-        self.pending_layout = None;
+        self.pending.clear_view_work();
     }
 }

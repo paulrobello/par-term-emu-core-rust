@@ -539,17 +539,9 @@ struct WindowSession {
     /// The window id this session mirrors, `@N`.
     window: String,
     renderer: PaneRenderer,
-    /// A `%layout-change` whose re-fit + replay the pump still owes.
-    pending_layout: Option<Vec<PaneRect>>,
-    /// A shared-selection move the pump still owes: the window another
-    /// client's select-window landed the shown session on (parked by the
-    /// nonblocking event handler, performed by the pump with the queries
-    /// and reseed it needs the connection for).
-    pending_follow_window: Option<String>,
-    /// A shared-selection move the pump still owes: the displayed session
-    /// a select-workspace landed on (`%client-session-changed`). The pump
-    /// resolves the session's active window by query before reseeding.
-    pending_follow_session: Option<String>,
+    /// Work the nonblocking handlers parked for the pump (it needs the
+    /// connection or the flush sink): see [`PendingWork`].
+    pending: PendingWork,
     /// The bottom row: queried state + paint/diff pair.
     status: status::StatusState,
     status_row: status::StatusRow,
@@ -558,8 +550,10 @@ struct WindowSession {
     /// Whether the status state is stale and needs a re-query before the
     /// next paint (the throttled re-query on agent/sessions churn).
     status_dirty: bool,
-    /// Whether scroll mode is up on the focused pane.
-    scroll_mode: bool,
+    /// The modal that owns the keyboard (and, for most, the pointer), if
+    /// any: see [`Modal`]. One field, so two open modals are
+    /// unrepresentable.
+    modal: Modal,
     /// The reload chord: the key byte matched after the prefix, and the
     /// detach prefix itself — both live-rebindable by the reload.
     prefix: u8,
@@ -571,43 +565,6 @@ struct WindowSession {
     /// Cells per resize step (config `resize-step`): each arrow press in
     /// resize mode and each cell of a divider drag.
     resize_step: u32,
-    /// Sticky resize mode: arrows adjust the focused pane's edges; Enter,
-    /// Escape, and `q` exit; any other key leaves the mode (consumed —
-    /// keys must not leak into the pane during a modal chord).
-    resize_mode: bool,
-    /// The bindings help panel is up (any key dismisses it).
-    help_mode: bool,
-    /// The help panel's filter box state (the `/` control).
-    help_filter: String,
-    /// Whether the filter box is actively typing.
-    help_filtering: bool,
-    /// The help panel's content-window scroll offset.
-    help_scroll: usize,
-    /// The session/window picker is up (the `picker` chord). The same
-    /// modal chrome as the help panel; selection-driven instead of
-    /// scroll-driven.
-    picker_mode: bool,
-    /// The picker's filter box state (the `/` control).
-    picker_filter: String,
-    /// Whether the picker's filter box is actively typing.
-    picker_filtering: bool,
-    /// The picker's selection cursor, over the FILTERED content rows.
-    picker_selected: usize,
-    /// The picker's content-window start (the listbox panning state).
-    picker_start: usize,
-    /// The queried picker state (sessions + their windows, as opened).
-    picker_entries: Vec<super::PickerEntry>,
-    /// The picker's current composed content refs (one per filtered
-    /// content row, in content order) — the selection/click target map.
-    picker_refs: Vec<super::PickerRef>,
-    /// The picker's composed panel length (filter + content + footer) —
-    /// the click hit-test's boundary between content rows and the
-    /// footer.
-    picker_panel_len: usize,
-    /// When set, the open picker is the WORKSPACE picker: the queried
-    /// `(id, name, active)` roster its rows compose from. `None` = the
-    /// session/window picker (or no picker open).
-    picker_workspaces: Option<Vec<(String, String, bool)>>,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
@@ -620,9 +577,6 @@ struct WindowSession {
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
     sidebar_on: bool,
-    /// The pump refits the grid (resize_to + full repaint) on the next
-    /// loop — set by the sidebar toggle, whose chord has no sink.
-    pending_grid_refit: bool,
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     drag_cursor_shape: bool,
@@ -633,17 +587,6 @@ struct WindowSession {
     /// The daemon's last known (unzoomed) tree layout, so the
     /// prefix+arrow navigation can aim through a zoom.
     daemon_layout: Vec<PaneRect>,
-    /// The rename prompt is up (the modal input overlay).
-    prompt_mode: bool,
-    /// The prompt's edit buffer.
-    prompt_text: String,
-    /// What the prompt edits (rename pane/window, or a new window's
-    /// name — the tab strip's `+`).
-    prompt_target: PromptTarget,
-    /// The context menu's modal state: which window/workspace it
-    /// targets and the action per overlay row. `None` when no menu is
-    /// up.
-    menu: Option<MenuState>,
     /// The status bar's visibility (the `status_bar` chord toggles it;
     /// shown by default).
     status_bar_on: bool,
@@ -739,6 +682,126 @@ struct MenuState {
     actions: Vec<Option<MenuAction>>,
 }
 
+/// The modal that owns input. At most one is up; opening one assigns
+/// [`WindowSession::modal`], replacing whatever was there.
+///
+/// Dispatch precedence, kept identical across the three dispatchers:
+/// a functional key ([`WindowSession::route_key`]) goes to whichever
+/// modal is up, then to the pane. A plain run
+/// ([`WindowSession::route_plain`]) goes to every modal except
+/// `Scroll` first; the scroll viewport sees the run through the prefix
+/// scanner, so a prefix chord still works while scrolling. The pointer
+/// ([`WindowSession::mouse_hit`]) checks the menu before the side
+/// panel and a drag in flight, and the prompt, picker, and help panel
+/// after them; `Scroll` and `Resize` leave the pointer to the panes.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+enum Modal {
+    /// No modal: input goes to the panes.
+    #[default]
+    None,
+    /// The prefix-[ keyboard scroll viewport on the focused pane.
+    Scroll,
+    /// The rename/create prompt.
+    Prompt(PromptState),
+    /// A context menu.
+    Menu(MenuState),
+    /// The bindings help panel.
+    Help(HelpState),
+    /// The session/window picker or the workspace picker.
+    Picker(PickerState),
+    /// Sticky resize mode: arrows adjust the focused pane's edges; Enter,
+    /// Escape, and `q` exit; any other key leaves the mode (consumed, so
+    /// keys never leak into the pane during a modal chord).
+    Resize,
+}
+
+impl Modal {
+    /// Whether the host cursor hides while this modal is up. Every modal
+    /// that paints an overlay or owns the keys hides it; the scroll
+    /// viewport keeps it (the pane's cursor maps through the scroll).
+    fn hides_cursor(&self) -> bool {
+        matches!(
+            self,
+            Modal::Prompt(_) | Modal::Menu(_) | Modal::Help(_) | Modal::Picker(_) | Modal::Resize
+        )
+    }
+}
+
+/// The rename/create prompt's state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptState {
+    /// The edit buffer.
+    text: String,
+    /// What the prompt edits (rename pane/window, or a new window's
+    /// name — the tab strip's `+`).
+    target: PromptTarget,
+}
+
+/// The bindings help panel's state.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct HelpState {
+    /// The filter box's contents (the `/` control).
+    filter: String,
+    /// Whether the filter box is actively typing.
+    filtering: bool,
+    /// The content window's scroll offset.
+    scroll: usize,
+}
+
+/// The picker's state: the session/window picker, or the workspace
+/// picker when `workspaces` is set.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct PickerState {
+    /// The filter box's contents (the `/` control).
+    filter: String,
+    /// Whether the filter box is actively typing.
+    filtering: bool,
+    /// The selection cursor, over the FILTERED content rows.
+    selected: usize,
+    /// The content-window start (the listbox panning state).
+    start: usize,
+    /// The queried session/window roster, as opened.
+    entries: Vec<super::PickerEntry>,
+    /// The current composed content refs (one per filtered content row,
+    /// in content order): the selection/click target map.
+    refs: Vec<super::PickerRef>,
+    /// The composed panel length (filter + content + footer): the click
+    /// hit-test's boundary between content rows and the footer.
+    panel_len: usize,
+    /// When set, this is the WORKSPACE picker: the queried
+    /// `(id, name, active)` roster its rows compose from.
+    workspaces: Option<Vec<(String, String, bool)>>,
+}
+
+/// Work the nonblocking event handlers and the sink-less chords park for
+/// the pump, which owns the connection and the flush sink.
+#[derive(Debug, Default)]
+struct PendingWork {
+    /// A `%layout-change` whose re-fit + replay the pump still owes.
+    layout: Option<Vec<PaneRect>>,
+    /// A shared-selection move: the window another client's
+    /// select-window landed the shown session on.
+    follow_window: Option<String>,
+    /// A shared-selection move: the displayed session a
+    /// select-workspace landed on (`%client-session-changed`); the pump
+    /// resolves its active window by query before reseeding.
+    follow_session: Option<String>,
+    /// Refit the grid (resize_to + full repaint) on the next loop: set by
+    /// the sidebar and status-bar toggles, whose chords have no sink.
+    grid_refit: bool,
+}
+
+impl PendingWork {
+    /// Forget work parked against a view a reseed just replaced: a
+    /// follow aimed at the old window is done (the reseed IS the follow
+    /// landing), and a parked layout was parsed against the old pane set.
+    fn clear_view_work(&mut self) {
+        self.layout = None;
+        self.follow_window = None;
+        self.follow_session = None;
+    }
+}
+
 impl WindowSession {
     fn new(cols: u16, rows: u16) -> Self {
         // The status bar starts shown and the side panel hidden (the
@@ -748,43 +811,22 @@ impl WindowSession {
         Self {
             window: String::new(),
             renderer: PaneRenderer::new(frame_w, frame_h, RenderOptions::default().glyphs),
-            pending_layout: None,
-            pending_follow_window: None,
-            pending_follow_session: None,
+            pending: PendingWork::default(),
             status: status::StatusState::default(),
             status_row: status::StatusRow::new(cols),
             tab_strip: TabStrip::new(cols),
             status_dirty: true,
-            scroll_mode: false,
+            modal: Modal::None,
             prefix: crate::mux::attach::C_B,
             reload_key: 0x12, // C-r
             management: super::super::config::Management::default(),
             resize_step: 1,
-            resize_mode: false,
-            help_mode: false,
-            help_filter: String::new(),
-            help_filtering: false,
-            help_scroll: 0,
-            picker_mode: false,
-            picker_filter: String::new(),
-            picker_filtering: false,
-            picker_selected: 0,
-            picker_start: 0,
-            picker_entries: Vec::new(),
-            picker_refs: Vec::new(),
-            picker_panel_len: 0,
-            picker_workspaces: None,
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar_on: false,
-            pending_grid_refit: false,
             drag_cursor_shape: false,
             zoomed: false,
             daemon_layout: Vec::new(),
-            prompt_mode: false,
-            prompt_text: String::new(),
-            prompt_target: PromptTarget::Window(String::new()),
-            menu: None,
             status_bar_on: true,
             stdin_primer: Vec::new(),
             literal: crate::mux::attach::C_B,
@@ -844,59 +886,23 @@ impl WindowSession {
                 return Ok(()); // the daemon is gone; a clean exit-0 like passthrough's %exit path
             }
 
-            // 1b. Apply a parked layout change: re-fit the emulators and
-            //     re-seed them from fresh daemon replays.
-            if let Some(layout) = self.pending_layout.take() {
-                self.daemon_layout = layout.clone();
-                self.renderer.apply_layout(layout);
-                self.replay_all_panes(conn);
-            }
+            // 2. Parked work the event handlers queued (a layout re-fit,
+            //    shared-selection follows), so this tick's input routes
+            //    against the newest layout.
+            self.apply_pending(conn, sink)?;
 
-            // 1b. Parked shared-selection follows: the reseed (and the
-            //     session follow's list-windows query) need the
-            //     connection, so the nonblocking handler only parks them
-            //     and the pump performs them here. No select is ever sent
-            //     — the daemon already moved the shared pointer, and a
-            //     re-select would echo the notification back as a loop.
-            if let Some(window) = self.pending_follow_window.take() {
-                if window != self.window {
-                    self.reseed_window(conn, &window);
-                }
-            }
-            if let Some(session) = self.pending_follow_session.take() {
-                if let Some(window) = session_active_window(conn, &session) {
-                    if window != self.window {
-                        self.reseed_window(conn, &window);
-                    }
-                }
-            }
-
-            // 2. Stdin: prefix routing (d detaches, [ enters scroll mode,
+            // 3. Stdin: prefix routing (d detaches, [ enters scroll mode,
             //    n/p/(/) switch windows/sessions), then keys/mouse to the
             //    focused pane.
             if self.pump_stdin(conn, &mut stdin, &mut prefix_pending) {
                 return Ok(());
             }
 
-            // 2b. A sidebar toggle parked a grid refit: the chord has no
-            //     flush sink, so the pump performs the resize_to here —
-            //     its repaint_all is what erases the vacated region.
-            if self.pending_grid_refit {
-                self.pending_grid_refit = false;
-                // The toggle that parked this moved the status bar or the
-                // side panel: re-derive the frame before refitting to it.
-                self.refresh_geometry();
-                let (frame_w, frame_h) = self.geometry.frame_size();
-                self.resize_to(conn, frame_w, frame_h, sink)?;
-                // The refit reconstructed the renderer, dropping the
-                // strip's sections; re-query so the next frame paints
-                // them (a changed mark rides the same dirty flag).
-                if self.sidebar_on {
-                    self.refresh_sidebar(conn);
-                }
-            }
+            // 4. Parked work the chords just queued (a sidebar or status
+            //    bar toggle's grid refit): the chords have no flush sink.
+            self.apply_pending(conn, sink)?;
 
-            // 3. Host resize (SIGWINCH): report the new grid, re-fit. The
+            // 5. Host resize (SIGWINCH): report the new grid, re-fit. The
             //    daemon's window renders into the rows between the tab
             //    strip and the status bar, so the size report carries the
             //    content height.
@@ -912,7 +918,7 @@ impl WindowSession {
                 self.draw_tab_strip();
             }
 
-            // 3b. Status: the throttled re-query. Any %agent-state-changed
+            // 6. Status: the throttled re-query. Any %agent-state-changed
             //     / %agent-telemetry-changed / %sessions-changed (and
             //     renames) marked the state stale; one re-query per burst
             //     serves them all. The shown session being gone ends the
@@ -924,14 +930,17 @@ impl WindowSession {
                 return Ok(());
             }
 
-            // 4. Frame whatever accumulated (panes + the status row's own
-            //    diff), then wait for the next push — the frame cadence
-            //    floods coalesce into. The flash clears about a second
-            //    after it first rides a frame.
+            // 7. The flash clears about a second after it first rides a
+            //    frame.
             self.tick_flash(std::time::Instant::now());
-            // 3c. Divider drag: apply the accumulated delta at frame
-            //     cadence — one resize-pane per unapplied cell.
+
+            // 8. Divider drag: apply the accumulated delta at frame
+            //    cadence — one resize-pane per unapplied cell.
             self.apply_drag(conn);
+
+            // 9. Frame whatever accumulated (panes + the status row's own
+            //    diff), then wait for the next push — the frame cadence
+            //    floods coalesce into.
             self.frame(sink);
             match conn.recv_timeout(super::POLL) {
                 Ok(event) => {
@@ -943,6 +952,49 @@ impl WindowSession {
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
         }
+    }
+
+    /// Perform the work parked in [`PendingWork`], in its fixed order: a
+    /// layout re-fit (re-seeded from fresh replays), the shared-selection
+    /// follows, then a grid refit. No select is ever sent for a follow:
+    /// the daemon already moved the shared pointer, and a re-select would
+    /// echo the notification back as a loop.
+    fn apply_pending(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        sink: &mut dyn FlushSink,
+    ) -> Result<(), String> {
+        if let Some(layout) = self.pending.layout.take() {
+            self.daemon_layout = layout.clone();
+            self.renderer.apply_layout(layout);
+            self.replay_all_panes(conn);
+        }
+        if let Some(window) = self.pending.follow_window.take() {
+            if window != self.window {
+                self.reseed_window(conn, &window);
+            }
+        }
+        if let Some(session) = self.pending.follow_session.take() {
+            if let Some(window) = session_active_window(conn, &session) {
+                if window != self.window {
+                    self.reseed_window(conn, &window);
+                }
+            }
+        }
+        if std::mem::take(&mut self.pending.grid_refit) {
+            // The toggle that parked this moved the status bar or the
+            // side panel: re-derive the frame before refitting to it. The
+            // resize_to's repaint_all is what erases the vacated region.
+            self.refresh_geometry();
+            let (frame_w, frame_h) = self.geometry.frame_size();
+            self.resize_to(conn, frame_w, frame_h, sink)?;
+            // The refit reconstructed the renderer, dropping the strip's
+            // sections; re-query so the next frame paints them.
+            if self.sidebar_on {
+                self.refresh_sidebar(conn);
+            }
+        }
+        Ok(())
     }
 
     /// The pump's throttled status step: re-query the bar's facts, reuse
@@ -1041,8 +1093,8 @@ impl WindowSession {
                         // A geometry change re-fit the daemon's panes; the
                         // local emulators re-fit (cleared) with the layout
                         // and re-seed from fresh replays — the pump's
-                        // step 1b, since replay needs the connection.
-                        self.pending_layout = Some(next);
+                        // step 2 (PendingWork), since replay needs the connection.
+                        self.pending.layout = Some(next);
                     }
                     Ok(_) => {}
                     Err(err) => eprintln!("par-mux: {err}"),
@@ -1052,7 +1104,7 @@ impl WindowSession {
             TmuxNotification::Exit => EventOutcome::End,
             // The status facts: agent churn, session churn, and renames
             // all re-query (the contract's throttled re-query; one burst
-            // of events collapses into one refresh in the pump's step 3b).
+            // of events collapses into one refresh in the pump's step 6).
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
                 // An external focus move on the shown window re-points the
                 // local highlight; on any other window it is chrome-only.
@@ -1075,7 +1127,7 @@ impl WindowSession {
                 if self.status.session_id.as_deref() == Some(session_id.as_str())
                     && window_id != self.window
                 {
-                    self.pending_follow_window = Some(window_id.clone());
+                    self.pending.follow_window = Some(window_id.clone());
                 }
                 self.status_dirty = true;
                 EventOutcome::Continue
@@ -1085,7 +1137,7 @@ impl WindowSession {
                 // the follow; the pump resolves the session's active
                 // window by query and reseeds. Re-selecting here would
                 // echo the notification back into a loop.
-                self.pending_follow_session = Some(session_id.clone());
+                self.pending.follow_session = Some(session_id.clone());
                 self.status_dirty = true;
                 EventOutcome::Continue
             }
