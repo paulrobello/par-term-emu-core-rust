@@ -128,10 +128,10 @@ impl SgrMouse {
 
 /// The bracketed-paste terminator the opaque body scan hunts for.
 const PASTE_END: &[u8] = b"\x1b[201~";
-/// A paste opened by `ESC[200~` that never sees its terminator stops
-/// holding the stream after this many held bytes — the same give-up shape
-/// the OSC 11 report drop uses, sized for real pastes (megabytes) rather
-/// than the 64-byte report bound.
+/// A paste opened by `ESC[200~` stops holding its body after this many
+/// bytes: the held bytes stream out as a `Token::Paste` chunk and the
+/// parser stays in paste mode until the terminator, so memory stays bounded
+/// and no byte of a huge clipboard reaches the chord scanner.
 const PASTE_HELD_CAP: usize = 1 << 20;
 
 /// Incremental stdin tokenizer: feed raw bytes, take complete tokens. A
@@ -171,8 +171,14 @@ impl InputParser {
                     }
                     None => {
                         if data.len() - i > PASTE_HELD_CAP {
-                            tokens.push(Token::Paste(data[i..].to_vec()));
-                            self.paste = false;
+                            // Stop holding, but stay in paste mode: the rest
+                            // of a huge clipboard must never reach the chord
+                            // scanner. Keep a terminator-sized tail pending
+                            // so a terminator split across this flush is
+                            // still recognized.
+                            let flush_end = data.len() - (PASTE_END.len() - 1);
+                            tokens.push(Token::Paste(data[i..flush_end].to_vec()));
+                            self.pending = data[flush_end..].to_vec();
                         } else {
                             self.pending = data[i..].to_vec();
                         }
@@ -930,8 +936,38 @@ mod tests {
         assert_eq!(merge_adjacent_bytes(bursted), merge_adjacent_bytes(tokens));
     }
 
-    /// An unterminated paste stops holding the stream at the cap and the
-    /// parser keeps working (the OSC 11 give-up shape, sized for pastes).
+    /// A paste larger than the hold cap streams out as successive Paste
+    /// chunks and STAYS in paste mode: a chord byte and an escape sequence
+    /// past the cap are still paste text, every byte arrives as Paste, and
+    /// the terminator (even split across the flush) ends the paste.
+    #[test]
+    fn paste_past_the_cap_streams_and_stays_opaque() {
+        let mut parser = InputParser::default();
+        let mut tokens = parser.feed(PASTE_START);
+        let mut body = vec![b'x'; PASTE_HELD_CAP + 10];
+        body.extend_from_slice(&[0x02, b'x']); // prefix + kill-pane chord
+        body.extend_from_slice(b"\x1b[3~"); // a key sequence
+        body.extend_from_slice(&vec![b'y'; PASTE_HELD_CAP]);
+        let mut stream = body.clone();
+        stream.extend_from_slice(PASTE_END);
+        for chunk in stream.chunks(PASTE_HELD_CAP / 3) {
+            tokens.extend(parser.feed(chunk));
+        }
+        let mut pasted = Vec::new();
+        for token in &tokens {
+            match token {
+                Token::Paste(b) => pasted.extend_from_slice(b),
+                Token::Bytes(b) => assert!(b.is_empty(), "paste bytes leaked as plain"),
+                other => panic!("non-paste token inside a paste: {other:?}"),
+            }
+        }
+        assert_eq!(pasted, body, "every body byte arrives as Paste, in order");
+        // The terminator ended the paste: the parser is healthy.
+        resync_health_check(&parser.feed(b"x"));
+    }
+
+    /// An unterminated paste stops holding at the cap — the held body
+    /// streams out as Paste — but stays in paste mode until its terminator.
     #[test]
     fn unterminated_paste_flushes_at_the_cap() {
         let mut parser = InputParser::default();
@@ -941,15 +977,25 @@ mod tests {
         let chunk = vec![b'x'; PASTE_HELD_CAP / 2];
         assert!(parser.feed(&chunk).is_empty());
         assert!(parser.feed(&chunk).is_empty());
-        // Crossing the cap flushes the whole held body and exits paste mode.
+        // Crossing the cap flushes the held body (less a terminator-sized
+        // tail) as Paste and stays in paste mode.
         let tokens = parser.feed(&chunk);
+        assert!(
+            matches!(tokens.as_slice(), [Token::Paste(_)]),
+            "{}",
+            tokens.len()
+        );
         assert_eq!(
             bytes_of(&tokens).len(),
-            PASTE_HELD_CAP + PASTE_HELD_CAP / 2,
-            "the entire held body flushed"
+            PASTE_HELD_CAP + PASTE_HELD_CAP / 2 - (PASTE_END.len() - 1),
+            "the held body flushed"
         );
-        // The parser stays healthy.
-        let tokens = parser.feed(b"x");
-        resync_health_check(&tokens);
+        // Still pasting: a chord byte is held as body, not decoded.
+        assert!(parser.feed(&[0x02]).is_empty());
+        // The terminator ends it; the tail arrives as Paste.
+        let tokens = parser.feed(PASTE_END);
+        assert_eq!(bytes_of(&tokens), b"xxxxx\x02");
+        assert!(tokens.iter().all(|t| matches!(t, Token::Paste(_))));
+        resync_health_check(&parser.feed(b"x"));
     }
 }
