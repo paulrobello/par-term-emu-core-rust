@@ -32,6 +32,14 @@ pub mod test_support {
     pub use super::render::{Glyphs, PaneRenderer};
 }
 
+// Fuzz-only re-export (ENH-046): `input` is pub(crate), the fuzz crate is an
+// external path dependency, and cargo-fuzz is the only builder that sets the cfg.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_support {
+    pub use super::input::{InputParser, Token};
+}
+
 // Non-render scaffolding (ARC-003): panel composition (help, prompts,
 // picker, sidebar) and target/list-line parsing. The passthrough
 // `Session` type, its constructor and its two dispatchers (`route_bytes`,

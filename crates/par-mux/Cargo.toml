@@ -87,3 +87,7 @@ serde = ["par-term-emu-core/serde"]
 mux-bin = ["mux", "dep:clap"]
 # The `par-mux attach` client TUI; rides the daemon binary's clap surface.
 attach = ["mux-bin", "dep:crossterm", "dep:ratatui"]
+
+# cargo-fuzz builds with `--cfg fuzzing` (the ENH-046 attach_input entry point).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

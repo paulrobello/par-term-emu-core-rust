@@ -19,12 +19,13 @@ parking_lot = "0.12.5"
 [dependencies.par-term-emu-core-rust]
 path = ".."
 default-features = false
-features = ["rust-only", "mux"]
+features = ["rust-only", "mux", "attach"]
 
 # rust-only: no Python toolchain in the fuzzer (see CONTRIBUTING.md "Fuzzing").
 # The targets mirror the untrusted-byte entry points: the whole VTE pipeline,
-# the Sixel state machine, the Kitty APC parser, the tmux control parser, and
-# (ENH-018, +mux) the par-mux control-protocol command and hook-report grammars.
+# the Sixel state machine, the Kitty APC parser, the tmux control parser,
+# (ENH-018, +mux) the par-mux control-protocol command and hook-report
+# grammars, and (ENH-046, +attach) the attach client's stdin tokenizer.
 
 [[bin]]
 name = "terminal_process"
@@ -71,6 +72,13 @@ bench = false
 [[bin]]
 name = "mux_hook_report"
 path = "fuzz_targets/mux_hook_report.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attach_input"
+path = "fuzz_targets/attach_input.rs"
 test = false
 doc = false
 bench = false
