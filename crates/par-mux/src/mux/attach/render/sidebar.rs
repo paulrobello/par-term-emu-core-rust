@@ -6,18 +6,29 @@ use super::*;
 impl PaneRenderer {
     /// The side panel's width (0 = hidden).
     pub(crate) fn sidebar_width(&self) -> u16 {
-        self.sidebar_w
+        self.geometry.sidebar_w
     }
 
     /// Show the side panel at `width` columns (0 hides it). The daemon
     /// never learns of the strip — window_size reports the reduced grid,
     /// and the next refresh-client report re-divides the panes around it.
+    /// Sessions push their whole geometry ([`Self::set_geometry`]).
+    #[cfg(test)]
     pub(crate) fn set_sidebar_width(&mut self, width: u16) {
-        if self.sidebar_w != width {
-            self.sidebar_w = width;
+        let mut geometry = self.geometry;
+        geometry.sidebar_w = width;
+        self.set_geometry(geometry);
+    }
+
+    /// Adopt the session's frame geometry (the one owner of the
+    /// host/frame/content mapping, ARC-128). A changed panel width drops
+    /// the stale sections and repaints.
+    pub(crate) fn set_geometry(&mut self, geometry: super::geometry::FrameGeometry) {
+        if self.geometry.sidebar_w != geometry.sidebar_w {
             self.sidebar_sections = None;
             self.dirty = true;
         }
+        self.geometry = geometry;
     }
 
     /// Replace the panel's sections (the workspace roster query's result)
@@ -38,14 +49,16 @@ impl PaneRenderer {
     /// rebases the renderer's rows +1 — so the lookup shifts the host
     /// row down one before matching.
     pub(crate) fn sidebar_row_at(&self, x: u16, y: u16) -> Option<String> {
-        if x >= self.sidebar_w || y == 0 {
+        let w = self.geometry.sidebar_w;
+        let (x, frame_y) = self.geometry.host_to_frame(x, y)?;
+        if x >= w {
             return None;
         }
         let sections = self.sidebar_sections.as_ref()?;
-        let lines = super::super::compose_sidebar(sections, self.sidebar_w, self.height);
+        let lines = super::super::compose_sidebar(sections, w, self.height);
         lines
             .into_iter()
-            .find(|line| line.y == y - 1 && line.id.is_some() && x >= line.x && x < line.x_end)
+            .find(|line| line.y == frame_y && line.id.is_some() && x >= line.x && x < line.x_end)
             .and_then(|line| line.id)
     }
 
@@ -55,7 +68,7 @@ impl PaneRenderer {
     /// accent + bold, herdr's emphasis). Clipped to the strip; composed
     /// by [`super::super::compose_sidebar`].
     pub(super) fn paint_sidebar(&mut self) {
-        let w = self.sidebar_w;
+        let w = self.geometry.sidebar_w;
         if w == 0 {
             return;
         }
@@ -129,7 +142,7 @@ impl WindowSession {
     pub(super) fn toggle_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         self.sidebar_on = !self.sidebar_on;
         self.chrome_geometry_changed();
-        self.renderer.set_sidebar_width(self.geometry.sidebar_w);
+        self.renderer.set_geometry(self.geometry);
         // The refit runs on the pump (it owns the flush sink): resize_to
         // reports the new grid, then repaint_all erases the region the
         // old layout vacated — the plain %layout-change re-seed never

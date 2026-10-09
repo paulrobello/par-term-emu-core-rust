@@ -411,7 +411,15 @@ impl PaneRenderer {
             focused: None,
             width,
             height,
-            sidebar_w: options.sidebar_width,
+            // A standalone renderer's own geometry: its buffer is the
+            // frame below the strip, status bar off. A session overrides
+            // it with its own (`set_geometry`).
+            geometry: super::geometry::FrameGeometry::new(
+                width,
+                height.saturating_add(super::geometry::STRIP_ROWS),
+                false,
+                options.sidebar_width,
+            ),
             sidebar_sections: None,
             user_titles: HashMap::new(),
             glyphs: options.glyphs,
@@ -442,7 +450,7 @@ impl PaneRenderer {
             show_label_in_border: self.show_label_in_border,
             pane_gaps: self.pane_gaps,
             scrollbar_gutter: self.scrollbar_gutter,
-            sidebar_width: self.sidebar_w,
+            sidebar_width: self.geometry.sidebar_w,
             border_active: self.border_active,
             border_plain: self.border_plain,
         }
@@ -492,7 +500,10 @@ impl PaneRenderer {
     /// less the side panel's strip (the panel is a client-only overlay —
     /// the daemon never learns of it), full height.
     pub fn window_size(&self) -> (u16, u16) {
-        (self.width.saturating_sub(self.sidebar_w), self.height)
+        (
+            self.width.saturating_sub(self.geometry.sidebar_w),
+            self.height,
+        )
     }
 
     /// One painted cell of the last frame — the test/introspection read
@@ -592,19 +603,20 @@ impl PaneRenderer {
     pub(crate) fn overlay_row_at(&self, x: u16, y: u16) -> Option<usize> {
         let (x0, y0, inner, height) = self.overlay_geometry()?;
         let x = usize::from(x);
-        let y = usize::from(y);
         if x < x0 + 1 || x > x0 + inner {
             return None;
         }
-        // The overlay paints at buffer rows y0..y0+height+1, and the
-        // frame flushes buffer row b at HOST row b+1 (the strip-row
-        // rebase) — so panel row r sits at host y0+2+r. The old mapping
+        // The overlay paints at buffer rows y0..y0+height+1 (its top
+        // border at y0, panel row r at y0+1+r); the host row maps into
+        // the buffer through the geometry's strip rebase. The old mapping
         // dropped that rebase and read every click one row low (the
         // manual-pass round-8 report: menu actions fired the neighbor).
-        if y < y0 + 2 || y > y0 + height + 1 {
+        let (_, frame_y) = self.geometry.host_to_frame(0, y)?;
+        let frame_y = usize::from(frame_y);
+        if frame_y < y0 + 1 || frame_y > y0 + height {
             return None;
         }
-        Some(y - y0 - 2)
+        Some(frame_y - y0 - 1)
     }
 
     /// Set (or clear) the modal overlay's title, rows, and scroll state.
@@ -728,11 +740,10 @@ impl PaneRenderer {
         if col >= usize::from(view_w) || row >= usize::from(view_h) {
             return None;
         }
-        Some((
-            rect.x + self.sidebar_w + inset_x + col as u16,
-            rect.y + inset_y + row as u16,
-            cursor.style,
-        ))
+        let (x, y) = self
+            .geometry
+            .content_to_frame(rect.x + inset_x + col as u16, rect.y + inset_y + row as u16);
+        Some((x, y, cursor.style))
     }
 
     /// The rect the pane's chrome and content paint into: the layout
@@ -745,12 +756,14 @@ impl PaneRenderer {
             ..PaneChrome::default()
         };
         let (gap, _, width, height) = gaps_only.interior(rect.width, rect.height);
-        let mut r = *rect;
-        r.x += gap + self.sidebar_w;
-        r.y += gap;
-        r.width = width;
-        r.height = height;
-        r
+        let (x, y) = self.geometry.content_to_frame(rect.x + gap, rect.y + gap);
+        PaneRect {
+            x,
+            y,
+            width,
+            height,
+            ..*rect
+        }
     }
 
     /// The per-pane chrome this renderer paints (`pane-borders`,
@@ -1089,9 +1102,10 @@ impl PaneRenderer {
         // The clamp counts the side panel's offset: a layout broadcast
         // racing the toggle still carries full-width rects, and painting
         // them offset would run past the buffer's right edge.
-        let max_cols = view_w
-            .min(grid.cols() as u16)
-            .min(self.width.saturating_sub(rect.x + self.sidebar_w + inset_x));
+        let max_cols = view_w.min(grid.cols() as u16).min(
+            self.width
+                .saturating_sub(rect.x + self.geometry.sidebar_w + inset_x),
+        );
         for row in 0..max_rows {
             // View row r: live grid row r - S when r >= S; otherwise the
             // scrollback line S_len - S + r (newest history first).
@@ -1115,7 +1129,7 @@ impl PaneRenderer {
                     }
                 };
                 let (x, y) = (
-                    rect.x + self.sidebar_w + inset_x + col,
+                    rect.x + self.geometry.sidebar_w + inset_x + col,
                     rect.y + inset_y + row,
                 );
                 // The wide base already marked this spacer skip; painting
@@ -1160,7 +1174,7 @@ impl PaneRenderer {
         // scroll offset is > 0 — one `▐` at the view top's proportional
         // depth into the history.
         if (self.scrollbar_gutter || scroll > 0) && view_h > 0 {
-            let gx = rect.x + self.sidebar_w + inset_x + view_w;
+            let gx = rect.x + self.geometry.sidebar_w + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
                     / (scroll.min(u16::MAX as usize) as u32 + u32::from(view_h));
@@ -1202,12 +1216,22 @@ impl PaneRenderer {
                 // vertical boundary (divider cell in a's last column).
                 if a.x + a.width == b.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((b.x.saturating_sub(1) + self.sidebar_w, y, a.pane, b.pane));
+                        vertical.push((
+                            b.x.saturating_sub(1) + self.geometry.sidebar_w,
+                            y,
+                            a.pane,
+                            b.pane,
+                        ));
                     }
                 }
                 if b.x + b.width == a.x && rows_overlap(a, b) {
                     for y in row_overlap(a, b) {
-                        vertical.push((a.x.saturating_sub(1) + self.sidebar_w, y, b.pane, a.pane));
+                        vertical.push((
+                            a.x.saturating_sub(1) + self.geometry.sidebar_w,
+                            y,
+                            b.pane,
+                            a.pane,
+                        ));
                     }
                 }
                 // Same along y for a horizontal boundary. (boundary, along)
@@ -1217,7 +1241,7 @@ impl PaneRenderer {
                     for x in col_overlap(a, b) {
                         horizontal.push((
                             b.y.saturating_sub(1),
-                            x + self.sidebar_w,
+                            x + self.geometry.sidebar_w,
                             a.pane,
                             b.pane,
                         ));
@@ -1227,7 +1251,7 @@ impl PaneRenderer {
                     for x in col_overlap(a, b) {
                         horizontal.push((
                             a.y.saturating_sub(1),
-                            x + self.sidebar_w,
+                            x + self.geometry.sidebar_w,
                             b.pane,
                             a.pane,
                         ));
@@ -1267,7 +1291,7 @@ impl PaneRenderer {
                     && self
                         .layout
                         .iter()
-                        .any(|r| r.pane == *a && x == self.sidebar_w + r.x + r.width - 1)
+                        .any(|r| r.pane == *a && x == self.geometry.sidebar_w + r.x + r.width - 1)
                 {
                     continue;
                 }

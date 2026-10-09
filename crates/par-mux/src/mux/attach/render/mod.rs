@@ -335,11 +335,12 @@ pub struct PaneRenderer {
     /// cells per side; the band cells stay at the frame's theme-bg fill.
     /// Default 0 — today's edge-to-edge tiling.
     pane_gaps: u16,
-    /// The workspace side panel's width in columns (0 = hidden). The
-    /// daemon's layout is the REDUCED grid (window_size reports the
-    /// width minus this); every layout x paints offset right by it, and
-    /// the strip columns hold the panel.
-    sidebar_w: u16,
+    /// The session's frame geometry (ARC-128): the content rect every
+    /// layout rect maps through. Its `sidebar_w` is the side panel's
+    /// width (0 = hidden) — the daemon's layout is the REDUCED grid, so
+    /// every layout x paints offset right by it and the strip columns
+    /// hold the panel.
+    geometry: geometry::FrameGeometry,
     /// The panel's sections (queried workspace roster, more to come) —
     /// `None` while hidden or before the first refresh.
     sidebar_sections: Option<Vec<super::SidebarSection>>,
@@ -447,9 +448,7 @@ fn render_session_inner(
     // the reduced grid and the daemon's first division reserves it.
     session.sidebar_on = chords.sidebar_on_launch;
     session.chrome_geometry_changed();
-    session
-        .renderer
-        .set_sidebar_width(session.geometry.sidebar_w);
+    session.renderer.set_geometry(session.geometry);
     // The border style first, the explicit `pane-borders` flag after it —
     // the style implies a paint mode (herdr = per-pane boxes), and the
     // explicit config key still overrides for any glyph set.

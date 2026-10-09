@@ -101,11 +101,24 @@ impl FrameGeometry {
         (col.saturating_sub(rect.x), row.saturating_sub(rect.y))
     }
 
-    #[cfg(test)]
     /// A content cell mapped back to the 0-based host grid.
     pub fn content_to_host(&self, col: u16, row: u16) -> (u16, u16) {
         let rect = self.content_rect();
         (col + rect.x, row + rect.y)
+    }
+
+    /// A content cell mapped into the renderer's frame buffer: right of
+    /// the side panel, rows unchanged (the frame already starts below the
+    /// strip).
+    pub fn content_to_frame(&self, col: u16, row: u16) -> (u16, u16) {
+        let (x, y) = self.content_to_host(col, row);
+        (x, y - self.strip_rows.min(y))
+    }
+
+    /// A 0-based host cell mapped into the frame buffer — the inverse of
+    /// [`Self::frame_to_host`] — `None` on the strip rows.
+    pub fn host_to_frame(&self, col: u16, row: u16) -> Option<(u16, u16)> {
+        row.checked_sub(self.strip_rows).map(|y| (col, y))
     }
 }
 
@@ -157,6 +170,22 @@ mod tests {
                 let (hx, hy) = g.content_to_host(cx, cy);
                 assert_eq!(g.host_to_content(hx, hy), Some((cx, cy)));
             }
+        }
+    }
+
+    #[test]
+    fn frame_mappings_offset_by_the_panel_and_the_strip() {
+        let g = FrameGeometry::new(80, 24, true, 0);
+        assert_eq!(g.content_to_frame(5, 3), (5, 3));
+        assert_eq!(g.host_to_frame(5, 0), None, "the strip row");
+        assert_eq!(g.host_to_frame(5, 1), Some((5, 0)));
+        let g = FrameGeometry::new(80, 24, true, 20);
+        assert_eq!(g.content_to_frame(5, 3), (25, 3));
+        assert_eq!(g.host_to_frame(25, 4), Some((25, 3)));
+        for (cx, cy) in [(0, 0), (7, 3), (59, 21)] {
+            let (fx, fy) = g.content_to_frame(cx, cy);
+            assert_eq!(g.frame_to_host(fx, fy), g.content_to_host(cx, cy));
+            assert_eq!(g.host_to_frame(fx, fy + 1), Some((fx, fy)));
         }
     }
 
