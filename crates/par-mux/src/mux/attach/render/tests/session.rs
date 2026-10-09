@@ -1230,7 +1230,7 @@ fn focused_cursor_maps_through_the_rect_and_the_border_inset() {
 /// with NO btop background remnants anywhere: both the live diff
 /// path (the same renderer fed the exit bytes in a second frame) and
 /// the re-seed path (a fresh renderer replaying the full scripted
-/// session, as reseed_window does) are checked.
+/// session, as a reseed does for a pane new to it) are checked.
 #[test]
 fn alt_screen_exit_leaves_no_stale_background_at_the_prompt_rows() {
     let theme_bg = RtColor::Rgb(16, 16, 16);
@@ -1302,8 +1302,8 @@ fn alt_screen_exit_leaves_no_stale_background_at_the_prompt_rows() {
     // The prompt landed where the app put it.
     assert_eq!(renderer.cell(0, 9).expect("c").symbol(), "$");
 
-    // Re-seed path: a fresh renderer replaying the session (the
-    // reseed_window reconstruction), framed once.
+    // Replay path: a fresh renderer replaying the session (what a pane
+    // new to the renderer gets on a reseed), framed once.
     let mut reseeded = PaneRenderer::new(80, 24, Glyphs::Unicode);
     reseeded.set_background(Some(theme_bg));
     reseeded.apply_layout(parse_layout("0000,80x24,0,0,2").expect("parses"));
@@ -1744,8 +1744,8 @@ fn effective_render_opts_zero_the_hidden_sidebar() {
     assert_eq!(session.effective_render_opts().sidebar_width, 20);
 }
 
-/// ARC-122: a host resize rebuilds the renderer; the configured border
-/// colors survive the rebuild (they used to revert to cyan/dim).
+/// ARC-122: a host resize re-fits the renderer; the configured border
+/// colors survive the refit (they used to revert to cyan/dim).
 #[test]
 fn border_colors_survive_a_resize_rebuild() {
     let active = RtColor::Rgb(1, 2, 3);
@@ -1762,11 +1762,11 @@ fn border_colors_survive_a_resize_rebuild() {
     session
         .resize_to(&mut conn, 100, 40, &mut RecordingSink::default())
         .expect("resize");
-    assert_eq!(session.renderer.layout().len(), 2, "the rebuild re-laid");
+    assert_eq!(session.renderer.layout().len(), 2, "the refit re-laid");
     assert_ring_colors(&mut session, 0, 100, active, plain);
 }
 
-/// ARC-122: a window re-seed rebuilds the renderer too; the colors
+/// ARC-122: a window re-seed re-fits the renderer too; the colors
 /// survive it.
 #[test]
 fn border_colors_survive_a_reseed_rebuild() {
@@ -1790,8 +1790,8 @@ fn border_colors_survive_a_reseed_rebuild() {
 }
 
 /// ARC-122: toggling the side panel (which parks a refit the pump runs
-/// as a resize rebuild) keeps the colors, and the configured panel
-/// width rides the rebuild.
+/// as a resize refit) keeps the colors, and the configured panel
+/// width rides the refit.
 #[test]
 fn border_colors_survive_a_sidebar_toggle_refit() {
     let active = RtColor::Rgb(1, 2, 3);
@@ -1817,6 +1817,240 @@ fn border_colors_survive_a_sidebar_toggle_refit() {
     );
     assert_eq!(session.renderer.layout().len(), 2, "the refit re-laid");
     assert_ring_colors(&mut session, 20, 60, active, plain);
+}
+
+/// The pane replays (`refresh-client -t %N` WITHOUT a `-C` size report)
+/// among recorded wire lines.
+fn replay_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with("refresh-client -t %") && !l.contains(" -C "))
+        .cloned()
+        .collect()
+}
+
+/// A `%layout-change @0` line splitting `cols`x`rows` evenly between
+/// `%1` and `%2`.
+fn two_pane_layout_line(cols: u16, rows: u16) -> String {
+    let half = cols / 2;
+    let layout = format!("0000,{cols}x{rows},0,0{{{half}x{rows},0,0,1,{half}x{rows},{half},0,2}}");
+    format!("%layout-change @0 {layout} {layout} *")
+}
+
+/// ENH-044: a host resize whose layout keeps every pane sends the size
+/// report and NO replay; the surviving emulators keep their content,
+/// reflowed to the new size.
+#[test]
+fn resize_in_place_replays_no_unchanged_panes() {
+    let (rx, mut conn, mut session) = two_pane_session(
+        "enh044-noreplay",
+        FakeScript {
+            notify: two_pane_notify(100, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.feed_output(1, b"left pane text");
+    session.renderer.feed_output(2, b"right pane text");
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    let lines = drained(&rx);
+    let reports: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with("refresh-client -t %1 -C "))
+        .collect();
+    assert_eq!(reports, vec!["refresh-client -t %1 -C 100x23"]);
+    assert!(replay_lines(&lines).is_empty(), "no replays: {lines:?}");
+    let one = session.renderer.emulators[&1].terminal();
+    assert_eq!(one.size(), (50, 23), "re-fit to the new layout");
+    assert!(one.content().contains("left pane text"));
+    assert!(session.renderer.emulators[&2]
+        .terminal()
+        .content()
+        .contains("right pane text"));
+}
+
+/// ENH-044: a pane new to the renderer is the only one replayed.
+#[test]
+fn resize_in_place_replays_a_pane_new_to_the_layout() {
+    let layout = "0000,99x23,0,0{33x23,0,0,1,33x23,33,0,2,33x23,66,0,3}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %1 -C 99x23".to_string(),
+        format!("%layout-change @0 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "refresh-client -t %3".to_string(),
+        "pane three body".to_string(),
+    );
+    let (rx, mut conn, mut session) = two_pane_session(
+        "enh044-newpane",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session
+        .resize_to(&mut conn, 99, 23, &mut RecordingSink::default())
+        .expect("resize");
+    let lines = drained(&rx);
+    assert_eq!(replay_lines(&lines), vec!["refresh-client -t %3"]);
+    assert!(session.renderer.emulators[&3]
+        .terminal()
+        .content()
+        .contains("pane three body"));
+}
+
+/// ENH-044: the configured border colors ride the in-place refit of
+/// both a host resize and a same-window re-seed.
+#[test]
+fn resize_keeps_border_colors() {
+    let active = RtColor::Rgb(1, 2, 3);
+    let plain = RtColor::Rgb(4, 5, 6);
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 * main", "@0", "%1\n%2");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "enh044-colors",
+        FakeScript {
+            replies,
+            notify: two_pane_notify(100, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.set_pane_borders(true);
+    session.set_border_colors(Some(active), Some(plain));
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    assert_eq!(session.renderer.frame_size(), (100, 23));
+    assert_ring_colors(&mut session, 0, 100, active, plain);
+    session.reseed_window(&mut conn, "@0");
+    assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
+    assert_ring_colors(&mut session, 0, 100, active, plain);
+}
+
+/// ENH-044 race rule: `%output` that arrives AFTER the `%layout-change`
+/// in the refit's drain may have been applied at the old size on the
+/// daemon, so the pane replays instead of feeding it.
+#[test]
+fn resize_output_after_layout_change_forces_replay() {
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %1 -C 100x23".to_string(),
+        format!("{}\n%output %1 late", two_pane_layout_line(100, 23)),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "refresh-client -t %1".to_string(),
+        "replayed body".to_string(),
+    );
+    let (rx, mut conn, mut session) = two_pane_session(
+        "enh044-late",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    let lines = drained(&rx);
+    assert_eq!(replay_lines(&lines), vec!["refresh-client -t %1"]);
+    let content = session.renderer.emulators[&1].terminal().content();
+    assert!(content.contains("replayed body"), "{content:?}");
+    assert!(!content.contains("late"), "the raced bytes were not fed");
+}
+
+/// ENH-044: `%output` drained BEFORE the `%layout-change` was produced
+/// at the old size, where the emulator still is: it feeds, no replay.
+#[test]
+fn resize_output_before_layout_change_is_fed_at_old_size() {
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %1 -C 100x23".to_string(),
+        format!("%output %1 early\n{}", two_pane_layout_line(100, 23)),
+    );
+    let (rx, mut conn, mut session) = two_pane_session(
+        "enh044-early",
+        FakeScript {
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    let lines = drained(&rx);
+    assert!(replay_lines(&lines).is_empty(), "no replays: {lines:?}");
+    assert!(session.renderer.emulators[&1]
+        .terminal()
+        .content()
+        .contains("early"));
+}
+
+/// ENH-044: a re-seed onto a different window has no surviving panes,
+/// so every pane of the new window replays.
+#[test]
+fn reseed_to_another_window_replays_every_pane() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "enh044-otherwin",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.set_user_title(1, "old window title");
+    session.reseed_window(&mut conn, "@1");
+    let lines = drained(&rx);
+    assert_eq!(
+        replay_lines(&lines),
+        vec!["refresh-client -t %5", "refresh-client -t %6"]
+    );
+    let panes: Vec<u32> = session.renderer.layout().iter().map(|r| r.pane).collect();
+    assert_eq!(panes, vec![5, 6]);
+    assert_eq!(
+        session.renderer.focused(),
+        Some(5),
+        "focus left the old window"
+    );
+    assert!(
+        !session.renderer.user_titles.contains_key(&1),
+        "the old window's titles are dropped with its panes"
+    );
+}
+
+/// ENH-044: an open modal overlay survives a host resize (the old
+/// renderer rebuild dropped it while the session still believed it was up).
+#[test]
+fn resize_preserves_open_overlay() {
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "enh044-overlay",
+        FakeScript {
+            notify: two_pane_notify(100, 23),
+            ..FakeScript::default()
+        },
+    );
+    session.open_menu(MenuTarget::Tab("@0".to_string()));
+    assert!(session.renderer.overlay.is_some());
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    assert!(
+        session.renderer.overlay.is_some(),
+        "the menu overlay survives the refit"
+    );
 }
 
 /// Four side-by-side panes (%1..%4) over an 80-col window.

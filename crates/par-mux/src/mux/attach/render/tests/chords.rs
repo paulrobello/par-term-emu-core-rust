@@ -266,7 +266,7 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     session.reseed_window(&mut conn, "@0");
     assert!(
         session.renderer.pane_borders,
-        "the rebuilt renderer keeps the herdr boxes"
+        "the re-fit renderer keeps the herdr boxes"
     );
     chord(&mut session, &mut conn, b'B');
     assert_eq!(
@@ -290,7 +290,7 @@ fn border_toggle_redeclares_chrome_on_the_next_size_report() {
         "list-commands".to_string(),
         "refresh-client cell-pixels chrome\nfeatures replay-held-state".to_string(),
     );
-    // Each report's layout broadcast re-seeds the rebuilt renderer, so the
+    // Each report's layout broadcast re-lays the renderer, so the
     // focus survives into the next report.
     let layout = "%layout-change @0 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,2} 0000,80x23,0,0{40x23,0,0,1,39x23,41,0,2} *";
     let mut notify = std::collections::HashMap::new();

@@ -545,6 +545,51 @@ fn pane_at_maps_points_to_their_rects() {
     assert_eq!(renderer.pane_at(0, 24), None, "below the window");
 }
 
+/// ENH-044 reflow equivalence: an emulator resized in place equals,
+/// cell for cell and cursor included, a fresh emulator seeded from the
+/// daemon's post-resize replay (`export_screen_restore_sequence`, what
+/// `refresh-client -t` sends) — so a surviving pane needs no replay.
+#[test]
+fn in_place_resize_matches_fresh_replay() {
+    let mut stream = Vec::new();
+    for i in 0..30 {
+        let color = 31 + (i % 6);
+        let tail = if i % 3 == 0 {
+            " and a tail long enough to wrap past forty columns"
+        } else {
+            ""
+        };
+        stream.extend_from_slice(format!("\x1b[{color}mline {i:02}\x1b[0m{tail}\r\n").as_bytes());
+    }
+    stream.extend_from_slice(b"\x1b[1;32m$ \x1b[0mprompt");
+
+    let mut a = PaneEmulator::new(1, 40, 10);
+    a.feed(&stream);
+    a.resize(60, 8);
+
+    let mut daemon = Terminal::new(40, 10);
+    daemon.process(&stream);
+    daemon.resize(60, 8);
+    let replay = daemon.export_screen_restore_sequence();
+    let mut b = PaneEmulator::new(1, 60, 8);
+    b.feed(replay.as_bytes());
+
+    let (ta, tb) = (a.terminal(), b.terminal());
+    assert_eq!(ta.size(), tb.size());
+    for row in 0..8 {
+        for col in 0..60 {
+            let ca = ta.active_grid().get(col, row).expect("a cell");
+            let cb = tb.active_grid().get(col, row).expect("b cell");
+            assert_eq!(ca.c, cb.c, "char at ({col},{row})");
+            assert_eq!(ca.fg(), cb.fg(), "fg at ({col},{row})");
+            assert_eq!(ca.bg(), cb.bg(), "bg at ({col},{row})");
+        }
+    }
+    let (ka, kb) = (ta.cursor(), tb.cursor());
+    assert_eq!((ka.col, ka.row), (kb.col, kb.row), "cursor position");
+    assert_eq!(ka.visible, kb.visible, "cursor visibility");
+}
+
 /// Emulator input-mode tracking: DECCKM and mouse mode arrive through
 /// the pane's own output bytes (replay or %output — same stream), and
 /// feed resets the client scroll to live.

@@ -31,9 +31,9 @@ impl WindowSession {
                 }
                 // The reply body is the new pane id; re-seed the window
                 // from the fresh layout (the split broadcast rides the
-                // reply), THEN focus the fresh pane — reseed_window
-                // rebuilds the renderer, which resets focus to the first
-                // leaf, so the focus must come after.
+                // reply), THEN focus the fresh pane — the renderer only
+                // knows the pane once the reseed installed the new
+                // layout, so the focus must come after.
                 let new_pane = reply
                     .body
                     .first()
@@ -483,30 +483,28 @@ impl WindowSession {
     }
 
     /// Point the whole view at `window`: daemon-side select already done
-    /// (or the window is in the same session), re-fit the renderer from a
-    /// fresh layout report, replay every pane, and mark everything dirty
-    /// — the render-mode resync.
+    /// (or the window is in the same session), re-fit the renderer in
+    /// place from a fresh layout report, replay the panes new to the
+    /// renderer (every pane of a different window; on the same window
+    /// only the ones it lacked, plus the output-race panes), and mark
+    /// everything dirty — the render-mode resync.
     pub(super) fn reseed_window(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) {
         let pane = self.focused_pane_or_first(conn, window);
-        // Rebuild at the CURRENT renderer's frame extent — the host grid
-        // the seed and resize_to derived — then report the fresh
-        // renderer's window_size: that size is the reported extent (the
-        // grid less the side panel), not the buffer's width, and
-        // constructing from it ratcheted the view one panel-width
-        // narrower on every re-seed while the panel was up, each report
-        // then shrinking again (the manual-pass click-shrinks-the-panes
-        // report).
+        // Re-fit at the CURRENT renderer's frame extent — the host grid
+        // the seed and resize_to derived — then report the renderer's
+        // window_size: that size is the reported extent (the grid less
+        // the side panel), not the buffer's width, and deriving the frame
+        // from it ratcheted the view one panel-width narrower on every
+        // re-seed while the panel was up (the manual-pass
+        // click-shrinks-the-panes report). The frame size is unchanged
+        // here, so the in-place refit only re-pushes the geometry; every
+        // display option stays on the live renderer (ENH-044).
         let (host_cols, host_rows) = self.renderer.frame_size();
-        // The rebuild carries every session display option (background,
-        // borders, labels, chrome, the side panel's effective width,
-        // border colors): a hand re-apply list here dropped options three
-        // times before (the round-3 prefix n/p black band and border
-        // mode, the split-while-panel-open width, ARC-122's colors).
-        self.rebuild_renderer(host_cols, host_rows);
+        self.refit_renderer(host_cols, host_rows);
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }
@@ -518,32 +516,22 @@ impl WindowSession {
         // The cue resets with the view, then takes the new window's zoom
         // truth from the layout triple the size report queues below.
         self.zoomed = false;
+        // The emulators survive the re-seed now, so leaving scroll mode
+        // also clears the focused pane's hold rather than relying on a
+        // fresh emulator.
         if matches!(self.modal, Modal::Scroll) {
-            self.modal = Modal::None;
+            self.leave_scroll_mode();
         }
-        if let Some((l, v, f)) =
-            conn.drain_pending_events()
-                .into_iter()
-                .find_map(|event| match event {
-                    TmuxNotification::LayoutChange {
-                        window_id,
-                        window_layout,
-                        window_visible_layout,
-                        window_raw_flags,
-                    } if window_id == window => {
-                        Some((window_layout, window_visible_layout, window_raw_flags))
-                    }
-                    _ => None,
-                })
-        {
+        let (layout_event, race) = self.drain_around_layout(conn);
+        if let Some((l, v, f)) = layout_event {
             self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
-                self.renderer.apply_layout(layout);
+                let replay = self.install_layout(layout, &race);
+                self.replay_panes(conn, &replay);
             }
         }
-        self.replay_all_panes(conn);
-        // The re-seed replaced the renderer's buffers: the next frame's
-        // diff repaints every cell, and the cursor guard must reset so a
+        // The re-seed re-laid the panes: the next frame's diff repaints
+        // what moved, and the cursor guard must reset so a
         // changed position/shape re-emits even when the recorded state
         // coincidentally matches the old window's.
         self.cursor_placed = Some(None);

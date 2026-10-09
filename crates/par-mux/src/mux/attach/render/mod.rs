@@ -590,10 +590,10 @@ struct WindowSession {
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
     /// glyphs, pane chrome, side-panel width, border colors), kept
-    /// OUTSIDE the renderer: every renderer rebuild (resize re-fit,
-    /// re-seed) constructs from [`Self::effective_render_opts`], so no
-    /// option can be dropped by a rebuild. Setters update this first,
-    /// then the live renderer.
+    /// OUTSIDE the renderer as the configured record; the in-place refit
+    /// reads the panel's effective width from
+    /// [`Self::effective_render_opts`]. Setters update this first, then
+    /// the live renderer.
     render_opts: RenderOptions,
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
@@ -635,6 +635,10 @@ struct WindowSession {
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
     detach_requested: bool,
+    /// An `%exit` (or other `End` outcome) the synchronous drain around
+    /// a refit's layout change consumed ([`Self::drain_around_layout`]);
+    /// the pump ends the view on it right after the refit returns.
+    pending_end: bool,
     /// The frame's chrome layout over the host grid (strip, status bar,
     /// side panel, content) — the one owner of the host ↔ frame ↔
     /// content mapping. Recomputed by [`Self::refresh_geometry`] at the
@@ -860,6 +864,7 @@ impl WindowSession {
             flash_until: None,
             cursor_placed: Some(None),
             detach_requested: false,
+            pending_end: false,
             geometry,
             parser: InputParser::default(),
         }
@@ -916,6 +921,9 @@ impl WindowSession {
             //    shared-selection follows), so this tick's input routes
             //    against the newest layout.
             self.apply_pending(conn, sink)?;
+            if std::mem::take(&mut self.pending_end) {
+                return Ok(());
+            }
 
             // 3. Stdin: prefix routing (d detaches, [ enters scroll mode,
             //    n/p/(/) switch windows/sessions), then keys/mouse to the
@@ -927,6 +935,9 @@ impl WindowSession {
             // 4. Parked work the chords just queued (a sidebar or status
             //    bar toggle's grid refit): the chords have no flush sink.
             self.apply_pending(conn, sink)?;
+            if std::mem::take(&mut self.pending_end) {
+                return Ok(());
+            }
 
             // 5. Host resize (SIGWINCH): report the new grid, re-fit. The
             //    daemon's window renders into the rows between the tab
@@ -937,6 +948,9 @@ impl WindowSession {
             if content != current_size {
                 current_size = content;
                 self.resize_to(conn, content.0, content.1, sink)?;
+                if std::mem::take(&mut self.pending_end) {
+                    return Ok(());
+                }
                 // A resize wiped the screen; the rows repaint whole.
                 self.status_row.invalidate();
                 self.draw_status_row();
@@ -981,7 +995,7 @@ impl WindowSession {
     }
 
     /// Perform the work parked in [`PendingWork`], in its fixed order: a
-    /// layout re-fit (re-seeded from fresh replays), the shared-selection
+    /// layout re-fit (only panes new to the renderer replay), the shared-selection
     /// follows, then a grid refit. No select is ever sent for a follow:
     /// the daemon already moved the shared pointer, and a re-select would
     /// echo the notification back as a loop.
@@ -991,9 +1005,12 @@ impl WindowSession {
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
         if let Some(layout) = self.pending.layout.take() {
+            // The `%layout-change` was consumed in stream order, so the
+            // `%output` after it feeds normally at the new size: no race
+            // list, only the panes new to the renderer replay (ENH-044).
             self.daemon_layout = layout.clone();
-            self.renderer.apply_layout(layout);
-            self.replay_all_panes(conn);
+            let replay = self.install_layout(layout, &[]);
+            self.replay_panes(conn, &replay);
         }
         if let Some(window) = self.pending.follow_window.take() {
             if window != self.window {
@@ -1014,8 +1031,8 @@ impl WindowSession {
             self.refresh_geometry();
             let (frame_w, frame_h) = self.geometry.frame_size();
             self.resize_to(conn, frame_w, frame_h, sink)?;
-            // The refit reconstructed the renderer, dropping the strip's
-            // sections; re-query so the next frame paints them.
+            // The refit keeps the strip's sections in place (ENH-044); the
+            // re-query refreshes the active workspace mark.
             if self.sidebar_on {
                 self.refresh_sidebar(conn);
             }
@@ -1107,9 +1124,9 @@ impl WindowSession {
                 ) {
                     Ok(next) if next != self.renderer.layout() => {
                         // A geometry change re-fit the daemon's panes; the
-                        // local emulators re-fit (cleared) with the layout
-                        // and re-seed from fresh replays — the pump's
-                        // step 2 (PendingWork), since replay needs the connection.
+                        // local emulators reflow with the layout and panes
+                        // new to the renderer replay — the pump's step 2
+                        // (PendingWork), since replay needs the connection.
                         self.pending.layout = Some(next);
                     }
                     Ok(_) => {}

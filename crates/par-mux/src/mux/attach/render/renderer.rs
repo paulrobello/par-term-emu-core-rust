@@ -328,11 +328,11 @@ pub(super) fn write_color(out: &mut String, color: RtColor, fg: bool) {
     }
 }
 
-/// Every display option a [`PaneRenderer`] paints with — the one value
-/// a renderer rebuild (host resize, sidebar refit, window re-seed)
-/// reconstructs from, so an option added here survives every rebuild
-/// without a per-site re-apply list. The session owns the configured
-/// value; [`PaneRenderer::with_options`] applies it whole.
+/// Every display option a [`PaneRenderer`] paints with, as one value.
+/// The session owns the configured value and [`PaneRenderer::with_options`]
+/// applies it whole. Host resizes, sidebar refits, and window re-seeds
+/// re-fit the live renderer in place ([`PaneRenderer::resize`]), so no
+/// option is re-applied per site.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderOptions {
     /// The host background fill (the OSC 11 probe; `None` = terminal
@@ -491,6 +491,26 @@ impl PaneRenderer {
         (self.width, self.height)
     }
 
+    /// Re-size the frame to `cols` x `rows` in place (ENH-044): the frame
+    /// buffers rebuild at the new extent, while the pane emulators, the
+    /// layout, focus, titles, the side panel's sections, any open overlay,
+    /// and every display option survive. Emulators are NOT re-fit here:
+    /// their size follows the daemon's layout, which the caller installs
+    /// next with [`Self::apply_layout`]. An unchanged size is a no-op.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        if (cols, rows) == (self.width, self.height) {
+            return;
+        }
+        let area = RtRect::new(0, 0, cols, rows);
+        self.width = cols;
+        self.height = rows;
+        self.buffer = Buffer::empty(area);
+        self.prev_buffer = Buffer::empty(area);
+        // A divider mark is geometry from the old frame.
+        self.drag_divider = None;
+        self.dirty = true;
+    }
+
     /// The window extent the daemon divides: the renderer's full width
     /// less the side panel's strip (the panel is a client-only overlay —
     /// the daemon never learns of it), full height.
@@ -512,9 +532,11 @@ impl PaneRenderer {
     }
 
     /// Install a new layout: pane terminals are created for new leaves,
-    /// dropped for gone ones, and re-fit to their rect's geometry. Resize
-    /// clears the emulator's grid — after a geometry change the daemon
-    /// re-replays the pane (the client's resync), which re-seeds it.
+    /// dropped for gone ones, and re-fit to their rect's geometry. The
+    /// re-fit reflows the emulator exactly as the daemon's pane terminal
+    /// reflowed, so a surviving pane needs no replay; a pane new to the
+    /// renderer starts empty and the caller replays it. A focus on a pane
+    /// that left the layout moves to the first pane.
     ///
     /// # Panics
     ///
@@ -528,8 +550,11 @@ impl PaneRenderer {
             "apply_layout requires at least one pane"
         );
         let new_ids: Vec<u32> = layout.iter().map(|r| r.pane).collect();
-        // Drop emulators for panes that left the layout.
+        // Drop emulators and titles for panes that left the layout: a
+        // title held across a window switch could not see a rename made
+        // while the pane was off screen.
         self.emulators.retain(|id, _| new_ids.contains(id));
+        self.user_titles.retain(|id, _| new_ids.contains(id));
         // Create / re-fit the rest to the pane's PTY grid.
         for rect in &layout {
             let (cols, rows) = self.emulator_size(rect);
@@ -541,7 +566,9 @@ impl PaneRenderer {
                 emulator.resize(cols, rows);
             }
         }
-        self.focused.get_or_insert(layout[0].pane);
+        if !self.focused.is_some_and(|f| new_ids.contains(&f)) {
+            self.focused = Some(layout[0].pane);
+        }
         self.layout = layout;
         self.dirty = true;
     }
@@ -1057,7 +1084,7 @@ impl PaneRenderer {
 
         // The last painted frame becomes this frame's diff baseline by a
         // swap, not a clone (ARC-132): both buffers share the renderer's
-        // fixed area (a resize rebuilds the renderer), and the reset below
+        // area (`resize` replaces both at once), and the reset below
         // clears the recycled buffer before painting. After the frame,
         // `self.buffer` holds it for tests and callers to read.
         std::mem::swap(&mut self.buffer, &mut self.prev_buffer);

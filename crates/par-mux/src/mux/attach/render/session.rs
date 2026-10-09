@@ -154,19 +154,86 @@ impl WindowSession {
         self.set_geometry_host(cols, rows);
     }
 
-    /// Replace the renderer with a fresh one over `cols` x `rows`,
-    /// built from the session's effective options — the one rebuild
-    /// path (resize re-fit, re-seed), so no display option can be lost
-    /// across a rebuild.
-    pub(super) fn rebuild_renderer(&mut self, cols: u16, rows: u16) {
-        self.renderer = PaneRenderer::with_options(cols, rows, &self.effective_render_opts());
+    /// Re-fit the renderer's frame to `cols` x `rows` in place (ENH-044)
+    /// and push the session's geometry with the side panel's effective
+    /// width. Emulators, titles, sections, the overlay, and every display
+    /// option stay on the live renderer, so a refit can drop none of them
+    /// (the ARC-122 class of regression).
+    pub(super) fn refit_renderer(&mut self, cols: u16, rows: u16) {
+        self.renderer.resize(cols, rows);
         let mut geometry = self.geometry;
-        geometry.sidebar_w = self.renderer.sidebar_width();
+        geometry.sidebar_w = self.effective_render_opts().sidebar_width;
         self.renderer.set_geometry(geometry);
     }
 
+    /// Drain the events a size report queued, IN ORDER, discarding none
+    /// (ENH-044). Returns the shown window's first `%layout-change`
+    /// triple, if any, and the "race" panes: those whose `%output`
+    /// arrived after it.
+    ///
+    /// Before the layout change every event goes through
+    /// [`Self::handle_event`] (output feeds at the old size, which is the
+    /// size the daemon produced it at). After it, `%output` is NOT fed:
+    /// the daemon's reader applies bytes to the pane terminal before it
+    /// pushes them, so a dispatch resize can land between the two and
+    /// those bytes were applied at the OLD size — the caller replays the
+    /// pane instead. Every other event still goes to `handle_event`; an
+    /// `End` outcome parks in `pending_end` for the pump.
+    pub(super) fn drain_around_layout(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> (Option<(String, String, String)>, Vec<u32>) {
+        let mut layout_event = None;
+        let mut race: Vec<u32> = Vec::new();
+        for event in conn.drain_pending_events() {
+            match event {
+                TmuxNotification::LayoutChange {
+                    window_id,
+                    window_layout,
+                    window_visible_layout,
+                    window_raw_flags,
+                } if layout_event.is_none() && window_id == self.window => {
+                    layout_event = Some((window_layout, window_visible_layout, window_raw_flags));
+                }
+                TmuxNotification::Output { pane_id, .. }
+                | TmuxNotification::ExtendedOutput { pane_id, .. }
+                    if layout_event.is_some() =>
+                {
+                    if let Some(n) = pane_id.strip_prefix('%').and_then(|n| n.parse().ok()) {
+                        if !race.contains(&n) {
+                            race.push(n);
+                        }
+                    }
+                }
+                other => {
+                    if self.handle_event(other) == super::EventOutcome::End {
+                        self.pending_end = true;
+                    }
+                }
+            }
+        }
+        (layout_event, race)
+    }
+
+    /// Install `layout` and return the panes to replay: those new to the
+    /// renderer (no emulator state yet) and the `race` panes
+    /// ([`Self::drain_around_layout`]). A surviving pane's emulator
+    /// reflows in `apply_layout` exactly as the daemon's pane did, so it
+    /// needs no replay.
+    pub(super) fn install_layout(&mut self, layout: Vec<PaneRect>, race: &[u32]) -> Vec<u32> {
+        let before: std::collections::HashSet<u32> =
+            self.renderer.layout().iter().map(|r| r.pane).collect();
+        self.renderer.apply_layout(layout);
+        self.renderer
+            .layout()
+            .iter()
+            .map(|r| r.pane)
+            .filter(|p| !before.contains(p) || race.contains(p))
+            .collect()
+    }
+
     /// Record the session's resolved background (the renderer paints
-    /// it; the session's options keep it across rebuilds). `None` = the
+    /// it; the session's options are the configured record). `None` = the
     /// probe failed; the fill stays terminal-default.
     pub(super) fn set_background(&mut self, bg: Option<RtColor>) {
         self.render_opts.bg = bg;
@@ -405,21 +472,31 @@ impl WindowSession {
         }
     }
 
-    /// Replay every visible pane's state into its emulator (the seed and
-    /// the post-resize re-seed share this). The reply body's lines join
-    /// back EXACTLY: the wire's body lines split on `\n` (BufRead::lines)
-    /// and joining restores the byte stream — appending another `\n`
-    /// would add a line feed the pane's restore stream never contained,
-    /// driving the freshly positioned cursor one row below the tracked
-    /// cell (the round-3 cursor off-by-one) or scrolling the grid when
-    /// the cursor sat on the bottom row.
+    /// Replay every visible pane's state into its emulator (the seed).
     pub(super) fn replay_all_panes(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        for rect in self.renderer.layout().to_vec() {
-            let pane = format!("%{}", rect.pane);
-            if let Ok(reply) = conn.send_checked(&format!("refresh-client -t {pane}")) {
+        let all: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+        self.replay_panes(conn, &all);
+    }
+
+    /// Replay `panes`' state into their emulators (the seed, and the
+    /// panes an in-place refit or re-seed cannot reconcile from the
+    /// `%output` stream). The reply body's lines join back EXACTLY: the
+    /// wire's body lines split on `\n` (BufRead::lines) and joining
+    /// restores the byte stream — appending another `\n` would add a
+    /// line feed the pane's restore stream never contained, driving the
+    /// freshly positioned cursor one row below the tracked cell (the
+    /// round-3 cursor off-by-one) or scrolling the grid when the cursor
+    /// sat on the bottom row.
+    pub(super) fn replay_panes(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        panes: &[u32],
+    ) {
+        for &id in panes {
+            if let Ok(reply) = conn.send_checked(&format!("refresh-client -t %{id}")) {
                 if reply.ok {
                     let bytes = reply.body.join("\n").into_bytes();
-                    self.renderer.feed_output(rect.pane, &bytes);
+                    self.renderer.feed_output(id, &bytes);
                 }
             }
         }
@@ -557,7 +634,9 @@ impl WindowSession {
     }
 
     /// Host resize: report the new grid against the window (the daemon
-    /// re-divides and re-broadcasts the layout), re-fit, repaint all.
+    /// re-divides and re-broadcasts the layout), re-fit in place, replay
+    /// only the panes the `%output` stream cannot reconcile, repaint all.
+    /// An `%exit` drained here parks in `pending_end` for the pump.
     pub(super) fn resize_to(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -569,46 +648,22 @@ impl WindowSession {
         if pane.is_empty() {
             return Ok(());
         }
-        // Reconstruct FIRST: the report below reads the fresh renderer's
-        // window_size (the new host grid less the side panel), and the
-        // reconstruction carries the panel width it depends on.
-        self.rebuild_renderer(cols, rows);
+        // Re-fit FIRST: the report below reads the renderer's window_size
+        // (the new host grid less the side panel), and the refit carries
+        // the panel width it depends on.
+        self.refit_renderer(cols, rows);
         let report = self.size_report(conn, &pane);
         conn.send_checked(&report)
             .map_err(|err| format!("resize report failed: {err}"))?;
-        // The layout broadcast the report queued re-seeds the panes; but
-        // drain it here directly so the repaint is synchronous.
-        let layout_event = conn
-            .drain_pending_events()
-            .into_iter()
-            .find_map(|event| match event {
-                TmuxNotification::LayoutChange {
-                    window_id,
-                    window_layout,
-                    window_visible_layout,
-                    window_raw_flags,
-                } if window_id == self.window => {
-                    Some((window_layout, window_visible_layout, window_raw_flags))
-                }
-                _ => None,
-            });
+        // Drain the layout broadcast the report queued here directly so
+        // the repaint is synchronous.
+        let (layout_event, race) = self.drain_around_layout(conn);
         if let Some((l, v, f)) = layout_event {
             self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
                 self.daemon_layout = layout.clone();
-                self.renderer.apply_layout(layout);
-                for rect in self.renderer.layout().to_vec() {
-                    let pane = format!("%{}", rect.pane);
-                    if let Ok(reply) = conn.send_checked(&format!("refresh-client -t {pane}")) {
-                        if reply.ok {
-                            // Join only: an extra trailing `\n` here would
-                            // push the replayed cursor one row down (the
-                            // replay_all_panes note).
-                            let bytes = reply.body.join("\n").into_bytes();
-                            self.renderer.feed_output(rect.pane, &bytes);
-                        }
-                    }
-                }
+                let replay = self.install_layout(layout, &race);
+                self.replay_panes(conn, &replay);
             }
         }
         // Same as the seed: repaint_all hid the cursor, so force the

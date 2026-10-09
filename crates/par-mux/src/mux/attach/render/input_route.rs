@@ -324,7 +324,7 @@ impl WindowSession {
     /// `o` cycles panes of the window, `n`/`p` next/prev window, `(`/`)`
     /// prev/next session — every switch is select-then-refresh, the
     /// daemon-side select + resync passthrough dispatches, with the
-    /// renderer rebuilding from the fresh replays.
+    /// renderer re-laid in place and new panes seeded from replays.
     pub(super) fn prefix_switch(
         &mut self,
         key: u8,
