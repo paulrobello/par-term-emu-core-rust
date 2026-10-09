@@ -259,7 +259,7 @@ impl Connection {
     /// %error block — instead of dropping the whole client.
     fn on_undecodable(&mut self, undecodable_len: usize) -> Flow {
         let command_number = self.next_command();
-        crate::debug_error!(
+        par_term_emu_core::debug_error!(
             "MUX",
             "non-UTF-8 command line #{} from client {} ({} bytes)",
             command_number,
@@ -300,7 +300,7 @@ impl Connection {
     fn on_control(&mut self, command: crate::mux::command::MuxCommand, line: &str) -> Flow {
         let command_number = self.next_command();
         let client_id = self.client_id;
-        crate::debug_log!(
+        par_term_emu_core::debug_log!(
             "MUX",
             "received #{} from client {}: {}",
             command_number,
@@ -318,7 +318,7 @@ impl Connection {
         let dispatch_started = std::time::Instant::now();
         let reply = dispatch_contained(command, &ctx, self.persist.as_ref(), Some(&self.tx));
         if dispatch_started.elapsed() > Duration::from_millis(100) {
-            crate::debug_log!(
+            par_term_emu_core::debug_log!(
                 "MUX",
                 "client {client_id} dispatch of command #{command_number} took {:?}",
                 dispatch_started.elapsed()
@@ -328,7 +328,7 @@ impl Connection {
             // A rejected command writes nothing to any pane and has no
             // other trace; without this log the rejection is invisible on
             // both sides of the socket.
-            crate::debug_error!(
+            par_term_emu_core::debug_error!(
                 "MUX",
                 "command #{} from client {} rejected: {}",
                 command_number,
@@ -346,7 +346,7 @@ impl Connection {
 
     fn on_parse_error(&mut self, err: &str, line: &str) -> Flow {
         let command_number = self.next_command();
-        crate::debug_error!(
+        par_term_emu_core::debug_error!(
             "MUX",
             "unparseable command #{} from client {}: {} ({})",
             command_number,

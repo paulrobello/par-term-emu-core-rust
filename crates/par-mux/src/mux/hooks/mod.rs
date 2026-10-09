@@ -37,7 +37,7 @@ use telemetry::handle_telemetry_report;
 use crate::mux::ids::PaneId;
 use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::str::FromStr;

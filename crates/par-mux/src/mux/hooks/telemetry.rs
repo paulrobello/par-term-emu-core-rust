@@ -3,8 +3,8 @@
 
 use super::{check_value_len, error_reply, is_stale, ok_reply, parse_header, record_seq};
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
 use base64::Engine as _;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::sync::Arc;

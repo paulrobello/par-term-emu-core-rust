@@ -4,7 +4,7 @@
 //! protocol over a local Unix socket so that control-mode clients — including
 //! `par-term-tmux` — can attach to it in place of tmux.
 //!
-//! This module is the *emitter* side of the format that [`crate::tmux_control`]
+//! This module is the *emitter* side of the format that [`par_term_emu_core::tmux_control`]
 //! parses. That parser is the format reference and the conformance oracle for
 //! everything here; see `par-mux.md`.
 

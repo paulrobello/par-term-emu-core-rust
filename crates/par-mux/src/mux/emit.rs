@@ -1,6 +1,6 @@
 //! Control-mode emitter: `TmuxNotification` values onto the wire.
 
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 
 /// Current time as epoch seconds, used for notification timestamps.
 fn now_secs() -> u64 {
@@ -14,7 +14,7 @@ fn now_secs() -> u64 {
 ///
 /// tmux renders any byte that is not printable ASCII as a three-digit octal
 /// escape, and escapes the backslash itself so decoding is unambiguous. The
-/// parser in [`crate::tmux_control`] decodes exactly this form.
+/// parser in [`par_term_emu_core::tmux_control`] decodes exactly this form.
 pub fn escape_output(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for &byte in bytes {
@@ -253,7 +253,7 @@ pub fn emit_block(command_number: u32, body: &str, ok: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tmux_control::{TmuxControlParser, TmuxNotification};
+    use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
 
     /// Feed an emitted line back through the real parser. This is the
     /// conformance oracle: it checks the emitter against the decoder

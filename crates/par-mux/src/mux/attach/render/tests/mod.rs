@@ -5,8 +5,8 @@ use super::input_route::*;
 use super::modal::*;
 use super::session::*;
 use super::*;
-use crate::keyboard::TermKey;
 use crate::mux::attach::layout::{parse_layout, parse_layout_triple};
+use par_term_emu_core::keyboard::TermKey;
 use std::io::BufRead as _;
 
 mod chords;
@@ -480,7 +480,7 @@ fn wheel_scrolls_client_scrollback_when_pane_has_no_mouse_mode() {
     let grid = renderer.pane_terminal(1).unwrap().active_grid().clone();
     let len = grid.scrollback_len();
     let offset = 3usize;
-    let line_text = |cells: &[crate::cell::Cell]| -> String {
+    let line_text = |cells: &[par_term_emu_core::cell::Cell]| -> String {
         cells
             .iter()
             .take(8)
@@ -558,10 +558,13 @@ fn emulator_tracks_input_modes_and_feed_resets_scroll() {
     assert!(emulator.owns_mouse());
     assert_eq!(
         emulator.mouse_encoding(),
-        crate::mouse::MouseEncoding::Default
+        par_term_emu_core::mouse::MouseEncoding::Default
     );
     emulator.feed(b"\x1b[?1006h");
-    assert_eq!(emulator.mouse_encoding(), crate::mouse::MouseEncoding::Sgr);
+    assert_eq!(
+        emulator.mouse_encoding(),
+        par_term_emu_core::mouse::MouseEncoding::Sgr
+    );
     // Scroll needs actual history to move into (the offset clamps to
     // the scrollback extent), so overflow the 24-row pane first;
     // feed output afterwards — the output snaps the view back to
@@ -590,7 +593,7 @@ fn emulator_feed_discards_responses_and_bells() {
 /// unit-level pin; the parser-level one is in `attach::input`).
 #[test]
 fn key_reencode_reads_the_panes_tracked_decckm() {
-    use crate::keyboard::{encode_key, TermKey, TermKeyEvent};
+    use par_term_emu_core::keyboard::{encode_key, TermKey, TermKeyEvent};
     let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
     let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
     renderer.apply_layout(layout);

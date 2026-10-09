@@ -7,14 +7,14 @@
 //! (D3.5: spawn first, restore second — startup bytes must not overwrite a
 //! restored screen).
 
-use crate::cell::Cell;
 use crate::mux::agent_resume::resume_invocation;
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{snapshot_from_parts, PaneSnapshotParts};
 use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
 use crate::mux::tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace};
-use crate::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
+use par_term_emu_core::cell::Cell;
+use par_term_emu_core::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1840,18 +1840,18 @@ mod tests {
     /// inside `with_terminal_mut` fails `try_read` on the delivering thread).
     #[cfg(unix)]
     struct TerminalLockProbe {
-        terminal: std::sync::Weak<parking_lot::RwLock<crate::terminal::Terminal>>,
+        terminal: std::sync::Weak<parking_lot::RwLock<par_term_emu_core::terminal::Terminal>>,
         scrolled_out: std::sync::atomic::AtomicBool,
         terminal_lock_was_free: std::sync::atomic::AtomicBool,
     }
 
     #[cfg(unix)]
-    impl crate::terminal::observer::TerminalObserver for TerminalLockProbe {
-        fn on_zone_event(&self, event: &crate::terminal::TerminalEvent) {
+    impl par_term_emu_core::terminal::observer::TerminalObserver for TerminalLockProbe {
+        fn on_zone_event(&self, event: &par_term_emu_core::terminal::TerminalEvent) {
             use std::sync::atomic::Ordering;
             if matches!(
                 event,
-                crate::terminal::TerminalEvent::ZoneScrolledOut { .. }
+                par_term_emu_core::terminal::TerminalEvent::ZoneScrolledOut { .. }
             ) {
                 let free = self
                     .terminal
@@ -1931,7 +1931,7 @@ mod tests {
         // scrollback filled exactly to its cap, cursor on the bottom row:
         // the first line the note scrolls evicts that zone.
         let (cols, rows) = (80usize, 24usize);
-        let mut term = crate::terminal::Terminal::with_scrollback(cols, rows, 50);
+        let mut term = par_term_emu_core::terminal::Terminal::with_scrollback(cols, rows, 50);
         let mut bytes =
             b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07".to_vec();
         let line = "x".repeat(cols);
@@ -2083,7 +2083,7 @@ mod tests {
         assert_eq!(got.cursor.row, want.cursor.row);
         assert_ne!(
             pane.terminal().read().mouse_mode(),
-            crate::mouse::MouseMode::Off,
+            par_term_emu_core::mouse::MouseMode::Off,
             "mouse mode kept: there is no new process to protect"
         );
         let text: String = got.alt_grid.cells.iter().map(|c| c.c).collect();
@@ -2586,7 +2586,7 @@ mod tests {
             "the app's cursor-key mode is gone"
         );
         assert!(!after.application_keypad, "the app's keypad mode is gone");
-        assert_eq!(after.mouse_mode, crate::mouse::MouseMode::Off);
+        assert_eq!(after.mouse_mode, par_term_emu_core::mouse::MouseMode::Off);
         assert_eq!(
             (after.scroll_region_top, after.scroll_region_bottom),
             (0, after.rows - 1),
@@ -3683,7 +3683,7 @@ mod serde_tests {
         // cap-depth math of the callers.
         let _ = start;
         let physical_lines = lines.min(max);
-        let mut cells = vec![crate::cell::Cell::default(); physical_lines * cols];
+        let mut cells = vec![par_term_emu_core::cell::Cell::default(); physical_lines * cols];
         let mut wrapped = vec![false; physical_lines];
         for logical in 0..lines.min(physical_lines) {
             for c in 0..cols {
@@ -3707,8 +3707,8 @@ mod serde_tests {
 
     /// A default cell carrying one marker character, so extracted rows are
     /// identifiable by their logical line.
-    fn marker_cell(line: usize) -> crate::cell::Cell {
-        let mut cell = crate::cell::Cell::default();
+    fn marker_cell(line: usize) -> par_term_emu_core::cell::Cell {
+        let mut cell = par_term_emu_core::cell::Cell::default();
         cell.c = char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0');
         cell
     }
@@ -3770,12 +3770,26 @@ mod serde_tests {
         let lines = keep + 750;
         let mut snapshot = ring_snapshot(lines, cols, 0, 10_000);
         let floor = lines - keep;
-        let mut old = crate::zone::Zone::new(1, crate::zone::ZoneType::Output, 0, None);
+        let mut old = par_term_emu_core::zone::Zone::new(
+            1,
+            par_term_emu_core::zone::ZoneType::Output,
+            0,
+            None,
+        );
         old.abs_row_end = floor.saturating_sub(1);
-        let mut straddling =
-            crate::zone::Zone::new(2, crate::zone::ZoneType::Output, floor - 10, None);
+        let mut straddling = par_term_emu_core::zone::Zone::new(
+            2,
+            par_term_emu_core::zone::ZoneType::Output,
+            floor - 10,
+            None,
+        );
         straddling.abs_row_end = floor + 10;
-        let mut recent = crate::zone::Zone::new(3, crate::zone::ZoneType::Output, floor + 5, None);
+        let mut recent = par_term_emu_core::zone::Zone::new(
+            3,
+            par_term_emu_core::zone::ZoneType::Output,
+            floor + 5,
+            None,
+        );
         recent.abs_row_end = floor + 20;
         snapshot.zones = vec![old, straddling, recent];
 

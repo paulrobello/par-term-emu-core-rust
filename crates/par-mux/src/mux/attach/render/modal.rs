@@ -149,7 +149,7 @@ impl WindowSession {
     /// the panel), j/k/arrows/pgup/pgdn scroll, esc/Enter/q close. Every
     /// key is consumed — nothing leaks into the pane.
     pub(super) fn help_key(&mut self, ev: &TermKeyEvent) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         let Modal::Help(help) = &mut self.modal else {
             return;
         };
@@ -410,7 +410,7 @@ impl WindowSession {
     /// One key while the menu is up: Escape closes, everything else is
     /// consumed (a modal owns the keyboard).
     pub(super) fn menu_key(&mut self, ev: &TermKeyEvent) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         if ev.key() == TermKey::Escape {
             self.leave_menu();
         }
@@ -624,7 +624,7 @@ impl WindowSession {
         ev: &TermKeyEvent,
     ) {
         let _ = conn;
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         match ev.key() {
             TermKey::Char => {
                 if let (Some(ch), Modal::Prompt(prompt)) =
@@ -893,7 +893,7 @@ impl WindowSession {
         ev: &TermKeyEvent,
     ) {
         let _ = conn;
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         let Modal::Picker(picker) = &mut self.modal else {
             return;
         };
@@ -996,7 +996,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         match ev.key() {
             TermKey::Up if ev.modifiers == 0 => self.send_resize(conn, "-U"),
             TermKey::Down if ev.modifiers == 0 => self.send_resize(conn, "-D"),
@@ -1069,7 +1069,7 @@ impl WindowSession {
     /// history, End and q and Enter exit. Keys never reach the pane
     /// while the viewport is up.
     pub(super) fn scroll_mode_key(&mut self, ev: &TermKeyEvent) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         let Some(id) = self.renderer.focused() else {
             return;
         };

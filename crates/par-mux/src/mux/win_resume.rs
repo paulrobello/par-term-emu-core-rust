@@ -31,8 +31,8 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use crate::pty_error::PtyError;
-use crate::pty_session::PtySession;
+use par_term_emu_core::pty_error::PtyError;
+use par_term_emu_core::pty_session::PtySession;
 use std::path::{Path, PathBuf};
 
 /// How `argv[0]` resolves for the Windows resume spawn.

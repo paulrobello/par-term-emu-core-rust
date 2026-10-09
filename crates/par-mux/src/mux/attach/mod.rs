@@ -35,7 +35,7 @@ use panels::*;
 use targets::*;
 
 use crate::mux::resolve_socket_path;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::time::Duration;

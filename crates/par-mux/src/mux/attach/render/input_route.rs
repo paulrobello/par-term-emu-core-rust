@@ -313,7 +313,7 @@ impl WindowSession {
             .renderer
             .focused()
             .and_then(|id| self.renderer.pane_terminal(id))
-            .map(|term| crate::keyboard::encode_key(ev, term))
+            .map(|term| par_term_emu_core::keyboard::encode_key(ev, term))
             .unwrap_or_default();
         if !bytes.is_empty() && !focused.is_empty() {
             super::super::forward_chunked(conn, focused, &bytes);
@@ -351,7 +351,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        use crate::keyboard::TermKey;
+        use par_term_emu_core::keyboard::TermKey;
         // Shift+arrow: swap with the pane in that direction. tmux's
         // swap-pane keeps focus following the pane's content, so no
         // re-select is needed — the %layout-change broadcast re-seeds the
@@ -359,7 +359,7 @@ impl WindowSession {
         // matched loosely (a terminal may co-report other modifiers), and
         // both outcomes flash on the status row so a no-op at an edge is
         // never silent (the manual-pass report: the chord felt dead).
-        if ev.modifiers & crate::keyboard::modifiers::SHIFT != 0 {
+        if ev.modifiers & par_term_emu_core::keyboard::modifiers::SHIFT != 0 {
             let dir = match ev.key() {
                 TermKey::Up => PaneDir::Up,
                 TermKey::Down => PaneDir::Down,
@@ -712,7 +712,7 @@ impl WindowSession {
     pub(super) fn pane_owns_mouse(&self, pane: u32) -> bool {
         self.renderer
             .pane_terminal(pane)
-            .is_some_and(|t| t.mouse_mode() != crate::mouse::MouseMode::Off)
+            .is_some_and(|t| t.mouse_mode() != par_term_emu_core::mouse::MouseMode::Off)
     }
 
     /// One motion or release while a drag is in flight: motion promotes a

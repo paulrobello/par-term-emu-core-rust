@@ -1143,7 +1143,7 @@ impl PaneRenderer {
             let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
             let in_history = (row as usize) < scroll;
             for col in 0..max_cols {
-                let core_cell: &crate::cell::Cell = if in_history {
+                let core_cell: &par_term_emu_core::cell::Cell = if in_history {
                     let logical = scrollback_row.max(0) as usize;
                     match grid.scrollback_line(logical) {
                         Some(line) if usize::from(col) < line.len() => &line[col as usize],

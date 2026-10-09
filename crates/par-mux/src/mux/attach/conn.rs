@@ -8,7 +8,7 @@
 
 use crate::mux::build_stamp;
 use crate::mux::client::{MuxClient, Reply};
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};

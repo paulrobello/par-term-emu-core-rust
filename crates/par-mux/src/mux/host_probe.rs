@@ -544,7 +544,7 @@ pub(crate) fn host_probe_sweep(
             break;
         }
         if state.outstanding.load(Ordering::SeqCst) >= MAX_ABANDONED_PROBES {
-            crate::debug_error!(
+            par_term_emu_core::debug_error!(
                 "MUX",
                 "host probe: {MAX_ABANDONED_PROBES} probe threads still running; sweep stopped"
             );
@@ -574,7 +574,7 @@ pub(crate) fn host_probe_sweep(
                 results.push((*pane_id, HostTelemetry::from_probe(&probe, now_ms)));
             }
             Err(ProbeMiss::TimedOut) => {
-                crate::debug_error!(
+                par_term_emu_core::debug_error!(
                     "MUX",
                     "host probe of pane {pane_id} timed out; skipped until its cwd changes"
                 );

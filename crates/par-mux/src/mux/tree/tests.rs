@@ -2407,12 +2407,12 @@ struct TreeLockProbe {
 }
 
 #[cfg(unix)]
-impl crate::terminal::observer::TerminalObserver for TreeLockProbe {
-    fn on_zone_event(&self, event: &crate::terminal::TerminalEvent) {
+impl par_term_emu_core::terminal::observer::TerminalObserver for TreeLockProbe {
+    fn on_zone_event(&self, event: &par_term_emu_core::terminal::TerminalEvent) {
         use std::sync::atomic::Ordering;
         if matches!(
             event,
-            crate::terminal::TerminalEvent::ZoneScrolledOut { .. }
+            par_term_emu_core::terminal::TerminalEvent::ZoneScrolledOut { .. }
         ) {
             let free = self
                 .tree

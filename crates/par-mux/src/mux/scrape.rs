@@ -21,7 +21,7 @@ use crate::mux::hooks::clear_agent_claim;
 use crate::mux::ids::PaneId;
 use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use regex::Regex;
 use serde::Deserialize;

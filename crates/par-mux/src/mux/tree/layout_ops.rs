@@ -3,10 +3,10 @@
 //! every layout-shape edit goes through (ARC-090).
 
 use super::{kill_detached, ClientView, MuxTree, MuxWindow, SplitSpawn};
-use crate::color::Color;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
+use par_term_emu_core::color::Color;
 use std::path::Path;
 
 impl MuxTree {

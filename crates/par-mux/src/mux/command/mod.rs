@@ -2,10 +2,10 @@
 
 use std::ops::Deref;
 
-use crate::keyboard::{self, modifiers, TermKey, TermKeyEvent};
 use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
-use crate::terminal::Terminal;
+use par_term_emu_core::keyboard::{self, modifiers, TermKey, TermKeyEvent};
+use par_term_emu_core::terminal::Terminal;
 
 /// One piece of a `send-keys` payload.
 #[derive(Debug, Clone, PartialEq, Eq)]

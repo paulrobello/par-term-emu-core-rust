@@ -7,8 +7,8 @@
 //! first time pane output arrived mid-command.
 
 use crate::mux::ipc::{connect_local_stream, default_socket_path, LocalStream};
-use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use interprocess::TryClone as _;
+use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};

@@ -1174,11 +1174,11 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
     session.prefix_pane_arrow(
         &mut conn,
-        &TermKeyEvent::functional(TermKey::Right, crate::keyboard::modifiers::ALT),
+        &TermKeyEvent::functional(TermKey::Right, par_term_emu_core::keyboard::modifiers::ALT),
     );
     assert!(drained(&rx).is_empty(), "a non-shift modifier is ignored");
 
-    let shift = crate::keyboard::modifiers::SHIFT;
+    let shift = par_term_emu_core::keyboard::modifiers::SHIFT;
     session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Right, shift));
     assert!(drained(&rx).is_empty());
     assert_eq!(session.flash.as_deref(), Some("no pane in that direction"));

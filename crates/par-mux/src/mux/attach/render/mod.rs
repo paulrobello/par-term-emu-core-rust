@@ -1,7 +1,7 @@
 //! The Phase B attach pane renderer: per-pane core emulators mapped onto a
 //! ratatui [`Buffer`], damage-diffed at frame cadence.
 //!
-//! One [`crate::terminal::Terminal`] instance per visible pane is fed the
+//! One [`par_term_emu_core::terminal::Terminal`] instance per visible pane is fed the
 //! pane's `refresh-client` replay and `%output` bytes — the same bytes a
 //! passthrough client forwards to the host terminal — so each pane's grid
 //! is exactly what the daemon's pane emulator holds (capture-pane ground
@@ -11,11 +11,6 @@
 //! caller flushes only those cells, and a whole output flood between two
 //! frames collapses into one diff.
 
-use crate::cell::CellFlags;
-use crate::color::{Color as CoreColor, NamedColor};
-use crate::cursor::CursorStyle;
-use crate::keyboard::TermKeyEvent;
-use crate::mouse::MouseMode;
 use crate::mux::attach::input::{InputParser, SgrMouse, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
@@ -25,8 +20,13 @@ use crate::mux::attach::targets::{
 };
 use crate::mux::attach::{layout, HelpRow, ManagementKey};
 use crate::mux::layout::PaneChrome;
-use crate::terminal::Terminal;
-use crate::tmux_control::TmuxNotification;
+use par_term_emu_core::cell::CellFlags;
+use par_term_emu_core::color::{Color as CoreColor, NamedColor};
+use par_term_emu_core::cursor::CursorStyle;
+use par_term_emu_core::keyboard::TermKeyEvent;
+use par_term_emu_core::mouse::MouseMode;
+use par_term_emu_core::terminal::Terminal;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -216,7 +216,7 @@ impl PaneEmulator {
 
     /// The pane's mouse encoding (its negotiated 1005/1006/1015), for the
     /// router's forward decision.
-    pub fn mouse_encoding(&self) -> crate::mouse::MouseEncoding {
+    pub fn mouse_encoding(&self) -> par_term_emu_core::mouse::MouseEncoding {
         self.term.mouse_encoding()
     }
 
