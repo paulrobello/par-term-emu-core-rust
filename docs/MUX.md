@@ -366,9 +366,11 @@ The color comes from an OSC 11 probe (`ESC ] 11 ; ? ST`, 150 ms deadline, poll(2
 
 #### Bracketed paste
 
-A host left in bracketed-paste mode by an earlier app (`ESC[200~` … `ESC[201~` around every paste) has its paste bodies treated as an opaque byte run in render mode: the body forwards to the focused pane verbatim — embedded prefix bytes and escape fragments included, since it is text the user meant to insert, not keystrokes to decode — with the markers consumed.
-A paste whose terminator never arrives stops holding the input stream after 1 MiB (the parser then resumes decoding normally).
-Passthrough mode never parses stdin, so pastes already flow through untouched there.
+A host in bracketed-paste mode (`ESC[200~` … `ESC[201~` around every paste) has its paste bodies treated as an opaque byte run in render mode: the body never meets the prefix scan or the chord table (a pending prefix is cancelled), and it forwards to the focused pane — embedded prefix bytes and escape fragments included, since it is text the user meant to insert, not keystrokes to decode.
+The host's markers are consumed; when the focused pane has bracketed paste on (DECSET 2004), the body is re-framed with the pane's own `ESC[200~`/`ESC[201~` after any embedded terminator is stripped.
+A modal that owns the keyboard (rename prompt, menu, help, picker) receives the body as typed text, and the scroll viewport consumes it.
+A paste longer than 1 MiB streams out in chunks and stays in paste mode until its terminator, so no byte of it reaches the chord scanner.
+Passthrough mode tracks the paste markers and skips the prefix scan inside a paste; the bytes themselves flow through untouched.
 
 #### Limitations
 
