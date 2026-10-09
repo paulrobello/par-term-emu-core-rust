@@ -27,12 +27,7 @@ Wire the target into `fuzz/Cargo.toml`, the Makefile, the nightly CI matrix and 
 - **SGR overflow (a crash the target finds at once).** `input.rs:286` reads `b'0'..=b'9' => fields[field] = fields[field] * 10 + u32::from(data[i] - b'0'),`.
   - `ESC[<` followed by 11 or more digits overflows `u32`. `cargo fuzz` builds with debug assertions and overflow checks on by default (`cargo +nightly fuzz run --help`: "default if not -O"), so this panics within seconds of the first run.
   - Under `cargo test` (dev profile, overflow checks on) it also panics. In a release build it wraps silently.
-- **Visibility. No fuzz hook is needed.**
-  - `crates/par-mux/src/mux/mod.rs:12-13`: `#[cfg(feature = "attach")] pub mod attach;`.
-  - `attach/mod.rs:15`: `pub mod input;`.
-  - The root re-exports the member: `src/lib.rs:106-107` (`#[cfg(feature = "mux")] pub use par_mux::mux;`).
-  - So `par_term_emu_core_rust::mux::attach::input::{InputParser, Token}` is reachable once the fuzz crate enables the root's `attach` feature (`Cargo.toml:221`, `attach = ["mux-bin", "par-mux/attach"]`).
-  - This mirrors `fuzz/fuzz_targets/mux_parse_command.rs:11`, which imports `par_term_emu_core_rust::mux::command::{parse_command, parse_line}` straight from the public API. `apc_filter` is the only target that needs a `cfg(fuzzing)` hook, and that is because its function is private.
+- **Visibility (updated at implementation, 2026-10-09).** ARC-134 made `attach::input` `pub(crate)`, so the plan's original "no fuzz hook needed" no longer holds. As implemented: `attach/mod.rs` carries a `#[cfg(fuzzing)] #[doc(hidden)] pub mod fuzz_support` re-exporting `super::input::{InputParser, Token}` (the `apc_filter` pattern), par-mux's `Cargo.toml` registers `check-cfg = ['cfg(fuzzing)']` under `[lints.rust] unexpected_cfgs`, and the target imports `mux::attach::fuzz_support::{InputParser, Token}`. The fuzz crate still enables the root's `attach` feature (`Cargo.toml`, `attach = ["mux-bin", "par-mux/attach"]`).
 - **Fuzz crate.**
   - `fuzz/Cargo.toml` is its own workspace (an empty `[workspace]` table at `:12`).
   - Its dependency is `par-term-emu-core-rust` with `features = ["rust-only", "mux"]` (`:18-21`). The comment block is at `:23-26`.
