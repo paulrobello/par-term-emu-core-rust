@@ -1727,6 +1727,27 @@ fn rename_window_updates_the_name() {
     assert_eq!(tree.window(window_id).unwrap().name, "scratch");
 }
 
+/// SEC-209: names are echoed to viewers' terminals, so every setter strips
+/// control characters (C0, DEL, C1) at entry instead of rejecting them.
+#[test]
+fn rename_strips_control_characters_from_every_tree_name() {
+    let mut tree = tree();
+    let session_id = tree.new_session("s\x1b[2J1", 80, 24).unwrap();
+    assert_eq!(tree.session(session_id).unwrap().name, "s[2J1");
+    let window_id = tree.session(session_id).unwrap().windows[0];
+
+    tree.rename_window(window_id, "a\x1b[2Jb").unwrap();
+    assert_eq!(tree.window(window_id).unwrap().name, "a[2Jb");
+
+    tree.rename_session(session_id, "x\x07\u{9b}y\x7f").unwrap();
+    assert_eq!(tree.session(session_id).unwrap().name, "xy");
+
+    let workspace = tree.new_workspace("w\x1b]0;t\x07s");
+    assert_eq!(tree.workspace(workspace).unwrap().name, "w]0;ts");
+    tree.rename_workspace(workspace, "\nfresh\r").unwrap();
+    assert_eq!(tree.workspace(workspace).unwrap().name, "fresh");
+}
+
 #[test]
 fn rename_window_rejects_an_unknown_window() {
     let mut tree = tree();

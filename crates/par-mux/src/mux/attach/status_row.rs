@@ -29,15 +29,17 @@ impl Session {
     /// pane title, agent count, and the held-dead cue with its respawn
     /// hint.
     pub(super) fn status_line(&self) -> String {
+        // Pane titles come from OSC 0/2 in pane output, and names from the
+        // control socket: strip controls before they reach the host.
         let session = if self.session_name.is_empty() {
-            "-"
+            "-".into()
         } else {
-            &self.session_name
+            crate::mux::strip_controls(&self.session_name)
         };
         let title = if self.pane_title.is_empty() {
-            &self.pane
+            crate::mux::strip_controls(&self.pane)
         } else {
-            &self.pane_title
+            crate::mux::strip_controls(&self.pane_title)
         };
         // The workspaces segment leads the line: every workspace's name
         // in id order, the daemon's active one bracketed (passthrough has
@@ -49,12 +51,13 @@ impl Session {
                 if index > 0 {
                     line.push(' ');
                 }
+                let name = crate::mux::strip_controls(name);
                 if Some(id) == self.active_workspace.as_ref() {
                     line.push('[');
-                    line.push_str(name);
+                    line.push_str(&name);
                     line.push(']');
                 } else {
-                    line.push_str(name);
+                    line.push_str(&name);
                 }
             }
             line.push_str(" |");

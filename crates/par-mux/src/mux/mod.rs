@@ -50,6 +50,19 @@ pub use scrape::{scrape_tick, ScrapeEngine};
 pub use server::MuxServer;
 pub use tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace};
 
+/// `s` without its control characters (C0, DEL, C1 — `char::is_control`).
+/// User-supplied names and titles are echoed into the status row and
+/// `par-mux -c` stdout verbatim, so an embedded ESC or BEL would reach the
+/// viewer's terminal as a live sequence (SEC-209). Borrowed when `s` is
+/// already clean.
+pub(crate) fn strip_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        std::borrow::Cow::Owned(s.chars().filter(|c| !c.is_control()).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// The build identity of THIS crate compilation: the crate version plus the
 /// git sha it was built from (`0.50.0+a02b2b3`, `-dirty` appended when the
 /// checkout had uncommitted tracked changes). Outside a repository (a

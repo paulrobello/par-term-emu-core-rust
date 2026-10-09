@@ -8,6 +8,7 @@ use super::{
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, MuxPane, SpawnContext};
+use crate::mux::strip_controls;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -22,7 +23,7 @@ impl MuxTree {
             id,
             MuxWorkspace {
                 id,
-                name: name.to_string(),
+                name: strip_controls(name).into_owned(),
                 sessions: Vec::new(),
                 active: 0,
             },
@@ -41,7 +42,7 @@ impl MuxTree {
             .workspaces
             .get_mut(&workspace_id)
             .ok_or(MuxError::NoSuchWorkspace(workspace_id))?;
-        workspace.name = name.to_string();
+        workspace.name = strip_controls(name).into_owned();
         Ok(())
     }
 
@@ -174,7 +175,7 @@ impl MuxTree {
             pane_id: self.ids.next_pane(),
             cols,
             rows,
-            name: name.to_string(),
+            name: strip_controls(name).into_owned(),
             window_name: None,
             env: env.clone(),
             workspace_id,
@@ -298,7 +299,7 @@ impl MuxTree {
             session_id,
             cols,
             rows,
-            name: name.to_string(),
+            name: strip_controls(name).into_owned(),
             session_name: session.name.clone(),
             env: session.env.clone(),
             cwd: cwd.map(Path::to_owned),
@@ -564,7 +565,7 @@ impl MuxTree {
             .windows
             .get_mut(&window_id)
             .ok_or(MuxError::NoSuchWindow(window_id))?;
-        window.name = name.to_string();
+        window.name = strip_controls(name).into_owned();
         Ok(())
     }
 
@@ -594,7 +595,7 @@ impl MuxTree {
             .sessions
             .get_mut(&session_id)
             .ok_or(MuxError::NoSuchSession(session_id))?;
-        session.name = name.to_string();
+        session.name = strip_controls(name).into_owned();
         Ok(())
     }
 

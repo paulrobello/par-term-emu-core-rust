@@ -301,6 +301,7 @@ impl MuxPane {
     /// the stored value changed, so the dispatcher can skip broadcasting a
     /// no-op `%pane-title-changed`.
     pub fn set_user_title(&mut self, title: &str) -> bool {
+        let title = crate::mux::strip_controls(title);
         let new = if title.is_empty() {
             None
         } else {
@@ -1729,6 +1730,32 @@ mod tests {
         assert!(pane.set_user_title(""));
         assert_eq!(pane.effective_title(), "later prog title");
         assert!(pane.user_title().is_none());
+    }
+
+    /// SEC-209: a user title carrying an OSC 52 clipboard write is stored
+    /// with no ESC or BEL, so echoing it cannot reach a viewer's terminal.
+    #[test]
+    fn user_title_strips_control_characters() {
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory
+            .create_pane(PaneId(10), 80, 24, None, &SpawnContext::default())
+            .unwrap();
+        assert!(pane.set_user_title("A\x1b]52;c;aGk=\x07B"));
+        let title = pane.user_title().expect("set");
+        assert!(!title.contains('\x1b') && !title.contains('\x07'));
+        assert_eq!(title, "A]52;c;aGk=B");
+        // A title of only control characters clears, like an empty one.
+        assert!(pane.set_user_title("\x1b\x07"));
+        assert!(pane.user_title().is_none());
+    }
+
+    #[test]
+    fn strip_controls_borrows_clean_input() {
+        assert!(matches!(
+            crate::mux::strip_controls("plain"),
+            std::borrow::Cow::Borrowed("plain")
+        ));
+        assert_eq!(crate::mux::strip_controls("a\u{85}b\u{9c}"), "ab");
     }
 
     #[test]

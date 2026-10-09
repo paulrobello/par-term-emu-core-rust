@@ -2354,3 +2354,21 @@ fn passthrough_paste_markers_split_across_bursts_are_recognized() {
         "the carry stays bounded"
     );
 }
+
+/// SEC-209 defence in depth: an OSC 0/2 pane title (pane output, not
+/// sanitized at the daemon) and names carrying controls never reach the
+/// host through the passthrough status row.
+#[test]
+fn status_line_strips_control_characters() {
+    let (_rx, mut session) = management_session("status-strip");
+    session.session_name = "wo\x1b[2Jrk".to_string();
+    session.workspaces = vec![("+0".to_string(), "ma\x07in".to_string())];
+    session.active_workspace = Some("+0".to_string());
+    session.pane_title = "t\x1b]52;c;aGk=\x07\u{9b}x".to_string();
+    let line = session.status_line();
+    assert!(!line.chars().any(char::is_control), "{line:?}");
+    assert!(
+        line.contains("[main]") && line.contains("wo[2Jrk") && line.contains("t]52;c;aGk=x"),
+        "{line:?}"
+    );
+}
