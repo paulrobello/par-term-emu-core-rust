@@ -12,20 +12,28 @@ use crate::cursor::Cursor;
 use crate::terminal::{MarginState, Terminal};
 use vte::Params;
 
+/// The terminal state cursor motion reads and moves (QA-240).
+pub(crate) struct CursorCtx<'a> {
+    pub cursor: &'a mut Cursor,
+    pub pending_wrap: &'a mut bool,
+    pub origin_mode: bool,
+    pub margins: &'a MarginState,
+    pub tab_stops: &'a [bool],
+    /// The active screen's `(cols, rows)`.
+    pub size: (usize, usize),
+}
+
 /// Cursor motion sequences. Returns `false` (and changes nothing) for an
-/// action this function does not handle. `size` is the active screen's
-/// `(cols, rows)`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_cursor_motion(
-    cursor: &mut Cursor,
-    pending_wrap: &mut bool,
-    origin_mode: bool,
-    margins: &MarginState,
-    tab_stops: &[bool],
-    size: (usize, usize),
-    action: char,
-    params: &Params,
-) -> bool {
+/// action this function does not handle.
+pub(crate) fn handle_cursor_motion(ctx: CursorCtx<'_>, action: char, params: &Params) -> bool {
+    let CursorCtx {
+        cursor,
+        pending_wrap,
+        origin_mode,
+        margins,
+        tab_stops,
+        size,
+    } = ctx;
     let (cols, rows) = size;
     match action {
         'A' => {
@@ -126,16 +134,15 @@ impl Terminal {
         _intermediates: &[u8],
     ) {
         let size = self.size();
-        if handle_cursor_motion(
-            &mut self.cursor,
-            &mut self.pending_wrap,
-            self.modes.origin_mode,
-            &self.margins,
-            &self.tab_stops,
+        let ctx = CursorCtx {
+            cursor: &mut self.cursor,
+            pending_wrap: &mut self.pending_wrap,
+            origin_mode: self.modes.origin_mode,
+            margins: &self.margins,
+            tab_stops: &self.tab_stops,
             size,
-            action,
-            params,
-        ) {
+        };
+        if handle_cursor_motion(ctx, action, params) {
             return;
         }
 

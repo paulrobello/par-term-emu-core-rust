@@ -36,12 +36,14 @@ impl Terminal {
 
         match action {
             't' => handle_xtwinops(
-                &mut self.response_buffer,
-                &self.host,
-                &mut self.title_state,
-                &mut self.warning_bell_volume,
-                (self.pixel_width, self.pixel_height),
-                (cols, rows),
+                XtwinopsCtx {
+                    response: &mut self.response_buffer,
+                    host: &self.host,
+                    title_state: &mut self.title_state,
+                    warning_bell_volume: &mut self.warning_bell_volume,
+                    pixel_size: (self.pixel_width, self.pixel_height),
+                    size: (cols, rows),
+                },
                 params,
                 intermediates,
             ),
@@ -213,19 +215,28 @@ fn handle_rect_ops(
     }
 }
 
-/// XTWINOPS window reports/title stack (`CSI Ps t`) and DECSWBV.
-/// `pixel_size` is `(width, height)`; `size` is `(cols, rows)`.
-#[allow(clippy::too_many_arguments)]
-fn handle_xtwinops(
-    response: &mut Vec<u8>,
-    host: &HostConfig,
-    title_state: &mut TitleState,
-    warning_bell_volume: &mut u8,
+/// The terminal state XTWINOPS/DECSWBV reads and writes (QA-240).
+struct XtwinopsCtx<'a> {
+    response: &'a mut Vec<u8>,
+    host: &'a HostConfig,
+    title_state: &'a mut TitleState,
+    warning_bell_volume: &'a mut u8,
+    /// `(width, height)` in pixels.
     pixel_size: (usize, usize),
+    /// `(cols, rows)`.
     size: (usize, usize),
-    params: &Params,
-    intermediates: &[u8],
-) {
+}
+
+/// XTWINOPS window reports/title stack (`CSI Ps t`) and DECSWBV.
+fn handle_xtwinops(ctx: XtwinopsCtx<'_>, params: &Params, intermediates: &[u8]) {
+    let XtwinopsCtx {
+        response,
+        host,
+        title_state,
+        warning_bell_volume,
+        pixel_size,
+        size,
+    } = ctx;
     let (pixel_width, pixel_height) = pixel_size;
     let (cols, rows) = size;
     // Window manipulation (XTWINOPS) or DECSWBV (Set Warning Bell Volume)
