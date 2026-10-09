@@ -158,244 +158,92 @@ impl PyTmuxNotification {
     }
 }
 
+/// One table row per `TmuxNotification` variant: `Variant { src => dst: mode, … }`.
+/// Every unlisted Py field stays None via `empty(kind)`. Trailing `raw:` arms are
+/// pasted into the same match verbatim for conversions no mode expresses. The
+/// generated match has no wildcard, so a new variant fails to compile here.
+macro_rules! tmux_to_py {
+    (@val own, $x:ident) => { Some($x.clone()) };
+    (@val copy, $x:ident) => { Some(*$x) };
+    (@val opt, $x:ident) => { $x.clone() };
+    (@val nonempty, $x:ident) => { (!$x.is_empty()).then(|| $x.clone()) };
+    // Rows sit inside `[...]`: a bare repetition of `$variant:ident` followed
+    // by the `raw` keyword would be a macro_rules local ambiguity.
+    ($notif:expr, $kind:expr;
+     [ $( $variant:ident $({ $($src:ident => $dst:ident : $mode:ident),* $(,)? })? ;)* ]
+     raw: { $($raw:tt)* }) => {
+        match $notif {
+            $( TmuxNotification::$variant $({ $($src),* })? => PyTmuxNotification {
+                $($( $dst: tmux_to_py!(@val $mode, $src), )*)?
+                ..PyTmuxNotification::empty($kind)
+            }, )*
+            $($raw)*
+        }
+    };
+}
+
 impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
     fn from(notif: &crate::tmux_control::TmuxNotification) -> Self {
         use crate::tmux_control::TmuxNotification;
 
-        // notification_type() is the one source of truth for kind strings;
-        // keeping the match exhaustive (no `_` arm) turns a new variant
-        // into a compile error here.
+        // notification_type() is the one source of truth for kind strings.
         let kind = notif.notification_type();
 
-        match notif {
-            TmuxNotification::Begin {
-                timestamp,
-                command_number,
-                flags,
-            } => Self {
-                timestamp: Some(*timestamp),
-                command_number: Some(*command_number),
-                flags: Some(flags.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::End {
-                timestamp,
-                command_number,
-                flags,
-            } => Self {
-                timestamp: Some(*timestamp),
-                command_number: Some(*command_number),
-                flags: Some(flags.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Error {
-                timestamp,
-                command_number,
-                flags,
-            } => Self {
-                timestamp: Some(*timestamp),
-                command_number: Some(*command_number),
-                flags: Some(flags.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Output { pane_id, data } => Self {
-                pane_id: Some(pane_id.clone()),
-                data: Some(data.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::PaneModeChanged { pane_id } => Self {
-                pane_id: Some(pane_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::WindowPaneChanged { window_id, pane_id } => Self {
-                window_id: Some(window_id.clone()),
-                pane_id: Some(pane_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::WindowClose { window_id } => Self {
-                window_id: Some(window_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::UnlinkedWindowClose { window_id } => Self {
-                window_id: Some(window_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::WindowAdd {
-                window_id,
-                window_layout,
-                window_visible_layout,
-                window_raw_flags,
-            } => Self {
-                window_id: Some(window_id.clone()),
-                // The triple rides on newer emitters; a bare-id line (real
-                // tmux's shape) leaves the fields None.
-                window_layout: (!window_layout.is_empty()).then(|| window_layout.clone()),
-                window_visible_layout: (!window_visible_layout.is_empty())
-                    .then(|| window_visible_layout.clone()),
-                window_raw_flags: (!window_raw_flags.is_empty()).then(|| window_raw_flags.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::UnlinkedWindowAdd { window_id } => Self {
-                window_id: Some(window_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::WindowRenamed { window_id, name } => Self {
-                window_id: Some(window_id.clone()),
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::UnlinkedWindowRenamed { window_id, name } => Self {
-                window_id: Some(window_id.clone()),
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::SessionChanged { session_id, name } => Self {
-                session_id: Some(session_id.clone()),
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::ClientSessionChanged {
-                client,
-                session_id,
-                name,
-            } => Self {
-                client: Some(client.clone()),
-                session_id: Some(session_id.clone()),
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::SessionRenamed { session_id, name } => Self {
-                session_id: Some(session_id.clone()),
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::WorkspacesChanged => Self {
-                ..Self::empty(kind)
-            },
-            TmuxNotification::SessionsChanged => Self {
-                ..Self::empty(kind)
-            },
-            TmuxNotification::SessionWindowChanged {
-                session_id,
-                window_id,
-            } => Self {
-                session_id: Some(session_id.clone()),
-                window_id: Some(window_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::ClientDetached { client } => Self {
-                client: Some(client.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::ClientAttached { client } => Self {
-                client: Some(client.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::ClientLeft {
-                client,
-                session_id,
-                window_id,
-            } => Self {
-                client: Some(client.clone()),
-                session_id: session_id.clone(),
-                window_id: window_id.clone(),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Exit => Self {
-                ..Self::empty(kind)
-            },
-            TmuxNotification::AgentStateChanged {
-                pane_id,
-                agent,
-                state,
-                source,
-            } => Self {
-                source: Some(source.clone()),
-                pane_id: Some(pane_id.clone()),
-                name: Some(agent.clone()),
-                value: Some(state.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::AgentReleased { pane_id, agent } => Self {
-                pane_id: Some(pane_id.clone()),
-                name: Some(agent.clone()),
-                ..Self::empty(kind)
-            },
+        tmux_to_py!(notif, kind; [
+            Begin { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
+            End { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
+            Error { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
+            Output { pane_id => pane_id: own, data => data: own };
+            PaneModeChanged { pane_id => pane_id: own };
+            WindowPaneChanged { window_id => window_id: own, pane_id => pane_id: own };
+            WindowClose { window_id => window_id: own };
+            UnlinkedWindowClose { window_id => window_id: own };
+            // The triple rides on newer emitters; a bare-id line (real
+            // tmux's shape) leaves the fields None.
+            WindowAdd { window_id => window_id: own, window_layout => window_layout: nonempty,
+                        window_visible_layout => window_visible_layout: nonempty,
+                        window_raw_flags => window_raw_flags: nonempty };
+            UnlinkedWindowAdd { window_id => window_id: own };
+            WindowRenamed { window_id => window_id: own, name => name: own };
+            UnlinkedWindowRenamed { window_id => window_id: own, name => name: own };
+            SessionChanged { session_id => session_id: own, name => name: own };
+            ClientSessionChanged { client => client: own, session_id => session_id: own, name => name: own };
+            SessionRenamed { session_id => session_id: own, name => name: own };
+            WorkspacesChanged;
+            SessionsChanged;
+            SessionWindowChanged { session_id => session_id: own, window_id => window_id: own };
+            ClientDetached { client => client: own };
+            ClientAttached { client => client: own };
+            ClientLeft { client => client: own, session_id => session_id: opt, window_id => window_id: opt };
+            Exit;
+            AgentStateChanged { pane_id => pane_id: own, agent => name: own, state => value: own,
+                                source => source: own };
+            AgentReleased { pane_id => pane_id: own, agent => name: own };
             // Identity only — the fresh telemetry blob lives on the
             // list-agents roster, so clients re-query.
-            TmuxNotification::AgentTelemetryChanged { pane_id, agent } => Self {
-                pane_id: Some(pane_id.clone()),
-                name: Some(agent.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::PaneTitleChanged { pane_id, title } => Self {
-                pane_id: Some(pane_id.clone()),
-                name: Some(title.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::PaneExited { pane_id, exit_code } => Self {
+            AgentTelemetryChanged { pane_id => pane_id: own, agent => name: own };
+            PaneTitleChanged { pane_id => pane_id: own, title => name: own };
+            PaneRespawned { pane_id => pane_id: own };
+            Pause { pane_id => pane_id: own };
+            ExtendedOutput { pane_id => pane_id: own, delay_ms => delay_ms: copy, data => data: own };
+            Continue { pane_id => pane_id: own };
+            SubscriptionChanged { name => subscription_name: own, value => value: own };
+            LayoutChange { window_id => window_id: own, window_layout => window_layout: own,
+                           window_visible_layout => window_visible_layout: own,
+                           window_raw_flags => window_raw_flags: own };
+            PasteBufferChanged { name => name: own };
+            PasteBufferDeleted { name => name: own };
+            Unknown { line => raw_line: own };
+            TerminalOutput { data => data: own };
+        ] raw: {
+            TmuxNotification::PaneExited { pane_id, exit_code } => PyTmuxNotification {
                 pane_id: Some(pane_id.clone()),
                 // Deprecated: name-as-exit-string; clients read exit_code.
                 name: exit_code.map(|code| code.to_string()),
                 exit_code: *exit_code,
-                ..Self::empty(kind)
+                ..PyTmuxNotification::empty(kind)
             },
-            TmuxNotification::PaneRespawned { pane_id } => Self {
-                pane_id: Some(pane_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Pause { pane_id } => Self {
-                pane_id: Some(pane_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::ExtendedOutput {
-                pane_id,
-                delay_ms,
-                data,
-            } => Self {
-                pane_id: Some(pane_id.clone()),
-                delay_ms: Some(*delay_ms),
-                data: Some(data.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Continue { pane_id } => Self {
-                pane_id: Some(pane_id.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::SubscriptionChanged { name, value } => Self {
-                subscription_name: Some(name.clone()),
-                value: Some(value.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::LayoutChange {
-                window_id,
-                window_layout,
-                window_visible_layout,
-                window_raw_flags,
-            } => Self {
-                window_id: Some(window_id.clone()),
-                window_layout: Some(window_layout.clone()),
-                window_visible_layout: Some(window_visible_layout.clone()),
-                window_raw_flags: Some(window_raw_flags.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::PasteBufferChanged { name } => Self {
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::PasteBufferDeleted { name } => Self {
-                name: Some(name.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::Unknown { line } => Self {
-                raw_line: Some(line.clone()),
-                ..Self::empty(kind)
-            },
-            TmuxNotification::TerminalOutput { data } => Self {
-                data: Some(data.clone()),
-                ..Self::empty(kind)
-            },
-        }
+        })
     }
 }
 impl From<crate::tmux_control::TmuxNotification> for PyTmuxNotification {
