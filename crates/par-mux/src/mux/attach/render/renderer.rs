@@ -1053,6 +1053,13 @@ impl PaneRenderer {
         }
         self.dirty = false;
 
+        // The last painted frame becomes this frame's diff baseline by a
+        // swap, not a clone (ARC-132): both buffers share the renderer's
+        // fixed area (a resize rebuilds the renderer), and the reset below
+        // clears the recycled buffer before painting. After the frame,
+        // `self.buffer` holds it for tests and callers to read.
+        std::mem::swap(&mut self.buffer, &mut self.prev_buffer);
+
         // Clear the frame to the host background BEFORE painting: every
         // cell that paint_pane skips (a short history line, the wide-char
         // spacer, past the grid edge) and every cell no pane rect covers
@@ -1095,11 +1102,6 @@ impl PaneRenderer {
             .into_iter()
             .map(|(x, y, cell)| (x, y, cell.clone()))
             .collect::<Vec<_>>();
-        // The painted frame becomes the next diff baseline. `self.buffer`
-        // keeps the frame — tests and callers can read it — and the next
-        // paint's per-cell `reset()` clears each rewritten cell, so no
-        // whole-buffer reset is needed (the layout tiles the window).
-        self.prev_buffer = self.buffer.clone();
         diff
     }
 

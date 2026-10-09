@@ -644,16 +644,14 @@ impl WindowSession {
         let geometry = self.geometry;
         let mut flushed = false;
         if self.renderer.needs_frame() {
-            let diff = self.renderer.render_frame();
+            let mut diff = self.renderer.render_frame();
             if !diff.is_empty() {
-                let rebased: Vec<(u16, u16, RtCell)> = diff
-                    .into_iter()
-                    .map(|(x, y, cell)| {
-                        let (hx, hy) = geometry.frame_to_host(x, y);
-                        (hx, hy, cell)
-                    })
-                    .collect();
-                sink.flush(&rebased);
+                // Rebase the owned diff in place: no second vector, no
+                // cell clones (ARC-132).
+                for (x, y, _) in &mut diff {
+                    (*x, *y) = geometry.frame_to_host(*x, *y);
+                }
+                sink.flush(&diff);
                 flushed = true;
             }
         }
