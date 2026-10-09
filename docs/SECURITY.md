@@ -1278,9 +1278,9 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:564` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:566` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:568` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:572` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:574` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:576` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
