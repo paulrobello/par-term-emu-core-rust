@@ -192,7 +192,7 @@ the cell with `Cell::default()` and sets `c` (same value).
 
 Root-side edits outside the move: `src/lib.rs` (re-exports, `ffi_tests`
 wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`
-(the helper above; `src/mux/persist.rs` before Phase 2),
+(the helper above),
 `Cargo.toml` (member dep, forwarded features, core-only deps and the
 `proptest` dev-dep removed), `cbindgen.toml` (`parse_deps`).
 
