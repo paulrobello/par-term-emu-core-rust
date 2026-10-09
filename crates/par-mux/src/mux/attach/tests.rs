@@ -2372,3 +2372,65 @@ fn status_line_strips_control_characters() {
         "{line:?}"
     );
 }
+
+/// ARC-123: the attach options with only the given CLI fields set.
+fn cli_options(prefix: Option<&str>, reload: Option<&str>) -> AttachOptions {
+    AttachOptions {
+        socket: None,
+        name: None,
+        target: None,
+        prefix: prefix.map(str::to_string),
+        reload: reload.map(str::to_string),
+        mode: None,
+    }
+}
+
+/// ARC-123: `resolve_client` layers CLI over file over defaults: no
+/// file and no flag is the built-in set; `--prefix C-a` sets the
+/// prefix byte 0x01.
+#[test]
+fn resolve_client_cli_prefix_overrides_the_default() {
+    let empty = crate::mux::config::ConfigFile::default();
+    let base = resolve_client_with(&cli_options(None, None), empty.clone()).expect("defaults");
+    assert_eq!(base.chords, crate::mux::config::Chords::with_defaults());
+    let resolved =
+        resolve_client_with(&cli_options(Some("C-a"), None), empty).expect("C-a resolves");
+    assert_eq!(resolved.chords.prefix, 0x01);
+}
+
+/// ARC-123: the CLI tier wins over the file's `[client]` chords, and
+/// the file still supplies everything the CLI does not name.
+#[test]
+fn resolve_client_cli_wins_over_the_file() {
+    let file: crate::mux::config::ConfigFile =
+        toml::from_str("[client]\nprefix = \"C-a\"\nreload = \"C-a C-s\"\nsplit-right = \"|\"\n")
+            .unwrap();
+    let from_file = resolve_client_with(&cli_options(None, None), file.clone()).expect("file");
+    assert_eq!(from_file.chords.prefix, 0x01);
+    assert_eq!(from_file.chords.reload, 0x13);
+    assert_eq!(from_file.chords.management.split_right, b'|');
+    let cli = resolve_client_with(&cli_options(Some("C-x"), Some("C-x C-e")), file).expect("cli");
+    assert_eq!(cli.chords.prefix, 0x18, "--prefix wins over the file");
+    assert_eq!(cli.chords.reload, 0x05, "the CLI reload chord wins");
+    assert_eq!(
+        cli.chords.management.split_right, b'|',
+        "the file still fills the rest"
+    );
+}
+
+/// ARC-123: a malformed `--prefix` is one `Handshake` error with the
+/// passthrough spelling, whichever mode is attaching.
+#[test]
+fn resolve_client_rejects_a_malformed_prefix() {
+    let err = resolve_client_with(
+        &cli_options(Some("bogus-key"), None),
+        crate::mux::config::ConfigFile::default(),
+    )
+    .expect_err("a bad prefix fails");
+    match err {
+        AttachError::Handshake(err) => {
+            assert!(err.to_string().contains("invalid --prefix"), "{err}")
+        }
+        other => panic!("expected a handshake error, got {other:?}"),
+    }
+}

@@ -388,6 +388,44 @@ fn prefix_d_detaches_and_leaves_the_pane_running() {
     );
 }
 
+/// ARC-123: render mode (the default) honors `--prefix`: under
+/// `--prefix C-a`, the old prefix `C-b d` does NOT detach (it forwards
+/// to the pane), and `C-a d` does, with exit 0. Render mode used to
+/// seed `C-b` and ignore the flag.
+#[test]
+fn render_mode_prefix_flag_rebinds_the_detach_chord() {
+    let (fixture, _daemon, mut client) = fixture_with_session("render-prefix");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane, "--prefix", "C-a"]);
+    let _ = wait_for_output(&host, b"$", Duration::from_secs(10));
+
+    // The old prefix is an ordinary key now: no detach.
+    host.to_child.write_all(&[0x02, b'd']).expect("C-b d");
+    host.to_child.flush().ok();
+    assert_eq!(
+        child_exit(&mut host, Duration::from_millis(1500)),
+        None,
+        "C-b d must not detach under --prefix C-a. stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    host.to_child.write_all(&[0x01, b'd']).expect("C-a d");
+    host.to_child.flush().ok();
+    assert_eq!(
+        child_exit(&mut host, Duration::from_secs(10)),
+        Some(0),
+        "C-a d must detach with exit 0. stderr: {}",
+        stderr.lock().unwrap()
+    );
+}
+
 /// Acceptance criterion 2b (clean restore): the client's output carries a
 /// terminal-restore sequence after detach — raw mode off is crossterm's
 /// disable_raw_mode (no bytes), and the pump leaves the scroll region

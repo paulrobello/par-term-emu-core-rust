@@ -68,17 +68,72 @@ pub fn run(options: &AttachOptions) -> ExitCode {
 /// cards (and any embedder) select through. [`run`] is this with
 /// [`AttachMode::Passthrough`].
 pub fn run_with_mode(options: &AttachOptions, mode: AttachMode) -> ExitCode {
+    // One resolution for both modes, before either touches the terminal:
+    // a malformed chord fails here with the same message in each mode.
+    let client = match resolve_client(options) {
+        Ok(client) => client,
+        Err(err) => return report_attach_error(err),
+    };
     match mode {
-        AttachMode::Passthrough => run_passthrough(options),
-        AttachMode::Render => render::run_render_session(options),
+        AttachMode::Passthrough => run_passthrough(options, &client),
+        AttachMode::Render => render::run_render_session(options, &client),
     }
 }
 
-/// The Phase A passthrough entry, unchanged.
-fn run_passthrough(options: &AttachOptions) -> ExitCode {
-    match run_inner(options) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(AttachError::NoDaemon(path)) => {
+/// The attach client's resolved configuration: the parsed config file
+/// (render mode reads its raw `[client]` keys where "absent" differs from
+/// "default", e.g. `pane-borders`, and the border colors) and the chords
+/// both modes run with — CLI over file over built-in defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedClient {
+    /// The canonical config file as loaded (defaults when absent or
+    /// unparseable — the lenient startup rule).
+    pub file: crate::mux::config::ConfigFile,
+    /// The resolved chords and display options.
+    pub chords: crate::mux::config::Chords,
+}
+
+/// Resolve the attach client's configuration once for both modes: the
+/// canonical config file's `[client]` chords over the built-in defaults,
+/// then `--prefix` and the CLI-layer reload chord (`options.reload`) over
+/// those. A malformed chord is an [`AttachError::Handshake`] carrying the
+/// passthrough spelling (`invalid --prefix …`); a broken FILE stays the
+/// lenient startup rule (warn-and-defaults — the strict error is the
+/// reload's, per docs/MUX.md).
+pub(crate) fn resolve_client(options: &AttachOptions) -> Result<ResolvedClient, AttachError> {
+    resolve_client_with(options, crate::mux::config::load_canonical())
+}
+
+/// [`resolve_client`] over an already-loaded file (the pure seam the
+/// unit tests drive).
+pub(crate) fn resolve_client_with(
+    options: &AttachOptions,
+    file: crate::mux::config::ConfigFile,
+) -> Result<ResolvedClient, AttachError> {
+    let handshake = |message: String| AttachError::Handshake(std::io::Error::other(message));
+    let mut chords = crate::mux::config::reload_client_chords(
+        &file,
+        &crate::mux::config::Chords::with_defaults(),
+    )
+    .map_err(handshake)?;
+    if let Some(spec) = options.prefix.as_deref() {
+        chords.prefix = parse_prefix(spec).ok_or_else(|| {
+            handshake(format!(
+                "invalid --prefix {spec:?} (expected the tmux spelling, e.g. C-b)"
+            ))
+        })?;
+    }
+    if let Some(chord) = options.reload.as_deref() {
+        chords.reload = crate::mux::config::reload_chord_key(chord).map_err(handshake)?;
+    }
+    Ok(ResolvedClient { file, chords })
+}
+
+/// Print an attach failure the way every attach entry reports it and
+/// map it to the exit code.
+fn report_attach_error(err: AttachError) -> ExitCode {
+    match err {
+        AttachError::NoDaemon(path) => {
             eprintln!(
                 "par-mux: no daemon running on {} — start one with `par-mux --socket {}`",
                 path.display(),
@@ -86,10 +141,18 @@ fn run_passthrough(options: &AttachOptions) -> ExitCode {
             );
             ExitCode::FAILURE
         }
-        Err(AttachError::Handshake(err)) => {
+        AttachError::Handshake(err) => {
             eprintln!("par-mux: attach failed: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The Phase A passthrough entry.
+fn run_passthrough(options: &AttachOptions, client: &ResolvedClient) -> ExitCode {
+    match run_inner(options, &client.chords) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => report_attach_error(err),
     }
 }
 
@@ -159,7 +222,10 @@ const POLL: Duration = Duration::from_millis(16);
 
 /// The attach session: connect, handshake, resolve the target pane, run
 /// the byte/key pump, and restore the terminal on every exit path.
-fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
+fn run_inner(
+    options: &AttachOptions,
+    chords: &crate::mux::config::Chords,
+) -> Result<(), AttachError> {
     let path = options.socket_path();
     let conn = conn::AttachConn::connect(&path).map_err(|_| AttachError::NoDaemon(path.clone()))?;
 
@@ -169,66 +235,17 @@ fn run_inner(options: &AttachOptions) -> Result<(), AttachError> {
         eprintln!("{warning}");
     }
 
-    let prefix = match options.prefix.as_deref() {
-        Some(spec) => match parse_prefix(spec) {
-            Some(byte) => byte,
-            None => {
-                return Err(AttachError::Handshake(std::io::Error::other(format!(
-                    "invalid --prefix {spec:?} (expected the tmux spelling, e.g. C-b)"
-                ))))
-            }
-        },
-        None => C_B,
-    };
-
     // Terminal setup/teardown guard: raw mode while attached, restored on
-    // every exit path — including error/panic unwind.
+    // every exit path — including error/panic unwind. The chords were
+    // resolved (and any malformed one reported) before this point.
     let guard = TerminalGuard::enter();
 
-    // The reload chord key: the CLI layer passes the `[client] reload`
-    // spelling from the resolved config; `None` keeps the built-in
-    // default `C-b C-r`. An unparseable chord fails the attach — the
-    // same contract `--prefix` follows.
-    let reload_key = match options.reload.as_deref() {
-        Some(chord) => chord.to_string(),
-        None => "C-b C-r".to_string(),
-    };
-    let reload_key = match crate::mux::config::reload_chord_key(&reload_key) {
-        Ok(key) => key,
-        Err(err) => {
-            drop(guard);
-            return Err(AttachError::Handshake(std::io::Error::other(err)));
-        }
-    };
-    // The management chords (split/kill/new-window) and the resize
-    // affordances (the resize-mode chord + its step) come from the config
-    // file — main.rs hands prefix/reload over explicitly, the management
-    // keys resolve here against the same canonical file, the SAME pure
-    // parser the live reload runs (one grammar, one error shape). A
-    // malformed chord fails the attach like a malformed --prefix; a
-    // broken FILE stays the lenient startup rule (warn-and-defaults —
-    // the strict error is the reload's, per docs/MUX.md).
-    let chords = match crate::mux::config::reload_client_chords(
-        &crate::mux::config::load_canonical(),
-        &crate::mux::config::Chords {
-            prefix,
-            reload: reload_key,
-            management: crate::mux::config::Management::default(),
-            ..crate::mux::config::Chords::with_defaults()
-        },
-    ) {
-        Ok(chords) => chords,
-        Err(err) => {
-            drop(guard);
-            return Err(AttachError::Handshake(std::io::Error::other(err)));
-        }
-    };
     let session = match Session::new(
         conn,
         &path,
         options.target.as_deref(),
-        prefix,
-        reload_key,
+        chords.prefix,
+        chords.reload,
         chords.management,
         chords.resize_step,
     ) {

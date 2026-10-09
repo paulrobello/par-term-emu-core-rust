@@ -384,8 +384,11 @@ pub(crate) trait FlushSink {
 /// per-pane state via the `refresh-client -t` replays), then pump
 /// `%output` into the per-pane emulators at frame cadence until detach or
 /// the connection ends.
-pub(crate) fn run_render_session(options: &super::AttachOptions) -> std::process::ExitCode {
-    match render_session_inner(options) {
+pub(crate) fn run_render_session(
+    options: &super::AttachOptions,
+    client: &super::ResolvedClient,
+) -> std::process::ExitCode {
+    match render_session_inner(options, client) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("par-mux: attach failed: {err}");
@@ -394,7 +397,10 @@ pub(crate) fn run_render_session(options: &super::AttachOptions) -> std::process
     }
 }
 
-fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
+fn render_session_inner(
+    options: &super::AttachOptions,
+    client: &super::ResolvedClient,
+) -> Result<(), String> {
     let path = options.socket_path();
     let mut conn = crate::mux::attach::conn::AttachConn::connect(&path)
         .map_err(|_| format!("no daemon running on {}", path.display()))?;
@@ -418,23 +424,14 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     );
 
     let mut session = WindowSession::new(cols, rows);
-    // The management chords resolve here against the canonical config
-    // file — the SAME pure parser the live reload runs (main.rs hands
-    // prefix/reload over explicitly; the management keys ride the file).
-    // A malformed chord fails the attach like a malformed prefix; a
-    // broken FILE stays the lenient startup rule (warn-and-defaults —
-    // the strict error is the reload's, per docs/MUX.md).
-    let file = crate::mux::config::load_canonical();
-    let chords = crate::mux::config::reload_client_chords(
-        &file,
-        &crate::mux::config::Chords {
-            prefix: session.prefix,
-            reload: session.reload_key,
-            management: crate::mux::config::Management::default(),
-            ..crate::mux::config::Chords::with_defaults()
-        },
-    )
-    .map_err(|err| format!("config: {err}"))?;
+    // The client configuration was resolved once for both modes
+    // (`resolve_client`: CLI over file over defaults) before the
+    // terminal was touched; the session seeds from it.
+    let file = &client.file;
+    let chords = &client.chords;
+    session.prefix = chords.prefix;
+    session.literal = chords.prefix;
+    session.reload_key = chords.reload;
     session.management = chords.management;
     session.resize_step = chords.resize_step;
     session.render_opts.sidebar_width = chords.sidebar_width;
@@ -466,10 +463,7 @@ fn render_session_inner(options: &super::AttachOptions) -> Result<(), String> {
     session.set_pane_gaps(chords.pane_gaps);
     session.set_scrollbar_gutter(chords.scrollbar_gutter);
     session.drag_cursor_shape = chords.drag_cursor_shape;
-    let eff = crate::mux::config::resolve(
-        &crate::mux::config::load_canonical(),
-        &crate::mux::config::Overrides::default(),
-    );
+    let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
     session.set_border_colors(
         crate::mux::config::parse_hex_color(&eff.border_active_color)
             .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
