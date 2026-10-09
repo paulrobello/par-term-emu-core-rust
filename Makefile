@@ -59,7 +59,7 @@ help:
 	@echo "  ffi-header      - Regenerate include/terminal_core.h with cbindgen (needs: cargo install cbindgen --locked)"
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
-	@echo "  mux-docs-check  - Fail when MUX.md or the API_REFERENCE notification_type list drifts from the mux code"
+	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"

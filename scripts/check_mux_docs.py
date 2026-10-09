@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ENH-033 — par-mux doc-contract gate.
 
-Diffs four code-owned lists against their documentation, so the next mux
+Diffs five code-owned lists against their documentation, so the next mux
 command or notification added without its doc row fails the gate:
 
   1. `const COMMANDS` (crates/par-mux/src/mux/command/)        ↔ MUX.md "Command Reference" rows
@@ -10,6 +10,10 @@ command or notification added without its doc row fails the gate:
   4. `notification_type()` strings (crates/par-term-emu-core/src/tmux_control.rs)
                                                  ↔ the `notification_type` bullet
                                                    in docs/API_REFERENCE.md
+  5. `#[arg(long…)]` fields (crates/par-mux/src/bin/par_mux/main.rs)
+                                                 ↔ every `--flag` claimed in MUX.md,
+                                                   CHANGELOG [Unreleased] par-mux
+                                                   bullets, and config.rs rustdoc
 
 `%begin`/`%end`/`%error` are reply framing: the gate requires them (backticked)
 in MUX.md's "Protocol Overview" section instead of the Notifications table.
@@ -51,6 +55,9 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "crates/par-term-emu-core/src/tmux_control.rs",
     "docs/MUX.md",
     "docs/API_REFERENCE.md",
+    "crates/par-mux/src/bin/par_mux/main.rs",
+    "crates/par-mux/src/mux/config.rs",
+    "CHANGELOG.md",
 )
 
 # `\s*` after the paren: rustfmt splits a row past the width limit onto
@@ -60,6 +67,35 @@ VARIANT_RE = re.compile(r"MuxCommand::(\w+)")
 EMIT_STRING_RE = re.compile(r'"%([a-z-]+)')
 DOC_CMD_ROW_RE = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
 DOC_NOTIF_ROW_RE = re.compile(r"^\| `%([a-z-]+)", re.MULTILINE)
+
+MAIN_RS = "crates/par-mux/src/bin/par_mux/main.rs"
+CONFIG_RS = "crates/par-mux/src/mux/config.rs"
+# `--` + kebab word, not preceded by a word char or `-` (so `---` rules and
+# `a--b` never match).
+FLAG_TOKEN_RE = re.compile(r"(?<![\w-])--([a-z][a-z0-9]*(?:-[a-z0-9]+)*)")
+ARG_ATTR_RE = re.compile(r"#\[arg\((.*?)\)\]", re.DOTALL)
+FIELD_RE = re.compile(r"^\s*(?:pub\s+)?(\w+)\s*:", re.MULTILINE)
+LONG_EXPLICIT_RE = re.compile(r'\blong\s*=\s*"([a-z0-9-]+)"')
+LONG_BARE_RE = re.compile(r"\blong\b(?!\s*=)")
+
+# clap derive built-ins (#[command(version)] plus the implicit help).
+CLAP_BUILTIN_FLAGS: set[str] = {"help", "version"}
+
+# Flags of OTHER programs that par-mux docs legitimately quote. Each needs a
+# reason; an entry that collides with a real par-mux flag fails the gate.
+FOREIGN_FLAGS: dict[str, str] = {
+    "bin": "cargo build/run/install --bin",
+    "features": "cargo --features",
+    "no-default-features": "cargo --no-default-features",
+    "locked": "cargo --locked",
+    "path": "cargo install --path",
+    "release": "cargo build --release",
+    "test-threads": "libtest -- --test-threads",
+    "mux-socket": "par-term-streamer --mux-socket (MUX.md Streaming Panes)",
+    "resume": "claude/grok --resume <id> (agent resume argv)",
+    "session": "pi --session <file> (agent resume argv)",
+    "others": "git ls-files --others (host telemetry probe)",
+}
 
 
 def fail(msg: str) -> NoReturn:
@@ -230,6 +266,49 @@ def strip_test_modules(code: str) -> str:
         out = out[: m.start()] + out[end:]
 
 
+def clap_long_flags(main_rs: str) -> set[str]:
+    """Long flag names clap derives from main.rs (production code only)."""
+    cut = re.search(r"#\[cfg\([^\]]*\btest\b", main_rs)
+    code = strip_line_comments(main_rs[: cut.start()] if cut else main_rs)
+    flags: set[str] = set()
+    for m in ARG_ATTR_RE.finditer(code):
+        args = m.group(1)
+        explicit = LONG_EXPLICIT_RE.search(args)
+        if explicit:
+            flags.add(explicit.group(1))
+        elif LONG_BARE_RE.search(args):
+            field = FIELD_RE.search(code, m.end())
+            if not field:
+                fail(f"parsed nothing from {MAIN_RS}: no field after #[arg(long …)]")
+            flags.add(field.group(1).replace("_", "-"))
+    if not flags:
+        fail(
+            f"parsed nothing from {MAIN_RS}: no #[arg(long …)] fields (clap derive moved?)"
+        )
+    return flags
+
+
+def unreleased_par_mux_bullets(changelog: str) -> str:
+    """Top-level bullets of `## [Unreleased]` that mention par-mux. Empty is
+    legitimate (right after a release fold); a missing heading is not."""
+    m = re.search(
+        r"^## \[Unreleased\]\s*$(.*?)(?=^## \[|\Z)", changelog, re.MULTILINE | re.DOTALL
+    )
+    if not m:
+        fail("parsed nothing from CHANGELOG.md: no `## [Unreleased]` heading")
+    bullets = re.split(r"\n(?=- )", m.group(1))
+    return "\n".join(b for b in bullets if "par-mux" in b)
+
+
+def rustdoc_text(rs: str, where: str) -> str:
+    cut = rs.find("#[cfg(test)]")
+    code = rs[:cut] if cut >= 0 else rs
+    docs = "\n".join(re.findall(r"^\s*//[/!][^\n]*", code, re.MULTILINE))
+    if not docs:
+        fail(f"parsed nothing from {where}: no rustdoc comments")
+    return docs
+
+
 def parse_commands(command_rs: str) -> list[tuple[str, str]]:
     start = command_rs.find("const COMMANDS")
     if start < 0:
@@ -362,6 +441,9 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     tmux_rs = read(root, "crates/par-term-emu-core/src/tmux_control.rs")
     mux_md = read(root, "docs/MUX.md")
     api_md = read(root, "docs/API_REFERENCE.md")
+    main_rs = read(root, MAIN_RS)
+    config_rs = read(root, CONFIG_RS)
+    changelog = read(root, "CHANGELOG.md")
 
     problems: list[str] = []
 
@@ -466,11 +548,37 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             f"API_REFERENCE notification_type token `{name}` has no notification_type() arm in crates/par-term-emu-core/src/tmux_control.rs"
         )
 
+    # Check 5: every --flag claimed for par-mux exists in clap (ARC-126 class).
+    clap_flags = clap_long_flags(main_rs)
+    for name in sorted(set(FOREIGN_FLAGS) & clap_flags):
+        problems.append(
+            f"FOREIGN_FLAGS entry `--{name}` is a real par-mux flag — drop it from the allowlist"
+        )
+    known = clap_flags | CLAP_BUILTIN_FLAGS | set(FOREIGN_FLAGS)
+    mux_claims = set(FLAG_TOKEN_RE.findall(mux_md))
+    if not mux_claims:
+        fail("parsed nothing from docs/MUX.md: no --flag tokens")
+    config_claims = set(FLAG_TOKEN_RE.findall(rustdoc_text(config_rs, CONFIG_RS)))
+    if not config_claims:
+        fail(f"parsed nothing from {CONFIG_RS}: no --flag tokens in rustdoc")
+    changelog_claims = set(FLAG_TOKEN_RE.findall(unreleased_par_mux_bullets(changelog)))
+    for where, claims in (
+        ("docs/MUX.md", mux_claims),
+        ("CHANGELOG.md [Unreleased] (par-mux bullets)", changelog_claims),
+        (f"{CONFIG_RS} rustdoc", config_claims),
+    ):
+        for name in sorted(claims - known):
+            problems.append(
+                f"{where} claims `--{name}`, which is not a par-mux clap flag in {MAIN_RS} "
+                "(add the flag, fix the claim, or allowlist it in FOREIGN_FLAGS with a reason)"
+            )
+
     counts = {
         "commands": len(command_names),
         "mutating": len(mutating),
         "notifications": len(tabled),
         "types": len(type_names),
+        "flags": len(clap_flags),
     }
     return problems, counts
 
@@ -540,6 +648,30 @@ def run_self_test(root: Path) -> int:
             ),
             "fake-cmd",
         ),
+        (
+            "claim a nonexistent --frobnicate flag in MUX.md",
+            "docs/MUX.md",
+            lambda t: t.replace(
+                "## Command Line\n", "## Command Line\n\n`par-mux --frobnicate`\n", 1
+            ),
+            "frobnicate",
+        ),
+        (
+            "claim a nonexistent --border-color flag in config.rs rustdoc",
+            CONFIG_RS,
+            lambda t: t.replace(
+                "    /// `--state-dir`.\n",
+                "    /// `--state-dir`.\n    /// `--border-color` (attach).\n",
+                1,
+            ),
+            "border-color",
+        ),
+        (
+            'drop the long = "cmd" spelling from main.rs',
+            MAIN_RS,
+            lambda t: t.replace('long = "cmd",', "", 1),
+            "cmd",
+        ),
     ]
     for label, rel, mutate, needle in drifts:
         with tempfile.TemporaryDirectory() as td:
@@ -553,6 +685,24 @@ def run_self_test(root: Path) -> int:
         if not any(needle in problem for problem in problems):
             fail(f"self-test: {label} was not reported naming `{needle}`: {problems}")
         print(f"self-test: drift reported as required — {label}")
+
+    # Fail closed: a main.rs with no clap fields is a broken gate, not a pass.
+    with tempfile.TemporaryDirectory() as td:
+        dst_root = Path(td)
+        copy_inputs(root, dst_root)
+        (dst_root / MAIN_RS).write_text("fn main() {}\n")
+        try:
+            collect_problems(dst_root)
+        except SystemExit as exc:
+            if f"parsed nothing from {MAIN_RS}" not in str(exc):
+                fail(
+                    f"self-test: empty clap extraction failed with the wrong error: {exc}"
+                )
+        else:
+            fail(
+                "self-test: empty clap extraction passed — the gate does not fail closed"
+            )
+    print("self-test: empty clap extraction fails closed")
 
     # QA-229: a cfg(test) module whose string/char literals carry unbalanced
     # braces must be stripped whole — the test-only NEVER_SENT construction
@@ -602,7 +752,8 @@ def run_self_test(root: Path) -> int:
     print("self-test: QA-229 production construction after the fixture still reported")
 
     print(
-        "self-test ok: baseline clean, all 5 injected drifts reported, "
+        "self-test ok: baseline clean, all 8 injected drifts reported, "
+        "empty clap extraction fails closed, "
         "QA-229 brace-in-string fixture pinned"
     )
     return 0
@@ -619,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="copy the inputs to a temp dir, inject five drifts, assert each is reported",
+        help="copy the inputs to a temp dir, inject eight drifts, assert each is reported",
     )
     args = parser.parse_args(argv)
     if args.self_test:
@@ -633,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"mux docs ok: {counts['commands']} commands, {counts['mutating']} mutating "
         f"(plus conditional `refresh-client -C`), {counts['notifications']} notification rows, "
-        f"{counts['types']} notification types"
+        f"{counts['types']} notification types, {counts['flags']} clap long flags"
     )
     return 0
 
