@@ -151,7 +151,7 @@ impl Drop for PaneEndpoint {
 }
 
 /// Remove stale pane-endpoint socket remnants beside `control_socket` at
-/// daemon startup (ENH-039). [`PaneEndpoint`]'s `Drop` unlinks a live
+/// daemon startup (ENH-039). `PaneEndpoint`'s `Drop` unlinks a live
 /// endpoint's socket file, but a crash or SIGKILL does not — without the
 /// sweep the remnants accumulate in the runtime directory. Each candidate
 /// goes through [`prepare_socket_path`], which reclaims exactly the stale

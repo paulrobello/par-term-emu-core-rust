@@ -232,7 +232,7 @@ impl MuxTree {
     /// full extent. The source window closes when the pane was its last
     /// one; the session cannot die that way — the new window is
     /// inserted before the source is dropped, so the cascade in
-    /// [`Self::drop_empty_window`] never finds an empty session. The Ok
+    /// `Self::drop_empty_window` never finds an empty session. The Ok
     /// payload is `(new window, source window, whether the source
     /// window closed)`.
     pub fn break_pane(

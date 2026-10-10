@@ -4,7 +4,7 @@
 //! is pushed to connected clients from the PTY reader callback as bytes arrive
 //! — there is no polling anywhere in this path, which is the whole point of
 //! the module (see `par-mux.md`). Command dispatch itself lives in
-//! [`crate::mux::dispatch`]: this module hands each parsed command over and
+//! `crate::mux::dispatch`: this module hands each parsed command over and
 //! keeps the accept loop, client threads, and broadcast sinks.
 
 #[cfg(test)]

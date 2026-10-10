@@ -962,7 +962,7 @@ fn platform_state_dir() -> PathBuf {
 /// `<any>/par-mux-<stem>.sock` maps to `<base>/par-mux/<stem>.state.json`,
 /// so two servers on different sockets never share state. `base` is exposed
 /// (ARC-017) so `par-mux --state-dir <dir>` can override
-/// [`platform_state_dir`] without duplicating this join logic.
+/// `platform_state_dir` without duplicating this join logic.
 pub fn state_file_in(base: &Path, socket_path: &Path) -> PathBuf {
     let stem = socket_path
         .file_stem()
