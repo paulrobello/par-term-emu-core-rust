@@ -2443,3 +2443,75 @@ fn rename_and_title_events_patch_without_a_query() {
     assert_eq!(session.renderer.border_label(1), "deploy");
     assert!(received_within_300ms(&rx).is_empty(), "no round trip");
 }
+
+/// ENH-044 parked-layout path: a `%layout-change` the handlers parked for
+/// the pump (`apply_pending`) replays only panes new to the renderer —
+/// the surviving panes reflow in place with their content intact (card
+/// 01a1216d58dd).
+#[test]
+fn parked_layout_replays_only_panes_new_to_the_renderer() {
+    let (rx, mut conn, mut session) = two_pane_session(
+        "parked-layout-replay",
+        FakeScript {
+            replies: [(
+                "refresh-client -t %3".to_string(),
+                "pane three body".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.feed_output(1, b"left pane text");
+    session.renderer.feed_output(2, b"right pane text");
+    session.pending.layout = Some(
+        parse_layout("0000,99x23,0,0{33x23,0,0,1,33x23,33,0,2,33x23,66,0,3}").expect("parses"),
+    );
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("apply pending");
+    let lines = drained(&rx);
+    assert_eq!(
+        replay_lines(&lines),
+        vec!["refresh-client -t %3"],
+        "only the new pane replays: {lines:?}"
+    );
+    assert!(session.renderer.emulators[&3]
+        .terminal()
+        .content()
+        .contains("pane three body"));
+    assert!(
+        session.renderer.emulators[&1]
+            .terminal()
+            .content()
+            .contains("left pane text"),
+        "surviving panes keep their content"
+    );
+}
+
+/// ENH-044: an `%exit` drained inside the resize's drain_around_layout
+/// parks in `pending_end`, which the pump checks (and ends the session
+/// on) after the refit (card 01a1216d58dd).
+#[test]
+fn exit_drained_in_a_resize_parks_pending_end() {
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %1 -C 100x23".to_string(),
+        format!("{}\n%exit", two_pane_layout_line(100, 23)),
+    );
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "resize-drain-exit",
+        FakeScript {
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session
+        .resize_to(&mut conn, 100, 23, &mut RecordingSink::default())
+        .expect("resize");
+    assert!(session.pending_end, "the drained %exit parked the end");
+    assert!(
+        std::mem::take(&mut session.pending_end),
+        "the pump's post-drain check would end the session"
+    );
+}
