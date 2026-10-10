@@ -289,6 +289,12 @@ impl Session {
                         return true;
                     }
                 }
+                Some(Err(err)) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    // A nonblocking host terminal's idle signal is not a
+                    // detach (card 01a11d9687d4); the reader retries it,
+                    // this arm keeps a stray one from detaching too.
+                    return false;
+                }
                 Some(Err(_)) => return true,
             }
         }

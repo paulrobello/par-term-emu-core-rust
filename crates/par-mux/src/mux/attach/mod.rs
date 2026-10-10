@@ -752,6 +752,10 @@ fn prefix_command(key: u8) -> PrefixKey {
     }
 }
 
+/// One stdin reader-thread → pump message: a chunk of host-tty bytes, or
+/// the error that ends the stream (EOF arrives as an empty `Ok`).
+type StdinMsg = std::io::Result<Vec<u8>>;
+
 /// Raw stdin byte source. Raw mode (the guard) makes reads byte-wise and
 /// non-echoing. A dedicated thread owns the blocking read and feeds a
 /// channel, so `read_available` never blocks the pump: on Windows a
@@ -763,7 +767,7 @@ fn prefix_command(key: u8) -> PrefixKey {
 /// the disconnect. Byte order is preserved (one reader, FIFO channel);
 /// Unix behavior is unchanged beyond who performs the same read.
 pub(crate) struct Stdin {
-    rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    rx: std::sync::mpsc::Receiver<StdinMsg>,
 }
 
 impl Stdin {
@@ -781,9 +785,18 @@ impl Stdin {
         if !primer.is_empty() {
             let _ = tx.send(Ok(primer));
         }
+        Self::spawn_reader(std::io::stdin(), tx);
+        Self { rx }
+    }
+
+    /// The stdin reader thread's body: feed every read result into `tx`.
+    /// Split out so tests can drive a real nonblocking fd through the
+    /// same classification.
+    fn spawn_reader<R: std::io::Read + Send + 'static>(
+        mut handle: R,
+        tx: std::sync::mpsc::SyncSender<StdinMsg>,
+    ) {
         std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut handle = std::io::stdin().lock();
             let mut buf = [0u8; 4096];
             loop {
                 match handle.read(&mut buf) {
@@ -801,6 +814,14 @@ impl Stdin {
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
                         continue;
                     }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        // A nonblocking host terminal: WouldBlock is the
+                        // no-data-now signal, not stream end. Park briefly
+                        // and retry — reporting it downward ended the
+                        // reader and detached the client at the first idle
+                        // poll (card 01a11d9687d4).
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
                     Err(err) => {
                         let _ = tx.send(Err(err));
                         break;
@@ -808,7 +829,6 @@ impl Stdin {
                 }
             }
         });
-        Self { rx }
     }
 
     /// Read whatever is available, or `Some(Ok(vec![]))` on EOF. `None`

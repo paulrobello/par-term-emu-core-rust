@@ -2535,3 +2535,71 @@ fn next_workspace_steps_from_the_active_row() {
         "no active row"
     );
 }
+
+/// A nonblocking host terminal must not end the stdin reader: the
+/// pre-fix reader sent `Err(WouldBlock)` and exited, and the pump's
+/// `Some(Err(_))` arm detached at the first idle poll (card 01a11d9687d4).
+#[test]
+#[cfg(unix)]
+fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
+    // A real pipe whose read end is O_NONBLOCK — the host-tty shape.
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+    let flags = unsafe { libc::fcntl(read_fd, libc::F_GETFL) };
+    assert_eq!(
+        unsafe { libc::fcntl(read_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+
+    struct FdReader(libc::c_int);
+    impl std::io::Read for FdReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                let n = unsafe { libc::read(self.0, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(err);
+                }
+                return Ok(n as usize);
+            }
+        }
+    }
+    impl Drop for FdReader {
+        fn drop(&mut self) {
+            unsafe { libc::close(self.0) };
+        }
+    }
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<StdinMsg>(64);
+    Stdin::spawn_reader(FdReader(read_fd), tx);
+
+    // Idle + nonblocking: nothing may arrive. Pre-fix this received
+    // Err(WouldBlock) at once and the reader thread ended.
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(120))
+            .is_err(),
+        "an idle nonblocking read must deliver nothing while idle"
+    );
+
+    // The reader is still alive: bytes written now must flow through.
+    let written = b"key";
+    assert_eq!(
+        unsafe { libc::write(write_fd, written.as_ptr().cast(), written.len()) },
+        3
+    );
+    match rx.recv_timeout(std::time::Duration::from_millis(2_000)) {
+        Ok(Ok(bytes)) => assert_eq!(bytes, b"key"),
+        other => panic!("expected the written bytes, got {other:?}"),
+    }
+
+    // Closing the write end still delivers EOF.
+    unsafe { libc::close(write_fd) };
+    match rx.recv_timeout(std::time::Duration::from_millis(2_000)) {
+        Ok(Ok(bytes)) => assert!(bytes.is_empty(), "expected EOF, got {bytes:?}"),
+        other => panic!("expected EOF, got {other:?}"),
+    }
+}
