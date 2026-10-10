@@ -67,10 +67,97 @@ impl Session {
         let _ = stdout.flush();
     }
 
-    /// Re-read the status-line state: the pane's window and held-dead cue
-    /// (pane-info), the owning session's name (list-windows scan for the
-    /// window), the pane title, and the pane's agent roster count.
+    /// Re-read the status-line state. Against a daemon advertising
+    /// `client-snapshot v1`, one `client-snapshot -t <window>` round trip
+    /// (the ENH-043 render-mode shape, card 01a1216d4780); any refusal —
+    /// the feature missing, the tracked window unknown, transport
+    /// failure, a stale window the daemon no longer knows — runs the
+    /// legacy per-fact round, the spelling that also discovers `window`
+    /// from pane-info.
     pub(super) fn refresh_status(&mut self) {
+        if !self.window.is_empty()
+            && self.conn.has_command_feature("client-snapshot", "v1")
+            && self.refresh_status_snapshot()
+        {
+            return;
+        }
+        self.refresh_status_legacy();
+    }
+
+    /// The single-round-trip refresh. False when the daemon refused the
+    /// snapshot (transport failure, unknown/stale tracked window, unknown
+    /// version) — the caller falls back to the legacy round, which
+    /// re-derives the tracked window. The pane's exit state is
+    /// event-driven (`%pane-exited` / `%pane-respawned`); the snapshot
+    /// body carries no exit fact.
+    fn refresh_status_snapshot(&mut self) -> bool {
+        let reply = match self.conn.send_checked_timeout(
+            &format!("client-snapshot -t {}", self.window),
+            super::status::STATUS_TIMEOUT,
+        ) {
+            Ok(reply) => reply,
+            Err(_) => return false,
+        };
+        if !reply.ok {
+            return false;
+        }
+        let mut body = reply.body.iter();
+        if body.next().map(|l| l.trim_end()) != Some("snapshot 1") {
+            return false;
+        }
+        self.session_id = None;
+        self.session_name.clear();
+        self.workspaces.clear();
+        self.active_workspace = None;
+        self.pane_title.clear();
+        let mut agents = 0usize;
+        for line in body {
+            let Some((kind, rest)) = line.split_once(' ') else {
+                continue;
+            };
+            match kind {
+                "workspace" => {
+                    let mut parts = rest.splitn(3, ' ');
+                    let (Some(id), Some(marker)) = (parts.next(), parts.next()) else {
+                        continue;
+                    };
+                    let name = parts.next().unwrap_or_default();
+                    if marker == "*" {
+                        self.active_workspace = Some(id.to_string());
+                    }
+                    self.workspaces.push((id.to_string(), name.to_string()));
+                }
+                "session" => {
+                    let mut parts = rest.splitn(4, ' ');
+                    let (Some(id), Some(marker)) = (parts.next(), parts.next()) else {
+                        continue;
+                    };
+                    if marker == "*" {
+                        let name = parts.nth(1).unwrap_or_default();
+                        self.session_id = Some(id.to_string());
+                        self.session_name = name.to_string();
+                    }
+                }
+                "pane" => {
+                    let (pane, title) = rest.split_once(' ').unwrap_or((rest, ""));
+                    if pane == self.pane.as_str() {
+                        self.pane_title = title.to_string();
+                    }
+                }
+                "agent" => match rest.split_whitespace().next() {
+                    Some(pane) if pane == self.pane.as_str() => agents += 1,
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        self.agents = agents;
+        true
+    }
+
+    /// The legacy per-fact re-read: pane-info, the session owner scan,
+    /// the workspace roster, pane-title, list-agents.
+    pub(super) fn refresh_status_legacy(&mut self) {
         if let Some(line) = self
             .conn
             .send_checked(&format!("pane-info -t {}", self.pane))

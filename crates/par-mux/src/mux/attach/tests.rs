@@ -2637,3 +2637,229 @@ fn a_blocked_stdout_write_retries_instead_of_dropping_the_chunk() {
         "no byte may be lost to the blocked first write"
     );
 }
+
+/// A fake daemon answering from a script keyed by the FULL command line,
+/// falling back to the same hardcoded defaults as [`serve_one`] (version,
+/// list-commands, list-panes, refresh-client). Answers everything `ok`
+/// unless the script value ends in `!ERR` (then an error block).
+fn serve_scripted(
+    stream: crate::mux::LocalStream,
+    tx: std::sync::mpsc::Sender<(String, String)>,
+    script: std::collections::HashMap<String, String>,
+) {
+    use interprocess::TryClone as _;
+    use std::io::Write as _;
+    let mut writer = stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(stream);
+    let mut number = 0u32;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+        let (reply, ok) = match script.get(trimmed) {
+            Some(body) if body.ends_with("!ERR") => (String::new(), false),
+            Some(body) => (body.clone(), true),
+            None => match name.as_str() {
+                "version" => ("9.9.9+deadbeef".to_string(), true),
+                "list-commands" => (
+                    "list-commands\nfeatures replay-held-state\n".to_string(),
+                    true,
+                ),
+                _ => (String::new(), true),
+            },
+        };
+        number += 1;
+        tx.send((name, trimmed.to_owned())).ok();
+        writer
+            .write_all(emit_block(number, &reply, ok).as_bytes())
+            .ok();
+        writer.flush().ok();
+    }
+}
+
+/// Bind a [`FakeDaemon`] whose serving loop answers from `script` (full
+/// command line → reply body).
+fn scripted_daemon(
+    tag: &str,
+    script: std::collections::HashMap<String, String>,
+) -> (FakeDaemon, PathBuf) {
+    let path = test_socket(tag);
+    let _ = std::fs::remove_file(&path);
+    let listener = crate::mux::bind_local_listener(&path).expect("bind fake daemon");
+    let (tx, received) = channel();
+    std::thread::spawn(move || {
+        #[cfg(unix)]
+        use interprocess::local_socket::traits::Listener as _;
+        if let Ok(stream) = listener.accept() {
+            serve_scripted(stream, tx, script);
+        }
+    });
+    (FakeDaemon { received }, path)
+}
+
+/// A passthrough Session literal bound to `conn`, showing `window`/`pane`.
+fn passthrough_session(conn: conn::AttachConn, window: &str, pane: &str) -> Session {
+    Session {
+        conn,
+        socket_path: PathBuf::from("/nonexistent"),
+        pane: pane.to_string(),
+        emulator: render::PaneEmulator::new(80, 24),
+        window: window.to_string(),
+        session_id: None,
+        session_name: String::new(),
+        workspaces: Vec::new(),
+        active_workspace: None,
+        pane_title: String::new(),
+        agents: 0,
+        exited: None,
+        drawn_size: None,
+        settling: false,
+        prefix: 0x02,
+        prefix_pending: false,
+        reload_key: 0x12,
+        management: crate::mux::config::Management::default(),
+        resize_step: 1,
+        resize_mode: false,
+        flash: None,
+        paste: PasteTracker::default(),
+    }
+}
+
+/// The snapshot body one refresh reads: 2 workspaces (+0 active), the
+/// owner session `$1 two`, panes `%1`/`%2` titled, one agent on `%1`.
+const PASSTHROUGH_SNAPSHOT: &str = "snapshot 1\nworkspace +0 * main\nworkspace +1 - side\nsession $0 - +0 one\nsession $1 * +0 two\nwindow @0 * edit\npane %1 build output\npane %2 tests\nagent %1 claude working hook\nagent %2 kimi blocked hook";
+
+/// ENH-043 port (card 01a1216d4780): against a daemon advertising
+/// `client-snapshot v1`, one passthrough status refresh is exactly one
+/// round trip, and every fact lands from that one reply.
+#[test]
+fn passthrough_status_refresh_uses_client_snapshot_when_advertised() {
+    let mut script = std::collections::HashMap::new();
+    script.insert(
+        "list-commands".to_string(),
+        "client-snapshot v1\nlist-commands\nfeatures replay-held-state\n".to_string(),
+    );
+    script.insert(
+        "client-snapshot -t @0".to_string(),
+        PASSTHROUGH_SNAPSHOT.to_string(),
+    );
+    let (daemon, path) = scripted_daemon("snap", script);
+    let conn = conn::AttachConn::connect(&path).expect("connect");
+    let mut session = passthrough_session(conn, "@0", "%1");
+    recorded(&daemon.received, 4); // handshake
+
+    session.refresh_status();
+    let lines = recorded(&daemon.received, 1);
+    assert_eq!(
+        lines,
+        vec![(
+            "client-snapshot".to_string(),
+            "client-snapshot -t @0".to_string()
+        )]
+    );
+    let quiet = daemon.received.try_recv().err().is_some();
+    assert!(quiet, "no further query after the single snapshot round");
+    assert_eq!(session.session_id.as_deref(), Some("$1"));
+    assert_eq!(session.session_name, "two");
+    assert_eq!(
+        session.workspaces,
+        vec![
+            ("+0".to_string(), "main".to_string()),
+            ("+1".to_string(), "side".to_string())
+        ]
+    );
+    assert_eq!(session.active_workspace.as_deref(), Some("+0"));
+    assert_eq!(session.pane_title, "build output");
+    assert_eq!(
+        session.agents, 1,
+        "one agent row for %1; %2's row is not this pane's"
+    );
+}
+
+/// Without the `client-snapshot v1` token the legacy per-fact round
+/// still runs, and the client never sends `client-snapshot`.
+#[test]
+fn passthrough_status_refresh_keeps_the_legacy_round_without_the_feature() {
+    let mut script = std::collections::HashMap::new();
+    script.insert("pane-info -t %1".to_string(), "%1 @0 80x24".to_string());
+    let (daemon, path) = scripted_daemon("snaplegacy", script);
+    let conn = conn::AttachConn::connect(&path).expect("connect");
+    let mut session = passthrough_session(conn, "@0", "%1");
+    recorded(&daemon.received, 4);
+
+    session.refresh_status();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut names = Vec::new();
+    while std::time::Instant::now() < deadline {
+        match daemon
+            .received
+            .recv_timeout(std::time::Duration::from_millis(300))
+        {
+            Ok((name, line)) => {
+                names.push(name.clone());
+                assert!(!line.starts_with("client-snapshot"), "{line}");
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(names.contains(&"pane-info".to_string()), "{names:?}");
+    assert!(names.contains(&"list-sessions".to_string()), "{names:?}");
+    assert!(names.contains(&"list-agents".to_string()), "{names:?}");
+    assert_eq!(
+        session.window, "@0",
+        "pane-info's second field still sets the window"
+    );
+}
+
+/// A daemon that advertises the feature but refuses the snapshot for the
+/// tracked window (unknown/stale id) falls back to the legacy round,
+/// which re-derives the window — never a loop.
+#[test]
+fn passthrough_status_snapshot_refusal_falls_back_to_legacy() {
+    let mut script = std::collections::HashMap::new();
+    script.insert(
+        "list-commands".to_string(),
+        "client-snapshot v1\nlist-commands\nfeatures replay-held-state\n".to_string(),
+    );
+    script.insert("client-snapshot -t @9".to_string(), "!ERR".to_string());
+    script.insert("pane-info -t %1".to_string(), "%1 @0 80x24".to_string());
+    let (daemon, path) = scripted_daemon("snaprefused", script);
+    let conn = conn::AttachConn::connect(&path).expect("connect");
+    let mut session = passthrough_session(conn, "@9", "%1");
+    recorded(&daemon.received, 4);
+
+    session.refresh_status();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut saw_snapshot = false;
+    let mut saw_pane_info = false;
+    while std::time::Instant::now() < deadline {
+        match daemon
+            .received
+            .recv_timeout(std::time::Duration::from_millis(300))
+        {
+            Ok((name, _)) => {
+                if name == "client-snapshot" {
+                    saw_snapshot = true;
+                }
+                if name == "pane-info" {
+                    saw_pane_info = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(saw_snapshot, "the advertised feature was tried first");
+    assert!(saw_pane_info, "the refusal fell back to the legacy round");
+    assert_eq!(
+        session.window, "@0",
+        "the legacy round re-derived the window"
+    );
+}
