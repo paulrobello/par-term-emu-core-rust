@@ -5320,3 +5320,198 @@ fn passthrough_flood_round_trip(shape: HostShape) {
     }
     host.killer.kill().ok();
 }
+
+/// Card 01a1216d4e3e — the post-reply race measurement. The output-race
+/// rule (`drain_around_layout`) only catches `%output` already queued
+/// when the drain runs; bytes the daemon pushes AFTER the size-report
+/// reply feed at the new size through the pump. This test measures
+/// whether real resizes under continuous output hit that window: a pane
+/// emits 90-char lines (which wrap differently at 80 and 100 columns)
+/// while the host resizes back and forth; afterwards the client's
+/// painted pane rows must equal the daemon's own grid row-for-row. A
+/// line applied at the old size on the daemon but fed at the new size
+/// in the client wraps differently and fails the comparison.
+#[cfg(unix)]
+#[test]
+fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
+    let (fixture, _daemon, mut client) = fixture_with_session("race");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    // The emitter: 300 lines of exactly 90 visible chars (4-char marker
+    // + 85 padded digits), one every ~5ms, then the end anchor. At 100
+    // cols each line is one row; at 80 cols it wraps — the divergence
+    // signal an old-size-fed byte would leave.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 300); do printf \"R%03d-%085d\\n\" $i $i; \
+             sleep 0.005; done; printf STORM-END-9137\\n'"
+        ))
+        .expect("keys emitter");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter emitter");
+
+    let (host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // The emitter is already running: settle on its live output before
+    // the storm, so the resizes land under genuine output pressure.
+    expect_output(
+        &host,
+        b"R00",
+        Duration::from_secs(10),
+        "emitter output on the host screen",
+    );
+
+    // The storm: alternate the host grid 12 times. Every resize rides
+    // the SIGWINCH -> size-report -> drain path the card names.
+    for i in 0..12 {
+        let (cols, rows) = if i % 2 == 0 { (100, 30) } else { (80, 24) };
+        host.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("storm resize");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // End at the wide grid so the comparison geometry is deterministic.
+    host.master
+        .resize(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("final resize");
+
+    // The anchor: the emitter's last output seen by BOTH sides. Past it
+    // only the fresh prompt follows; give that a beat to land everywhere.
+    // Every host byte is accumulated — the anchor may paint in one poll
+    // and the comparison needs the full stream anyway.
+    let mut all_host: Vec<u8> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        while let Ok(bytes) = host.output_rx.try_recv() {
+            all_host.extend_from_slice(&bytes);
+        }
+        let capture = client
+            .send(&format!("capture-pane -t {pane} -e"))
+            .expect("capture");
+        // The render client paints per-cell (CUP + SGR + glyph), so the
+        // needle never appears contiguous in the raw stream — search the
+        // CSI-stripped text.
+        if capture.join("\n").contains("STORM-END-9137")
+            && plain_text(&all_host).contains("STORM-END-9137")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "emitter never finished: capture={:?} stderr={} host_plain_tail={}",
+            capture.join("\n"),
+            stderr.lock().unwrap(),
+            plain_text(&all_host[all_host.len().saturating_sub(4000)..])
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(800));
+
+    // Ground truth: the daemon's own pane grid (one line per row, SGR
+    // inline), stripped to plain text.
+    let capture = client
+        .send(&format!("capture-pane -t {pane} -e"))
+        .expect("capture -e");
+    let truth: Vec<String> = capture
+        .iter()
+        .map(|row| strip_sgr(row).trim_end().to_string())
+        .collect();
+
+    // The client's painted screen at the final 100x30 geometry: the pane
+    // fills rows 1..=28 (tab strip at 0, status row at 29). Keep pulling
+    // the stream until a quiet beat, then reconstruct.
+    let mut quiet = 0;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let mut got = 0;
+        while let Ok(bytes) = host.output_rx.try_recv() {
+            all_host.extend_from_slice(&bytes);
+            got += bytes.len();
+        }
+        if got == 0 {
+            quiet += 1;
+            if quiet >= 3 {
+                break;
+            }
+        } else {
+            quiet = 0;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    let (grid, _ever) = reconstructed_screen(&all_host, 30, 100);
+    // The reconstructor mangles multibyte glyphs (one byte per cell), so
+    // compare ASCII-graphic text only; chrome rows and prompt glyphs
+    // normalize to empty and drop. Row ORDER is preserved on both sides.
+    let norm = |rows: Vec<String>| -> Vec<String> {
+        rows.into_iter()
+            .map(|row| {
+                row.chars()
+                    .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .filter(|row| !row.is_empty())
+            .collect()
+    };
+    let painted = norm(
+        grid[1..grid.len() - 1]
+            .iter()
+            .map(|row| row.trim_end().to_string())
+            .collect::<Vec<_>>(),
+    );
+    let truth = norm(truth);
+    assert_eq!(
+        truth,
+        painted,
+        "the client's painted pane diverged from the daemon's grid — a \
+         post-reply %output fed at the wrong size (card 01a1216d4e3e). \
+         stderr: {}",
+        stderr.lock().unwrap()
+    );
+}
+
+/// Strip SGR (CSI …m) runs from a `capture-pane -e` row.
+fn strip_sgr(row: &str) -> String {
+    let bytes = row.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            let mut j = i + 2;
+            while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+                j += 1;
+            }
+            // Keep only SGR runs; any other CSI (none expected in a
+            // capture row) is dropped too — the comparison is text-only.
+            i = j + 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
