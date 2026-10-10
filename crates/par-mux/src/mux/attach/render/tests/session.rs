@@ -640,7 +640,10 @@ fn scrollbar_gutter_option_reserves_a_column_and_indicates() {
         "the indicator is accent"
     );
 
-    // Gutter OFF: no indicator paints at the pane's edge.
+    // Gutter OFF: the cue is suppressed entirely — no indicator glyph or
+    // full-height blank lands in the neighbor's first column, and the
+    // boundary column carries the divider glyph in every row (the
+    // boundary cell is not yielded to a scrolled pane).
     let mut plain = PaneRenderer::new(80, 24, Glyphs::Unicode);
     plain.set_background(Some(RtColor::Rgb(16, 24, 40)));
     plain.apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
@@ -648,11 +651,20 @@ fn scrollbar_gutter_option_reserves_a_column_and_indicates() {
     plain.render_frame();
     plain.scroll_viewport(1, 10);
     plain.render_frame();
-    assert_ne!(
-        plain.cell(39, 0).expect("plain").symbol(),
-        "\u{2590}",
-        "gutter off paints no indicator"
-    );
+    for y in 0..24u16 {
+        assert_ne!(
+            plain.cell(40, y).expect("plain").symbol(),
+            "\u{2590}",
+            "gutter off writes nothing into the neighbor's first column"
+        );
+    }
+    for y in 0..24u16 {
+        assert_eq!(
+            plain.cell(39, y).expect("plain").symbol(),
+            "│",
+            "the boundary divider stays painted"
+        );
+    }
 }
 
 /// The `drag-cursor-shape` option: while a divider drag is live the

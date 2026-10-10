@@ -1244,8 +1244,12 @@ impl PaneRenderer {
         // The reserved gutter column (config `scrollbar-gutter`): theme-bg
         // fill, with a minimal position indicator while the pane's client
         // scroll offset is > 0 — one `▐` at the view top's proportional
-        // depth into the history.
-        if (self.scrollbar_gutter || scroll > 0) && view_h > 0 {
+        // depth into the history. Without a reserved gutter nothing
+        // paints: view_w is not narrowed, so the column right of the
+        // content sits outside the rect — a neighbor's first content
+        // column, blanked full-height — and the cue must not occlude
+        // content the pane does not own.
+        if self.scrollbar_gutter && view_h > 0 {
             let gx = rect.x + self.geometry.sidebar_w + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
@@ -1341,16 +1345,11 @@ impl PaneRenderer {
     /// reserved (config `scrollbar-gutter`): the boundary divider yields
     /// the cell so the gutter's indicator stays visible. The boundary
     /// stays a drag handle (`divider_near` reads the layout geometry, not
-    /// the paint). A vertical boundary also yields while pane `a` is
-    /// scrolled (its indicator shows without the reserved gutter).
+    /// the paint).
     fn gutter_owns(&self, axis: Axis, x: u16, y: u16, a: u32) -> bool {
         match axis {
             Axis::Vertical => {
-                let a_scrolled = self
-                    .emulators
-                    .get(&a)
-                    .is_some_and(|e| e.scroll_offset() > 0);
-                (self.scrollbar_gutter || a_scrolled)
+                self.scrollbar_gutter
                     && self
                         .layout
                         .iter()
