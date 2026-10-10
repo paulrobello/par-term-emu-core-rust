@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **par-mux attach render mode: the no-gutter scroll cue no longer paints outside the pane** (`crates/par-mux/src/mux/attach/render/renderer.rs`; card 01a11d7e): with `scrollbar-gutter` off, a scrolled pane painted its indicator column one past its rect — a full-height theme-bg blank landing in a neighbor's first content column wherever the neighbor under-paints — while `gutter_owns` yielded the boundary cell to the scrolled pane, leaving a blank band where the divider glyph belongs. The cue is now gated strictly on `scrollbar-gutter` and the scrolled yield is gone: without a reserved gutter the pane owns all of its columns, the divider stays continuous, and the cue never occludes content the pane does not own. Pinned red-to-green by the strengthened gutter-off section of `scrollbar_gutter_option_reserves_a_column_and_indicates` (divider continuity at the boundary column).
+
 ## [0.58.1] - 2026-10-02
 
 ### Added
