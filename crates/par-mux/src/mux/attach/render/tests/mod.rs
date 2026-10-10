@@ -563,7 +563,7 @@ fn in_place_resize_matches_fresh_replay() {
     }
     stream.extend_from_slice(b"\x1b[1;32m$ \x1b[0mprompt");
 
-    let mut a = PaneEmulator::new(1, 40, 10);
+    let mut a = PaneEmulator::new(40, 10);
     a.feed(&stream);
     a.resize(60, 8);
 
@@ -571,7 +571,7 @@ fn in_place_resize_matches_fresh_replay() {
     daemon.process(&stream);
     daemon.resize(60, 8);
     let replay = daemon.export_screen_restore_sequence();
-    let mut b = PaneEmulator::new(1, 60, 8);
+    let mut b = PaneEmulator::new(60, 8);
     b.feed(replay.as_bytes());
 
     let (ta, tb) = (a.terminal(), b.terminal());
@@ -595,7 +595,7 @@ fn in_place_resize_matches_fresh_replay() {
 /// feed resets the client scroll to live.
 #[test]
 fn emulator_tracks_input_modes_and_feed_resets_scroll() {
-    let mut emulator = PaneEmulator::new(7, 80, 24);
+    let mut emulator = PaneEmulator::new(80, 24);
     assert!(!emulator.application_cursor());
     assert!(!emulator.owns_mouse());
     emulator.feed(b"\x1b[?1h\x1b[?1000h");
@@ -627,7 +627,7 @@ fn emulator_tracks_input_modes_and_feed_resets_scroll() {
 /// query and BEL output cannot grow the attach client's memory.
 #[test]
 fn emulator_feed_discards_responses_and_bells() {
-    let mut emulator = PaneEmulator::new(7, 80, 24);
+    let mut emulator = PaneEmulator::new(80, 24);
     emulator.feed(b"\x07\x1b[6n");
     assert!(!emulator.term.has_pending_responses());
     assert!(emulator.term.drain_bell_events().is_empty());

@@ -432,7 +432,7 @@ impl Session {
             conn,
             socket_path: socket_path.to_path_buf(),
             pane,
-            emulator: render::PaneEmulator::new(0, pane_cols, pane_rows),
+            emulator: render::PaneEmulator::new(pane_cols, pane_rows),
             window: String::new(),
             session_id: None,
             session_name: String::new(),

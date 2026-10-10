@@ -45,11 +45,6 @@ mod sidebar;
 
 use renderer::*;
 
-/// How long the renderer waits between frames at most — the frame cadence
-/// output floods coalesce into. Matches Phase A's pump poll interval.
-#[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
-pub const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
-
 /// How long a status-row flash stays up.
 const FLASH_LIFETIME: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -173,10 +168,6 @@ impl Glyphs {
 /// One pane's local emulator: the core [`Terminal`] fed the pane's wire
 /// bytes, at the pane's layout geometry.
 pub struct PaneEmulator {
-    /// The pane id this emulator mirrors, the layout string's leaf number.
-    #[allow(dead_code)]
-    // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
-    pub pane_id: u32,
     term: Terminal,
     /// Client-side scroll offset into the pane's scrollback (0 = live).
     /// Driven by the wheel when the pane does not own mouse mode; every
@@ -191,9 +182,8 @@ pub struct PaneEmulator {
 
 impl PaneEmulator {
     /// A fresh emulator at `cols` x `rows`.
-    pub fn new(pane_id: u32, cols: u16, rows: u16) -> Self {
+    pub fn new(cols: u16, rows: u16) -> Self {
         Self {
-            pane_id,
             term: Terminal::new(cols as usize, rows as usize),
             scroll: 0,
             hold_scroll: false,
@@ -219,13 +209,13 @@ impl PaneEmulator {
 
     /// The pane's mouse encoding (its negotiated 1005/1006/1015), for the
     /// router's forward decision.
-    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
+    #[cfg(test)]
     pub fn mouse_encoding(&self) -> par_term_emu_core::mouse::MouseEncoding {
         self.term.mouse_encoding()
     }
 
     /// The pane's DECCKM application-cursor mode, for the key re-encoder.
-    #[allow(dead_code)] // unreachable since ARC-134 narrowed attach to pub(crate); cleanup candidate
+    #[cfg(test)]
     pub fn application_cursor(&self) -> bool {
         self.term.application_cursor()
     }

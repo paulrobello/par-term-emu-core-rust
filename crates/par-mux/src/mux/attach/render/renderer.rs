@@ -573,7 +573,7 @@ impl PaneRenderer {
             let emulator = self
                 .emulators
                 .entry(rect.pane)
-                .or_insert_with(|| PaneEmulator::new(rect.pane, cols, rows));
+                .or_insert_with(|| PaneEmulator::new(cols, rows));
             if emulator.terminal().size() != (usize::from(cols), usize::from(rows)) {
                 emulator.resize(cols, rows);
             }
