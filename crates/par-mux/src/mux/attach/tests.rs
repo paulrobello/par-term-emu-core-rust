@@ -2603,3 +2603,37 @@ fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
         other => panic!("expected EOF, got {other:?}"),
     }
 }
+
+/// The old `let _ = stdout.write_all(data)` shape dropped everything
+/// after the first WouldBlock a nonblocking host terminal raised; the
+/// blocking writer retries until the host drains (card 01a11d96654c).
+#[test]
+fn a_blocked_stdout_write_retries_instead_of_dropping_the_chunk() {
+    struct BlocksOnce {
+        blocked: bool,
+        got: Vec<u8>,
+    }
+    impl std::io::Write for BlocksOnce {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if !self.blocked {
+                self.blocked = true;
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            self.got.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut out = BlocksOnce {
+        blocked: false,
+        got: Vec::new(),
+    };
+    write_all_blocking(&mut out, b"pane-bytes-1").expect("retry completes the write");
+    assert_eq!(
+        out.got, b"pane-bytes-1",
+        "no byte may be lost to the blocked first write"
+    );
+}

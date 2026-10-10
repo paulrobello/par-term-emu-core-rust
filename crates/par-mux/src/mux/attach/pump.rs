@@ -59,10 +59,10 @@ impl Session {
         // pane's screen must not mix with the previous pane's leftovers
         // (rows the last pane never wrote). The guard cleared at attach;
         // this re-clears per pane-show.
-        let _ = stdout.write_all(b"\x1b[2J\x1b[H");
+        let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
         for line in &reply.body {
-            let _ = stdout.write_all(line.as_bytes());
-            let _ = stdout.write_all(b"\n");
+            let _ = write_all_blocking(&mut stdout, line.as_bytes());
+            let _ = write_all_blocking(&mut stdout, b"\n");
         }
         let _ = stdout.flush();
     }
@@ -172,7 +172,7 @@ impl Session {
     /// Reset the scroll region and cursor state the status line borrowed.
     pub(super) fn restore_region(&self) {
         let mut stdout = std::io::stdout().lock();
-        let _ = write!(stdout, "\x1b[r\x1b[?25h");
+        let _ = write_all_blocking(&mut stdout, b"\x1b[r\x1b[?25h");
         let _ = stdout.flush();
     }
 

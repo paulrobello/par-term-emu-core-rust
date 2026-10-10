@@ -110,7 +110,7 @@ impl Session {
             self.resize_step,
         );
         let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(help_dump_text(&rows).as_bytes());
+        let _ = write_all_blocking(&mut stdout, help_dump_text(&rows).as_bytes());
         let _ = stdout.flush();
         // Advance the pane past the dump: the pane's cursor is still on
         // the prompt row, so every later keystroke painted over the help
@@ -142,7 +142,7 @@ impl Session {
             // surface first (we are inside the alternate screen) so the
             // new output does not mix over the corpse.
             let mut stdout = std::io::stdout().lock();
-            let _ = stdout.write_all(b"\x1b[2J\x1b[H");
+            let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
             let _ = stdout.flush();
             self.resync();
             self.refresh_status();

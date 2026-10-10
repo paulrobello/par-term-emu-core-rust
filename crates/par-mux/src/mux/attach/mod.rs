@@ -464,7 +464,7 @@ impl Session {
             TmuxNotification::Output { pane_id, data } if *pane_id == self.pane => {
                 self.emulator.feed(data);
                 let mut stdout = std::io::stdout().lock();
-                let _ = stdout.write_all(data);
+                let _ = write_all_blocking(&mut stdout, data);
                 let _ = stdout.flush();
                 // The startup repaint flood (the daemon's re-fit repaint
                 // after the handshake's size report lands, amplified by
@@ -847,6 +847,32 @@ impl Stdin {
     }
 }
 
+/// Write `bytes` to `out`, parking on WouldBlock (a nonblocking host
+/// terminal whose buffer is full) and retrying Interrupted instead of
+/// dropping the remainder of the chunk — the `let _ = write_all` shape
+/// silently lost everything after the first blocked write (card
+/// 01a11d96654c). Other errors return to the caller's existing
+/// best-effort handling.
+pub(crate) fn write_all_blocking<W: std::io::Write>(
+    out: &mut W,
+    mut bytes: &[u8],
+) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        match out.write(bytes) {
+            Ok(0) => {
+                return Err(std::io::Error::from(std::io::ErrorKind::WriteZero));
+            }
+            Ok(n) => bytes = &bytes[n..],
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 /// RAII raw-mode guard: enters raw mode on construction, restores on drop —
 /// including on error/panic unwind, so a failed attach never leaves the
 /// host terminal in raw mode.
@@ -869,9 +895,9 @@ impl TerminalGuard {
         // host's scrollback), and detach clears again so nothing we or the
         // pane apps painted outlives the session.
         if entered {
-            let _ = std::io::stdout()
-                .write_all(b"\x1b[2J\x1b[H")
-                .and_then(|()| std::io::stdout().flush());
+            let mut stdout = std::io::stdout().lock();
+            let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
+            let _ = stdout.flush();
         }
         Self { entered }
     }
@@ -885,9 +911,9 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered {
-            let _ = std::io::stdout()
-                .write_all(b"\x1b[2J\x1b[H")
-                .and_then(|()| std::io::stdout().flush());
+            let mut stdout = std::io::stdout().lock();
+            let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
+            let _ = stdout.flush();
             let _ = crossterm::terminal::disable_raw_mode();
         }
     }
