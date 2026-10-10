@@ -7,6 +7,12 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      os-scope:
+        description: "Runner scope for the test/mux matrices (verification runs); 'all' runs the full matrix. Wheels, features, xcframework, and web-term-drift run only on 'all'."
+        type: choice
+        default: all
+        options: [all, ubuntu-latest, macos-latest, windows-latest]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -21,6 +27,8 @@ jobs:
     name: Verify Version Consistency
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      os-matrix: ${{ steps.os-scope.outputs.os-matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -62,6 +70,28 @@ jobs:
       - name: Check core member lockstep version (ARC-007)
         run: python3 scripts/check_core_version.py
 
+      - name: Resolve os scope
+        id: os-scope
+        run: |
+          SCOPE="${{ github.event.inputs.os-scope }}"
+          case "$SCOPE" in
+            ubuntu-latest|macos-latest|windows-latest)
+              MATRIX="[$(jq -Rn --arg s "$SCOPE" '$s')]" ;;
+            "")
+              if [ "${{ github.event_name }}" = "pull_request" ]; then
+                MATRIX='["ubuntu-latest"]'
+              else
+                MATRIX='["ubuntu-latest", "macos-latest", "windows-latest"]'
+              fi ;;
+            all)
+              MATRIX='["ubuntu-latest", "macos-latest", "windows-latest"]' ;;
+            *)
+              echo "unknown os-scope: $SCOPE" >&2
+              exit 1 ;;
+          esac
+          echo "os-matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "os-matrix=$MATRIX"
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
@@ -72,7 +102,7 @@ jobs:
     needs: [version-check]
     strategy:
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ fromJSON(needs.version-check.outputs.os-matrix) }}
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.12", "3.13", "3.14"]') }}
 
     steps:
@@ -151,7 +181,7 @@ jobs:
     needs: [version-check]
     strategy:
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ fromJSON(needs.version-check.outputs.os-matrix) }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -282,7 +312,7 @@ jobs:
 
   build:
     name: Build wheels
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     needs: [version-check]
@@ -321,7 +351,7 @@ jobs:
   # default build IDs made rebuilds of identical source differ).
   web-term-drift:
     name: web_term/ drift gate
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [version-check]
@@ -358,7 +388,7 @@ jobs:
   # ARC-044 class (mux pulling binary-only clap) mechanically.
   features:
     name: Feature matrix
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [version-check]
@@ -419,7 +449,7 @@ jobs:
   # release is cut. No upload: the artifact ships only from deployment.yml.
   xcframework:
     name: iOS xcframework build
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
     runs-on: macos-latest
     timeout-minutes: 40
     needs: [version-check]

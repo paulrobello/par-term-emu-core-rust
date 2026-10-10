@@ -11,3 +11,11 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 # passed --test-threads=1; the ci profile keeps that serial execution.
 override-threads = true
 threads = 1
+
+# The chords test is legitimately long, not wedged: ~123s in isolation
+# (several waits consume most of their 10s deadline), which straddles the
+# default 30s x4 kill. Give it 30s x8 instead of watering the harness
+# bound down for every other test.
+[[profile.ci.overrides]]
+filter = "test(render_mode_zoom_rename_border_chords)"
+slow-timeout = { period = "30s", terminate-after = 8 }

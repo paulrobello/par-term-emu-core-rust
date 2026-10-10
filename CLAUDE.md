@@ -17,6 +17,7 @@ make setup-venv          # Initial setup: creates .venv, installs deps
 make dev                 # Build library (release mode via maturin, streaming included) - USE THIS, not cargo build
 make dev-streaming       # Alias of make dev (streaming is in pyproject's [tool.maturin] features)
 make checkall            # All quality checks (run before every commit)
+make checkall-ci         # CI-parity gate: checkall + the CI mux-test job's suites (nextest, serial; run before pushing)
 make ffi-header          # Regenerate include/terminal_core.h with cbindgen (after FFI surface changes)
 ```
 

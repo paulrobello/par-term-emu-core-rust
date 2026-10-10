@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check mux-rustdoc-check \
         pre-commit-run pre-commit-update deploy \
@@ -71,6 +71,7 @@ help:
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
+	@echo "  checkall-ci     - CI-parity gate: checkall + the CI mux-test job's suites (nextest, serial; heavy — run before pushing)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
@@ -543,6 +544,30 @@ checkall: ffi-header-check ffi-surface-check derive-version-check core-version-c
 	@echo "  ✓ Caps table in sync"
 	@echo "  ✓ Doc links + anchors (lychee, offline)"
 	@echo ""
+
+# CI-parity gate (two-tier convention: checkall stays fast, checkall-ci adds
+# what CI's mux-test job runs that the fast gate skips — the par-mux
+# integration suites incl. the attach client, the D1 sim isolation build,
+# and the mux feature-set runs). Heavy; run before pushing, not per-iteration.
+checkall-ci: checkall test-mux-ci
+	@echo ""
+	@echo "======================================================================"
+	@echo "  All CI-parity checks passed!"
+	@echo "======================================================================"
+
+# The mux nextest runs of CI's mux-test job, same serial ci profile
+# (.config/nextest.toml), plus the D1 isolation build and dep assertion.
+test-mux-ci:
+	@echo "Running the mux CI suites (nextest ci profile, serial)..."
+	cargo build --locked --no-default-features --features sim
+	@if cargo tree --locked --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum|swash'; then \
+		echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"; \
+		exit 1; \
+	fi
+	cargo nextest run --profile ci --locked -p par-mux --features attach
+	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
+	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
+	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.
