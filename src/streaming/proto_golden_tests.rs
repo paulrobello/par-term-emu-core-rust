@@ -598,8 +598,12 @@ fn proto_golden_wire_conversions_are_unchanged() {
         std::fs::write(GOLDEN_PATH, &rendered).expect("write golden");
         return;
     }
+    // A windows autocrlf checkout hands include_str! CRLF bytes; the
+    // golden is authored with LF, so compare LF-normalized (the same rule
+    // build.rs applies to the proto drift checksums).
     assert_eq!(
-        rendered, GOLDEN,
+        rendered,
+        GOLDEN.replace("\r\n", "\n"),
         "app <-> protobuf conversion output changed; see the module doc to regenerate"
     );
 }

@@ -3351,16 +3351,11 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
         .expect("split")
         .join("");
     let pane_b = pane_b.trim().to_string();
-    client
-        .send(&format!("send-keys -t {pane_b} -l 'echo GEO-MARK-42'"))
-        .expect("marker");
-    client
-        .send(&format!("send-keys -t {pane_b} Enter"))
-        .expect("Enter");
+    print_marker_line(&mut client, &pane_b, "GEO-MARK-42");
     common::wait_daemon(
         fixture.socket(),
         &format!("capture-pane -t {pane_b}"),
-        echoed("GEO-MARK-42"),
+        |screen: &str| screen.contains("GEO-MARK-42"),
         Duration::from_secs(10),
         "GEO-MARK-42 executed on the pane screen",
     );
@@ -3426,6 +3421,24 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
     host.killer.kill().ok();
 }
 
+/// Prints `marker` on a fresh pane line. The leading empty `echo` keeps the
+/// output off any wrapped typed line, and the `""` split keeps the typed
+/// literal from containing the marker: pane prompts vary by host (24 chars
+/// on CI runners), and without both the CUP geometry reads report the wrap
+/// continuation's column instead of the pane's content column.
+#[cfg(unix)]
+fn print_marker_line(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str) {
+    let (head, tail) = marker.split_at(marker.len() / 2);
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'echo; echo {head}\"\"{tail}'"
+        ))
+        .expect("marker");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("Enter");
+}
+
 /// A two-pane session whose right pane printed `marker`, for the
 /// sidebar-on-launch geometry reads. Returns the left pane's id.
 #[cfg(unix)]
@@ -3443,12 +3456,7 @@ fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -
         .expect("split")
         .join("");
     let pane_b = pane_b.trim().to_string();
-    client
-        .send(&format!("send-keys -t {pane_b} -l 'echo {marker}'"))
-        .expect("marker");
-    client
-        .send(&format!("send-keys -t {pane_b} Enter"))
-        .expect("Enter");
+    print_marker_line(client, &pane_b, marker);
     wait_pane_echo(client, &pane_b, marker);
     pane_a
 }
@@ -3463,7 +3471,7 @@ fn wait_pane_echo(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str
             .send(&format!("capture-pane -t {pane}"))
             .expect("capture-pane")
             .join("\n");
-        if echoed(marker)(&screen) {
+        if screen.contains(marker) {
             return;
         }
         assert!(
@@ -4122,12 +4130,7 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
         .expect("split")
         .join("");
     let pane_b = pane_b.trim().to_string();
-    client
-        .send(&format!("send-keys -t {pane_b} -l 'echo GEO-MARK-42'"))
-        .expect("marker");
-    client
-        .send(&format!("send-keys -t {pane_b} Enter"))
-        .expect("Enter");
+    print_marker_line(&mut client, &pane_b, "GEO-MARK-42");
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     expect_output(
