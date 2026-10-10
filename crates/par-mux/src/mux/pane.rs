@@ -386,7 +386,7 @@ impl MuxPane {
     /// changes through PTY output (which bumps the session's update
     /// generation) or a resize (which changes the size) — so an idle pane
     /// costs one `Vec<Cell>` clone instead of a full grid walk. Keyed on
-    /// both, per [`SnapshotCacheKey`].
+    /// both, per `SnapshotCacheKey`.
     pub fn persisted_snapshot(&self) -> TerminalSnapshot {
         snapshot_from_parts(&self.snapshot_capture_parts())
     }
@@ -676,7 +676,7 @@ pub struct SpawnContext<'a> {
 
 /// Creates panes on demand — extension seam S1.
 ///
-/// Mirrors [`crate::streaming::SessionFactory`] deliberately. An agent layer
+/// Mirrors the streaming crate's `SessionFactory` deliberately. An agent layer
 /// later ships an implementation that spawns an agent CLI, seeds the child
 /// environment, and tags [`MuxPane::metadata`], with no change to this trait
 /// or to the server that calls it.
@@ -696,7 +696,7 @@ pub trait PaneFactory: Send + Sync {
     /// re-parse (the spawn layer quotes for CreateProcess, which cmd then
     /// re-tokenizes with its own rules), so implementors that can spawn
     /// argv without a shell should override. The default renders through
-    /// [`agent_resume::render_surviving`] into the string path — exact on
+    /// `agent_resume::render_surviving` into the string path — exact on
     /// POSIX `sh`, and the historical behavior every factory shipped with.
     fn create_argv_pane(
         &self,

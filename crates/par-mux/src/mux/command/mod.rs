@@ -68,7 +68,7 @@ impl SendKeysPayload {
 /// How a `resize-pane` moves a pane's borders (T4.C).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResizeAdjustment {
-    /// `-L`/`-R`/`-U`/`-D` [cells]: move the bordering divider relatively;
+    /// `-L`/`-R`/`-U`/`-D` \[cells]: move the bordering divider relatively;
     /// 5 cells when the flag carries no number (tmux's default adjustment).
     Relative {
         /// Which way the border moves.
@@ -1156,34 +1156,34 @@ pub(crate) fn list_commands_body() -> String {
 ///
 /// Quoting is honored in a fixed set of places, all of them values that may
 /// legitimately contain a space, and all sharing the one bounded grammar in
-/// [`shell_split`] (single or double quotes, backslash escapes outside
+/// `shell_split` (single or double quotes, backslash escapes outside
 /// quotes, the `'\''` close-escape-reopen idiom; no interpolation):
-/// - the `send-keys` payload (see [`parse_send_keys_payload`]), because key
+/// - the `send-keys` payload (see `parse_send_keys_payload`), because key
 ///   names, `-l` and `-H` cannot survive a whitespace split;
 /// - `new-session -s NAME` and `new-window -n NAME` (see
-///   [`Args::quoted_flag`]) — tmux admits any non-empty session or window
+///   `Args::quoted_flag`) — tmux admits any non-empty session or window
 ///   name, spaces included;
 /// - environment values: `new-session -e NAME=VALUE` (see
-///   [`Args::quoted_values`]) and the `set-environment` words;
-/// - the `set-buffer` payload (see [`parse_set_buffer`]), because a
+///   `Args::quoted_values`) and the `set-environment` words;
+/// - the `set-buffer` payload (see `parse_set_buffer`), because a
 ///   clipboard copy may contain spaces, quotes and newlines — with `-H`
 ///   as the hex escape hatch for anything the line-delimited wire cannot
 ///   carry.
 ///
 /// Every other flag stays whitespace-split where values cannot contain
 /// whitespace. `-t`/`-s` targets are the exception that now joins the
-/// quoted set (see [`Args::pane`]): a target is a typed `$N`/`@N`/`%N`
+/// quoted set (see `Args::pane`): a target is a typed `$N`/`@N`/`%N`
 /// id OR a name — pane user title, window name, session name — resolved
 /// daemon-side against the tree, and a name may contain spaces, so it is
-/// read through [`Args::quoted_flag`]. `send-keys` alone keeps a
-/// single-token target (see [`parse_send_keys`]), quoted alongside the
+/// read through `Args::quoted_flag`. `send-keys` alone keeps a
+/// single-token target (see `parse_send_keys`), quoted alongside the
 /// payload it would collide with.
 ///
 /// Two commands take trailing free text. `respawn-pane` reads its flags
 /// only up to the first command word or `--` and passes the raw rest of
 /// the line to the pane's shell, quoting and whitespace intact (see
-/// [`split_leading_flags`]). `rename-window` is the one remaining
-/// [`Args::trailing_after`] user, joining the words after `-t`.
+/// `split_leading_flags`). `rename-window` is the one remaining
+/// `Args::trailing_after` user, joining the words after `-t`.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {

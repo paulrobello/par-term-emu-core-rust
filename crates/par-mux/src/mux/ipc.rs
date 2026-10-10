@@ -580,7 +580,7 @@ fn connect_unix_bounded(
 /// every later connect (the roster watcher's redial among them). The bounded
 /// form retries the transient `EAGAIN` until `deadline`, then fails with
 /// `TimedOut`. Windows named-pipe connects run through
-/// [`connect_windows_bounded`]: interprocess's connect spin loop waits in
+/// `connect_windows_bounded`: interprocess's connect spin loop waits in
 /// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` once every pipe instance is busy,
 /// so the wait is performed first — bounded by the time remaining to
 /// `deadline` — and the plain connect runs only once an instance is
@@ -638,7 +638,7 @@ pub fn connect_local_stream_bounded(
 /// probe connect would run interprocess's spin loop, whose
 /// `WaitNamedPipeW(NMPWAIT_WAIT_FOREVER)` blocks indefinitely once every
 /// instance is busy — the live-socket prepare test hung forever there — so
-/// [`pipe_server_alive_bounded`] decides on the name alone, bounded.
+/// `pipe_server_alive_bounded` decides on the name alone, bounded.
 pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     guard_fallback_socket_dir(path)?;
@@ -856,7 +856,7 @@ fn remove_remnant(path: &Path) -> io::Result<()> {
 /// The default socket path for a server named `name`, namespaced per user.
 ///
 /// Unix prefers `$XDG_RUNTIME_DIR` (per-user by definition) and falls back to
-/// a per-UID directory under the temp dir — see [`uid_socket_dir`] for why
+/// a per-UID directory under the temp dir — see `uid_socket_dir` for why
 /// the fallback is not the temp dir itself; Windows uses the (per-user) temp
 /// dir as the marker-file location the pipe name is derived from.
 pub fn default_socket_path(name: &str) -> PathBuf {
