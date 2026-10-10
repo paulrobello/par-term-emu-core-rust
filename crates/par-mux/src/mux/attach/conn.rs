@@ -271,59 +271,74 @@ pub(crate) fn parse_command_features(body: &[String]) -> Vec<(String, String)> {
 
 /// The host terminal theme as `(fg, bg)` six-hex-digit strings, dark
 /// default per channel (contract: "dark default"). The renderer refines
-/// the background right after raw mode comes up — [`probe_background`]
-/// needs raw mode (a cooked tty line-buffers the OSC reply away), so the
+/// the background right after raw mode comes up — [`probe_host_terminal`]
+/// needs raw mode (a cooked tty line-buffers the replies away), so the
 /// handshake keeps the default and the session setup follows up with a
 /// corrected `set-client-colors`.
 fn host_colors() -> (&'static str, &'static str) {
     ("ffffff", "000000")
 }
 
-/// Probe the host terminal's background color with OSC 11
-/// (`ESC ] 11 ; ? ST`): write the query and wait up to 150 ms for the
-/// `rgb:RRRR/GGGG/BBBB` reply on stdin, poll(2)-based so a silent host
-/// costs only the deadline. Unix only. Must run while raw mode is up and
-/// BEFORE the pump's stdin reader thread starts (the probe is, briefly,
-/// the tty's only reader).
+/// What the host-terminal probe learned while raw mode was up and the
+/// pump's stdin reader had not yet started. `background` is the OSC 11
+/// reply; `cell_pixels` is the XTWINOPS reply as `(cell_width,
+/// cell_height)`; `primer` is every stdin byte the probe consumed that
+/// was not a probed reply, in stream order, for `Stdin::new_with_primer`.
+/// A field stays `None` when the host never answered within the deadline;
+/// callers keep their construction defaults then.
+#[derive(Default)]
+pub(crate) struct HostProbe {
+    pub background: Option<(u8, u8, u8)>,
+    pub cell_pixels: Option<(u16, u16)>,
+    pub primer: Vec<u8>,
+}
+
+/// Probe the host terminal's background color (OSC 11, `ESC ] 11 ; ? ST`)
+/// and character-cell pixel size (XTWINOPS `CSI 16 t`): write both
+/// queries and wait up to 150 ms for the replies on stdin, poll(2)-based
+/// so a silent host costs only the deadline. Unix only. Must run while
+/// raw mode is up and BEFORE the pump's stdin reader thread starts (the
+/// probe is, briefly, the tty's only reader).
 ///
-/// The SECOND tuple element is every stdin byte the probe consumed that
-/// is not the reply itself, in stream order — keystrokes that landed
-/// inside the probe's window and, on the success path, the bytes before
-/// and after the reply in the same accumulated chunk. The caller MUST
-/// prime them back into the pump's stdin stream
-/// (`Stdin::new_with_primer`); dropping them eats the user's first
-/// keystrokes.
+/// `primer` is every stdin byte the probe consumed that is not a probed
+/// reply, in stream order — keystrokes that landed inside the probe's
+/// window and the bytes before, between, and after the replies in the
+/// same accumulated chunks. The caller MUST prime them back into the
+/// pump's stdin stream (`Stdin::new_with_primer`); dropping them eats the
+/// user's first keystrokes.
 ///
 /// Race audit (round 3): the probe and the pump's stdin reader never run
 /// concurrently — the reader thread is born in `Stdin::new_with_primer`,
-/// after `probe_background` returned — so the reply cannot be stolen
-/// mid-window. The two shapes that miss the reply are timing, not racing:
-/// a host answering after the 150 ms deadline (the reply bytes then reach
+/// after `probe_host_terminal` returned — so the replies cannot be stolen
+/// mid-window. The shapes that miss a reply are timing, not racing: a
+/// host answering after the 150 ms deadline (the reply bytes then reach
 /// the Stdin reader, whose parser drops unknown OSC/CSI spellings — the
 /// bytes are consumed and discarded, never forwarded to a pane), and a
-/// reply the parser cannot read (non-UTF-8). Both degrade to the `None`
-/// result, whose fallback renders terminal-default cells — see
-/// `PaneRenderer::set_background` — so a missed probe can never paint a
-/// wrong color.
+/// reply the parser cannot read (non-UTF-8). Both degrade to `None`,
+/// whose fallbacks are terminal-default cell fill — see
+/// `PaneRenderer::set_background` — and the 10x20 construction cell
+/// size, so a missed probe can never paint a wrong color or size a pane
+/// grid wrong.
 #[cfg(unix)]
-pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
+pub(crate) fn probe_host_terminal() -> HostProbe {
     use nix::poll;
     use std::io::{Read as _, Write as _};
     use std::os::fd::AsFd as _;
     {
         let mut out = std::io::stdout().lock();
-        if out.write_all(b"\x1b]11;?\x1b\\").is_err() || out.flush().is_err() {
-            return (None, Vec::new());
+        if out.write_all(b"\x1b]11;?\x1b\\\x1b[16t").is_err() || out.flush().is_err() {
+            return HostProbe::default();
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_millis(150);
+    let mut probe = HostProbe::default();
     let mut acc: Vec<u8> = Vec::new();
     let mut buf = [0u8; 32];
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
     loop {
         if std::time::Instant::now() >= deadline {
-            return (None, acc);
+            break;
         }
         let remaining = deadline
             .saturating_duration_since(std::time::Instant::now())
@@ -331,25 +346,37 @@ pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
             .min(150) as u16;
         let mut fds = [poll::PollFd::new(handle.as_fd(), poll::PollFlags::POLLIN)];
         let Ok(ready) = poll::poll(&mut fds, Some(remaining)) else {
-            return (None, acc);
+            break;
         };
         if ready == 0 {
-            return (None, acc); // deadline hit with nothing to read
+            break; // deadline hit with nothing to read
         }
         let Ok(n) = handle.read(&mut buf) else {
-            return (None, acc);
+            break;
         };
         if n == 0 {
-            return (None, acc); // EOF: not a tty / host closed
+            break; // EOF: not a tty / host answered nothing
         }
         acc.extend_from_slice(&buf[..n]);
-        if let Some((color, leftover)) = split_around_reply(&acc) {
-            return (Some(color), leftover);
+        // Strip every complete reply already in the chunk, earliest
+        // first, so a chunk holding both replies (or a reply sharing a
+        // read with keystrokes) resolves in one pass.
+        while let Some((reply, leftover)) = split_around_reply(&acc) {
+            match reply {
+                ProbeReply::Background(color) => probe.background = Some(color),
+                ProbeReply::CellPixels(size) => probe.cell_pixels = Some(size),
+            }
+            acc = leftover;
         }
-        if acc.len() > 128 {
-            return (None, acc); // runaway reply; hand back what arrived
+        if probe.background.is_some() && probe.cell_pixels.is_some() {
+            break;
+        }
+        if acc.len() > 256 {
+            break; // runaway traffic; hand back what arrived
         }
     }
+    probe.primer = acc;
+    probe
 }
 
 /// Locate a complete OSC 11 color report in a raw byte stream and return
@@ -393,30 +420,78 @@ fn find_osc_color_reply(bytes: &[u8]) -> Option<((u8, u8, u8), core::ops::Range<
     Some(((r, g, b), start..reply_end))
 }
 
-/// The probe's success shape: when `acc` holds a complete reply, return
-/// the color and every byte around it (keystrokes before the reply plus
-/// bytes trailing it) in stream order — the caller re-primes this
-/// remainder through `Stdin::new_with_primer` so keystrokes that landed
-/// inside the probe window still reach their consumer. `None` keeps the
-/// probe polling (reply absent or split across reads).
+/// Locate a complete XTWINOPS cell-size report — xterm's
+/// `CSI 6 ; height ; width t` answer to a `CSI 16 t` query — and return
+/// `(cell_width, cell_height)` plus the byte span covering the whole
+/// reply, introducer through terminator, so the caller can split around
+/// it and re-prime the surrounding bytes.
+///
+/// Only a leading `6` parameter matches: the family's other replies
+/// (`CSI 4 ; h ; w t` window pixels, `CSI 8 ; h ; w t` character grid)
+/// are sequences a host may legitimately send near attach time, not cell
+/// answers. `None` while the reply is incomplete (split across reads),
+/// the parameters are not two positive numbers, or there are more than
+/// two.
 #[cfg(unix)]
-fn split_around_reply(acc: &[u8]) -> Option<((u8, u8, u8), Vec<u8>)> {
-    let (color, span) = find_osc_color_reply(acc)?;
+fn find_xtwinops_cell_reply(bytes: &[u8]) -> Option<((u16, u16), core::ops::Range<usize>)> {
+    let text = core::str::from_utf8(bytes).ok()?;
+    let start = text.find("\x1b[6;")?;
+    let rest = &text[start + "\x1b[6;".len()..];
+    let end = rest.find('t')?;
+    let mut parts = rest[..end].split(';');
+    let height: u16 = parts.next()?.parse().ok()?;
+    let width: u16 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || height == 0 || width == 0 {
+        return None;
+    }
+    Some(((width, height), start..start + "\x1b[6;".len() + end + 1))
+}
+
+/// One probed reply kind, for [`split_around_reply`].
+#[cfg(unix)]
+enum ProbeReply {
+    Background((u8, u8, u8)),
+    CellPixels((u16, u16)),
+}
+
+/// The probe's seam: when `acc` holds a complete reply of either kind,
+/// return it with every byte around it (keystrokes before plus bytes
+/// trailing) in stream order — the caller re-primes this remainder
+/// through `Stdin::new_with_primer` so keystrokes that landed inside the
+/// probe window still reach their consumer. When both kinds are complete,
+/// the reply that starts earliest comes back first. `None` keeps the
+/// probe polling (reply absent, incomplete, or split across reads).
+#[cfg(unix)]
+fn split_around_reply(acc: &[u8]) -> Option<(ProbeReply, Vec<u8>)> {
+    let color = find_osc_color_reply(acc);
+    let cell = find_xtwinops_cell_reply(acc);
+    let (reply, span) = match (color, cell) {
+        (Some((c, cs)), Some((p, ps))) => {
+            if cs.start <= ps.start {
+                (ProbeReply::Background(c), cs)
+            } else {
+                (ProbeReply::CellPixels(p), ps)
+            }
+        }
+        (Some((c, cs)), None) => (ProbeReply::Background(c), cs),
+        (None, Some((p, ps))) => (ProbeReply::CellPixels(p), ps),
+        (None, None) => return None,
+    };
     let mut leftover = Vec::with_capacity(acc.len() - span.len());
     leftover.extend_from_slice(&acc[..span.start]);
     leftover.extend_from_slice(&acc[span.end..]);
-    Some((color, leftover))
+    Some((reply, leftover))
 }
 
 #[cfg(not(unix))]
-pub(crate) fn probe_background() -> (Option<(u8, u8, u8)>, Vec<u8>) {
-    (None, Vec::new())
+pub(crate) fn probe_host_terminal() -> HostProbe {
+    HostProbe::default()
 }
 
-/// The host terminal's per-cell pixel size.
-/// TODO(attach: XTWINOPS CSI 16 t probe, card 01a11e5909d87377878bfc2077236c8b)
-/// Probe with the same raw reader `probe_background` uses; until then the
-/// 10x20 construction default the daemon itself assumes.
+/// The construction-default per-cell pixel size the handshake reports
+/// before the probe has answered (the XTWINOPS reply supersedes it with
+/// a follow-up `refresh-client -C … -p …` once known — the daemon's
+/// client cell-size record is latest-report-wins).
 fn cell_pixels() -> (u16, u16) {
     (10, 20)
 }
@@ -469,8 +544,8 @@ mod tests {
     }
 
     /// Card: the probe's success path must not eat keystrokes that share
-    /// a read chunk with the OSC 11 reply. `split_around_reply` is the
-    /// pure seam the probe loop uses — same extraction the success return
+    /// a read chunk with a reply. `split_around_reply` is the pure seam
+    /// the probe loop uses — same extraction the probe's strip loop
     /// performs.
     #[test]
     fn same_chunk_keystrokes_are_re_primed_around_the_reply() {
@@ -478,13 +553,20 @@ mod tests {
         // the bg is configured AND both keystroke runs come back in
         // stream order for the Stdin primer.
         let acc = b"ls\x1b]11;rgb:1e/1e/1e\x1b\\ -la\r";
-        let (color, leftover) = split_around_reply(acc).expect("reply in the chunk");
+        let (ProbeReply::Background(color), leftover) =
+            split_around_reply(acc).expect("reply in the chunk")
+        else {
+            panic!("expected the color reply");
+        };
         assert_eq!(color, (0x1e, 0x1e, 0x1e));
         // Stream order: pre-reply keystrokes, then the trailing ones.
         assert_eq!(leftover, b"ls -la\r");
         // BEL-terminated reply: terminator stays inside the span.
-        let (color, leftover) =
-            split_around_reply(b"\x07\x1b]11;rgb:ff/ff/ff\x07j").expect("bel reply");
+        let (ProbeReply::Background(color), leftover) =
+            split_around_reply(b"\x07\x1b]11;rgb:ff/ff/ff\x07j").expect("bel reply")
+        else {
+            panic!("expected the color reply");
+        };
         assert_eq!(color, (255, 255, 255));
         assert_eq!(leftover, b"\x07j");
         // A trailing ESC that opens the NEXT sequence is not consumed:
@@ -492,6 +574,70 @@ mod tests {
         let (_, leftover) =
             split_around_reply(b"\x1b]11;rgb:00/00/00\x1b\\\x1b[A").expect("st reply");
         assert_eq!(leftover, b"\x1b[A");
+    }
+
+    /// The XTWINOPS cell reply parse: xterm's `CSI 6 ; height ; width t`
+    /// shape, graceful None on partial streams and on the family's other
+    /// reports (window pixels `CSI 4 ; h ; w t`, character grid
+    /// `CSI 8 ; h ; w t`), and the positive-two-parameter guard.
+    #[test]
+    fn xtwinops_cell_report_parses_and_yields_gracefully() {
+        // xterm's reply shape: height first, then width.
+        assert_eq!(
+            find_xtwinops_cell_reply(b"\x1b[6;20;10t"),
+            Some(((10, 20), 0..10))
+        );
+        // A partial reply (split read) parses to None - the probe's loop
+        // keeps the bytes and polls again.
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[6;20"), None);
+        // The family's other reports never match: window pixels (the CSI
+        // 14 t answer) and the character grid (the CSI 18 t answer).
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[4;600;400t"), None);
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[8;24;80t"), None);
+        // A "\x1b[6;" whose body is a DIFFERENT sequence's bytes is not a
+        // cell answer (the body must parse as two integers).
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[6;\x1b[8;24;80t"), None);
+        // Zero and extra parameters are rejected.
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[6;0;0t"), None);
+        assert_eq!(find_xtwinops_cell_reply(b"\x1b[6;20;10;5t"), None);
+    }
+
+    /// The probe's strip loop resolves BOTH replies when they share a
+    /// read chunk, earliest-starting reply first, and hands every
+    /// non-reply byte back as the primer.
+    #[test]
+    fn both_replies_in_one_chunk_strip_earliest_first() {
+        // Color first, cell reply second, one stray keystroke behind.
+        let mut acc: Vec<u8> = b"q\x1b]11;rgb:ab/cd/ef\x07\x1b[6;20;10t".to_vec();
+        let mut background = None;
+        let mut cell_pixels = None;
+        while let Some((reply, leftover)) = split_around_reply(&acc) {
+            match reply {
+                ProbeReply::Background(c) => background = Some(c),
+                ProbeReply::CellPixels(p) => cell_pixels = Some(p),
+            }
+            acc = leftover;
+        }
+        assert_eq!(background, Some((0xab, 0xcd, 0xef)));
+        assert_eq!(cell_pixels, Some((10, 20)));
+        // The stray keystroke is all that remains, for the primer.
+        assert_eq!(acc, b"q");
+
+        // Cell reply first: the strip order follows the byte stream, not
+        // the probe's query order.
+        let mut acc: Vec<u8> = b"\x1b[6;20;10t\x1b]11;rgb:ff/ff/ff\x07".to_vec();
+        let mut background = None;
+        let mut cell_pixels = None;
+        while let Some((reply, leftover)) = split_around_reply(&acc) {
+            match reply {
+                ProbeReply::Background(c) => background = Some(c),
+                ProbeReply::CellPixels(p) => cell_pixels = Some(p),
+            }
+            acc = leftover;
+        }
+        assert_eq!(cell_pixels, Some((10, 20)));
+        assert_eq!(background, Some((255, 255, 255)));
+        assert!(acc.is_empty());
     }
 
     /// The reply split across reads still resolves: the probe's
@@ -505,21 +651,39 @@ mod tests {
         assert!(split_around_reply(&acc).is_none());
         // Read 2 completes the reply.
         acc.extend_from_slice(b"/cd/ef\x07");
-        let (color, leftover) = split_around_reply(&acc).expect("complete after split");
+        let (ProbeReply::Background(color), leftover) =
+            split_around_reply(&acc).expect("complete after split")
+        else {
+            panic!("expected the color reply");
+        };
         assert_eq!(color, (0xab, 0xcd, 0xef));
         assert_eq!(leftover, b"k");
+
+        // Same contract for the cell reply.
+        let mut acc: Vec<u8> = b"\x1b[6;2".to_vec();
+        assert!(split_around_reply(&acc).is_none());
+        acc.extend_from_slice(b"0;10t");
+        let (ProbeReply::CellPixels(size), leftover) =
+            split_around_reply(&acc).expect("complete cell reply after split")
+        else {
+            panic!("expected the cell reply");
+        };
+        assert_eq!(size, (10, 20));
+        assert!(leftover.is_empty());
     }
 
     /// No reply in the window: the probe's fallback shapes — the locator
-    /// stays None so the loop rides to the deadline (or the 128-byte
-    /// runaway cap) and hands every consumed byte back as the primer.
+    /// stays None so the loop rides to the deadline (or the 256-byte
+    /// runaway cap, sized for two replies plus keystrokes) and hands
+    /// every consumed byte back as the primer.
     #[test]
     fn reply_absent_keeps_polling_and_hands_back_every_byte() {
         // Keystroke-only traffic never resolves — graceful fallback.
         assert!(split_around_reply(b"normal typing \x1b[A\x1b[B").is_none());
         // A keystroke stream longer than the runaway cap likewise: the
-        // probe gives up with (None, acc) and the caller primes it all.
-        let long = vec![b'x'; 129];
+        // probe gives up with the probe's fields unset and the caller
+        // primes it all.
+        let long = vec![b'x'; 257];
         assert!(split_around_reply(&long).is_none());
     }
 }

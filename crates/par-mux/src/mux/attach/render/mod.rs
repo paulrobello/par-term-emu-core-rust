@@ -456,22 +456,29 @@ fn render_session_inner(
         );
     }
 
-    // The OSC 11 background probe: raw mode is up and the pump's stdin
-    // reader has not started, so the probe is briefly the tty's only
-    // reader. The probed bg fills every frame cell; a probe FAILURE
-    // leaves the fill terminal-default (no assumed color). A corrected
-    // set-client-colors rides the probe so the daemon's theme record
-    // follows the host.
-    let probe = super::conn::probe_background();
-    if let Some((r, g, b)) = probe.0 {
+    // The host probe: OSC 11 background + XTWINOPS CSI 16 t cell pixels,
+    // run with raw mode up and before the pump's stdin reader starts, so
+    // the probe is briefly the tty's only reader. The probed bg fills
+    // every frame cell; a probe FAILURE leaves the fill terminal-default
+    // (no assumed color). A corrected set-client-colors rides the probe
+    // so the daemon's theme record follows the host, and probed cell
+    // pixels follow as their own `refresh-client -C … -p …` — the
+    // handshake already reported the 10x20 construction default and the
+    // daemon's client cell-size record is latest-report-wins.
+    let probe = super::conn::probe_host_terminal();
+    if let Some((r, g, b)) = probe.background {
         session.set_background(Some(RtColor::Rgb(r, g, b)));
         let _ = conn.send_checked(&format!(
             "set-client-colors -f ffffff -b {r:02x}{g:02x}{b:02x}"
         ));
     }
+    if let Some((cw, ch)) = probe.cell_pixels {
+        let (cols, rows) = super::conn::terminal_grid();
+        let _ = conn.send_checked(&format!("refresh-client -C {cols}x{rows} -p {cw}x{ch}"));
+    }
     // Keystrokes the probe consumed get back into the stream instead of
     // being eaten.
-    session.stdin_primer = probe.1;
+    session.stdin_primer = probe.primer;
 
     session.run(&mut conn, options.target.as_deref(), &mut StdoutSink)
 }

@@ -362,7 +362,7 @@ A divider that does not touch the focused pane is plain throughout, and a divide
 #### Background fill
 
 Every frame cell carries the host terminal's resolved background before painting, so unwritten cells (rows below the layout, short history lines, wide-char spacers) render as background instead of the terminal default (the light-grey bands a dark-theme host showed).
-The color comes from an OSC 11 probe (`ESC ] 11 ; ? ST`, 150 ms deadline, poll(2)-based) run right after raw mode comes up and before the pump's stdin reader starts; when the probe fails (Windows and non-xtermish hosts) the fill stays at the terminal default, and a corrected `set-client-colors` rides the probe so the daemon's theme record follows the host.
+The color comes from an OSC 11 probe (`ESC ] 11 ; ? ST`, 150 ms deadline, poll(2)-based) run right after raw mode comes up and before the pump's stdin reader starts; when the probe fails (Windows and non-xtermish hosts) the fill stays at the terminal default, and a corrected `set-client-colors` rides the probe so the daemon's theme record follows the host. The same window also probes the cell pixel size with XTWINOPS `CSI 16 t` and, on a reply (`CSI 6 ; height ; width t`), follows the handshake's `refresh-client -C … -p 10x20` construction default with the measured `WxH` — the daemon's cell-size record is latest-report-wins, so panes re-fit to the real cell metrics; a silent host keeps the default.
 
 #### Bracketed paste
 
