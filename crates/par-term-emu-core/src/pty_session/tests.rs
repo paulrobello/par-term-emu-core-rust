@@ -965,18 +965,34 @@ fn test_generation_advances_after_content_applied() {
 /// thread itself, so before the reorder this failed deterministically —
 /// the thread executing the callback was the one that had not yet taken
 /// the write guard to process the bytes.
+///
+/// The marker search runs over the ACCUMULATED stream, not each chunk:
+/// the PTY delivers bytes in read-sized chunks it does not control, so
+/// under parallel-suite load `MARKERZ` can split across two callback
+/// invocations and a per-chunk `windows(7)` never sees it (observed
+/// 2026-10-09: two full-suite runs failed at the 30 s deadline while the
+/// test passed in isolation). The child's exit status fails fast — a
+/// failed printf can never deliver the marker, and burning the 30 s
+/// deadline on it hides the real cause.
 #[test]
 fn output_callback_sees_applied_terminal_state() {
     let mut session = new_test_session(80, 24, 1000);
 
     let terminal = Arc::clone(session.terminal_ref());
+    // Every callback invocation appends its bytes, then re-scans the
+    // accumulated stream — chunk boundaries cannot hide the marker, and
+    // the applied-state check runs on the invocation where it completes.
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     // 0 = marker not seen yet, 1 = seen and state contained it, 2 = seen
     // and state lacked it. Stored once, after the check completes, so the
     // test thread never samples a "seen but not yet checked" window.
     let outcome = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let seen_probe = Arc::clone(&seen);
     let outcome_probe = Arc::clone(&outcome);
     session.set_output_callback(Arc::new(move |bytes: &[u8]| {
-        if bytes.windows(7).any(|w| w == b"MARKERZ") {
+        let mut acc = seen_probe.lock().unwrap();
+        acc.extend_from_slice(bytes);
+        if acc.windows(7).any(|w| w == b"MARKERZ") {
             let text = terminal.read().grid.export_text_buffer();
             outcome_probe.store(
                 if text.contains("MARKERZ") { 1 } else { 2 },
@@ -990,7 +1006,10 @@ fn output_callback_sees_applied_terminal_state() {
     #[cfg(windows)]
     let result = session.spawn("cmd.exe", &["/C", "echo MARKERZ"]);
     assert!(result.is_ok());
-    let _ = session.wait();
+    let code = session
+        .wait()
+        .expect("session wait should not fail for a printf");
+    assert_eq!(code, 0, "printf failed, no marker can arrive");
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while outcome.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
@@ -999,7 +1018,8 @@ fn output_callback_sees_applied_terminal_state() {
     assert_ne!(
         outcome.load(Ordering::SeqCst),
         0,
-        "output callback should have received the marker bytes"
+        "output callback should have received the marker bytes (callback saw {} bytes total)",
+        seen.lock().unwrap().len(),
     );
     assert_eq!(
         outcome.load(Ordering::SeqCst),
