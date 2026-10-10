@@ -5347,11 +5347,15 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
     // The emitter: 300 lines of exactly 90 visible chars (4-char marker
     // + 85 padded digits), one every ~5ms, then the end anchor. At 100
     // cols each line is one row; at 80 cols it wraps — the divergence
-    // signal an old-size-fed byte would leave.
+    // signal an old-size-fed byte would leave. The anchor rides shell
+    // EXPANSION — the echoed command carries the literal $(date …)
+    // spelling, only the executed OUTPUT holds ANCHOR-<epoch>-DONE, so
+    // the anchor can never fire on the echo (a plain-needle anchor fired
+    // on the echoed command line under load and compared mid-stream).
     client
         .send(&format!(
             "send-keys -t {pane} -l 'for i in $(seq 1 300); do printf \"R%03d-%085d\\n\" $i $i; \
-             sleep 0.005; done; printf STORM-END-9137\\n'"
+             sleep 0.005; done; echo \"ANCHOR-$(date +%s)-DONE\"'"
         ))
         .expect("keys emitter");
     client
@@ -5398,12 +5402,25 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         })
         .expect("final resize");
 
-    // The anchor: the emitter's last output seen by BOTH sides. Past it
-    // only the fresh prompt follows; give that a beat to land everywhere.
-    // Every host byte is accumulated — the anchor may paint in one poll
-    // and the comparison needs the full stream anyway.
+    // The anchor: the emitter's last OUTPUT seen by BOTH sides (the
+    // expanded ANCHOR-<digits>-DONE, never the echoed literal form).
+    // Past it only the fresh prompt follows; give that a beat to land
+    // everywhere. Every host byte is accumulated — the anchor may paint
+    // in one poll and the comparison needs the full stream anyway.
+    let anchor_done = |text: &str| -> bool {
+        let mut rest = text;
+        while let Some(at) = rest.find("ANCHOR-") {
+            let tail = &rest[at + "ANCHOR-".len()..];
+            let digits = tail.bytes().take_while(|b| b.is_ascii_digit()).count();
+            if digits >= 8 && tail[digits..].starts_with("-DONE") {
+                return true;
+            }
+            rest = &rest[at + 1..];
+        }
+        false
+    };
     let mut all_host: Vec<u8> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         while let Ok(bytes) = host.output_rx.try_recv() {
             all_host.extend_from_slice(&bytes);
@@ -5414,9 +5431,7 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         // The render client paints per-cell (CUP + SGR + glyph), so the
         // needle never appears contiguous in the raw stream — search the
         // CSI-stripped text.
-        if capture.join("\n").contains("STORM-END-9137")
-            && plain_text(&all_host).contains("STORM-END-9137")
-        {
+        if anchor_done(&capture.join("\n")) && anchor_done(&plain_text(&all_host)) {
             break;
         }
         assert!(
@@ -5429,6 +5444,27 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         std::thread::sleep(Duration::from_millis(100));
     }
     std::thread::sleep(Duration::from_millis(800));
+
+    // The daemon must have APPLIED the final size before its capture is
+    // ground truth — under load the re-fit lags the resize (the existing
+    // host-resize test's fitted wait). The single pane fills the 100x30
+    // host's 100x28 content grid; its PTY is the interior inside the
+    // default border ring: 98x26 (card 01a11c5b's geometry).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info");
+        if info.join(" ").contains("98x26") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the daemon never re-fit the pane to 98x26: {:?}",
+            info
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     // Ground truth: the daemon's own pane grid (one line per row, SGR
     // inline), stripped to plain text.
