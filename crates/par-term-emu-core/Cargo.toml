@@ -3,7 +3,7 @@ name = "par-term-emu-core"
 # Lockstep with the root crate (DESIGN.md "Version train"): the XTVERSION
 # reply embeds this crate's CARGO_PKG_VERSION. `make core-version-check`
 # fails when it drifts from the root version or the root's dependency pin.
-version = "0.58.1"
+version = "0.59.0"
 edition = "2021"
 rust-version = "1.98"
 authors = ["Paul Robello <probello@gmail.com>"]

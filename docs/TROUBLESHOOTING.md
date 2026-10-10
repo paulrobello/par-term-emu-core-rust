@@ -198,9 +198,9 @@ printf '\e[?2004l'
 
 **Symptom:** `par-mux attach` serves a new daemon named `attach`, or rejects `-t`, `--mode`, or `--prefix` as unexpected arguments. `par-mux --help` lists no `attach` command.
 
-**Cause:** the binary was built without the `attach` cargo feature, so `attach` is parsed as a daemon NAME. The published 0.58.0 crate has no `attach` feature.
+**Cause:** the binary was built without the `attach` cargo feature, so `attach` is parsed as a daemon NAME. Installs that predate 0.58.1 (when the daemon shipped from `par-term-emu-core-rust` with no `attach` feature) behave this way.
 
-**Fix:** rebuild with the feature (from a source checkout until 0.58.1 is published):
+**Fix:** install or rebuild with the feature:
 
 ```bash
 cargo install --path crates/par-mux --features mux-bin,attach --locked

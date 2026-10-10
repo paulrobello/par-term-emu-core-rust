@@ -7,7 +7,7 @@ exclude = ["fuzz"]
 
 [package]
 name = "par-term-emu-core-rust"
-version = "0.58.1"
+version = "0.59.0"
 edition = "2021"
 rust-version = "1.98"
 authors = ["Paul Robello <probello@gmail.com>"]
@@ -63,10 +63,10 @@ par-term-emu-derive = { path = "derive", version = "0.47.0", optional = true }
 # The terminal core (ARC-007 O2): every pre-split public path is re-exported
 # from src/lib.rs. Exact pin + lockstep version — see
 # crates/par-term-emu-core/DESIGN.md "Version train" (`make core-version-check`).
-par-term-emu-core = { path = "crates/par-term-emu-core", version = "=0.58.1" }
+par-term-emu-core = { path = "crates/par-term-emu-core", version = "=0.59.0" }
 # The par-mux multiplexer (ARC-007 O2 Phase 2), re-exported as `crate::mux`
 # behind the `mux` feature. Same exact pin + lockstep version as the core.
-par-mux = { path = "crates/par-mux", version = "=0.58.1", optional = true }
+par-mux = { path = "crates/par-mux", version = "=0.59.0", optional = true }
 base64 = "0.22.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

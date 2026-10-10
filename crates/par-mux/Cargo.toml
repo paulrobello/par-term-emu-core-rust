@@ -5,7 +5,7 @@ name = "par-mux"
 # CARGO_PKG_VERSION, which a daemon and its clients compare. `make
 # core-version-check` fails when it drifts from the root version or the
 # root's exact pin on it.
-version = "0.58.1"
+version = "0.59.0"
 edition = "2021"
 rust-version = "1.98"
 authors = ["Paul Robello <probello@gmail.com>"]
@@ -30,7 +30,7 @@ required-features = ["mux-bin"]
 
 [dependencies]
 # The terminal core. Exact pin + lockstep version (`make core-version-check`).
-par-term-emu-core = { path = "../par-term-emu-core", version = "=0.58.1", features = ["mux", "pty_session", "serde"] }
+par-term-emu-core = { path = "../par-term-emu-core", version = "=0.59.0", features = ["mux", "pty_session", "serde"] }
 log = "0.4"
 base64 = "0.22.1"
 regex = "1.12.3"
