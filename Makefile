@@ -2,7 +2,7 @@
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
-        mux-manual-seed mux-package-check \
+        mux-manual-seed mux-package-check mux-rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -60,6 +60,7 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
+	@echo "  mux-rustdoc-check - Fail when par-mux rustdoc has broken or private intra-doc links (RUSTDOCFLAGS=-D warnings cargo doc -p par-mux)"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
@@ -456,6 +457,12 @@ stub-docs-check:
 mux-package-check:
 	python3 scripts/package_mux_release.py --self-test
 
+# Card 01a11f5dd65177beb5fd8e5f85ddfa02 follow-up: 22 broken/private
+# intra-doc links sat undetected because nothing ran rustdoc with -D
+# warnings. ~1s warm; the full graph docs only on change.
+mux-rustdoc-check:
+	RUSTDOCFLAGS="-D warnings" cargo doc -p par-mux --features mux-bin --no-deps
+
 # Seed the docs/MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
 # WIPE the socket's saved tree (stop, then remove the state file and its
@@ -514,7 +521,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check stub-docs-check mux-package-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
