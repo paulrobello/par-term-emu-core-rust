@@ -1092,7 +1092,16 @@ fn restart_detaches_before_serving() {
     let mut reader = BufReader::new(stream);
     let reply = command(&mut writer, &mut reader, "list-sessions").join("");
     assert!(!reply.contains("%error"), "fresh daemon serves: {reply}");
-    drop((writer, reader));
+    // A live session pins the daemon open for the detach proof below.
+    // exit-when-empty gives an EMPTY persisting daemon a ~5 s lifetime
+    // and attached clients do NOT hold it (server/mod.rs's exit-empty
+    // rule), so the proof's ps-scrape raced the grace under load — the
+    // 2026-10-09 flake: the daemon demonstrably served, then the scrape
+    // found nothing (card 01a1249b19c1). The session makes the tree
+    // non-empty and the proof load-tolerant; the --stop teardown below
+    // still reaps the daemon.
+    let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
+    assert!(!reply.contains("%error"), "keepalive session: {reply}");
 
     // Detach proof: find the serving process by its unique socket path (ps
     // only locates the pid — macOS `ps -o sess` reports 0 for every process,
@@ -1154,6 +1163,7 @@ fn restart_detaches_before_serving() {
         nix::unistd::getpgrp().as_raw(),
         "the serving process left the invoker's process group"
     );
+    drop((writer, reader));
 
     // Teardown: the documented stop path, which also waits for the exit.
     let status = Command::new(env!("CARGO_BIN_EXE_par-mux"))
