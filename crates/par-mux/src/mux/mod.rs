@@ -20,6 +20,7 @@ pub(crate) mod foreground;
 pub mod hooks;
 pub(crate) mod host_probe;
 pub mod ids;
+pub mod integrations;
 pub mod ipc;
 pub mod layout;
 pub mod pane;

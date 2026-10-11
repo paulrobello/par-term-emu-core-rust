@@ -1415,3 +1415,22 @@ fn install_skill_writes_the_bundled_skill_without_a_daemon() {
     assert!(run.stdout.contains(path.display().to_string().as_str()));
     assert!(installed.starts_with("---\nname: par-mux\n"));
 }
+
+/// `--agent-hooks-status` needs no daemon and prints exactly one
+/// `<agent> installed|absent` line per agent — the parseable shape the
+/// par-term Settings rows consume.
+#[test]
+fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
+    let run = par_mux(&["--agent-hooks-status"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "stdout: {:?}", run.stdout);
+    for (agent, line) in ["claude", "codex", "grok"].iter().zip(&lines) {
+        let rest = line.strip_prefix(agent).expect("agent name leads the line");
+        assert!(
+            rest == " installed" || rest == " absent",
+            "line {line:?} must read <agent> installed|absent"
+        );
+    }
+}

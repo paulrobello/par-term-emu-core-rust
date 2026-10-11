@@ -146,6 +146,14 @@ such daemons also export `PAR_MUX_CONTROL_SOCKET` (started with
 rename or a pane move leaves the name fields stale (the id fields stay
 valid), and `respawn-pane` re-seeds them.
 
+## Agent-state integrations
+
+par-mux installs the hooks and extensions that feed the roster itself:
+`par-mux --install-agent-hooks` (claude, codex, grok), `--install-agent-extensions`
+(pi, omp), with `--uninstall-*` and `--agent-hooks-status` counterparts. par-term
+runs these after installing par-mux. The hooks are inert and instant outside a
+par-mux pane, and silent on every failure.
+
 ## Agent hook reports
 
 A pane process reports agent state by sending **one JSON line** to the

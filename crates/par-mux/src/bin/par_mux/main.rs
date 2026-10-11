@@ -54,6 +54,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
 /// Binds one control socket and serves it until killed. `MuxClient::connect_or_spawn_at`
 /// (par_mux::mux::client) spawns this binary with `--socket <path>`; the
 /// positional `NAME` form is the equivalent default-path shorthand for manual runs.
+
 #[derive(Parser, Debug)]
 #[command(
     name = "par-mux",
@@ -166,6 +167,37 @@ struct Cli {
     /// Claude Code default (tests, other agent harnesses).
     #[arg(long, value_name = "DIR", requires = "install_skill")]
     skills_dir: Option<std::path::PathBuf>,
+    /// Install the agent-state session hooks for claude, codex, and grok
+    /// (script assets plus the config entries that run them) and exit.
+    /// Never starts or contacts a daemon; par-term invokes it instead of
+    /// embedding its own copies of the integrations.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "uninstall_agent_hooks", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    install_agent_hooks: bool,
+
+    /// Remove the agent-state session hooks par-mux installed: the config
+    /// entries first, then the script assets. Never contacts a daemon.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    uninstall_agent_hooks: bool,
+
+    /// Print one line per agent — `<agent> installed` or `<agent> absent` —
+    /// and exit: the read-only state behind the par-term Settings rows.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "install_agent_extensions", "uninstall_agent_extensions"])]
+    agent_hooks_status: bool,
+
+    /// Install the pi and omp agent-state extensions (a file drop into
+    /// each agent extension directory) and exit. Never contacts a daemon.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "uninstall_agent_extensions"])]
+    install_agent_extensions: bool,
+
+    /// Remove the pi and omp agent-state extensions par-mux installed.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill"])]
+    uninstall_agent_extensions: bool,
+    /// Rewrite a registered hook script asset that went missing (the
+    /// hooks directory has been deleted externally while the agent config
+    /// entries survived) without touching any agent config — the startup
+    /// self-heal par-term runs. Never contacts a daemon.
+    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "install_agent_hooks", "uninstall_agent_hooks", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    heal_agent_hooks: bool,
 }
 
 /// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
@@ -439,6 +471,152 @@ fn stop_daemon(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// One integration arm: its name and the action that yields the stdout detail.
+type Arm = fn() -> std::io::Result<String>;
+
+/// Which one-shot agent-hook action the flag runs.
+enum AgentHookAction {
+    Install,
+    Uninstall,
+}
+
+/// Install or uninstall every agent session hook, one stdout line per
+/// arm, exiting non-zero when any arm failed. Each arm runs even when an
+/// earlier one fails — a partial install is visible in full, not hidden
+/// by the first error.
+fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
+    use par_mux::mux::integrations as integ;
+    let arms: [(&str, Arm); 3] = match action {
+        AgentHookAction::Install => [
+            ("claude", || {
+                let r = integ::install_claude_hook()?;
+                Ok(format!(
+                    "{} (settings {})",
+                    r.hook_path.display(),
+                    if r.settings_changed {
+                        "updated"
+                    } else {
+                        "already present"
+                    }
+                ))
+            }),
+            ("codex", || {
+                let r = integ::install_codex_hook()?;
+                Ok(format!(
+                    "{} + {}",
+                    r.hook_path.display(),
+                    r.hooks_path.display()
+                ))
+            }),
+            ("grok", || {
+                let r = integ::install_grok_hook()?;
+                Ok(format!(
+                    "{} + {}",
+                    r.hook_path.display(),
+                    r.config_path.display()
+                ))
+            }),
+        ],
+        AgentHookAction::Uninstall => [
+            ("claude", || {
+                let r = integ::uninstall_claude_hook()?;
+                Ok(arm_summary(r.settings_changed || r.hook_removed))
+            }),
+            ("codex", || {
+                let r = integ::uninstall_codex_hook()?;
+                Ok(arm_summary(r.hooks_changed || r.hook_removed))
+            }),
+            ("grok", || {
+                let r = integ::uninstall_grok_hook()?;
+                Ok(arm_summary(r.hook_removed || r.config_removed))
+            }),
+        ],
+    };
+    run_arms(arms)
+}
+
+/// One arm's one-word outcome for the uninstall lines.
+fn arm_summary(removed_any: bool) -> String {
+    if removed_any {
+        "removed".to_string()
+    } else {
+        "not installed".to_string()
+    }
+}
+
+/// Print one `par-mux: <arm> …` line per (name, action) pair, stdout for
+/// successes and stderr for failures; FAILURE when any arm failed.
+fn run_arms(arms: [(&str, Arm); 3]) -> std::process::ExitCode {
+    let mut failed = false;
+    for (name, action) in arms {
+        match action() {
+            Ok(detail) => println!("par-mux: {name} hook: {detail}"),
+            Err(err) => {
+                failed = true;
+                eprintln!("par-mux: {name} hook failed: {err}")
+            }
+        }
+    }
+    if failed {
+        std::process::ExitCode::FAILURE
+    } else {
+        std::process::ExitCode::SUCCESS
+    }
+}
+
+/// `--agent-hooks-status`: one `<agent> installed|absent` line per agent.
+fn run_agent_hooks_status() -> std::process::ExitCode {
+    for status in par_mux::mux::integrations::hook_status() {
+        let state = if status.installed {
+            "installed"
+        } else {
+            "absent"
+        };
+        println!("{} {state}", status.agent);
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+/// `--(un)install-agent-extensions`: drop or remove the pi and omp
+/// agent-state extension files, one line per agent.
+fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
+    use par_mux::mux::integrations as integ;
+    let arms: [(&str, Arm); 2] = if install {
+        [
+            ("pi", || {
+                integ::install_pi_extension().map(|p| p.display().to_string())
+            }),
+            ("omp", || {
+                integ::install_omp_extension().map(|p| p.display().to_string())
+            }),
+        ]
+    } else {
+        [
+            ("pi", || {
+                integ::uninstall_pi_extension().map(|r| arm_summary(r.removed))
+            }),
+            ("omp", || {
+                integ::uninstall_omp_extension().map(|r| arm_summary(r.removed))
+            }),
+        ]
+    };
+    let mut failed = false;
+    for (name, action) in arms {
+        match action() {
+            Ok(detail) => println!("par-mux: {name} extension: {detail}"),
+            Err(err) => {
+                failed = true;
+                eprintln!("par-mux: {name} extension failed: {err}")
+            }
+        }
+    }
+    if failed {
+        std::process::ExitCode::FAILURE
+    } else {
+        std::process::ExitCode::SUCCESS
+    }
+}
+
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
@@ -584,6 +762,29 @@ fn main() -> std::process::ExitCode {
                 std::process::ExitCode::FAILURE
             }
         };
+    }
+
+    // The agent-state integration flags: install/uninstall/status for the
+    // claude/codex/grok session hooks and the pi/omp extensions this
+    // binary owns. No socket, no daemon, so they run anywhere.
+    if cli.install_agent_hooks {
+        return run_agent_hook_action(AgentHookAction::Install);
+    }
+    if cli.uninstall_agent_hooks {
+        return run_agent_hook_action(AgentHookAction::Uninstall);
+    }
+    if cli.agent_hooks_status {
+        return run_agent_hooks_status();
+    }
+    if cli.install_agent_extensions {
+        return run_agent_extension_action(true);
+    }
+    if cli.heal_agent_hooks {
+        par_mux::mux::integrations::heal_hook_assets();
+        return std::process::ExitCode::SUCCESS;
+    }
+    if cli.uninstall_agent_extensions {
+        return run_agent_extension_action(false);
     }
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`

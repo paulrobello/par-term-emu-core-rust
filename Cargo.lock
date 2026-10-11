@@ -1630,6 +1630,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonc-parser"
+version = "0.33.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ff5a48f48971be8e762a6ff955725a0802b6e46c441057992da5a673db9fd3a"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "kasuari"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2006,6 +2015,7 @@ dependencies = [
  "dirs",
  "image",
  "interprocess",
+ "jsonc-parser",
  "libc",
  "log",
  "nix 0.31.3",

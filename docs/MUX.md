@@ -547,6 +547,34 @@ Each registered client has a bounded broadcast queue (4096 lines). A client that
 
 Eviction is by **queue depth only** — intended, and deliberately unlike tmux, whose control clients are evicted by output *age* (300 s) while buffering without bound in between. The depth policy bounds daemon memory at ~128 MiB per client; its accepted consequence is that a burst whose backlog passes 4096 lines evicts even a *healthy* client that drains continuously but slower than the producer — the backlog, not the client, is what hit the cap. The client reconnects and re-queries. Pinned by `a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap` (`crates/par-mux/src/mux/server/tests.rs`); an age-based policy would replace that test with a drains-slowly-survives one.
 
+
+## Agent-State Integrations
+
+par-mux owns the integrations that report agent state into the daemon:
+the claude, codex, and grok session hooks (script assets written under the
+par-mux config directory and registered in each agent own config — a merge
+that preserves the user entries, comments, and formatting) and the pi/omp
+agent-state extensions (a file drop into each agent extension directory).
+They are embedded in the binary and driven by five one-shot flags, none of
+which starts or contacts a daemon:
+
+```text
+par-mux --install-agent-hooks            Install the claude/codex/grok session hooks
+par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
+par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent
+par-mux --install-agent-extensions        Drop the pi and omp extension files
+par-mux --uninstall-agent-extensions      Remove them
+par-mux --heal-agent-hooks                Rewrite a registered hook asset that went missing
+```
+
+The hooks never slow an agent down: outside a par-mux pane the scripts
+exit on their env guards before doing anything, inside one the single
+socket write carries a 0.5 s timeout, and every failure is swallowed
+silently — a session start never blocks or fails because of them. par-term
+invokes these flags for its integrations dialog, CLI, Settings status rows,
+and startup self-heal instead of embedding its own copies, so the
+integrations always match the shipped binary.
+
 ## Command Reference
 
 The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `split-window -c DIR` / `new-window -c DIR` start directories, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value, the `rename-session` / `rename-workspace` names), and the `-t`/`-s` targets, so a name, directory, title, value, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` / `set-buffer` take the rest of the line verbatim — so rename clients send the raw name (quoting would become part of the name) List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
