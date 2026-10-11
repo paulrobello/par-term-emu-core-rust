@@ -811,6 +811,18 @@ fn a_pane_endpoint_refuses_control_commands_and_leaves_the_daemon_unchanged() {
             .map(str::to_string)
             .collect()
     }
+    // A trailing bare prompt line is redraw timing, not content: zsh draws
+    // the next prompt some time AFTER the previous output lands, and under
+    // load that draw can pass the settle window (two equal captures) and
+    // land during the refusal round instead. Trim trailing prompt-only
+    // lines at the comparison — a refused `send-keys … x` would surface as
+    // `❯ x`, which is content and never trimmed.
+    fn without_trailing_prompt(mut lines: Vec<String>) -> Vec<String> {
+        while lines.last().is_some_and(|last| last.trim() == "❯") {
+            lines.pop();
+        }
+        lines
+    }
     // The pre-refusal content, once the pane is SETTLED: zsh draws the next
     // prompt some time after the echo's output lands, so capture until two
     // consecutive content snapshots agree.
@@ -873,7 +885,8 @@ fn a_pane_endpoint_refuses_control_commands_and_leaves_the_daemon_unchanged() {
             .join(""),
     );
     assert_eq!(
-        before, after,
+        without_trailing_prompt(before),
+        without_trailing_prompt(after),
         "the pane's visible content is untouched by the refused commands"
     );
     assert!(
