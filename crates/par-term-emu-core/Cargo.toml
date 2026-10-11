@@ -5,7 +5,7 @@ name = "par-term-emu-core"
 # fails when it drifts from the root version or the root's dependency pin.
 version = "0.59.0"
 edition = "2021"
-rust-version = "1.98"
+rust-version = "1.99"
 authors = ["Paul Robello <probello@gmail.com>"]
 description = "Terminal emulator core for par-term-emu-core-rust: VT100-VT520 state machine, grid, PTY session, Sixel/iTerm2/Kitty graphics, screenshot renderer"
 readme = "DESIGN.md"

@@ -273,7 +273,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-binaries/${{ matrix.asset_name }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binary-${{ matrix.target }}
           path: release-binaries/${{ matrix.asset_name }}
@@ -367,7 +367,7 @@ jobs:
             --output-dir mux-release
 
       - name: Upload mux archive artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mux-binaries-${{ matrix.target }}
           path: mux-release/*
@@ -404,7 +404,7 @@ jobs:
           zip -qry TerminalCore.xcframework.zip TerminalCore.xcframework
 
       - name: Upload xcframework artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-xcframework
           path: target/xcframework/TerminalCore.xcframework.zip
@@ -433,12 +433,12 @@ jobs:
 
       - name: Set up QEMU
         if: matrix.target == 'aarch64'
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
 
       - name: Build wheels
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
           args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
@@ -465,7 +465,7 @@ jobs:
           timeout 300 pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
 
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
@@ -495,13 +495,13 @@ jobs:
       - name: Install uv
         run: pip install uv
       - name: Build wheels - x86_64
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64
           args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
       - name: Build wheels - universal2
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: universal2-apple-darwin
           args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
@@ -520,7 +520,7 @@ jobs:
           source .venv/bin/activate
           pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-macos-${{ matrix.python-version }}
           path: dist
@@ -546,7 +546,7 @@ jobs:
         run: pip install uv
 
       - name: Build wheels
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64
           args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
@@ -569,7 +569,7 @@ jobs:
           pytest tests/ -v --timeout=30 --timeout-method=thread -k "not pty"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-windows-${{ matrix.python-version }}
           path: dist
@@ -584,13 +584,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build sdist
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: sdist
           args: --out dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-sdist
           path: dist
@@ -640,7 +640,7 @@ jobs:
           unzip -l release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.zip | head -20
 
       - name: Upload web frontend artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-frontend
           path: release-web/*
@@ -672,34 +672,34 @@ jobs:
           echo "Package version: $version"
 
       - name: Download Python wheel artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
 
       - name: Download streaming server binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binary-*
           path: binaries
           merge-multiple: true
 
       - name: Download par-mux archives
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: mux-binaries-*
           path: mux-release
           merge-multiple: true
 
       - name: Download web frontend artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: web-frontend
           path: web-frontend
 
       - name: Download iOS xcframework
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ios-xcframework
           path: xcframework
@@ -815,7 +815,7 @@ jobs:
           echo "Package version: $version"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: wheels-*
           path: dist

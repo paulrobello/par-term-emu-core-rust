@@ -7,7 +7,7 @@ name = "par-mux"
 # root's exact pin on it.
 version = "0.59.0"
 edition = "2021"
-rust-version = "1.98"
+rust-version = "1.99"
 authors = ["Paul Robello <probello@gmail.com>"]
 description = "par-mux terminal multiplexer: tmux control-mode daemon, session tree, persistence, and attach client for par-term-emu-core"
 license = "MIT"
