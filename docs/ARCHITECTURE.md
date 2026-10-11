@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.58.1 (commit `e1a914b`).** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.60.0 (commit `c9cb0fe`).** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -297,13 +297,14 @@ The main terminal emulator that ties everything together, organized into submodu
   - `server/` - the socket server: `mod.rs` (accept loop, one writer thread per client), `protocol.rs` (bounded line reads, eviction-aware writes, reply classification), `client.rs` (per-client registration and the read-dispatch-reply loop), `broadcast.rs` (client fan-out, pane output wiring, layout/exit replays), `reap.rs` (dead-pane reaping), `endpoint.rs` (hook-only per-pane endpoints, ENH-039)
   - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`; the `mutates()` persistence rule lives in `mod.rs`
   - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
-  - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config.rs` (`<config dir>/par-mux/config.toml`)
+  - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport) plus `ipc/rows.rs` (typed reply rows for the fixed-shape listings, shared by the daemon's emitters and the clients that parse them, ARC-130), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config.rs` (`<config dir>/par-mux/config.toml`)
 - State:
   - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090)
   - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore)
-- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport)
+- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`)
 - `attach/` - the `par-mux attach` client (feature `attach`). Shared by both phases: `mod.rs`, `conn.rs` (`AttachConn`, the connection layer), `panels.rs` (overlay and sidebar composition, help rows, prompts, pickers), `targets.rs` (prefix/chord parsing and `-t` target resolution). Phase A (passthrough) keeps the host terminal as the emulator: `pump.rs`, `actions.rs`, `navigate.rs`, `status_row.rs`. Phase B (render mode) runs a core `Terminal` per pane and paints a ratatui buffer: `input.rs` (stdin parse and re-encode), `layout.rs` (client-side layout parser), `status.rs`, `tabs.rs`, and `render/`:
   - `render/mod.rs` - the pane renderer type and its frame-cadence damage diffing
+  - `render/geometry.rs` - the frame chrome layout: the one owner of how the host grid divides into tab strip, status bar, side panel, and pane content area (host/frame/content coordinate spaces)
   - `render/renderer.rs` - painting: per-pane grids, dividers, pane boxes, the modal overlay, the stdout flush sink
   - `render/modal.rs` - modal state machines: help, session/workspace pickers, prompts, context menus, resize mode, scroll viewport
   - `render/input_route.rs` - routes key runs through the prefix scanner and modal owners (`route_key`) and mouse reports through the overlay hit-testers
@@ -1041,6 +1042,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 **Multiplexer dependencies (`par-mux` member, optional, feature-gated):**
 - `interprocess` - Unix socket / Windows named pipe transport (`mux`)
 - `toml` + `dirs` - Config file and per-user directories (`mux`)
+- `jsonc-parser` - Lenient JSONC parsing for the agent-settings files the `integrations/` installers merge into (`mux`)
 - `nix` (Unix) and `widestring` + `windows-sys` (Windows) - Platform process and terminal calls (`mux`)
 - `clap` - Daemon CLI (`mux-bin`)
 - `crossterm` + `ratatui` - The attach client's input and render-mode painting (`attach`)
@@ -1172,6 +1174,11 @@ The project uses GitHub Actions. `.github/workflows/ci.yml` is authoritative; th
 #### Build Job and web_term Drift Gate (dispatch only)
 - **Build wheels:** `maturin build --release --locked` on Ubuntu, macOS, and Windows with Python 3.14; wheels are uploaded as artifacts
 - **web_term/ drift gate:** rebuilds `web-terminal-frontend/` and fails when the committed `web_term/` static export differs
+
+#### Other Jobs
+- **Feature matrix (`features`)**: `make check-features` through cargo-hack builds the library across feature combinations (dispatch only)
+- **FFI header + surface drift (`ffi-drift`)**: regenerates `include/terminal_core.h` with a pinned cbindgen and fails when the committed header, the exported surface, or its FFI_GUIDE.md coverage drifts (runs on every trigger)
+- **iOS xcframework (`xcframework`)**: builds the C FFI staticlib for iOS with a header smoke-compile and link probe (dispatch only; the shipping artifact is produced by `deployment.yml`)
 
 ### Running Checks Locally
 

@@ -353,6 +353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_key: None,
         allow_api_key_in_query: false,
         allowed_origins: None,
+        kitty_file_media: Default::default(),  // Kitty file-media gate (SEC-101)
     };
 
     let server = StreamingServer::with_config(
@@ -462,11 +463,12 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 | `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session`, `screenshot`, `macro-yaml` |
 | `python-test` | The `python` feature's deps with `pyo3/auto-initialize` instead of `extension-module`, so the bindings link a real interpreter under `cargo test` | `pyo3`, `pyo3/auto-initialize`, `par-term-emu-derive`, `pty_session`, `screenshot`, `macro-yaml` |
 | `screenshot` | Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts). Enabled by `python` and `python-test`; opt-in for `sim` (`features = ["sim", "screenshot"]`) | `swash` |
-| `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signal deps. Auto-enabled by `python`, `streaming-bin`, and `mux` | `portable-pty`, `nix` |
+| `pty_session` | Real PTY backend (`PtySession`): portable-pty. Auto-enabled by `python`, `streaming-bin`, and `mux` | `portable-pty` |
 | `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo`, `subtle`, `zeroize` |
-| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `pty_session`, `macro-yaml` |
-| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` and `windows-sys` (Windows only), `serde`, `dirs`, `toml` |
+| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `sha2`, `pty_session`, `macro-yaml` |
+| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, `jsonc-parser`, `nix` (Unix only), `widestring` and `windows-sys` (Windows only) |
 | `mux-bin` | The `par-mux` daemon binary (the CLI parser on top of `mux`, mirroring `streaming`/`streaming-bin`) | `mux`, `clap` |
+| `attach` | The `par-mux attach` client TUI (`mux::attach`); rides the daemon binary's clap surface | `mux-bin`, `crossterm`, `ratatui` |
 | `macro-yaml` | `Macro` YAML save/load (`save_yaml`, `load_yaml`, `to_yaml`, `from_yaml`). Enabled by `python`, `python-test`, and `streaming-bin` | `serde_yaml_ng` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence | `smallvec/serde`, `bitflags/serde` |
 | `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |
@@ -474,6 +476,7 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 | `full` | All features | `python`, `streaming`, `streaming-bin` |
 | `jemalloc` | Better server performance (non-Windows) | `tikv-jemallocator` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` | `prost-build` |
+| `ffi` | C ABI surface (`ptec_terminal_*` exports in `src/ffi.rs`) for the xcframework and C/Swift embedders; off by default so Python wheels export no unprefixed C symbols | (forwards to `par-term-emu-core/ffi`) |
 | `default` | Default features | `python` |
 
 ## Building
@@ -519,7 +522,7 @@ The repository includes example binaries:
 
   # With HTTP Basic Auth
   cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- \
-    --enable-http --auth-user admin --auth-pass secret
+    --enable-http --http-user admin --http-password secret
   ```
 
 ## API Documentation

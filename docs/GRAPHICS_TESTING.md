@@ -168,17 +168,18 @@ for i in {1..50}; do echo "line $i"; done
 Enable debug output to track graphics processing:
 
 ```bash
-# Set debug level (0-5, where 4=Debug, 5=Trace)
+# Set debug level (1=Error, 2=Info, 3=Debug, 4=Trace; unset or any other value disables the log)
 export DEBUG_LEVEL=4
 
-# Debug log location
-tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY"
+# Debug log location (one file per process, in the system temp dir:
+# /tmp on Linux, per-user $TMPDIR on macOS, %TEMP% on Windows)
+tail -f "${TMPDIR:-/tmp}"/par_term_emu_core_rust_debug_rust_*.log | grep -i "GRAPHICS\|KITTY"
 ```
 
 **Debug Categories:**
 - `GRAPHICS` - General graphics operations and scrolling
 - `KITTY` - Kitty graphics protocol parsing and animation control
-- `KITTY_PLACEHOLDER` - Unicode placeholder insertion for virtual placements
+- `ITERM` - iTerm2 OSC 1337 parsing
 - `ANIMATION` - Animation frame management and timing
 
 ## Python TUI Testing
@@ -186,7 +187,7 @@ tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY"
 For the Python TUI (par-term-emu-tui-rust):
 
 ```bash
-cd /Users/probello/Repos/par-term-emu-tui-rust
+cd ../par-term-emu-tui-rust
 uv run par-term-emu-tui-rust
 
 # Graphics render as half-block characters in TUI mode

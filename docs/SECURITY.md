@@ -26,6 +26,10 @@ This document outlines security considerations when using the PTY functionality 
   - [XTWINOPS Query Response Control](#xtwinops-query-response-control)
 - [Input Validation](#input-validation)
   - [Keyboard Input Sanitization](#keyboard-input-sanitization)
+- [Escape Sequence Output Gating](#escape-sequence-output-gating)
+  - [Insecure Sequence Filter](#insecure-sequence-filter)
+  - [OSC 7 Directory Reports](#osc-7-directory-reports)
+  - [OSC 52 Clipboard Access](#osc-52-clipboard-access)
 - [Graphics Protocol File Loading Security](#graphics-protocol-file-loading-security)
   - [Kitty Graphics Protocol File Transmission](#kitty-graphics-protocol-file-transmission)
   - [File Loading Implementation](#file-loading-implementation)
@@ -143,6 +147,11 @@ graph TB
 - Configurable XTWINOPS response filtering
 - Prevention of information leakage via terminal queries
 - Support for nested TUI applications
+
+**Output Sequence Gating**:
+- Disable flag for insecure sequences (OSC 52/8/9/777/99, color sets/resets, Sixel DCS)
+- OSC 7 directory-report acceptance control
+- OSC 52 clipboard reads disabled by default
 
 ## Command Injection Prevention
 
@@ -570,6 +579,57 @@ def safe_send_input(term, user_input):
 
     term.write(input_bytes)
 ```
+
+## Escape Sequence Output Gating
+
+Everything a program writes to the terminal is untrusted input. Beyond the
+XTWINOPS reply filter above, three embedder-side controls gate what
+escape-sequence output can do past changing the screen: an insecure-sequence
+filter, OSC 7 acceptance, and clipboard read policy. All are methods on
+`Terminal` and `PtyTerminal` (the same names on both classes), and all survive
+`reset()` (RIS), so a program running in the session cannot undo the
+embedder's policy.
+
+### Insecure Sequence Filter
+
+`Terminal.set_disable_insecure_sequences(True)` drops potentially hostile
+sequences before their handlers run. The default is `False` (everything listed
+below executes). When enabled, it blocks:
+
+- **OSC 52** (clipboard), **OSC 8** (hyperlinks), **OSC 9**, **OSC 777**, and
+  **OSC 99** (notifications) — dropped whole
+- **OSC 4** (palette set), **OSC 104** (palette reset), and **OSC 110/111/112**
+  (default fg/bg/cursor color resets) — dropped
+- **OSC 10/11/12** color *sets* — dropped; a `?` query on those codes is still
+  answered
+- **Sixel graphics** (DCS … q) — blocked at the DCS hook. Sixel payload limits
+  (raster size, repeat count, retained graphics) live in the
+  [Resource Limits Reference](#resource-limits-reference)
+
+Kitty and iTerm2 inline-image sequences are **not** gated by this flag; their
+exposure is bounded by the decode caps in the
+[Resource Limits Reference](#resource-limits-reference). Blocked sequences are
+logged at Debug level under the `SECURITY` target.
+
+### OSC 7 Directory Reports
+
+OSC 7 and iTerm2's OSC 1337 `CurrentDir` tell the emulator what the shell
+reports as its working directory, feeding the terminal's cwd API (and, in
+par-mux, a respawn-pane start-directory candidate). Acceptance is **on by
+default**; `Terminal.set_accept_osc7(False)` ignores the reports so untrusted
+output cannot seed a cwd value. A payload whose decoded path contains control
+characters is rejected regardless of the flag (SEC-117).
+
+### OSC 52 Clipboard Access
+
+An OSC 52 write stores its payload (bounded by the OSC data cap,
+`Terminal.set_max_osc_data_length`, 1 MiB by default) in the terminal's
+internal clipboard, where the embedding application can read it. The query
+form — `OSC 52 ; c ; ?`, which returns the clipboard content to the program
+that asked — receives a reply **only** when
+`Terminal.set_allow_clipboard_read(True)` is set; the default is `False`, so
+untrusted output cannot read the clipboard back.
+`set_disable_insecure_sequences(True)` blocks both directions.
 
 ## Graphics Protocol File Loading Security
 

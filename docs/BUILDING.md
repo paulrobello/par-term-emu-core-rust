@@ -48,7 +48,7 @@ After changing any `#[repr(C)]` type or `extern "C"` function, regenerate and co
 
 ### Rust
 
-You need Rust 1.98 or later (as specified in `Cargo.toml` with `rust-version = "1.98"`). Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.99 or later (as specified in `Cargo.toml` with `rust-version = "1.99"`). Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -83,12 +83,14 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 The library supports several optional features that can be enabled during the build:
 
 - **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`); also enables `pty_session`, `screenshot`, and `macro-yaml`
+- **`python-test`** - The `python` feature's dependency set with `pyo3/auto-initialize` instead of `pyo3/extension-module`, so the bindings (and their `#[cfg(test)]` unit tests) link a real interpreter under `cargo test`. Not used by maturin wheel builds
 - **`screenshot`** - Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts via `swash`). Enabled by `python`; opt-in for `sim` (`features = ["sim", "screenshot"]`)
 - **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
 - **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar); also enables `macro-yaml` for `--macro-file`
 - **`mux`** - The par-mux multiplexer library, re-exported as `par_term_emu_core_rust::mux` from the `par-mux` workspace member (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`; does not pull `clap`
 - **`mux-bin`** - The `par-mux` daemon binary: `mux` plus its `clap` CLI parser. The binary lives in the `par-mux` workspace member (`crates/par-mux`): build it with `cargo build -p par-mux --bin par-mux --features mux-bin`; this root feature forwards to the member
+- **`attach`** - The `par-mux attach` client (`crate::mux::attach`); implies `mux-bin` and forwards to the member's `attach` feature
 - **`macro-yaml`** - `Macro` YAML save/load (`serde_yaml_ng`). Enabled by `python`, `python-test`, and `streaming-bin`; slim `rust-only`/`sim`/`mux` builds must add it to use `Macro::save_yaml`/`load_yaml`/`to_yaml`/`from_yaml`
 - **`serde`** - Serde derives on the replay-snapshot types, which are the par-mux persistence format. Enabled by `mux`
 - **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
@@ -114,14 +116,15 @@ make dev
 ```
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
-- **maturin** (≥1.13.3) - Build tool for PyO3 projects
-- **pytest** (≥9.0.3) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
-- **ruff** (≥0.15.16) - Fast Python linter and formatter
-- **pyright** (≥1.1.410) - Static type checker
-- **pre-commit** (≥4.6.0) - Git hook framework
+- **maturin** (≥1.15.0) - Build tool for PyO3 projects
+- **pytest** (≥9.1.1), **pytest-asyncio**, and **pytest-cov** - Test runner, async support, and coverage
+- **pytest-timeout** (≥2.4.0) - Per-test timeout (5-second default)
+- **ruff** (≥0.17.0) - Fast Python linter and formatter
+- **pyright** (≥1.1.414) - Static type checker
+- **pre-commit** (≥4.6.2) - Git hook framework
 - **rich** (≥15.0.0) - Rich text formatting for examples
-- **websockets** (≥16.0) - WebSocket client for streaming examples
-- **pillow** (≥12.2.0) - Image processing for graphics features (required dependency)
+- **websockets** (≥17.2) - WebSocket client for streaming examples
+- **pillow** (≥12.3.0) - Image processing for graphics features (required dependency)
 
 ### Development Build
 
@@ -153,11 +156,11 @@ To create a wheel for distribution:
 ```bash
 uv run maturin build --release
 
-# Or use the make target
-make build-release
+# Or build the wheel and install it in one step
+make install
 ```
 
-The wheel will be created in `target/wheels/`.
+The wheel will be created in `target/wheels/`. (`make build-release` is a development-mode install into the venv — `maturin develop --release` — not a wheel build.)
 
 Install it with:
 
@@ -250,7 +253,8 @@ cargo test --lib --no-default-features --features pyo3/auto-initialize
 # (no PyO3 flags needed); add --features for the gated modules
 cargo test -p par-term-emu-core --features pty_session,screenshot,serde
 
-# Or use the make target
+# Or use the make target (also runs the par-term-emu-core and par-mux
+# member suites; the par-mux integration tests run serialized)
 make test-rust
 ```
 
@@ -271,6 +275,9 @@ make test-python
 # Or manually
 uv run maturin develop --release
 uv run pytest tests/ -v
+
+# PTY test family with a longer per-test timeout
+make test-pty
 ```
 
 **Test configuration:**
@@ -283,24 +290,21 @@ uv run pytest tests/ -v
 Run all code quality checks (format, lint, type check, tests):
 
 ```bash
-# Run all checks with auto-fix
+# All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)
 make checkall
+
+# CI-parity gate: checkall + the CI mux-test job's suites (heavy; run before pushing)
+make checkall-ci
 
 # Individual checks
 make fmt              # Format Rust code (cargo fmt)
 make fmt-python       # Format Python code (ruff format)
-make lint             # Lint Rust code (clippy --all-targets --all-features --fix + fmt)
+make lint             # Lint Rust code (clippy auto-fix across the three crates + fmt)
 make lint-python      # Lint and type-check Python code (ruff format + ruff check --fix + pyright)
+make lint-check       # Non-mutating lint gate checkall runs (fmt --check, clippy, ruff --check, pyright)
 ```
 
-> **Note:** The `make checkall` target runs checks in this order:
-> 1. Rust tests (`test-rust`)
-> 2. Rust streaming tests (`test-rust-streaming`)
-> 3. Rust linting with auto-fix (`lint` - runs clippy + fmt)
-> 4. Python linting with auto-fix (`lint-python` - runs ruff format + ruff check + pyright)
-> 5. Python tests (`test-python` - rebuilds package with `make dev` first)
->
-> This ensures all code quality issues are caught before committing.
+> **Note:** The `make checkall` target runs: the FFI header and surface checks, the derive/core version-sync checks, the mux-docs, stub-docstring, mux-package, and mux-rustdoc checks, the doc-links check, the Rust tests (`test-rust`, `test-rust-streaming`), the non-mutating lint gate (`lint-check`), the Python stub check, the Python tests (`test-python` - rebuilds the package with `make dev` first), the web frontend tests (`test-web`), and the caps-table check. It is non-mutating: `make lint lint-python` auto-fixes findings.
 
 ### Pre-commit Hooks
 
@@ -321,13 +325,12 @@ make pre-commit-uninstall
 ```
 
 **Pre-commit hooks include:**
+- **Secrets**: `gitleaks`
 - **File checks**: Trailing whitespace, end-of-file fixer, YAML/TOML validation, large files (max 1MB), merge conflicts, mixed line endings
-- **Rust**: `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test --lib --no-default-features --features pyo3/auto-initialize`
-- **Python**: `ruff format`, `ruff check --fix`, `pyright`, `pytest`
+- **Rust**: `cargo fmt`, `cargo clippy` (the project's clippy feature sets, including the `par-term-emu-core` and `par-mux` members), `cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi`
+- **Python**: `ruff format`, `ruff check --fix`, `pyright`
 
-The pytest hook runs `uv sync && maturin develop && uv run pytest tests/ -v` to ensure the package is built before running tests.
-
-> **Warning:** The pytest pre-commit hook can be slow since it rebuilds the package. You may want to comment out the pytest section in `.pre-commit-config.yaml` if you prefer to run tests manually before pushing.
+Python tests are NOT run in pre-commit: the `maturin develop` rebuild made every Rust-touching commit slow and flaked the streaming suite's latency-sensitive timeouts. `make checkall` is the authoritative test gate — run it before pushing.
 
 > **Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
 
@@ -472,7 +475,7 @@ uv run maturin build --release --target aarch64-apple-darwin
 uv run maturin publish
 ```
 
-> **Note:** You'll need to configure PyPI credentials first. Use `maturin publish --help` for authentication options.
+> **Note:** Release publishing normally runs through the GitHub workflows (`.github/workflows/deployment.yml` publishes to PyPI and crates.io); the commands above are the manual fallback. Registry credentials must be configured first.
 
 ## Troubleshooting
 

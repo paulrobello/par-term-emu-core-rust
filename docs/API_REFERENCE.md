@@ -402,7 +402,7 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 
 #### Notifications (OSC 9/777)
 - `drain_notifications() -> list[tuple[str, str]]`: Drain notifications (title, message)
-- `take_notifications() -> list[tuple[str, str]]`: Take notifications without removing
+- `take_notifications() -> list[tuple[str, str]]`: Take notifications (title, message). Alias of `drain_notifications()`; clears the notification queue after retrieval
 - `take_notifications_detailed() -> list[Notification]`: Take pending notifications as `Notification` objects, exposing the Kitty OSC 99 `id`, `urgency`, and `actions` metadata. Non-breaking companion to `take_notifications()`/`drain_notifications()`, which are unchanged and still return `(title, message)` tuples. For OSC 9/777 notifications, `id` is `None`, `urgency` is `"normal"`, and `actions` is empty. Available on both `Terminal` and `PtyTerminal`.
 - `has_notifications() -> bool`: Check if notifications are pending
 - `set_max_notifications(max: int)`: Limit OSC 9/777 notification backlog
@@ -424,6 +424,7 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), and Kitty Graphics Protocol (APC G).
 
 - `resize_pixels(cols: int, rows: int, pixel_width: int, pixel_height: int)`: Resize terminal (cols/rows) and set the pixel dimensions of the text area in one call
+- `graphics() -> list[Graphic]`: Get all graphics currently displayed
 - `graphics_count() -> int`: Get count of graphics currently displayed
 - `graphics_at_row(row: int) -> list[Graphic]`: Get graphics at specific row
 - `clear_graphics()`: Clear all graphics
@@ -944,7 +945,7 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 - `poll_screen_cleared_events() -> list[bool]`: Drain pending `ScreenCleared` events. Each `bool` is `True` if the scrollback was also cleared (ED 3J), `False` for screen-only clears (ED 2J). Use this to invalidate scrollback zone/mark metadata on the frontend.
 
 **Event types returned by `poll_events()` / `poll_subscribed_events()`:**
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`
 
 The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`None` when the variable is first set).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
@@ -1046,7 +1047,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 **Supported event types:**
 
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`
 
 #### Examples
 
@@ -1128,7 +1129,7 @@ Terminal emulator with PTY (pseudo-terminal) support for interactive shell sessi
 PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 ```
 
-**Method availability:** `PtyTerminal` is a standalone wrapper around a live PTY session, not a `Terminal` subclass (`PtyTerminal.__mro__` is `(PtyTerminal, object)`). It exposes 204 of `Terminal`'s 386 public methods plus 40 PTY-specific ones (process management, I/O, update tracking, macro playback, coprocesses — documented in this section). See [Method Availability](#method-availability) for the Terminal-only surface it lacks.
+**Method availability:** `PtyTerminal` is a standalone wrapper around a live PTY session, not a `Terminal` subclass (`PtyTerminal.__mro__` is `(PtyTerminal, object)`). It exposes 164 of `Terminal`'s 387 public methods plus 40 PTY-specific ones (204 public methods in total) — process management, I/O, update tracking, macro playback, coprocesses — documented in this section. See [Method Availability](#method-availability) for the Terminal-only surface it lacks.
 
 ### PTY-Specific Methods
 
@@ -1203,7 +1204,7 @@ Run external processes alongside the terminal session, optionally feeding termin
 
 ### Method Availability
 
-`PtyTerminal` is not a `Terminal` subclass. Of `Terminal`'s 386 public methods, 222 have no `PtyTerminal` counterpart (counts generated from `_native.pyi` at this release). The notable groups:
+`PtyTerminal` is not a `Terminal` subclass. Of `Terminal`'s 387 public methods, 223 have no `PtyTerminal` counterpart (counts generated from `_native.pyi` at this release). The notable groups:
 
 - **Input processing**: `process`/`process_str`/`reset` — a `PtyTerminal` is fed by its child through the PTY (`write`/`write_str`), not by host-side `process()` calls
 - **Observers and events**: `add_observer`/`add_async_observer`/`remove_observer`, the whole `poll_*` family, `set_event_subscription`
@@ -1216,13 +1217,13 @@ Run external processes alongside the terminal session, optionally feeding termin
 The Kitty file-media gate is available on both classes: `set_allow_file_media`/`get_allow_file_media` work on `Terminal` and `PtyTerminal` alike.
 
 <details>
-<summary>Full list of the 222 Terminal-only methods</summary>
+<summary>Full list of the 223 Terminal-only methods</summary>
 
 `add_async_observer`, `add_bookmark`, `add_damage_region`, `add_inline_image`, `add_observer`, `add_rendering_hint`, `add_to_clipboard_history`, `add_trigger`, `application_cursor`, `application_keypad`, `auto_wrap_mode`,
 `badge_color`, `benchmark_grid_ops`, `benchmark_parsing`, `benchmark_rendering`, `bold_brightening`, `bold_color`,
 `capture_replay_snapshot`, `check_activity`, `check_silence`, `clear_all_clipboard_history`, `clear_all_tab_stops`, `clear_bookmarks`, `clear_clipboard_history`, `clear_clipboard_sync_events`, `clear_command_history`, `clear_cwd_history`, `clear_damage_regions`, `clear_event_subscription`, `clear_images`, `clear_mouse_history`, `clear_notification_events`, `clear_regex_matches`, `clear_rendering_hints`, `clear_selection`, `clear_tab_stop`, `clear_tmux_notifications`, `clear_trigger_highlights`, `color_distance`, `conformance_level`, `conformance_level_name`, `cursor_guide_color`,
 `damage_generation`, `delete_image`, `detect_file_paths`, `detect_semantic_items`, `detect_urls`, `diff_snapshots`, `dirty_rows_since`, `disable_profiling`, `drain_bell_events`, `drain_tmux_notifications`,
-`enable_profiling`, `end_command_execution`, `erase_rectangle`, `export_graphics_json`, `export_scrollback`,
+`encode_key`, `enable_profiling`, `end_command_execution`, `erase_rectangle`, `export_graphics_json`, `export_scrollback`,
 `fill_rectangle`, `format_compliance_report`,
 `generate_color_palette`, `get_all_hyperlinks`, `get_all_images`, `get_ansi_color`, `get_ansi_palette`, `get_average_frame_time`, `get_bookmarks`, `get_clipboard_from_slot`, `get_clipboard_history`, `get_clipboard_sync_events`, `get_clipboard_sync_history`, `get_command_history`, `get_command_output`, `get_command_outputs`, `get_current_command`, `get_current_regex_pattern`, `get_cwd_changes`, `get_damage_regions`, `get_dirty_region`, `get_dirty_rows`, `get_fps`, `get_frame_timings`, `get_image_by_id`, `get_images_at`, `get_last_mouse_position`, `get_latest_clipboard`, `get_line_context`, `get_logical_lines`, `get_max_clipboard_event_bytes`, `get_max_clipboard_sync_events`, `get_max_mouse_history`, `get_max_notifications`, `get_mouse_events`, `get_mouse_positions`, `get_named_progress_bar`, `get_notification_config`, `get_notification_events`, `get_paragraph_at`, `get_performance_metrics`, `get_profiling_data`, `get_rectangle`, `get_regex_matches`, `get_rendering_hints`, `get_selected_text`, `get_selection`, `get_semantic_snapshot`, `get_semantic_snapshot_json`, `get_shell_integration_stats`, `get_tab_stops`, `get_tmux_notifications`, `get_trigger`, `get_trigger_highlights`, `get_user_var`, `get_user_vars`, `get_zone_at`, `get_zone_text`, `get_zones`,
 `handle_bell_notification`, `has_tmux_notifications`, `hsl_to_rgb_color`, `hsv_to_rgb_color`,

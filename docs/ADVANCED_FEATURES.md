@@ -7,16 +7,21 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Overview](#overview)
 - [True Color Support](#true-color-support)
   - [Bold Brightening](#bold-brightening)
+  - [Faint/Dim Text Alpha (SGR 2)](#faintdim-text-alpha-sgr-2)
 - [Minimum Contrast Adjustment (iTerm2-Compatible)](#minimum-contrast-adjustment-iterm2-compatible)
 - [Alternate Screen Buffer](#alternate-screen-buffer)
 - [Mouse Reporting](#mouse-reporting)
 - [Bracketed Paste Mode](#bracketed-paste-mode)
 - [Focus Tracking](#focus-tracking)
 - [OSC 52 Clipboard Operations](#osc-52-clipboard-operations)
+- [General-Purpose File Transfer (OSC 1337)](#general-purpose-file-transfer-osc-1337)
 - [OSC 8 Hyperlinks](#osc-8-hyperlinks)
 - [Notifications (OSC 9/777)](#notifications-osc-9777)
 - [Progress Bars (OSC 9;4)](#progress-bars-osc-94)
 - [Shell Integration](#shell-integration)
+- [Triggers & Automation](#triggers--automation)
+- [Coprocess Management](#coprocess-management)
+- [Badge Format Support](#badge-format-support)
 - [Sixel Graphics](#sixel-graphics)
 - [Kitty Graphics Protocol](#kitty-graphics-protocol)
 - [Synchronized Updates](#synchronized-updates)
@@ -29,6 +34,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Scrollback Storage and Resize](#scrollback-storage-and-resize)
 - [Terminal Notifications](#terminal-notifications)
 - [Session Recording and Replay](#session-recording-and-replay)
+- [Instant Replay](#instant-replay)
 - [Macro Recording and Playback](#macro-recording-and-playback)
 - [Terminal Streaming](#terminal-streaming)
 - [Complete Example](#complete-example)
@@ -140,7 +146,7 @@ from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
 
-# Enable bold brightening (default is typically off)
+# Bold brightening is enabled by default (iTerm2-style)
 term.set_bold_brightening(True)
 
 # Bold text with red (color 1) will appear as bright red (color 9)
@@ -635,7 +641,7 @@ for title, message in notifications:
 # Notification with title and message
 term.process_str("\x1b]777;notify;Build Status;Compilation successful\x07")
 
-# Get notifications without removing them
+# Get and clear pending notifications
 notifications = term.take_notifications()
 
 # Check if notifications pending
@@ -681,7 +687,7 @@ term.process_str("\x1b]9;4;1;50\x07")
 
 # Check progress state
 progress = term.progress_bar()
-print(f"State: {progress.state}")  # "Normal"
+print(f"State: {progress.state}")  # ProgressState.NORMAL
 print(f"Progress: {progress.progress}%")  # 50
 
 # Error state at 100%
@@ -712,7 +718,7 @@ term.set_progress(ProgressState.Normal, 33)
 # Get progress state and value
 if term.has_progress():
     progress = term.progress_bar()
-    print(f"State: {progress.state}")  # e.g., "Normal"
+    print(f"State: {progress.state}")  # e.g., ProgressState.NORMAL
     print(f"Progress: {progress.progress}%")  # e.g., 33
 
 # Clear progress
@@ -890,7 +896,7 @@ A `cwd_changed` event is emitted when the remote host changes, allowing frontend
 4. **Command rerun**: Right-click to rerun commands
 5. **Directory tracking**: Open new tabs in same directory
 6. **Remote host awareness**: Detect SSH sessions and display host info
-6. **Duration tracking**: Measure command execution time
+7. **Duration tracking**: Measure command execution time
 
 ### Supported Terminals
 
@@ -964,6 +970,7 @@ results = term.poll_action_results()
 | `run_command` | `command`, `args` | Emit a command execution event |
 | `play_sound` | `sound_id`, `volume` | Emit a sound playback event |
 | `send_text` | `text`, `delay_ms` | Emit a text input event |
+| `split_pane` | `direction`, `command`, `focus_new_pane`, `target` | Split the pane and run a command in the new pane |
 | `stop` | (none) | Stop processing subsequent triggers for this match |
 
 ### Highlighting
@@ -2279,7 +2286,7 @@ session = term.get_recording_session()
 if session:
     print(f"Events recorded: {len(session.events)}")
     print(f"Duration: {session.duration}ms")
-    print(f"Size: {session.terminal_size}")
+    print(f"Initial size: {session.initial_size}")
 
 # Stop recording
 final_session = term.stop_recording()
@@ -2361,9 +2368,9 @@ The exported asciicast format is compatible with asciinema:
 session = term.get_recording_session()
 
 # Access session properties
-print(f"Start time: {session.start_time}")  # UNIX timestamp (ms)
+print(f"Start time: {session.created_at}")  # UNIX timestamp (ms)
 print(f"Duration: {session.duration}ms")
-print(f"Size: {session.terminal_size}")  # (cols, rows) tuple or None
+print(f"Initial size: {session.initial_size}")  # (cols, rows) tuple
 print(f"Title: {session.title}")
 print(f"Events: {len(session.events)}")
 
@@ -2666,6 +2673,8 @@ Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed p
 - `ZoneClosed`: Semantic zone closed
 - `ZoneScrolledOut`: Semantic zone evicted from scrollback
 - `ScreenCleared`: Screen cleared (ED 2J / ED 3J)
+- `AgentRoster`: Agent roster updated (par-mux agent integrations)
+- `AgentStateChanged`: Agent state changed (par-mux agent integrations)
 - `EnvironmentChanged`: Environment variable changed
 - `RemoteHostTransition`: Remote host transition detected
 - `SubShellDetected`: Sub-shell detected
@@ -2683,13 +2692,13 @@ Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed p
 - `Input`: User keyboard input
 - `Resize`: Request terminal resize
 - `Ping`: Keepalive request
-- `Refresh`: Request full screen refresh
+- `RequestRefresh`: Request full screen refresh
 - `Subscribe`: Subscribe to specific event types
 - `Mouse`: Mouse input (press, release, move, scroll)
-- `Focus`: Focus change notification
+- `FocusChange`: Focus change notification
 - `Paste`: Paste input
-- `Selection`: Selection request
-- `Clipboard`: Clipboard request (set/get)
+- `SelectionRequest`: Selection request
+- `ClipboardRequest`: Clipboard request (set/get)
 - `SnapshotRequest`: Request semantic snapshot
 
 > **📝 Note:** The protocol definition is in `proto/terminal.proto`. See [STREAMING.md](STREAMING.md) for complete protocol specification and examples.
@@ -2808,11 +2817,11 @@ par-term-streamer \
 - Python: PyO3 bindings for easy integration
 
 **Frontend:**
-- Next.js 16 with React 19
-- TypeScript 6.0
-- xterm.js 6.0 with WebGL renderer (@xterm/xterm)
-- Tailwind CSS 4.3
-- Protocol Buffers: @bufbuild/protobuf 2.12
+- Next.js with React (versions per `web-terminal-frontend/package.json`)
+- TypeScript
+- xterm.js with WebGL renderer (@xterm/xterm)
+- Tailwind CSS
+- Protocol Buffers: @bufbuild/protobuf
 - Compression: pako (zlib)
 
 **Protocol:**

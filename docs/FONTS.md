@@ -51,9 +51,9 @@ The library includes two embedded fonts that work without any external dependenc
 - Monochrome outline rendering (grayscale)
 - Automatic fallback when system color emoji fonts are not available
 - Works on all platforms without additional dependencies
-- Used as final fallback after all system fonts fail
+- Used as the emoji font when no system emoji font can be loaded (the choice is made once at load time, not per glyph)
 
-Both fonts are used automatically when no `font_path` is specified:
+JetBrains Mono is the default main font when no `font_path` is specified, and Noto Emoji provides emoji fallback on every platform regardless of which main font is used:
 
 ```python
 # Take screenshot with default embedded fonts (JetBrains Mono + Noto Emoji)
@@ -70,84 +70,89 @@ The library uses a smart multi-tier fallback system to render all characters cor
 ```mermaid
 graph TD
     Start[Render Character]
+    CheckType{Character Type?}
     TryMain[Try Main Font<br/>JetBrains Mono or custom]
     CheckSuccess{Glyph Found?}
 
-    CheckType{Character Type?}
     TrySystemEmoji[Try System Emoji Fonts<br/>Apple/Segoe/Noto Color]
-    TryEmbeddedEmoji[Try Embedded Noto Emoji<br/>Monochrome]
+    TryEmbeddedEmoji[Use Embedded Noto Emoji<br/>if no system emoji font found]
     TryCJK[Try System CJK Fonts<br/>All available in priority order]
-    CheckEmojiAfterCJK{Found in<br/>CJK fonts?}
+    CheckCJKGlyph{Glyph Found?}
     FinalFallback[Use Main Font Result<br/>May show as tofu box]
     Success[Render Glyph]
 
-    Start --> TryMain
-    TryMain --> CheckSuccess
-    CheckSuccess -->|Yes| Success
-    CheckSuccess -->|No or Empty Bitmap| CheckType
-
+    Start --> CheckType
     CheckType -->|Emoji| TrySystemEmoji
     CheckType -->|CJK| TryCJK
-    CheckType -->|Other| TrySystemEmoji
+    CheckType -->|Other| TryMain
+
+    TryMain --> CheckSuccess
+    CheckSuccess -->|Yes| Success
+    CheckSuccess -->|No or Empty Bitmap| TrySystemEmoji
 
     TrySystemEmoji -->|Found| Success
-    TrySystemEmoji -->|Not Found| TryEmbeddedEmoji
+    TrySystemEmoji -->|Loaded font lacks the glyph| FinalFallback
+    TrySystemEmoji -->|No system emoji font found| TryEmbeddedEmoji
     TryEmbeddedEmoji -->|Found| Success
     TryEmbeddedEmoji -->|Not Found| FinalFallback
 
-    TryCJK --> CheckEmojiAfterCJK
-    CheckEmojiAfterCJK -->|Yes| Success
-    CheckEmojiAfterCJK -->|No| TrySystemEmoji
+    TryCJK --> CheckCJKGlyph
+    CheckCJKGlyph -->|Yes| Success
+    CheckCJKGlyph -->|No| TrySystemEmoji
 
     FinalFallback --> Success
 
-    style Start fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
-    style TryMain fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style TrySystemEmoji fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style TryCJK fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style TryEmbeddedEmoji fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
-    style Success fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style FinalFallback fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
-    style CheckSuccess fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style CheckType fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
-    style CheckEmojiAfterCJK fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    class Start primary
+    class TryMain,Success active
+    class TrySystemEmoji,TryCJK data
+    class TryEmbeddedEmoji external
+    class FinalFallback warning
+    class CheckType,CheckSuccess,CheckCJKGlyph neutral
+
+    classDef primary fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef data fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef external fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    classDef warning fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    classDef neutral fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
 ### Font Fallback Chain
 
+The main font renders all regular text. Emoji and CJK characters are always routed to their dedicated fallback fonts first; the main font's own emoji/CJK glyphs are used only when every fallback fails.
+
 **For Emoji Characters** (automatic fallback chain):
 
-1. **Main font** (JetBrains Mono or custom `font_path`)
-2. **System color emoji fonts** (tries multiple paths in order until one is found):
+1. **System emoji fonts** (the first font that loads is selected; tried in order until one loads):
    - **macOS**: Apple Color Emoji, Arial Unicode, DejaVu Sans, AppleSDGothicNeo, CJKSymbolsFallback, PingFang, Hiragino Sans GB, Apple Symbols
    - **Linux**: NotoColorEmoji, NotoEmoji, NotoSans, NotoSansCJK, DejaVuSans, LiberationSans
    - **Windows**: Segoe UI Emoji, Segoe UI Symbol, Arial, MS Gothic, MS YaHei
-3. **Embedded Noto Emoji** (monochrome, always available as final fallback)
+2. **Embedded Noto Emoji** (monochrome, selected as the emoji font when no system emoji font can be loaded)
+3. **Main font result** (may show as tofu box) if the selected emoji font lacks the glyph
 
 **For CJK Characters** (Chinese, Japanese, Korean):
 
-1. **Main font** (JetBrains Mono or custom `font_path`)
-2. **System CJK fonts** (loads ALL available fonts in priority order for comprehensive coverage, trying each until a glyph is found):
+1. **System CJK fonts** (loads ALL available fonts in priority order for comprehensive coverage, trying each until a glyph is found):
    - **macOS**: Arial Unicode, PingFang, Hiragino Sans GB, AppleSDGothicNeo, Hiragino Kaku Gothic ProN, CJKSymbolsFallback, STHeiti Medium, AppleMyungjo, STSong
    - **Linux**: NotoSansCJK, DejaVuSans, LiberationSans
    - **Windows**: MS Gothic, MS YaHei, Malgun Gothic, Arial
-3. **System emoji fonts** (as additional fallback if CJK fonts do not have the glyph)
-4. **Embedded Noto Emoji** (monochrome, as final fallback after all system fonts)
-5. **Main font result** (may show as tofu box) if all fallbacks fail
+2. **Selected emoji font** (the first loadable system emoji font, or the embedded Noto Emoji when no system emoji font is found; additional fallback when the CJK fonts lack the glyph)
+3. **Main font result** (may show as tofu box) if all fallbacks fail
 
 ### Behavior Summary
 
-| Character Type | Primary Font | Fallback Chain |
+| Character Type | Primary Font | Complete Order |
 |----------------|--------------|----------------|
-| Regular text | Main font (JetBrains Mono or custom) | None needed |
-| Emoji | Main font | System color emoji fonts, Embedded Noto Emoji |
-| CJK | Main font | All system CJK fonts (tried in order), System emoji fonts, Embedded Noto Emoji, Main font (tofu) |
+| Regular text | Main font (JetBrains Mono or custom) | Main font |
+| Emoji | System emoji font, or embedded Noto Emoji when none loads | System emoji fonts, embedded Noto Emoji (when no system font loads), main font (tofu) |
+| CJK | System CJK fonts | System CJK fonts (each in order), selected emoji font, main font (tofu) |
 
 **Key behaviors**:
 
 - **Font loading**: System fonts are lazy-loaded only when needed (first emoji/CJK character encountered)
 - **Comprehensive fallback**: The library tries multiple font sources in sequence to maximize glyph coverage
 - **CJK character caching**: The library caches which system CJK font has each character for performance optimization
+- **Flag emoji shaping**: Lines containing regional-indicator flag emoji are shaped as whole lines for correct flag rendering; all other text renders character by character
 - **No system fonts needed**: Works out-of-the-box with embedded fonts (JetBrains Mono + Noto Emoji)
 
 ## Installation Options (Optional)
@@ -282,7 +287,7 @@ RUN apt-get update && apt-get install -y fonts-dejavu-core && rm -rf /var/lib/ap
 
 ### Screenshots work without any font installation
 
-The library includes two embedded fonts (JetBrains Mono + Noto Emoji). You should **never** see a "No system monospace font found" error. If you do, please file a bug report.
+The library includes two embedded fonts (JetBrains Mono + Noto Emoji), so screenshots never depend on system font availability. A missing system font only reduces emoji/CJK coverage, it never breaks the screenshot.
 
 ### Emoji appear as monochrome/grayscale instead of color
 
@@ -301,11 +306,9 @@ This is expected behavior when system color emoji fonts are not installed:
 
 This happens when none of the available fonts have the required glyph. The library tries:
 
-1. Main font (JetBrains Mono or custom)
-2. ALL available system CJK fonts (lazy-loaded when first CJK character is encountered)
-3. System emoji fonts (as additional fallback)
-4. Embedded Noto Emoji (as final fallback)
-5. Returns to main font result (shows as tofu box)
+1. ALL available system CJK fonts (lazy-loaded when first CJK character is encountered, tried each in priority order)
+2. The selected emoji font (the first loadable system emoji font, or the embedded Noto Emoji when no system emoji font is found)
+3. Returns to main font result (shows as tofu box)
 
 **To fix this**:
 
@@ -337,19 +340,17 @@ The library uses this priority order for rendering characters:
 
 **Emoji characters**:
 
-1. Custom `font_path` (if it contains emoji glyphs)
-2. System color emoji fonts (loaded in order: see full list above)
-3. Embedded Noto Emoji (monochrome, always available as final fallback)
+1. System color emoji fonts (loaded in order: see full list above, first loadable font is selected)
+2. Embedded Noto Emoji (selected only when no system emoji font can be loaded)
+3. Main font result (may show as tofu box) if the selected emoji font lacks the glyph
 
 **CJK characters**:
 
-1. Custom `font_path` (if it contains CJK glyphs)
-2. System CJK fonts (loads ALL available in priority order: see full list above, tries each until a glyph is found)
-3. System emoji fonts (as additional fallback)
-4. Embedded Noto Emoji (monochrome, as final fallback)
-5. Main font result (may show as tofu box) if all fallbacks fail
+1. System CJK fonts (loads ALL available in priority order: see full list above, tries each until a glyph is found)
+2. Selected emoji font (the first loadable system emoji font, or the embedded Noto Emoji when no system emoji font is found)
+3. Main font result (may show as tofu box) if all fallbacks fail
 
-**Note**: The library caches which system CJK font has each character (character to font index mapping) for performance optimization, avoiding repeated searches through all fonts for the same character.
+**Note**: The main font (custom `font_path` or embedded JetBrains Mono) renders all regular text, but emoji and CJK characters are always routed to the fallback fonts first; the main font's own emoji/CJK glyphs are used only when every fallback fails. The library caches which system CJK font has each character (character to font index mapping) for performance optimization, avoiding repeated searches through all fonts for the same character.
 
 ## Related Documentation
 

@@ -509,6 +509,7 @@ server.start()
 | `api_key` | Option\<String\> | None | API key for authenticating API routes (`/ws`, `/sessions`, `/stats`). Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. When both API key and Basic Auth are configured, either satisfies auth. Static files remain unprotected so the web frontend loads without auth. |
 | `allow_api_key_in_query` | bool | false | Allow API key authentication via query parameter (?api_key=...). Disabled by default because query params are logged by proxies/firewalls, saved in browser history, and leaked via Referer headers. |
 | `allowed_origins` | Option\<Vec\<String\>\> | None | Allowed browser `Origin` values for WebSocket/CORS requests (CSRF defense, SEC-005). `None` applies the default policy: loopback and non-browser clients allowed, remote browser origins rejected. |
+| `kitty_file_media` | FileMediaMode / str | `"temp_only"` | Kitty graphics file-media gate applied to sessions the server creates: `off` \| `temp_only` \| `all` — see [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission) |
 
 **Python Example:**
 ```python
@@ -558,22 +559,22 @@ let server = StreamingServer::with_config(terminal, addr, config);
 ### Technology Stack
 
 **Core Dependencies:**
-- **Next.js** 16.0+ - React framework with App Router (configured for static export)
-- **React** 19.0+ - UI library
-- **TypeScript** 5.9+ - Type safety
-- **Tailwind CSS** 4.1+ - Utility-first styling
+- **Next.js** 16.4+ - React framework with App Router (configured for static export)
+- **React** 19.3+ - UI library
+- **TypeScript** 7 - Type safety
+- **Tailwind CSS** 4.3+ - Utility-first styling
 
 **Protocol Buffers:**
-- **@bufbuild/protobuf** 2.10+ - Protocol Buffers runtime for binary message encoding/decoding
-- **@bufbuild/buf** 1.61+ - Buf CLI for proto code generation
-- **pako** 2.1+ - Zlib compression/decompression for large messages (> 256 bytes)
+- **@bufbuild/protobuf** 2.16+ - Protocol Buffers runtime for binary message encoding/decoding
+- **@bufbuild/buf** 1.73+ - Buf CLI for proto code generation
+- **pako** 3.0+ - Zlib compression/decompression for large messages (> 256 bytes)
 
 **Terminal Components:**
-- **@xterm/xterm** 5.5+ - Terminal emulator core with VT sequences support
-- **@xterm/addon-fit** 0.10+ - Auto-sizing addon for responsive layouts
-- **@xterm/addon-webgl** 0.18+ - Hardware-accelerated WebGL renderer (60 FPS)
-- **@xterm/addon-web-links** 0.11+ - Clickable URLs in terminal output
-- **@xterm/addon-unicode11** 0.8+ - Unicode 11 support for emojis and wide characters
+- **@xterm/xterm** 6.0+ - Terminal emulator core with VT sequences support
+- **@xterm/addon-fit** 0.11+ - Auto-sizing addon for responsive layouts
+- **@xterm/addon-webgl** 0.19+ - Hardware-accelerated WebGL renderer (60 FPS)
+- **@xterm/addon-web-links** 0.12+ - Clickable URLs in terminal output
+- **@xterm/addon-unicode11** 0.9+ - Unicode 11 support for emojis and wide characters
 
 ### Setup and Development
 
@@ -714,7 +715,7 @@ const getResponsiveFontSize = (): number => {
 ```
 
 **React StrictMode Compatibility:**
-The terminal component handles React 18's StrictMode double-invocation pattern by preserving the xterm.js instance across the unmount/remount cycle, preventing duplicate terminals in the DOM.
+The terminal component handles React's StrictMode double-invocation pattern by preserving the xterm.js instance across the unmount/remount cycle, preventing duplicate terminals in the DOM.
 
 ### Theme System
 
@@ -827,6 +828,10 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
 | `screen_cleared` | `include_scrollback: bool` | Screen cleared (ED 2J or ED 3J) |
+| `agent_roster` | `agents: AgentEntry[]` | Full agent roster snapshot (pane-id ascending), pushed once per client connect in mux-backed sessions |
+| `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
+
+`AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none). Both roster messages are always sent — event subscriptions do not filter them.
 
 ### Client Messages (ClientMessage oneof)
 
@@ -856,6 +861,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 > | `cwd_changed` | `cwdchanged` |
 > | `trigger_matched` | `triggermatched` |
 > | `user_var_changed` | `user_var_changed` (explicit rename) |
+> | `shell_integration_event` | `shell_integration` (explicit rename) |
 >
 > Single-word names (`output`, `resize`, `bell`, `pong`) are identical in both
 > forms. The WebSocket wire protocol itself is protobuf — this divergence only
@@ -1575,7 +1581,7 @@ par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
 
 ### Mux-Backed Sessions
 
-A streaming session can mirror a pane owned by the [par-mux daemon](MUX.md) instead of spawning its own shell. The pane keeps exactly one terminal, in the daemon; the streaming session holds a mirror fed by the daemon's screen replay and then its `%output` deltas. A mux-backed session is an ordinary session to the web and mobile frontend, with no new protocol messages.
+A streaming session can mirror a pane owned by the [par-mux daemon](MUX.md) instead of spawning its own shell. The pane keeps exactly one terminal, in the daemon; the streaming session holds a mirror fed by the daemon's screen replay and then its `%output` deltas. A mux-backed session is an ordinary session to the web and mobile frontend. The one protocol addition is agent-roster mirroring: the server streams `agent_roster` (a full snapshot on connect) and `agent_state_changed` (upsert/remove deltas) derived from the daemon's `list-agents` state.
 
 ```bash
 # Build with both features, then point the server at a running daemon
@@ -1977,7 +1983,7 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 **Problem:** Sixel/Kitty graphics not displaying
 
 **Solutions:**
-- Graphics require xterm.js 5.5.0+
+- Graphics require xterm.js 6.0.0+
 - Verify graphics support is enabled in terminal
 - Check browser supports canvas/WebGL
 - See `GRAPHICS_TESTING.md` for detailed troubleshooting

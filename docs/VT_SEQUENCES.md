@@ -310,7 +310,7 @@ VT100/VT220 device information requests.
 - `CSI > q` - XTVERSION - Response: DCS with version info
 - `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) - Response: `CSI ? mode ; state $ y`
 - `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM) - Response: `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x`
-- `CSI 11 t` - Report window state (XTWINOPS) - Response: `CSI 1 t` (always non-iconified)
+- `CSI 11 t` - Report window state (XTWINOPS) - Response: `CSI 1 t` (non-iconified; `CSI 2 t` if the host last set iconified via `set_window_iconified`, non-iconified by default)
 - `CSI 13 t` / `CSI 13 ; 2 t` - Report window position (XTWINOPS) - Response: `CSI 3 ; 0 ; 0 t`
 - `CSI 14 t` - Report pixel size - Response: `CSI 4 ; height ; width t`
 - `CSI 16 t` - Report cell size in pixels - Response: `CSI 6 ; height ; width t`
@@ -402,9 +402,9 @@ ConEmu/Windows Terminal style progress indicator:
 
 - `OSC 9;4;0 ST` - Hide progress bar
 - `OSC 9;4;1;N ST` - Normal progress at N% (0-100)
-- `OSC 9;4;2 ST` - Indeterminate/busy indicator
-- `OSC 9;4;3;N ST` - Warning progress at N%
-- `OSC 9;4;4;N ST` - Error progress at N%
+- `OSC 9;4;2;N ST` - Error progress at N%
+- `OSC 9;4;3 ST` - Indeterminate/busy indicator
+- `OSC 9;4;4;N ST` - Warning/paused progress at N%
 
 Implementation notes: [OSC 9;4 implementation guide](research/OSC-9-4-PROGRESS-BAR-IMPLEMENTATION.md) (dated research, 2026-02-09).
 

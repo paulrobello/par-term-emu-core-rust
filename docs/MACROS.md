@@ -195,6 +195,8 @@ if session:
 
 **Recording with PTY:**
 ```python
+import time
+
 # Create PTY terminal
 pty_term = terminal_core.PtyTerminal(80, 24)
 pty_term.spawn_shell()
@@ -210,8 +212,9 @@ time.sleep(30)  # Record for 30 seconds
 session = pty_term.stop_recording()
 if session:
     print(f"Recorded {session.event_count} events in {session.duration}ms")
-    # Note: RecordingSession is for terminal output capture
-    # For playable macros, use Macro class to construct programmatically
+
+    # Convert the recording into a playable macro directly
+    macro = pty_term.recording_to_macro(session, "Shell Session")
 ```
 
 **RecordingSession Object:**
@@ -291,7 +294,7 @@ if let Some(session) = terminal.stop_recording() {
 
     // `session.title` is a `String` (never None). Convert to a playable macro
     // with the `recording_to_macro` helper, or build one manually:
-    let macro_data = MacroEngine::recording_to_macro(&mut terminal, &session, session.title.clone());
+    let macro_data = MacroEngine::recording_to_macro(&terminal, &session, session.title.clone());
     macro_data.save_yaml("recording.yaml")?;
 }
 ```
@@ -335,6 +338,8 @@ macro.save_yaml("welcome.yaml")
 ## Macro Format
 
 ### YAML Structure
+
+> **Feature note:** In Rust, YAML persistence (`save_yaml` / `load_yaml` / `to_yaml` / `from_yaml`) requires the `macro-yaml` feature, enabled by the `python`, `python-test`, and `streaming-bin` features. The Python `Macro` class always exposes these methods.
 
 **Complete Example:**
 ```yaml
@@ -663,7 +668,7 @@ term.load_macro("demo", macro)
 macros = term.list_macros()
 print(f"Available macros: {macros}")
 
-# Play a macro by name
+# Play a macro by name (an optional speed multiplier is accepted: play_macro("demo", speed=2.0))
 term.play_macro("demo")
 
 # Drive playback: tick_macro() sends key bytes to the PTY and returns
@@ -1065,7 +1070,7 @@ ctrl+z   # Ctrl+Z (SUB, 0x1A) - Suspend
 **Shift Combinations:**
 ```yaml
 shift+tab      # Reverse tab (Shift+Tab)
-shift+a        # Uppercase A (same as 'A')
+shift+a        # Sends 'a' (Shift does not uppercase a character key; use the literal 'A')
 ```
 
 **Alt Combinations:**

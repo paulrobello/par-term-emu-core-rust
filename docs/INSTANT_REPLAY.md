@@ -155,7 +155,7 @@ Input bytes are appended to the most recent snapshot entry's `input_bytes` buffe
 When total memory usage exceeds `max_memory_bytes`:
 - Oldest entries are removed first
 - Always keeps at least one entry (the newest)
-- Eviction happens automatically after `take_snapshot()` and `record_input()`
+- Eviction happens automatically after `take_snapshot()`, `record_input()`, `push_entry()`, and `set_max_memory()`
 
 Adjust memory budget dynamically (Rust API):
 ```rust
@@ -414,7 +414,7 @@ mgr.record_input(bytes);
 ### Limitations
 
 - **No Python bindings for ReplaySession**: Full timeline navigation API is Rust-only (planned for future release)
-- **No persistence**: Snapshots exist only in memory; no serialization/deserialization support yet
+- **No session save/load**: The snapshot types (`TerminalSnapshot`, `GridSnapshot`) serialize via the `serde` feature (par-mux uses this for on-disk pane persistence), but `SnapshotManager` and `ReplaySession` expose no save/load API yet — a session cannot be written to or restored from disk as a whole
 - **No compression**: Input bytes are stored raw; future versions may add compression for long input streams
 - **Clone overhead**: `ReplaySession::new()` clones the entire `SnapshotManager` state (necessary for frozen timelines)
 
@@ -422,7 +422,7 @@ mgr.record_input(bytes);
 
 Planned features:
 - Python bindings for `ReplaySession` (timeline navigation from Python)
-- Snapshot persistence (save/load replay sessions)
+- Session save/load (persist/restore a whole `SnapshotManager` timeline; the snapshot types already serialize behind the `serde` feature)
 - Input stream compression (reduce memory usage for large sessions)
 - Incremental snapshots (delta encoding between snapshots)
 - Metadata-only snapshots (capture timestamps without full state for scrubbing)

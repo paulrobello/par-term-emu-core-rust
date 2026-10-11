@@ -29,13 +29,16 @@ par-term-emu-core-rust/
 ├── pyproject.toml
 ├── proto/                          # Protocol Buffers definitions
 │   └── terminal.proto
+├── crates/                         # Cargo workspace members
+│   ├── par-term-emu-core/          # Terminal core (grid, sequences, PTY, graphics)
+│   └── par-mux/                    # Multiplexer library + daemon binary
 └── src/
     ├── lib.rs
-    ├── grapheme.rs
     ├── bin/
     │   └── streaming_server/main.rs
+    ├── python_bindings/
     ├── streaming/
-    │   ├── proto.rs                # Generated protobuf code
+    │   ├── terminal.pb.rs          # Generated protobuf code
     │   └── (other streaming modules)
     └── (other modules)
 ```
@@ -52,7 +55,7 @@ par-term-emu-core-rust/
 graph TB
     subgraph "Source Code"
         RS[Rust Source<br/>src/lib.rs]
-        BIN[Binary Source<br/>src/bin/streaming_server.rs]
+        BIN[Binary Source<br/>src/bin/streaming_server/main.rs]
         PY[Python Wrapper<br/>python/par_term_emu_core_rust/__init__.py]
     end
 
@@ -85,7 +88,7 @@ graph TB
 
     MAT --> FEAT
     FEAT -->|python feature| WHEEL
-    FEAT -->|streaming feature| RUSTBIN
+    FEAT -->|streaming-bin feature| RUSTBIN
     WHEEL --> NATIVE
     WHEEL --> PYPI
     RUSTBIN --> CARGO_BIN
@@ -126,7 +129,7 @@ See [`Cargo.toml`](../Cargo.toml): `[package]`, `[lib]` (`crate-type = ["cdylib"
 - Minimum Rust version: `rust-version` in `Cargo.toml`
 - Rust edition: 2021
 - Proper PyO3 extension-module feature in `python` feature
-- Feature-based architecture (python, streaming, streaming-bin, rust-only, full, jemalloc)
+- Feature-based architecture (python, python-test, streaming, streaming-bin, mux, ffi, sim, rust-only, full, jemalloc)
 - Aggressive release optimizations (LTO, strip, single codegen-unit)
 - Supports both Python bindings and standalone Rust binaries
 
@@ -149,25 +152,28 @@ See [`Cargo.toml`](../Cargo.toml): `[package]`, `[lib]` (`crate-type = ["cdylib"
 **Windows**: **Enabled**
 - Builds for x86_64 architecture
 - Tests run with PTY tests excluded (Unix-only feature)
-- Uses pytest ignore pattern for PTY test files
+- PTY tests filtered out with pytest's `-k "not pty"`
 - Python versions: 3.12, 3.13, 3.14
 
 #### 5. **GitHub Actions Integration**
 ```yaml
-- uses: PyO3/maturin-action@v1
+- uses: PyO3/maturin-action@v1  # SHA-pinned (v1.51.0) in the workflows
   with:
+    rust-toolchain: 1.99.0
     target: x86_64
-    args: --release --out dist --interpreter python${{ matrix.python-version }}
+    args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
     sccache: 'true'
     manylinux: auto
 ```
 
 **Status**: **Compliant**
-- Uses official `PyO3/maturin-action@v1` (latest stable)
+- Uses official `PyO3/maturin-action`, SHA-pinned to v1.51.0 in every wheel-building workflow
+- Pins the Rust toolchain (`rust-toolchain: 1.99.0`) on each maturin build step
+- Passes `--locked` so a stale `Cargo.lock` fails the build instead of resolving silently
 - Enables sccache for faster builds
 - Proper target specification
 - Correct interpreter selection
-- All workflows use consistent maturin-action version
+- The wheel-building workflows (deployment, publish-testpypi) use the same pinned maturin-action version; CI builds in place with `maturin develop` instead
 
 ## Implemented Improvements
 
@@ -182,16 +188,17 @@ All previously recommended improvements have been **fully implemented** and rema
 # QEMU setup for ARM64 cross-compilation
 - name: Set up QEMU
   if: matrix.target == 'aarch64'
-  uses: docker/setup-qemu-action@v4
+  uses: docker/setup-qemu-action@v4  # SHA-pinned (v4.4.0) in the workflow
   with:
     platforms: arm64
 
 # Build ARM64 wheels
-- uses: PyO3/maturin-action@v1
+- uses: PyO3/maturin-action@v1  # SHA-pinned (v1.51.0) in the workflow
   with:
     target: aarch64
     manylinux: auto
-    args: --release --out dist --interpreter python${{ matrix.python-version }}
+    rust-toolchain: 1.99.0
+    args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
     sccache: 'true'
 ```
 
@@ -225,21 +232,22 @@ manylinux: auto  # Automatically selects best compatibility
 windows:
   name: Windows - Python ${{ matrix.python-version }}
   runs-on: windows-latest
-  timeout-minutes: 15
+  timeout-minutes: 30
   strategy:
     matrix:
       python-version: ["3.12", "3.13", "3.14"]
   steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-python@v6
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install uv
       run: pip install uv
-    - uses: PyO3/maturin-action@v1
+    - uses: PyO3/maturin-action@v1  # SHA-pinned (v1.51.0) in the workflow
       with:
+        rust-toolchain: 1.99.0
         target: x86_64
-        args: --release --out dist --interpreter python${{ matrix.python-version }}
+        args: --release --locked --out dist --interpreter python${{ matrix.python-version }}
         sccache: 'true'
     - name: Create virtual environment
       run: |
@@ -249,7 +257,7 @@ windows:
     - name: Install test dependencies
       run: |
         .venv\Scripts\activate
-        uv pip install pytest pytest-timeout
+        uv pip install pytest pytest-timeout pytest-asyncio
     - name: Run tests (skip PTY tests on Windows)
       run: |
         .venv\Scripts\activate
@@ -281,9 +289,9 @@ windows:
 
 | Platform | Architecture | Status | Test Coverage | Python Versions |
 |----------|--------------|--------|---------------|-----------------|
-| Linux | x86_64 | Built & Tested | Full | 3.12, 3.13, 3.14 |
+| Linux | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 | Linux | aarch64 (ARM64) | Built | Build-only* | 3.12, 3.13, 3.14 |
-| macOS | x86_64 | Built & Tested | Full | 3.12, 3.13, 3.14 |
+| macOS | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 | macOS | universal2 | Built & Tested | x86_64 on CI | 3.12, 3.13, 3.14 |
 | Windows | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 
@@ -291,14 +299,14 @@ windows:
 
 *ARM64 Linux wheels built via QEMU cross-compilation, not directly testable on x86_64 CI runners
 †macOS universal2 wheels tested for x86_64 portion on CI, Apple Silicon portion tested post-release
-‡Windows tests exclude PTY functionality (Unix-only feature)
+‡CI test runs exclude the PTY test files on every platform (Unix-only feature): Linux/macOS ignore the PTY test files, Windows filters with `-k "not pty"`
 
 ### CI/CD Build Matrix Visualization
 
 ```mermaid
 graph TB
     subgraph "GitHub Actions Workflows"
-        CI[CI Workflow<br/>Manual Trigger]
+        CI[CI Workflow<br/>PR Gates + Manual]
         DEPLOY[Deployment Workflow<br/>Manual Trigger]
     end
 
@@ -397,14 +405,17 @@ Keep `manylinux: auto` - it provides:
 ## Distribution Workflow Best Practices
 
 ### Current Workflow
-1. Build wheels for multiple Python versions (3.12, 3.13, 3.14)
-2. Build platform-specific wheels (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64)
-3. Build source distribution (sdist)
-4. QEMU-based ARM64 cross-compilation
-5. Platform-specific test strategies (PTY tests excluded on Windows)
-6. TestPyPI pre-release testing workflow
-7. PyPI trusted publishing (OIDC)
-8. Sigstore signing (in deployment.yml)
+1. Verify version consistency across `Cargo.toml`, `pyproject.toml`, and `__init__.py` (version-check job)
+2. Build wheels for multiple Python versions (3.12, 3.13, 3.14)
+3. Build platform-specific wheels (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64)
+4. Build source distribution (sdist)
+5. QEMU-based ARM64 cross-compilation
+6. Platform-specific test strategies (PTY tests excluded on every platform)
+7. Build standalone binaries: `par-term-streamer` and the `par-mux` daemon (5 targets each), the iOS xcframework, and the web frontend archive
+8. Sign the wheels and sdist with Sigstore; create the GitHub release
+9. Publish the Rust crates to crates.io (derive → par-term-emu-core → par-mux → root)
+10. PyPI trusted publishing (OIDC)
+11. TestPyPI pre-release testing workflow (`publish-testpypi.yml`, manual trigger)
 
 ### Following Official Recommendations
 - Using `maturin build` + PyPI publish pattern
@@ -418,10 +429,10 @@ Our current `[profile.release]` is excellent for distribution:
 
 ```toml
 [profile.release]
-opt-level = 3      # Maximum optimization
-lto = true         # Link-time optimization (smaller, faster)
-codegen-units = 1  # Single codegen unit (better optimization)
-strip = true       # Strip symbols (smaller wheel)
+opt-level = 3           # Maximum optimization
+lto = true              # Link-time optimization (smaller, faster)
+codegen-units = 1       # Single codegen unit (better optimization)
+strip = "debuginfo"     # Strip debug info (smaller wheel)
 ```
 
 **Impact on Wheel Size**:
@@ -465,7 +476,7 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last verified**: 2026-07-09 against 0.45.0 — scores have not been re-verified for later releases
+**Last verified**: 2026-10-11 against 0.60.0 — scores have not been re-verified for later releases
 
 | Category | Score | Notes |
 |----------|-------|-------|

@@ -5,7 +5,7 @@ How to embed the terminal emulator from C, C++, Swift, or any language with a C 
 - **Embedding functions** — `ptec_terminal_abi_version`, `ptec_terminal_create`/`ptec_terminal_free`, `ptec_terminal_feed`, `ptec_terminal_resize`, `ptec_terminal_dirty_ranges`/`ptec_terminal_mark_clean`, `ptec_terminal_damage_generation`/`ptec_terminal_dirty_ranges_since`, `ptec_terminal_scroll_delta_since`/`ptec_terminal_content_dirty_ranges_since`, `ptec_terminal_read_row`/`ptec_terminal_read_scrollback_row`/`ptec_terminal_read_cell_grapheme`/`ptec_terminal_scrollback_count`/`ptec_terminal_scrollback_total_scrolled`, `ptec_terminal_get_cursor`/`ptec_terminal_get_modes`, `ptec_terminal_encode_key`/`ptec_terminal_encode_key_ex`
 - **Snapshot functions** — `ptec_terminal_get_state`/`ptec_terminal_free_state`
 - **Observer functions** — `ptec_terminal_add_observer`/`ptec_terminal_remove_observer`
-- **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `TermKeyOptions`, `TerminalObserverVtable`, `TermEvent`
+- **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermScrollDelta`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `TermKeyOptions`, `TerminalObserverVtable`, `TermEvent`
 
 ## Table of Contents
 - [Overview](#overview)
@@ -442,7 +442,6 @@ void observer_example(void) {
 | `on_environment_event` | `CwdChanged`, `EnvironmentChanged`, `RemoteHostTransition`, `SubShellDetected` |
 | `on_screen_event` | everything else — `TitleChanged`, `BellRang`, `SizeChanged`, `ModeChanged`, `ScreenCleared`, `DirtyRegion`, graphics/hyperlink/transfer events, … |
 | `on_event` | catch-all: every event, in addition to its category callback |
-
 | `on_event_v2` | every event, as a structured `TermEvent` (see [Structured events](#structured-events-on_event_v2)) |
 
 All callbacks are optional (NULL slots are skipped, and a NULL slot's text or JSON is never built).

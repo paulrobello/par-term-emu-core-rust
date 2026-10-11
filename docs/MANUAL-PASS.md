@@ -66,11 +66,12 @@ Per terminal, in passthrough then render mode, check:
   flash names off/on. The label is your prefix `$` title when set (it
   repaints within a beat of the rename), else the pane's own title.
 - **Arrow navigation** (render): prefix+arrows move focus to the pane in
-  that direction (side-by-side and stacked splits); at an edge the status
-  row says so. Shift+arrows swap with the pane in that direction — the two
-  panes exchange cells, focus following the content, a `swapped` flash
-  confirming — and resize mode (prefix `R`) reaches a divider on BOTH axes
-  for panes nested under cross-orientation splits.
+  that direction (side-by-side and stacked splits); at an edge the press
+  is a silent no-op. Shift+arrows swap with the pane in that direction —
+  the two panes exchange cells, focus following the content, a `swapped`
+  flash confirming (an edge flashes `no pane in that direction` instead,
+  never silent) — and resize mode (prefix `R`) reaches a divider on BOTH
+  axes for panes nested under cross-orientation splits.
 - **Workspace picker** (render): prefix `g` opens the ` workspaces ` modal —
   one row per workspace, the active one marked; `/` filters, j/k and arrows
   move, Enter lands on the workspace (its session's window re-seeds), a row

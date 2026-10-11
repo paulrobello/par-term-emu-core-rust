@@ -27,7 +27,7 @@ One entry point for the most common build, test, streaming, and par-mux failures
   - [Render mode shows the wrong background](#render-mode-shows-the-wrong-background)
   - [Pastes arrive wrapped in 200~ and 201~](#pastes-arrive-wrapped-in-200-and-201)
   - [par-mux attach starts a daemon instead of attaching](#par-mux-attach-starts-a-daemon-instead-of-attaching)
-  - [Cannot attach to a daemon named attach](#cannot-attach-to-a-daemon-named-attach)
+  - [Cannot start a daemon named attach](#cannot-start-a-daemon-named-attach)
   - [Terminal stays in the alternate screen after a crash](#terminal-stays-in-the-alternate-screen-after-a-crash)
 - [Related Documentation](#related-documentation)
 
@@ -105,7 +105,7 @@ See [BUILDING.md Running Tests](BUILDING.md#running-tests).
 
 ### Keystrokes have no effect
 
-**Fix:** read the session's `dropped_messages` counter from `curl http://localhost:8099/sessions` before and after typing with a client connected.
+**Fix:** read the session's `dropped_messages` counter from `curl http://localhost:8099/sessions` (the HTTP endpoints, `/sessions` included, are served only when the server runs with `--enable-http`) before and after typing with a client connected.
 
 - **Counter does not move during macro playback:** expected. `--macro-file` serves every viewer read-only.
 - **Counter rises with no PTY writer:** a Rust embedder must call `StreamingServer::set_pty_writer` before clients can type, and a closed session never regains its writer. Reconnect to a live session.
@@ -208,11 +208,11 @@ cargo install --path crates/par-mux --features mux-bin,attach --locked
 
 From 0.58.1, the GitHub release archives are built with `attach`. See [MUX.md](MUX.md#standalone-binaries-github-releases).
 
-### Cannot attach to a daemon named attach
+### Cannot start a daemon named attach
 
-**Cause:** the `attach` subcommand name shadows the positional NAME form, so `par-mux attach attach` cannot address a daemon literally named `attach`.
+**Cause:** the `attach` subcommand name shadows the daemon NAME form, so `par-mux attach` runs the attach client instead of serving a daemon named `attach`.
 
-**Fix:** pass that daemon's socket path, which it prints at startup: `par-mux attach --socket <path>`.
+**Fix:** start it with an explicit socket — `par-mux --socket <path>` — and attach with either spelling: `par-mux attach attach` still reaches it by NAME, or `par-mux attach --socket <path>` takes the socket directly.
 
 ### Terminal stays in the alternate screen after a crash
 

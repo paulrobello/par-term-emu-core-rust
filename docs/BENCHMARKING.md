@@ -6,14 +6,24 @@ two binaries, and how the scheduled benchmark regression gate works (ENH-016).
 ## Running benches locally
 
 ```bash
-make bench         # cargo bench --no-default-features --features rust-only
+make bench         # cargo bench --no-default-features --features rust-only,ffi
 ```
 
-The benches live in `benches/terminal_throughput.rs` and drive the real
-`Terminal::process` pipeline (VTE parser, sequence dispatch, grid writes,
-scrolling, Sixel/Kitty graphics), reporting throughput as MB/s. They build
-without the Python feature, so no `make dev` / maturin step is needed and they
-never run as part of `make checkall`.
+The benches live in `benches/` and are declared as `[[bench]]` targets in
+`Cargo.toml`:
+
+| Target | File | Required features | Measures |
+| --- | --- | --- | --- |
+| `terminal_throughput` | `benches/terminal_throughput.rs` | `rust-only` | The real `Terminal::process` pipeline (VTE parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) across seven groups: `plain_ascii`, `sgr_heavy`, `unicode_wide`, `scroll`, `cursor_addressing`, `sixel_decode`, `kitty_decode` |
+| `ffi_readback` | `benches/ffi_readback.rs` | `rust-only`, `ffi` | Per-frame dirty-readback cost through the C FFI surface |
+| `pty_geometry` | `benches/pty_geometry.rs` | `pty_session` | `Terminal::size()` reads against a live PTY session |
+
+Criterion reports `terminal_throughput` as MiB/s (`Throughput::Bytes`); the
+other two use element counts (frames per second, iterations per second). The
+targets build without the Python feature, so no `make dev` / maturin step is
+needed, and they never run as part of `make checkall`. `make bench` runs
+`terminal_throughput` and `ffi_readback`; `pty_geometry` runs on its own with
+`cargo bench --no-default-features --features pty_session`.
 
 ## The 2x rule: only interleaved A/B comparisons are valid
 
@@ -35,10 +45,10 @@ cargo bench --no-default-features --features rust-only -- --save-baseline my-cha
 cargo bench --no-default-features --features rust-only -- --baseline my-change
 ```
 
-(`--save-baseline` needs the named `--bench terminal_throughput` target when
-cargo would also run the lib's unit-test pass. A criterion binary invoked
-directly needs `--bench`, or it runs one test iteration and exits without
-measuring.)
+(`--save-baseline` needs a named `--bench` target such as
+`--bench terminal_throughput` when cargo would also run the lib's unit-test
+pass. A criterion binary invoked directly needs `--bench`, or it runs one test
+iteration and exits without measuring.)
 
 ## The scheduled bench gate
 
@@ -46,7 +56,8 @@ measuring.)
 `workflow_dispatch`) and is driven by `scripts/bench_gate.sh`:
 
 1. Builds the bench binary for `HEAD` and for the `bench-baseline` git tag in
-   one shared `target/` dir, copying each binary out.
+   one shared `target/` dir, copying each binary out. The gate builds with
+   `--features rust-only`, so the compare covers `terminal_throughput` only.
 2. Runs them in **alternating interleaved rounds** (`BENCH_ROUNDS`, default 3;
    round order flips each round to cancel ordering bias), each round writing
    to its own `CRITERION_HOME`.

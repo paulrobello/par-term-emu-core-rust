@@ -500,6 +500,7 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 | `bold_color` | `Option<(u8,u8,u8)>` | `None` | Bold text color RGB (None = use terminal default) |
 | `use_bold_color` | `bool` | `false` | Use custom bold color instead of bright variant |
 | `bold_brightening` | `bool` | `false` | Bold ANSI colors 0-7 brighten to 8-15 |
+| `iterm2_color_boost` | `bool` | `true` | Apply iTerm2-style Display P3 color-space conversion and brightness boost to foreground colors (Rust API only: `with_iterm2_color_boost`; not a `screenshot()` parameter) |
 | `minimum_contrast` | `f64` | `0.5` | Minimum contrast adjustment (0.0-1.0, iTerm2-compatible) |
 | `faint_text_alpha` | `f32` | `0.5` | Alpha multiplier for faint/dim text (0.0-1.0) |
 
@@ -514,7 +515,7 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 - `0.5` - 50% opacity (default, matches iTerm2)
 - `1.0` - No dimming (full opacity)
 
-**Note:** In ScreenshotConfig, `use_bold_color` and `bold_brightening` are boolean values (not `Option<bool>`). When not specified in the screenshot API, they use the config defaults (false for both).
+**Note:** In ScreenshotConfig, `use_bold_color` and `bold_brightening` are boolean values (not `Option<bool>`). When not specified in the screenshot API, `use_bold_color` uses the config default (`false`), while `bold_brightening` falls back to the terminal's current bold-brightening setting (`set_bold_brightening()`, default `true`).
 
 ### Python API Examples
 
@@ -534,7 +535,8 @@ jpg_bytes = term.screenshot(format="jpeg", quality=85)
 svg_bytes = term.screenshot(format="svg", font_path="/path/to/font.ttf", font_size=16.0)
 
 # Screenshot with theme settings
-# Note: bold_brightening and use_bold_color are Optional[bool], defaulting to False when not specified
+# Note: bold_brightening and use_bold_color are Optional[bool]; use_bold_color
+# defaults to False when omitted, bold_brightening to the terminal's setting
 png_bytes = term.screenshot(
     bold_brightening=True,
     use_bold_color=True,

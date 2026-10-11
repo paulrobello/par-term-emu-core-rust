@@ -50,20 +50,20 @@ The terminal implementation uses a modular structure:
 **Primary directory:** `crates/par-term-emu-core/src/terminal/`
 
 **Sequence handlers** (in `crates/par-term-emu-core/src/terminal/sequences/`):
-- `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
+- `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for color_stack, cursor, edit, erase, keyboard, mode, report, scroll, style, window
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
 - `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
-- `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
+- `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` - DCS sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
 
 **Core components:**
-- `crates/par-term-emu-core/src/terminal/mod.rs` - Terminal core, VTE callbacks, APC to DCS conversion
+- `crates/par-term-emu-core/src/terminal/mod.rs` - Terminal core, VTE callbacks, Kitty APC pre-filter (`filter_apc_and_advance()`)
 - `crates/par-term-emu-core/src/terminal/write.rs` - Character writing and text handling
 - `crates/par-term-emu-core/src/grid/mod.rs` - Screen buffer and cell grid
 - `crates/par-term-emu-core/src/conformance_level.rs` - VT conformance level management
 
 **Graphics support** (in `crates/par-term-emu-core/src/graphics/`):
 - `mod.rs` - Unified graphics store and protocol-agnostic representation
-- `kitty.rs` - Kitty graphics protocol parser (APC G)
+- `kitty/` - Kitty graphics protocol parser (APC G), split into `mod.rs` (types and `KittyParser`), `parse.rs` (payload parsing), `dispatch.rs` (command dispatch), `decode.rs` (image decoding)
 - `iterm.rs` - iTerm2 inline images parser (OSC 1337)
 - `animation.rs` - Animation frame and state management
 - `placeholder.rs` - Unicode placeholder support for Kitty virtual placements
@@ -269,7 +269,7 @@ CSI 39 m    - Default foreground
 CSI 49 m    - Default background
 ```
 
-**Implementation:** Extended color parsing in `csi_dispatch()`
+**Implementation:** Extended color parsing in `parse_extended_color()` (`crates/par-term-emu-core/src/terminal/sequences/csi/style.rs`)
 
 **Color Parsing Notes:**
 - Supports both colon (`:`) and semicolon (`;`) separators for sub-parameters
@@ -378,15 +378,15 @@ CSI 49 m    - Default background
 - When protection is enabled (Ps=1), subsequently printed characters are marked as "guarded"
 - DECSERA (Selective Erase Rectangular Area) respects the guarded flag and skips protected cells
 - DECERA (Erase Rectangular Area) does NOT respect protection and erases all cells
-- The guarded flag is stored per-cell in the `CellFlags.guarded` field
+- The guarded flag is stored per-cell as the `GUARDED` bit in `CellFlags` (`crates/par-term-emu-core/src/cell.rs`, accessed via `CellFlags::guarded()`)
 - Commonly used for protecting status lines or menu headers from accidental erasure
 
 **Implementation:**
-- DECSCA handler in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` (CSI ? Ps " q)
+- DECSCA handler in `crates/par-term-emu-core/src/terminal/sequences/csi/erase.rs` (CSI ? Ps " q)
 - SPA/EPA handlers in `crates/par-term-emu-core/src/terminal/sequences/esc.rs` (ESC V/W)
 - Character printing applies guarded flag in `crates/par-term-emu-core/src/terminal/write.rs`
-- Grid selective erase method `erase_rectangle()` in `crates/par-term-emu-core/src/grid/mod.rs`
-- Grid unconditional erase method `erase_rectangle_unconditional()` in `crates/par-term-emu-core/src/grid/mod.rs`
+- Selective erase (DECSERA) is implemented inline in `handle_decsera()` (`crates/par-term-emu-core/src/terminal/sequences/csi/erase.rs`) — it resets only unguarded cells with current-background erase (BCE)
+- Unconditional erase uses `Grid::erase_rectangle_unconditional()` in `crates/par-term-emu-core/src/grid/rect.rs`
 
 **Sequence Examples:**
 ```text
@@ -483,7 +483,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 **Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
 **Supported Modes:**
-- DEC private (`CSI ? mode $ p`): 1, 6, 7, 9, 25, 47, 80, 1000, 1002, 1003, 1047, 1048, 1049, 2004, 2026
+- DEC private (`CSI ? mode $ p`): 1, 6, 7, 9, 25, 47, 69, 80, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1047, 1048, 1049, 2004, 2026
 - ANSI (`CSI mode $ p`): 4, 20
 
 All other mode numbers return state `0` (not recognized).
@@ -582,7 +582,7 @@ All other mode numbers return state `0` (not recognized).
 - Default conformance level is VT520
 
 **Implementation:**
-- Handler in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
+- Handler in `crates/par-term-emu-core/src/terminal/sequences/csi/report.rs` (`handle_csi_report()`, the `"`-intermediate arm)
 - Conformance level types in `crates/par-term-emu-core/src/conformance_level.rs`
 
 **Example:**
@@ -610,7 +610,7 @@ CSI 65 " p        # Set to VT520 (long form)
 - Values above 8 are clamped to 8
 - Default volume is 4 (moderate)
 
-**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
+**Implementation:** `handle_csi_cursor()` in `crates/par-term-emu-core/src/terminal/sequences/csi/cursor.rs` (dispatched from `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`)
 
 **Example:**
 ```text
@@ -636,7 +636,7 @@ CSI 8 SP t    # Set to maximum volume
 - Default volume is 4 (moderate)
 - Independent from warning bell volume
 
-**Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
+**Implementation:** `handle_csi_cursor()` in `crates/par-term-emu-core/src/terminal/sequences/csi/cursor.rs` (dispatched from `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`)
 
 **Example:**
 ```text
@@ -788,7 +788,7 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 `OSC 9 ; 4 ; state [; progress] ST` - ConEmu/Windows Terminal style progress reporting
 
 **Implementation:**
-- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` (`handle_osc9_progress()`)
+- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/notify.rs` (`handle_osc9_progress()`, dispatched from `osc_dispatch_impl()` in `osc/mod.rs`)
 - Progress types in `crates/par-term-emu-core/src/terminal/progress.rs`
 
 **States:**
@@ -820,7 +820,7 @@ OSC 9 ; 4 ; 4 ; 75 ST    # Show warning state at 75%
 `OSC 934 ; action ; id [; key=value ...] ST` - Named progress bar protocol for concurrent progress tracking
 
 **Implementation:**
-- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
+- OSC handler in `crates/par-term-emu-core/src/terminal/sequences/osc/notify.rs` (`handle_osc934()`)
 - Named progress types in `crates/par-term-emu-core/src/terminal/progress.rs` (`NamedProgressBar`, `ProgressBarCommand`)
 
 **Actions:**
@@ -1026,7 +1026,7 @@ is distinguishable from a sequence never sent.
 
 `OSC 1337 ; SetUserVar=<name>=<base64_value> ST`
 
-**Implementation:** `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` (handle_set_user_var)
+**Implementation:** `handle_set_user_var()` in `crates/par-term-emu-core/src/terminal/sequences/osc/iterm.rs` (storage in `BadgeState::set_user_var()`, `crates/par-term-emu-core/src/terminal/mod.rs`)
 
 Shell integration scripts use this sequence to report session metadata such as hostname, username, and current directory. The value is base64-encoded UTF-8 text.
 
@@ -1108,12 +1108,11 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 `APC G <key>=<value>,<key>=<value>;<base64-data> ST`
 
-**Note:** The terminal converts APC sequences (`ESC _`) to DCS sequences (`ESC P`) internally since VTE ignores APC.
+**Note:** The terminal intercepts Kitty APC sequences (`ESC _ G ... ST`) with a byte-level pre-filter before the VTE parser, since vte 0.15 does not deliver APC payload bytes to the `Perform` trait.
 
 **Implementation:**
-- APC to DCS conversion in `crates/par-term-emu-core/src/terminal/mod.rs`
-- DCS handler in `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` (action 'G')
-- Kitty parser in `crates/par-term-emu-core/src/graphics/kitty/`
+- Kitty APC pre-filter in `crates/par-term-emu-core/src/terminal/apc_filter.rs`, driven by `filter_apc_and_advance()` in `crates/par-term-emu-core/src/terminal/mod.rs`
+- Kitty parser in `crates/par-term-emu-core/src/graphics/kitty/` (payload parsing, command dispatch, image decoding)
 - Graphics store in `crates/par-term-emu-core/src/graphics/mod.rs`
 
 #### Actions
@@ -1233,7 +1232,7 @@ APC G i=<id>;OK ST
 
 APC (Application Program Command) sequences follow: `ESC _ ... ESC \`
 
-**Implementation Note:** The VTE parser library ignores APC sequences, so the terminal converts them to DCS sequences internally before parsing. This conversion happens in `crates/par-term-emu-core/src/terminal/mod.rs`.
+**Implementation Note:** The vte 0.15 parser library drops APC payload bytes without invoking the `Perform` trait, so Kitty graphics APC sequences are intercepted by a byte-level pre-filter before the byte stream reaches the parser. The filter lives in `crates/par-term-emu-core/src/terminal/apc_filter.rs` and is driven by `filter_apc_and_advance()` in `crates/par-term-emu-core/src/terminal/mod.rs`.
 
 ### Kitty Graphics Protocol
 
@@ -1244,21 +1243,22 @@ See [Kitty Graphics Protocol](#kitty-graphics-protocol-apc-g) in the DCS Sequenc
 APC G <key>=<value>,<key>=<value>;<base64-data> ST
 ```
 
-**Internal Conversion:**
-- `ESC _` → `ESC P` (APC start to DCS start)
-- Payload remains unchanged
-- `ST` terminator handled by VTE
+**Interception:**
+- Only `ESC _ G ...` (Kitty TGP) sequences are intercepted and never reach vte
+- Each completed payload is forwarded to `KittyParser::parse_chunk`; when the final chunk arrives (no `m=1`), `build_graphic` commits the result into `GraphicsStore`
+- The pre-filter itself recognizes both ST terminators (`ESC \` and the 8-bit `0x9c`)
+- All other APC sequences (e.g. `ESC _ X ...`) pass through unchanged and are silently swallowed by vte
+- A payload that exceeds the 96 MiB wire cap (`MAX_KITTY_APC_BYTES`, SEC-116) is discarded whole
 
-**Why This Conversion?**
-- VTE parser library only processes DCS sequences
-- APC sequences are ignored by default
+**Why This Filter?**
+- The vte parser library does not expose APC payloads to `Perform`
 - Kitty graphics protocol specifies APC format
-- Conversion enables Kitty compatibility without modifying VTE
+- Intercepting the bytes lets Kitty compatibility work without modifying vte
 
 **Affected Commands:**
 - All Kitty graphics commands (`APC G ...`)
 
-**Implementation:** `crates/par-term-emu-core/src/terminal/mod.rs` (process method, APC to DCS conversion)
+**Implementation:** `crates/par-term-emu-core/src/terminal/apc_filter.rs` (state machine), driven by `filter_apc_and_advance()` in `crates/par-term-emu-core/src/terminal/mod.rs`
 
 ---
 

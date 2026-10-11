@@ -152,15 +152,15 @@ The screenshot module in `crates/par-term-emu-core/src/screenshot/` uses pure Ru
 Debug logging in `crates/par-term-emu-core/src/debug.rs` handles platform differences transparently:
 
 **Log File Locations:**
-- **Unix/macOS**: `/tmp/par_term_emu_core_rust_debug_rust.log`
-- **Windows**: `%TEMP%\par_term_emu_core_rust_debug_rust.log`
+
+All platforms write to the system temp directory (`std::env::temp_dir()`): `/tmp` on Linux, the per-user temp directory on macOS, and `%TEMP%` on Windows. The filename carries the process ID so concurrent emulator processes do not truncate each other's logs: `par_term_emu_core_rust_debug_rust_{pid}.log`.
 
 Implementation:
 ```rust
-#[cfg(unix)]
-let log_path = std::path::PathBuf::from("/tmp/par_term_emu_core_rust_debug_rust.log");
-#[cfg(windows)]
-let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log");
+let log_path = std::env::temp_dir().join(format!(
+    "par_term_emu_core_rust_debug_rust_{}.log",
+    std::process::id()
+));
 ```
 
 **Control:**
@@ -213,7 +213,7 @@ let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log"
 - Excellent out-of-the-box emoji rendering with Apple Color Emoji
 - Wide range of CJK fonts pre-installed (Chinese, Japanese, Korean)
 - May require Full Disk Access permission for some system fonts in certain security contexts
-- PTY implementation uses Unix domain sockets with SIGWINCH for resize signals
+- PTY implementation uses traditional Unix PTYs with SIGWINCH for resize signals
 
 ### Linux
 
@@ -259,7 +259,7 @@ par-term-emu-core-rust is built entirely in Rust with no C dependencies required
 - Consistent behavior everywhere
 
 **Required Tools:**
-- **Rust**: Version 1.98 or later (minimum specified in `Cargo.toml: rust-version = "1.98"`)
+- **Rust**: Version 1.99 or later (minimum specified in `Cargo.toml: rust-version = "1.99"`)
 - **Cargo**: Comes with Rust
 - **Python**: 3.12+ for Python bindings (if building with `python` feature)
 - **uv**: Python package manager for dependency management (recommended)
@@ -399,8 +399,12 @@ Run Rust tests on all platforms:
 # Basic test suite (library tests only, no default features)
 cargo test --lib --no-default-features --features pyo3/auto-initialize
 
-# All tests including integration tests
-cargo test
+# All root-crate tests including integration tests
+cargo test --no-default-features --features pyo3/auto-initialize,ffi
+
+# Workspace members run explicitly (a root `cargo test` does not include them)
+cargo test -p par-term-emu-core
+cargo test -p par-mux --features attach
 
 # Platform-specific tests use cfg guards
 #[cfg(unix)]
@@ -541,6 +545,7 @@ fn test_windows_conpty() {
 - Test on your development platform before committing
 - If possible, test on at least two platforms (e.g., macOS + Linux)
 - Use VMs or WSL for testing other platforms locally
+- Windows-only compile and PTY checks can run on a local Parallels Windows 11 VM; the step-by-step playbook lives in the repository `CLAUDE.md` ("Local Windows VM (compile checks)")
 
 **CI/CD Testing:**
 - CI runs on every pull request (Linux-only test and mux legs, lint, FFI drift) and on manual `workflow_dispatch` (full Linux, macOS, and Windows matrix)
@@ -583,46 +588,56 @@ The project uses comprehensive cross-platform CI via GitHub Actions (`.github/wo
 ```yaml
 strategy:
   matrix:
-    os: [ubuntu-latest, macos-latest, windows-latest]
-    python-version: ["3.12", "3.13", "3.14"]
+    os: ${{ fromJSON(needs.version-check.outputs.os-matrix) }}
+    python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.12", "3.13", "3.14"]') }}
 ```
 
-This creates **9 test combinations** (3 platforms × 3 Python versions).
+A full manual dispatch (`workflow_dispatch` with the default `os-scope: all`) creates **9 test combinations** (3 platforms × 3 Python versions). A `pull_request` runs the Linux/Python 3.14 leg only.
 
 ### CI Pipeline Jobs
 
-**1. Test Job**
-- Runs on all platforms (Linux, macOS, Windows)
-- Tests all Python versions (3.12, 3.13, 3.14)
-- 15-minute timeout per job
-- Executes:
-  - Rust library tests: `cargo test --lib`
-  - Python tests: `pytest tests/` (with 5-second per-test timeout)
+**0. Version Check Job**
+- Runs on Ubuntu on every trigger
+- Verifies the versions across `Cargo.toml`, `pyproject.toml`, and `python/par_term_emu_core_rust/__init__.py` match, plus the derive-crate and core-member lockstep pins
+- Resolves the runner scope for the test and mux matrices
 
-**2. Lint Job**
+**1. Test Job**
+- On `pull_request`: `ubuntu-latest` with Python 3.14 only; on manual dispatch: the full platform/Python matrix (see Test Matrix above)
+- 30-minute timeout per job (Windows legs run 15-25 minutes cold)
+- Executes:
+  - Rust library tests across the root crate (with `ffi`, `streaming`, and `python-test` feature sets) and the `par-term-emu-core` member
+  - Python tests: `pytest tests/` (5-second per-test timeout with `--timeout-method=thread`, PTY-family files excluded — see Exclusions below)
+
+**2. Mux Test Job**
+- Same runner matrix as the Test job; 20-minute timeout
+- Runs the par-mux suites serially under `cargo nextest run --profile ci -p par-mux --features attach`, plus sim dependency isolation, mux-re-export, core-member, and mux-backed streaming runs
+
+**3. Lint Job**
 - Runs on Ubuntu only (linting is platform-independent)
 - Checks:
-  - Rust formatting: `cargo fmt -- --check`
-  - Rust linting: `cargo clippy --all-targets --features python,streaming -- -D warnings`
+  - Rust formatting: `cargo fmt --all -- --check`
+  - Rust linting: `cargo clippy` sweeps over the root crate (`--features python,streaming,mux,mux-bin,serde,streaming-bin,ffi,attach`) and the `par-term-emu-core` and `par-mux` members with their feature sets, all with `-D warnings`
   - Python formatting: `ruff format --check`
   - Python linting: `ruff check`
   - Python type checking: `pyright`
 
-**3. Build Job**
-- Runs on all platforms (Linux, macOS, Windows)
-- Builds Python wheels using maturin
+**4. Build Job (wheels)**
+- Manual dispatch with `os-scope: all` only
+- Builds Python wheels using maturin on all three platforms
 - 15-minute timeout per job
 - Uploads wheel artifacts for each platform
+
+The remaining jobs — `web_term/` drift gate, feature matrix, and the iOS xcframework build — also run only on a full manual dispatch.
 
 ### Platform-Specific CI Steps
 
 **All Platforms:**
 ```yaml
 - name: Build Python package
-  run: uv run maturin develop --release
+  run: uv run maturin develop --release --locked
 
 - name: Run Rust tests
-  run: cargo test --lib --no-default-features --features pyo3/auto-initialize
+  run: cargo test --locked --lib --no-default-features --features pyo3/auto-initialize,ffi
 ```
 
 **Windows Only:**
@@ -638,26 +653,26 @@ Linux uses `timeout` wrapper:
 ```yaml
 - name: Run Python tests (Linux)
   if: runner.os == 'Linux'
-  run: timeout 300 uv run pytest tests/ -v --timeout=5
+  run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread
 ```
 
 macOS and Windows run pytest directly:
 ```yaml
 - name: Run Python tests (macOS)
   if: runner.os == 'macOS'
-  run: uv run pytest tests/ -v --timeout=5
+  run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread
 ```
 
 ### CI Best Practices
 
 **Timeouts:**
-- Job timeout: 15 minutes
-- Individual test timeout: 5 seconds
+- Job timeout: 30 minutes (Test), 20 minutes (Mux tests), 15 minutes (Lint, wheels)
+- Individual test timeout: 5 seconds for Python tests; Rust mux tests run serially under the nextest `ci` profile with a per-test ceiling
 - Prevents hanging tests from blocking CI
 
 **Exclusions:**
-- PTY tests excluded in CI: `test_pty.py`, `test_ioctl_size.py`, `test_pty_resize_sigwinch.py`, `test_nested_shell_resize.py`
-- These are excluded due to platform-specific behavior and CI environment limitations
+- PTY tests excluded in CI: `test_pty.py`, `test_ioctl_size.py`, `test_pty_resize_sigwinch.py`, `test_nested_shell_resize.py`, `test_pty_screenshot.py`
+- These are excluded due to platform-specific behavior and CI environment limitations (GitHub runners hang on PTY I/O)
 - Graphics tests may be excluded if they require display access
 
 **Test Execution:**

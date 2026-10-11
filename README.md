@@ -18,11 +18,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 > **Note:** This section covers unreleased work on `main` and the last three
 > releases. The complete release history is in [CHANGELOG.md](CHANGELOG.md).
 
+Version 0.60.0 makes **par-mux own its agent-state integrations**: `par-mux --install-skill` installs the par-mux agent skill from an `include_str!` copy embedded in the binary — always overwriting, so the skill can never drift from the CLI it documents — and the one-shot flags `--install-agent-hooks` / `--uninstall-agent-hooks` / `--agent-hooks-status` / `--install-agent-extensions` / `--uninstall-agent-extensions` (plus `--heal-agent-hooks`) move the claude/codex/grok session hooks and pi/omp extensions from the par-term config directory into par-mux's own. Every flag runs without starting or contacting a daemon, hook writes merge into agent settings without disturbing user bytes, and every hook failure is swallowed so an agent session start never blocks. par-term invokes these flags after installing par-mux instead of embedding its own copies. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
 Version 0.59.0 hardens **par-mux passthrough** (attach in any terminal, no TUI): the status refresh adopts the single-round-trip `client-snapshot` read (`refresh_status`) with automatic fallback to the legacy per-fact queries against older daemons, the attach client probes the host's real cell pixel size with XTWINOPS `CSI 16 t` so panes are sized for the actual grid instead of the 10x20 default, and two byte-loss bugs on `O_NONBLOCK` host ttys are fixed — a blocked stdout write is retried until the terminal takes every byte instead of dropping the rest of the chunk, and the stdin reader no longer ends the session at the first idle poll. Render mode's no-gutter scroll cue no longer paints outside its pane, and scheduled fuzz runs stop OOMing at the RSS limit (bounded ASAN quarantine). The standalone `par-term-emu-core` and `par-mux` crates are now published on crates.io alongside the root crate (the publish train first ran with 0.58.1): install the daemon with `cargo install par-mux --features mux-bin,attach`. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 Version 0.58.1 ships the **par-mux `attach` client** behind the new `attach` cargo feature (off by default; `--features mux-bin,attach` builds the daemon with the subcommand): `par-mux attach` passthrough puts one pane fullscreen in any terminal (byte pump, `C-b` prefix router, status row), `--mode render` is a full ratatui TUI — per-pane layout-aware rendering with dividers and focus highlight, DECCKM-aware key re-encoding, pane-relative mouse forwarding, client-side wheel scrollback, a status bar with sessions/windows/agent-roster chips, and `prefix-[` keyboard scrollback. Supporting daemon work: `list-windows/-panes -t` targeted tree queries with a `targeted` capability token, a `-t`-less `refresh-client -C/-p` size report, and a `PtySession` reader fix so quiet child deaths advance the generation counter and a dead pty can no longer spin the reader. It also ships **mux workspaces** — a first-class level above sessions (daemon > workspace > session > window > pane): `new-workspace`/`list-workspaces`/`select-workspace`/`rename-workspace`/`kill-workspace`, workspace-targeted `new-session -t`/`list-sessions -t`, the argument-less `%workspaces-changed` broadcast, and persistence format **v3** — plus the split into the `par-term-emu-core` and `par-mux` crates (every `par_term_emu_core_rust::…` re-export path unchanged) and the per-pane chrome declaration (`refresh-client -I`) so render-mode panes no longer lose a TUI's bottom row under the pane-border ring. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
-
-Version 0.58.0 is a **minor release with breaking changes for C/Swift and Rust embedders**: the C FFI lands its **v4 ABI revision** — every export is `ptec_`-prefixed, `SharedCell` colors resolve through the live palette with `ptec_terminal_read_cell_grapheme` for full graphemes, and observers receive structured `on_event_v2` events — plus **v5 scroll-aware damage** (ENH-038) so renderers blit on scroll and redraw only changed rows. Python per-cell colors follow the palette and OSC 10/11 defaults too (ARC-101), and the deprecated bridges are gone (`poll_events_legacy`, `Grid::erase_rectangle`). par-mux gains **held-dead panes that survive a daemon restart** (ARC-114), **`list-commands` discovery with held-state replay on registration** (ENH-037), **`pane-exited-replay`**, **`clear-history`**, and opt-in **per-pane hook-only endpoints** (ENH-039). Feature flags split (**`mux-bin`**, **`macro-yaml`**), `Cargo.lock` is committed and release builds are `--locked` (ARC-107), core diagnostics reach the `log` facade (ARC-111), the streaming server is load-hardened (QA-184/191/192/198), and a large audit batch lands security and robustness fixes (SEC-125–SEC-134). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 Every other release is documented in [CHANGELOG.md](CHANGELOG.md).
 
@@ -183,7 +183,7 @@ Wheels ship with the streaming server compiled in (`StreamingServer` works out o
 
 ### From Source
 
-Requires Rust 1.98+ and Python 3.12+:
+Requires Rust 1.99+ and Python 3.12+:
 
 ```bash
 # Install maturin (build tool)
@@ -640,7 +640,7 @@ A full-featured TUI (Text User Interface) application is available in the sister
 
 ## Technology
 
-- **Rust** (1.98+) - Core library implementation
+- **Rust** (1.99+) - Core library implementation
 - **Python** (3.12+) - Python bindings
 - **PyO3** - Zero-cost Python/Rust bindings
 - **VTE** - ANSI sequence parsing

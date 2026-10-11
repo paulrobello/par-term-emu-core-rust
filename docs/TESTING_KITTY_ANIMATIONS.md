@@ -162,7 +162,8 @@ export DEBUG_LEVEL=4
 cd ../par-term && cargo run
 
 # In another terminal, monitor logs
-tail -f /tmp/par_term_emu_core_rust_debug_rust.log
+# The log file lives in the system temp dir and carries a PID suffix
+tail -f "${TMPDIR:-/tmp}"/par_term_emu_core_rust_debug_rust_*.log
 ```
 
 **Expected log entries:**
@@ -321,18 +322,19 @@ export DEBUG_LEVEL=4
 cd ../par-term && cargo run
 
 # In another terminal, monitor logs
-tail -f /tmp/par_term_emu_core_rust_debug_rust.log
+# The log file lives in the system temp dir and carries a PID suffix
+tail -f "${TMPDIR:-/tmp}"/par_term_emu_core_rust_debug_rust_*.log
 ```
 
 **Expected log output:**
 ```text
-KITTY: Parsed animation control: s=3 -> Some(EnableLooping)
-ANIMATION: Adding frame 1 to image_id=42 (delay=500ms, size=100x100)
-ANIMATION: Frame 1 added. Total frames in animation: 1
-GRAPHICS: Added animation frame 1 to image_id=42 (total frames: 1)
-ANIMATION: Applying control to image_id=42: EnableLooping (current state=Stopped, frame=1/1)
-ANIMATION: After control: image_id=42 state=Playing, frame=1/1
-ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
+[KITTY] Parsed animation control: s=3 -> Some(EnableLooping)
+[ANIMATION] Adding frame 1 to image_id=42 (delay=500ms, size=100x100)
+[ANIMATION] Frame 1 added. Total frames in animation: 1
+[GRAPHICS] Added animation frame 1 to image_id=42 (total frames: 1)
+[ANIMATION] Applying control to image_id=42: EnableLooping (current state=Stopped, frame=1/1)
+[ANIMATION] After control: image_id=42 state=Playing, frame=1/1
+[ANIMATION] image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501.2ms)
 ```
 
 ### Common Issues
@@ -395,7 +397,7 @@ print(f"Restored {count} graphics")
 ### Serialized Animation Data
 
 The serialization captures:
-- All animation frames with pixel data (base64-encoded RGBA)
+- All animation frames with pixel data (inline base64 RGBA, or a file-path reference)
 - Frame metadata (delay, composition mode, offsets)
 - Current playback state (Playing, Paused, Stopped)
 - Current frame number
@@ -415,6 +417,7 @@ The serialization captures:
 - [`crates/par-term-emu-core/src/graphics/mod.rs`](../crates/par-term-emu-core/src/graphics/mod.rs) - Graphics store with `update_animations()` method
 - [`crates/par-term-emu-core/src/graphics/kitty/`](../crates/par-term-emu-core/src/graphics/kitty/mod.rs) - Kitty protocol parser with animation support
 - [`crates/par-term-emu-core/src/graphics/serialization.rs`](../crates/par-term-emu-core/src/graphics/serialization.rs) - Animation serialization for session persistence
+- [`src/python_bindings/common.rs`](../src/python_bindings/common.rs) - `impl_terminal_exports!` macro providing `update_animations()` to `Terminal` and `PtyTerminal`
 - [`scripts/test_kitty_animation.py`](../scripts/test_kitty_animation.py) - Automated animation test script
 - [`src/python_bindings/terminal/mod.rs`](../src/python_bindings/terminal/mod.rs) - Python bindings for terminal animation updates
 - [`src/python_bindings/pty.rs`](../src/python_bindings/pty.rs) - Python bindings for PTY animation updates

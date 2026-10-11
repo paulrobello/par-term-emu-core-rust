@@ -74,6 +74,7 @@ Screen content and metadata changes:
 | `HyperlinkAdded` | Hyperlink detected |
 | `DirtyRegion` | Screen region needs redraw |
 | `ScreenCleared` | Screen cleared via ED (ESC[2J or ESC[3J) |
+| `InlineImageDropped` | An OSC 1337 inline image was dropped (malformed, rejected, or failed to decode) |
 | `UserVarChanged` | User variable set via OSC 1337 |
 | `ProgressBarChanged` | Progress bar updated via OSC 934 |
 | `BadgeChanged` | Badge text changed via OSC 1337 |
@@ -356,8 +357,11 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 | `file_transfer_completed` | `FileTransferCompleted` | Screen |
 | `file_transfer_failed` | `FileTransferFailed` | Screen |
 | `upload_requested` | `UploadRequested` | Screen |
+| `inline_image_dropped` | `InlineImageDropped` | Screen |
 
 ### Event Fields
+
+Every event dict begins with `"type"`, followed by the event's fields. Values use native Python types: `str` for text, `int` for numeric fields, and `bool` for flags. Optional fields are always present; the value is `None` when unset.
 
 #### Bell Event
 
@@ -365,7 +369,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 {
     "type": "bell",
     "bell_type": "visual" | "warning" | "margin",
-    "volume": "5",  # Only for warning/margin bells (0-8)
+    "volume": 5,  # Only present for warning/margin bells (0-8)
 }
 ```
 
@@ -378,13 +382,13 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 #### Size Changed
 
 ```python
-{"type": "size_changed", "cols": "120", "rows": "40"}
+{"type": "size_changed", "cols": 120, "rows": 40}
 ```
 
 #### Mode Changed
 
 ```python
-{"type": "mode_changed", "mode": "DECCKM", "enabled": "true"}
+{"type": "mode_changed", "mode": "DECCKM", "enabled": True}
 ```
 
 #### CWD Changed
@@ -393,10 +397,10 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 {
     "type": "cwd_changed",
     "new_cwd": "/home/user/project",
-    "old_cwd": "/home/user",  # Optional
-    "hostname": "server.example.com",  # Optional
-    "username": "user",  # Optional
-    "timestamp": "1708400000000",
+    "old_cwd": "/home/user",  # None if unknown
+    "hostname": "server.example.com",  # None if not provided
+    "username": "user",  # None if not provided
+    "timestamp": 1708400000000,
 }
 ```
 
@@ -409,10 +413,10 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     | "command_start"
     | "command_executed"
     | "command_finished",
-    "command": "ls -la",  # Optional
-    "exit_code": "0",  # Optional
-    "timestamp": "1708400000000",  # Optional
-    "cursor_line": "42",  # Optional
+    "command": "ls -la",  # None if not provided
+    "exit_code": 0,  # None until command_finished
+    "timestamp": 1708400000000,  # None if not provided
+    "cursor_line": 42,  # None if not provided
 }
 ```
 
@@ -422,23 +426,23 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 # Zone Opened
 {
     "type": "zone_opened",
-    "zone_id": "1",
+    "zone_id": 1,
     "zone_type": "prompt" | "command" | "output",
-    "abs_row_start": "10",
+    "abs_row_start": 10,
 }
 
 # Zone Closed
 {
     "type": "zone_closed",
-    "zone_id": "1",
+    "zone_id": 1,
     "zone_type": "output",
-    "abs_row_start": "10",
-    "abs_row_end": "25",
-    "exit_code": "0",  # Optional
+    "abs_row_start": 10,
+    "abs_row_end": 25,
+    "exit_code": 0,  # None if not reported
 }
 
 # Zone Scrolled Out
-{"type": "zone_scrolled_out", "zone_id": "1", "zone_type": "command"}
+{"type": "zone_scrolled_out", "zone_id": 1, "zone_type": "command"}
 ```
 
 #### File Transfer Events
@@ -447,30 +451,30 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 # Transfer Started
 {
     "type": "file_transfer_started",
-    "id": "123",
+    "id": 123,
     "direction": "download" | "upload",
-    "filename": "file.txt",  # Optional
-    "total_bytes": "1024",  # Optional
+    "filename": "file.txt",  # None if unknown
+    "total_bytes": 1024,  # None if unknown
 }
 
 # Transfer Progress
 {
     "type": "file_transfer_progress",
-    "id": "123",
-    "bytes_transferred": "512",
-    "total_bytes": "1024",  # Optional
+    "id": 123,
+    "bytes_transferred": 512,
+    "total_bytes": 1024,  # None if unknown
 }
 
 # Transfer Completed
 {
     "type": "file_transfer_completed",
-    "id": "123",
-    "filename": "file.txt",  # Optional
-    "size": "1024",
+    "id": 123,
+    "filename": "file.txt",  # None if unknown
+    "size": 1024,
 }
 
 # Transfer Failed
-{"type": "file_transfer_failed", "id": "123", "reason": "Network error"}
+{"type": "file_transfer_failed", "id": 123, "reason": "Network error"}
 
 # Upload Requested
 {"type": "upload_requested", "format": "base64"}
@@ -482,12 +486,12 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 # Trigger Matched
 {
     "type": "trigger_matched",
-    "trigger_id": "1",
-    "row": "10",
-    "col": "0",
-    "end_col": "15",
+    "trigger_id": 1,
+    "row": 10,
+    "col": 0,
+    "end_col": 15,
     "text": "error: something failed",
-    "timestamp": "1708400000000",
+    "timestamp": 1708400000000,
 }
 
 # Progress Bar Changed
@@ -495,24 +499,24 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "progress_bar_changed",
     "action": "set" | "remove" | "remove_all",
     "id": "download",
-    "state": "normal",  # Optional, for "set" action
-    "percent": "50",  # Optional, for "set" action
-    "label": "Downloading...",  # Optional
+    "state": "normal",  # None unless action is "set"
+    "percent": 50,  # None unless action is "set"
+    "label": "Downloading...",  # None unless action is "set"
 }
 
 # Badge Changed
 {
     "type": "badge_changed",
-    "badge": "Important",  # Optional, None if cleared
+    "badge": "Important",  # None if cleared
 }
 
 # Hyperlink Added
 {
     "type": "hyperlink_added",
     "url": "https://example.com",
-    "row": "5",
-    "col": "10",
-    "id": "42",  # Optional
+    "row": 5,
+    "col": 10,
+    "id": 42,  # None if not assigned
 }
 
 # User Var Changed
@@ -520,7 +524,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "user_var_changed",
     "name": "MY_VAR",
     "value": "new_value",
-    "old_value": "old_value",  # Optional
+    "old_value": "old_value",  # None if no previous value
 }
 
 # Environment Changed
@@ -528,35 +532,41 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "environment_changed",
     "key": "cwd",
     "value": "/new/path",
-    "old_value": "/old/path",  # Optional
+    "old_value": "/old/path",  # None if no previous value
 }
 
 # Remote Host Transition
 {
     "type": "remote_host_transition",
     "hostname": "server.example.com",
-    "username": "user",  # Optional
-    "old_hostname": "localhost",  # Optional
-    "old_username": "localuser",  # Optional
+    "username": "user",  # None if unknown
+    "old_hostname": "localhost",  # None if no previous host
+    "old_username": "localuser",  # None if no previous user
 }
 
 # Sub Shell Detected
 {
     "type": "sub_shell_detected",
-    "depth": "2",
-    "shell_type": "bash",  # Optional
+    "depth": 2,
+    "shell_type": "bash",  # None if unknown
 }
 
 # Dirty Region
-{"type": "dirty_region", "first_row": "0", "last_row": "23"}
+{"type": "dirty_region", "first_row": 0, "last_row": 23}
 
 # Graphics Added
-{"type": "graphics_added", "row": "10"}
+{"type": "graphics_added", "row": 10}
 
 # Screen Cleared
 {
     "type": "screen_cleared",
-    "include_scrollback": "false",  # "true" when ED 3J also cleared scrollback
+    "include_scrollback": False,  # True when ED 3J also cleared scrollback
+}
+
+# Inline Image Dropped
+{
+    "type": "inline_image_dropped",
+    "reason": "malformed sequence",  # Why the image was dropped
 }
 ```
 
@@ -566,7 +576,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 The terminal supports two event delivery mechanisms:
 
-1. **Observers (push)**: Events are delivered via callbacks during `process()`, or via `process_deferred()` after the caller releases an exclusive lock
+1. **Observers (push)**: Events are delivered via callbacks during `process()` (and `resize()`, which can scroll zones out), or via `process_deferred()` after the caller releases an exclusive lock
 2. **Polling (pull)**: Events are queued in a buffer and retrieved via `poll_events()`
 
 Both mechanisms work simultaneously:
