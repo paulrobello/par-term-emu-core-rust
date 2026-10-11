@@ -1397,3 +1397,21 @@ fn par_mux_with(args: &[&str], env: &[(&str, &str)]) -> Run {
         stderr: err.join().expect("stderr reader"),
     }
 }
+
+/// `--install-skill` writes the embedded agent skill under `--skills-dir`
+/// and needs no daemon: exit 0, one stdout line naming the path, and the
+/// file byte-identical to the source-tree asset.
+#[test]
+fn install_skill_writes_the_bundled_skill_without_a_daemon() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let dir = root.path().to_str().expect("utf-8 temp path");
+
+    let run = par_mux(&["--install-skill", "--skills-dir", dir]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let path = root.path().join("par-mux").join("SKILL.md");
+    let installed = std::fs::read_to_string(&path).expect("skill written");
+    assert_eq!(installed, include_str!("../skills/par-mux/SKILL.md"));
+    assert!(run.stdout.contains(path.display().to_string().as_str()));
+    assert!(installed.starts_with("---\nname: par-mux\n"));
+}

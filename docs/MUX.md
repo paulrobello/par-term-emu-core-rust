@@ -110,6 +110,7 @@ par-mux [<name>] --cmd CMD  Send one control command to the running daemon and p
 par-mux --pane-endpoints          Give each pane its own hook-only socket (see Agent Hook Reports)
 par-mux --expose-control-socket   With --pane-endpoints: also export PAR_MUX_CONTROL_SOCKET in panes
 par-mux --gen-config [--force]    Write the config file with the current effective settings
+par-mux --install-skill [--skills-dir DIR]  Install the bundled agent skill into the Claude Code skills directory
 ```
 
 The `[daemon]` section of `<config dir>/par-mux/config.toml` carries
@@ -128,6 +129,17 @@ The invocation returns as soon as the daemon detaches (fork + `setsid`; stdin/st
 This is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
 
 `--pane-endpoints` (opt-in, default off) gives every pane its own socket endpoint that accepts only hook reports — see [Agent Hook Reports](#agent-hook-reports). `--expose-control-socket` accompanies it: panes then also get `PAR_MUX_CONTROL_SOCKET` naming the full control socket, and a session env of `PAR_MUX_CONTROL=1` grants the same per session.
+
+`--install-skill` writes the agent skill embedded in the binary (the
+`skills/par-mux/SKILL.md` this repository ships — the docs a coding agent
+loads to drive this CLI) to `~/.claude/skills/par-mux/SKILL.md`, creating
+the directory, and prints the installed path. Always overwrites: the
+embedded copy is the source of truth, so a re-install after an upgrade
+refreshes the skill; `--skills-dir DIR` retargets the skills root (tests,
+other agent harnesses). Like `--cmd`, it never starts or contacts a daemon,
+so it works with nothing running and from inside a pane. par-term invokes
+it after installing par-mux instead of embedding its own copy of the skill,
+so what an agent reads always matches the binary it drives.
 
 ### Nested daemons
 

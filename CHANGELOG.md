@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **par-mux `--install-skill`: the CLI owns and installs its agent skill** (`crates/par-mux/skills/par-mux/SKILL.md`, `crates/par-mux/src/mux/skill_installer.rs`, `crates/par-mux/src/bin/par_mux/main.rs`, `crates/par-mux/tests/mux_cli.rs`, `docs/MUX.md`; card 01a12b66aa39704e94a79166854654e5): the par-mux agent skill moves from the par-term repository into this one and is embedded in the binary via `include_str!`, so it can never drift from the CLI it documents; the skill content was also refreshed for the current feature set (workspaces `+N` and the workspace-prefixed `list-sessions` shape, `respawn-pane` and held-dead panes, `list-commands` capability discovery, `par-mux attach`, `--list-servers`, the config file, the full pane env contract including `PAR_MUX_CONTROL_SOCKET`, and standalone `cargo install par-mux`).
+  `par-mux --install-skill [--skills-dir DIR]` writes it to `~/.claude/skills/par-mux/SKILL.md` — always overwriting, since the embedded copy is the source of truth — without starting or contacting a daemon; par-term invokes the flag after installing par-mux instead of embedding its own copy. Pinned by `install_writes_the_embedded_asset_under_the_skills_root` and `reinstall_overwrites_an_older_copy` (installer seam) and `install_skill_writes_the_bundled_skill_without_a_daemon` (end-to-end through the real binary).
+
 ## [0.59.0] - 2026-10-10
 
 ### Added

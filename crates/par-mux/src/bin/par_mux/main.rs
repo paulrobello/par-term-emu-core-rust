@@ -151,6 +151,21 @@ struct Cli {
     /// With --gen-config: overwrite an existing config file.
     #[arg(long, requires = "gen_config")]
     force: bool,
+
+    /// Install the bundled par-mux agent skill into the Claude Code
+    /// skills directory and exit. Never starts or contacts a daemon, so
+    /// it runs anywhere, including inside a pane; par-term invokes it
+    /// after installing par-mux so the skill matches the shipped binary.
+    #[arg(
+        long,
+        conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config"]
+    )]
+    install_skill: bool,
+
+    /// With --install-skill: write under this skills root instead of the
+    /// Claude Code default (tests, other agent harnesses).
+    #[arg(long, value_name = "DIR", requires = "install_skill")]
+    skills_dir: Option<std::path::PathBuf>,
 }
 
 /// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
@@ -550,6 +565,25 @@ fn main() -> std::process::ExitCode {
         }
         println!("par-mux: wrote {}", path.display());
         return std::process::ExitCode::SUCCESS;
+    }
+
+    // --install-skill: write the embedded agent skill and exit — no
+    // socket, no daemon, so it also runs inside a pane.
+    if cli.install_skill {
+        let result = match cli.skills_dir.as_deref() {
+            Some(dir) => par_mux::mux::skill_installer::install_skill_into(dir),
+            None => par_mux::mux::skill_installer::install_skill(),
+        };
+        return match result {
+            Ok(path) => {
+                println!("par-mux: installed agent skill to {}", path.display());
+                std::process::ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("par-mux: {err}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`

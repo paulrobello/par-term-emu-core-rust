@@ -26,6 +26,7 @@ pub mod pane;
 pub mod persist;
 pub mod scrape;
 pub mod server;
+pub mod skill_installer;
 pub mod tree;
 pub mod win_resume;
 
