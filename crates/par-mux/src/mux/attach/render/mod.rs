@@ -1226,7 +1226,9 @@ impl WindowSession {
                 state,
                 ..
             } => {
-                self.status.patch_agent(&pane_id, &agent, Some(&state));
+                if self.status.patch_agent(&pane_id, &agent, Some(&state)) {
+                    self.status_dirty = true;
+                }
                 self.rebuild_agent_section();
                 self.draw_status_row();
                 EventOutcome::Continue

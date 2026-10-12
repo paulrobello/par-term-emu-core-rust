@@ -2270,9 +2270,10 @@ fn snapshot_session() -> WindowSession {
     session
 }
 
-/// The agents section groups by workspace (herdr's panel): rows sort
-/// under their workspace's label head, the focused pane's row activates,
-/// and an unknown workspace keeps the bare `{agent} ({state})` label.
+/// The agents section groups by workspace (herdr's panel): rows sort by
+/// their workspace's position in the id-ordered cache, the focused
+/// pane's row activates, and an unknown workspace keeps the bare
+/// `{agent} ({state})` label and trails as the last group (ARC-138).
 #[test]
 fn sidebar_agents_section_groups_by_workspace() {
     let mut session = snapshot_session();
@@ -2310,16 +2311,101 @@ fn sidebar_agents_section_groups_by_workspace() {
     );
     assert_eq!(
         rows[1],
-        ("pane:5".to_string(), "pi (idle)".to_string(), false)
-    );
-    assert_eq!(
-        rows[2],
         (
             "pane:3".to_string(),
             "zeta \u{b7} kimi (blocked)".to_string(),
             false
         )
     );
+    assert_eq!(
+        rows[2],
+        ("pane:5".to_string(), "pi (idle)".to_string(), false)
+    );
+}
+
+/// Two workspaces sharing a display name stay two groups: the key is the
+/// workspace id's position, not the label head (ARC-138).
+#[test]
+fn sidebar_agents_group_by_workspace_id_not_name() {
+    let mut session = snapshot_session();
+    let roster = vec![("+0".to_string(), "dev".to_string(), true)];
+    let agent = |pane: u32, name: &str, ws: &str| {
+        (pane, name.to_string(), "idle".to_string(), ws.to_string())
+    };
+    let agents = vec![
+        agent(4, "a", "+1"),
+        agent(3, "b", "+0"),
+        agent(2, "c", "+1"),
+    ];
+    let names = vec![
+        ("+0".to_string(), "dev".to_string()),
+        ("+1".to_string(), "dev".to_string()),
+    ];
+    session.set_sidebar_roster(roster, &agents, &names, None);
+    let sections = session.renderer.sidebar_sections.clone().expect("sections");
+    let ids: Vec<&str> = sections[1]
+        .rows
+        .iter()
+        .map(|(id, ..)| id.as_str())
+        .collect();
+    // Group `+0` (pane 3), then group `+1` with panes ascending (2, 4).
+    // A label-head key would merge both "dev" groups into pane order 2, 3, 4.
+    assert_eq!(ids, ["pane:3", "pane:2", "pane:4"]);
+}
+
+/// An agent event for a pane the roster lacks inserts a row with no
+/// workspace (the payload carries no `ws=`): the status goes stale so the
+/// throttled refresh places it, the row trails the grouped rows even
+/// though its pane id is lower, and no query goes out (ARC-138).
+#[test]
+fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
+    let mut script = snapshot_script();
+    let snapshot = script
+        .replies
+        .get("client-snapshot -t @0")
+        .expect("snapshot reply")
+        .replace(
+            "agent %1 claude working hook",
+            "agent %1 claude working hook ws=+0",
+        )
+        .replace(
+            "agent %3 kimi blocked hook",
+            "agent %3 kimi blocked hook ws=+1",
+        );
+    script
+        .replies
+        .insert("client-snapshot -t @0".to_string(), snapshot);
+    let (rx, mut conn) = fake_daemon("snapinsert", script);
+    let mut session = snapshot_session();
+    session.refresh_status_facts(&mut conn).expect("seed");
+    session.status_dirty = false;
+    drained(&rx);
+
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%2".to_string(),
+        agent: "claude".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+    });
+    assert!(session.status_dirty);
+    let sections = session.renderer.sidebar_sections.clone().expect("sections");
+    assert_eq!(
+        sections[1].rows,
+        vec![
+            (
+                "pane:1".to_string(),
+                "main \u{b7} claude (working)".to_string(),
+                true
+            ),
+            (
+                "pane:3".to_string(),
+                "side \u{b7} kimi (blocked)".to_string(),
+                false
+            ),
+            ("pane:2".to_string(), "claude (blocked)".to_string(), false),
+        ]
+    );
+    assert!(received_within_300ms(&rx).is_empty(), "no round trip");
 }
 
 /// Every line the fake daemon receives within 300 ms.

@@ -453,24 +453,32 @@ impl StatusState {
     /// Patch one pane's agent chip from a notification payload:
     /// `Some(state)` upserts it (`%agent-state-changed`), `None` removes
     /// it (`%agent-released`). The roster stays in pane-id order.
-    pub(crate) fn patch_agent(&mut self, pane: &str, agent: &str, state: Option<&str>) {
+    /// Returns `true` when the patch inserted a row the payload could not
+    /// place in a workspace (`%agent-state-changed` carries no `ws=`): the
+    /// caller marks the status stale so the next throttled refresh fills it.
+    pub(crate) fn patch_agent(&mut self, pane: &str, agent: &str, state: Option<&str>) -> bool {
         let Some(pane) = pane_number(pane) else {
-            return;
+            return false;
         };
         match state {
             Some(state) => match self.agents.binary_search_by_key(&pane, |(p, ..)| *p) {
                 Ok(index) => {
                     let ws = self.agents[index].3.clone();
                     self.agents[index] = (pane, agent.to_string(), state.to_string(), ws);
+                    false
                 }
                 Err(index) => {
                     self.agents.insert(
                         index,
                         (pane, agent.to_string(), state.to_string(), String::new()),
                     );
+                    true
                 }
             },
-            None => self.agents.retain(|(p, ..)| *p != pane),
+            None => {
+                self.agents.retain(|(p, ..)| *p != pane);
+                false
+            }
         }
     }
 
@@ -868,8 +876,8 @@ mod tests {
     #[test]
     fn payload_patches_update_agents_and_window_names() {
         let mut got = state();
-        got.patch_agent("%2", "kimi", Some("working"));
-        got.patch_agent("%0", "pi", Some("blocked"));
+        assert!(!got.patch_agent("%2", "kimi", Some("working")), "update");
+        assert!(got.patch_agent("%0", "pi", Some("blocked")), "insert");
         assert_eq!(
             got.agents,
             vec![
@@ -883,7 +891,7 @@ mod tests {
                 (2, "kimi".to_string(), "working".to_string(), String::new()),
             ]
         );
-        got.patch_agent("%1", "claude", None);
+        assert!(!got.patch_agent("%1", "claude", None), "release");
         assert!(got.agents.iter().all(|(p, ..)| *p != 1));
         got.patch_window_name("@1", "  edit  me ");
         assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));

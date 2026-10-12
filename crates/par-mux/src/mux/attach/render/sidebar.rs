@@ -228,7 +228,8 @@ impl WindowSession {
     /// workspace name (`{ws} · {agent} ({state})`; the bare `{agent}
     /// ({state})` when the daemon pre-`ws=` or the workspace is unknown)
     /// and activates when its pane is the view's focus. Grouped by
-    /// workspace name, so an agent's row sits adjacent to its group.
+    /// workspace id in id order (unknown workspaces last), panes
+    /// ascending within a group.
     pub(super) fn set_sidebar_roster(
         &mut self,
         roster: Vec<(String, String, bool)>,
@@ -240,7 +241,18 @@ impl WindowSession {
             .map(|rows| vec![super::super::SidebarSection { rows }])
             .unwrap_or_default();
         if !agents.is_empty() {
-            let mut rows: Vec<(String, String, bool)> = agents
+            // Group by workspace ID in the daemon's id order (`ws_names` is
+            // the workspace cache, id order), panes ascending within a
+            // group; rows whose workspace is unknown (pre-`ws=` daemon, or
+            // a row a patch inserted before the refresh filled it) trail as
+            // one group.
+            let group = |ws: &str| {
+                ws_names
+                    .iter()
+                    .position(|(id, _)| id == ws)
+                    .unwrap_or(ws_names.len())
+            };
+            let mut keyed: Vec<_> = agents
                 .iter()
                 .map(|(pane, agent, state, ws)| {
                     let ws_name = ws_names
@@ -251,19 +263,12 @@ impl WindowSession {
                         Some(name) => format!("{name} · {agent} ({state})"),
                         None => format!("{agent} ({state})"),
                     };
-                    (format!("pane:{pane}"), label, focused == Some(*pane))
+                    let row = (format!("pane:{pane}"), label, focused == Some(*pane));
+                    ((group(ws), *pane), row)
                 })
                 .collect();
-            // herdr groups agents under their workspace: adjacent rows per
-            // workspace (label head order), stable within on pane order.
-            rows.sort_by_key(|(id, label, _)| {
-                let head = label.split(" · ").next().unwrap_or(label).to_string();
-                let pane = id
-                    .strip_prefix("pane:")
-                    .and_then(|p| p.parse::<u32>().ok())
-                    .unwrap_or(u32::MAX);
-                (head, pane)
-            });
+            keyed.sort_by_key(|(key, _)| *key);
+            let rows: Vec<(String, String, bool)> = keyed.into_iter().map(|(_, row)| row).collect();
             sections.push(super::super::SidebarSection { rows });
         }
         if sections.is_empty() {
