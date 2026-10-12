@@ -37,6 +37,7 @@ mod renderer;
 mod session;
 mod sidebar;
 mod sidebar_state;
+mod status_patch;
 
 use chrome::ChromeRows;
 use cursor::CursorState;
@@ -1084,6 +1085,32 @@ impl WindowSession {
         }
     }
 
+    /// The shown window's `%layout-change`: the zoom cue, then the
+    /// geometry diff parked for the pump.
+    fn on_layout_change(&mut self, layout: &str, visible: &str, flags: &str) {
+        // Zoom truth is per-window and the daemon's: another
+        // client's zoom (or a select-away unzoom) reaches this one
+        // only through the flags, and a one-pane zoom leaves the
+        // geometry unchanged — so the cue updates outside the
+        // geometry guard below.
+        let zoomed = flags.contains('Z');
+        if zoomed != self.zoomed {
+            self.zoomed = zoomed;
+            self.status_dirty = true;
+        }
+        match layout::parse_layout_triple(layout, visible, flags) {
+            Ok(next) if next != self.renderer.layout() => {
+                // A geometry change re-fit the daemon's panes; the
+                // local emulators reflow with the layout and panes
+                // new to the renderer replay — the pump's step 2
+                // (PendingWork), since replay needs the connection.
+                self.pending.layout = Some(next);
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("par-mux: {err}"),
+        }
+    }
+
     /// One daemon push. `End` on `%exit` (or the window's pane roster
     /// emptying, which leaves nothing to render).
     fn handle_event(&mut self, event: TmuxNotification) -> EventOutcome {
@@ -1102,31 +1129,7 @@ impl WindowSession {
                 window_visible_layout,
                 window_raw_flags,
             } if window_id == self.window => {
-                // Zoom truth is per-window and the daemon's: another
-                // client's zoom (or a select-away unzoom) reaches this one
-                // only through the flags, and a one-pane zoom leaves the
-                // geometry unchanged — so the cue updates outside the
-                // geometry guard below.
-                let zoomed = window_raw_flags.contains('Z');
-                if zoomed != self.zoomed {
-                    self.zoomed = zoomed;
-                    self.status_dirty = true;
-                }
-                match layout::parse_layout_triple(
-                    &window_layout,
-                    &window_visible_layout,
-                    &window_raw_flags,
-                ) {
-                    Ok(next) if next != self.renderer.layout() => {
-                        // A geometry change re-fit the daemon's panes; the
-                        // local emulators reflow with the layout and panes
-                        // new to the renderer replay — the pump's step 2
-                        // (PendingWork), since replay needs the connection.
-                        self.pending.layout = Some(next);
-                    }
-                    Ok(_) => {}
-                    Err(err) => eprintln!("par-mux: {err}"),
-                }
+                self.on_layout_change(&window_layout, &window_visible_layout, &window_raw_flags);
                 EventOutcome::Continue
             }
             TmuxNotification::Exit => EventOutcome::End,
@@ -1172,28 +1175,7 @@ impl WindowSession {
                 EventOutcome::Continue
             }
             TmuxNotification::PaneTitleChanged { pane_id, title } => {
-                let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse::<u32>().ok())
-                else {
-                    return EventOutcome::Continue;
-                };
-                let title = title.trim();
-                if title.is_empty() {
-                    // A cleared user title falls back to the program's OSC
-                    // title, which the payload does not carry: re-query
-                    // that pane on the next refresh.
-                    self.renderer.invalidate_title(pane);
-                    self.status_dirty = true;
-                    return EventOutcome::Continue;
-                }
-                // The payload IS the new effective title (a user title
-                // wins over OSC): patch it without a query (ENH-043).
-                if self.renderer.layout().iter().any(|r| r.pane == pane) {
-                    self.renderer.set_user_title(pane, title);
-                }
-                if self.renderer.focused() == Some(pane) {
-                    self.status.set_pane_title(title);
-                    self.draw_status_row();
-                }
+                self.on_pane_title_changed(&pane_id, &title);
                 EventOutcome::Continue
             }
             // Agent churn carries its own fact: patch the cached roster
@@ -1206,17 +1188,11 @@ impl WindowSession {
                 ws,
                 ..
             } => {
-                if self.status.patch_agent(&pane_id, &agent, Some(&state), &ws) {
-                    self.status_dirty = true;
-                }
-                self.rebuild_agent_section();
-                self.draw_status_row();
+                self.on_agent_changed(&pane_id, &agent, Some(&state), &ws);
                 EventOutcome::Continue
             }
             TmuxNotification::AgentReleased { pane_id, agent } => {
-                self.status.patch_agent(&pane_id, &agent, None, "");
-                self.rebuild_agent_section();
-                self.draw_status_row();
+                self.on_agent_changed(&pane_id, &agent, None, "");
                 EventOutcome::Continue
             }
             // Neither the status row nor the side panel renders
@@ -1224,9 +1200,7 @@ impl WindowSession {
             // client shows.
             TmuxNotification::AgentTelemetryChanged { .. } => EventOutcome::Continue,
             TmuxNotification::WindowRenamed { window_id, name } => {
-                self.status.patch_window_name(&window_id, &name);
-                self.draw_status_row();
-                self.draw_tab_strip();
+                self.on_window_renamed(&window_id, &name);
                 EventOutcome::Continue
             }
             TmuxNotification::SessionsChanged
