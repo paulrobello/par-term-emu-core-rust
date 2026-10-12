@@ -275,6 +275,12 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
     pub http_password_file: Option<String>,
 
+    /// Refuse to start unless HTTP Basic Auth uses a bcrypt hash.
+    /// Rejects cleartext passwords and legacy {SHA} / $1$ / $apr1$ hashes.
+    /// Off by default; legacy formats are accepted with a warning otherwise.
+    #[arg(long, env = "PAR_TERM_REQUIRE_BCRYPT", requires = "http_user")]
+    pub require_bcrypt: bool,
+
     // Multi-session options
     /// Maximum number of concurrent terminal sessions
     #[arg(long, default_value = "10", env = "PAR_TERM_MAX_SESSIONS")]
@@ -377,6 +383,16 @@ mod tests {
                 .unwrap()
                 .input_rate_limit,
             0
+        );
+    }
+
+    #[test]
+    fn require_bcrypt_requires_http_user() {
+        assert!(parse(&["--require-bcrypt"]).is_err());
+        assert!(
+            parse(&["--http-user", "admin", "--require-bcrypt"])
+                .unwrap()
+                .require_bcrypt
         );
     }
 }

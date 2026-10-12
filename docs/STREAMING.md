@@ -289,6 +289,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_HTTP_PASSWORD` | `--http-password` | HTTP Basic Auth password (clear text) |
 | `PAR_TERM_HTTP_PASSWORD_HASH` | `--http-password-hash` | HTTP Basic Auth password (htpasswd hash) |
 | `PAR_TERM_HTTP_PASSWORD_FILE` | `--http-password-file` | Password file path |
+| `PAR_TERM_REQUIRE_BCRYPT` | `--require-bcrypt` | Refuse cleartext and legacy htpasswd hashes at startup |
 | `PAR_TERM_TLS_CERT` | `--tls-cert` | TLS certificate file |
 | `PAR_TERM_TLS_KEY` | `--tls-key` | TLS private key file |
 | `PAR_TERM_TLS_PEM` | `--tls-pem` | Combined TLS PEM file |

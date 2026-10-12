@@ -6,10 +6,11 @@
 
 use anyhow::{Context, Result};
 use par_term_emu_core_rust::pty_session::PtySession;
+use par_term_emu_core_rust::streaming::auth_hash::legacy_hash_format;
 use par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message;
 use par_term_emu_core_rust::streaming::{
-    HttpBasicAuthConfig, ServerMessage, SessionFactory, SessionFactoryResult, StreamSessionState,
-    StreamingServer,
+    HttpBasicAuthConfig, PasswordConfig, ServerMessage, SessionFactory, SessionFactoryResult,
+    StreamSessionState, StreamingServer,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -792,6 +793,11 @@ fn looks_like_hash(s: &str) -> bool {
         || s.starts_with("{SHA}")
 }
 
+/// True if `s` carries a bcrypt prefix (the set `verify_htpasswd_hash` accepts).
+fn is_bcrypt(s: &str) -> bool {
+    s.starts_with("$2a$") || s.starts_with("$2b$") || s.starts_with("$2y$") || s.starts_with("$2x$")
+}
+
 /// True if `host` binds only to the loopback interface (not reachable from the network).
 pub fn is_loopback_host(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
@@ -820,7 +826,7 @@ pub fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig
     };
 
     // Priority: file > hash > clear text
-    if let Some(ref file_path) = args.http_password_file {
+    let auth: HttpBasicAuthConfig = if let Some(ref file_path) = args.http_password_file {
         // Validate file permissions (should not be world/group readable)
         #[cfg(unix)]
         {
@@ -856,36 +862,53 @@ pub fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig
         // Determine if it's a hash or clear text
         if looks_like_hash(password_value) {
             info!("Using password hash from file: {}", file_path);
-            return Ok(Some(HttpBasicAuthConfig::with_hash(
-                username,
-                password_value.to_string(),
-            )));
+            HttpBasicAuthConfig::with_hash(username, password_value.to_string())
         } else {
             info!("Using clear text password from file: {}", file_path);
-            return Ok(Some(HttpBasicAuthConfig::with_password(
-                username,
-                password_value.to_string(),
-            )));
+            HttpBasicAuthConfig::with_password(username, password_value.to_string())
+        }
+    } else if let Some(ref hash) = args.http_password_hash {
+        info!("Using password hash from argument/environment");
+        HttpBasicAuthConfig::with_hash(username, hash.clone())
+    } else if let Some(ref password) = args.http_password {
+        info!("Using clear text password from argument/environment");
+        HttpBasicAuthConfig::with_password(username, password.clone())
+    } else {
+        // Username provided but no password - this is an error
+        anyhow::bail!(
+            "--http-user requires one of: --http-password, --http-password-hash, or --http-password-file"
+        );
+    };
+
+    // Error messages must never echo the password or hash (SEC-009/SEC-201).
+    if args.require_bcrypt {
+        match &auth.password {
+            PasswordConfig::ClearText(_) => anyhow::bail!(
+                "--require-bcrypt: HTTP Basic Auth for user '{}' is a cleartext password; \
+                 supply a bcrypt hash (`htpasswd -nB {}`)",
+                auth.username,
+                auth.username
+            ),
+            PasswordConfig::Hash(h) => {
+                if let Some(format) = legacy_hash_format(h) {
+                    anyhow::bail!(
+                        "--require-bcrypt: HTTP Basic Auth for user '{}' uses legacy hash format \
+                         {format}; regenerate it with `htpasswd -nB {}`",
+                        auth.username,
+                        auth.username
+                    );
+                }
+                if !is_bcrypt(h) {
+                    anyhow::bail!(
+                        "--require-bcrypt: HTTP Basic Auth for user '{}' is not a bcrypt hash",
+                        auth.username
+                    );
+                }
+            }
         }
     }
 
-    if let Some(ref hash) = args.http_password_hash {
-        info!("Using password hash from argument/environment");
-        return Ok(Some(HttpBasicAuthConfig::with_hash(username, hash.clone())));
-    }
-
-    if let Some(ref password) = args.http_password {
-        info!("Using clear text password from argument/environment");
-        return Ok(Some(HttpBasicAuthConfig::with_password(
-            username,
-            password.clone(),
-        )));
-    }
-
-    // Username provided but no password - this is an error
-    anyhow::bail!(
-        "--http-user requires one of: --http-password, --http-password-hash, or --http-password-file"
-    );
+    Ok(Some(auth))
 }
 
 #[cfg(all(test, unix))]
@@ -937,5 +960,93 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod require_bcrypt_tests {
+    use super::*;
+    use clap::Parser;
+
+    const LEGACY: [&str; 3] = [
+        "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=",
+        "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.",
+        "$1$salt$qJH7.N4xYta3aEG/dfqo/0",
+    ];
+
+    fn args(extra: &[&str]) -> Args {
+        Args::try_parse_from(
+            ["par-term-streamer", "--http-user", "admin"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .expect("args parse")
+    }
+
+    #[test]
+    fn require_bcrypt_rejects_legacy_hashes_without_echoing_them() {
+        for hash in LEGACY {
+            let err =
+                resolve_http_basic_auth(&args(&["--http-password-hash", hash, "--require-bcrypt"]))
+                    .expect_err("legacy hash must be refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("--require-bcrypt"), "{msg}");
+            assert!(!msg.contains(hash), "error leaked the hash: {msg}");
+        }
+    }
+
+    #[test]
+    fn require_bcrypt_rejects_cleartext_without_echoing_it() {
+        let err =
+            resolve_http_basic_auth(&args(&["--http-password", "secret", "--require-bcrypt"]))
+                .expect_err("cleartext must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("--require-bcrypt"), "{msg}");
+        assert!(!msg.contains("secret"), "error leaked the password: {msg}");
+    }
+
+    #[test]
+    fn require_bcrypt_rejects_unrecognized_hash() {
+        let err = resolve_http_basic_auth(&args(&[
+            "--http-password-hash",
+            "not-a-hash",
+            "--require-bcrypt",
+        ]))
+        .expect_err("non-bcrypt hash must be refused");
+        assert!(!format!("{err:#}").contains("not-a-hash"));
+    }
+
+    #[test]
+    fn require_bcrypt_accepts_bcrypt() {
+        let hash = bcrypt::hash("pw", 4).expect("bcrypt hash");
+        let auth =
+            resolve_http_basic_auth(&args(&["--http-password-hash", &hash, "--require-bcrypt"]))
+                .expect("bcrypt accepted");
+        assert!(auth.is_some());
+    }
+
+    #[test]
+    fn require_bcrypt_off_keeps_legacy_hashes_accepted() {
+        for hash in LEGACY {
+            let auth = resolve_http_basic_auth(&args(&["--http-password-hash", hash]))
+                .expect("legacy hash accepted by default");
+            assert!(auth.is_some());
+        }
+    }
+
+    #[test]
+    fn require_bcrypt_rejects_legacy_hash_from_password_file() {
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        writeln!(file, "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        let path = file.path().to_str().expect("utf-8 path");
+        let err =
+            resolve_http_basic_auth(&args(&["--http-password-file", path, "--require-bcrypt"]))
+                .expect_err("legacy hash in file must be refused");
+        assert!(format!("{err:#}").contains("--require-bcrypt"));
     }
 }

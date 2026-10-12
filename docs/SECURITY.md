@@ -926,6 +926,9 @@ connected client can execute arbitrary commands as the user running the server.
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
   A cleartext password or a legacy `{SHA}`/MD5-crypt hash logs a startup
   warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
+  `--require-bcrypt` (`PAR_TERM_REQUIRE_BCRYPT`) refuses to start unless the
+  credential is a bcrypt hash; it is off by default, and legacy formats will
+  stop being accepted by default in a later minor release.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default and warns loudly if binding a public interface without auth (SEC-002).
 
