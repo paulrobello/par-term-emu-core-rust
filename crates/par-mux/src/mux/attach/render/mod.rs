@@ -886,7 +886,10 @@ impl WindowSession {
     }
 
     /// The pump: route daemon pushes into the renderer, poll the host
-    /// size (SIGWINCH lands as a size change), frame at cadence.
+    /// size (SIGWINCH lands as a size change), frame at cadence. The
+    /// step order (drain, pending, stdin, pending, resize, status, flash,
+    /// drag, frame, wait) is the contract; `Break` ends the view with a
+    /// clean exit.
     fn pump(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -901,30 +904,14 @@ impl WindowSession {
             self.refresh_geometry();
 
             // 1. Drain daemon pushes.
-            let mut disconnected = false;
-            loop {
-                match conn.try_recv() {
-                    Ok(event) => {
-                        if self.handle_event(event) == EventOutcome::End {
-                            return Ok(());
-                        }
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-            if disconnected {
-                return Ok(()); // the daemon is gone; a clean exit-0 like passthrough's %exit path
+            if self.drain_pushes(conn).is_break() {
+                return Ok(());
             }
 
             // 2. Parked work the event handlers queued (a layout re-fit,
             //    shared-selection follows), so this tick's input routes
             //    against the newest layout.
-            self.apply_pending(conn, sink)?;
-            if std::mem::take(&mut self.pending_end) {
+            if self.pump_pending(conn, sink)?.is_break() {
                 return Ok(());
             }
 
@@ -937,28 +924,13 @@ impl WindowSession {
 
             // 4. Parked work the chords just queued (a sidebar or status
             //    bar toggle's grid refit): the chords have no flush sink.
-            self.apply_pending(conn, sink)?;
-            if std::mem::take(&mut self.pending_end) {
+            if self.pump_pending(conn, sink)?.is_break() {
                 return Ok(());
             }
 
-            // 5. Host resize (SIGWINCH): report the new grid, re-fit. The
-            //    daemon's window renders into the rows between the tab
-            //    strip and the status bar, so the size report carries the
-            //    content height.
-            self.refresh_geometry();
-            let content = self.geometry.frame_size();
-            if content != current_size {
-                current_size = content;
-                self.resize_to(conn, content.0, content.1, sink)?;
-                if std::mem::take(&mut self.pending_end) {
-                    return Ok(());
-                }
-                // A resize wiped the screen; the rows repaint whole.
-                self.chrome.status_row.invalidate();
-                self.draw_status_row();
-                self.chrome.tab_strip.invalidate();
-                self.draw_tab_strip();
+            // 5. Host resize (SIGWINCH): report the new grid, re-fit.
+            if self.pump_resize(conn, sink, &mut current_size)?.is_break() {
+                return Ok(());
             }
 
             // 6. Status: the throttled re-query. Any %sessions-changed /
@@ -985,16 +957,91 @@ impl WindowSession {
             //    diff), then wait for the next push — the frame cadence
             //    floods coalesce into.
             self.frame(sink);
-            match conn.recv_timeout(super::POLL) {
-                Ok(event) => {
-                    if self.handle_event(event) == EventOutcome::End {
-                        return Ok(());
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            if self.wait_next_push(conn).is_break() {
+                return Ok(());
             }
         }
+    }
+
+    /// Pump step 1: route every queued daemon push. Breaks on `End` or a
+    /// disconnected daemon (a clean exit-0 like passthrough's `%exit` path).
+    fn drain_pushes(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> std::ops::ControlFlow<()> {
+        loop {
+            match conn.try_recv() {
+                Ok(event) => {
+                    if self.handle_event(event) == EventOutcome::End {
+                        return std::ops::ControlFlow::Break(());
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    return std::ops::ControlFlow::Continue(());
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+        }
+    }
+
+    /// Pump steps 2 and 4: apply the parked work, then break when it
+    /// ended the view.
+    fn pump_pending(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        sink: &mut dyn FlushSink,
+    ) -> Result<std::ops::ControlFlow<()>, String> {
+        self.apply_pending(conn, sink)?;
+        if std::mem::take(&mut self.pending_end) {
+            return Ok(std::ops::ControlFlow::Break(()));
+        }
+        Ok(std::ops::ControlFlow::Continue(()))
+    }
+
+    /// Pump step 5: the daemon's window renders into the rows between the
+    /// tab strip and the status bar, so the size report carries the
+    /// content height.
+    fn pump_resize(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        sink: &mut dyn FlushSink,
+        current_size: &mut (u16, u16),
+    ) -> Result<std::ops::ControlFlow<()>, String> {
+        self.refresh_geometry();
+        let content = self.geometry.frame_size();
+        if content != *current_size {
+            *current_size = content;
+            self.resize_to(conn, content.0, content.1, sink)?;
+            if std::mem::take(&mut self.pending_end) {
+                return Ok(std::ops::ControlFlow::Break(()));
+            }
+            // A resize wiped the screen; the rows repaint whole.
+            self.chrome.status_row.invalidate();
+            self.draw_status_row();
+            self.chrome.tab_strip.invalidate();
+            self.draw_tab_strip();
+        }
+        Ok(std::ops::ControlFlow::Continue(()))
+    }
+
+    /// Pump step 9's wait: block up to one poll interval for the next
+    /// push.
+    fn wait_next_push(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> std::ops::ControlFlow<()> {
+        match conn.recv_timeout(super::POLL) {
+            Ok(event) => {
+                if self.handle_event(event) == EventOutcome::End {
+                    return std::ops::ControlFlow::Break(());
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     /// Perform the work parked in [`PendingWork`], in its fixed order: a
