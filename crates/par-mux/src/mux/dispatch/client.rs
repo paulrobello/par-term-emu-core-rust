@@ -36,150 +36,136 @@ pub(super) fn cmd_refresh_client(
     if let Some((cell_w, cell_h)) = cell_pixels {
         ctx.tree.lock().set_client_cell_pixels(cell_w, cell_h);
     }
-    match pane {
-        None => {
-            // The target-less size-report form (the attach handshake's
-            // shape): never a replay — replay is what the -t form exists
-            // for, and resyncing a pane the client never named would push
-            // it screen bytes of the wrong pane. `-C` records the report as
-            // the connection's sizing contribution against the window it
-            // displays (the bare form's documented stand-in: the newest
-            // session's active window) and re-fits that window to the
-            // smallest-attached-client minimum.
-            match size {
-                Some((cols, rows)) => {
-                    let outcome: Result<(WindowId, Vec<WindowId>), String> = {
-                        let mut guard = ctx.tree.lock();
-                        // Newest = highest id (ids are monotonic). The
-                        // map has no insertion order, so this is the
-                        // deterministic spelling of bare new-window's
-                        // documented stand-in.
-                        let session = guard.sessions().into_iter().max();
-                        match session {
-                            Some(session) => {
-                                let window = guard
-                                    .session(session)
-                                    .and_then(|s| s.windows.get(s.active).copied());
-                                match window {
-                                    Some(window_id) => {
-                                        let resized = match ctx.client_id {
-                                            Some(client_id) => guard.set_client_view(
-                                                client_id, window_id, cols, rows, chrome,
-                                            ),
-                                            // No connection identity (embedder/test
-                                            // dispatch): keep the legacy direct resize.
-                                            None => {
-                                                match guard.resize_window_with_chrome(
-                                                    window_id, cols, rows, chrome,
-                                                ) {
-                                                    Ok(()) => vec![window_id],
-                                                    Err(err) => {
-                                                        return Outcome::err(ctx, &err.to_string())
-                                                    }
-                                                }
-                                            }
-                                        };
-                                        Ok((window_id, resized))
-                                    }
-                                    None => Err(format!("no such session: {session}")),
-                                }
-                            }
-                            None => Err("no sessions exist to size".to_string()),
-                        }
-                    };
-                    match outcome {
-                        Ok((window_id, resized)) => {
-                            let mut outcome = Outcome::ok(ctx, "").with_layout(window_id);
-                            for extra in resized {
-                                if extra != window_id {
-                                    outcome = outcome.with_layout(extra);
-                                }
-                            }
-                            outcome
-                        }
-                        Err(err) => Outcome::err(ctx, &err),
-                    }
-                }
-                // Sizeless and targetless is meaningless (the parser
-                // rejects it), but dispatch stays total: an empty ok.
-                None => Outcome::ok(ctx, ""),
-            }
-        }
-        Some(pane) => {
-            let pane = {
-                let guard = ctx.tree.lock();
-                match guard.resolve_pane_target(pane) {
-                    Ok(id) => id,
-                    Err(err) => return Outcome::err(ctx, &err.to_string()),
-                }
+    match (pane, size) {
+        (None, Some(size)) => refresh_newest_window(ctx, size, chrome),
+        // Sizeless and targetless is meaningless (the parser
+        // rejects it), but dispatch stays total: an empty ok.
+        (None, None) => Outcome::ok(ctx, ""),
+        (Some(pane), size) => {
+            let resolved = ctx.tree.lock().resolve_pane_target(pane);
+            let pane = match resolved {
+                Ok(id) => id,
+                Err(err) => return Outcome::err(ctx, &err.to_string()),
             };
             match size {
-                // The window-size policy's input: a client's renderer reports
-                // its grid against one of the window's panes; the report is
-                // recorded as that connection's sizing contribution and the
-                // window re-fits to the smallest-attached-client minimum.
-                // Every pane terminal re-fits to the re-divided geometry (less the
-                // declared `-I` chrome) —
-                // followed by a %layout-change so clients re-render (the
-                // seed path requires one even when the minimum did not move
-                // the grid).
-                Some((cols, rows)) => {
-                    let outcome = {
-                        let mut guard = ctx.tree.lock();
-                        match guard.window_of_pane(pane) {
-                            Some(window_id) => {
-                                let resized = match ctx.client_id {
-                                    Some(client_id) => guard
-                                        .set_client_view(client_id, window_id, cols, rows, chrome),
-                                    None => match guard
-                                        .resize_window_with_chrome(window_id, cols, rows, chrome)
-                                    {
-                                        Ok(()) => vec![window_id],
-                                        Err(err) => return Outcome::err(ctx, &err.to_string()),
-                                    },
-                                };
-                                Ok((window_id, resized))
-                            }
-                            None => Err(MuxError::NoSuchPane(pane)),
-                        }
-                    };
-                    match outcome {
-                        Ok((window_id, resized)) => {
-                            let mut outcome = Outcome::ok(ctx, "").with_layout(window_id);
-                            for extra in resized {
-                                if extra != window_id {
-                                    outcome = outcome.with_layout(extra);
-                                }
-                            }
-                            outcome
-                        }
-                        Err(err) => Outcome::err(ctx, &err.to_string()),
-                    }
-                }
-                // Resync (D5.4): replay the pane's state as the screen-restore
-                // encoder's byte stream so a reattached client's emulator
-                // reproduces it exactly — the main screen's scrollback first (a
-                // reattached pane can scroll back), alt-screen selection (a TUI
-                // replays its TUI screen), then the styled content with
-                // absolute row addressing (`\x1b[R;1H`; a `\n`-joined reply
-                // staircases: LF preserves the column), attributes via SGR
-                // (a plain reply loses every color), trailing background-styled
-                // cells (plain text trims them), and finally the cursor
-                // position/visibility/style and the input modes a full-screen
-                // app's next %output deltas assume.
-                None => {
-                    let guard = ctx.tree.lock();
-                    match guard.pane(pane) {
-                        Some(target) => {
-                            let screen = target.terminal().read().export_screen_restore_sequence();
-                            Outcome::ok(ctx, &screen)
-                        }
-                        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
-                    }
-                }
+                Some(size) => refresh_pane_window(ctx, pane, size, chrome),
+                None => replay_pane_screen(ctx, pane),
             }
         }
     }
+}
+
+/// The target-less size-report form (the attach handshake's shape):
+/// never a replay — replay is what the -t form exists for, and resyncing
+/// a pane the client never named would push it screen bytes of the wrong
+/// pane. `-C` records the report as the connection's sizing contribution
+/// against the window it displays (the bare form's documented stand-in:
+/// the newest session's active window) and re-fits that window to the
+/// smallest-attached-client minimum.
+fn refresh_newest_window(ctx: &Ctx<'_>, size: (u16, u16), chrome: PaneChrome) -> Outcome {
+    let outcome: Result<(WindowId, Vec<WindowId>), String> = {
+        let mut guard = ctx.tree.lock();
+        // Newest = highest id (ids are monotonic). The map has no
+        // insertion order, so this is the deterministic spelling of bare
+        // new-window's documented stand-in.
+        match guard.sessions().into_iter().max() {
+            Some(session) => {
+                let window = guard
+                    .session(session)
+                    .and_then(|s| s.windows.get(s.active).copied());
+                match window {
+                    Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
+                        .map(|resized| (window_id, resized))
+                        .map_err(|err| err.to_string()),
+                    None => Err(format!("no such session: {session}")),
+                }
+            }
+            None => Err("no sessions exist to size".to_string()),
+        }
+    };
+    match outcome {
+        Ok((window_id, resized)) => size_report_outcome(ctx, window_id, resized),
+        Err(err) => Outcome::err(ctx, &err),
+    }
+}
+
+/// The window-size policy's input: a client's renderer reports its grid
+/// against one of the window's panes; the report is recorded as that
+/// connection's sizing contribution and the window re-fits to the
+/// smallest-attached-client minimum. Every pane terminal re-fits to the
+/// re-divided geometry (less the declared `-I` chrome) — followed by a
+/// %layout-change so clients re-render (the seed path requires one even
+/// when the minimum did not move the grid).
+fn refresh_pane_window(
+    ctx: &Ctx<'_>,
+    pane: PaneId,
+    size: (u16, u16),
+    chrome: PaneChrome,
+) -> Outcome {
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        match guard.window_of_pane(pane) {
+            Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
+                .map(|resized| (window_id, resized)),
+            None => Err(MuxError::NoSuchPane(pane)),
+        }
+    };
+    match outcome {
+        Ok((window_id, resized)) => size_report_outcome(ctx, window_id, resized),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+/// Resync (D5.4): replay the pane's state as the screen-restore
+/// encoder's byte stream so a reattached client's emulator reproduces it
+/// exactly — the main screen's scrollback first (a reattached pane can
+/// scroll back), alt-screen selection (a TUI replays its TUI screen),
+/// then the styled content with absolute row addressing (`\x1b[R;1H`; a
+/// `\n`-joined reply staircases: LF preserves the column), attributes via
+/// SGR (a plain reply loses every color), trailing background-styled
+/// cells (plain text trims them), and finally the cursor
+/// position/visibility/style and the input modes a full-screen app's next
+/// %output deltas assume.
+fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    let guard = ctx.tree.lock();
+    match guard.pane(pane) {
+        Some(target) => {
+            let screen = target.terminal().read().export_screen_restore_sequence();
+            Outcome::ok(ctx, &screen)
+        }
+        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    }
+}
+
+/// Record a `-C` size report against `window_id` — the connection's
+/// sizing contribution, or the legacy direct resize when dispatch has no
+/// connection identity (embedder/test dispatch) — and return every
+/// window the re-fit moved.
+fn apply_size_report(
+    ctx: &Ctx<'_>,
+    guard: &mut MuxTree,
+    window_id: WindowId,
+    (cols, rows): (u16, u16),
+    chrome: PaneChrome,
+) -> Result<Vec<WindowId>, MuxError> {
+    match ctx.client_id {
+        Some(client_id) => Ok(guard.set_client_view(client_id, window_id, cols, rows, chrome)),
+        None => guard
+            .resize_window_with_chrome(window_id, cols, rows, chrome)
+            .map(|()| vec![window_id]),
+    }
+}
+
+/// The ok reply for a size report: the reported window's
+/// `%layout-change` first, then every other window the re-fit moved.
+fn size_report_outcome(ctx: &Ctx<'_>, window_id: WindowId, resized: Vec<WindowId>) -> Outcome {
+    resized
+        .into_iter()
+        .filter(|extra| *extra != window_id)
+        .fold(
+            Outcome::ok(ctx, "").with_layout(window_id),
+            |outcome, extra| outcome.with_layout(extra),
+        )
 }
 
 /// Build one roster row: pane, agent, state, source, then zero or more
