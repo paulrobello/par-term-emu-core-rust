@@ -1980,8 +1980,8 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
     );
 
     // Agent churn: a hook report claims the pane; %agent-state-changed
-    // marks the status stale and the throttled re-query pulls the chip
-    // onto the row.
+    // marks the status stale and the throttled re-query pulls the roster
+    // row onto the side panel.
     let reply = hook_report(
         fixture.socket(),
         &format!(
@@ -2007,10 +2007,77 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
         "the status bar must show the shown session on row 24. snapshots:\n{ever_row}\nstderr: {}",
         stderr.lock().unwrap()
     );
+    // The roster left the bar: this fixture runs sidebar-off, so the
+    // claim must NOT land here — the side panel carries it (the panel
+    // test below).
+    let ever_grid: String = ever
+        .iter()
+        .map(|row| row.iter().map(|r| r.as_str()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        ever[23].iter().any(|r| r.contains("kimi:blocked")),
-        "the roster chip must appear on %agent-state-changed (a later liveness-sweep \
-         repaint may remove the test claim again). snapshots:\n{ever_row}\nstderr: {}",
+        !ever_grid.contains("kimi"),
+        "the roster left the bar (the side panel renders it). snapshots:\n{ever_grid}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// The side panel carries the agent roster: a hook report claims the
+/// pane, the throttled re-query fills the panel's agents section, and
+/// the agent's name lands in the strip columns (the sidebar-on fixture;
+/// the sidebar-off bar contract is the test above).
+#[cfg(unix)]
+#[test]
+fn render_mode_side_panel_carries_the_agent_roster() {
+    let (fixture, _daemon, mut client) = fixture_with_session("panelroster");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &pane],
+        "render",
+        "[client]\nsidebar-on-launch = true\n",
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+
+    let reply = hook_report(
+        fixture.socket(),
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"kimi","state":"blocked","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "claim accepted: {reply}"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let mut all = Vec::new();
+    while let Ok(bytes) = host.output_rx.try_recv() {
+        all.extend_from_slice(&bytes);
+    }
+    let (_final, ever) = reconstructed_screen(&all, 24, 80);
+    let ever_grid: String = ever
+        .iter()
+        .map(|row| row.iter().map(|r| r.as_str()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        ever_grid.contains("kimi"),
+        "the roster row must appear in the side panel on %agent-state-changed (a later \
+         liveness-sweep repaint may remove the test claim again). snapshots:\n{ever_grid}\nstderr: {}",
         stderr.lock().unwrap()
     );
     host.killer.kill().ok();

@@ -232,7 +232,10 @@ impl WindowSession {
         let rows = self.status.refresh(conn, &self.window, focused)?;
         if self.sidebar_on {
             if let Some(roster) = rows.workspaces {
-                self.set_sidebar_roster(roster);
+                let focused = self.renderer.focused();
+                let agents = self.status.agents().to_vec();
+                let names = self.status.workspaces().to_vec();
+                self.set_sidebar_roster(roster, &agents, &names, focused);
             }
         }
         self.refresh_pane_titles(conn)
@@ -286,6 +289,38 @@ impl WindowSession {
             }
         }
         Ok(())
+    }
+
+    /// Focus an agent's pane from a side-panel agent-row click: move the
+    /// daemon's shared selection with `select-pane` + `pane-info` lookup,
+    /// then land the view on the pane's window when it is not already
+    /// shown (the select+resync contract every switch follows).
+    /// Same-window clicks just move focus; the throttled status refresh
+    /// repaints the panel highlight.
+    pub(super) fn focus_pane(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        pane: u32,
+    ) {
+        let _ = conn.send_checked(&format!("select-pane -t %{pane}"));
+        let window = conn
+            .send_checked(&format!("pane-info -t %{pane}"))
+            .ok()
+            .filter(|reply| reply.ok)
+            .and_then(|reply| {
+                reply
+                    .body
+                    .first()?
+                    .split_whitespace()
+                    .nth(1)
+                    .map(str::to_string)
+            });
+        match window {
+            Some(window) if window != self.window => self.land_window(conn, &window),
+            _ => {
+                self.status_dirty = true;
+            }
+        }
     }
 
     pub(super) fn land_on_workspace(

@@ -184,29 +184,39 @@ pub(super) fn cmd_refresh_client(
 
 /// Build one roster row: pane, agent, state, source, then zero or more
 /// whitespace-free `key=value` tokens — `reason=<base64>` (blocked
-/// reason), `telemetry=<base64>`, `host_telemetry=<base64>`. Every token
+/// reason), `telemetry=<base64>`, `host_telemetry=<base64>`, and
+/// `ws=<id>` (the owning workspace, `+N` — the side panel's grouping
+/// key). Every token
 /// after `source` is key=value, so a consumer parses positions 1-4 then
 /// splits each remaining token on its first `=` (ARC-060: a free-text
 /// reason column was ambiguous).
+pub(super) struct RosterTokens<'a> {
+    pub reason: Option<&'a str>,
+    pub telemetry: Option<&'a str>,
+    pub host_telemetry: Option<&'a str>,
+}
+
 pub(super) fn roster_row(
     pane: PaneId,
     agent: &str,
     state: &str,
     source: &str,
-    reason: Option<&str>,
-    telemetry_b64: Option<&str>,
-    host_telemetry_b64: Option<&str>,
+    tokens: RosterTokens<'_>,
+    ws: String,
 ) -> crate::mux::ipc::AgentRow {
     let mut extras = Vec::new();
-    if let Some(reason) = reason {
+    if let Some(reason) = tokens.reason {
         let encoded = base64::engine::general_purpose::STANDARD.encode(reason.as_bytes());
         extras.push(("reason".to_string(), encoded));
     }
-    if let Some(telemetry) = telemetry_b64 {
+    if let Some(telemetry) = tokens.telemetry {
         extras.push(("telemetry".to_string(), telemetry.to_string()));
     }
-    if let Some(host) = host_telemetry_b64 {
+    if let Some(host) = tokens.host_telemetry {
         extras.push(("host_telemetry".to_string(), host.to_string()));
+    }
+    if !ws.is_empty() {
+        extras.push(("ws".to_string(), ws));
     }
     crate::mux::ipc::AgentRow {
         pane: pane.to_string(),
@@ -244,38 +254,64 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
     let mut roster: Vec<(PaneId, crate::mux::ipc::AgentRow)> = guard
         .sessions()
         .iter()
-        .filter_map(|s| guard.session(*s))
-        .flat_map(|s| s.windows.clone())
-        .filter_map(|w| guard.window(w))
-        .flat_map(|w| w.panes())
-        .filter_map(|p| {
-            let pane = guard.pane(p)?;
-            let state = pane.metadata().get("agent_state")?;
-            let agent = pane.metadata().get("agent")?;
-            let source = pane
-                .metadata()
-                .get("agent_state_source")
-                .map(String::as_str)
-                .unwrap_or("hook");
-            // The blocked reason rides as one whitespace-free
-            // `reason=<base64>` token (same standard engine as the
-            // telemetry tokens). Absent message, no token.
-            let reason = pane.metadata().get("agent_message").map(String::as_str);
-            // Fresh telemetry rides as one final whitespace-free token
-            // (base64 of the canonical JSON — string values carry
-            // spaces). Stale or absent telemetry adds nothing, so a
-            // pane without it keeps the exact pre-telemetry row. The
-            // host probe's sibling token follows the same rule, aged
-            // per field — and neither ever triggers a probe: the roster
-            // reads only what the cadence thread already wrote.
-            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.telemetry.as_ref());
-            let host =
-                crate::mux::host_probe::fresh_host_telemetry_b64(pane.host_telemetry.as_ref());
-            Some((
-                p,
-                roster_row(p, agent, state, source, reason, telemetry, host.as_deref()),
-            ))
+        .filter_map(|sid| {
+            let session = guard.session(*sid)?;
+            // The pane's owning workspace (`ws=` extra on every row):
+            // the side panel's grouping key.
+            let ws = guard
+                .session_workspace
+                .get(sid)
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let inner: Vec<(PaneId, crate::mux::ipc::AgentRow)> = session
+                .windows
+                .iter()
+                .filter_map(|w| guard.window(*w))
+                .flat_map(|w| w.panes())
+                .filter_map(|p| {
+                    let pane = guard.pane(p)?;
+                    let state = pane.metadata().get("agent_state")?;
+                    let agent = pane.metadata().get("agent")?;
+                    let source = pane
+                        .metadata()
+                        .get("agent_state_source")
+                        .map(String::as_str)
+                        .unwrap_or("hook");
+                    // The blocked reason rides as one whitespace-free
+                    // `reason=<base64>` token (same standard engine as the
+                    // telemetry tokens). Absent message, no token.
+                    let reason = pane.metadata().get("agent_message").map(String::as_str);
+                    // Fresh telemetry rides as one final whitespace-free token
+                    // (base64 of the canonical JSON — string values carry
+                    // spaces). Stale or absent telemetry adds nothing, so a
+                    // pane without it keeps the exact pre-telemetry row. The
+                    // host probe's sibling token follows the same rule, aged
+                    // per field — and neither ever triggers a probe: the roster
+                    // reads only what the cadence thread already wrote.
+                    let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.telemetry.as_ref());
+                    let host = crate::mux::host_probe::fresh_host_telemetry_b64(
+                        pane.host_telemetry.as_ref(),
+                    );
+                    Some((
+                        p,
+                        roster_row(
+                            p,
+                            agent,
+                            state,
+                            source,
+                            RosterTokens {
+                                reason,
+                                telemetry,
+                                host_telemetry: host.as_deref(),
+                            },
+                            ws.clone(),
+                        ),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            Some(inner)
         })
+        .flatten()
         .collect();
     roster.sort_by_key(|(pane, _)| *pane);
     roster.iter().map(|(_, row)| row.to_string()).collect()

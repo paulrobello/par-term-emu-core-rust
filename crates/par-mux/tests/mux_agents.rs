@@ -175,8 +175,8 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     let roster = control.body_lines("list-agents");
     assert_eq!(
         roster,
-        vec![format!("{pane} kimi blocked hook")],
-        "list-agents agrees with the last report, provenance included"
+        vec![format!("{pane} kimi blocked hook ws=+0")],
+        "list-agents agrees with the last report, provenance + workspace included"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
@@ -403,10 +403,15 @@ fn telemetry_serves_on_the_roster_and_pushes_identity_only() {
         row.starts_with(&prefix),
         "the row keeps its pre-telemetry shape up to the token: {row}"
     );
-    let token = row[prefix.len()..].trim();
-    let encoded = token
-        .strip_prefix("telemetry=")
-        .expect("the one trailing token is telemetry=<b64>");
+    let tokens: Vec<&str> = row[prefix.len()..].split_whitespace().collect();
+    let encoded = tokens
+        .iter()
+        .find_map(|t| t.strip_prefix("telemetry="))
+        .expect("the row carries a telemetry=<b64> token");
+    assert!(
+        tokens.contains(&"ws=+0"),
+        "the roster row names the pane's workspace: {tokens:?}"
+    );
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .expect("the token is standard base64");

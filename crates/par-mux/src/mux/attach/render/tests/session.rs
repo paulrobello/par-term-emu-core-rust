@@ -2270,6 +2270,58 @@ fn snapshot_session() -> WindowSession {
     session
 }
 
+/// The agents section groups by workspace (herdr's panel): rows sort
+/// under their workspace's label head, the focused pane's row activates,
+/// and an unknown workspace keeps the bare `{agent} ({state})` label.
+#[test]
+fn sidebar_agents_section_groups_by_workspace() {
+    let mut session = snapshot_session();
+    let roster = vec![("+0".to_string(), "main".to_string(), true)];
+    let agents = vec![
+        (
+            3,
+            "kimi".to_string(),
+            "blocked".to_string(),
+            "+1".to_string(),
+        ),
+        (
+            2,
+            "claude".to_string(),
+            "working".to_string(),
+            "+0".to_string(),
+        ),
+        (5, "pi".to_string(), "idle".to_string(), String::new()),
+    ];
+    let names = vec![
+        ("+0".to_string(), "main".to_string()),
+        ("+1".to_string(), "zeta".to_string()),
+    ];
+    session.set_sidebar_roster(roster, &agents, &names, Some(2));
+    let sections = session.renderer.sidebar_sections.clone().expect("sections");
+    assert_eq!(sections.len(), 2, "{sections:?}");
+    let rows = &sections[1].rows;
+    assert_eq!(
+        rows[0],
+        (
+            "pane:2".to_string(),
+            "main \u{b7} claude (working)".to_string(),
+            true
+        )
+    );
+    assert_eq!(
+        rows[1],
+        ("pane:5".to_string(), "pi (idle)".to_string(), false)
+    );
+    assert_eq!(
+        rows[2],
+        (
+            "pane:3".to_string(),
+            "zeta \u{b7} kimi (blocked)".to_string(),
+            false
+        )
+    );
+}
+
 /// Every line the fake daemon receives within 300 ms.
 fn received_within_300ms(rx: &std::sync::mpsc::Receiver<(String, String)>) -> Vec<String> {
     let mut lines = Vec::new();
@@ -2309,12 +2361,20 @@ fn snapshot_refresh_is_one_round_trip() {
     assert_eq!(session.renderer.border_label(3), "");
     assert_eq!(
         session.renderer.sidebar_sections,
-        Some(vec![crate::mux::attach::panels::SidebarSection {
-            rows: vec![
-                ("ws:+0".to_string(), "main".to_string(), true),
-                ("ws:+1".to_string(), "side".to_string(), false),
-            ],
-        }])
+        Some(vec![
+            crate::mux::attach::panels::SidebarSection {
+                rows: vec![
+                    ("ws:+0".to_string(), "main".to_string(), true),
+                    ("ws:+1".to_string(), "side".to_string(), false),
+                ],
+            },
+            crate::mux::attach::panels::SidebarSection {
+                rows: vec![
+                    ("pane:1".to_string(), "claude (working)".to_string(), true),
+                    ("pane:3".to_string(), "kimi (blocked)".to_string(), false),
+                ],
+            },
+        ])
     );
     let text: String = session
         .status
@@ -2322,8 +2382,8 @@ fn snapshot_refresh_is_one_round_trip() {
         .iter()
         .map(|s| s.text.as_str())
         .collect();
-    assert!(text.contains("claude:working"), "{text}");
-    assert!(text.contains("kimi:blocked"), "{text}");
+    assert!(!text.contains("claude:working"), "{text}");
+    assert!(!text.contains("kimi:blocked"), "{text}");
     assert!(text.contains("$2:three"), "{text}");
 }
 
@@ -2372,13 +2432,8 @@ fn agent_event_patches_without_a_query() {
     session.status_dirty = false;
     drained(&rx);
 
-    let chips = |session: &WindowSession| -> String {
-        session
-            .status
-            .compose(200, None, false)
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect()
+    let roster = |session: &WindowSession| -> Vec<(u32, String, String, String)> {
+        session.status.agents().to_vec()
     };
     session.handle_event(TmuxNotification::AgentStateChanged {
         pane_id: "%2".to_string(),
@@ -2388,9 +2443,11 @@ fn agent_event_patches_without_a_query() {
     });
     assert!(!session.status_dirty);
     assert!(
-        chips(&session).contains("claude:blocked"),
-        "{}",
-        chips(&session)
+        roster(&session)
+            .iter()
+            .any(|(p, agent, state, _)| *p == 2 && agent == "claude" && state == "blocked"),
+        "{:?}",
+        roster(&session)
     );
 
     session.handle_event(TmuxNotification::AgentReleased {
@@ -2399,9 +2456,11 @@ fn agent_event_patches_without_a_query() {
     });
     assert!(!session.status_dirty);
     assert!(
-        !chips(&session).contains("claude:blocked"),
-        "{}",
-        chips(&session)
+        !roster(&session)
+            .iter()
+            .any(|(p, agent, _, _)| *p == 2 && agent == "claude"),
+        "{:?}",
+        roster(&session)
     );
     assert!(received_within_300ms(&rx).is_empty(), "no round trip");
 }

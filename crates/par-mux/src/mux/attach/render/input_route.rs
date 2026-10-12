@@ -22,6 +22,8 @@ pub(super) enum Hit {
     /// A side panel workspace row (`+N`): land on it, or open its
     /// context menu on a right press (`menu`).
     SidebarWorkspace { id: String, menu: bool },
+    /// An agent row in the side panel: the pane id (`%N`) to focus.
+    SidebarPane { pane: u32 },
     /// Motion or release while a divider drag is in flight.
     Drag { x: u16, y: u16, release: bool },
     /// A picker wheel: move the selection by the delta.
@@ -433,6 +435,7 @@ impl WindowSession {
                 self.open_menu(MenuTarget::Workspace(id));
             }
             Hit::SidebarWorkspace { id, menu: false } => self.land_on_workspace(conn, &id),
+            Hit::SidebarPane { pane } => self.focus_pane(conn, pane),
             Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::PickerMove(delta) => self.picker_move(delta),
             Hit::PickerFilter => {
@@ -569,6 +572,8 @@ impl WindowSession {
             Hit::SidebarNewWorkspace
         } else if id == super::super::SIDEBAR_MENU_ID {
             Hit::SidebarMenu
+        } else if let Some(pane) = id.strip_prefix("pane:").and_then(|p| p.parse::<u32>().ok()) {
+            Hit::SidebarPane { pane }
         } else if let Some(ws_id) = id.strip_prefix("ws:") {
             Hit::SidebarWorkspace {
                 id: ws_id.to_string(),

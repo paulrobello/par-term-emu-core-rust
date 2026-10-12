@@ -2,7 +2,7 @@
 //! composition, and the ratatui row painter.
 //!
 //! [`StatusState`] is what the client knows (sessions, the shown
-//! session's windows, the focused pane's title, the agent roster);
+//! session's windows, the focused pane's title);
 //! [`StatusState::refresh`] re-queries it over the control connection —
 //! one `client-snapshot` round trip when the daemon advertises it
 //! (ENH-043), else the per-fact queries — on the events that do not carry
@@ -15,7 +15,7 @@
 //! shown session's windows, as herdr-style tabs — `|`-separated, the
 //! active tab a solid shaded block, the rest dim), every session
 //! (`$N:name`, the shown one bold), the focused pane's title, and the
-//! agent roster as `agent:state` chips. When the focused pane is
+//! When the focused pane is
 //! scrolled client-side, a trailing `[scroll +N]` cue reports the
 //! offset.
 
@@ -104,9 +104,11 @@ pub(crate) struct StatusState {
     /// Every pane title of the shown window as `(pane, title)`, from the
     /// last `client-snapshot` (empty on the legacy query path).
     pane_titles: Vec<(u32, String)>,
-    /// The agent roster as `(pane, agent, state)`, pane-id order (the
-    /// order `list-agents` sorts by), so a payload patch keeps it.
-    agents: Vec<(u32, String, String)>,
+    /// The agent roster as `(pane, agent, state, workspace-id)`, pane-id
+    /// order (the order `list-agents` sorts by), so a payload patch keeps
+    /// it. The workspace id is the `ws=` extra's value (`+N`), empty when
+    /// a pre-`ws` daemon omitted it.
+    agents: Vec<(u32, String, String, String)>,
 }
 
 /// A window row's display name: an unnamed window shows its id, and a
@@ -247,7 +249,13 @@ impl StatusState {
                 "agent" => {
                     if let Some(row) = AgentRow::parse(rest) {
                         if let Some(pane) = pane_number(&row.pane) {
-                            agents.push((pane, row.agent, row.state));
+                            let ws = row
+                                .extras
+                                .iter()
+                                .find(|(k, _)| k == "ws")
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or_default();
+                            agents.push((pane, row.agent, row.state, ws));
                         }
                     }
                 }
@@ -343,7 +351,15 @@ impl StatusState {
             self.agents = body
                 .iter()
                 .filter_map(|line| AgentRow::parse(line))
-                .filter_map(|row| Some((pane_number(&row.pane)?, row.agent, row.state)))
+                .filter_map(|row| {
+                    let ws = row
+                        .extras
+                        .iter()
+                        .find(|(k, _)| k == "ws")
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    Some((pane_number(&row.pane)?, row.agent, row.state, ws))
+                })
                 .collect();
         }
         Ok(rows)
@@ -403,6 +419,11 @@ impl StatusState {
 
     /// The workspace roster as `(id, name)`, id order — the side
     /// panel's and the workspace prompts'/menus' source of truth.
+    /// The agent roster in pane-id order: `(pane, agent, state, ws)`.
+    pub(crate) fn agents(&self) -> &[(u32, String, String, String)] {
+        &self.agents
+    }
+
     pub(crate) fn workspaces(&self) -> &[(String, String)] {
         &self.workspaces
     }
@@ -437,16 +458,19 @@ impl StatusState {
             return;
         };
         match state {
-            Some(state) => match self.agents.binary_search_by_key(&pane, |(p, _, _)| *p) {
+            Some(state) => match self.agents.binary_search_by_key(&pane, |(p, ..)| *p) {
                 Ok(index) => {
-                    self.agents[index] = (pane, agent.to_string(), state.to_string());
+                    let ws = self.agents[index].3.clone();
+                    self.agents[index] = (pane, agent.to_string(), state.to_string(), ws);
                 }
                 Err(index) => {
-                    self.agents
-                        .insert(index, (pane, agent.to_string(), state.to_string()));
+                    self.agents.insert(
+                        index,
+                        (pane, agent.to_string(), state.to_string(), String::new()),
+                    );
                 }
             },
-            None => self.agents.retain(|(p, _, _)| *p != pane),
+            None => self.agents.retain(|(p, ..)| *p != pane),
         }
     }
 
@@ -548,21 +572,6 @@ impl StatusState {
                 false,
                 false,
             );
-        }
-        if !self.agents.is_empty() {
-            push(&mut segments, " | ".to_string(), false, false, false);
-            for (index, (_, agent, state)) in self.agents.iter().enumerate() {
-                if index > 0 {
-                    push(&mut segments, " ".to_string(), false, false, false);
-                }
-                push(
-                    &mut segments,
-                    format!("{agent}:{state}"),
-                    false,
-                    false,
-                    false,
-                );
-            }
         }
         if let Some(offset) = scroll.filter(|offset| *offset > 0) {
             push(
@@ -758,8 +767,13 @@ mod tests {
             pane_title: "~/src".to_string(),
             pane_titles: Vec::new(),
             agents: vec![
-                (1, "claude".to_string(), "working".to_string()),
-                (2, "kimi".to_string(), "blocked".to_string()),
+                (
+                    1,
+                    "claude".to_string(),
+                    "working".to_string(),
+                    String::new(),
+                ),
+                (2, "kimi".to_string(), "blocked".to_string(), String::new()),
             ],
         }
     }
@@ -858,13 +872,18 @@ mod tests {
         assert_eq!(
             got.agents,
             vec![
-                (0, "pi".to_string(), "blocked".to_string()),
-                (1, "claude".to_string(), "working".to_string()),
-                (2, "kimi".to_string(), "working".to_string()),
+                (0, "pi".to_string(), "blocked".to_string(), String::new()),
+                (
+                    1,
+                    "claude".to_string(),
+                    "working".to_string(),
+                    String::new()
+                ),
+                (2, "kimi".to_string(), "working".to_string(), String::new()),
             ]
         );
         got.patch_agent("%1", "claude", None);
-        assert!(got.agents.iter().all(|(p, _, _)| *p != 1));
+        assert!(got.agents.iter().all(|(p, ..)| *p != 1));
         got.patch_window_name("@1", "  edit  me ");
         assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));
         got.patch_window_name("@9", "ignored");
@@ -914,8 +933,8 @@ mod tests {
     }
 
     /// The composed line carries every fact the card lists: sessions,
-    /// the shown session's windows (active `*`-marked), the pane title,
-    /// and the agent chips in `agent:state` spelling.
+    /// the shown session's windows (active `*`-marked), and the pane
+    /// title — and NOT the agent roster, which lives in the side panel.
     #[test]
     fn compose_carries_sessions_windows_title_and_chips() {
         let segments = state().compose(120, None, false);
@@ -925,8 +944,8 @@ mod tests {
         assert!(text.contains(" main "), "windows, active tab: {text}");
         assert!(text.contains(" vim "), "windows: {text}");
         assert!(text.contains("~/src"), "pane title: {text}");
-        assert!(text.contains("claude:working"), "agent chips: {text}");
-        assert!(text.contains("kimi:blocked"), "agent chips: {text}");
+        assert!(!text.contains("claude:working"), "agent chips: {text}");
+        assert!(!text.contains("kimi:blocked"), "agent chips: {text}");
     }
 
     /// The shown session's segment is bold; the active window's tab is
@@ -1024,13 +1043,14 @@ mod tests {
         row.paint(&segments, None);
         assert!(row.diff().is_empty(), "identical repaint diffs empty");
 
-        // One agent state change: only that chip's cells move.
+        // One pane-title change: only that segment's cells move. (Agent
+        // state left the bar — the side panel renders it.)
         let mut next = state();
-        next.agents = vec![(1, "claude".to_string(), "blocked".to_string())];
+        next.pane_title = "~/src/other".to_string();
         row.paint(&next.compose(80, None, false), None);
         let diff = row.diff();
         assert!(!diff.is_empty());
-        assert!(diff.len() < 80, "a chip change must not repaint the row");
+        assert!(diff.len() < 80, "a title change must not repaint the row");
     }
 
     /// The painter pads the row with reversed spaces, so a shorter line

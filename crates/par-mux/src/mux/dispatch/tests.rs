@@ -1,4 +1,4 @@
-use super::{dispatch_command, resolve_start_dir, roster_row, Ctx};
+use super::{dispatch_command, resolve_start_dir, roster_row, Ctx, RosterTokens};
 use crate::mux::command::parse_command;
 use crate::mux::ids::PaneId;
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
@@ -349,9 +349,12 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
         "pi",
         "blocked",
         "hook",
-        Some("waiting on telemetry=x hook"),
-        Some("dGVsZW1ldHJ5"),
-        Some("aG9zdA=="),
+        RosterTokens {
+            reason: Some("waiting on telemetry=x hook"),
+            telemetry: Some("dGVsZW1ldHJ5"),
+            host_telemetry: Some("aG9zdA=="),
+        },
+        String::new(),
     );
     let line = row.to_string();
     let mut tokens = line.split_whitespace();
@@ -394,8 +397,21 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
 
     // Absent fields add nothing: the row keeps its exact shorter shape.
     assert_eq!(
-        roster_row(PaneId(4), "pi", "working", "hook", None, None, None).to_string(),
-        "%4 pi working hook"
+        roster_row(
+            PaneId(4),
+            "pi",
+            "working",
+            "hook",
+            RosterTokens {
+                reason: None,
+                telemetry: None,
+                host_telemetry: None,
+            },
+            String::new()
+        )
+        .to_string(),
+        "%4 pi working hook",
+        "absent fields (no ws among them) add nothing"
     );
     assert_eq!(
         crate::mux::ipc::AgentRow::parse(&line),

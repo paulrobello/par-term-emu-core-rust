@@ -94,8 +94,7 @@ impl PaneRenderer {
             // full-width inverted block (the round-6 panel lists only
             // workspaces). The footer chips paint at their own columns
             // (line.x), body rows at col 0.
-            let workspace_row = line.id.as_deref().is_some_and(|id| id.starts_with("ws:"));
-            if line.active && workspace_row {
+            if line.active {
                 let block = RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
                     .add_modifier(RtModifier::BOLD);
@@ -108,7 +107,7 @@ impl PaneRenderer {
                     cell.set_style(block);
                 }
             }
-            let style = if line.active && workspace_row {
+            let style = if line.active {
                 RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
                     .add_modifier(RtModifier::BOLD)
@@ -168,46 +167,96 @@ impl WindowSession {
     pub(super) fn refresh_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         // A `client-snapshot` daemon's refresh already carries the roster
         // (ENH-043); query only before the first refresh filled it.
-        if conn.has_command_feature("client-snapshot", "v1") && !self.status.workspaces().is_empty()
+        let roster: Vec<(String, String, bool)> = if conn
+            .has_command_feature("client-snapshot", "v1")
+            && !self.status.workspaces().is_empty()
         {
             let active = self.status.active_workspace().map(str::to_string);
-            let roster = self
-                .status
+            self.status
                 .workspaces()
                 .iter()
                 .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
-                .collect();
-            self.set_sidebar_roster(roster);
-            return;
-        }
-        let roster: Vec<(String, String, bool)> = conn
-            .send_checked("list-workspaces")
-            .ok()
-            .filter(|reply| reply.ok)
-            .map(|reply| {
-                reply
-                    .body
-                    .iter()
-                    .filter_map(|l| super::super::parse_workspace_line(l))
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.set_sidebar_roster(roster);
+                .collect()
+        } else {
+            conn.send_checked("list-workspaces")
+                .ok()
+                .filter(|reply| reply.ok)
+                .map(|reply| {
+                    reply
+                        .body
+                        .iter()
+                        .filter_map(|l| super::super::parse_workspace_line(l))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let focused = self.renderer.focused();
+        let agents = self.status.agents().to_vec();
+        let names = self.status.workspaces().to_vec();
+        self.set_sidebar_roster(roster, &agents, &names, focused);
     }
 
-    /// Fill the panel's sections from an already-fetched workspace
-    /// roster `(id, name, active)` — the status refresh's own
-    /// `list-workspaces` rows, so one refresh queries the roster once.
-    pub(super) fn set_sidebar_roster(&mut self, roster: Vec<(String, String, bool)>) {
-        let rows: Vec<(String, String, bool)> = roster
-            .into_iter()
-            .map(|(id, name, active)| (format!("ws:{id}"), name, active))
-            .collect();
-        if rows.is_empty() {
+    /// Fill the panel's sections: the workspace rows, then the agent
+    /// roster — herdr's grouped panel. Each agent row labels with its
+    /// workspace name (`{ws} · {agent} ({state})`; the bare `{agent}
+    /// ({state})` when the daemon pre-`ws=` or the workspace is unknown)
+    /// and activates when its pane is the view's focus. Grouped by
+    /// workspace name, so an agent's row sits adjacent to its group.
+    pub(super) fn set_sidebar_roster(
+        &mut self,
+        roster: Vec<(String, String, bool)>,
+        agents: &[(u32, String, String, String)],
+        ws_names: &[(String, String)],
+        focused: Option<u32>,
+    ) {
+        let mut sections: Vec<super::super::SidebarSection> = Self::ws_rows_only(&roster)
+            .map(|rows| vec![super::super::SidebarSection { rows }])
+            .unwrap_or_default();
+        if !agents.is_empty() {
+            let mut rows: Vec<(String, String, bool)> = agents
+                .iter()
+                .map(|(pane, agent, state, ws)| {
+                    let ws_name = ws_names
+                        .iter()
+                        .find(|(id, _)| id == ws)
+                        .map(|(_, name)| name.as_str());
+                    let label = match ws_name {
+                        Some(name) => format!("{name} · {agent} ({state})"),
+                        None => format!("{agent} ({state})"),
+                    };
+                    (format!("pane:{pane}"), label, focused == Some(*pane))
+                })
+                .collect();
+            // herdr groups agents under their workspace: adjacent rows per
+            // workspace (label head order), stable within on pane order.
+            rows.sort_by_key(|(id, label, _)| {
+                let head = label.split(" · ").next().unwrap_or(label).to_string();
+                let pane = id
+                    .strip_prefix("pane:")
+                    .and_then(|p| p.parse::<u32>().ok())
+                    .unwrap_or(u32::MAX);
+                (head, pane)
+            });
+            sections.push(super::super::SidebarSection { rows });
+        }
+        if sections.is_empty() {
             self.renderer.set_sidebar_sections(None);
             return;
         }
-        self.renderer
-            .set_sidebar_sections(Some(vec![super::super::SidebarSection { rows }]));
+        self.renderer.set_sidebar_sections(Some(sections));
+    }
+
+    /// The workspace rows `(ws:{id}, name, active)`; `None` when the
+    /// roster is empty.
+    fn ws_rows_only(roster: &[(String, String, bool)]) -> Option<Vec<(String, String, bool)>> {
+        if roster.is_empty() {
+            return None;
+        }
+        Some(
+            roster
+                .iter()
+                .map(|(id, name, active)| (format!("ws:{id}"), name.clone(), *active))
+                .collect(),
+        )
     }
 }
