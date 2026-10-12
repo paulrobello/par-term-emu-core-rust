@@ -20,6 +20,9 @@ pub(crate) mod foreground;
 pub mod hooks;
 pub(crate) mod host_probe;
 pub mod ids;
+// The installers back the binary's one-shot flags only (ARC-143, the
+// ARC-106 binary-only rule).
+#[cfg(feature = "mux-bin")]
 pub mod integrations;
 pub mod ipc;
 pub mod layout;
@@ -27,6 +30,7 @@ pub mod pane;
 pub mod persist;
 pub mod scrape;
 pub mod server;
+#[cfg(feature = "mux-bin")]
 pub mod skill_installer;
 pub mod tree;
 pub mod win_resume;

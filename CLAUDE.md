@@ -168,7 +168,7 @@ It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, seque
 | `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
 | `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session` and `macro-yaml`) |
 | `mux` | `par-mux` multiplexer library, re-exported from the `par-mux` member as `crate::mux`: PTYs, session tree, control-mode socket, on-disk persistence. Enables `par-mux/mux`, `pty_session`, `interprocess` (for the streaming `MuxSessionFactory`), and `serde`. No `clap` |
-| `mux-bin` | Forwards to the `par-mux` member's `mux-bin` (`mux` + `clap`). The binary builds from the member: `cargo build -p par-mux --bin par-mux --features mux-bin` |
+| `mux-bin` | Forwards to the `par-mux` member's `mux-bin` (`mux` + `clap`, plus the agent-integration installers and `skill_installer` (`jsonc-parser`)). The binary builds from the member: `cargo build -p par-mux --bin par-mux --features mux-bin` |
 | `attach` | The `par-mux attach` client (`crate::mux::attach`): raw-mode terminal attach with size/keypress reads and SIGWINCH resize reports (crossterm + ratatui pane renderer). Forwards to `mux-bin` + `par-mux/attach` |
 | `macro-yaml` | `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` via `serde_yaml_ng`. Enabled by `python`, `python-test`, and `streaming-bin` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
