@@ -33,10 +33,13 @@ mod geometry;
 mod input_route;
 mod modal;
 mod navigate;
+mod paint;
+mod pane_chrome;
 mod renderer;
 mod session;
 mod sidebar;
 mod sidebar_state;
+mod sink;
 mod status_patch;
 
 use chrome::ChromeRows;
