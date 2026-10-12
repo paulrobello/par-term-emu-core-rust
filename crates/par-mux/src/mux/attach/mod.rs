@@ -242,6 +242,14 @@ const CHUNK: usize = 512;
 /// of note.
 const POLL: Duration = Duration::from_millis(16);
 
+/// Cadence the render session re-asserts the host cursor placement at
+/// while quiet: every guarded writer keeps the client's belief equal to
+/// the host's state, but an intermittent loss outside those writers (the
+/// joe invisible-cursor report) would otherwise never self-heal — the
+/// heartbeat re-emits the same CUP + DECSCUSR + DECTCEM-show at least
+/// once per interval. Idempotent on a healthy host (~16 bytes/s).
+pub(crate) const CURSOR_HEARTBEAT: Duration = Duration::from_secs(1);
+
 /// The attach session: connect, handshake, resolve the target pane, run
 /// the byte/key pump, and restore the terminal on every exit path.
 fn run_inner(

@@ -18,7 +18,7 @@ use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::{
     active_window_row, list_window_ids, next_in_cycle, next_workspace, session_active_window,
 };
-use crate::mux::attach::{layout, HelpRow, ManagementKey};
+use crate::mux::attach::{layout, HelpRow, ManagementKey, CURSOR_HEARTBEAT};
 use crate::mux::layout::PaneChrome;
 use par_term_emu_core::cell::CellFlags;
 use par_term_emu_core::color::{Color as CoreColor, NamedColor};
@@ -384,6 +384,19 @@ pub(crate) trait FlushSink {
     }
 }
 
+/// Opt-in diagnostics (`PAR_MUX_CURSOR_TRACE=1`) for the intermittent
+/// invisible-cursor report (joe in a render attach): each host cursor
+/// write and each [`PaneRenderer::focused_cursor`] `None` reason lands
+/// on stderr, so the next occurrence names the hider. Cheap when unset
+/// (one `OnceLock` read per call).
+pub(crate) fn cursor_trace() -> bool {
+    use std::sync::OnceLock;
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| {
+        std::env::var("PAR_MUX_CURSOR_TRACE").is_ok_and(|v| v != "0" && !v.is_empty())
+    })
+}
+
 /// The Phase B render-mode attach session: connect, seed the window's
 /// panes from the daemon (layout via a size-report `%layout-change`,
 /// per-pane state via the `refresh-client -t` replays), then pump
@@ -628,6 +641,12 @@ struct WindowSession {
     /// tick, while a flushed frame (whose per-cell CUP left the terminal
     /// cursor wherever the last diff cell sits) always repositions.
     cursor_placed: Option<Option<(u16, u16, CursorStyle)>>,
+    /// The instant the last `place_cursor` wrote, heartbeat-gated: a
+    /// quiet pump emits nothing, and a host terminal that lost the
+    /// cursor state (an output race outside the guarded writers) would
+    /// keep it lost forever — every [`Self::frame`] re-asserts the
+    /// placement after [`CURSOR_HEARTBEAT`].
+    last_cursor_emit: std::time::Instant,
     /// A mouse path (the command menu's `detach` row) asked to end the
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
@@ -860,6 +879,7 @@ impl WindowSession {
             flash: None,
             flash_until: None,
             cursor_placed: Some(None),
+            last_cursor_emit: std::time::Instant::now(),
             detach_requested: false,
             pending_end: false,
             geometry,

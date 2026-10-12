@@ -206,6 +206,12 @@ impl FlushSink for StdoutSink {
     }
 
     fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
+        if super::cursor_trace() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "par-mux cursor-trace: place_cursor {cursor:?}"
+            );
+        }
         let mut out = String::with_capacity(24);
         match cursor {
             Some((x, y, style)) => {
@@ -756,14 +762,60 @@ impl PaneRenderer {
     /// The style is the pane's tracked DECSCUSR shape, for the sink to
     /// re-emit (`CSI Ps SP q`).
     pub fn focused_cursor(&self) -> Option<(u16, u16, CursorStyle)> {
-        let focus = self.focused?;
-        let rect = self.layout.iter().find(|r| r.pane == focus)?;
-        let emulator = self.emulators.get(&focus)?;
+        let focus = match self.focused {
+            Some(focus) => focus,
+            None => {
+                if super::cursor_trace() {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "par-mux cursor-trace: focused_cursor None (no focused pane)"
+                    );
+                }
+                return None;
+            }
+        };
+        let rect = match self.layout.iter().find(|r| r.pane == focus) {
+            Some(rect) => rect,
+            None => {
+                if super::cursor_trace() {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "par-mux cursor-trace: focused_cursor None (focused pane has no layout rect)"
+                    );
+                }
+                return None;
+            }
+        };
+        let emulator = match self.emulators.get(&focus) {
+            Some(emulator) => emulator,
+            None => {
+                if super::cursor_trace() {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "par-mux cursor-trace: focused_cursor None (no emulator for focused pane)"
+                    );
+                }
+                return None;
+            }
+        };
         if emulator.scroll_offset() > 0 {
+            if super::cursor_trace() {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "par-mux cursor-trace: focused_cursor None (view scrolled: offset {})",
+                    emulator.scroll_offset()
+                );
+            }
             return None;
         }
         let cursor = emulator.terminal().cursor();
         if !cursor.visible {
+            if super::cursor_trace() {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "par-mux cursor-trace: focused_cursor None (pane tracked cursor hidden by DECTCEM)"
+                );
+            }
             return None;
         }
         let (col, row) = (cursor.col, cursor.row);
@@ -772,6 +824,12 @@ impl PaneRenderer {
         // when the tracked cell falls in the cropped perimeter band.
         let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
         if col >= usize::from(view_w) || row >= usize::from(view_h) {
+            if super::cursor_trace() {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "par-mux cursor-trace: focused_cursor None (tracked cell ({col},{row}) outside content view {view_w}x{view_h})"
+                );
+            }
             return None;
         }
         let (x, y) = self
