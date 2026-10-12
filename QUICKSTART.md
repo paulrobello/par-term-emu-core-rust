@@ -31,7 +31,7 @@ pip install par-term-emu-core-rust
 
 ### Install from source
 
-For hacking on the library itself. Requires Rust 1.98+ and Python 3.12+.
+For hacking on the library itself. Requires Rust 1.99+ (the `rust-version` in `Cargo.toml`) and Python 3.12+.
 
 ```bash
 # Install Rust if you haven't already

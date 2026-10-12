@@ -8,7 +8,7 @@ Rust terminal emulator library with Python 3.12+ bindings (PyO3). Provides VT100
 
 **Sister Projects** (keep config files, CLI options, and features in sync):
 - `../par-term-emu-tui-rust` - Python TUI application ([GitHub](https://github.com/paulrobello/par-term-emu-tui-rust), [PyPI](https://pypi.org/project/par-term-emu-tui-rust/))
-- `../par-term` - Rust terminal frontend ([GitHub](https://github.com/probello/par-term))
+- `../par-term` - Rust terminal frontend ([GitHub](https://github.com/paulrobello/par-term))
 
 ## Build Commands
 
