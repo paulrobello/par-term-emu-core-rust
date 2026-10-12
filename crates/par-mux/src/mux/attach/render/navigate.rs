@@ -256,7 +256,7 @@ impl WindowSession {
     ) -> Result<(), status::StatusError> {
         let focused = self.renderer.focused().unwrap_or(0);
         let rows = self.status.refresh(conn, &self.window, focused)?;
-        if self.sidebar_on {
+        if self.sidebar.is_on() {
             if let Some(roster) = rows.workspaces {
                 let focused = self.renderer.focused();
                 let sections = Self::sidebar_sections(
@@ -426,7 +426,7 @@ impl WindowSession {
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: resolved for the shape, never applied to
                 // the live panel below.
-                sidebar_on_launch: self.sidebar_on,
+                sidebar_on_launch: self.sidebar.is_on(),
             },
         ) {
             Ok(chords) => {
@@ -557,7 +557,7 @@ impl WindowSession {
         // display option stays on the live renderer (ENH-044).
         let (host_cols, host_rows) = self.renderer.frame_size();
         self.refit_renderer(host_cols, host_rows);
-        if self.sidebar_on {
+        if self.sidebar.is_on() {
             self.refresh_sidebar(conn);
         }
         let report = self.size_report(conn, &pane);

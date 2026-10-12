@@ -389,7 +389,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     assert!(drained(&rx).is_empty(), "the local toggles touch no wire");
 
     chord(&mut session, &mut conn, b's');
-    assert!(session.sidebar_on && session.pending.grid_refit);
+    assert!(session.sidebar.is_on() && session.pending.grid_refit);
     assert_eq!(session.renderer.sidebar_width(), 20);
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     assert_eq!(
@@ -398,7 +398,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
         "the queried roster fills the panel"
     );
     chord(&mut session, &mut conn, b's');
-    assert!(!session.sidebar_on);
+    assert!(!session.sidebar.is_on());
     assert_eq!(session.renderer.sidebar_width(), 0);
     assert_eq!(session.chrome.flash_text(), Some("sidebar off"));
     assert!(drained(&rx).is_empty(), "closing re-queries nothing");

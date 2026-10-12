@@ -137,7 +137,7 @@ impl WindowSession {
     /// re-seed repaints. Opening queries the workspace roster for the
     /// section rows.
     pub(super) fn toggle_sidebar(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        self.sidebar_on = !self.sidebar_on;
+        self.sidebar.toggle();
         self.chrome_geometry_changed();
         self.renderer.set_geometry(self.geometry);
         // The refit runs on the pump (it owns the flush sink): resize_to
@@ -145,11 +145,11 @@ impl WindowSession {
         // old layout vacated — the plain %layout-change re-seed never
         // clears those host cells (the manual-pass ghost-pane report).
         self.pending.grid_refit = true;
-        if self.sidebar_on {
+        if self.sidebar.is_on() {
             self.refresh_sidebar(conn);
         }
         self.chrome.flash(
-            if self.sidebar_on {
+            if self.sidebar.is_on() {
                 "sidebar on"
             } else {
                 "sidebar off"
@@ -208,7 +208,7 @@ impl WindowSession {
     /// the workspace cache this only marks the status stale, so the
     /// throttled refresh draws the panel whole.
     pub(super) fn rebuild_agent_section(&mut self) {
-        if !self.sidebar_on {
+        if !self.sidebar.is_on() {
             return;
         }
         if self.status.workspaces().is_empty() {

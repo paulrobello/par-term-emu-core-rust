@@ -36,9 +36,11 @@ mod navigate;
 mod renderer;
 mod session;
 mod sidebar;
+mod sidebar_state;
 
 use chrome::ChromeRows;
 use cursor::CursorState;
+use sidebar_state::SidebarState;
 
 use renderer::{RenderOptions, StdoutSink};
 
@@ -462,7 +464,7 @@ fn render_session_inner(
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.
-    session.sidebar_on = chords.sidebar_on_launch;
+    session.sidebar.set(chords.sidebar_on_launch);
     session.chrome_geometry_changed();
     session.renderer.set_geometry(session.geometry);
     if !session.apply_chords(chords, &client.file) {
@@ -619,7 +621,7 @@ struct WindowSession {
     render_opts: RenderOptions,
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
-    sidebar_on: bool,
+    sidebar: SidebarState,
     /// The zoom cue (the daemon's `resize-pane -Z` state, as the chord
     /// last saw it) — bolds a ` Z |` head on the status row. The daemon
     /// holds the truth; a window switch resets the cue.
@@ -857,7 +859,7 @@ impl WindowSession {
             resize_step: chords.resize_step,
             drag: None,
             render_opts: RenderOptions::default(),
-            sidebar_on: false,
+            sidebar: SidebarState::default(),
             zoomed: false,
             daemon_layout: Vec::new(),
             stdin_primer: Vec::new(),
@@ -1033,7 +1035,7 @@ impl WindowSession {
             self.resize_to(conn, frame_w, frame_h, sink)?;
             // The refit keeps the strip's sections in place (ENH-044); the
             // re-query refreshes the active workspace mark.
-            if self.sidebar_on {
+            if self.sidebar.is_on() {
                 self.refresh_sidebar(conn);
             }
         }

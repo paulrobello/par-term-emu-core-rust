@@ -1607,7 +1607,7 @@ fn click_menu_row(
 /// Show the side panel at its default 20 columns the way the toggle
 /// does: the session flag, the frame geometry, and the renderer's strip.
 fn show_sidebar(session: &mut WindowSession) {
-    session.sidebar_on = true;
+    session.sidebar.set(true);
     session.chrome_geometry_changed();
     session
         .renderer

@@ -111,7 +111,7 @@ impl WindowSession {
     /// the panel is hidden.
     pub(super) fn effective_render_opts(&self) -> RenderOptions {
         RenderOptions {
-            sidebar_width: if self.sidebar_on {
+            sidebar_width: if self.sidebar.is_on() {
                 self.render_opts.sidebar_width
             } else {
                 0
@@ -440,7 +440,7 @@ impl WindowSession {
         self.renderer.apply_layout(layout);
         // A panel up at launch (`sidebar-on-launch`) needs its sections
         // for the first frame.
-        if self.sidebar_on {
+        if self.sidebar.is_on() {
             self.refresh_sidebar(conn);
         }
 
@@ -597,7 +597,7 @@ impl WindowSession {
         let segments = self.status.compose(
             cols.saturating_sub(reserved as u16),
             scroll,
-            self.sidebar_on,
+            self.sidebar.is_on(),
         );
         let mut with_head = head;
         with_head.extend(segments);

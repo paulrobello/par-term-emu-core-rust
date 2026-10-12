@@ -1760,7 +1760,7 @@ fn effective_render_opts_zero_the_hidden_sidebar() {
     let mut session = WindowSession::new(80, 25);
     assert_eq!(session.render_opts.sidebar_width, 20);
     assert_eq!(session.effective_render_opts().sidebar_width, 0);
-    session.sidebar_on = true;
+    session.sidebar.set(true);
     assert_eq!(session.effective_render_opts().sidebar_width, 20);
 }
 
@@ -2155,7 +2155,7 @@ fn status_refresh_round_trips_are_bounded() {
         .renderer
         .apply_layout(parse_layout(FOUR_PANE).expect("parses"));
     session.window = "@0".to_string();
-    session.sidebar_on = true;
+    session.sidebar.set(true);
     session.renderer.focus(1);
     // Steady state: every pane's title was learned on an earlier
     // refresh; then %3's user title is cleared (a set title patches from
@@ -2344,7 +2344,7 @@ fn snapshot_session() -> WindowSession {
         .renderer
         .apply_layout(parse_layout(THREE_PANE).expect("parses"));
     session.window = "@0".to_string();
-    session.sidebar_on = true;
+    session.sidebar.set(true);
     session.renderer.focus(1);
     session
 }
