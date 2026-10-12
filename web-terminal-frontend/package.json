@@ -35,7 +35,7 @@
     "autoprefixer": "^10.6.1",
     "eslint": "^10",
     "eslint-config-next": "^16.4.0",
-    "happy-dom": "^20.14.6",
+    "happy-dom": "^21.0.1",
     "postcss": "^8.5.29",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
