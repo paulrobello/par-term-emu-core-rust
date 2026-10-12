@@ -19,6 +19,10 @@ make dev-streaming       # Alias of make dev (streaming is in pyproject's [tool.
 make checkall            # All quality checks (run before every commit)
 make checkall-ci         # CI-parity gate: checkall + the CI mux-test job's suites (nextest, serial; run before pushing)
 make ffi-header          # Regenerate include/terminal_core.h with cbindgen (after FFI surface changes)
+make stubs               # Regenerate python/par_term_emu_core_rust/_native.pyi (after Rust-side binding changes; run after make dev)
+make release-check       # Pre-release gates: version-lockstep checks + release-notes presence
+make bench               # Criterion VTE throughput benchmarks
+make fuzz-all            # All eight cargo-fuzz targets (fuzz-terminal_process, fuzz-sixel, fuzz-kitty, fuzz-apc_filter, fuzz-tmux_control, fuzz-mux_parse_command, fuzz-mux_hook_report, fuzz-attach_input)
 ```
 
 **Never use `cargo build` directly** for PyO3 modules - it will fail at link stage. Always use `make dev` (maturin).
@@ -163,6 +167,7 @@ It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, seque
 | `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session` and `macro-yaml`) |
 | `mux` | `par-mux` multiplexer library, re-exported from the `par-mux` member as `crate::mux`: PTYs, session tree, control-mode socket, on-disk persistence. Enables `par-mux/mux`, `pty_session`, `interprocess` (for the streaming `MuxSessionFactory`), and `serde`. No `clap` |
 | `mux-bin` | Forwards to the `par-mux` member's `mux-bin` (`mux` + `clap`). The binary builds from the member: `cargo build -p par-mux --bin par-mux --features mux-bin` |
+| `attach` | The `par-mux attach` client (`crate::mux::attach`): raw-mode terminal attach with size/keypress reads and SIGWINCH resize reports (crossterm + ratatui pane renderer). Forwards to `mux-bin` + `par-mux/attach` |
 | `macro-yaml` | `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}` via `serde_yaml_ng`. Enabled by `python`, `python-test`, and `streaming-bin` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
 | `ffi` | The C ABI (`src/ffi.rs`, `ptec_terminal_*` exports). Off by default so Python wheels export no C symbols; `make xcframework` builds `rust-only,ffi` (ARC-112) |
@@ -286,6 +291,7 @@ Files that must stay in sync:
 - **docs/ARCHITECTURE.md** - Detailed internal architecture with diagrams
 - **docs/SECURITY.md** - PTY security considerations
 - **docs/MUX.md** - par-mux multiplexer daemon operational reference
+- **docs/par-mux.md** - par-mux design decision record (the D-numbers cited from Cargo.toml feature comments and code)
 - **docs/DOCUMENTATION_STYLE_GUIDE.md** - Documentation standards
 - [PyO3 guide](https://pyo3.rs/) - Python bindings reference
 - [xterm sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) - VT spec
