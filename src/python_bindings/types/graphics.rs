@@ -102,7 +102,7 @@ pub struct PyGraphic {
     /// Unique graphic identifier
     #[pyo3(get)]
     pub id: u64,
-    /// Source protocol: "sixel", "iterm2", or "kitty"
+    /// Source protocol: "sixel", "iterm", or "kitty"
     #[pyo3(get)]
     pub protocol: String,
     /// Anchor position as (col, row)

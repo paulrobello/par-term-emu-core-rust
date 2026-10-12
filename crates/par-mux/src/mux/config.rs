@@ -201,9 +201,9 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub sidebar_on_launch: Option<bool>,
-    /// The divider/border line style: `unicode` (default), `double`,
-    /// `heavy`, or `ascii`. An unknown value warns and uses the
-    /// default.
+    /// The divider/border line style: `herdr` (default), `unicode`,
+    /// `double`, `heavy`, or `ascii`. An unknown value warns and uses
+    /// the default.
     #[serde(
         default,
         rename = "border-lines",
@@ -637,7 +637,7 @@ pub struct Chords {
     /// Default off.
     pub pane_borders: bool,
     /// The pane's user title embedded in its top border (config
-    /// `show-label-in-border`). Default off.
+    /// `show-label-in-border`). Default on.
     pub show_label_in_border: bool,
     /// Visible gap bands between panes in render mode (config
     /// `pane-gaps`). Default 0.
@@ -648,8 +648,8 @@ pub struct Chords {
     /// The drag cursor shaping (config `drag-cursor-shape`). Default
     /// off.
     pub drag_cursor_shape: bool,
-    /// The divider/border glyph set (config `border-lines`): `unicode`,
-    /// `double`, `heavy`, or `ascii`. Default `unicode`.
+    /// The divider/border glyph set (config `border-lines`): `herdr`,
+    /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
     /// The workspace side panel's width in columns when shown.
     pub sidebar_width: u16,

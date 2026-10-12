@@ -133,9 +133,9 @@ struct Cli {
 
     /// Attach a client TUI to the daemon on the resolved socket (the
     /// `attach` cargo feature builds it in). Subcommand, not flag: its
-    /// own positional/flag grammar. NOTE: a daemon literally named
-    /// "attach" must use --socket — the subcommand name shadows the
-    /// positional NAME form for that one name.
+    /// own positional/flag grammar. NOTE: the subcommand shadows the
+    /// NAME form only when STARTING a daemon literally named "attach"
+    /// (that needs --socket); attaching to one by NAME still resolves.
     #[cfg(feature = "attach")]
     #[command(subcommand)]
     attach: Option<AttachCommand>,
@@ -207,9 +207,10 @@ struct Cli {
 #[cfg(feature = "attach")]
 #[derive(clap::Subcommand, Debug)]
 enum AttachCommand {
-    /// Attach a client to a running par-mux daemon; never starts one. A
-    /// daemon literally named "attach" must use --socket — the subcommand
-    /// name shadows the positional NAME form for that one name.
+    /// Attach a client to a running par-mux daemon; never starts one.
+    /// Attaching by NAME resolves normally, even for a daemon literally
+    /// named "attach"; only STARTING one of that name needs --socket,
+    /// where the subcommand shadows the NAME form.
     Attach(AttachArgs),
 }
 
@@ -234,8 +235,9 @@ struct AttachArgs {
     #[arg(long = "mode", value_name = "MODE")]
     mode: Option<String>,
 
-    /// Named default socket path. A daemon literally named "attach" must
-    /// use --socket instead — the subcommand name shadows this form.
+    /// Named default socket path. Only STARTING a daemon named "attach"
+    /// needs --socket (the subcommand shadows the NAME form there);
+    /// attaching by this NAME form works, including for "attach".
     name: Option<String>,
 
     /// Connect to an explicit socket path instead of the named default.

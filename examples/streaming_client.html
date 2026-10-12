@@ -225,9 +225,10 @@
         // Enable Unicode 11 for better emoji width calculation
         term.unicode.activeVersion = '11';
 
-        // Note: Regional indicator flag emojis (🇺🇸, 🇨🇳, etc.) require grapheme cluster support
-        // which is not yet published by xterm.js. They will appear as placeholder boxes.
-        // See docs/REGIONAL_FLAG_LIMITATION.md for details.
+        // Note: Regional indicator flag emojis (🇺🇸, 🇨🇳, etc.) need the
+        // experimental @xterm/addon-unicode-graphemes addon. It is published,
+        // but this client does not load it, so under unicode11 they appear as
+        // placeholder boxes. See docs/REGIONAL_FLAG_LIMITATION.md for details.
 
         // Wait for fonts to load before opening terminal to prevent rendering issues
         document.fonts.ready.then(() => {

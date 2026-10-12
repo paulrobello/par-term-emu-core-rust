@@ -63,21 +63,21 @@ Any edit to `[features]` or the dependency lists in `Cargo.toml` gets an additio
 
 ## Benchmarks
 
-Criterion benchmarks for the VTE processing hot path live in `benches/terminal_throughput.rs`. They drive the real `Terminal::process` pipeline (vte parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) and report throughput as MB/s.
+Criterion benchmarks live in three `[[bench]]` targets (full table in [docs/BENCHMARKING.md](docs/BENCHMARKING.md)): `benches/terminal_throughput.rs` drives the real `Terminal::process` pipeline (vte parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) and reports MiB/s via `Throughput::Bytes`; `benches/ffi_readback.rs` measures per-frame dirty-readback cost through the C FFI surface (`rust-only,ffi`); `benches/pty_geometry.rs` measures `Terminal::size()` reads against a live PTY session (`pty_session`).
 
 ```bash
-make bench         # cargo bench --no-default-features --features rust-only
+make bench         # cargo bench --no-default-features --features rust-only,ffi (terminal_throughput + ffi_readback)
 ```
 
-Benchmarks build without the Python feature, so no `make dev` / maturin step is needed. They are on-demand only and never run as part of `make checkall`. The committed baseline is `docs/fable/BENCH-BASELINE-2026-09.md` — compare your changes against it when touching the hot path (its methodology section explains why you must interleave A/B binaries rather than compare across sessions):
+Benchmarks build without the Python feature, so no `make dev` / maturin step is needed. `pty_geometry` is not covered by `make bench`; run it directly with `cargo bench --no-default-features --features pty_session --bench pty_geometry`. Benchmarks are on-demand only and never run as part of `make checkall`. The committed baseline is `docs/fable/BENCH-BASELINE-2026-09.md` — compare your changes against it when touching the hot path (its methodology section explains why you must interleave A/B binaries rather than compare across sessions):
 
 ```bash
-cargo bench --no-default-features --features rust-only -- --save-baseline my-change
+cargo bench --no-default-features --features rust-only,ffi --bench terminal_throughput -- --save-baseline my-change
 # ... after further changes ...
-cargo bench --no-default-features --features rust-only -- --baseline my-change
+cargo bench --no-default-features --features rust-only,ffi --bench terminal_throughput -- --baseline my-change
 ```
 
-A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only -- --test`. A scheduled gate also tracks these benches against a stored baseline tag over time — see [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
+A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only,ffi -- --test`. A scheduled gate also tracks these benches against a stored baseline tag over time — see [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
 
 ## Fuzzing
 

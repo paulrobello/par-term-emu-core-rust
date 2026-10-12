@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          "/Users/probello/Repos/par-term-emu-core-rust/examples/streaming_client.html"
+        ],
+        "createdAt": "2026-10-12T01:16:47.183Z",
+        "reason": "2026-10-11 doc-sync session: demo/fixture page for the streamer (dark terminal UI is intentional); finding is pre-existing styling, the session's edit only changed a JS comment. Suppressed at file scope as the narrowest available option."
+      }
+    ]
+  }
+}
