@@ -82,7 +82,7 @@ Per terminal, in passthrough then render mode, check:
   prefix `s` closes it. Prefix `s` toggles a left strip — one flat
   workspace row each (ONLY the active one a full-width inverted block),
   then the agents section: one `{workspace} · {agent} ({state})` row per
-  rostered agent, grouped by workspace name, the focused pane's row
+  rostered agent, grouped by workspace (id order), the focused pane's row
   inverted; clicking a workspace row lands on it, clicking an agent row
   focuses that pane (a same-window click just moves focus). Panes
   re-divide narrower around the strip with the vacated region fully
