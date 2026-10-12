@@ -1096,6 +1096,15 @@ adversary:
   — complete or unterminated — exceeding it is answered with one `%error`
   block ("line exceeds 1 MiB budget, closing connection") and the
   connection is closed without waiting for a newline.
+- **Client-side per-line budget (`MAX_REPLY_LINE_BYTES`, ENH-058):** the
+  par-mux client reader (`crates/par-mux/src/mux/client.rs`) reuses the
+  daemon's bounded-line helper with its own 4 MiB budget. A healthy
+  daemon's longest line is a `show-buffer` body under the daemon's own 1
+  MiB input budget (a `%output` line is at most ~64 KiB), so it never
+  trips on a healthy daemon; a broken daemon streaming an unterminated
+  line gets the connection closed, and a pending command reports
+  "server closed the connection" (`ConnectionAborted`) instead of the
+  client process growing without bound.
 - **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` lines):** a `%output`
   line carries one PTY read (up to 16 KiB raw, roughly doubled by escape
   encoding), so a client that stops draining pins at most
@@ -1341,6 +1350,7 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
+| `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:25` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:572` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:574` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:576` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |

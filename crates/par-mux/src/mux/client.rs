@@ -7,6 +7,7 @@
 //! first time pane output arrived mid-command.
 
 use crate::mux::ipc::{connect_local_stream, default_socket_path, LocalStream};
+use crate::mux::server::{fill_line_bounded, is_poll_wake, LineFill};
 use interprocess::TryClone as _;
 use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
 use std::io::{self, BufRead, BufReader, Write};
@@ -16,6 +17,13 @@ use std::time::{Duration, Instant};
 
 /// How long `send` waits for a reply block before giving up.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-line byte budget for the client reader. A healthy daemon's longest
+/// line is a `show-buffer` body under the daemon's own 1 MiB input budget
+/// (a `%output` line is at most ~64 KiB), so 4x that never trips; a broken
+/// daemon streaming an unterminated line gets the connection closed
+/// instead of growing this process without bound.
+/// cap: Bytes accumulated from one daemon reply or notification line before the client closes the connection.
+const MAX_REPLY_LINE_BYTES: usize = 4 * 1024 * 1024;
 /// How long `connect_or_spawn_at` keeps retrying after spawning a daemon.
 const SPAWN_CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -301,12 +309,25 @@ fn reader_loop(
     reply_tx: Sender<Reply>,
     notification_tx: Sender<TmuxNotification>,
 ) {
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
     let mut parser = TmuxControlParser::new(true);
     // The open reply block: its command number and body so far.
     let mut open: Option<(u32, Vec<String>)> = None;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    loop {
+        let line = match read_daemon_line(&mut reader, MAX_REPLY_LINE_BYTES) {
+            DaemonLine::Line(line) => line,
+            DaemonLine::Oversize => {
+                log::warn!(
+                    "par-mux client: daemon line exceeded {MAX_REPLY_LINE_BYTES} bytes; \
+                     closing the connection"
+                );
+                break;
+            }
+            // EOF, a read fault, or a non-UTF-8 line: the same clean break
+            // `lines()` produced, so a pending command reports
+            // ConnectionAborted on the dropped reply channel.
+            DaemonLine::Closed => break,
+        };
         match framing(&line) {
             // A begin opens a block only when none is open — the daemon
             // writes each block atomically, so a begin inside an open
@@ -353,6 +374,47 @@ fn reader_loop(
             }
         }
     }
+}
+
+/// One line from the daemon, as `reader_loop` consumes it.
+#[derive(Debug, PartialEq, Eq)]
+enum DaemonLine {
+    /// A line with its `\n` (and a preceding `\r`) stripped, like `Lines`;
+    /// also an unterminated final line read before EOF.
+    Line(String),
+    /// EOF with nothing pending, a read fault, or a non-UTF-8 line: the
+    /// same clean break `lines()` produced, so a pending command reports
+    /// ConnectionAborted on the dropped reply channel.
+    Closed,
+    /// The line passed `max` bytes.
+    Oversize,
+}
+
+/// One bounded daemon line. `fill_line_bounded` keeps the bytes raw across
+/// read wakes, so a healthy sender's pause never loses a partial line, and
+/// an unterminated stream trips the budget without a newline — the
+/// property `Lines` lacks (it grows one `String` without limit).
+fn read_daemon_line<R: BufRead>(reader: &mut R, max: usize) -> DaemonLine {
+    let mut buf = Vec::new();
+    loop {
+        match fill_line_bounded(reader, &mut buf, max) {
+            Ok(LineFill::Complete) => break,
+            Ok(LineFill::Eof) if buf.is_empty() => return DaemonLine::Closed,
+            Ok(LineFill::Eof) => break,
+            Ok(LineFill::Oversize) => return DaemonLine::Oversize,
+            // No recv timeout is set on the client stream today; if one is
+            // ever added, a wake must keep `buf` (Lines would drop it).
+            Err(err) if is_poll_wake(&err) => continue,
+            Err(_) => return DaemonLine::Closed,
+        }
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    String::from_utf8(buf).map_or(DaemonLine::Closed, DaemonLine::Line)
 }
 
 /// Which framing line a connection line is.
@@ -845,6 +907,83 @@ mod tests {
 
         let err = client.send("list-panes").expect_err("server hung up");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{err}");
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
+    /// `read_daemon_line` strips `\n` and one preceding `\r` like `Lines`,
+    /// and reads an unterminated final line before EOF.
+    #[test]
+    fn read_daemon_line_strips_lf_and_crlf() {
+        let mut reader = io::Cursor::new(b"a\nb\r\nc".to_vec());
+        assert_eq!(
+            read_daemon_line(&mut reader, 16),
+            DaemonLine::Line("a".into())
+        );
+        assert_eq!(
+            read_daemon_line(&mut reader, 16),
+            DaemonLine::Line("b".into())
+        );
+        assert_eq!(
+            read_daemon_line(&mut reader, 16),
+            DaemonLine::Line("c".into())
+        );
+        assert_eq!(read_daemon_line(&mut reader, 16), DaemonLine::Closed);
+    }
+
+    /// The budget trips mid-line without a newline — the property `Lines`
+    /// lacks: it would grow one `String` forever.
+    #[test]
+    fn read_daemon_line_trips_the_budget_without_a_newline() {
+        let mut reader = io::Cursor::new(vec![b'x'; 300]);
+        assert_eq!(read_daemon_line(&mut reader, 100), DaemonLine::Oversize);
+    }
+
+    /// Non-UTF-8 closes the connection, matching `Lines`' InvalidData break.
+    #[test]
+    fn read_daemon_line_closes_on_non_utf8() {
+        let mut reader = io::Cursor::new(b"\xff\n".to_vec());
+        assert_eq!(read_daemon_line(&mut reader, 16), DaemonLine::Closed);
+    }
+
+    /// An unterminated daemon line past the budget ends the reader while
+    /// the socket stays open: the pending `send_checked` reports
+    /// `ConnectionAborted` from the dropped reply channel, not EOF.
+    #[cfg(unix)]
+    #[test]
+    fn an_unterminated_oversize_daemon_line_aborts_the_pending_command() {
+        use std::io::Write as _;
+        let (dir, socket) = temp_socket("oversize.sock");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+
+            assert_eq!(lines.next().unwrap().unwrap(), "show-buffer");
+            writer.write_all(b"%begin 1 5 1\n").unwrap();
+            let chunk = [b'x'; 64 * 1024];
+            let mut remaining = MAX_REPLY_LINE_BYTES + 1;
+            while remaining > 0 {
+                let take = remaining.min(chunk.len());
+                writer.write_all(&chunk[..take]).unwrap();
+                remaining -= take;
+            }
+            writer.flush().unwrap();
+            // Hold the socket: a line the client never finishes reading
+            // keeps the budget — not EOF — as the only way out. Blocks in
+            // `next()` until the client drops its side.
+            let _ = lines.next();
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        let err = client.send_checked("show-buffer").expect_err("budget trip");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::ConnectionAborted,
+            "the budget trip must surface as the dropped reply channel, not a hang: {err}"
+        );
+        drop(client);
         server.join().expect("server thread");
         drop(dir);
     }

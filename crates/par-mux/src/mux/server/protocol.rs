@@ -5,7 +5,7 @@ use super::*;
 
 /// How one bounded fill attempt ended (SEC-127).
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum LineFill {
+pub(crate) enum LineFill {
     /// `buf` ends in `\n`.
     Complete,
     /// `buf` grew past `max`; the caller answers %error and closes.
@@ -18,7 +18,7 @@ pub(super) enum LineFill {
 /// trips. Errors (a recv-timeout poll wake above all) propagate with `buf`
 /// intact: the bytes stay raw until the line completes, so a wake that
 /// splits a multi-byte UTF-8 char loses nothing.
-pub(super) fn fill_line_bounded<R: BufRead>(
+pub(crate) fn fill_line_bounded<R: BufRead>(
     reader: &mut R,
     buf: &mut Vec<u8>,
     max: usize,
@@ -168,7 +168,7 @@ pub(super) fn write_line(
 
 /// Whether an I/O error is a send/recv-timeout wake rather than a fault —
 /// the timeout-driven poll loop's transient, to be retried or examined.
-pub(super) fn is_poll_wake(err: &std::io::Error) -> bool {
+pub(crate) fn is_poll_wake(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut

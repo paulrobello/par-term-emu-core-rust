@@ -125,6 +125,9 @@ pub use endpoint::sweep_pane_endpoint_remnants;
 pub(crate) use endpoint::PaneEndpoint;
 use endpoint::*;
 use protocol::*;
+// The attach client's reader reuses the daemon's bounded-line helper
+// (ENH-058): one definition, two sides of the socket.
+pub(crate) use protocol::{fill_line_bounded, is_poll_wake, LineFill};
 use reap::*;
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
