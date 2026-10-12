@@ -157,7 +157,7 @@ To create a wheel for distribution:
 uv run maturin build --release
 
 # Or build the wheel and install it in one step
-make install
+make python-install
 ```
 
 The wheel will be created in `target/wheels/`. (`make build-release` is a development-mode install into the venv — `maturin develop --release` — not a wheel build.)

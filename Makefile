@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
@@ -22,8 +22,13 @@ help:
 	@echo "Setup & Installation:"
 	@echo "  setup-venv      - Create virtual environment and install tools"
 	@echo "  dev             - Install library in development mode (release, streaming included)"
-	@echo "  install         - Build and install the package"
-	@echo "  install-force   - Force uninstall and reinstall the package"
+	@echo "  install         - Install everything: python extension + par-mux (daemon + attach TUI) + streamer"
+	@echo "  uninstall       - Uninstall everything installed by 'install'"
+	@echo "  python-install  - Build the wheel and install the python extension into the venv"
+	@echo "  python-uninstall- Uninstall the python extension from the venv"
+	@echo "  par-mux-install - cargo install the par-mux binary (daemon + attach TUI, features mux-bin,attach)"
+	@echo "  par-mux-uninstall - cargo uninstall par-mux"
+	@echo "  install-force   - Force uninstall and reinstall the package (python, dev mode)"
 	@echo ""
 	@echo "Building:"
 	@echo "  build            - Build the library in development mode (debug, streaming included)"
@@ -161,10 +166,31 @@ dev:
 	uv sync
 	uv run maturin develop --release
 
-install:
+python-install:
 	rm -rf target/wheels
 	uv run maturin build --release
 	uv pip install target/wheels/*.whl --force-reinstall
+
+# Everything this repo installs: the python extension, the par-mux binary
+# (the daemon and the attach TUI are one binary; attach adds the ratatui
+# client), and the streaming server.
+install: python-install par-mux-install streamer-install
+	@echo ""
+	@echo "Installed: python extension, par-mux (daemon + attach TUI), par-term-streamer."
+
+uninstall: python-uninstall par-mux-uninstall streamer-uninstall
+
+python-uninstall:
+	uv pip uninstall par-term-emu-core-rust
+
+par-mux-install:
+	cargo install --path crates/par-mux --bin par-mux --features mux-bin,attach --force
+
+par-mux-uninstall:
+	cargo uninstall par-mux
+
+streamer-uninstall:
+	cargo uninstall par-term-streamer
 
 install-force:
 	@echo "Force uninstalling and reinstalling library..."
