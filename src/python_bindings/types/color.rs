@@ -83,3 +83,11 @@ impl PyColorPalette {
         )
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyColorHSV>()?;
+    m.add_class::<PyColorHSL>()?;
+    m.add_class::<PyColorPalette>()?;
+    Ok(())
+}

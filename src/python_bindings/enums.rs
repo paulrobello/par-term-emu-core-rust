@@ -691,3 +691,16 @@ mod tests {
         assert_ne!(PyUnderlineStyle::Curly, PyUnderlineStyle::Dotted);
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyCursorStyle>()?;
+    m.add_class::<PyUnderlineStyle>()?;
+    m.add_class::<PyMouseEncoding>()?;
+    m.add_class::<PyProgressState>()?;
+    m.add_class::<PyUnicodeVersion>()?;
+    m.add_class::<PyAmbiguousWidth>()?;
+    m.add_class::<PyWidthConfig>()?;
+    m.add_class::<PyNormalizationForm>()?;
+    Ok(())
+}

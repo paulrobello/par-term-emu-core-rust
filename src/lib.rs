@@ -218,75 +218,7 @@ fn register_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Python classes exposed by the module.
 #[cfg(any(feature = "python", feature = "python-test"))]
 fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Classes
-    m.add_class::<PyTerminal>()?;
-    m.add_class::<PyPtyTerminal>()?;
-    m.add_class::<PyScreenshotConfig>()?;
-    m.add_class::<PyAttributes>()?;
-    m.add_class::<PyScreenSnapshot>()?;
-    m.add_class::<PyShellIntegration>()?;
-    m.add_class::<PyGraphic>()?;
-    m.add_class::<PyImagePlacement>()?;
-    m.add_class::<PyImageDimension>()?;
-    m.add_class::<PyTmuxNotification>()?;
-    m.add_class::<PyNotification>()?;
-    m.add_class::<PyCursorStyle>()?;
-    m.add_class::<PyUnderlineStyle>()?;
-    m.add_class::<PyMouseEncoding>()?;
-    m.add_class::<PySearchMatch>()?;
-    m.add_class::<PyDetectedItem>()?;
-    m.add_class::<PySelection>()?;
-    m.add_class::<PySelectionMode>()?;
-    m.add_class::<PyScrollbackStats>()?;
-    m.add_class::<PyBookmark>()?;
-    m.add_class::<PyPerformanceMetrics>()?;
-    m.add_class::<PyFrameTiming>()?;
-    m.add_class::<PyColorHSV>()?;
-    m.add_class::<PyColorHSL>()?;
-    m.add_class::<PyColorPalette>()?;
-    m.add_class::<PyJoinedLines>()?;
-    m.add_class::<PyClipboardEntry>()?;
-    m.add_class::<PyMouseEvent>()?;
-    m.add_class::<PyMousePosition>()?;
-    m.add_class::<PyDamageRegion>()?;
-    m.add_class::<PyRenderingHint>()?;
-    m.add_class::<PyEscapeSequenceProfile>()?;
-    m.add_class::<PyProfilingData>()?;
-    m.add_class::<PyLineDiff>()?;
-    m.add_class::<PySnapshotDiff>()?;
-    m.add_class::<PyRegexMatch>()?;
-    m.add_class::<PyImageProtocol>()?;
-    m.add_class::<PyImageFormat>()?;
-    m.add_class::<PyInlineImage>()?;
-    m.add_class::<PyBenchmarkResult>()?;
-    m.add_class::<PyBenchmarkSuite>()?;
-    m.add_class::<PyComplianceTest>()?;
-    m.add_class::<PyComplianceReport>()?;
-    m.add_class::<PyClipboardSyncEvent>()?;
-    m.add_class::<PyClipboardHistoryEntry>()?;
-    m.add_class::<PyCommandExecution>()?;
-    m.add_class::<PyShellIntegrationStats>()?;
-    m.add_class::<PyCwdChange>()?;
-    m.add_class::<PyNotificationEvent>()?;
-    m.add_class::<PyNotificationConfig>()?;
-    m.add_class::<PyRecordingEvent>()?;
-    m.add_class::<PyRecordingSession>()?;
-    m.add_class::<PyMacro>()?;
-    m.add_class::<PyMacroEvent>()?;
-    m.add_class::<PyStreamingServer>()?;
-    m.add_class::<PyStreamingConfig>()?;
-    m.add_class::<PyProgressState>()?;
-    m.add_class::<PyProgressBar>()?;
-    m.add_class::<PyUnicodeVersion>()?;
-    m.add_class::<PyAmbiguousWidth>()?;
-    m.add_class::<PyWidthConfig>()?;
-    m.add_class::<PyNormalizationForm>()?;
-    m.add_class::<PyTrigger>()?;
-    m.add_class::<PyTriggerMatch>()?;
-    m.add_class::<PyTriggerAction>()?;
-    m.add_class::<PyCoprocessConfig>()?;
-
-    Ok(())
+    python_bindings::register_classes(m)
 }
 
 /// Color utility functions.

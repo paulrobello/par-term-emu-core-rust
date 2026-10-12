@@ -134,3 +134,11 @@ impl From<&crate::terminal::ClipboardHistoryEntry> for PyClipboardHistoryEntry {
         }
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyClipboardEntry>()?;
+    m.add_class::<PyClipboardSyncEvent>()?;
+    m.add_class::<PyClipboardHistoryEntry>()?;
+    Ok(())
+}

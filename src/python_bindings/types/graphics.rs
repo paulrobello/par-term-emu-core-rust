@@ -601,3 +601,14 @@ mod tests {
         assert_eq!(graphic.get_pixel(3, 0), Some((128, 128, 128, 64)));
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyGraphic>()?;
+    m.add_class::<PyImagePlacement>()?;
+    m.add_class::<PyImageDimension>()?;
+    m.add_class::<PyImageProtocol>()?;
+    m.add_class::<PyImageFormat>()?;
+    m.add_class::<PyInlineImage>()?;
+    Ok(())
+}

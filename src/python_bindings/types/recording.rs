@@ -433,3 +433,13 @@ impl From<crate::macros::Macro> for PyMacro {
         PyMacro { inner: macro_data }
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyRecordingEvent>()?;
+    m.add_class::<PyRecordingSession>()?;
+    m.add_class::<PyMacro>()?;
+    m.add_class::<PyMacroEvent>()?;
+    m.add_class::<PyCoprocessConfig>()?;
+    Ok(())
+}

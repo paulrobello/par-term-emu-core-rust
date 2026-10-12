@@ -1346,3 +1346,10 @@ pub fn decode_client_message<'py>(
         "Streaming feature not enabled. Rebuild with --features streaming",
     ))
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyStreamingServer>()?;
+    m.add_class::<PyStreamingConfig>()?;
+    Ok(())
+}

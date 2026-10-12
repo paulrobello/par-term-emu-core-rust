@@ -340,3 +340,13 @@ mod tests {
         assert_eq!(shell_int1.username, shell_int2.username);
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyShellIntegration>()?;
+    m.add_class::<PyProgressBar>()?;
+    m.add_class::<PyCommandExecution>()?;
+    m.add_class::<PyShellIntegrationStats>()?;
+    m.add_class::<PyCwdChange>()?;
+    Ok(())
+}

@@ -31,3 +31,26 @@ pub use trigger::*;
 /// Type alias for a row of cell data returned by get_line_cells
 /// Tuple contains: (character, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes)
 pub type LineCellData = Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
+
+use pyo3::prelude::*;
+
+/// Registers every `types` pyclass on the `_native` module, one `register`
+/// per submodule (ENH-054).
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    for register in [
+        clipboard::register,
+        color::register,
+        graphics::register,
+        metrics::register,
+        mouse::register,
+        notification::register,
+        recording::register,
+        screen::register,
+        selection::register,
+        shell::register,
+        trigger::register,
+    ] {
+        register(m)?;
+    }
+    Ok(())
+}

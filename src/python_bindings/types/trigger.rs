@@ -285,3 +285,11 @@ impl PyTriggerAction {
         }
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyTrigger>()?;
+    m.add_class::<PyTriggerMatch>()?;
+    m.add_class::<PyTriggerAction>()?;
+    Ok(())
+}

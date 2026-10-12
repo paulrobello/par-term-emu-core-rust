@@ -355,3 +355,16 @@ impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
         }
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyPerformanceMetrics>()?;
+    m.add_class::<PyFrameTiming>()?;
+    m.add_class::<PyEscapeSequenceProfile>()?;
+    m.add_class::<PyProfilingData>()?;
+    m.add_class::<PyBenchmarkResult>()?;
+    m.add_class::<PyBenchmarkSuite>()?;
+    m.add_class::<PyComplianceTest>()?;
+    m.add_class::<PyComplianceReport>()?;
+    Ok(())
+}

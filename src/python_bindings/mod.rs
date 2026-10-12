@@ -51,3 +51,21 @@ pub use types::{
     PySelectionMode, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
     PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch,
 };
+
+use pyo3::prelude::*;
+
+/// Registers every pyclass on the `_native` module, one `register` per
+/// binding module (ENH-054).
+pub fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    for register in [
+        terminal::register,
+        pty::register,
+        screenshot_config::register,
+        enums::register,
+        types::register,
+        streaming::register,
+    ] {
+        register(m)?;
+    }
+    Ok(())
+}

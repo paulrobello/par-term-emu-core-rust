@@ -161,3 +161,9 @@ impl PyScreenshotConfig {
         })
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyScreenshotConfig>()?;
+    Ok(())
+}

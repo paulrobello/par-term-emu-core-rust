@@ -143,3 +143,13 @@ impl From<&crate::terminal::RegexMatch> for PyRegexMatch {
         }
     }
 }
+
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySearchMatch>()?;
+    m.add_class::<PyDetectedItem>()?;
+    m.add_class::<PySelection>()?;
+    m.add_class::<PyRegexMatch>()?;
+    m.add_class::<PySelectionMode>()?;
+    Ok(())
+}
