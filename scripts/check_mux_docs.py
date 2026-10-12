@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ENH-033 — par-mux doc-contract gate.
 
-Diffs five code-owned lists against their documentation, so the next mux
+Diffs six code-owned contracts against their documentation, so the next mux
 command or notification added without its doc row fails the gate:
 
   1. `const COMMANDS` (crates/par-mux/src/mux/command/)        ↔ MUX.md "Command Reference" rows
@@ -13,7 +13,11 @@ command or notification added without its doc row fails the gate:
   5. `#[arg(long…)]` fields (crates/par-mux/src/bin/par_mux/main.rs)
                                                  ↔ every `--flag` claimed in MUX.md,
                                                    CHANGELOG [Unreleased] par-mux
-                                                   bullets, and config.rs rustdoc
+                                                   bullets, config.rs rustdoc, and
+                                                   the embedded agent skill SKILL.md
+  6. the roster row grammar (`roster_row`, ARC-060) ↔ SKILL.md's
+     `--cmd list-agents` comment line, which must show the key=value
+     extras form and never the pre-ARC-060 `[message]`/`<reason>` column
 
 `%begin`/`%end`/`%error` are reply framing: the gate requires them (backticked)
 in MUX.md's "Protocol Overview" section instead of the Notifications table.
@@ -58,6 +62,7 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "crates/par-mux/src/bin/par_mux/main.rs",
     "crates/par-mux/src/mux/config.rs",
     "CHANGELOG.md",
+    "crates/par-mux/skills/par-mux/SKILL.md",
 )
 
 # `\s*` after the paren: rustfmt splits a row past the width limit onto
@@ -70,6 +75,12 @@ DOC_NOTIF_ROW_RE = re.compile(r"^\| `%([a-z-]+)", re.MULTILINE)
 
 MAIN_RS = "crates/par-mux/src/bin/par_mux/main.rs"
 CONFIG_RS = "crates/par-mux/src/mux/config.rs"
+# Embedded into the par-mux binary by include_str! (skill_installer.rs), so it
+# ships in every release and gets the same fail-closed contracts as MUX.md.
+SKILL_MD = "crates/par-mux/skills/par-mux/SKILL.md"
+# A `--cmd list-agents` line carrying a `#` comment. Anchored on the command
+# so the frontmatter `description:` mention of "list-agents" never matches.
+LIST_AGENTS_LINE_RE = re.compile(r"^.*--cmd list-agents\b.*#.*$", re.MULTILINE)
 # `--` + kebab word, not preceded by a word char or `-` (so `---` rules and
 # `a--b` never match).
 FLAG_TOKEN_RE = re.compile(r"(?<![\w-])--([a-z][a-z0-9]*(?:-[a-z0-9]+)*)")
@@ -444,6 +455,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     main_rs = read(root, MAIN_RS)
     config_rs = read(root, CONFIG_RS)
     changelog = read(root, "CHANGELOG.md")
+    skill_md = read(root, SKILL_MD)
 
     problems: list[str] = []
 
@@ -562,16 +574,35 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     if not config_claims:
         fail(f"parsed nothing from {CONFIG_RS}: no --flag tokens in rustdoc")
     changelog_claims = set(FLAG_TOKEN_RE.findall(unreleased_par_mux_bullets(changelog)))
+    skill_claims = set(FLAG_TOKEN_RE.findall(skill_md))
+    if not skill_claims:
+        fail(f"parsed nothing from {SKILL_MD}: no --flag tokens")
     for where, claims in (
         ("docs/MUX.md", mux_claims),
         ("CHANGELOG.md [Unreleased] (par-mux bullets)", changelog_claims),
         (f"{CONFIG_RS} rustdoc", config_claims),
+        (SKILL_MD, skill_claims),
     ):
         for name in sorted(claims - known):
             problems.append(
                 f"{where} claims `--{name}`, which is not a par-mux clap flag in {MAIN_RS} "
                 "(add the flag, fix the claim, or allowlist it in FOREIGN_FLAGS with a reason)"
             )
+
+    # Check 6: SKILL.md documents the list-agents key=value row grammar.
+    list_agents_lines = LIST_AGENTS_LINE_RE.findall(skill_md)
+    if not list_agents_lines:
+        fail(f"parsed nothing from {SKILL_MD}: no `--cmd list-agents` comment line")
+    for line in list_agents_lines:
+        if "[message]" in line or "<reason>" in line:
+            problems.append(
+                f"{SKILL_MD} list-agents line uses the pre-ARC-060 free-text form: {line.strip()}"
+            )
+    if not any("key=value" in line for line in list_agents_lines):
+        problems.append(
+            f"{SKILL_MD} must document the list-agents key=value extras form on its "
+            "`--cmd list-agents` line"
+        )
 
     counts = {
         "commands": len(command_names),
@@ -672,6 +703,22 @@ def run_self_test(root: Path) -> int:
             lambda t: t.replace('long = "cmd",', "", 1),
             "cmd",
         ),
+        (
+            "claim a nonexistent --frobnicate flag in SKILL.md",
+            SKILL_MD,
+            lambda t: t.replace(
+                "## Daemon lifecycle\n",
+                "## Daemon lifecycle\n\n`par-mux --frobnicate`\n",
+                1,
+            ),
+            "frobnicate",
+        ),
+        (
+            "revert the SKILL.md list-agents line to [message]",
+            SKILL_MD,
+            lambda t: t.replace("<source> [key=value…]", "<source> [message]", 1),
+            "list-agents",
+        ),
     ]
     for label, rel, mutate, needle in drifts:
         with tempfile.TemporaryDirectory() as td:
@@ -752,7 +799,7 @@ def run_self_test(root: Path) -> int:
     print("self-test: QA-229 production construction after the fixture still reported")
 
     print(
-        "self-test ok: baseline clean, all 8 injected drifts reported, "
+        "self-test ok: baseline clean, all 10 injected drifts reported, "
         "empty clap extraction fails closed, "
         "QA-229 brace-in-string fixture pinned"
     )
@@ -770,7 +817,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="copy the inputs to a temp dir, inject eight drifts, assert each is reported",
+        help="copy the inputs to a temp dir, inject ten drifts, assert each is reported",
     )
     args = parser.parse_args(argv)
     if args.self_test:

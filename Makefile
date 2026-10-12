@@ -518,7 +518,7 @@ mux-manual-seed:
 # evidence and stay out. Backticked placeholder paths are parsight's job,
 # not this gate's. No --cache: an offline run is sub-second and --cache
 # would drop .lycheecache into the working tree.
-DOC_LINK_FILES := docs/*.md README.md CONTRIBUTING.md QUICKSTART.md CHANGELOG.md CLAUDE.md
+DOC_LINK_FILES := docs/*.md README.md CONTRIBUTING.md QUICKSTART.md CHANGELOG.md CLAUDE.md crates/*/DESIGN.md crates/par-mux/skills/par-mux/SKILL.md
 doc-links-check:
 	@command -v lychee >/dev/null 2>&1 || { \
 		echo "ERROR: lychee not found — brew install lychee (or cargo install lychee --locked)"; \
