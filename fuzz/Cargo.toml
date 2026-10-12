@@ -25,7 +25,8 @@ features = ["rust-only", "mux", "attach"]
 # The targets mirror the untrusted-byte entry points: the whole VTE pipeline,
 # the Sixel state machine, the Kitty APC parser, the tmux control parser,
 # (ENH-018, +mux) the par-mux control-protocol command and hook-report
-# grammars, and (ENH-046, +attach) the attach client's stdin tokenizer.
+# grammars, and (ENH-046, +attach) the attach client's stdin tokenizer —
+# and (ENH-060) the attach client's reply-row parsers.
 
 [[bin]]
 name = "terminal_process"
@@ -79,6 +80,13 @@ bench = false
 [[bin]]
 name = "attach_input"
 path = "fuzz_targets/attach_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_rows"
+path = "fuzz_targets/ipc_rows.rs"
 test = false
 doc = false
 bench = false

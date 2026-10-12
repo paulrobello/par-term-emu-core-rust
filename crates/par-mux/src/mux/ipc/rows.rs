@@ -142,7 +142,8 @@ impl WorkspaceRow {
 
 /// One `list-agents` roster row: `%N <agent> <state> <source>` then zero
 /// or more whitespace-free `key=value` tokens (`reason=`, `telemetry=`,
-/// `host_telemetry=`), kept in wire order.
+/// `host_telemetry=`, `ws=<+N>`), kept in wire order — unknown keys are
+/// kept, not rejected, so a newer daemon never breaks the parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRow {
     /// The pane id, `%N`.
@@ -206,6 +207,32 @@ impl AgentRow {
             .iter()
             .find(|(k, _)| k == "ws")
             .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Fuzz/test invariant (ENH-060): every parser either rejects `line` or
+/// returns a row whose `Display` parses back to the same row.
+#[cfg(any(test, fuzzing))]
+pub fn assert_round_trip(line: &str) {
+    if let Some(row) = WindowRow::parse(line) {
+        assert_eq!(WindowRow::parse(&row.to_string()), Some(row), "window: {line:?}");
+    }
+    if let Some(row) = SessionRow::parse(line) {
+        assert_eq!(SessionRow::parse(&row.to_string()), Some(row), "session: {line:?}");
+    }
+    if let Some(row) = WorkspaceRow::parse(line) {
+        assert_eq!(
+            WorkspaceRow::parse(&row.to_string()),
+            Some(row),
+            "workspace: {line:?}"
+        );
+    }
+    if let Some(row) = AgentRow::parse(line) {
+        assert!(
+            row.extras.iter().all(|(k, _)| !k.contains('=')),
+            "agent key kept '=': {line:?}"
+        );
+        assert_eq!(AgentRow::parse(&row.to_string()), Some(row), "agent: {line:?}");
     }
 }
 
@@ -285,6 +312,25 @@ impl PaneInfoRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `fuzz/corpus/ipc_rows` seed contents, as Rust literals (ENH-060).
+    /// `include_str!` of the corpus would break `cargo package` (par-mux is
+    /// published), so the seeds are mirrored here and kept in sync by the
+    /// card's Verify-step diff check.
+    const FUZZ_SEED_LINES: &[&str] = &[
+        "%1 claude working hook",
+        "%2 claude blocked hook reason=aGk=",
+        "%3 pi idle scrape ws=+0",
+        "%4 omp working hook reason=d2FpdA== telemetry=e30= host_telemetry=e30= ws=+12",
+        "%5 pi idle hook future=1 ws=+1",
+        "%6 pi idle hook ws=+0 ws=+1",
+        "%7 pi idle hook == =x k=",
+        "%8\tpi  working\thook ws=+2",
+        "%10 pi idle hook\u{3000}ws=+0",
+        "%9 pi idle hook stray ws=+0",
+        "%x pi idle hook ws=+0",
+        "@1 * two\n+0: main: $3: work\n+1: beta active\nagent %2 pi idle hook ws=+1",
+    ];
 
     fn pane_info(cmd: Option<&str>, exited: Option<Option<i32>>) -> PaneInfoRow {
         PaneInfoRow {
@@ -446,5 +492,54 @@ mod tests {
         assert_eq!(row.workspace(), Some("+2"));
         let bare = AgentRow::parse("%1 pi working hook").expect("parses");
         assert_eq!(bare.workspace(), None);
+    }
+
+    /// ENH-060: the `fuzz/corpus/ipc_rows` seeds, replayed on stable.
+    #[test]
+    fn ipc_rows_fuzz_seeds_round_trip() {
+        for seed in FUZZ_SEED_LINES {
+            assert_round_trip(seed);
+            for line in seed.split('\n') {
+                assert_round_trip(line);
+                if let Some((_, rest)) = line.split_once(' ') {
+                    assert_round_trip(rest);
+                }
+            }
+        }
+    }
+
+    /// The extras grammar behind the corpus (ENH-060): the `ws=` lookup,
+    /// extras order, the empty-key/value shapes, and the two rejects.
+    #[test]
+    fn agent_row_extras_grammar() {
+        let ws = AgentRow::parse("%3 pi idle scrape ws=+0").expect("parses");
+        assert_eq!(ws.workspace(), Some("+0"));
+
+        let all = AgentRow::parse(
+            "%4 omp working hook reason=d2FpdA== telemetry=e30= host_telemetry=e30= ws=+12",
+        )
+        .expect("parses");
+        assert_eq!(
+            all.extras,
+            vec![
+                ("reason".to_string(), "d2FpdA==".to_string()),
+                ("telemetry".to_string(), "e30=".to_string()),
+                ("host_telemetry".to_string(), "e30=".to_string()),
+                ("ws".to_string(), "+12".to_string()),
+            ]
+        );
+
+        let empty = AgentRow::parse("%7 pi idle hook == =x k=").expect("parses");
+        assert_eq!(
+            empty.extras,
+            vec![
+                ("".to_string(), "=".to_string()),
+                ("".to_string(), "x".to_string()),
+                ("k".to_string(), "".to_string()),
+            ]
+        );
+
+        assert_eq!(AgentRow::parse("%9 pi idle hook stray ws=+0"), None);
+        assert_eq!(AgentRow::parse("%x pi idle hook ws=+0"), None);
     }
 }

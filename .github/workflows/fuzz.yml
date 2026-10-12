@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [terminal_process, sixel, kitty, apc_filter, tmux_control, mux_parse_command, mux_hook_report, attach_input]
+        target: [terminal_process, sixel, kitty, apc_filter, tmux_control, mux_parse_command, mux_hook_report, attach_input, ipc_rows]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

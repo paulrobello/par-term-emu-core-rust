@@ -22,7 +22,7 @@ make ffi-header          # Regenerate include/terminal_core.h with cbindgen (aft
 make stubs               # Regenerate python/par_term_emu_core_rust/_native.pyi (after Rust-side binding changes; run after make dev)
 make release-check       # Pre-release gates: version-lockstep checks + release-notes presence
 make bench               # Criterion VTE throughput benchmarks
-make fuzz-all            # All eight cargo-fuzz targets (fuzz-terminal_process, fuzz-sixel, fuzz-kitty, fuzz-apc_filter, fuzz-tmux_control, fuzz-mux_parse_command, fuzz-mux_hook_report, fuzz-attach_input)
+make fuzz-all            # All nine cargo-fuzz targets (fuzz-terminal_process, fuzz-sixel, fuzz-kitty, fuzz-apc_filter, fuzz-tmux_control, fuzz-mux_parse_command, fuzz-mux_hook_report, fuzz-attach_input, fuzz-ipc_rows)
 ```
 
 **Never use `cargo build` directly** for PyO3 modules - it will fail at link stage. Always use `make dev` (maturin).

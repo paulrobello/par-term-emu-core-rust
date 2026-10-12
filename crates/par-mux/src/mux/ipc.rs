@@ -26,6 +26,15 @@ pub use interprocess::local_socket::Stream as LocalStream;
 pub(crate) mod rows;
 pub(crate) use rows::{AgentRow, PaneInfoRow, SessionRow, WindowRow, WorkspaceRow};
 
+// Fuzz-only re-export (ENH-060): `rows` is pub(crate), the fuzz crate is an
+// external path dependency, and cargo-fuzz is the only builder that sets the
+// cfg. Mirrors attach/mod.rs's fuzz_support.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_support {
+    pub use super::rows::{assert_round_trip, AgentRow, SessionRow, WindowRow, WorkspaceRow};
+}
+
 // Unix serves the interprocess listener as-is: its sockets honor send/recv
 // timeouts, which is what the eviction teardown's poll loop needs (ENH-012).
 // Windows must wrap the named-pipe listener instead — see `LocalListener`
