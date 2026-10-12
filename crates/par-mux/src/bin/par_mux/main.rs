@@ -62,6 +62,26 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
     about = "tmux-control-mode-compatible multiplexer daemon",
     long_about = None
 )]
+// The mode flags are mutually exclusive: at most one per invocation, none
+// meaning "start/serve the daemon".
+#[command(group(
+    clap::ArgGroup::new("daemon_mode")
+        .multiple(false)
+        .args([
+            "stop",
+            "restart",
+            "command",
+            "list_servers",
+            "gen_config",
+            "install_skill",
+            "install_agent_hooks",
+            "uninstall_agent_hooks",
+            "agent_hooks_status",
+            "install_agent_extensions",
+            "uninstall_agent_extensions",
+            "heal_agent_hooks",
+        ])
+))]
 struct Cli {
     /// Named default socket path (par-mux::default_socket_path). Ignored if
     /// --socket is set; if absent, `$PAR_MUX_SOCKET` decides before the
@@ -81,7 +101,7 @@ struct Cli {
     /// `%exit` to clients) and wait for it to exit. Flags rather than
     /// subcommands: the positional NAME would otherwise be ambiguous with a
     /// session named `stop`.
-    #[arg(long, conflicts_with = "restart")]
+    #[arg(long)]
     stop: bool,
 
     /// Stop the running daemon (as --stop), then start a fresh one on the
@@ -99,7 +119,7 @@ struct Cli {
         short = 'c',
         long = "cmd",
         value_name = "COMMAND",
-        conflicts_with_all = ["stop", "restart", "state_dir"]
+        conflicts_with = "state_dir"
     )]
     command: Option<String>,
 
@@ -110,10 +130,7 @@ struct Cli {
     /// `--state-dir`, so tests can point the registry at a fixture; with
     /// `--socket`/NAME, the named/default resolution is skipped for the
     /// target socket (discovery is user-wide, not per-socket).
-    #[arg(
-        long,
-        conflicts_with_all = ["stop", "restart", "command", "gen_config"]
-    )]
+    #[arg(long)]
     list_servers: bool,
 
     /// Give each pane its own hook-only socket endpoint: `PAR_MUX_SOCKET`
@@ -157,10 +174,7 @@ struct Cli {
     /// skills directory and exit. Never starts or contacts a daemon, so
     /// it runs anywhere, including inside a pane; par-term invokes it
     /// after installing par-mux so the skill matches the shipped binary.
-    #[arg(
-        long,
-        conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config"]
-    )]
+    #[arg(long)]
     install_skill: bool,
 
     /// With --install-skill: write under this skills root instead of the
@@ -171,32 +185,32 @@ struct Cli {
     /// (script assets plus the config entries that run them) and exit.
     /// Never starts or contacts a daemon; par-term invokes it instead of
     /// embedding its own copies of the integrations.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "uninstall_agent_hooks", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    #[arg(long)]
     install_agent_hooks: bool,
 
     /// Remove the agent-state session hooks par-mux installed: the config
     /// entries first, then the script assets. Never contacts a daemon.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    #[arg(long)]
     uninstall_agent_hooks: bool,
 
     /// Print one line per agent — `<agent> installed` or `<agent> absent` —
     /// and exit: the read-only state behind the par-term Settings rows.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "install_agent_extensions", "uninstall_agent_extensions"])]
+    #[arg(long)]
     agent_hooks_status: bool,
 
     /// Install the pi and omp agent-state extensions (a file drop into
     /// each agent extension directory) and exit. Never contacts a daemon.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "uninstall_agent_extensions"])]
+    #[arg(long)]
     install_agent_extensions: bool,
 
     /// Remove the pi and omp agent-state extensions par-mux installed.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill"])]
+    #[arg(long)]
     uninstall_agent_extensions: bool,
     /// Rewrite a registered hook script asset that went missing (the
     /// hooks directory has been deleted externally while the agent config
     /// entries survived) without touching any agent config — the startup
     /// self-heal par-term runs. Never contacts a daemon.
-    #[arg(long, conflicts_with_all = ["stop", "restart", "command", "list_servers", "gen_config", "install_skill", "install_agent_hooks", "uninstall_agent_hooks", "agent_hooks_status", "install_agent_extensions", "uninstall_agent_extensions"])]
+    #[arg(long)]
     heal_agent_hooks: bool,
 }
 
@@ -1165,6 +1179,57 @@ impl log::Log for StderrLog {
 }
 
 static STDERR_LOG: StderrLog = StderrLog;
+
+#[cfg(test)]
+mod mode_group_tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn cli_debug_asserts() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn mode_flags_are_mutually_exclusive() {
+        let flags = [
+            "--stop",
+            "--restart",
+            "--cmd=list-sessions",
+            "--list-servers",
+            "--gen-config",
+            "--install-skill",
+            "--install-agent-hooks",
+            "--uninstall-agent-hooks",
+            "--agent-hooks-status",
+            "--install-agent-extensions",
+            "--uninstall-agent-extensions",
+            "--heal-agent-hooks",
+        ];
+        for (i, a) in flags.iter().enumerate() {
+            assert!(
+                Cli::try_parse_from(["par-mux", a]).is_ok(),
+                "{a} alone parses"
+            );
+            for b in &flags[i + 1..] {
+                let err = Cli::try_parse_from(["par-mux", a, b])
+                    .expect_err(&format!("{a} {b} must conflict"));
+                assert_eq!(
+                    err.kind(),
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "{a} {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cmd_still_conflicts_with_state_dir() {
+        let err = Cli::try_parse_from(["par-mux", "--cmd=x", "--state-dir", "/tmp"])
+            .expect_err("conflict");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+}
 
 #[cfg(all(test, feature = "attach"))]
 mod attach_cli_tests {
