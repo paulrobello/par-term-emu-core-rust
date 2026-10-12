@@ -266,8 +266,9 @@ fn report_with_message(pane: &str, state: &str, message: &str, seq: u64) -> Stri
 
 /// The decoded fields of one roster row (ARC-060 grammar): positions 1-4
 /// fixed (`%N agent state source`), then zero or more whitespace-free
-/// `key=value` tokens. This is the positional parse a roster consumer
-/// writes — the shape par-term's fixed parser targets.
+/// `key=value` tokens (`reason=`/`telemetry=`/`host_telemetry=` are base64;
+/// `ws=` is a `+<id>` workspace reference). This is the positional parse a
+/// roster consumer writes — the shape par-term's fixed parser targets.
 struct RosterRow {
     pane: String,
     agent: String,
@@ -276,6 +277,7 @@ struct RosterRow {
     reason: Option<String>,
     telemetry: Option<Vec<u8>>,
     host_telemetry: Option<Vec<u8>>,
+    ws: Option<String>,
 }
 
 fn parse_roster_row(row: &str) -> RosterRow {
@@ -292,11 +294,20 @@ fn parse_roster_row(row: &str) -> RosterRow {
         reason: None,
         telemetry: None,
         host_telemetry: None,
+        ws: None,
     };
     for token in tokens {
         let (key, value) = token.split_once('=').unwrap_or_else(|| {
             panic!("every token after source is key=value, got {token:?} in {row:?}")
         });
+        if key == "ws" {
+            assert!(
+                value.starts_with('+') && value[1..].bytes().all(|b| b.is_ascii_digit()),
+                "ws token is a +<id> workspace reference, got {value:?} in {row:?}"
+            );
+            fields.ws = Some(value.to_string());
+            continue;
+        }
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(value)
             .unwrap_or_else(|_| panic!("{key} token is standard base64 in {row:?}"));
@@ -388,7 +399,9 @@ fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
     let roster = stage.control.command("list-agents").join("");
     let lines = body_lines(&roster);
     assert!(
-        lines.contains(&format!("{} pi working hook", stage.pane).as_str()),
+        lines.iter().any(|l| {
+            l.starts_with(&format!("{} pi working hook", stage.pane)) && !l.contains("reason=")
+        }),
         "no reason residue on a message-less state: {lines:?}"
     );
 
@@ -606,7 +619,9 @@ fn list_agents_agrees_with_hook_reports_and_omits_hookless_panes() {
     let roster = stage.control.command("list-agents").join("");
     let lines = body_lines(&roster);
     assert!(
-        lines.contains(&format!("{claimed} kimi blocked hook").as_str()),
+        lines
+            .iter()
+            .any(|l| l.starts_with(&format!("{claimed} kimi blocked hook"))),
         "the roster line matches the hook's claim, provenance included: {lines:?}"
     );
     assert!(
