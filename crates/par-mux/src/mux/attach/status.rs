@@ -87,6 +87,99 @@ pub(crate) fn status_query(
     }
 }
 
+/// One refresh's facts, filled row by row from either wire shape and
+/// committed whole by [`StatusState::commit`] (ENH-053). `None` fields
+/// keep the state's previous value — the legacy path's per-fact
+/// keep-on-failure rule, applied at commit granularity.
+#[derive(Debug, Default)]
+struct StatusFacts {
+    workspaces: Option<Vec<(String, String, bool)>>,
+    sessions: Option<Vec<(String, String)>>,
+    session_id: Option<String>,
+    windows: Option<Vec<(String, String)>>,
+    active_window: Option<String>,
+    pane_title: Option<String>,
+    pane_titles: Option<Vec<(u32, String)>>,
+    agents: Option<Vec<RosterEntry>>,
+}
+
+impl StatusFacts {
+    /// One window row's projection — the display name plus the active
+    /// pick — shared by both wire shapes.
+    fn push_window_row(
+        windows: &mut Vec<(String, String)>,
+        active: &mut Option<String>,
+        row: WindowRow,
+    ) {
+        if row.active {
+            *active = Some(row.id.clone());
+        }
+        let name = window_display_name(&row.id, &row.name);
+        windows.push((row.id, name));
+    }
+
+    /// The single agent-row projection, shared by both wire shapes.
+    fn agent_entry(row: AgentRow) -> Option<RosterEntry> {
+        let workspace = row.workspace().map(str::to_string);
+        Some(RosterEntry {
+            pane: pane_number(&row.pane)?,
+            agent: row.agent,
+            state: row.state,
+            workspace,
+        })
+    }
+
+    /// The legacy queries' row shapes as one `StatusFacts`, factored out
+    /// so the equivalence test can drive it without a connection. `None`
+    /// bodies are the failed queries that keep their previous values.
+    fn legacy_from(
+        sessions: &[String],
+        workspaces: Option<&[String]>,
+        owner: (String, Vec<String>),
+        title: Option<&[String]>,
+        agents: Option<&[String]>,
+    ) -> Self {
+        let mut facts = Self {
+            sessions: Some(
+                sessions
+                    .iter()
+                    .filter_map(|line| super::parse_session_line(line))
+                    .collect(),
+            ),
+            ..Self::default()
+        };
+        if let Some(body) = workspaces {
+            facts.workspaces = Some(
+                body.iter()
+                    .filter_map(|l| super::parse_workspace_line(l))
+                    .collect(),
+            );
+        }
+        let mut windows = Vec::new();
+        let mut active_window = None;
+        for line in &owner.1 {
+            if let Some(row) = WindowRow::parse(line) {
+                Self::push_window_row(&mut windows, &mut active_window, row);
+            }
+        }
+        facts.session_id = Some(owner.0);
+        facts.active_window = active_window.or_else(|| windows.first().map(|(id, _)| id.clone()));
+        facts.windows = Some(windows);
+        if let Some(body) = title {
+            facts.pane_title = Some(body.join(" "));
+        }
+        if let Some(body) = agents {
+            facts.agents = Some(
+                body.iter()
+                    .filter_map(|line| AgentRow::parse(line))
+                    .filter_map(Self::agent_entry)
+                    .collect(),
+            );
+        }
+        facts
+    }
+}
+
 /// The queried status state behind the bottom row.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct StatusState {
@@ -196,6 +289,56 @@ impl StatusState {
         })
     }
 
+    /// Assign every `Some` field of `facts`, in the refresh's current
+    /// order; `None` fields leave the state alone. Returns the workspace
+    /// roster as `(id, name, active)` for `RefreshRows`.
+    fn commit(&mut self, facts: StatusFacts) -> Option<Vec<(String, String, bool)>> {
+        let StatusFacts {
+            workspaces,
+            sessions,
+            session_id,
+            windows,
+            active_window,
+            pane_title,
+            pane_titles,
+            agents,
+        } = facts;
+        let triple = workspaces.clone();
+        if let Some(parsed) = workspaces {
+            self.workspaces = parsed
+                .iter()
+                .map(|(id, name, _)| (id.clone(), name.clone()))
+                .collect();
+            self.active_workspace = parsed
+                .iter()
+                .find(|(_, _, active)| *active)
+                .map(|(id, _, _)| id.clone());
+        }
+        if let Some(sessions) = sessions {
+            self.sessions = sessions;
+        }
+        if let Some(session_id) = session_id {
+            self.session_id = Some(session_id);
+        }
+        if let Some(windows) = windows {
+            self.active_window =
+                active_window.or_else(|| windows.first().map(|(id, _)| id.clone()));
+            self.windows = windows;
+        } else if let Some(active) = active_window {
+            self.active_window = Some(active);
+        }
+        if let Some(pane_titles) = pane_titles {
+            self.pane_titles = pane_titles;
+        }
+        if let Some(pane_title) = pane_title {
+            self.pane_title = pane_title;
+        }
+        if let Some(agents) = agents {
+            self.agents = agents;
+        }
+        triple
+    }
+
     /// Apply one `client-snapshot` reply body. Rows are classified by
     /// their first word; unknown kinds are ignored (the additive rule).
     /// A missing or non-`1` `snapshot` header is `Query`; no `*` session
@@ -209,13 +352,8 @@ impl StatusState {
         if body.first().map(|l| l.trim_end()) != Some("snapshot 1") {
             return Err(StatusError::Query);
         }
-        let mut workspaces: Vec<(String, String, bool)> = Vec::new();
-        let mut sessions = Vec::new();
+        let mut facts = StatusFacts::default();
         let mut owner = None;
-        let mut windows = Vec::new();
-        let mut active_window = None;
-        let mut pane_titles = Vec::new();
-        let mut agents = Vec::new();
         for line in &body[1..] {
             let Some((kind, rest)) = line.split_once(' ') else {
                 continue;
@@ -227,7 +365,11 @@ impl StatusState {
                         continue;
                     };
                     let name = parts.next().unwrap_or_default();
-                    workspaces.push((id.to_string(), name.to_string(), marker == "*"));
+                    facts.workspaces.get_or_insert_with(Vec::new).push((
+                        id.to_string(),
+                        name.to_string(),
+                        marker == "*",
+                    ));
                 }
                 "session" => {
                     let mut parts = rest.splitn(4, ' ');
@@ -240,58 +382,53 @@ impl StatusState {
                     if marker == "*" {
                         owner = Some(id.to_string());
                     }
-                    sessions.push((id.to_string(), name.to_string()));
+                    facts
+                        .sessions
+                        .get_or_insert_with(Vec::new)
+                        .push((id.to_string(), name.to_string()));
                 }
                 "window" => {
                     let Some(row) = WindowRow::parse(rest) else {
                         continue;
                     };
-                    if row.active {
-                        active_window = Some(row.id.clone());
-                    }
-                    let name = window_display_name(&row.id, &row.name);
-                    windows.push((row.id, name));
+                    StatusFacts::push_window_row(
+                        facts.windows.get_or_insert_with(Vec::new),
+                        &mut facts.active_window,
+                        row,
+                    );
                 }
                 "pane" => {
                     let (id, title) = rest.split_once(' ').unwrap_or((rest, ""));
                     if let Some(pane) = pane_number(id) {
-                        pane_titles.push((pane, title.to_string()));
+                        facts
+                            .pane_titles
+                            .get_or_insert_with(Vec::new)
+                            .push((pane, title.to_string()));
                     }
                 }
                 "agent" => {
                     if let Some(row) = AgentRow::parse(rest) {
-                        if let Some(pane) = pane_number(&row.pane) {
-                            let workspace = row.workspace().map(str::to_string);
-                            agents.push(RosterEntry {
-                                pane,
-                                agent: row.agent,
-                                state: row.state,
-                                workspace,
-                            });
+                        if let Some(entry) = StatusFacts::agent_entry(row) {
+                            facts.agents.get_or_insert_with(Vec::new).push(entry);
                         }
                     }
                 }
                 _ => {}
             }
         }
+        // "Nothing half-applied": the owner check gates the commit.
         let Some(owner) = owner else {
             return Err(StatusError::SessionGone);
         };
-        self.workspaces = workspaces
-            .iter()
-            .map(|(id, name, _)| (id.clone(), name.clone()))
-            .collect();
-        self.active_workspace = workspaces
-            .iter()
-            .find(|(_, _, active)| *active)
-            .map(|(id, _, _)| id.clone());
-        self.sessions = sessions;
-        self.session_id = Some(owner);
-        self.active_window = active_window.or_else(|| windows.first().map(|(id, _)| id.clone()));
-        self.windows = windows;
-        self.pane_titles = pane_titles;
-        self.agents = agents;
-        Ok(workspaces)
+        facts.session_id = Some(owner);
+        // The snapshot is authoritative: empty lists are real facts, not
+        // failed queries.
+        facts.workspaces.get_or_insert_with(Vec::new);
+        facts.sessions.get_or_insert_with(Vec::new);
+        facts.windows.get_or_insert_with(Vec::new);
+        facts.pane_titles.get_or_insert_with(Vec::new);
+        facts.agents.get_or_insert_with(Vec::new);
+        Ok(self.commit(facts).unwrap_or_default())
     }
 
     /// The legacy per-fact refresh, for daemons without `client-snapshot`.
@@ -301,6 +438,11 @@ impl StatusState {
     /// session and lists its windows (a daemon without the `all` token
     /// gets the per-session scan, reusing the owner's reply),
     /// `pane-title` for the focused pane, and `list-agents`.
+    ///
+    /// The queries fill a [`StatusFacts`] and commit once at the end
+    /// (ENH-053): a `TimedOut` at any step returns before the commit, so
+    /// the stale state stands whole, matching the snapshot path and the
+    /// `StatusError::TimedOut` doc.
     fn refresh_legacy(
         &mut self,
         conn: &mut AttachConn,
@@ -315,66 +457,33 @@ impl StatusState {
         // The workspace roster: the status line's leading segment. The
         // daemon lists in id order and marks the active one, so the reply
         // order IS the display order and the active pick is one find.
-        let mut rows = RefreshRows::default();
-        if let Some(body) = status_query(conn, "list-workspaces")? {
-            let parsed: Vec<(String, String, bool)> = body
-                .iter()
-                .filter_map(|l| super::parse_workspace_line(l))
-                .collect();
-            self.workspaces = parsed
-                .iter()
-                .map(|(id, name, _)| (id.clone(), name.clone()))
-                .collect();
-            self.active_workspace = parsed
-                .iter()
-                .find(|(_, _, active)| *active)
-                .map(|(id, _, _)| id.clone());
-            rows.workspaces = Some(parsed);
-        }
-        self.sessions = session_rows
-            .iter()
-            // Workspace-aware shape `+W: wname: $N: name` — the shared
-            // parser extracts the session id (the last `$N:` marker).
-            .filter_map(|line| super::parse_session_line(line))
-            .collect();
+        let workspaces = status_query(conn, "list-workspaces")?;
 
         // Which session owns our window now (it can move or vanish), and
-        // that session's window rows.
-        let (session_id, window_rows) = self.find_owner(conn, window)?;
-        self.session_id = Some(session_id);
-        self.windows = window_rows
+        // that session's window rows. The scan needs this round's parsed
+        // session rows (see find_owner's doc).
+        let parsed_sessions: Vec<(String, String)> = session_rows
             .iter()
-            .filter_map(|line| WindowRow::parse(line))
-            .map(|row| {
-                let name = window_display_name(&row.id, &row.name);
-                (row.id, name)
-            })
+            .filter_map(|line| super::parse_session_line(line))
             .collect();
-        self.active_window = super::targets::active_window_row(&window_rows)
-            .or_else(|| self.windows.first().map(|(id, _)| id.clone()));
+        let owner = self.find_owner(conn, window, &parsed_sessions)?;
 
         // The focused pane's title.
-        if let Some(body) = status_query(conn, &format!("pane-title -t %{focused}"))? {
-            self.pane_title = body.join(" ");
-        }
+        let title = status_query(conn, &format!("pane-title -t %{focused}"))?;
 
         // The agent roster: `%N <agent> <state> <source> [key=val …]`.
-        if let Some(body) = status_query(conn, "list-agents")? {
-            self.agents = body
-                .iter()
-                .filter_map(|line| AgentRow::parse(line))
-                .filter_map(|row| {
-                    let workspace = row.workspace().map(str::to_string);
-                    Some(RosterEntry {
-                        pane: pane_number(&row.pane)?,
-                        agent: row.agent,
-                        state: row.state,
-                        workspace,
-                    })
-                })
-                .collect();
-        }
-        Ok(rows)
+        let agents = status_query(conn, "list-agents")?;
+
+        let facts = StatusFacts::legacy_from(
+            &session_rows,
+            workspaces.as_deref(),
+            owner,
+            title.as_deref(),
+            agents.as_deref(),
+        );
+        Ok(RefreshRows {
+            workspaces: self.commit(facts),
+        })
     }
 
     /// The session owning `window` and its `list-windows -t` rows. One
@@ -382,10 +491,17 @@ impl StatusState {
     /// per-session `-t` scan, whose matching reply doubles as the rows.
     /// `SessionGone` only when the replies came back and none listed the
     /// window; a failed `-a` is `Query`.
+    /// The session owning `window` and its `list-windows -t` rows. One
+    /// `list-windows -a` when the daemon advertises it; otherwise the
+    /// per-session `-t` scan over `sessions` (the round's parsed
+    /// `list-sessions` rows — commit-at-end means the state does not hold
+    /// them yet, ENH-053), whose matching reply doubles as the rows.
+    /// `SessionGone` only when the replies came back and none listed the
     fn find_owner(
         &self,
         conn: &mut AttachConn,
         window: &str,
+        sessions: &[(String, String)],
     ) -> Result<(String, Vec<String>), StatusError> {
         if conn.has_command_feature("list-windows", "all") {
             let Some(body) = status_query(conn, "list-windows -a")? else {
@@ -409,7 +525,7 @@ impl StatusState {
                 .collect();
             return Ok((owner, rows));
         }
-        for (id, _) in &self.sessions {
+        for (id, _) in sessions {
             let Some(body) = status_query(conn, &format!("list-windows -t {id}"))? else {
                 continue;
             };
@@ -872,6 +988,88 @@ mod tests {
         assert_eq!(got, plain);
     }
 
+    /// ENH-053: the legacy row shapes for `snapshot_body()`'s contents
+    /// commit the same state the snapshot path does — `pane_titles`
+    /// excluded, the legacy path has no such query.
+    #[test]
+    fn legacy_and_snapshot_commit_identical_state() {
+        let mut from_snapshot = StatusState::default();
+        from_snapshot
+            .apply_snapshot(&snapshot_body())
+            .expect("applies");
+
+        let body = snapshot_body();
+        // The legacy `list-workspaces` row shape: `+N: name [active]`.
+        let workspaces: Vec<String> = body
+            .iter()
+            .filter(|l| l.starts_with("workspace "))
+            .map(|l| {
+                let rest = &l["workspace ".len()..];
+                let (id, rest) = rest.split_once(' ').expect("fixture shape");
+                let (marker, name) = rest.split_once(' ').expect("fixture shape");
+                format!(
+                    "{}: {}{}",
+                    id,
+                    name,
+                    if marker == "*" { " active" } else { "" }
+                )
+            })
+            .collect();
+        let sessions: Vec<String> = body
+            .iter()
+            .filter(|l| l.starts_with("session "))
+            .map(|l| {
+                // The legacy `list-sessions` row shape: `+W: wname: $N: name`.
+                let mut parts = l["session ".len()..].splitn(4, ' ');
+                let id = parts.next();
+                let _marker = parts.next();
+                let ws_id = parts.next();
+                let name = parts.next();
+                let (Some(id), Some(ws_id), Some(name)) = (id, ws_id, name) else {
+                    unreachable!("fixture shape");
+                };
+                let ws_name = workspaces
+                    .iter()
+                    .find(|row| row.starts_with(&format!("{ws_id}: ")))
+                    .map(|row| {
+                        row[format!("{ws_id}: ").len()..]
+                            .split(" active")
+                            .next()
+                            .unwrap_or_default()
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                format!("{ws_id}: {ws_name}: {id}: {name}")
+            })
+            .collect();
+        let window_rows: Vec<String> = body
+            .iter()
+            .filter(|l| l.starts_with("window "))
+            .map(|l| l["window ".len()..].to_string())
+            .collect();
+        let agent_rows: Vec<String> = body
+            .iter()
+            .filter(|l| l.starts_with("agent "))
+            .map(|l| l["agent ".len()..].to_string())
+            .collect();
+        let facts = StatusFacts::legacy_from(
+            &sessions,
+            Some(&workspaces),
+            ("$0".to_string(), window_rows),
+            Some(&["~/src".to_string()]),
+            Some(&agent_rows),
+        );
+        let mut from_legacy = StatusState::default();
+        from_legacy.commit(facts);
+
+        // The legacy path has no pane-title-per-pane query, and the
+        // snapshot caller derives pane_title from pane_titles itself
+        // (refresh_snapshot) — mirror both here.
+        from_snapshot.pane_titles.clear();
+        from_snapshot.pane_title = "~/src".to_string();
+        assert_eq!(from_legacy, from_snapshot);
+    }
+
     /// No `*` session row means no session owns the window: SessionGone,
     /// and `session_id` keeps its previous value (the landing contract).
     #[test]
@@ -912,11 +1110,19 @@ mod tests {
             !got.patch_agent("%2", "kimi", Some("working"), ""),
             "update"
         );
-        assert!(got.patch_agent("%0", "pi", Some("blocked"), "+1"), "insert");
+        assert!(
+            !got.patch_agent("%0", "pi", Some("blocked"), "+1"),
+            "an insert carrying its ws needs no refresh (ENH-061)"
+        );
         assert_eq!(
             got.agents,
             vec![
-                entry(0, "pi", "blocked"),
+                RosterEntry {
+                    pane: 0,
+                    agent: "pi".to_string(),
+                    state: "blocked".to_string(),
+                    workspace: Some("+1".to_string()),
+                },
                 entry(1, "claude", "working"),
                 entry(2, "kimi", "working"),
             ]
