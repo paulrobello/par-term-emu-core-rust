@@ -199,6 +199,14 @@ impl AgentRow {
             extras,
         })
     }
+
+    /// The owning workspace (`ws=` extra), `None` from a pre-`ws` daemon.
+    pub fn workspace(&self) -> Option<&str> {
+        self.extras
+            .iter()
+            .find(|(k, _)| k == "ws")
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +317,14 @@ mod tests {
         assert_eq!(AgentRow::parse(&row.to_string()), Some(row));
         assert_eq!(AgentRow::parse("%1 pi working"), None, "source missing");
         assert_eq!(AgentRow::parse("%1 pi working hook stray"), None);
+    }
+
+    /// `workspace()` reads the `ws=` extra; a row without it has none.
+    #[test]
+    fn agent_row_workspace_reads_the_ws_extra() {
+        let row = AgentRow::parse("%1 pi working hook reason=x ws=+2").expect("parses");
+        assert_eq!(row.workspace(), Some("+2"));
+        let bare = AgentRow::parse("%1 pi working hook").expect("parses");
+        assert_eq!(bare.workspace(), None);
     }
 }

@@ -6,6 +6,7 @@ use super::modal::*;
 use super::session::*;
 use super::*;
 use crate::mux::attach::layout::{parse_layout, parse_layout_triple};
+use crate::mux::attach::panels::{SidebarRow, SidebarRowId};
 use par_term_emu_core::keyboard::TermKey;
 use std::io::BufRead as _;
 
@@ -1600,6 +1601,15 @@ fn show_sidebar(session: &mut WindowSession) {
     session
         .renderer
         .set_sidebar_width(session.geometry.sidebar_w);
+}
+
+/// A side-panel row.
+fn srow(id: SidebarRowId, label: &str, active: bool) -> SidebarRow {
+    SidebarRow {
+        id,
+        label: label.to_string(),
+        active,
+    }
 }
 
 /// Every line the fake daemon recorded so far, in wire order. A

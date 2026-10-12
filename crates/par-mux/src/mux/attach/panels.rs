@@ -569,8 +569,29 @@ pub(crate) fn compose_picker_panel(
 /// segment (round 6), so the section carries only its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarSection {
-    /// `(id, label, active)` per row; `id` is what a click lands on.
-    pub rows: Vec<(String, String, bool)>,
+    pub rows: Vec<SidebarRow>,
+}
+
+/// What a side-panel row activates on click (ARC-140).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SidebarRowId {
+    /// A workspace row: its id, `+N`.
+    Workspace(String),
+    /// An agent row: the agent's pane.
+    Pane(u32),
+    /// The footer's ` new ` chip: opens the new-workspace prompt.
+    New,
+    /// The footer's ` menu ` chip: opens the command menu (keybinds,
+    /// reload config, detach).
+    Menu,
+}
+
+/// One side-panel row: its click target, label, and active flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidebarRow {
+    pub id: SidebarRowId,
+    pub label: String,
+    pub active: bool,
 }
 
 /// One composed sidebar line: buffer-row-relative `y`, the clickable
@@ -587,18 +608,10 @@ pub(crate) struct SidebarLine {
     /// The clickable columns `[x, x_end)` — the click hit-test's span.
     pub x_end: u16,
     pub text: String,
-    pub id: Option<String>,
+    pub id: Option<SidebarRowId>,
     /// The active entry: painted as herdr's full-width inverted block.
     pub active: bool,
 }
-
-/// The side panel's footer chips: ` new ` opens the new-workspace
-/// prompt, ` menu ` the command menu (keybinds, reload config, detach).
-/// The ids flow through
-/// [`SidebarLine.id`] into the click dispatch.
-pub(crate) const SIDEBAR_NEW_ID: &str = "panel:new";
-
-pub(crate) const SIDEBAR_MENU_ID: &str = "panel:menu";
 
 /// Compose the side panel's lines from its sections: the rows top-down
 /// (NO section header rows — the title lives in the tab strip's lead
@@ -622,12 +635,12 @@ pub(crate) fn compose_sidebar(
     // Body rows fill everything above the footer row.
     let body_cap = max - 1;
     for section in sections {
-        for (id, label, active) in &section.rows {
+        for row in &section.rows {
             if lines.len() >= body_cap {
                 break;
             }
-            let marker = if *active { "▸" } else { " " };
-            let text: String = format!(" {marker} {}", super::chrome_safe(label))
+            let marker = if row.active { "▸" } else { " " };
+            let text: String = format!(" {marker} {}", super::chrome_safe(&row.label))
                 .chars()
                 .take(text_width)
                 .collect();
@@ -636,8 +649,8 @@ pub(crate) fn compose_sidebar(
                 x: 0,
                 x_end: width.saturating_sub(1),
                 text,
-                id: Some(id.clone()),
-                active: *active,
+                id: Some(row.id.clone()),
+                active: row.active,
             });
         }
     }
@@ -651,7 +664,7 @@ pub(crate) fn compose_sidebar(
             x: 0,
             x_end: new_chip.len() as u16,
             text: new_chip.to_string(),
-            id: Some(SIDEBAR_NEW_ID.to_string()),
+            id: Some(SidebarRowId::New),
             active: false,
         });
         let menu_chip = " menu ";
@@ -662,7 +675,7 @@ pub(crate) fn compose_sidebar(
                 x: mx as u16,
                 x_end: text_width as u16,
                 text: menu_chip.to_string(),
-                id: Some(SIDEBAR_MENU_ID.to_string()),
+                id: Some(SidebarRowId::Menu),
                 active: false,
             });
         }

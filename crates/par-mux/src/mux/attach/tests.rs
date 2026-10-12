@@ -1595,10 +1595,23 @@ fn chrome_safe_keeps_zwj_and_zwnj() {
     }
 }
 
+/// A side-panel row for the compose tests.
+fn srow(id: super::SidebarRowId, label: &str, active: bool) -> super::SidebarRow {
+    super::SidebarRow {
+        id,
+        label: label.to_string(),
+        active,
+    }
+}
+
 #[test]
 fn compose_sidebar_drops_spoofing_chars() {
     let sections = vec![super::SidebarSection {
-        rows: vec![("+0".to_string(), "\u{202E}evil".to_string(), false)],
+        rows: vec![srow(
+            super::SidebarRowId::Workspace("+0".into()),
+            "\u{202E}evil",
+            false,
+        )],
     }];
     let lines = super::compose_sidebar(&sections, 20, 4);
     assert_eq!(lines[0].text, "   evil");
@@ -1608,11 +1621,11 @@ fn compose_sidebar_drops_spoofing_chars() {
 fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     let sections = vec![super::SidebarSection {
         rows: vec![
-            ("+0".to_string(), "main".to_string(), true),
-            ("+1".to_string(), "dev".to_string(), false),
-            (
-                "+2".to_string(),
-                "a very long workspace name".to_string(),
+            srow(super::SidebarRowId::Workspace("+0".into()), "main", true),
+            srow(super::SidebarRowId::Workspace("+1".into()), "dev", false),
+            srow(
+                super::SidebarRowId::Workspace("+2".into()),
+                "a very long workspace name",
                 false,
             ),
         ],
@@ -1620,23 +1633,29 @@ fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     let lines = super::compose_sidebar(&sections, 20, 12);
     // Row 0 is the first workspace — no header row above it.
     assert_eq!(lines[0].text, " ▸ main");
-    assert_eq!(lines[0].id.as_deref(), Some("+0"));
+    assert_eq!(
+        lines[0].id,
+        Some(super::SidebarRowId::Workspace("+0".into()))
+    );
     assert!(lines[0].active, "the active row is flagged");
     assert_eq!(lines[1].text, "   dev");
-    assert_eq!(lines[1].id.as_deref(), Some("+1"));
+    assert_eq!(
+        lines[1].id,
+        Some(super::SidebarRowId::Workspace("+1".into()))
+    );
     assert_eq!(lines[2].text, "   a very long work", "clipped to width - 1");
     // The footer chips pin to the panel's LAST row (footer_y = 11 of
     // 12 rows), never at a body row's position.
     let new_chip = lines
         .iter()
-        .find(|l| l.id.as_deref() == Some(super::SIDEBAR_NEW_ID))
+        .find(|l| l.id == Some(super::SidebarRowId::New))
         .expect("the new chip composes");
     assert_eq!(new_chip.y, 11);
     assert_eq!(new_chip.text, " new ");
     assert_eq!((new_chip.x, new_chip.x_end), (0, 5));
     let menu_chip = lines
         .iter()
-        .find(|l| l.id.as_deref() == Some(super::SIDEBAR_MENU_ID))
+        .find(|l| l.id == Some(super::SidebarRowId::Menu))
         .expect("the menu chip composes");
     assert_eq!(menu_chip.text, " menu ");
     assert_eq!(
@@ -1650,20 +1669,21 @@ fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     assert!(
         narrow
             .iter()
-            .any(|l| l.id.as_deref() == Some(super::SIDEBAR_NEW_ID)),
+            .any(|l| l.id == Some(super::SidebarRowId::New)),
         "the new chip fits a 6-col content: {narrow:?}"
     );
     assert!(
         !narrow
             .iter()
-            .any(|l| l.id.as_deref() == Some(super::SIDEBAR_MENU_ID)),
+            .any(|l| l.id == Some(super::SidebarRowId::Menu)),
         "the menu chip does not fit: {narrow:?}"
     );
     let tiny = super::compose_sidebar(&sections, 4, 3);
     assert!(
-        !tiny
-            .iter()
-            .any(|l| l.id.as_deref().is_some_and(|id| id.starts_with("panel:"))),
+        !tiny.iter().any(|l| matches!(
+            l.id,
+            Some(super::SidebarRowId::New | super::SidebarRowId::Menu)
+        )),
         "no chips fit a 3-col content: {tiny:?}"
     );
 }

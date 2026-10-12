@@ -2,6 +2,7 @@
 //! and the toggle/refresh the session drives.
 
 use super::*;
+use crate::mux::attach::panels::{SidebarRow, SidebarRowId, SidebarSection};
 
 impl PaneRenderer {
     /// The side panel's width (0 = hidden).
@@ -33,10 +34,7 @@ impl PaneRenderer {
 
     /// Replace the panel's sections (the workspace roster query's result)
     /// and mark dirty.
-    pub(crate) fn set_sidebar_sections(
-        &mut self,
-        sections: Option<Vec<super::super::SidebarSection>>,
-    ) {
+    pub(crate) fn set_sidebar_sections(&mut self, sections: Option<Vec<SidebarSection>>) {
         if self.sidebar_sections != sections {
             self.sidebar_sections = sections;
             self.dirty = true;
@@ -48,7 +46,7 @@ impl PaneRenderer {
     /// line composed at row `y` paints at HOST row `y + 1` — the frame
     /// rebases the renderer's rows +1 — so the lookup shifts the host
     /// row down one before matching.
-    pub(crate) fn sidebar_row_at(&self, x: u16, y: u16) -> Option<String> {
+    pub(crate) fn sidebar_row_at(&self, x: u16, y: u16) -> Option<SidebarRowId> {
         let w = self.geometry.sidebar_w;
         let (x, frame_y) = self.geometry.host_to_frame(x, y)?;
         if x >= w {
@@ -191,9 +189,13 @@ impl WindowSession {
                 .unwrap_or_default()
         };
         let focused = self.renderer.focused();
-        let agents = self.status.agents().to_vec();
-        let names = self.status.workspaces().to_vec();
-        self.set_sidebar_roster(roster, &agents, &names, focused);
+        let sections = Self::sidebar_sections(
+            &roster,
+            self.status.agents(),
+            self.status.workspaces(),
+            focused,
+        );
+        self.renderer.set_sidebar_sections(sections);
     }
 
     /// Rebuild the panel's sections from the cached status (workspaces,
@@ -210,85 +212,88 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         }
-        let active = self.status.active_workspace().map(str::to_string);
+        let active = self.status.active_workspace();
         let roster: Vec<(String, String, bool)> = self
             .status
             .workspaces()
             .iter()
-            .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
+            .map(|(id, name)| (id.clone(), name.clone(), Some(id.as_str()) == active))
             .collect();
         let focused = self.renderer.focused();
-        let agents = self.status.agents().to_vec();
-        let names = self.status.workspaces().to_vec();
-        self.set_sidebar_roster(roster, &agents, &names, focused);
+        let sections = Self::sidebar_sections(
+            &roster,
+            self.status.agents(),
+            self.status.workspaces(),
+            focused,
+        );
+        self.renderer.set_sidebar_sections(sections);
     }
 
-    /// Fill the panel's sections: the workspace rows, then the agent
-    /// roster — herdr's grouped panel. Each agent row labels with its
-    /// workspace name (`{ws} · {agent} ({state})`; the bare `{agent}
-    /// ({state})` when the daemon pre-`ws=` or the workspace is unknown)
-    /// and activates when its pane is the view's focus. Grouped by
-    /// workspace id in id order (unknown workspaces last), panes
-    /// ascending within a group.
-    pub(super) fn set_sidebar_roster(
-        &mut self,
-        roster: Vec<(String, String, bool)>,
-        agents: &[(u32, String, String, String)],
+    /// The panel's sections: the workspace rows (`roster` is `(id, name,
+    /// active)`), then the agent roster — herdr's grouped panel. Each
+    /// agent row labels with its workspace name (`{ws} · {agent}
+    /// ({state})`; the bare `{agent} ({state})` when the daemon pre-`ws=`
+    /// or the workspace is unknown) and activates when its pane is the
+    /// view's focus. Grouped by workspace id in id order (unknown
+    /// workspaces last), panes ascending within a group. `None` when
+    /// both are empty.
+    pub(super) fn sidebar_sections(
+        roster: &[(String, String, bool)],
+        agents: &[status::RosterEntry],
         ws_names: &[(String, String)],
         focused: Option<u32>,
-    ) {
-        let mut sections: Vec<super::super::SidebarSection> = Self::ws_rows_only(&roster)
-            .map(|rows| vec![super::super::SidebarSection { rows }])
-            .unwrap_or_default();
+    ) -> Option<Vec<SidebarSection>> {
+        let mut sections: Vec<SidebarSection> = Vec::new();
+        if !roster.is_empty() {
+            let rows = roster
+                .iter()
+                .map(|(id, name, active)| SidebarRow {
+                    id: SidebarRowId::Workspace(id.clone()),
+                    label: name.clone(),
+                    active: *active,
+                })
+                .collect();
+            sections.push(SidebarSection { rows });
+        }
         if !agents.is_empty() {
             // Group by workspace ID in the daemon's id order (`ws_names` is
             // the workspace cache, id order), panes ascending within a
             // group; rows whose workspace is unknown (pre-`ws=` daemon, or
             // a row a patch inserted before the refresh filled it) trail as
             // one group.
-            let group = |ws: &str| {
-                ws_names
-                    .iter()
-                    .position(|(id, _)| id == ws)
+            let group = |ws: Option<&str>| {
+                ws.and_then(|ws| ws_names.iter().position(|(id, _)| id == ws))
                     .unwrap_or(ws_names.len())
             };
             let mut keyed: Vec<_> = agents
                 .iter()
-                .map(|(pane, agent, state, ws)| {
+                .map(|entry| {
+                    let ws = entry.workspace.as_deref();
                     let ws_name = ws_names
                         .iter()
-                        .find(|(id, _)| id == ws)
+                        .find(|(id, _)| Some(id.as_str()) == ws)
                         .map(|(_, name)| name.as_str());
+                    let (agent, state) = (&entry.agent, &entry.state);
                     let label = match ws_name {
                         Some(name) => format!("{name} · {agent} ({state})"),
                         None => format!("{agent} ({state})"),
                     };
-                    let row = (format!("pane:{pane}"), label, focused == Some(*pane));
-                    ((group(ws), *pane), row)
+                    let row = SidebarRow {
+                        id: SidebarRowId::Pane(entry.pane),
+                        label,
+                        active: focused == Some(entry.pane),
+                    };
+                    ((group(ws), entry.pane), row)
                 })
                 .collect();
             keyed.sort_by_key(|(key, _)| *key);
-            let rows: Vec<(String, String, bool)> = keyed.into_iter().map(|(_, row)| row).collect();
-            sections.push(super::super::SidebarSection { rows });
+            let rows = keyed.into_iter().map(|(_, row)| row).collect();
+            sections.push(SidebarSection { rows });
         }
         if sections.is_empty() {
-            self.renderer.set_sidebar_sections(None);
-            return;
+            None
+        } else {
+            Some(sections)
         }
-        self.renderer.set_sidebar_sections(Some(sections));
-    }
-
-    /// The workspace rows `(ws:{id}, name, active)`; `None` when the
-    /// roster is empty.
-    fn ws_rows_only(roster: &[(String, String, bool)]) -> Option<Vec<(String, String, bool)>> {
-        if roster.is_empty() {
-            return None;
-        }
-        Some(
-            roster
-                .iter()
-                .map(|(id, name, active)| (format!("ws:{id}"), name.clone(), *active))
-                .collect(),
-        )
     }
 }

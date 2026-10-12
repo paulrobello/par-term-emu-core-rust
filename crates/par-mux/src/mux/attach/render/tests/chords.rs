@@ -393,7 +393,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     assert_eq!(
         session.renderer.sidebar_row_at(2, 2),
-        Some("ws:+1".to_string()),
+        Some(SidebarRowId::Workspace("+1".into())),
         "the queried roster fills the panel"
     );
     chord(&mut session, &mut conn, b's');
@@ -1469,8 +1469,8 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
             rows: vec![
-                ("ws:+0".to_string(), "alpha".to_string(), true),
-                ("ws:+1".to_string(), "beta".to_string(), false),
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
             ],
         }]));
     // Host row 2 (1-based 3) is the second workspace row.
@@ -1686,7 +1686,7 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
-            rows: vec![("ws:+1".to_string(), "beta".to_string(), false)],
+            rows: vec![srow(SidebarRowId::Workspace("+1".into()), "beta", false)],
         }]));
     // Host row 1 (SGR row 2) is the first workspace row.
     assert_eq!(
@@ -1726,9 +1726,9 @@ fn sidebar_agent_row_click_focuses_the_pane() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
-            rows: vec![(
-                "pane:7".to_string(),
-                "main \u{b7} kimi (blocked)".to_string(),
+            rows: vec![srow(
+                SidebarRowId::Pane(7),
+                "main \u{b7} kimi (blocked)",
                 false,
             )],
         }]));

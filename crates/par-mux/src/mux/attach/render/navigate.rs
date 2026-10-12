@@ -233,9 +233,13 @@ impl WindowSession {
         if self.sidebar_on {
             if let Some(roster) = rows.workspaces {
                 let focused = self.renderer.focused();
-                let agents = self.status.agents().to_vec();
-                let names = self.status.workspaces().to_vec();
-                self.set_sidebar_roster(roster, &agents, &names, focused);
+                let sections = Self::sidebar_sections(
+                    &roster,
+                    self.status.agents(),
+                    self.status.workspaces(),
+                    focused,
+                );
+                self.renderer.set_sidebar_sections(sections);
             }
         }
         self.refresh_pane_titles(conn)

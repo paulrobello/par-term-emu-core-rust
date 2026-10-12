@@ -104,11 +104,20 @@ pub(crate) struct StatusState {
     /// Every pane title of the shown window as `(pane, title)`, from the
     /// last `client-snapshot` (empty on the legacy query path).
     pane_titles: Vec<(u32, String)>,
-    /// The agent roster as `(pane, agent, state, workspace-id)`, pane-id
-    /// order (the order `list-agents` sorts by), so a payload patch keeps
-    /// it. The workspace id is the `ws=` extra's value (`+N`), empty when
-    /// a pre-`ws` daemon omitted it.
-    agents: Vec<(u32, String, String, String)>,
+    /// The agent roster, pane-id order (the order `list-agents` sorts
+    /// by), so a payload patch keeps it.
+    agents: Vec<RosterEntry>,
+}
+
+/// One agent-roster row the client knows (ARC-140).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RosterEntry {
+    pub pane: u32,
+    pub agent: String,
+    pub state: String,
+    /// The owning workspace id (`+N`); `None` when unknown (a pre-`ws`
+    /// daemon, or a row a patch inserted before a refresh placed it).
+    pub workspace: Option<String>,
 }
 
 /// A window row's display name: an unnamed window shows its id, and a
@@ -249,13 +258,13 @@ impl StatusState {
                 "agent" => {
                     if let Some(row) = AgentRow::parse(rest) {
                         if let Some(pane) = pane_number(&row.pane) {
-                            let ws = row
-                                .extras
-                                .iter()
-                                .find(|(k, _)| k == "ws")
-                                .map(|(_, v)| v.clone())
-                                .unwrap_or_default();
-                            agents.push((pane, row.agent, row.state, ws));
+                            let workspace = row.workspace().map(str::to_string);
+                            agents.push(RosterEntry {
+                                pane,
+                                agent: row.agent,
+                                state: row.state,
+                                workspace,
+                            });
                         }
                     }
                 }
@@ -352,13 +361,13 @@ impl StatusState {
                 .iter()
                 .filter_map(|line| AgentRow::parse(line))
                 .filter_map(|row| {
-                    let ws = row
-                        .extras
-                        .iter()
-                        .find(|(k, _)| k == "ws")
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or_default();
-                    Some((pane_number(&row.pane)?, row.agent, row.state, ws))
+                    let workspace = row.workspace().map(str::to_string);
+                    Some(RosterEntry {
+                        pane: pane_number(&row.pane)?,
+                        agent: row.agent,
+                        state: row.state,
+                        workspace,
+                    })
                 })
                 .collect();
         }
@@ -419,8 +428,8 @@ impl StatusState {
 
     /// The workspace roster as `(id, name)`, id order — the side
     /// panel's and the workspace prompts'/menus' source of truth.
-    /// The agent roster in pane-id order: `(pane, agent, state, ws)`.
-    pub(crate) fn agents(&self) -> &[(u32, String, String, String)] {
+    /// The agent roster in pane-id order.
+    pub(crate) fn agents(&self) -> &[RosterEntry] {
         &self.agents
     }
 
@@ -461,22 +470,28 @@ impl StatusState {
             return false;
         };
         match state {
-            Some(state) => match self.agents.binary_search_by_key(&pane, |(p, ..)| *p) {
+            Some(state) => match self.agents.binary_search_by_key(&pane, |e| e.pane) {
                 Ok(index) => {
-                    let ws = self.agents[index].3.clone();
-                    self.agents[index] = (pane, agent.to_string(), state.to_string(), ws);
+                    let entry = &mut self.agents[index];
+                    entry.agent = agent.to_string();
+                    entry.state = state.to_string();
                     false
                 }
                 Err(index) => {
                     self.agents.insert(
                         index,
-                        (pane, agent.to_string(), state.to_string(), String::new()),
+                        RosterEntry {
+                            pane,
+                            agent: agent.to_string(),
+                            state: state.to_string(),
+                            workspace: None,
+                        },
                     );
                     true
                 }
             },
             None => {
-                self.agents.retain(|(p, ..)| *p != pane);
+                self.agents.retain(|e| e.pane != pane);
                 false
             }
         }
@@ -775,15 +790,17 @@ mod tests {
             active_window: Some("@0".to_string()),
             pane_title: "~/src".to_string(),
             pane_titles: Vec::new(),
-            agents: vec![
-                (
-                    1,
-                    "claude".to_string(),
-                    "working".to_string(),
-                    String::new(),
-                ),
-                (2, "kimi".to_string(), "blocked".to_string(), String::new()),
-            ],
+            agents: vec![entry(1, "claude", "working"), entry(2, "kimi", "blocked")],
+        }
+    }
+
+    /// A roster entry with no known workspace.
+    fn entry(pane: u32, agent: &str, state: &str) -> RosterEntry {
+        RosterEntry {
+            pane,
+            agent: agent.to_string(),
+            state: state.to_string(),
+            workspace: None,
         }
     }
 
@@ -881,18 +898,13 @@ mod tests {
         assert_eq!(
             got.agents,
             vec![
-                (0, "pi".to_string(), "blocked".to_string(), String::new()),
-                (
-                    1,
-                    "claude".to_string(),
-                    "working".to_string(),
-                    String::new()
-                ),
-                (2, "kimi".to_string(), "working".to_string(), String::new()),
+                entry(0, "pi", "blocked"),
+                entry(1, "claude", "working"),
+                entry(2, "kimi", "working"),
             ]
         );
         assert!(!got.patch_agent("%1", "claude", None), "release");
-        assert!(got.agents.iter().all(|(p, ..)| *p != 1));
+        assert!(got.agents.iter().all(|e| e.pane != 1));
         got.patch_window_name("@1", "  edit  me ");
         assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));
         got.patch_window_name("@9", "ignored");

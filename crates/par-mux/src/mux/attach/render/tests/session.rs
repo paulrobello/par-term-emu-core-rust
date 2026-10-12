@@ -2,6 +2,7 @@
 //! display options, overlays, and the command menu.
 
 use super::*;
+use crate::mux::attach::status::RosterEntry;
 
 /// The tab strip costs one content row everywhere the status row
 /// does: the renderer is the host grid minus strip minus status
@@ -818,8 +819,8 @@ fn sidebar_clicks_land_on_the_painted_row() {
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
             rows: vec![
-                ("ws:+0".to_string(), "alpha".to_string(), true),
-                ("ws:+1".to_string(), "beta".to_string(), false),
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
             ],
         }]));
     // Host row 0 (the tab strip row): nothing.
@@ -828,13 +829,13 @@ fn sidebar_clicks_land_on_the_painted_row() {
     // above it since round 6).
     assert_eq!(
         session.renderer.sidebar_row_at(2, 1),
-        Some("ws:+0".to_string()),
+        Some(SidebarRowId::Workspace("+0".into())),
         "the click lands on the row as painted"
     );
     // Host row 2: the second workspace row.
     assert_eq!(
         session.renderer.sidebar_row_at(2, 2),
-        Some("ws:+1".to_string())
+        Some(SidebarRowId::Workspace("+1".into()))
     );
     // The footer row (host row = renderer height - 1 + 1 = 24... the
     // 22-row renderer's LAST row at host row 22): the chips answer
@@ -842,12 +843,12 @@ fn sidebar_clicks_land_on_the_painted_row() {
     // ` the content's right edge.
     assert_eq!(
         session.renderer.sidebar_row_at(2, 22),
-        Some("panel:new".to_string()),
+        Some(SidebarRowId::New),
         "the new chip's cell"
     );
     assert_eq!(
         session.renderer.sidebar_row_at(16, 22),
-        Some("panel:menu".to_string()),
+        Some(SidebarRowId::Menu),
         "the menu chip's cell"
     );
     assert_eq!(
@@ -859,7 +860,7 @@ fn sidebar_clicks_land_on_the_painted_row() {
     // row's inverted block is clickable anywhere on it).
     assert_eq!(
         session.renderer.sidebar_row_at(17, 1),
-        Some("ws:+0".to_string())
+        Some(SidebarRowId::Workspace("+0".into()))
     );
     // Past the strip's width: nothing.
     assert_eq!(session.renderer.sidebar_row_at(20, 2), None);
@@ -2258,6 +2259,16 @@ fn snapshot_script() -> FakeScript {
     }
 }
 
+/// An agent-roster entry.
+fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) -> RosterEntry {
+    RosterEntry {
+        pane,
+        agent: agent.to_string(),
+        state: state.to_string(),
+        workspace: workspace.map(str::to_string),
+    }
+}
+
 /// A three-pane render session showing `@0` with the side panel up.
 fn snapshot_session() -> WindowSession {
     let mut session = WindowSession::new(90, 26);
@@ -2279,48 +2290,28 @@ fn sidebar_agents_section_groups_by_workspace() {
     let mut session = snapshot_session();
     let roster = vec![("+0".to_string(), "main".to_string(), true)];
     let agents = vec![
-        (
-            3,
-            "kimi".to_string(),
-            "blocked".to_string(),
-            "+1".to_string(),
-        ),
-        (
-            2,
-            "claude".to_string(),
-            "working".to_string(),
-            "+0".to_string(),
-        ),
-        (5, "pi".to_string(), "idle".to_string(), String::new()),
+        roster_entry(3, "kimi", "blocked", Some("+1")),
+        roster_entry(2, "claude", "working", Some("+0")),
+        roster_entry(5, "pi", "idle", None),
     ];
     let names = vec![
         ("+0".to_string(), "main".to_string()),
         ("+1".to_string(), "zeta".to_string()),
     ];
-    session.set_sidebar_roster(roster, &agents, &names, Some(2));
+    let sections = WindowSession::sidebar_sections(&roster, &agents, &names, Some(2));
+    session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
     assert_eq!(sections.len(), 2, "{sections:?}");
     let rows = &sections[1].rows;
     assert_eq!(
         rows[0],
-        (
-            "pane:2".to_string(),
-            "main \u{b7} claude (working)".to_string(),
-            true
-        )
+        srow(SidebarRowId::Pane(2), "main \u{b7} claude (working)", true)
     );
     assert_eq!(
         rows[1],
-        (
-            "pane:3".to_string(),
-            "zeta \u{b7} kimi (blocked)".to_string(),
-            false
-        )
+        srow(SidebarRowId::Pane(3), "zeta \u{b7} kimi (blocked)", false)
     );
-    assert_eq!(
-        rows[2],
-        ("pane:5".to_string(), "pi (idle)".to_string(), false)
-    );
+    assert_eq!(rows[2], srow(SidebarRowId::Pane(5), "pi (idle)", false));
 }
 
 /// Two workspaces sharing a display name stay two groups: the key is the
@@ -2329,28 +2320,29 @@ fn sidebar_agents_section_groups_by_workspace() {
 fn sidebar_agents_group_by_workspace_id_not_name() {
     let mut session = snapshot_session();
     let roster = vec![("+0".to_string(), "dev".to_string(), true)];
-    let agent = |pane: u32, name: &str, ws: &str| {
-        (pane, name.to_string(), "idle".to_string(), ws.to_string())
-    };
     let agents = vec![
-        agent(4, "a", "+1"),
-        agent(3, "b", "+0"),
-        agent(2, "c", "+1"),
+        roster_entry(4, "a", "idle", Some("+1")),
+        roster_entry(3, "b", "idle", Some("+0")),
+        roster_entry(2, "c", "idle", Some("+1")),
     ];
     let names = vec![
         ("+0".to_string(), "dev".to_string()),
         ("+1".to_string(), "dev".to_string()),
     ];
-    session.set_sidebar_roster(roster, &agents, &names, None);
+    let sections = WindowSession::sidebar_sections(&roster, &agents, &names, None);
+    session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
-    let ids: Vec<&str> = sections[1]
-        .rows
-        .iter()
-        .map(|(id, ..)| id.as_str())
-        .collect();
+    let ids: Vec<SidebarRowId> = sections[1].rows.iter().map(|row| row.id.clone()).collect();
     // Group `+0` (pane 3), then group `+1` with panes ascending (2, 4).
     // A label-head key would merge both "dev" groups into pane order 2, 3, 4.
-    assert_eq!(ids, ["pane:3", "pane:2", "pane:4"]);
+    assert_eq!(
+        ids,
+        [
+            SidebarRowId::Pane(3),
+            SidebarRowId::Pane(2),
+            SidebarRowId::Pane(4)
+        ]
+    );
 }
 
 /// An agent event for a pane the roster lacks inserts a row with no
@@ -2392,17 +2384,9 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
     assert_eq!(
         sections[1].rows,
         vec![
-            (
-                "pane:1".to_string(),
-                "main \u{b7} claude (working)".to_string(),
-                true
-            ),
-            (
-                "pane:3".to_string(),
-                "side \u{b7} kimi (blocked)".to_string(),
-                false
-            ),
-            ("pane:2".to_string(), "claude (blocked)".to_string(), false),
+            srow(SidebarRowId::Pane(1), "main \u{b7} claude (working)", true),
+            srow(SidebarRowId::Pane(3), "side \u{b7} kimi (blocked)", false),
+            srow(SidebarRowId::Pane(2), "claude (blocked)", false),
         ]
     );
     assert!(received_within_300ms(&rx).is_empty(), "no round trip");
@@ -2450,14 +2434,14 @@ fn snapshot_refresh_is_one_round_trip() {
         Some(vec![
             crate::mux::attach::panels::SidebarSection {
                 rows: vec![
-                    ("ws:+0".to_string(), "main".to_string(), true),
-                    ("ws:+1".to_string(), "side".to_string(), false),
+                    srow(SidebarRowId::Workspace("+0".into()), "main", true),
+                    srow(SidebarRowId::Workspace("+1".into()), "side", false),
                 ],
             },
             crate::mux::attach::panels::SidebarSection {
                 rows: vec![
-                    ("pane:1".to_string(), "claude (working)".to_string(), true),
-                    ("pane:3".to_string(), "kimi (blocked)".to_string(), false),
+                    srow(SidebarRowId::Pane(1), "claude (working)", true),
+                    srow(SidebarRowId::Pane(3), "kimi (blocked)", false),
                 ],
             },
         ])
@@ -2520,7 +2504,7 @@ fn agent_event_patches_without_a_query() {
     session.status_dirty = false;
     drained(&rx);
 
-    let rows = |session: &WindowSession| -> Vec<(String, String, bool)> {
+    let rows = |session: &WindowSession| -> Vec<SidebarRow> {
         session
             .renderer
             .sidebar_sections
@@ -2537,14 +2521,14 @@ fn agent_event_patches_without_a_query() {
     });
     assert!(!session.status_dirty);
     assert!(
-        rows(&session).contains(&("pane:3".to_string(), "kimi (working)".to_string(), false)),
+        rows(&session).contains(&srow(SidebarRowId::Pane(3), "kimi (working)", false)),
         "{:?}",
         rows(&session)
     );
     assert!(
         !rows(&session)
             .iter()
-            .any(|(_, label, _)| label == "kimi (blocked)"),
+            .any(|row| row.label == "kimi (blocked)"),
         "{:?}",
         rows(&session)
     );
@@ -2555,7 +2539,9 @@ fn agent_event_patches_without_a_query() {
     });
     assert!(!session.status_dirty);
     assert!(
-        !rows(&session).iter().any(|(id, _, _)| id == "pane:3"),
+        !rows(&session)
+            .iter()
+            .any(|row| row.id == SidebarRowId::Pane(3)),
         "{:?}",
         rows(&session)
     );

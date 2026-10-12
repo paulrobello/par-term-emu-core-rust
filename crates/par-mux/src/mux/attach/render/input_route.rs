@@ -565,22 +565,18 @@ impl WindowSession {
         if mouse.release || mouse.is_motion() {
             return Hit::Consumed;
         }
+        use crate::mux::attach::panels::SidebarRowId;
         let Some(id) = self.renderer.sidebar_row_at(x, y) else {
             return Hit::Consumed;
         };
-        if id == super::super::SIDEBAR_NEW_ID {
-            Hit::SidebarNewWorkspace
-        } else if id == super::super::SIDEBAR_MENU_ID {
-            Hit::SidebarMenu
-        } else if let Some(pane) = id.strip_prefix("pane:").and_then(|p| p.parse::<u32>().ok()) {
-            Hit::SidebarPane { pane }
-        } else if let Some(ws_id) = id.strip_prefix("ws:") {
-            Hit::SidebarWorkspace {
-                id: ws_id.to_string(),
+        match id {
+            SidebarRowId::New => Hit::SidebarNewWorkspace,
+            SidebarRowId::Menu => Hit::SidebarMenu,
+            SidebarRowId::Pane(pane) => Hit::SidebarPane { pane },
+            SidebarRowId::Workspace(id) => Hit::SidebarWorkspace {
+                id,
                 menu: mouse.is_right_press(),
-            }
-        } else {
-            Hit::Consumed
+            },
         }
     }
 
