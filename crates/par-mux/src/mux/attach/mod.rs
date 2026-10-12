@@ -91,7 +91,7 @@ pub enum AttachMode {
 /// Attach entry point. Returns the process exit code.
 ///
 /// Standing client-mode contract: a failed connect is reported as
-/// "no daemon running on <path>" and exits 1 — attach never starts a
+/// `"no daemon running on <path>"` and exits 1 — attach never starts a
 /// daemon, matching `--cmd`/`--stop` (docs/MUX.md Client Mode).
 pub fn run(options: &AttachOptions) -> ExitCode {
     run_with_mode(options, AttachMode::default())
@@ -203,7 +203,7 @@ pub struct AttachOptions {
     /// the newest session's newest pane (the global `list-panes` order).
     pub target: Option<String>,
     /// `--prefix KEY`: the detach key chord, e.g. `C-b` (tmux spelling),
-    /// parsed by [`parse_prefix`].
+    /// parsed by the crate-private `parse_prefix`.
     pub prefix: Option<String>,
     /// The config-file reload chord (`[client] reload`, e.g. `C-b C-r`):
     /// the key pressed after the prefix that re-reads the config file and
