@@ -950,6 +950,38 @@ connected client can execute arbitrary commands as the user running the server.
 - The `/sessions` HTTP endpoint applies the same origin check and rejects
   disallowed browser origins with HTTP 403.
 
+### Response Headers (SEC-010, ENH-059)
+
+Every HTTP-app response carries `X-Frame-Options: DENY` and a full
+`Content-Security-Policy` (`CONTENT_SECURITY_POLICY`,
+`src/streaming/server/http.rs`):
+
+```text
+default-src 'self';
+script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval';
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net;
+img-src 'self' data: blob:;
+connect-src 'self' ws: wss:;
+object-src 'none'; base-uri 'self'; form-action 'self';
+frame-ancestors 'none'
+```
+
+The sources are exactly what the shipped `web_term/` export loads:
+Google Fonts CSS plus its font files and the jsDelivr Nerd Font, xterm's
+runtime `<style>` elements and React's SSR `style=` attributes
+(`'unsafe-inline'` styles), the image addon's WASM decoder
+(`'wasm-unsafe-eval'`) and blob-URL images, and any `ws:`/`wss:` endpoint
+(the UI accepts a user-typed server URL). Scripts are same-origin plus
+`'unsafe-inline'` rather than hashes: Next.js inlines a per-page,
+per-build RSC payload, so a hash list would break every
+`--download-frontend` version but the one it was computed for; computing
+hashes at startup by scanning `web_root` is a possible follow-up. A
+frontend change that loads a new external origin must extend
+`CONTENT_SECURITY_POLICY` in the same change —
+`csp_allows_every_external_origin_the_shipped_frontend_loads` fails
+until it does.
+
 **Example:**
 ```bash
 # Only allow a specific remote browser origin to open a WebSocket connection

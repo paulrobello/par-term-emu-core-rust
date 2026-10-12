@@ -257,12 +257,31 @@ pub(super) fn build_cors_layer(
     }
 }
 
-/// Anti-framing headers on every response (SEC-010). The served web
-/// frontend drives a live shell; without `X-Frame-Options: DENY` and a
-/// `frame-ancestors 'none'` CSP, a transparent iframe on an attacker page
-/// plus cached Basic credentials lets the attacker clickjack keystrokes
-/// into the terminal. Applied at the outermost router so static files and
-/// API responses both carry it.
+/// Content-Security-Policy on every HTTP-app response (ENH-059, extends
+/// SEC-010). Sources are exactly what the shipped `web_term/` export
+/// loads: Google Fonts CSS + font files and the jsDelivr Nerd Font,
+/// xterm's runtime `<style>` elements and React's SSR `style=` attributes
+/// (`'unsafe-inline'` styles), the image addon's WASM decoder
+/// (`'wasm-unsafe-eval'`) and blob-URL images, and any `ws:`/`wss:`
+/// endpoint (the UI accepts a user-typed server URL). Scripts are
+/// same-origin plus `'unsafe-inline'`: Next.js inlines a per-page,
+/// per-build RSC payload, so a hash list would break every
+/// `--download-frontend` version but the one it was computed for.
+pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
+    img-src 'self' data: blob:; \
+    connect-src 'self' ws: wss:; \
+    object-src 'none'; base-uri 'self'; form-action 'self'; \
+    frame-ancestors 'none'";
+
+/// Anti-framing headers on every response (SEC-010), with the full CSP
+/// (ENH-059). The served web frontend drives a live shell; without
+/// `X-Frame-Options: DENY` and a `frame-ancestors 'none'` CSP, a
+/// transparent iframe on an attacker page plus cached Basic credentials
+/// lets the attacker clickjack keystrokes into the terminal. Applied at
+/// the outermost router so static files and API responses both carry it.
 pub(super) async fn add_security_headers(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
@@ -276,7 +295,7 @@ pub(super) async fn add_security_headers(
     );
     headers.insert(
         HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static("frame-ancestors 'none'"),
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
     );
     res
 }

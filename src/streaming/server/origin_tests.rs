@@ -1,3 +1,4 @@
+use super::http::CONTENT_SECURITY_POLICY;
 use super::{
     build_cors_layer, check_ws_origin, is_local_origin, sessions_handler, StreamingConfig,
     StreamingServer,
@@ -269,7 +270,14 @@ async fn http_app_responses_carry_anti_framing_headers() {
         res.headers()
             .get("content-security-policy")
             .and_then(|v| v.to_str().ok()),
-        Some("frame-ancestors 'none'")
+        Some(CONTENT_SECURITY_POLICY)
+    );
+    assert!(
+        res.headers()
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|csp| csp.contains("frame-ancestors 'none'")),
+        "SEC-010's anti-framing guarantee must survive the full policy"
     );
 
     // API route response too.
@@ -288,6 +296,146 @@ async fn http_app_responses_carry_anti_framing_headers() {
         res.headers()
             .get("content-security-policy")
             .and_then(|v| v.to_str().ok()),
-        Some("frame-ancestors 'none'")
+        Some(CONTENT_SECURITY_POLICY)
     );
+}
+/// ENH-059: the full policy carries the directives the page needs, and
+/// never the unscoped eval.
+#[tokio::test]
+async fn http_app_csp_restricts_scripts_connections_and_objects() {
+    let web_root = tempfile::Builder::new()
+        .prefix("par-term-webroot-csp-")
+        .tempdir()
+        .expect("create temp dir for web root fixture");
+    std::fs::write(web_root.path().join("index.html"), "<html></html>").unwrap();
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let config = StreamingConfig {
+        web_root: web_root.path().to_string_lossy().into_owned(),
+        ..StreamingConfig::default()
+    };
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        config,
+    ));
+    let app = server.build_http_app();
+
+    let res = app.oneshot(origin_request("GET", "/", None)).await.unwrap();
+    assert_eq!(res.status(), 200);
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .expect("the CSP header");
+    for needle in [
+        "default-src 'self'",
+        "connect-src 'self' ws: wss:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "script-src 'self'",
+    ] {
+        assert!(csp.contains(needle), "CSP must contain {needle}: {csp}");
+    }
+    assert!(
+        !csp.contains("'unsafe-eval'"),
+        "plain 'unsafe-eval' must not appear (the WASM carve-out is scoped): {csp}"
+    );
+}
+
+/// ENH-059 drift guard: every external origin the shipped `web_term/`
+/// export actually loads must appear in CONTENT_SECURITY_POLICY. A
+/// frontend change that adds one fails here until the constant is
+/// extended in the same change.
+#[test]
+fn csp_allows_every_external_origin_the_shipped_frontend_loads() {
+    let web = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web_term");
+    if !web.is_dir() {
+        // The static export is a build artifact; the guard runs where it
+        // exists.
+        return;
+    }
+    // `href=`/`src=` attributes in the HTML and `url()` forms in the CSS.
+    // Preconnect links are navigation hints CSP does not govern, so their
+    // lines are skipped; `https://` tokens anywhere else are not scanned.
+    let mut origins: Vec<String> = Vec::new();
+    for html in glob_html(&web) {
+        let text = std::fs::read_to_string(&html).unwrap_or_default();
+        for line in text.lines() {
+            if line.contains("rel=\"preconnect\"") {
+                continue;
+            }
+            for needle in ["href=\"https://", "src=\"https://"] {
+                collect_origins(line, needle, '"', &mut origins);
+            }
+        }
+    }
+    for css in glob_css(&web) {
+        let text = std::fs::read_to_string(&css).unwrap_or_default();
+        for line in text.lines() {
+            for needle in ["url(https://", "url('https://", "url(\"https://"] {
+                collect_origins(line, needle, ')', &mut origins);
+            }
+        }
+    }
+    assert!(
+        !origins.is_empty(),
+        "the shipped export must load at least one external origin for this guard to mean anything"
+    );
+    for origin in &origins {
+        assert!(
+            CONTENT_SECURITY_POLICY.contains(origin.as_str()),
+            "the shipped frontend loads https://{origin}, which the CSP does not allow; extend CONTENT_SECURITY_POLICY in src/streaming/server/http.rs in the same change"
+        );
+    }
+}
+
+/// Every `https://<host>` origin after `needle` in `line`, cut at `terminator`.
+fn collect_origins(line: &str, needle: &str, terminator: char, out: &mut Vec<String>) {
+    let mut rest = line;
+    while let Some(i) = rest.find(needle) {
+        let after = &rest[i + needle.len()..];
+        let end = after.find(terminator).unwrap_or(after.len());
+        let host: String = after[..end]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+            .collect();
+        if !host.is_empty() {
+            out.push(host);
+        }
+        rest = &after[end.min(after.len())..];
+    }
+}
+
+/// Every `*.html` under `web`, sorted for stable assertions.
+fn glob_html(web: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = std::fs::read_dir(web)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every `*.css` under `web`'s `_next/static`, recursive.
+fn glob_css(web: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![web.join("_next")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "css") {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
