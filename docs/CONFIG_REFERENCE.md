@@ -826,7 +826,7 @@ term.process(b"\x1b[?1006h")  # SGR mouse encoding
 
 ## Environment Variables
 
-This is the one table of every environment variable the library, the `par-mux` binary, and the `par-term-streamer` binary read. Each area's guide keeps its own detail: [SECURITY.md](SECURITY.md#xtwinops-query-response-control) for `PAR_TERM_REPLY_XTWINOPS`, [MUX.md](MUX.md#agent-hook-reports) for the variables par-mux sets inside panes, and [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) for the streaming server options.
+This is the one table of every environment variable the library, the `par-mux` binary, the `par-term-streamer` binary, and the shipped par-mux agent integrations read. Each area's guide keeps its own detail: [SECURITY.md](SECURITY.md#xtwinops-query-response-control) for `PAR_TERM_REPLY_XTWINOPS`, [MUX.md](MUX.md#agent-hook-reports) for the variables par-mux sets inside panes, and [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) for the streaming server options.
 
 | Variable | Read by | Default | Purpose |
 |----------|---------|---------|---------|
@@ -842,6 +842,13 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `PAR_MUX_CONTROL` | par-mux daemon, per session (`set-environment` / `new-session -e`) | unset | `1` in a session's env grants that session's panes `PAR_MUX_CONTROL_SOCKET` (the full control socket) under `--pane-endpoints` without `--expose-control-socket`; see [MUX.md](MUX.md#agent-hook-reports) |
 | `PAR_MUX_CURSOR_TRACE` | `par-mux attach` render mode (read once) | unset | Any value but empty or `0` logs every host cursor placement write and every reason the focused cursor is unplaceable to stderr; redirect it (`2>/tmp/cursor.log`) because stderr is usually the rendered tty |
 | `PAR_MUX_OMP_IDLE_DEBOUNCE_MS` | par-mux omp agent extension (`par-mux-omp-agent-state.ts`) | `250` | Milliseconds the extension waits after an agent turn ends before reporting `idle`, so a turn that immediately continues never flashes idle; negative or unparsable values use the default |
+| `PAR_MUX_OMP_RETRY_GRACE_MS` | par-mux omp agent extension (`par-mux-omp-agent-state.ts`) | `2500` | Milliseconds the extension keeps reporting the previous state after an agent process restarts, so a slow relaunch never flashes unregistered; negative or unparsable values use the default |
+| `PAR_MUX_SENDLOG` | par-mux pi/omp agent extensions (`par-mux-agent-state.ts`, `par-mux-omp-agent-state.ts`) | unset | `1` writes one `SENDLOG` stderr line per send, for debugging extension-to-daemon delivery |
+| `CLAUDE_CONFIG_DIR` | `par-mux --install-agent-hooks` (claude) | `~/.claude` | Where the claude session hook is installed instead of the default config directory |
+| `CODEX_HOME` | `par-mux --install-agent-hooks` (codex) | `~/.codex` | Where the codex session hook is installed instead of the default config directory |
+| `GROK_HOME` | `par-mux --install-agent-hooks` (grok) | `~/.grok` | Where the grok session hook is installed instead of the default config directory |
+| `PI_CODING_AGENT_DIR` | `par-mux --install-agent-extensions` (pi) | `~/.pi` | Where the pi agent extension is installed instead of the default agent directory |
+| `PI_CONFIG_DIR` | `par-mux --install-agent-extensions` (pi) | `~/.config/pi` | Where the pi agent extension reads its config instead of the default config directory |
 | `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
 | `TMPDIR` | System temp directory (Unix) | `/tmp` | Base for the per-UID socket fallback and debug logs |
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |

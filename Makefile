@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check env-docs-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check mux-rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -65,6 +65,7 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
+	@echo "  env-docs-check  - Fail when an env var production code reads is missing from CONFIG_REFERENCE (or vice versa)"
 	@echo "  mux-rustdoc-check - Fail when par-mux rustdoc has broken or private intra-doc links (RUSTDOCFLAGS=-D warnings cargo doc -p par-mux)"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
@@ -460,6 +461,12 @@ mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
 
+# ENH-055: every env var production code reads is in the CONFIG_REFERENCE
+# table (or MUX.md's pane env contract / STREAMING.md). Pure python3.
+env-docs-check:
+	python3 scripts/check_env_docs.py
+	python3 scripts/check_env_docs.py --self-test
+
 # ARC-008: the main crate's par-term-emu-derive dependency spec must name
 # derive/Cargo.toml's version (publish strips `path`, so crates.io resolves
 # the spec). Pure python3 stdlib; also runs from release-check.
@@ -555,7 +562,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check env-docs-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
