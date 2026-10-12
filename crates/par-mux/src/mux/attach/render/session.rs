@@ -729,23 +729,17 @@ impl WindowSession {
         if self.renderer.overlay.is_some() || self.modal.hides_cursor() {
             cursor = None;
         }
-        if flushed
-            || self.cursor_placed.as_ref() != Some(&cursor)
-            // Heartbeat: every guard is belief-based, so a host terminal
-            // that lost the cursor state outside the guarded writers
-            // never re-syncs on its own — re-assert the placement (idempotent
-            // on a healthy host) once per heartbeat so any desync
-            // self-heals within a second.
-            || (cursor.is_some() && self.last_cursor_emit.elapsed() >= CURSOR_HEARTBEAT)
-        {
-            if super::cursor_trace() {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "par-mux cursor-trace: frame emit (flushed={flushed}, belief-changed={}, heartbeat={})",
-                    self.cursor_placed.as_ref() != Some(&cursor),
-                    cursor.is_some() && self.last_cursor_emit.elapsed() >= CURSOR_HEARTBEAT
-                );
-            }
+        let belief_changed = self.cursor_placed.as_ref() != Some(&cursor);
+        // Heartbeat: every guard is belief-based, so a host terminal
+        // that lost the cursor state outside the guarded writers
+        // never re-syncs on its own — re-assert the placement (idempotent
+        // on a healthy host) once per heartbeat so any desync
+        // self-heals within a second.
+        let heartbeat_due = cursor.is_some() && self.last_cursor_emit.elapsed() >= CURSOR_HEARTBEAT;
+        if flushed || belief_changed || heartbeat_due {
+            super::trace_cursor(format_args!(
+                "frame emit (flushed={flushed}, belief-changed={belief_changed}, heartbeat={heartbeat_due})"
+            ));
             sink.place_cursor(cursor);
             self.cursor_placed = Some(cursor);
             self.last_cursor_emit = std::time::Instant::now();

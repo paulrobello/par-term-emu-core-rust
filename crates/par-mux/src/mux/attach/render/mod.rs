@@ -390,13 +390,29 @@ pub(crate) trait FlushSink {
 /// invisible-cursor report (joe in a render attach): each host cursor
 /// write and each [`PaneRenderer::focused_cursor`] `None` reason lands
 /// on stderr, so the next occurrence names the hider. Cheap when unset
-/// (one `OnceLock` read per call).
+/// (one `OnceLock` read per call). In render mode stderr is normally the
+/// same tty as the frame, so redirect it (`2>/tmp/cursor.log`) or the
+/// trace lines paint into the screen being diagnosed.
 pub(crate) fn cursor_trace() -> bool {
     use std::sync::OnceLock;
     static TRACE: OnceLock<bool> = OnceLock::new();
     *TRACE.get_or_init(|| {
         std::env::var("PAR_MUX_CURSOR_TRACE").is_ok_and(|v| v != "0" && !v.is_empty())
     })
+}
+
+/// Write one cursor-trace line to stderr when `PAR_MUX_CURSOR_TRACE` is set.
+pub(crate) fn trace_cursor(line: std::fmt::Arguments<'_>) {
+    if cursor_trace() {
+        let _ = writeln!(std::io::stderr(), "par-mux cursor-trace: {line}");
+    }
+}
+
+/// Trace one `focused_cursor` `None` reason (when tracing is on) and
+/// yield `None`, so the lookup chain keeps its early-return shape.
+pub(crate) fn trace_none<T>(reason: std::fmt::Arguments<'_>) -> Option<T> {
+    trace_cursor(format_args!("focused_cursor None ({reason})"));
+    None
 }
 
 /// The Phase B render-mode attach session: connect, seed the window's
