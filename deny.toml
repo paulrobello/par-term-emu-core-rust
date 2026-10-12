@@ -16,6 +16,12 @@ ignore = [
   # Cargo.toml does not enable. Remove when image drops it or if avif/exr
   # is ever enabled (SEC-134).
   { id = "RUSTSEC-2024-0436", reason = "lockfile-only via image avif/exr; not compiled" },
+  # unsafe-libyaml: unmaintained (archived 2024-03-25), no vulnerability.
+  # Reached only through serde_yaml_ng behind the opt-in `macro-yaml`
+  # feature (python, python-test, streaming-bin), which parses macro files
+  # the user chose to load. Replace when serde_yaml_ng moves off it or when
+  # macros migrate to a safe-Rust YAML crate (serde-saphyr) (SEC-214).
+  { id = "RUSTSEC-2024-0449", reason = "unmaintained only; macro-yaml parses user-chosen files" },
 ]
 
 [bans]

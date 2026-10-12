@@ -537,12 +537,18 @@ release-check: derive-version-check core-version-check
 # (python-build-standalone) interpreters abort during pip-audit's venv
 # bootstrap on macOS because it copies the interpreter binary; system
 # interpreters survive the copy, on macOS and CI alike.
+# bun audit ignores GHSA-vfj7-8cjw-p6xm (SEC-214): braces <=3.0.3
+# stack-exhaustion DoS with no patched release (checked 2026-10-12), reached
+# only through the eslint dev chain (eslint-config-next >
+# @next/eslint-plugin-next > fast-glob > micromatch), never in the static
+# build or runtime. Remove the ignore once a patched braces ships, then add
+# "braces": ">=<patched>" to web-terminal-frontend/package.json overrides.
 audit-deps:
 	@command -v cargo-deny >/dev/null 2>&1 || { echo "ERROR: cargo-deny not found — cargo install cargo-deny --locked"; exit 1; }
 	@command -v bun >/dev/null 2>&1 || { echo "ERROR: bun not found — install from https://bun.sh"; exit 1; }
 	@command -v uvx >/dev/null 2>&1 || { echo "ERROR: uv not found — brew install uv (or https://docs.astral.sh/uv)"; exit 1; }
 	cargo deny check advisories sources bans
-	cd web-terminal-frontend && bun audit
+	cd web-terminal-frontend && bun audit --ignore=GHSA-vfj7-8cjw-p6xm
 	@reqs=$$(mktemp); \
 	uv export --frozen --no-emit-project --no-hashes --all-extras --format requirements-txt -o $$reqs && \
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
