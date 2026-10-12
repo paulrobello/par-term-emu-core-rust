@@ -227,13 +227,22 @@ belief-consistent, but a host terminal that lost the cursor state outside
 those writers (a race the soaks could never pin) stayed lost: the guards
 only re-emit on a state change, and an idle app never changes one.
 
-**Fix:** main `0d26830` adds a heartbeat — `WindowSession::frame()`
-re-asserts the placement at least once per second while a pane cursor is
-shown, so any desync self-heals without output. If a cursor vanishes on a
-build carrying the heartbeat, run the attach client with
-`PAR_MUX_CURSOR_TRACE=1`: every placement write and every reason the
-tracked cursor is unplaceable (view scrolled, DECTCEM hide, out-of-bounds
-cell) lands on stderr and names the hider.
+**Fix:** the next release after 0.60.0 adds a heartbeat (on `main` until
+then): `WindowSession::frame()` re-asserts the placement at least once per
+second while a pane cursor is shown, so any desync self-heals without
+output. If a cursor vanishes on a build carrying the heartbeat, run the
+attach client with `PAR_MUX_CURSOR_TRACE=1` and stderr redirected, since
+in render mode stderr is normally the same tty as the frame and trace
+lines would paint into it:
+
+```sh
+PAR_MUX_CURSOR_TRACE=1 par-mux attach 2>/tmp/cursor.log
+```
+
+Every placement write and every reason the tracked cursor is unplaceable
+lands in the log and names the hider: no focused pane, the focused pane
+has no layout rect, no emulator for the focused pane, view scrolled,
+DECTCEM hide, or a tracked cell outside the content view.
 
 ### Terminal stays in the alternate screen after a crash
 

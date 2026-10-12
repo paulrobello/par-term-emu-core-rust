@@ -839,6 +839,9 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon |
 | `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
 | `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
+| `PAR_MUX_CONTROL` | par-mux daemon, per session (`set-environment` / `new-session -e`) | unset | `1` in a session's env grants that session's panes `PAR_MUX_CONTROL_SOCKET` (the full control socket) under `--pane-endpoints` without `--expose-control-socket`; see [MUX.md](MUX.md#agent-hook-reports) |
+| `PAR_MUX_CURSOR_TRACE` | `par-mux attach` render mode (read once) | unset | Any value but empty or `0` logs every host cursor placement write and every reason the focused cursor is unplaceable to stderr; redirect it (`2>/tmp/cursor.log`) because stderr is usually the rendered tty |
+| `PAR_MUX_OMP_IDLE_DEBOUNCE_MS` | par-mux omp agent extension (`par-mux-omp-agent-state.ts`) | `250` | Milliseconds the extension waits after an agent turn ends before reporting `idle`, so a turn that immediately continues never flashes idle; negative or unparsable values use the default |
 | `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
 | `TMPDIR` | System temp directory (Unix) | `/tmp` | Base for the per-UID socket fallback and debug logs |
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |
