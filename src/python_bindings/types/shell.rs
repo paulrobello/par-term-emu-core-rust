@@ -271,6 +271,16 @@ impl From<&crate::terminal::CwdChange> for PyCwdChange {
     }
 }
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyShellIntegration>()?;
+    m.add_class::<PyProgressBar>()?;
+    m.add_class::<PyCommandExecution>()?;
+    m.add_class::<PyShellIntegrationStats>()?;
+    m.add_class::<PyCwdChange>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,12 +351,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyShellIntegration>()?;
-    m.add_class::<PyProgressBar>()?;
-    m.add_class::<PyCommandExecution>()?;
-    m.add_class::<PyShellIntegrationStats>()?;
-    m.add_class::<PyCwdChange>()?;
-    Ok(())
-}

@@ -1650,6 +1650,12 @@ pub(crate) fn transfer_to_py_dict(
     Ok(dict.into())
 }
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyTerminal>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1697,8 +1703,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyTerminal>()?;
-    Ok(())
-}

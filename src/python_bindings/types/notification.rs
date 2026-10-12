@@ -394,6 +394,15 @@ impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
     }
 }
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyTmuxNotification>()?;
+    m.add_class::<PyNotification>()?;
+    m.add_class::<PyNotificationEvent>()?;
+    m.add_class::<PyNotificationConfig>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,11 +673,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyTmuxNotification>()?;
-    m.add_class::<PyNotification>()?;
-    m.add_class::<PyNotificationEvent>()?;
-    m.add_class::<PyNotificationConfig>()?;
-    Ok(())
-}

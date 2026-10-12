@@ -450,6 +450,20 @@ impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
     }
 }
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyAttributes>()?;
+    m.add_class::<PyScreenSnapshot>()?;
+    m.add_class::<PyScrollbackStats>()?;
+    m.add_class::<PyBookmark>()?;
+    m.add_class::<PyJoinedLines>()?;
+    m.add_class::<PyDamageRegion>()?;
+    m.add_class::<PyRenderingHint>()?;
+    m.add_class::<PyLineDiff>()?;
+    m.add_class::<PySnapshotDiff>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,16 +818,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyAttributes>()?;
-    m.add_class::<PyScreenSnapshot>()?;
-    m.add_class::<PyScrollbackStats>()?;
-    m.add_class::<PyBookmark>()?;
-    m.add_class::<PyJoinedLines>()?;
-    m.add_class::<PyDamageRegion>()?;
-    m.add_class::<PyRenderingHint>()?;
-    m.add_class::<PyLineDiff>()?;
-    m.add_class::<PySnapshotDiff>()?;
-    Ok(())
-}

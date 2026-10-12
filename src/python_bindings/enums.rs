@@ -496,6 +496,19 @@ bidirectional_from!(PyNormalizationForm <=> CoreNormalizationForm {
     NFKD => NFKD,
 });
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyCursorStyle>()?;
+    m.add_class::<PyUnderlineStyle>()?;
+    m.add_class::<PyMouseEncoding>()?;
+    m.add_class::<PyProgressState>()?;
+    m.add_class::<PyUnicodeVersion>()?;
+    m.add_class::<PyAmbiguousWidth>()?;
+    m.add_class::<PyWidthConfig>()?;
+    m.add_class::<PyNormalizationForm>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,15 +705,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyCursorStyle>()?;
-    m.add_class::<PyUnderlineStyle>()?;
-    m.add_class::<PyMouseEncoding>()?;
-    m.add_class::<PyProgressState>()?;
-    m.add_class::<PyUnicodeVersion>()?;
-    m.add_class::<PyAmbiguousWidth>()?;
-    m.add_class::<PyWidthConfig>()?;
-    m.add_class::<PyNormalizationForm>()?;
-    Ok(())
-}

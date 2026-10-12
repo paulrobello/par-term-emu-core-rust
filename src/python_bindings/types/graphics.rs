@@ -377,6 +377,17 @@ impl From<&crate::terminal::InlineImage> for PyInlineImage {
     }
 }
 
+/// Registers this module's pyclasses on the `_native` module (ENH-054).
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyGraphic>()?;
+    m.add_class::<PyImagePlacement>()?;
+    m.add_class::<PyImageDimension>()?;
+    m.add_class::<PyImageProtocol>()?;
+    m.add_class::<PyImageFormat>()?;
+    m.add_class::<PyInlineImage>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,13 +613,3 @@ mod tests {
     }
 }
 
-/// Registers this module's pyclasses on the `_native` module (ENH-054).
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyGraphic>()?;
-    m.add_class::<PyImagePlacement>()?;
-    m.add_class::<PyImageDimension>()?;
-    m.add_class::<PyImageProtocol>()?;
-    m.add_class::<PyImageFormat>()?;
-    m.add_class::<PyInlineImage>()?;
-    Ok(())
-}
