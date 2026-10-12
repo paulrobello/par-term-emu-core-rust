@@ -125,6 +125,7 @@ fn strip_click_switches_windows_without_forwarding() {
         "the gap hits nothing"
     );
     session.tab_click(&mut conn, 12);
+    settle(&mut session, &mut conn);
 
     assert_eq!(session.window, "@1", "the view moved to the clicked tab");
     assert_eq!(session.status.active_window.as_deref(), Some("@1"));
@@ -2241,16 +2242,15 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
     assert_eq!(reply.body, vec!["%1 @0 20x24".to_string()]);
 }
 
-/// ARC-137: a user-initiated switch against a wedged daemon gives up at
-/// the interactive bound instead of blocking input for 10 s: the view
-/// flashes "daemon busy", stays put, and the late reply is discarded so
-/// the next command reads its own answer.
+/// ENH-049 (superseding ARC-137's blocking bound): a user-initiated switch
+/// against a slow daemon returns at once, the late reply lands on a later
+/// tick, and the next sync command still reads its own answer.
 #[test]
-fn interactive_switch_times_out_flashes_busy_and_keeps_replies_aligned() {
+fn slow_switch_returns_at_once_and_keeps_replies_aligned() {
     let mut script = FakeScript::default();
     script.delays.insert(
         "list-sessions".to_string(),
-        std::time::Duration::from_millis(1500),
+        std::time::Duration::from_millis(500),
     );
     script
         .replies
@@ -2258,32 +2258,37 @@ fn interactive_switch_times_out_flashes_busy_and_keeps_replies_aligned() {
     let (rx, mut conn, mut session) = two_pane_session("int-switch", script);
 
     let started = std::time::Instant::now();
-    chord(&mut session, &mut conn, b')');
+    let mut prefix_pending = false;
+    session.route_plain(
+        &[crate::mux::attach::C_B, b')'],
+        &mut conn,
+        &mut prefix_pending,
+    );
     let took = started.elapsed();
     assert!(
-        took < std::time::Duration::from_millis(1400),
-        "bounded by the interactive timeout: {took:?}"
+        took < std::time::Duration::from_millis(200),
+        "the pump does not wait for the daemon: {took:?}"
     );
-    assert_eq!(session.chrome.flash_text(), Some("daemon busy"));
     assert_eq!(session.window, "@0", "the view stays put");
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec!["list-sessions"],
-        "the chain stopped at the timeout"
+        "the empty roster ends the chain"
     );
 
     let reply = conn.send_checked("pane-info -t %1").expect("reply");
     assert_eq!(reply.body, vec!["%1 @0 40x24".to_string()]);
 }
 
-/// ARC-137: `focus_pane`'s chain stops at the first timeout — a select
-/// that outlived the bound sends no `pane-info` and no landing.
+/// ENH-049: `focus_pane` writes the select and the lookup back to back; a
+/// slow select delays neither the call nor the lookup's write.
 #[test]
-fn focus_pane_chain_stops_at_the_first_timeout() {
+fn focus_pane_returns_before_a_slow_select_answers() {
     let mut script = FakeScript::default();
     script.delays.insert(
         "select-pane -t %7".to_string(),
-        std::time::Duration::from_millis(1500),
+        std::time::Duration::from_millis(500),
     );
     let (rx, mut conn, mut session) = two_pane_session("int-focus", script);
 
@@ -2291,15 +2296,16 @@ fn focus_pane_chain_stops_at_the_first_timeout() {
     session.focus_pane(&mut conn, 7);
     let took = started.elapsed();
     assert!(
-        took < std::time::Duration::from_millis(1400),
-        "bounded by the interactive timeout: {took:?}"
+        took < std::time::Duration::from_millis(200),
+        "the pump does not wait for the daemon: {took:?}"
     );
-    assert_eq!(session.chrome.flash_text(), Some("daemon busy"));
-    let lines = drained(&rx);
-    assert!(
-        !lines.iter().any(|l| l.starts_with("pane-info")),
-        "no pane-info after the timeout: {lines:?}"
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec!["select-pane -t %7", "pane-info -t %7"],
+        "pipelined in order"
     );
+    assert_eq!(session.chrome.flash_text(), None);
 }
 
 const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
@@ -2766,6 +2772,7 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
         },
     );
     session.focus_pane(&mut conn, 5);
+    settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
         &lines[..3],
@@ -2796,6 +2803,7 @@ fn focus_pane_on_the_shown_window_does_not_land() {
     );
     session.status_dirty = false;
     session.focus_pane(&mut conn, 2);
+    settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(lines, vec!["select-pane -t %2", "pane-info -t %2"]);
     assert_eq!(session.window, "@0");
@@ -2826,5 +2834,137 @@ fn focus_pane_stops_when_select_pane_fails() {
         session.chrome.flash_text(),
         None,
         "a refusal is not a busy daemon"
+    );
+}
+
+/// ENH-049: with a 2 s daemon delay on the click's `select-pane`, neither
+/// the sidebar click nor the keystrokes typed after it make the pump wait;
+/// once the daemon catches up it saw the select, the lookup and the keys
+/// in order.
+#[test]
+fn slow_daemon_does_not_block_key_forwarding() {
+    let mut script = FakeScript::default();
+    script.delays.insert(
+        "select-pane -t %2".to_string(),
+        std::time::Duration::from_secs(2),
+    );
+    script
+        .replies
+        .insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+    let (rx, mut conn, mut session) = two_pane_session("enh049-slow", script);
+    show_sidebar(&mut session);
+    session
+        .renderer
+        .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            rows: vec![srow(SidebarRowId::Pane(2), "main \u{b7} agent", false)],
+        }]));
+
+    let started = std::time::Instant::now();
+    session.route_mouse(&mut conn, sgr(0, 3, 2, false));
+    let click = started.elapsed();
+    let started = std::time::Instant::now();
+    let mut prefix_pending = false;
+    session.route_stdin_bytes(&mut conn, b"abc", &mut prefix_pending);
+    let typed = started.elapsed();
+    let limit = std::time::Duration::from_millis(200);
+    assert!(click < limit, "the click blocked the pump for {click:?}");
+    assert!(typed < limit, "typing blocked the pump for {typed:?}");
+
+    settle(&mut session, &mut conn);
+    let lines = drained(&rx);
+    let position = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.starts_with(needle))
+            .unwrap_or_else(|| panic!("no {needle} line: {lines:?}"))
+    };
+    let select = position("select-pane -t %2");
+    let info = position("pane-info -t %2");
+    let keys = lines
+        .iter()
+        .position(|l| l.starts_with("send-keys -t ") && l.ends_with("-H 61 62 63"))
+        .unwrap_or_else(|| panic!("no send-keys line: {lines:?}"));
+    assert!(select < info && info < keys, "wire order: {lines:?}");
+}
+
+/// ENH-049: a click on a pane of window @2 followed, before the daemon
+/// answers, by the next-window chord to @3 ends on @3 and never reseeds
+/// back to @2.
+#[test]
+fn focus_pane_chain_pipelines_and_ignores_a_stale_landing() {
+    let layout = "0000,80x23,0,0,9";
+    let mut notify = std::collections::HashMap::new();
+    for pane in [1u32, 9] {
+        notify.insert(
+            format!("refresh-client -t %{pane} -C 80x23"),
+            format!("%layout-change @3 {layout} {layout} *"),
+        );
+    }
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %5".to_string(), "%5 @2 40x23".to_string());
+    reseed_replies(&mut replies, "@0 * main\n@3 - other", "@3", "%9 @3 * z");
+    replies.insert("list-panes -t @2".to_string(), "%5 @2 * y".to_string());
+    let mut script = FakeScript {
+        replies,
+        notify,
+        ..FakeScript::default()
+    };
+    script.delays.insert(
+        "pane-info -t %5".to_string(),
+        std::time::Duration::from_millis(300),
+    );
+    let (rx, mut conn, mut session) = two_pane_session("enh049-stale", script);
+
+    session.focus_pane(&mut conn, 5);
+    // The newer navigation: next window from @0 is @3.
+    session.switch_window(&mut conn, 1);
+    settle(&mut session, &mut conn);
+
+    assert_eq!(session.window, "@3", "the newest navigation wins");
+    let lines = drained(&rx);
+    assert!(
+        lines.iter().all(|l| !l.starts_with("switch-client -t @2")),
+        "the stale pane-info reply must not land on @2: {lines:?}"
+    );
+    let reports = lines
+        .iter()
+        .filter(|l| l.starts_with("refresh-client") && l.contains(" -C "))
+        .count();
+    assert_eq!(reports, 1, "one reseed only: {lines:?}");
+}
+
+/// ENH-049: a parked reply never answers a later synchronous query. The
+/// status refresh parses its own replies, and the continuation gets its
+/// own.
+#[test]
+fn async_reply_never_answers_a_later_sync_query() {
+    let mut script = five_session_script();
+    script.delays.insert(
+        "list-agents".to_string(),
+        std::time::Duration::from_millis(100),
+    );
+    let (_rx, mut conn) = fake_daemon("enh049-mix", script);
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(FOUR_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    let seen: std::rc::Rc<std::cell::RefCell<Option<Vec<String>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let sink = std::rc::Rc::clone(&seen);
+    session.send_then(&mut conn, "list-agents", move |_s, _c, reply| {
+        *sink.borrow_mut() = Some(reply.body);
+    });
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert_eq!(
+        session.status.session_id.as_deref(),
+        Some("$4"),
+        "the status refresh parsed its own replies"
+    );
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        seen.borrow().clone(),
+        Some(Vec::new()),
+        "the continuation received its own (empty agents) reply, not a status reply"
     );
 }

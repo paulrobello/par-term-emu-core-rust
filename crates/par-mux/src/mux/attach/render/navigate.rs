@@ -3,49 +3,33 @@
 
 use super::{Glyphs, Modal, PromptTarget, WindowSession};
 use crate::mux::attach::targets::{
-    interactive, marked_pane, session_landing, session_switch_target, window_switch_target,
-    workspace_session, workspace_switch_target, WorkspaceLanding,
+    active_window_row, displayed_session_of, marked_pane, next_in_cycle, next_workspace,
+    parse_session_line,
 };
 use crate::mux::attach::{layout, status, ManagementKey};
 
-/// A user-initiated command outlived [`INTERACTIVE_TIMEOUT`]: the view
-/// already flashed "daemon busy", and the chain it belonged to stops here.
-///
-/// [`INTERACTIVE_TIMEOUT`]: crate::mux::attach::conn::INTERACTIVE_TIMEOUT
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Busy;
-
 impl WindowSession {
-    /// Cue a daemon that did not answer a user-initiated command within
-    /// the interactive bound: flash "daemon busy" and paint it now, mid
-    /// tick. Other error kinds draw nothing (a closed daemon ends the pump
-    /// through the notification channel).
+    /// Start a user navigation: the latest one wins. Every chain captures
+    /// the returned generation and drops its work when a newer navigation
+    /// (or a follow reseed) moved the view since it was issued, so a slow
+    /// reply never pulls the view back.
+    pub(super) fn begin_nav(&mut self) -> u64 {
+        self.nav_gen += 1;
+        self.nav_gen
+    }
+
+    fn nav_current(&self, gen: u64, expected: &str) -> bool {
+        self.nav_gen == gen && self.window == expected
+    }
+
+    /// Flash "daemon busy" when a write to the daemon timed out. Other
+    /// error kinds draw nothing (a closed daemon ends the pump through the
+    /// notification channel).
     pub(super) fn flash_if_busy(&mut self, err: &std::io::Error) {
         if err.kind() == std::io::ErrorKind::TimedOut {
             self.chrome.flash("daemon busy".to_string());
             self.draw_status_row();
         }
-    }
-
-    /// One user-initiated command at the interactive bound (ARC-137):
-    /// `Ok(Some(reply))` accepted, `Ok(None)` refused or failed, and
-    /// `Err(Busy)` (already flashed) when it timed out. The late reply is
-    /// discarded on arrival by the client's abandoned-reply count; never
-    /// retry a timed-out command, it may still execute.
-    pub(super) fn ask(
-        &mut self,
-        conn: &mut crate::mux::attach::conn::AttachConn,
-        command: &str,
-    ) -> Result<Option<crate::mux::client::Reply>, Busy> {
-        self.busy(interactive(conn, command))
-    }
-
-    /// Map a resolver's `Err(TimedOut)` to [`Busy`], flashing the cue.
-    pub(super) fn busy<T>(&mut self, result: std::io::Result<T>) -> Result<T, Busy> {
-        result.map_err(|err| {
-            self.flash_if_busy(&err);
-            Busy
-        })
     }
 
     /// The management chords in render mode: issue the daemon command for
@@ -270,10 +254,19 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         direction: i32,
     ) {
-        let target = workspace_switch_target(conn, direction > 0);
-        if let Ok(Some(ws_id)) = self.busy(target) {
-            self.land_on_workspace(conn, &ws_id);
-        }
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        self.send_then(conn, "list-workspaces", move |s, c, reply| {
+            if !reply.ok || !s.nav_current(gen, &expected) {
+                return;
+            }
+            let Some(ws_id) = next_workspace(&reply.body, direction > 0) else {
+                return;
+            };
+            // In-order daemon: the landing's queries observe this select.
+            let _ = c.send_forget(&format!("select-workspace -t {ws_id}"));
+            s.land_on_workspace(c, &ws_id);
+        });
     }
 
     /// The pump's status facts in one step: the bar's state, the side
@@ -373,23 +366,33 @@ impl WindowSession {
         {
             return;
         }
-        let Ok(info) = self.ask(conn, &format!("pane-info -t %{pane}")) else {
-            return;
-        };
-        let window = info
-            .and_then(|reply| {
-                reply
-                    .body
-                    .first()
-                    .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
-            })
-            .map(|row| row.window);
-        match window {
-            Some(window) if window != self.window => self.land_window(conn, &window),
-            _ => {
-                self.status_dirty = true;
-            }
-        }
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("pane-info -t %{pane}"),
+            move |s, c, reply| {
+                // A landing that completed since the click moved the view;
+                // this one must not pull it back.
+                if !s.nav_current(gen, &expected) {
+                    return;
+                }
+                let window = reply
+                    .ok
+                    .then(|| {
+                        reply
+                            .body
+                            .first()
+                            .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+                    })
+                    .flatten()
+                    .map(|row| row.window);
+                match window {
+                    Some(window) if window != s.window => s.land_window(c, &window),
+                    _ => s.status_dirty = true,
+                }
+            },
+        );
     }
 
     /// Land the view on `ws_id`: the session `select-workspace` resumed
@@ -407,9 +410,8 @@ impl WindowSession {
         // must move it too — landing used to re-seed the view without
         // selecting, leaving the highlight on the old workspace (the
         // manual-pass round-8 report). Idempotent for the keybind path,
-        // which selects before landing.
-        // The daemon applies one connection's lines in order, so the
-        // roster queries below observe the select without waiting for it.
+        // which selects before landing. In-order daemon: the queries below
+        // observe it.
         if conn
             .send_forget(&format!("select-workspace -t {ws_id}"))
             .is_err()
@@ -418,20 +420,49 @@ impl WindowSession {
         }
         // The session select-workspace resumed, else the first listed
         // (card 01a11bd1) — the rule both attach modes share.
-        let resolved = workspace_session(conn, ws_id);
-        let session = match self.busy(resolved) {
-            Ok(WorkspaceLanding::Session(session)) => session,
-            Ok(WorkspaceLanding::Empty) => {
-                self.status_dirty = true;
-                return;
-            }
-            Ok(WorkspaceLanding::Failed) | Err(Busy) => return,
-        };
-        let landing = session_landing(conn, &session);
-        let Ok(Some(landing)) = self.busy(landing) else {
-            return;
-        };
-        self.land_window(conn, &landing.window);
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("list-sessions -t {ws_id}"),
+            move |s, c, listed| {
+                if !listed.ok || !s.nav_current(gen, &expected) {
+                    return;
+                }
+                let sessions: Vec<String> = listed
+                    .body
+                    .iter()
+                    .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
+                    .collect();
+                s.send_then(c, "switch-client", move |s, c, displayed| {
+                    if !s.nav_current(gen, &expected) {
+                        return;
+                    }
+                    let resumed = displayed
+                        .ok
+                        .then(|| displayed_session_of(&displayed))
+                        .flatten()
+                        .filter(|id| sessions.contains(id));
+                    let Some(session) = resumed.or_else(|| sessions.first().cloned()) else {
+                        // An empty workspace only marks the status stale.
+                        s.status_dirty = true;
+                        return;
+                    };
+                    s.send_then(
+                        c,
+                        &format!("list-windows -t {session}"),
+                        move |s, c, windows| {
+                            if !windows.ok || !s.nav_current(gen, &expected) {
+                                return;
+                            }
+                            if let Some(window) = active_window_row(&windows.body) {
+                                s.land_window(c, &window);
+                            }
+                        },
+                    );
+                });
+            },
+        );
     }
 
     /// The reload chord in render mode: the same client-side rebind the
@@ -517,11 +548,21 @@ impl WindowSession {
         let Some(session) = self.status.session_id.clone() else {
             return;
         };
-        let target = window_switch_target(conn, &session, &self.window, direction > 0);
-        let Ok(Some(landing)) = self.busy(target) else {
-            return;
-        };
-        self.land_window(conn, &landing.window);
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("list-windows -t {session}"),
+            move |s, c, reply| {
+                if !reply.ok || !s.nav_current(gen, &expected) {
+                    return;
+                }
+                let windows = window_ids(&reply.body);
+                if let Some(next) = next_in_cycle(&windows, &expected, direction > 0) {
+                    s.land_window(c, next);
+                }
+            },
+        );
     }
 
     /// prefix ( / ): the previous/next session in list-sessions order;
@@ -532,14 +573,67 @@ impl WindowSession {
         direction: i32,
     ) {
         // The current session counts only while it owns the shown
-        // window; stale state falls back to the roster head
-        // ([`session_switch_target`]).
+        // window; stale state falls back to the roster head.
         let current = self.status.session_id.clone();
-        let target = session_switch_target(conn, current.as_deref(), &self.window, direction > 0);
-        let Ok(Some(landing)) = self.busy(target) else {
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        self.send_then(conn, "list-sessions", move |s, c, reply| {
+            if !reply.ok || !s.nav_current(gen, &expected) {
+                return;
+            }
+            let sessions: Vec<String> = reply
+                .body
+                .iter()
+                .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
+                .collect();
+            let Some(head) = sessions.first().cloned() else {
+                return;
+            };
+            let Some(current) = current else {
+                s.land_on_session_after(c, &sessions, &head, direction > 0, (gen, &expected));
+                return;
+            };
+            s.send_then(
+                c,
+                &format!("list-windows -t {current}"),
+                move |s, c, owned| {
+                    if !s.nav_current(gen, &expected) {
+                        return;
+                    }
+                    let owns = owned.ok && window_ids(&owned.body).contains(&expected);
+                    let from = if owns { current } else { head };
+                    s.land_on_session_after(c, &sessions, &from, direction > 0, (gen, &expected));
+                },
+            );
+        });
+    }
+
+    /// The tail of a session switch: the session after (or before) `from`
+    /// in `sessions`, landed on its active window.
+    fn land_on_session_after(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        sessions: &[String],
+        from: &str,
+        forward: bool,
+        (gen, expected): (u64, &str),
+    ) {
+        let Some(next) = next_in_cycle(sessions, from, forward).cloned() else {
             return;
         };
-        self.land_window(conn, &landing.window);
+        let expected = expected.to_string();
+        self.send_then(
+            conn,
+            &format!("list-windows -t {next}"),
+            move |s, c, reply| {
+                if !reply.ok || !s.nav_current(gen, &expected) {
+                    return;
+                }
+                if let Some(window) = active_window_row(&reply.body) {
+                    s.land_window(c, &window);
+                }
+            },
+        );
     }
 
     /// A user-initiated landing on `window`: `switch-client -t <window>`
@@ -553,23 +647,38 @@ impl WindowSession {
     /// both refuse (the window is gone) leaves the view put. Follow
     /// reseeds must NOT come through here: the daemon already moved, and a
     /// write from a lagging follow could pull the display back. Only a
-    /// refused `switch-client` falls back; a timed-out one flashes and
-    /// stops (ARC-137).
+    /// refused `switch-client` falls back. The reseed runs when the reply
+    /// lands, unless another landing moved the view first.
     pub(super) fn land_window(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) {
-        match self.ask(conn, &format!("switch-client -t {window}")) {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                let Ok(Some(_)) = self.ask(conn, &format!("select-window -t {window}")) else {
+        let gen = self.begin_nav();
+        let expected = self.window.clone();
+        let target = window.to_string();
+        self.send_then(
+            conn,
+            &format!("switch-client -t {window}"),
+            move |s, c, reply| {
+                if !s.nav_current(gen, &expected) {
                     return;
-                };
-            }
-            Err(Busy) => return,
-        }
-        self.reseed_window(conn, window);
+                }
+                if reply.ok {
+                    s.reseed_window(c, &target);
+                    return;
+                }
+                s.send_then(
+                    c,
+                    &format!("select-window -t {target}"),
+                    move |s, c, reply| {
+                        if reply.ok && s.nav_current(gen, &expected) {
+                            s.reseed_window(c, &target);
+                        }
+                    },
+                );
+            },
+        );
     }
 
     /// Point the whole view at `window`: daemon-side select already done
@@ -644,4 +753,12 @@ impl WindowSession {
         self.draw_tab_strip();
         self.pending.clear_view_work();
     }
+}
+
+/// The window ids (`@N`) of a `list-windows` reply body, in order.
+fn window_ids(body: &[String]) -> Vec<String> {
+    body.iter()
+        .filter_map(|l| crate::mux::ipc::WindowRow::parse(l))
+        .map(|row| row.id)
+        .collect()
 }

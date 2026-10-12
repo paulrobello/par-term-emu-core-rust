@@ -150,7 +150,7 @@ pub(crate) fn try_displayed_session(
 }
 
 /// The session id a bare `switch-client` reply names, if any.
-fn displayed_session_of(reply: &crate::mux::client::Reply) -> Option<String> {
+pub(crate) fn displayed_session_of(reply: &crate::mux::client::Reply) -> Option<String> {
     let id = reply.body.first()?.trim();
     (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
 }

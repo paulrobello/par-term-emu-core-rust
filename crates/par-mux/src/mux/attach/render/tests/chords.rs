@@ -526,6 +526,7 @@ fn workspace_landing_takes_the_resumed_session_not_the_first_listed() {
         },
     );
     session.land_on_workspace(&mut conn, "+1");
+    settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert!(
         lines.contains(&"list-windows -t $2".to_string()),
@@ -549,6 +550,7 @@ fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
     let (rx, mut conn, mut session) = two_pane_session("ws-empty", FakeScript::default());
     session.status_dirty = false;
     session.land_on_workspace(&mut conn, "+3");
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![
@@ -597,7 +599,9 @@ fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
     assert!(text.contains(" +2  gamma"), "{text}");
     drained(&rx);
     session.picker_byte(&mut conn, b'j');
+    settle(&mut session, &mut conn);
     session.picker_byte(&mut conn, b'\r');
+    settle(&mut session, &mut conn);
     // Closing the picker drops its workspace roster with it (the state
     // lives in the closed Modal::Picker).
     assert!(!session.is_picker());
@@ -1506,6 +1510,7 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
         }]));
     // Host row 2 (1-based 3) is the second workspace row.
     session.route_mouse(&mut conn, sgr(2, 3, 3, false));
+    settle(&mut session, &mut conn);
     assert_eq!(
         session.menu().map(|m| m.target.clone()),
         Some(MenuTarget::Workspace("+1".to_string()))
@@ -1513,8 +1518,10 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     assert!(drained(&rx).is_empty(), "opening the menu sends nothing");
     session.leave_menu();
     session.route_mouse(&mut conn, sgr(0, 3, 3, true));
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "a release does nothing");
     session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx)[..2].to_vec(),
         vec!["select-workspace -t +1", "list-sessions -t +1"],
@@ -1523,6 +1530,7 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     // The ` new ` chip: the 23-row renderer's footer row is host
     // row 23 (SGR 24); col 2.
     session.route_mouse(&mut conn, sgr(0, 3, 24, false));
+    settle(&mut session, &mut conn);
     assert!(session.is_prompt());
     assert_eq!(session.prompt().target, PromptTarget::NewWorkspace);
 }
@@ -1592,11 +1600,15 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     chord(&mut session, &mut conn, b'g');
     drained(&rx);
     session.route_mouse(&mut conn, sgr(65, 40, 10, false));
+    settle(&mut session, &mut conn);
     assert_eq!(session.picker().selected, 1, "wheel down moves down");
     session.route_mouse(&mut conn, sgr(64, 40, 10, false));
+    settle(&mut session, &mut conn);
     assert_eq!(session.picker().selected, 0, "wheel up moves up");
     session.route_mouse(&mut conn, sgr(32, 40, 10, false));
+    settle(&mut session, &mut conn);
     session.route_mouse(&mut conn, sgr(0, 40, 10, true));
+    settle(&mut session, &mut conn);
     assert!(session.is_picker(), "drags and releases do nothing");
 
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
@@ -1607,16 +1619,21 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
         &mut conn,
         sgr(0, (x0 + 4) as u16, (y0 + 3 + footer) as u16, false),
     );
+    settle(&mut session, &mut conn);
     assert!(session.is_picker(), "the footer does nothing");
     assert!(drained(&rx).is_empty());
 
     // Filtering: panel row 0 is the filter line.
     session.picker_byte(&mut conn, b'/');
+    settle(&mut session, &mut conn);
     session.picker_byte(&mut conn, b'a');
+    settle(&mut session, &mut conn);
     session.picker_byte(&mut conn, b'\r');
+    settle(&mut session, &mut conn);
     assert!(!session.picker().filtering);
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false));
+    settle(&mut session, &mut conn);
     assert!(
         session.picker().filtering,
         "the filter line re-opens the box"
@@ -1625,6 +1642,7 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     // "a" keeps all three rows: panel row 3 is the third content
     // row (gamma).
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 6) as u16, false));
+    settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "a content click activates");
     assert_eq!(drained(&rx)[0], "select-workspace -t +2");
 }

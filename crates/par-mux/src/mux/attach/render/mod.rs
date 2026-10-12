@@ -643,6 +643,8 @@ struct WindowSession {
     stdin_backlog: Vec<(String, Vec<u8>)>,
     /// Continuations awaiting their command replies: see [`pending_cmd`].
     pending_cmds: pending_cmd::PendingCommands,
+    /// Generation of the latest user navigation: see [`WindowSession::begin_nav`].
+    nav_gen: u64,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -876,6 +878,7 @@ impl WindowSession {
             stdin_primer: Vec::new(),
             stdin_backlog: Vec::new(),
             pending_cmds: pending_cmd::PendingCommands::default(),
+            nav_gen: 0,
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
