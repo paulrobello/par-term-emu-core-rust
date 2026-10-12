@@ -1,5 +1,5 @@
-# installed by par-term
-# managed by par-term; reinstalling or updating the integration overwrites
+# installed by par-mux
+# managed by par-mux; reinstalling or updating the integration overwrites
 # this file. add custom hooks beside this file instead of editing it.
 # PowerShell port of the POSIX reporter (par-mux-grok-session-hook.sh):
 # one JSON line over the control socket, one reply read, close. Inert

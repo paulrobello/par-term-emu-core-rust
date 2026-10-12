@@ -1,6 +1,6 @@
 #!/bin/sh
-# installed by par-term
-# managed by par-term; reinstalling or updating the integration overwrites
+# installed by par-mux
+# managed by par-mux; reinstalling or updating the integration overwrites
 # this file. add custom hooks beside this file instead of editing it.
 # PAR_MUX_INTEGRATION_ID=grok
 # PAR_MUX_INTEGRATION_VERSION=1

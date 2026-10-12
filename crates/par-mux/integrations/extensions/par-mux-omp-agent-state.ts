@@ -1,4 +1,4 @@
-// installed by par-term
+// installed by par-mux
 // managed by par-mux; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // PAR_MUX_INTEGRATION_ID=omp
