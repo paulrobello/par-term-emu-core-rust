@@ -2451,24 +2451,24 @@ fn passthrough_switch_resolvers_wrap_and_fall_back() {
         session: None,
     };
     assert_eq!(
-        window_switch_target(conn, "$0", "@0", true),
+        window_switch_target(conn, "$0", "@0", true).unwrap(),
         Some(window("@1"))
     );
     assert_eq!(
-        window_switch_target(conn, "$0", "@0", false),
+        window_switch_target(conn, "$0", "@0", false).unwrap(),
         Some(window("@2"))
     );
     assert_eq!(
-        window_switch_target(conn, "$0", "@2", true),
+        window_switch_target(conn, "$0", "@2", true).unwrap(),
         Some(window("@0"))
     );
     assert_eq!(
-        window_switch_target(conn, "$0", "@9", true),
+        window_switch_target(conn, "$0", "@9", true).unwrap(),
         None,
         "unlisted"
     );
     assert_eq!(
-        window_switch_target(conn, "$5", "@0", true),
+        window_switch_target(conn, "$5", "@0", true).unwrap(),
         None,
         "no windows"
     );
@@ -2478,33 +2478,33 @@ fn passthrough_switch_resolvers_wrap_and_fall_back() {
         session: Some(s.to_string()),
     };
     assert_eq!(
-        session_switch_target(conn, Some("$0"), "@0", true),
+        session_switch_target(conn, Some("$0"), "@0", true).unwrap(),
         Some(landed("@4", "$1"))
     );
     assert_eq!(
-        session_switch_target(conn, Some("$0"), "@0", false),
+        session_switch_target(conn, Some("$0"), "@0", false).unwrap(),
         Some(landed("@8", "$2")),
         "wraps backward"
     );
     assert_eq!(
-        session_switch_target(conn, Some("$1"), "@0", true),
+        session_switch_target(conn, Some("$1"), "@0", true).unwrap(),
         Some(landed("@4", "$1")),
         "$1 does not own @0: stale, so the head ($0) is the base"
     );
     assert_eq!(
-        session_switch_target(conn, None, "@0", true),
+        session_switch_target(conn, None, "@0", true).unwrap(),
         Some(landed("@4", "$1")),
         "no current: the head is the base"
     );
 
     let (_rx, mut empty) = scripted_passthrough("pt-resolvers-empty", &[]);
     assert_eq!(
-        session_switch_target(&mut empty.conn, Some("$0"), "@0", true),
+        session_switch_target(&mut empty.conn, Some("$0"), "@0", true).unwrap(),
         None,
         "empty roster"
     );
     assert_eq!(
-        workspace_session(&mut empty.conn, "+1"),
+        workspace_session(&mut empty.conn, "+1").unwrap(),
         WorkspaceLanding::Empty
     );
 }

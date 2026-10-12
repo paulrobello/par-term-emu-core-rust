@@ -237,12 +237,9 @@ impl WindowSession {
     /// esc/q dismiss and the prior frame repaints. Keys and the mouse
     /// never reach the pane while it is up.
     pub(super) fn enter_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let Ok(reply) = conn.send_checked("list-sessions") else {
+        let Ok(Some(reply)) = self.ask(conn, "list-sessions") else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
         let mut entries: Vec<super::super::PickerEntry> = Vec::new();
         for line in &reply.body {
             let Some((sid, name)) = super::super::parse_session_line(line) else {
@@ -250,21 +247,24 @@ impl WindowSession {
             };
             let mut windows: Vec<(String, String)> = Vec::new();
             let mut active_window: Option<String> = None;
-            if let Ok(r) = conn.send_checked(&format!("list-windows -t {sid}")) {
-                if r.ok {
-                    for wl in &r.body {
-                        let mut fields = wl.split_whitespace();
-                        let Some(id) = fields.next().filter(|id| id.starts_with('@')) else {
-                            continue;
-                        };
-                        let marker = fields.next().unwrap_or("-");
-                        let rest = fields.collect::<Vec<_>>().join(" ");
-                        let wname = if rest.is_empty() { id } else { &rest };
-                        if marker == "*" {
-                            active_window = Some(id.to_string());
-                        }
-                        windows.push((id.to_string(), wname.to_string()));
+            // A timeout stops the roster walk (each further query would
+            // wait as long and abandon another reply).
+            let Ok(listed) = self.ask(conn, &format!("list-windows -t {sid}")) else {
+                return;
+            };
+            if let Some(r) = listed {
+                for wl in &r.body {
+                    let mut fields = wl.split_whitespace();
+                    let Some(id) = fields.next().filter(|id| id.starts_with('@')) else {
+                        continue;
+                    };
+                    let marker = fields.next().unwrap_or("-");
+                    let rest = fields.collect::<Vec<_>>().join(" ");
+                    let wname = if rest.is_empty() { id } else { &rest };
+                    if marker == "*" {
+                        active_window = Some(id.to_string());
                     }
+                    windows.push((id.to_string(), wname.to_string()));
                 }
             }
             let current = self.status.session_id.as_deref() == Some(sid.as_str());
@@ -300,12 +300,9 @@ impl WindowSession {
     /// session/window picker runs. Enter lands on the workspace through
     /// the same select-then-resync every switch follows.
     pub(super) fn enter_ws_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let Ok(reply) = conn.send_checked("list-workspaces") else {
+        let Ok(Some(reply)) = self.ask(conn, "list-workspaces") else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
         let workspaces: Vec<(String, String, bool)> = reply
             .body
             .iter()
@@ -482,7 +479,9 @@ impl WindowSession {
         window: &str,
     ) {
         let shown = self.window == window;
-        let _ = conn.send_checked(&format!("kill-window -t {window}"));
+        if self.ask(conn, &format!("kill-window -t {window}")).is_err() {
+            return;
+        }
         if !shown {
             self.status_dirty = true;
             return;
@@ -491,12 +490,9 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         };
-        let Ok(reply) = conn.send_checked(&format!("list-windows -t {session}")) else {
+        let Ok(Some(reply)) = self.ask(conn, &format!("list-windows -t {session}")) else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
         let Some(survivor) = active_window_row(&reply.body) else {
             // The session died with the window: the next status refresh
             // reports SessionGone and the view ends cleanly.
@@ -518,29 +514,34 @@ impl WindowSession {
         workspace: &str,
     ) {
         // Was the view's session inside this workspace?
-        let shown = self.status.session_id.as_ref().is_some_and(|session| {
-            conn.send_checked(&format!("list-sessions -t {workspace}"))
-                .ok()
-                .filter(|reply| reply.ok)
-                .is_some_and(|reply| {
+        let shown = match self.status.session_id.clone() {
+            Some(session) => {
+                let Ok(listed) = self.ask(conn, &format!("list-sessions -t {workspace}")) else {
+                    return;
+                };
+                listed.is_some_and(|reply| {
                     reply
                         .body
                         .iter()
                         .filter_map(|l| super::super::parse_session_line(l))
-                        .any(|(sid, _)| sid == *session)
+                        .any(|(sid, _)| sid == session)
                 })
-        });
-        let _ = conn.send_checked(&format!("kill-workspace -t {workspace}"));
+            }
+            None => false,
+        };
+        if self
+            .ask(conn, &format!("kill-workspace -t {workspace}"))
+            .is_err()
+        {
+            return;
+        }
         if !shown {
             self.status_dirty = true;
             return;
         }
-        let Ok(reply) = conn.send_checked("list-workspaces") else {
+        let Ok(Some(reply)) = self.ask(conn, "list-workspaces") else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
         let survivor = reply
             .body
             .iter()
@@ -553,7 +554,12 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         };
-        let _ = conn.send_checked(&format!("select-workspace -t {survivor}"));
+        if self
+            .ask(conn, &format!("select-workspace -t {survivor}"))
+            .is_err()
+        {
+            return;
+        }
         self.land_on_workspace(conn, &survivor);
     }
 
@@ -660,11 +666,12 @@ impl WindowSession {
         }
         match target {
             PromptTarget::Pane => {
-                let _ = conn.send_checked(&format!(
+                let command = format!(
                     "select-pane -t {} -T {}",
                     self.focused_pane(),
                     super::super::wire_quote(&text)
-                ));
+                );
+                let _ = self.ask(conn, &command);
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -673,15 +680,18 @@ impl WindowSession {
                 // daemon grammar's documented exception) — quoting would
                 // become part of the name (the manual-pass round-8
                 // report: renamed tabs wore literal quotes).
-                let _ = conn.send_checked(&format!("rename-window -t {id} {text}"));
+                let _ = self.ask(conn, &format!("rename-window -t {id} {text}"));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
             PromptTarget::Workspace(id) => {
-                let _ = conn.send_checked(&format!(
-                    "rename-workspace -t {id} {}",
-                    super::super::wire_quote(&text)
-                ));
+                let _ = self.ask(
+                    conn,
+                    &format!(
+                        "rename-workspace -t {id} {}",
+                        super::super::wire_quote(&text)
+                    ),
+                );
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -690,35 +700,37 @@ impl WindowSession {
                     self.leave_prompt();
                     return;
                 };
-                let Ok(reply) = conn.send_checked(&format!(
-                    "new-window -t {session} -n {}",
-                    super::super::wire_quote(&text)
-                )) else {
-                    self.leave_prompt();
+                let created = self.ask(
+                    conn,
+                    &format!(
+                        "new-window -t {session} -n {}",
+                        super::super::wire_quote(&text)
+                    ),
+                );
+                self.leave_prompt();
+                let Ok(Some(reply)) = created else {
                     return;
                 };
-                self.leave_prompt();
-                if !reply.ok {
-                    return;
-                }
                 if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
                     self.land_window(conn, &window);
                 }
             }
             PromptTarget::NewWorkspace => {
-                let Ok(reply) = conn.send_checked(&format!(
-                    "new-workspace -n {}",
-                    super::super::wire_quote(&text)
-                )) else {
-                    self.leave_prompt();
+                let created = self.ask(
+                    conn,
+                    &format!("new-workspace -n {}", super::super::wire_quote(&text)),
+                );
+                self.leave_prompt();
+                let Ok(Some(reply)) = created else {
                     return;
                 };
-                self.leave_prompt();
-                if !reply.ok {
-                    return;
-                }
                 if let Some(workspace) = reply.body.first().map(|w| w.trim().to_string()) {
-                    let _ = conn.send_checked(&format!("select-workspace -t {workspace}"));
+                    if self
+                        .ask(conn, &format!("select-workspace -t {workspace}"))
+                        .is_err()
+                    {
+                        return;
+                    }
                     self.land_on_workspace(conn, &workspace);
                 }
             }
@@ -1047,10 +1059,8 @@ impl WindowSession {
             ("-D", true) => "-U",
             (other, _) => other,
         };
-        let _ = conn.send_checked(&format!(
-            "resize-pane -t {focused} {flag} {}",
-            self.resize_step
-        ));
+        let command = format!("resize-pane -t {focused} {flag} {}", self.resize_step);
+        let _ = self.ask(conn, &command);
     }
 
     /// Leave scroll mode: clear the hold and snap the focused pane to

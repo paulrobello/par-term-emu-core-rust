@@ -49,23 +49,48 @@ pub(crate) fn active_window_row(body: &[String]) -> Option<String> {
         .map(|row| row.id.clone())
 }
 
+/// One user-initiated query at [`conn::INTERACTIVE_TIMEOUT`] (ARC-137):
+/// `Ok(Some(reply))` for an ok reply, `Ok(None)` for a refusal or a
+/// transport failure other than a timeout, and `Err(TimedOut)` when the
+/// reply outlived the bound — the one outcome a chain must stop on, since
+/// each further command adds another abandoned reply.
+pub(crate) fn interactive(
+    conn: &mut conn::AttachConn,
+    command: &str,
+) -> std::io::Result<Option<crate::mux::client::Reply>> {
+    match conn.send_interactive(command) {
+        Ok(reply) if reply.ok => Ok(Some(reply)),
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Err(err),
+        Err(_) => Ok(None),
+    }
+}
+
+/// [`session_active_window`] that surfaces a timeout instead of folding
+/// it into `None`.
+pub(crate) fn try_session_active_window(
+    conn: &mut conn::AttachConn,
+    session: &str,
+) -> std::io::Result<Option<String>> {
+    Ok(interactive(conn, &format!("list-windows -t {session}"))?
+        .and_then(|reply| active_window_row(&reply.body)))
+}
+
 /// `session`'s active window id ([`active_window_row`] over its
-/// `list-windows` reply), or `None` when the session no longer exists
-/// or has no windows.
+/// `list-windows` reply), or `None` when the session no longer exists,
+/// has no windows, or the query outlived the interactive bound.
 pub(crate) fn session_active_window(conn: &mut conn::AttachConn, session: &str) -> Option<String> {
-    let reply = conn
-        .send_checked(&format!("list-windows -t {session}"))
-        .ok()
-        .filter(|reply| reply.ok)?;
-    active_window_row(&reply.body)
+    try_session_active_window(conn, session).ok().flatten()
 }
 
 /// `session`'s window ids (`@N`) in the daemon's order — empty when the
-/// query fails or the session is gone.
-pub(crate) fn list_window_ids(conn: &mut conn::AttachConn, session: &str) -> Vec<String> {
-    conn.send_checked(&format!("list-windows -t {session}"))
-        .ok()
-        .filter(|reply| reply.ok)
+/// query fails or the session is gone; `Err(TimedOut)` past the
+/// interactive bound.
+pub(crate) fn list_window_ids(
+    conn: &mut conn::AttachConn,
+    session: &str,
+) -> std::io::Result<Vec<String>> {
+    Ok(interactive(conn, &format!("list-windows -t {session}"))?
         .map(|reply| {
             reply
                 .body
@@ -74,7 +99,7 @@ pub(crate) fn list_window_ids(conn: &mut conn::AttachConn, session: &str) -> Vec
                 .map(|row| row.id)
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 /// The id after (`forward`) or before `current` in `ids`, wrapping at
@@ -110,12 +135,22 @@ pub(crate) fn next_workspace(body: &[String], forward: bool) -> Option<String> {
 
 /// The daemon's displayed session (the active workspace's active session)
 /// via the bare `switch-client` query; `None` when the daemon predates it
-/// or nothing is displayed.
+/// or nothing is displayed. The attach seed's path (unbounded wait);
+/// interactive callers use [`try_displayed_session`].
 pub(crate) fn displayed_session(conn: &mut conn::AttachConn) -> Option<String> {
-    let reply = conn.send_checked("switch-client").ok()?;
-    if !reply.ok {
-        return None;
-    }
+    let reply = conn.send_checked("switch-client").ok().filter(|r| r.ok)?;
+    displayed_session_of(&reply)
+}
+
+/// [`displayed_session`] at the interactive bound, surfacing a timeout.
+pub(crate) fn try_displayed_session(
+    conn: &mut conn::AttachConn,
+) -> std::io::Result<Option<String>> {
+    Ok(interactive(conn, "switch-client")?.and_then(|reply| displayed_session_of(&reply)))
+}
+
+/// The session id a bare `switch-client` reply names, if any.
+fn displayed_session_of(reply: &crate::mux::client::Reply) -> Option<String> {
     let id = reply.body.first()?.trim();
     (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
 }
@@ -141,13 +176,21 @@ pub(crate) enum WorkspaceLanding {
     Failed,
 }
 
+// Every resolver below runs at the interactive bound (ARC-137) and
+// returns `Err(TimedOut)` the moment one of its queries outlives it, so
+// the caller stops the chain; `Ok(None)` is "nowhere to land".
+
 /// `session`'s active window as a [`Landing`] that names the session.
-pub(crate) fn session_landing(conn: &mut conn::AttachConn, session: &str) -> Option<Landing> {
-    let window = session_active_window(conn, session)?;
-    Some(Landing {
-        window,
-        session: Some(session.to_string()),
-    })
+pub(crate) fn session_landing(
+    conn: &mut conn::AttachConn,
+    session: &str,
+) -> std::io::Result<Option<Landing>> {
+    Ok(
+        try_session_active_window(conn, session)?.map(|window| Landing {
+            window,
+            session: Some(session.to_string()),
+        }),
+    )
 }
 
 /// prefix n/p: the window after (`forward`) or before `shown_window` in
@@ -158,13 +201,14 @@ pub(crate) fn window_switch_target(
     session: &str,
     shown_window: &str,
     forward: bool,
-) -> Option<Landing> {
-    let windows = list_window_ids(conn, session);
-    let window = next_in_cycle(&windows, shown_window, forward)?.clone();
-    Some(Landing {
-        window,
-        session: None,
-    })
+) -> std::io::Result<Option<Landing>> {
+    let windows = list_window_ids(conn, session)?;
+    Ok(
+        next_in_cycle(&windows, shown_window, forward).map(|window| Landing {
+            window: window.clone(),
+            session: None,
+        }),
+    )
 }
 
 /// prefix ( / ): the session after (`forward`) or before the current one
@@ -178,17 +222,21 @@ pub(crate) fn session_switch_target(
     current: Option<&str>,
     shown_window: &str,
     forward: bool,
-) -> Option<Landing> {
-    let reply = conn.send_checked("list-sessions").ok().filter(|r| r.ok)?;
+) -> std::io::Result<Option<Landing>> {
+    let Some(reply) = interactive(conn, "list-sessions")? else {
+        return Ok(None);
+    };
     let sessions: Vec<String> = reply
         .body
         .iter()
         .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
         .collect();
-    let head = sessions.first()?.clone();
+    let Some(head) = sessions.first().cloned() else {
+        return Ok(None);
+    };
     let current = match current {
         Some(current)
-            if list_window_ids(conn, current)
+            if list_window_ids(conn, current)?
                 .iter()
                 .any(|w| w == shown_window) =>
         {
@@ -196,7 +244,9 @@ pub(crate) fn session_switch_target(
         }
         _ => head,
     };
-    let next = next_in_cycle(&sessions, &current, forward)?.clone();
+    let Some(next) = next_in_cycle(&sessions, &current, forward).cloned() else {
+        return Ok(None);
+    };
     session_landing(conn, &next)
 }
 
@@ -204,24 +254,23 @@ pub(crate) fn session_switch_target(
 /// resumed (the [`displayed_session`], which the follow broadcast names,
 /// so every client lands on the same view — card 01a11bd1) when it is
 /// listed under `ws_id`, else the first listed.
-pub(crate) fn workspace_session(conn: &mut conn::AttachConn, ws_id: &str) -> WorkspaceLanding {
-    let Some(reply) = conn
-        .send_checked(&format!("list-sessions -t {ws_id}"))
-        .ok()
-        .filter(|r| r.ok)
-    else {
-        return WorkspaceLanding::Failed;
+pub(crate) fn workspace_session(
+    conn: &mut conn::AttachConn,
+    ws_id: &str,
+) -> std::io::Result<WorkspaceLanding> {
+    let Some(reply) = interactive(conn, &format!("list-sessions -t {ws_id}"))? else {
+        return Ok(WorkspaceLanding::Failed);
     };
     let listed: Vec<String> = reply
         .body
         .iter()
         .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
         .collect();
-    let resumed = displayed_session(conn).filter(|s| listed.contains(s));
-    match resumed.or_else(|| listed.first().cloned()) {
+    let resumed = try_displayed_session(conn)?.filter(|s| listed.contains(s));
+    Ok(match resumed.or_else(|| listed.first().cloned()) {
         Some(session) => WorkspaceLanding::Session(session),
         None => WorkspaceLanding::Empty,
-    }
+    })
 }
 
 /// prefix W / C-w: `list-workspaces`, the next/previous workspace in id
@@ -230,11 +279,15 @@ pub(crate) fn workspace_session(conn: &mut conn::AttachConn, ws_id: &str) -> Wor
 pub(crate) fn workspace_switch_target(
     conn: &mut conn::AttachConn,
     forward: bool,
-) -> Option<String> {
-    let reply = conn.send_checked("list-workspaces").ok().filter(|r| r.ok)?;
-    let ws_id = next_workspace(&reply.body, forward)?;
-    let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
-    Some(ws_id)
+) -> std::io::Result<Option<String>> {
+    let Some(reply) = interactive(conn, "list-workspaces")? else {
+        return Ok(None);
+    };
+    let Some(ws_id) = next_workspace(&reply.body, forward) else {
+        return Ok(None);
+    };
+    interactive(conn, &format!("select-workspace -t {ws_id}"))?;
+    Ok(Some(ws_id))
 }
 
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane

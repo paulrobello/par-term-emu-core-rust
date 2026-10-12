@@ -46,7 +46,9 @@ impl Session {
         let Some(session) = self.session_id.clone() else {
             return;
         };
-        if let Some(landing) =
+        // A timed-out resolve (ARC-137's interactive bound) moves nowhere,
+        // like a refused one.
+        if let Ok(Some(landing)) =
             window_switch_target(&mut self.conn, &session, &self.window, direction > 0)
         {
             self.land_on(landing);
@@ -59,7 +61,7 @@ impl Session {
     /// window ([`session_switch_target`]).
     pub(super) fn switch_session(&mut self, direction: i32) {
         let current = self.session_id.clone();
-        if let Some(landing) = session_switch_target(
+        if let Ok(Some(landing)) = session_switch_target(
             &mut self.conn,
             current.as_deref(),
             &self.window,
@@ -76,7 +78,7 @@ impl Session {
     /// with no sessions cannot be landed on: the selection still moves
     /// and the status refresh carries the new active marker.
     pub(super) fn switch_workspace(&mut self, direction: i32) {
-        if let Some(ws_id) = workspace_switch_target(&mut self.conn, direction > 0) {
+        if let Ok(Some(ws_id)) = workspace_switch_target(&mut self.conn, direction > 0) {
             self.land_in_workspace(&ws_id);
         }
     }
@@ -88,16 +90,16 @@ impl Session {
     /// moved active marker instead.
     pub(super) fn land_in_workspace(&mut self, ws_id: &str) {
         match workspace_session(&mut self.conn, ws_id) {
-            WorkspaceLanding::Session(session) => {
-                if let Some(landing) = session_landing(&mut self.conn, &session) {
+            Ok(WorkspaceLanding::Session(session)) => {
+                if let Ok(Some(landing)) = session_landing(&mut self.conn, &session) {
                     self.land_on(landing);
                 }
             }
-            WorkspaceLanding::Empty => {
+            Ok(WorkspaceLanding::Empty) => {
                 self.refresh_status();
                 self.draw_status();
             }
-            WorkspaceLanding::Failed => {}
+            Ok(WorkspaceLanding::Failed) | Err(_) => {}
         }
     }
 

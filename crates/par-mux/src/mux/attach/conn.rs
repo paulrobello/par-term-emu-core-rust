@@ -14,6 +14,10 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::Duration;
 
+/// How long a user-initiated render command waits before the view gives
+/// up on it (ARC-137).
+pub(crate) const INTERACTIVE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Everything one attach session knows about its daemon connection.
 pub struct AttachConn {
     client: MuxClient,
@@ -187,6 +191,15 @@ impl AttachConn {
     /// path, so a wedged daemon delays the bar instead of freezing input.
     pub fn send_checked_timeout(&mut self, command: &str, timeout: Duration) -> io::Result<Reply> {
         self.client.send_checked_timeout(command, timeout)
+    }
+
+    /// [`Self::send_checked_timeout`] at [`INTERACTIVE_TIMEOUT`]: the
+    /// user-initiated path. A timed-out command's reply is still owed and
+    /// is discarded on arrival by the client's abandoned-reply count, so
+    /// later commands stay aligned.
+    pub fn send_interactive(&mut self, command: &str) -> io::Result<Reply> {
+        self.client
+            .send_checked_timeout(command, INTERACTIVE_TIMEOUT)
     }
 
     /// The push stream: everything the daemon sends that is not a command

@@ -3,7 +3,46 @@
 
 use super::*;
 
+/// A user-initiated command outlived [`INTERACTIVE_TIMEOUT`]: the view
+/// already flashed "daemon busy", and the chain it belonged to stops here.
+///
+/// [`INTERACTIVE_TIMEOUT`]: crate::mux::attach::conn::INTERACTIVE_TIMEOUT
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Busy;
+
 impl WindowSession {
+    /// Cue a daemon that did not answer a user-initiated command within
+    /// the interactive bound: flash "daemon busy" and paint it now, mid
+    /// tick. Other error kinds draw nothing (a closed daemon ends the pump
+    /// through the notification channel).
+    pub(super) fn flash_if_busy(&mut self, err: &std::io::Error) {
+        if err.kind() == std::io::ErrorKind::TimedOut {
+            self.flash = Some("daemon busy".to_string());
+            self.draw_status_row();
+        }
+    }
+
+    /// One user-initiated command at the interactive bound (ARC-137):
+    /// `Ok(Some(reply))` accepted, `Ok(None)` refused or failed, and
+    /// `Err(Busy)` (already flashed) when it timed out. The late reply is
+    /// discarded on arrival by the client's abandoned-reply count; never
+    /// retry a timed-out command, it may still execute.
+    pub(super) fn ask(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        command: &str,
+    ) -> Result<Option<crate::mux::client::Reply>, Busy> {
+        self.busy(interactive(conn, command))
+    }
+
+    /// Map a resolver's `Err(TimedOut)` to [`Busy`], flashing the cue.
+    pub(super) fn busy<T>(&mut self, result: std::io::Result<T>) -> Result<T, Busy> {
+        result.map_err(|err| {
+            self.flash_if_busy(&err);
+            Busy
+        })
+    }
+
     /// The management chords in render mode: issue the daemon command for
     /// the focused pane/session, then land the view through the same
     /// re-seed contract `switch_window` follows — split lands on the new
@@ -22,13 +61,10 @@ impl WindowSession {
                 } else {
                     ""
                 };
-                let Ok(reply) = conn.send_checked(&format!("split-window -t {focused}{flag}"))
+                let Ok(Some(reply)) = self.ask(conn, &format!("split-window -t {focused}{flag}"))
                 else {
                     return;
                 };
-                if !reply.ok {
-                    return;
-                }
                 // The reply body is the new pane id; re-seed the window
                 // from the fresh layout (the split broadcast rides the
                 // reply), THEN focus the fresh pane — the renderer only
@@ -43,32 +79,29 @@ impl WindowSession {
                 self.reseed_window(conn, &window);
                 if let Some(new_pane) = new_pane {
                     self.renderer.focus(new_pane);
-                    let _ = conn.send_checked(&format!("select-pane -t %{new_pane}"));
+                    let _ = self.ask(conn, &format!("select-pane -t %{new_pane}"));
                 }
             }
             super::super::ManagementKey::KillPane => {
-                let Ok(reply) = conn.send_checked(&format!("kill-pane -t {focused}")) else {
+                let Ok(Some(_)) = self.ask(conn, &format!("kill-pane -t {focused}")) else {
                     return;
                 };
-                if !reply.ok {
-                    return;
-                }
                 // The window survives with a new active pane, or the view
                 // is over (the last pane died; %window-close's session
                 // contract ends the view through the status refresh). The
                 // survivor focus lands AFTER the re-seed (reseed_window
                 // resets focus to the first leaf).
                 let window = self.window.clone();
-                let survivor = conn
-                    .send_checked(&format!("list-panes -t {window}"))
-                    .ok()
-                    .filter(|reply| reply.ok)
-                    .and_then(|reply| super::super::marked_pane(&reply.body, &window).ok());
+                let Ok(listed) = self.ask(conn, &format!("list-panes -t {window}")) else {
+                    return;
+                };
+                let survivor =
+                    listed.and_then(|reply| super::super::marked_pane(&reply.body, &window).ok());
                 if let Some(pane) = survivor {
                     self.reseed_window(conn, &window);
                     if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
                         self.renderer.focus(n);
-                        let _ = conn.send_checked(&format!("select-pane -t %{n}"));
+                        let _ = self.ask(conn, &format!("select-pane -t %{n}"));
                     }
                     return;
                 }
@@ -102,18 +135,15 @@ impl WindowSession {
                 };
                 let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
                 let focused = self.focused_pane();
-                let _ = conn.send_checked(&format!("swap-pane -s {focused} -t %{next}"));
+                let _ = self.ask(conn, &format!("swap-pane -s {focused} -t %{next}"));
             }
             super::super::ManagementKey::NewWindow => {
                 let Some(session) = self.status.session_id.clone() else {
                     return;
                 };
-                let Ok(reply) = conn.send_checked(&format!("new-window -t {session}")) else {
+                let Ok(Some(reply)) = self.ask(conn, &format!("new-window -t {session}")) else {
                     return;
                 };
-                if !reply.ok {
-                    return;
-                }
                 let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
                     return;
                 };
@@ -136,12 +166,9 @@ impl WindowSession {
                 // re-seeds this client through the pump's pending path.
                 // The bool only drives the status row's Z cue; the daemon
                 // holds the truth.
-                let Ok(reply) = conn.send_checked(&format!("resize-pane -t {focused} -Z")) else {
+                let Ok(Some(_)) = self.ask(conn, &format!("resize-pane -t {focused} -Z")) else {
                     return;
                 };
-                if !reply.ok {
-                    return;
-                }
                 self.zoomed = !self.zoomed;
                 self.flash = Some(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
                 self.draw_status_row();
@@ -206,7 +233,8 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         direction: i32,
     ) {
-        if let Some(ws_id) = workspace_switch_target(conn, direction > 0) {
+        let target = workspace_switch_target(conn, direction > 0);
+        if let Ok(Some(ws_id)) = self.busy(target) {
             self.land_on_workspace(conn, &ws_id);
         }
     }
@@ -293,22 +321,20 @@ impl WindowSession {
     /// shown (the select+resync contract every switch follows).
     /// Same-window clicks just move focus; the throttled status refresh
     /// repaints the panel highlight. A refused `select-pane` (the pane is
-    /// gone) stops there: no `pane-info`, no landing.
+    /// gone) stops there: no `pane-info`, no landing. A timed-out one
+    /// flashes "daemon busy" and stops the same way (ARC-137).
     pub(super) fn focus_pane(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         pane: u32,
     ) {
-        if !conn
-            .send_checked(&format!("select-pane -t %{pane}"))
-            .is_ok_and(|reply| reply.ok)
-        {
-            return; // the pane is gone or the select was refused: no pane-info, no landing
-        }
-        let window = conn
-            .send_checked(&format!("pane-info -t %{pane}"))
-            .ok()
-            .filter(|reply| reply.ok)
+        let Ok(Some(_)) = self.ask(conn, &format!("select-pane -t %{pane}")) else {
+            return; // the pane is gone, the select was refused, or the daemon is busy
+        };
+        let Ok(info) = self.ask(conn, &format!("pane-info -t %{pane}")) else {
+            return;
+        };
+        let window = info
             .and_then(|reply| {
                 reply
                     .body
@@ -335,18 +361,25 @@ impl WindowSession {
         // selecting, leaving the highlight on the old workspace (the
         // manual-pass round-8 report). Idempotent for the keybind path,
         // which selects before landing.
-        let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
+        if self
+            .ask(conn, &format!("select-workspace -t {ws_id}"))
+            .is_err()
+        {
+            return;
+        }
         // The session select-workspace resumed, else the first listed
         // (card 01a11bd1) — the rule both attach modes share.
-        let session = match workspace_session(conn, ws_id) {
-            WorkspaceLanding::Session(session) => session,
-            WorkspaceLanding::Empty => {
+        let resolved = workspace_session(conn, ws_id);
+        let session = match self.busy(resolved) {
+            Ok(WorkspaceLanding::Session(session)) => session,
+            Ok(WorkspaceLanding::Empty) => {
                 self.status_dirty = true;
                 return;
             }
-            WorkspaceLanding::Failed => return,
+            Ok(WorkspaceLanding::Failed) | Err(Busy) => return,
         };
-        let Some(landing) = session_landing(conn, &session) else {
+        let landing = session_landing(conn, &session);
+        let Ok(Some(landing)) = self.busy(landing) else {
             return;
         };
         self.land_window(conn, &landing.window);
@@ -362,7 +395,7 @@ impl WindowSession {
             Ok(file) => file,
             Err(err) => {
                 self.flash = Some(format!("reload failed: {err}"));
-                let _ = conn.send_checked("reload-config");
+                let _ = self.ask(conn, "reload-config");
                 return;
             }
         };
@@ -400,7 +433,7 @@ impl WindowSession {
                 self.flash = Some(format!("reload failed: {err}"));
             }
         }
-        let _ = conn.send_checked("reload-config");
+        let _ = self.ask(conn, "reload-config");
     }
 
     /// prefix o: select the next pane in the window's layout-leaf order,
@@ -418,7 +451,7 @@ impl WindowSession {
             .unwrap_or(0);
         let next = order[(current + 1) % order.len()];
         self.renderer.focus(next);
-        let _ = conn.send_checked(&format!("select-pane -t %{next}"));
+        let _ = self.ask(conn, &format!("select-pane -t %{next}"));
     }
 
     /// prefix n/p: move to the next/previous window of the shown session
@@ -434,8 +467,8 @@ impl WindowSession {
         let Some(session) = self.status.session_id.clone() else {
             return;
         };
-        let Some(landing) = window_switch_target(conn, &session, &self.window, direction > 0)
-        else {
+        let target = window_switch_target(conn, &session, &self.window, direction > 0);
+        let Ok(Some(landing)) = self.busy(target) else {
             return;
         };
         self.land_window(conn, &landing.window);
@@ -452,9 +485,8 @@ impl WindowSession {
         // window; stale state falls back to the roster head
         // ([`session_switch_target`]).
         let current = self.status.session_id.clone();
-        let Some(landing) =
-            session_switch_target(conn, current.as_deref(), &self.window, direction > 0)
-        else {
+        let target = session_switch_target(conn, current.as_deref(), &self.window, direction > 0);
+        let Ok(Some(landing)) = self.busy(target) else {
             return;
         };
         self.land_window(conn, &landing.window);
@@ -470,18 +502,22 @@ impl WindowSession {
     /// without `switch-client` keeps the select-window behavior; a landing
     /// both refuse (the window is gone) leaves the view put. Follow
     /// reseeds must NOT come through here: the daemon already moved, and a
-    /// write from a lagging follow could pull the display back.
+    /// write from a lagging follow could pull the display back. Only a
+    /// refused `switch-client` falls back; a timed-out one flashes and
+    /// stops (ARC-137).
     pub(super) fn land_window(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) {
-        let landed =
-            |reply: std::io::Result<crate::mux::client::Reply>| reply.is_ok_and(|reply| reply.ok);
-        if !landed(conn.send_checked(&format!("switch-client -t {window}")))
-            && !landed(conn.send_checked(&format!("select-window -t {window}")))
-        {
-            return;
+        match self.ask(conn, &format!("switch-client -t {window}")) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let Ok(Some(_)) = self.ask(conn, &format!("select-window -t {window}")) else {
+                    return;
+                };
+            }
+            Err(Busy) => return,
         }
         self.reseed_window(conn, window);
     }

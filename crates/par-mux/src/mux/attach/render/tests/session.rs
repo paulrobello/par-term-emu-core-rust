@@ -2223,6 +2223,67 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
     assert_eq!(reply.body, vec!["%1 @0 20x24".to_string()]);
 }
 
+/// ARC-137: a user-initiated switch against a wedged daemon gives up at
+/// the interactive bound instead of blocking input for 10 s: the view
+/// flashes "daemon busy", stays put, and the late reply is discarded so
+/// the next command reads its own answer.
+#[test]
+fn interactive_switch_times_out_flashes_busy_and_keeps_replies_aligned() {
+    let mut script = FakeScript::default();
+    script.delays.insert(
+        "list-sessions".to_string(),
+        std::time::Duration::from_millis(1500),
+    );
+    script
+        .replies
+        .insert("pane-info -t %1".to_string(), "%1 @0 40x24".to_string());
+    let (rx, mut conn, mut session) = two_pane_session("int-switch", script);
+
+    let started = std::time::Instant::now();
+    chord(&mut session, &mut conn, b')');
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_millis(1400),
+        "bounded by the interactive timeout: {took:?}"
+    );
+    assert_eq!(session.flash.as_deref(), Some("daemon busy"));
+    assert_eq!(session.window, "@0", "the view stays put");
+    assert_eq!(
+        drained(&rx),
+        vec!["list-sessions"],
+        "the chain stopped at the timeout"
+    );
+
+    let reply = conn.send_checked("pane-info -t %1").expect("reply");
+    assert_eq!(reply.body, vec!["%1 @0 40x24".to_string()]);
+}
+
+/// ARC-137: `focus_pane`'s chain stops at the first timeout — a select
+/// that outlived the bound sends no `pane-info` and no landing.
+#[test]
+fn focus_pane_chain_stops_at_the_first_timeout() {
+    let mut script = FakeScript::default();
+    script.delays.insert(
+        "select-pane -t %7".to_string(),
+        std::time::Duration::from_millis(1500),
+    );
+    let (rx, mut conn, mut session) = two_pane_session("int-focus", script);
+
+    let started = std::time::Instant::now();
+    session.focus_pane(&mut conn, 7);
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_millis(1400),
+        "bounded by the interactive timeout: {took:?}"
+    );
+    assert_eq!(session.flash.as_deref(), Some("daemon busy"));
+    let lines = drained(&rx);
+    assert!(
+        !lines.iter().any(|l| l.starts_with("pane-info")),
+        "no pane-info after the timeout: {lines:?}"
+    );
+}
+
 const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
 
 /// A fake daemon advertising `client-snapshot v1` (ENH-043), scripted

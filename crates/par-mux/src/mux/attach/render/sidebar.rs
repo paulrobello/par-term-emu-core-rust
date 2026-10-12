@@ -176,9 +176,12 @@ impl WindowSession {
                 .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
                 .collect()
         } else {
-            conn.send_checked("list-workspaces")
-                .ok()
-                .filter(|reply| reply.ok)
+            // A timeout keeps the panel's current sections rather than
+            // blanking it (ARC-137).
+            let Ok(listed) = self.ask(conn, "list-workspaces") else {
+                return;
+            };
+            listed
                 .map(|reply| {
                     reply
                         .body

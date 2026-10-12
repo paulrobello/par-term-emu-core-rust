@@ -378,7 +378,12 @@ impl WindowSession {
                 self.draw_status_row();
                 return;
             };
-            let _ = conn.send_checked(&format!("swap-pane -s %{focused_id} -t %{next}"));
+            if self
+                .ask(conn, &format!("swap-pane -s %{focused_id} -t %{next}"))
+                .is_err()
+            {
+                return;
+            }
             self.flash = Some(format!("swapped %{focused_id} with %{next}"));
             self.draw_status_row();
             return;
@@ -405,7 +410,7 @@ impl WindowSession {
         // The daemon unzooms on the select of a different pane; the
         // broadcast re-seeds the view.
         self.renderer.focus(next);
-        let _ = conn.send_checked(&format!("select-pane -t %{next}"));
+        let _ = self.ask(conn, &format!("select-pane -t %{next}"));
     }
 
     /// One host mouse report. Clicks on the tab strip switch windows;
@@ -472,7 +477,7 @@ impl WindowSession {
             }
             Hit::PanePress(rect) => {
                 self.renderer.focus(rect.pane);
-                let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
+                let _ = self.ask(conn, &format!("select-pane -t %{}", rect.pane));
                 if self.pane_owns_mouse(rect.pane) {
                     self.forward_mouse(conn, &rect, &mouse);
                 }
@@ -735,7 +740,7 @@ impl WindowSession {
             if let Some(DragState::Pending { .. }) = state {
                 if let Some(rect) = self.renderer.pane_at(x, y).cloned() {
                     self.renderer.focus(rect.pane);
-                    let _ = conn.send_checked(&format!("select-pane -t %{}", rect.pane));
+                    let _ = self.ask(conn, &format!("select-pane -t %{}", rect.pane));
                     let mouse = SgrMouse {
                         cb: 0,
                         col: x + 1,
@@ -813,12 +818,13 @@ impl WindowSession {
         } else {
             "-U"
         };
-        let _ = conn.send_checked(&format!(
+        let command = format!(
             "resize-pane -t %{a} {flag} {n}",
             a = divider.a,
             n = step.abs()
-        ));
+        );
         *applied = *pending;
+        let _ = self.ask(conn, &command);
     }
 
     /// Re-encode one host mouse report pane-relative and send it. The
