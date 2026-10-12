@@ -671,7 +671,7 @@ class Graphic:
     def position(self, value: Any) -> None: ...
     @property
     def protocol(self) -> Any:
-        """Source protocol: "sixel", "iterm2", or "kitty\""""
+        """Source protocol: "sixel", "iterm", or "kitty\""""
     @protocol.setter
     def protocol(self, value: Any) -> None: ...
     def sample_half_block(
