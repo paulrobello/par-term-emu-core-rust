@@ -350,6 +350,11 @@ impl WindowSession {
         }
     }
 
+    /// Land the view on `ws_id`: the session `select-workspace` resumed
+    /// (else the first listed one), at its active window, re-seeded (the
+    /// select+resync contract every switch follows). An empty workspace
+    /// only marks the status stale — the %workspaces-changed the select
+    /// queued moves the strip's active marker on the next frame.
     pub(super) fn land_on_workspace(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,

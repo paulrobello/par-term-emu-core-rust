@@ -1236,8 +1236,9 @@ impl WindowSession {
                 }
                 EventOutcome::Continue
             }
-            // Agent churn carries its own fact: patch the chip in place,
-            // no re-query (ENH-043).
+            // Agent churn carries its own fact: patch the cached roster
+            // and rebuild the side panel's agents section from it — no
+            // re-query (ENH-043). The status row shows no agents.
             TmuxNotification::AgentStateChanged {
                 pane_id,
                 agent,
@@ -1257,8 +1258,9 @@ impl WindowSession {
                 self.draw_status_row();
                 EventOutcome::Continue
             }
-            // The bar renders `agent:state` chips only, never telemetry,
-            // so a telemetry sample changes nothing this client shows.
+            // Neither the status row nor the side panel renders
+            // telemetry, so a telemetry sample changes nothing this
+            // client shows.
             TmuxNotification::AgentTelemetryChanged { .. } => EventOutcome::Continue,
             TmuxNotification::WindowRenamed { window_id, name } => {
                 self.status.patch_window_name(&window_id, &name);

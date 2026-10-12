@@ -88,9 +88,9 @@ impl PaneRenderer {
             return;
         };
         for line in super::super::compose_sidebar(&sections, w, self.height) {
-            // herdr's active treatment: the ACTIVE WORKSPACE's row is a
-            // full-width inverted block (the round-6 panel lists only
-            // workspaces). The footer chips paint at their own columns
+            // herdr's active treatment: an active row (the active
+            // workspace, or the focused pane's agent row) is a full-width
+            // inverted block. The footer chips paint at their own columns
             // (line.x), body rows at col 0.
             if line.active {
                 let block = RtStyle::default()
@@ -126,11 +126,6 @@ impl PaneRenderer {
 }
 
 impl WindowSession {
-    /// Land the view on `ws_id`: its first listed session's active
-    /// window, re-seeded (the select+resync contract every switch
-    /// follows). An empty workspace only marks the status stale — the
-    /// %workspaces-changed the select queued moves the strip's active
-    /// marker on the next frame.
     /// Toggle the side panel: flip the strip width on the renderer, then
     /// report the REDUCED/RESTORED grid — `refresh-client -C` — so the
     /// daemon re-divides the panes around it; the `%layout-change`

@@ -2,22 +2,25 @@
 //! composition, and the ratatui row painter.
 //!
 //! [`StatusState`] is what the client knows (sessions, the shown
-//! session's windows, the focused pane's title);
+//! session's windows, the workspace roster, the agent roster the side
+//! panel draws, the focused pane's title);
 //! [`StatusState::refresh`] re-queries it over the control connection —
 //! one `client-snapshot` round trip when the daemon advertises it
 //! (ENH-043), else the per-fact queries — on the events that do not carry
 //! their fact (`%sessions-changed`, `%window-add`, …). Events that do
-//! (`%agent-state-changed`, `%window-renamed`, …) patch it in place. [`StatusRow`] paints the composed line into a
-//! one-row ratatui `Buffer` and diffs it, so a status change flushes
-//! only the changed cells of the bottom row.
+//! (`%agent-state-changed`, `%window-renamed`, …) patch it in place; an
+//! agent patch changes the side panel's roster, not this row.
+//! [`StatusRow`] paints the composed line into a one-row ratatui
+//! `Buffer` and diffs it, so a status change flushes only the changed
+//! cells of the bottom row.
 //!
 //! Layout, left to right: the tab strip (every workspace name, then the
 //! shown session's windows, as herdr-style tabs — `|`-separated, the
 //! active tab a solid shaded block, the rest dim), every session
-//! (`$N:name`, the shown one bold), the focused pane's title, and the
-//! When the focused pane is
-//! scrolled client-side, a trailing `[scroll +N]` cue reports the
-//! offset.
+//! (`$N:name`, the shown one bold), then the focused pane's title.
+//! When the focused pane is scrolled client-side, a trailing
+//! `[scroll +N]` cue reports the offset. Agents are not on this row:
+//! render mode draws them in the side panel's agents section.
 
 use super::conn::AttachConn;
 use super::spell_key;
@@ -426,13 +429,14 @@ impl StatusState {
         &self.windows
     }
 
-    /// The workspace roster as `(id, name)`, id order — the side
-    /// panel's and the workspace prompts'/menus' source of truth.
-    /// The agent roster in pane-id order.
+    /// The agent roster in pane-id order — the side panel's agents
+    /// section's source of truth.
     pub(crate) fn agents(&self) -> &[RosterEntry] {
         &self.agents
     }
 
+    /// The workspace roster as `(id, name)`, id order — the side
+    /// panel's and the workspace prompts'/menus' source of truth.
     pub(crate) fn workspaces(&self) -> &[(String, String)] {
         &self.workspaces
     }
@@ -459,7 +463,7 @@ impl StatusState {
         self.active_workspace.as_deref()
     }
 
-    /// Patch one pane's agent chip from a notification payload:
+    /// Patch one pane's roster entry from a notification payload:
     /// `Some(state)` upserts it (`%agent-state-changed`), `None` removes
     /// it (`%agent-released`). The roster stays in pane-id order.
     /// Returns `true` when the patch inserted a row the payload could not
