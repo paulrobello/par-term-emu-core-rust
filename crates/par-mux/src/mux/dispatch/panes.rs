@@ -340,21 +340,19 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     };
     // The process table snapshot reads the whole OS process list; taking
     // it outside the tree lock keeps a slow read from stalling clients.
-    let mut line = format!("{pane} {window} {cols}x{rows}");
-    if let Some(name) = child_pid
+    let cmd = child_pid
         .and_then(|pid| ProcessTable::snapshot().and_then(|table| table.foreground_command(pid)))
-    {
-        line.push_str(" cmd=");
-        line.push_str(&base64::engine::general_purpose::STANDARD.encode(name));
-    }
-    if dead {
-        line.push_str(" exited=");
-        match exit_code {
-            Some(code) => line.push_str(&code.to_string()),
-            None => line.push('?'),
-        }
-    }
-    Outcome::ok(ctx, &line)
+        .map(|name| base64::engine::general_purpose::STANDARD.encode(name));
+    // The row's Display is the wire line, so the attach client's
+    // `PaneInfoRow::parse` cannot drift from it (ARC-141).
+    let row = crate::mux::ipc::PaneInfoRow {
+        pane: pane.to_string(),
+        window: window.to_string(),
+        size: (cols, rows),
+        cmd,
+        exited: dead.then_some(exit_code),
+    };
+    Outcome::ok(ctx, &row.to_string())
 }
 
 /// ENH-042: queue the held panes' `%pane-exited` lines on the issuing

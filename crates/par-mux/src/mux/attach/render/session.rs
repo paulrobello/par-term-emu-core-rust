@@ -49,13 +49,12 @@ pub(super) fn resolve_window_and_pane(
             // A pane: pane-info's second field names the window.
             if let Ok(reply) = conn.send_checked(&format!("pane-info -t {target}")) {
                 if reply.ok {
-                    if let Some(line) = reply.body.first() {
-                        let mut fields = line.split_whitespace();
-                        if let (Some(pane), Some(window)) = (fields.next(), fields.next()) {
-                            if pane.starts_with('%') && window.starts_with('@') {
-                                return Ok((window.to_string(), pane.to_string()));
-                            }
-                        }
+                    if let Some(row) = reply
+                        .body
+                        .first()
+                        .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+                    {
+                        return Ok((row.window, row.pane));
                     }
                 }
             }

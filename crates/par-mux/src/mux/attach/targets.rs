@@ -276,7 +276,12 @@ pub(super) fn resolve_target(
             if conn
                 .send_checked(&format!("pane-info -t {target}"))
                 .is_ok_and(|reply| {
-                    reply.ok && reply.body.first().is_some_and(|l| l.starts_with('%'))
+                    reply.ok
+                        && reply
+                            .body
+                            .first()
+                            .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+                            .is_some()
                 })
             {
                 return Ok(target.to_string());

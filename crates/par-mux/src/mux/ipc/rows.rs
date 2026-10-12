@@ -209,9 +209,129 @@ impl AgentRow {
     }
 }
 
+/// One `pane-info -t <pane>` reply line: `%N @W COLSxROWS`, then optional
+/// whitespace-free `cmd=<base64>` / `exited=<code|?>` tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfoRow {
+    /// The pane id, `%N`.
+    pub pane: String,
+    /// The owning window, `@W`.
+    pub window: String,
+    /// The pane terminal's grid, `(cols, rows)`.
+    pub size: (usize, usize),
+    /// The foreground command, still base64 as on the wire.
+    pub cmd: Option<String>,
+    /// `None` live; `Some(None)` held-dead with an unreadable code (`?`);
+    /// `Some(Some(c))` exit code.
+    pub exited: Option<Option<i32>>,
+}
+
+impl fmt::Display for PaneInfoRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {}x{}",
+            self.pane, self.window, self.size.0, self.size.1
+        )?;
+        if let Some(cmd) = &self.cmd {
+            write!(f, " cmd={cmd}")?;
+        }
+        match self.exited {
+            None => {}
+            Some(Some(code)) => write!(f, " exited={code}")?,
+            Some(None) => write!(f, " exited=?")?,
+        }
+        Ok(())
+    }
+}
+
+impl PaneInfoRow {
+    /// Parse one reply line; `None` when the pane is not `%N`, the window
+    /// not `@W`, or the size not `COLSxROWS`. Unknown `key=value` tail
+    /// tokens are ignored: the emitter promises older clients keep parsing
+    /// the fixed prefix, so a new token must not break this parse.
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut fields = line.split_whitespace();
+        let pane = fields.next()?;
+        let window = fields.next()?;
+        if !is_typed_id(pane, '%') || !is_typed_id(window, '@') {
+            return None;
+        }
+        let (cols, rows) = fields.next()?.split_once('x')?;
+        let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        if !digits(cols) || !digits(rows) {
+            return None;
+        }
+        let size = (cols.parse().ok()?, rows.parse().ok()?);
+        let mut cmd = None;
+        let mut exited = None;
+        for token in fields {
+            if let Some(value) = token.strip_prefix("cmd=") {
+                cmd = Some(value.to_string());
+            } else if let Some(code) = token.strip_prefix("exited=") {
+                exited = Some(code.parse::<i32>().ok());
+            }
+        }
+        Some(Self {
+            pane: pane.to_string(),
+            window: window.to_string(),
+            size,
+            cmd,
+            exited,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pane_info(cmd: Option<&str>, exited: Option<Option<i32>>) -> PaneInfoRow {
+        PaneInfoRow {
+            pane: "%3".to_string(),
+            window: "@1".to_string(),
+            size: (80, 24),
+            cmd: cmd.map(str::to_string),
+            exited,
+        }
+    }
+
+    /// ARC-141: `PaneInfoRow` writes the emitter's exact bytes and reads
+    /// them back.
+    #[test]
+    fn pane_info_row_formats_and_round_trips() {
+        let cases = [
+            (pane_info(None, None), "%3 @1 80x24"),
+            (
+                pane_info(Some("Y2xhdWRl"), None),
+                "%3 @1 80x24 cmd=Y2xhdWRl",
+            ),
+            (pane_info(None, Some(Some(0))), "%3 @1 80x24 exited=0"),
+            (pane_info(None, Some(None)), "%3 @1 80x24 exited=?"),
+            (
+                pane_info(Some("Y2xhdWRl"), Some(Some(2))),
+                "%3 @1 80x24 cmd=Y2xhdWRl exited=2",
+            ),
+        ];
+        for (row, golden) in cases {
+            assert_eq!(row.to_string(), golden);
+            assert_eq!(PaneInfoRow::parse(golden), Some(row));
+        }
+    }
+
+    /// ARC-141: the fixed prefix is required; an unknown tail token is
+    /// ignored so a newer daemon never breaks an older client.
+    #[test]
+    fn pane_info_row_rejects_bad_prefixes_and_ignores_unknown_tokens() {
+        assert_eq!(PaneInfoRow::parse("@1 %3 80x24"), None, "swapped ids");
+        assert_eq!(PaneInfoRow::parse("%3 @1"), None, "no size");
+        assert_eq!(PaneInfoRow::parse("%3 @1 80by24"), None, "bad size");
+        assert_eq!(PaneInfoRow::parse("%3 @1 x24"), None, "empty cols");
+        assert_eq!(
+            PaneInfoRow::parse("%3 @1 80x24 future=1"),
+            Some(pane_info(None, None))
+        );
+    }
 
     fn window(id: &str, active: bool, name: &str) -> WindowRow {
         WindowRow {

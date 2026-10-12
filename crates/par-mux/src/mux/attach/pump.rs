@@ -158,21 +158,20 @@ impl Session {
     /// The legacy per-fact re-read: pane-info, the session owner scan,
     /// the workspace roster, pane-title, list-agents.
     pub(super) fn refresh_status_legacy(&mut self) {
-        if let Some(line) = self
+        if let Some(row) = self
             .conn
             .send_checked(&format!("pane-info -t {}", self.pane))
             .ok()
             .filter(|reply| reply.ok)
-            .and_then(|reply| reply.body.first().cloned())
+            .and_then(|reply| {
+                reply
+                    .body
+                    .first()
+                    .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+            })
         {
-            let mut fields = line.split_whitespace();
-            if let (Some(_pane), Some(window)) = (fields.next(), fields.next()) {
-                self.window = window.to_string();
-            }
-            self.exited = line
-                .split_whitespace()
-                .find_map(|tok| tok.strip_prefix("exited="))
-                .map(|code| code.parse::<i32>().ok());
+            self.window = row.window;
+            self.exited = row.exited;
         }
         self.session_name.clear();
         self.session_id = None;

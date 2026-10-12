@@ -292,13 +292,19 @@ impl WindowSession {
     /// then land the view on the pane's window when it is not already
     /// shown (the select+resync contract every switch follows).
     /// Same-window clicks just move focus; the throttled status refresh
-    /// repaints the panel highlight.
+    /// repaints the panel highlight. A refused `select-pane` (the pane is
+    /// gone) stops there: no `pane-info`, no landing.
     pub(super) fn focus_pane(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         pane: u32,
     ) {
-        let _ = conn.send_checked(&format!("select-pane -t %{pane}"));
+        if !conn
+            .send_checked(&format!("select-pane -t %{pane}"))
+            .is_ok_and(|reply| reply.ok)
+        {
+            return; // the pane is gone or the select was refused: no pane-info, no landing
+        }
         let window = conn
             .send_checked(&format!("pane-info -t %{pane}"))
             .ok()
@@ -306,11 +312,10 @@ impl WindowSession {
             .and_then(|reply| {
                 reply
                     .body
-                    .first()?
-                    .split_whitespace()
-                    .nth(1)
-                    .map(str::to_string)
-            });
+                    .first()
+                    .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+            })
+            .map(|row| row.window);
         match window {
             Some(window) if window != self.window => self.land_window(conn, &window),
             _ => {
