@@ -2718,3 +2718,82 @@ fn exit_drained_in_a_resize_parks_pending_end() {
         "the pump's post-drain check would end the session"
     );
 }
+
+/// A `pane:N` agent-row click on a pane in ANOTHER window: select the
+/// pane, look up its window, then land there (switch-client) and
+/// re-seed onto it (QA-245).
+#[test]
+fn focus_pane_on_another_window_selects_looks_up_and_lands() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %5".to_string(), "%5 @1 40x23".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "qa245-otherwin",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 5);
+    let lines = drained(&rx);
+    assert_eq!(
+        &lines[..3],
+        &[
+            "select-pane -t %5",
+            "pane-info -t %5",
+            "switch-client -t @1"
+        ],
+        "wire: {lines:?}"
+    );
+    assert_eq!(session.window, "@1", "the view landed on the pane's window");
+    let panes: Vec<u32> = session.renderer.layout().iter().map(|r| r.pane).collect();
+    assert_eq!(panes, vec![5, 6], "re-seeded onto the new window's panes");
+}
+
+/// Same-window click: select + lookup only, no landing; the status is
+/// marked so the throttled refresh repaints the highlight (QA-245).
+#[test]
+fn focus_pane_on_the_shown_window_does_not_land() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "qa245-samewin",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.status_dirty = false;
+    session.focus_pane(&mut conn, 2);
+    let lines = drained(&rx);
+    assert_eq!(lines, vec!["select-pane -t %2", "pane-info -t %2"]);
+    assert_eq!(session.window, "@0");
+    assert!(session.status_dirty, "the highlight repaint is scheduled");
+}
+
+/// A refused `select-pane` (the pane is gone) ends the click silently:
+/// no `pane-info`, no landing, no busy flash (ARC-141's early return;
+/// the timed-out case is `focus_pane_chain_stops_at_the_first_timeout`).
+#[test]
+fn focus_pane_stops_when_select_pane_fails() {
+    let mut failing = std::collections::HashSet::new();
+    failing.insert("select-pane -t %9".to_string());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "qa245-gone",
+        FakeScript {
+            failing,
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 9);
+    assert_eq!(drained(&rx), vec!["select-pane -t %9"]);
+    assert_eq!(session.window, "@0", "the view stays put");
+    assert_eq!(session.flash, None, "a refusal is not a busy daemon");
+}
