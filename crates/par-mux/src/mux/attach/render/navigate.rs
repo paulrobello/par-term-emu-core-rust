@@ -190,16 +190,20 @@ impl WindowSession {
     /// holds the truth.
     fn chord_zoom(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let focused = self.focused_pane();
+        // Assigned, not toggled: the %layout-change the zoom queues may
+        // reseed (setting the cue from the layout flags) before this reply
+        // is dispatched, and a toggle would then flip it back.
+        let zoomed = !self.zoomed;
         self.send_then(
             conn,
             &format!("resize-pane -t {focused} -Z"),
-            |s, _c, reply| {
+            move |s, _c, reply| {
                 if !reply.ok {
                     return;
                 }
-                s.zoomed = !s.zoomed;
+                s.zoomed = zoomed;
                 s.chrome
-                    .flash(if s.zoomed { "zoomed" } else { "unzoomed" }.to_string());
+                    .flash(if zoomed { "zoomed" } else { "unzoomed" }.to_string());
                 s.draw_status_row();
             },
         );
