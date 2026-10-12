@@ -10,6 +10,7 @@ use crate::mux::ipc::{connect_local_stream, default_socket_path, LocalStream};
 use crate::mux::server::{fill_line_bounded, is_poll_wake, LineFill};
 use interprocess::TryClone as _;
 use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -36,11 +37,28 @@ pub struct MuxClient {
     /// spawner can end what it created via [`MuxClient::kill_spawned_daemon`];
     /// `None` when the client attached to an existing server.
     spawned_daemon: Option<std::process::Child>,
-    /// Replies owed to commands whose wait timed out. The daemon answers
-    /// in order and the reply channel is FIFO, so later waits discard
-    /// this many blocks before taking their own; otherwise a late reply
-    /// would answer the following command.
-    abandoned_replies: usize,
+    /// Replies owed ahead of the next command's own, in daemon order. The
+    /// daemon answers in order and the reply channel is FIFO, so each
+    /// arriving block belongs to the front entry: abandoned (timed-out) and
+    /// fire-and-forget replies are dropped, async ones are parked in
+    /// `completed`. A sync wait first resolves everything ahead of it,
+    /// otherwise a late reply would answer the following command.
+    owed: VecDeque<Owed>,
+    /// Async replies resolved while a sync wait or [`MuxClient::poll_replies`]
+    /// was reading, not yet handed to the caller.
+    completed: VecDeque<(u64, Reply)>,
+    next_token: u64,
+}
+
+/// Who a not-yet-arrived reply block belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owed {
+    /// A sync command timed out; discard its reply.
+    Abandoned,
+    /// A fire-and-forget command; discard its reply.
+    Forget,
+    /// A [`MuxClient::send_nowait`] command; deliver its reply by token.
+    Async(u64),
 }
 
 impl MuxClient {
@@ -212,7 +230,9 @@ impl MuxClient {
             reply_rx,
             notifications_rx,
             spawned_daemon: None,
-            abandoned_replies: 0,
+            owed: VecDeque::new(),
+            completed: VecDeque::new(),
+            next_token: 0,
         })
     }
 
@@ -235,16 +255,20 @@ impl MuxClient {
     /// and discarded when it arrives, so later commands keep reading
     /// their own replies.
     pub fn send_checked_timeout(&mut self, command: &str, timeout: Duration) -> io::Result<Reply> {
-        writeln!(self.writer, "{command}")?;
-        self.writer.flush()?;
+        self.write_line(command)?;
         let deadline = Instant::now() + timeout;
+        // Replies already owed to earlier commands arrive before this one's.
+        let mut ahead = self.owed.len();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.reply_rx.recv_timeout(remaining) {
-                Ok(_) if self.abandoned_replies > 0 => self.abandoned_replies -= 1,
+                Ok(reply) if ahead > 0 => {
+                    ahead -= 1;
+                    self.resolve_front(reply);
+                }
                 Ok(reply) => return Ok(reply),
                 Err(RecvTimeoutError::Timeout) => {
-                    self.abandoned_replies += 1;
+                    self.owed.push_back(Owed::Abandoned);
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!("no reply block within {}ms", timeout.as_millis()),
@@ -258,6 +282,52 @@ impl MuxClient {
                 }
             }
         }
+    }
+
+    /// Assign an arrived reply to the front owed entry.
+    fn resolve_front(&mut self, reply: Reply) {
+        if let Some(Owed::Async(token)) = self.owed.pop_front() {
+            self.completed.push_back((token, reply));
+        }
+    }
+
+    fn write_line(&mut self, command: &str) -> io::Result<()> {
+        writeln!(self.writer, "{command}")?;
+        self.writer.flush()
+    }
+
+    /// Write `command` without waiting; its reply is returned by
+    /// [`Self::poll_replies`] under the returned token.
+    pub fn send_nowait(&mut self, command: &str) -> io::Result<u64> {
+        self.write_line(command)?;
+        let token = self.next_token;
+        self.next_token += 1;
+        self.owed.push_back(Owed::Async(token));
+        Ok(token)
+    }
+
+    /// Write `command` without waiting; its reply is read and discarded.
+    pub fn send_forget(&mut self, command: &str) -> io::Result<()> {
+        self.write_line(command)?;
+        self.owed.push_back(Owed::Forget);
+        Ok(())
+    }
+
+    /// Resolve every reply that has already arrived and return the async
+    /// ones, in order. Never blocks.
+    pub fn poll_replies(&mut self) -> Vec<(u64, Reply)> {
+        while let Ok(reply) = self.reply_rx.try_recv() {
+            self.resolve_front(reply);
+        }
+        self.completed.drain(..).collect()
+    }
+
+    /// Fire-and-forget and async commands whose reply has not arrived yet.
+    pub fn outstanding(&self) -> usize {
+        self.owed
+            .iter()
+            .filter(|owed| !matches!(owed, Owed::Abandoned))
+            .count()
     }
 
     /// Pushed notifications (`%output` and friends), already parsed.
@@ -909,6 +979,120 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{err}");
         server.join().expect("server thread");
         drop(dir);
+    }
+
+    /// A daemon that answers each line, in order, with a block whose body is
+    /// the command itself, sleeping first when the command is in `delays`.
+    #[cfg(unix)]
+    fn echo_daemon(
+        tag: &str,
+        delays: Vec<(&'static str, Duration)>,
+    ) -> (tempfile::TempDir, MuxClient, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead as _, Write as _};
+        let (dir, socket) = temp_socket(tag);
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut number = 0u32;
+            for line in std::io::BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                if let Some((_, delay)) = delays.iter().find(|(c, _)| *c == line) {
+                    std::thread::sleep(*delay);
+                }
+                number += 1;
+                let block = format!("%begin 1 {number} 1\n{line}\n%end 1 {number} 1\n");
+                if writer.write_all(block.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        });
+        let client = MuxClient::connect(&socket).expect("connect");
+        (dir, client, server)
+    }
+
+    #[cfg(unix)]
+    fn poll_until(client: &mut MuxClient, want: usize) -> Vec<(u64, Reply)> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut got = Vec::new();
+        while got.len() < want {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {want} replies",
+                got.len()
+            );
+            got.extend(client.poll_replies());
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        got
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn async_reply_never_answers_a_later_sync_command() {
+        let (_dir, mut client, _server) = echo_daemon("owed-a.sock", vec![]);
+        let token = client.send_nowait("A").expect("write A");
+        let reply = client.send_checked("B").expect("B");
+        assert_eq!(reply.body, vec!["B".to_string()]);
+        let got = client.poll_replies();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, token);
+        assert_eq!(got[0].1.body, vec!["A".to_string()]);
+        assert_eq!(client.outstanding(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_timed_out_wait_does_not_steal_a_later_async_or_sync_reply() {
+        let (_dir, mut client, _server) =
+            echo_daemon("owed-b.sock", vec![("slow", Duration::from_millis(300))]);
+        let err = client
+            .send_checked_timeout("slow", Duration::from_millis(40))
+            .expect_err("times out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        let token = client.send_nowait("C").expect("write C");
+        let reply = client.send_checked("D").expect("D");
+        assert_eq!(
+            reply.body,
+            vec!["D".to_string()],
+            "the abandoned block is dropped"
+        );
+        let got = client.poll_replies();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, token);
+        assert_eq!(got[0].1.body, vec!["C".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn async_replies_are_delivered_in_order() {
+        let (_dir, mut client, _server) = echo_daemon("owed-c.sock", vec![]);
+        let tokens: Vec<u64> = ["one", "two", "three"]
+            .iter()
+            .map(|c| client.send_nowait(c).expect("write"))
+            .collect();
+        let got = poll_until(&mut client, 3);
+        let bodies: Vec<&str> = got.iter().map(|(_, r)| r.body[0].as_str()).collect();
+        assert_eq!(bodies, ["one", "two", "three"]);
+        assert_eq!(got.iter().map(|(t, _)| *t).collect::<Vec<_>>(), tokens);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forgotten_replies_are_dropped_and_drain_the_outstanding_count() {
+        let (_dir, mut client, _server) = echo_daemon("owed-d.sock", vec![]);
+        client.send_forget("x").expect("write x");
+        client.send_forget("y").expect("write y");
+        assert_eq!(client.outstanding(), 2);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while client.outstanding() > 0 {
+            assert!(Instant::now() < deadline, "forget replies never drained");
+            assert!(
+                client.poll_replies().is_empty(),
+                "forget replies are never returned"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     /// `read_daemon_line` strips `\n` and one preceding `\r` like `Lines`,

@@ -202,6 +202,27 @@ impl AttachConn {
             .send_checked_timeout(command, INTERACTIVE_TIMEOUT)
     }
 
+    /// Write `command` without waiting; the reply comes back from
+    /// [`Self::poll_replies`] under the returned token.
+    pub fn send_nowait(&mut self, command: &str) -> io::Result<u64> {
+        self.client.send_nowait(command)
+    }
+
+    /// Write `command` without waiting and discard its reply.
+    pub fn send_forget(&mut self, command: &str) -> io::Result<()> {
+        self.client.send_forget(command)
+    }
+
+    /// Async replies that have arrived, in order. Never blocks.
+    pub fn poll_replies(&mut self) -> Vec<(u64, Reply)> {
+        self.client.poll_replies()
+    }
+
+    /// Async and fire-and-forget commands still awaiting their reply.
+    pub fn outstanding(&self) -> usize {
+        self.client.outstanding()
+    }
+
     /// The push stream: everything the daemon sends that is not a command
     /// reply, already parsed. `Err(Disconnected)` (recv family) is the
     /// connection-ended signal.
