@@ -27,6 +27,8 @@ make fuzz-all            # All eight cargo-fuzz targets (fuzz-terminal_process, 
 
 **Never use `cargo build` directly** for PyO3 modules - it will fail at link stage. Always use `make dev` (maturin).
 
+Make targets call bare `python3` and need ≥3.11 (`tomllib`); a shell that resolves `python3` to the macOS system 3.9 fails `derive-version-check` instantly. Prefix gate runs with `PATH="$PWD/.venv/bin:$PATH"`.
+
 ### Running Tests
 
 ```bash
