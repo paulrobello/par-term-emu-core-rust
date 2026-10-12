@@ -52,6 +52,7 @@ FRAMING: set[str] = {"begin", "end", "error"}
 # means the daemon now sends it and the row belongs in the table.
 NEVER_SENT: set[str] = {"unlinked-window-close", "pane-mode-changed"}
 
+ROSTER_RS = "crates/par-mux/src/mux/dispatch/client.rs"
 # Files the gate reads (also the set --self-test copies and drifts).
 SELF_TEST_FILES: tuple[str, ...] = (
     "crates/par-mux/src/mux/command/",
@@ -63,6 +64,7 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "crates/par-mux/src/mux/config.rs",
     "CHANGELOG.md",
     "crates/par-mux/skills/par-mux/SKILL.md",
+    ROSTER_RS,
 )
 
 # `\s*` after the paren: rustfmt splits a row past the width limit onto
@@ -408,6 +410,29 @@ def notification_type_map(tmux_rs: str) -> dict[str, str]:
     return {name: variant for variant, name in arms}
 
 
+ROSTER_KEY_RE = re.compile(r'extras\.push\(\(\s*"([a-z_]+)"\.to_string\(\)')
+
+def roster_extra_keys(client_rs: str) -> list[str]:
+    """The trailing key=value keys roster_row appends, in emit order."""
+    keys = ROSTER_KEY_RE.findall(fn_block(client_rs, "fn roster_row(", ROSTER_RS))
+    if not keys:
+        fail(f'parsed nothing from {ROSTER_RS}: no extras.push(("key"… in fn roster_row(')
+    return keys
+
+
+def list_agents_bullet(mux_md: str) -> str:
+    """The `- **`list-agents`**` bullet of MUX.md's Command Reference."""
+    section = md_section(mux_md, "Command Reference", "docs/MUX.md")
+    m = re.search(
+        r"^- \*\*`list-agents`\*\*[^^\n]*(?:\n(?!- |\n)[^^\n]*)*",
+        section,
+        re.MULTILINE,
+    )
+    if not m:
+        fail("parsed nothing from docs/MUX.md: no `- **`list-agents`**` bullet in Command Reference")
+    return m.group(0)
+
+
 def doc_notification_types(api_md: str) -> list[str]:
     m = re.search(r"^- `notification_type: str`:.*$", api_md, re.MULTILINE)
     if not m:
@@ -604,12 +629,32 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             "`--cmd list-agents` line"
         )
 
+    # Check 6: list-agents trailing keys (roster_row) <-> MUX.md bullet +
+    # SKILL.md (ENH-056). The bullet is the grammar's home; the skill must
+    # keep teaching the same token shape.
+    client_rs = read(root, ROSTER_RS)
+    skill_md_text = read(root, SKILL_MD)
+    roster_keys = roster_extra_keys(client_rs)
+    bullet = list_agents_bullet(mux_md)
+    for where, text in (("docs/MUX.md `list-agents` bullet", bullet), (SKILL_MD, skill_md_text)):
+        for key in roster_keys:
+            if f"`{key}=" not in text and f" {key}=" not in text:
+                problems.append(
+                    f"{where} does not name the list-agents `{key}=` token that roster_row "
+                    f"emits ({ROSTER_RS})"
+                )
+    if "unknown keys are ignored" not in bullet:
+        problems.append(
+            "docs/MUX.md `list-agents` bullet must keep the consumer rule 'unknown keys are ignored'"
+        )
+
     counts = {
         "commands": len(command_names),
         "mutating": len(mutating),
         "notifications": len(tabled),
         "types": len(type_names),
         "flags": len(clap_flags),
+        "roster_keys": len(roster_keys),
     }
     return problems, counts
 
@@ -719,6 +764,29 @@ def run_self_test(root: Path) -> int:
             lambda t: t.replace("<source> [key=value…]", "<source> [message]", 1),
             "list-agents",
         ),
+        (
+            "drop `ws=` from the MUX.md list-agents bullet",
+            "docs/MUX.md",
+            lambda t: t.replace("and a `ws=<id>` token", "and a workspace token", 1),
+            "ws=",
+        ),
+        (
+            "add a fake extras key to roster_row",
+            ROSTER_RS,
+            lambda t: t.replace(
+                'extras.push(("ws".to_string(), ws));',
+                'extras.push(("ws".to_string(), ws));\n        extras.push(("frob".to_string(), String::new()));',
+                1,
+            ),
+            "frob=",
+        ),
+        (
+            "restore the stale [message] form in SKILL.md",
+            SKILL_MD,
+            lambda t: t
+            + '\npar-mux --cmd list-agents  # "%N <agent> <state> <source> [message]"\n',
+            "free-text",
+        ),
     ]
     for label, rel, mutate, needle in drifts:
         with tempfile.TemporaryDirectory() as td:
@@ -750,6 +818,20 @@ def run_self_test(root: Path) -> int:
                 "self-test: empty clap extraction passed — the gate does not fail closed"
             )
     print("self-test: empty clap extraction fails closed")
+
+    # Fail closed: an empty roster_row is a broken gate, not a pass (ENH-056).
+    with tempfile.TemporaryDirectory() as td:
+        dst_root = Path(td)
+        copy_inputs(root, dst_root)
+        (dst_root / ROSTER_RS).write_text("fn roster_row() {}\n")
+        try:
+            collect_problems(dst_root)
+        except SystemExit as exc:
+            if f"parsed nothing from {ROSTER_RS}" not in str(exc):
+                fail(f"self-test: empty roster_row failed with the wrong error: {exc}")
+        else:
+            fail("self-test: empty roster_row passed — the gate does not fail closed")
+    print("self-test: empty roster_row extraction fails closed")
 
     # QA-229: a cfg(test) module whose string/char literals carry unbalanced
     # braces must be stripped whole — the test-only NEVER_SENT construction
@@ -799,7 +881,7 @@ def run_self_test(root: Path) -> int:
     print("self-test: QA-229 production construction after the fixture still reported")
 
     print(
-        "self-test ok: baseline clean, all 10 injected drifts reported, "
+        f"self-test ok: baseline clean, all {len(drifts)} injected drifts reported, "
         "empty clap extraction fails closed, "
         "QA-229 brace-in-string fixture pinned"
     )
@@ -817,7 +899,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="copy the inputs to a temp dir, inject ten drifts, assert each is reported",
+        help=f"copy the inputs to a temp dir, inject one drift per contract, assert each is reported",
     )
     args = parser.parse_args(argv)
     if args.self_test:
@@ -831,7 +913,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"mux docs ok: {counts['commands']} commands, {counts['mutating']} mutating "
         f"(plus conditional `refresh-client -C`), {counts['notifications']} notification rows, "
-        f"{counts['types']} notification types, {counts['flags']} clap long flags"
+        f"{counts['types']} notification types, {counts['flags']} clap long flags, "
+        f"{counts['roster_keys']} list-agents keys"
     )
     return 0
 
