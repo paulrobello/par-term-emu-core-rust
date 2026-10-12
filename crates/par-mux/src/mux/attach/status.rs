@@ -492,6 +492,7 @@ impl StatusState {
         let mut segments: Vec<Segment> = Vec::new();
         let push =
             |segments: &mut Vec<Segment>, text: String, bold: bool, dim: bool, shaded: bool| {
+                let text = super::chrome_safe(&text).into_owned();
                 if let Some(last) = segments.last_mut() {
                     // Merge into the previous run when the style matches so
                     // the line stays a handful of segments.

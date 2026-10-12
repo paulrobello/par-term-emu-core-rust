@@ -1000,7 +1000,7 @@ impl PaneRenderer {
                 .map(|e| e.terminal().title().to_string())
                 .unwrap_or_default(),
         };
-        crate::mux::strip_controls(&raw).trim().to_string()
+        crate::mux::attach::chrome_safe(&raw).trim().to_string()
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does

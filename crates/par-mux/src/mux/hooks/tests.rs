@@ -801,6 +801,18 @@ fn reports_with_an_invalid_state_or_label_are_rejected_without_broadcast() {
     );
     assert_eq!(notification, None);
 
+    // SEC-212: a bidi override in the label would reorder the roster
+    // text every render client paints.
+    let (reply, notification) = handle_report(
+        &state_report(pane_id, "kimi\u{202E}", "working", 1_000),
+        &tree,
+    );
+    assert!(
+        reply.contains("error") && reply.contains("bidi"),
+        "a label with a bidi override is an error: {reply}"
+    );
+    assert_eq!(notification, None);
+
     // The injection shape: agent, state, and source are interpolated
     // verbatim into `%agent-state-changed`, so a newline in any of
     // them forges a control-mode line every attached client parses.
@@ -843,6 +855,17 @@ fn reports_with_an_invalid_state_or_label_are_rejected_without_broadcast() {
     // still accepted afterward.
     let (_, notification) = handle_report(&state_report(pane_id, "kimi", "working", 1_000), &tree);
     assert!(notification.is_some(), "a valid report still lands");
+
+    // ZWJ joins emoji sequences and Indic/Persian text, so it stays legal.
+    let (reply, notification) = handle_report(
+        &state_report(pane_id, "a\u{200D}b", "working", 2_000),
+        &tree,
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "a ZWJ label is accepted: {reply}"
+    );
+    assert!(notification.is_some(), "a ZWJ label is broadcast");
 }
 
 /// SEC-105: free-text report values are bounded — an oversized label,

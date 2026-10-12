@@ -107,6 +107,7 @@ fn tab_text(_id: &str, name: &str, budget: Option<usize>) -> String {
     // The reference rendering: the bare NAME (the `N:` ordinal prefix is
     // gone — round 8), truncating to the name budget when over.
     let _ = _id;
+    let name = super::chrome_safe(name);
     match budget {
         None => name.to_string(),
         Some(budget) => {
@@ -220,7 +221,7 @@ pub(crate) fn layout_tabs(
     // Stage 2.
     let max_name = windows
         .iter()
-        .map(|(_, name)| name.chars().count())
+        .map(|(_, name)| super::chrome_safe(name).chars().count())
         .max()
         .unwrap_or(1)
         .max(1);
@@ -496,6 +497,18 @@ mod tests {
         assert_eq!(layout.cells[2].col, 17, "one gap column after vim");
         assert_eq!(layout.cells[2].width, 9, "'  build  ' = 9 cols");
         assert_eq!(layout.plus, Some(77), "the plus reserves the right edge");
+    }
+
+    /// SEC-212: a bidi override in a window name is dropped before
+    /// layout, so the tab is as wide as the visible name.
+    #[test]
+    fn spoofing_format_chars_do_not_widen_a_tab() {
+        let clean = vec![("@0".to_string(), "abc".to_string())];
+        let spoofed = vec![("@0".to_string(), "\u{202E}abc".to_string())];
+        let a = layout_tabs(&clean, Some("@0"), 80, 0);
+        let b = layout_tabs(&spoofed, Some("@0"), 80, 0);
+        assert_eq!(b.cells[0].text, "abc");
+        assert_eq!(b.cells[0].width, a.cells[0].width);
     }
 
     /// Stage 2: long names overflow — every long name truncates to the

@@ -446,7 +446,11 @@ pub(crate) fn picker_rows(
     for (i, entry) in entries.iter().enumerate() {
         let marker = if entry.current { ">" } else { " " };
         rows.push(HelpRow {
-            text: format!(" {marker}{0}: {1}", entry.session_id, entry.session_name),
+            text: format!(
+                " {marker}{0}: {1}",
+                entry.session_id,
+                super::chrome_safe(&entry.session_name)
+            ),
             accent: true,
             footer: false,
         });
@@ -460,7 +464,7 @@ pub(crate) fn picker_rows(
             let active = entry.active_window.as_deref() == Some(window_id.as_str());
             let star = if active { " *" } else { "" };
             rows.push(HelpRow {
-                text: format!(" {marker}  {window_id}: {name}{star}"),
+                text: format!(" {marker}  {window_id}: {}{star}", super::chrome_safe(name)),
                 accent: false,
                 footer: false,
             });
@@ -623,7 +627,7 @@ pub(crate) fn compose_sidebar(
                 break;
             }
             let marker = if *active { "▸" } else { " " };
-            let text: String = format!(" {marker} {label}")
+            let text: String = format!(" {marker} {}", super::chrome_safe(label))
                 .chars()
                 .take(text_width)
                 .collect();

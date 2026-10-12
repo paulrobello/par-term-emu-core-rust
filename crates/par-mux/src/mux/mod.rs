@@ -65,6 +65,25 @@ pub(crate) fn strip_controls(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Invisible format characters that reorder or hide text: the bidi
+/// embeddings/overrides (U+202A–U+202E), isolates (U+2066–U+2069),
+/// marks (U+200E, U+200F, U+061C), U+200B ZERO WIDTH SPACE and U+FEFF
+/// BOM. A pane can put them in a title or agent label so chrome reads
+/// as another pane (SEC-212). ZWJ/ZWNJ (U+200D/U+200C) are NOT here:
+/// emoji sequences and Persian/Indic text need them.
+pub(crate) fn is_spoofing_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{061C}'
+            | '\u{200B}'
+            | '\u{FEFF}'
+    )
+}
+
 /// The build identity of THIS crate compilation: the crate version plus the
 /// git sha it was built from (`0.50.0+a02b2b3`, `-dirty` appended when the
 /// checkout had uncommitted tracked changes). Outside a repository (a

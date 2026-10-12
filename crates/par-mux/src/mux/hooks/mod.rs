@@ -120,8 +120,14 @@ fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
     // shape every consumer parses, and a control character (a newline
     // above all) forges a control-mode line delivered to every client.
     // Any process in any pane can reach this endpoint, so the door is here.
-    if agent.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("agent label must not contain whitespace or control characters".to_string());
+    if agent
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || crate::mux::is_spoofing_format_char(c))
+    {
+        return Err(
+            "agent label must not contain whitespace, control, or bidi/invisible format characters"
+                .to_string(),
+        );
     }
     check_value_len("agent label", &agent)?;
     let seq = params

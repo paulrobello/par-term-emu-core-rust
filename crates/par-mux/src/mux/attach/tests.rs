@@ -1569,6 +1569,42 @@ fn help_chord_advances_the_pane_past_the_dump() {
 /// panel's bottom-left and ` menu ` to its bottom-right — each chip
 /// its own clickable span and id.
 #[test]
+fn chrome_safe_strips_bidi_and_zero_width() {
+    let set = ('\u{202A}'..='\u{202E}')
+        .chain('\u{2066}'..='\u{2069}')
+        .chain(['\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{FEFF}']);
+    for c in set {
+        assert_eq!(
+            super::chrome_safe(&format!("a{c}b")),
+            "ab",
+            "U+{:04X} is stripped",
+            c as u32
+        );
+    }
+}
+
+#[test]
+fn chrome_safe_keeps_zwj_and_zwnj() {
+    for s in ["👨\u{200D}👩\u{200D}👧", "می\u{200C}خواهم"] {
+        let out = super::chrome_safe(s);
+        assert!(
+            matches!(out, std::borrow::Cow::Borrowed(_)),
+            "{s:?} borrowed"
+        );
+        assert_eq!(out, s);
+    }
+}
+
+#[test]
+fn compose_sidebar_drops_spoofing_chars() {
+    let sections = vec![super::SidebarSection {
+        rows: vec![("+0".to_string(), "\u{202E}evil".to_string(), false)],
+    }];
+    let lines = super::compose_sidebar(&sections, 20, 4);
+    assert_eq!(lines[0].text, "   evil");
+}
+
+#[test]
 fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     let sections = vec![super::SidebarSection {
         rows: vec![

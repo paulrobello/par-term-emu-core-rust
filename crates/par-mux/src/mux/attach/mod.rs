@@ -23,6 +23,17 @@ pub(crate) mod render;
 pub(crate) mod status;
 pub(crate) mod tabs;
 
+/// `s` as chrome may paint it: control characters and the spoofing
+/// format characters removed. Borrowed when already clean.
+pub(crate) fn chrome_safe(s: &str) -> std::borrow::Cow<'_, str> {
+    let unsafe_char = |c: char| c.is_control() || crate::mux::is_spoofing_format_char(c);
+    if s.chars().any(unsafe_char) {
+        std::borrow::Cow::Owned(s.chars().filter(|c| !unsafe_char(*c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// Internals the `tests/mux_attach.rs` integration suite drives directly
 /// (a render client over a live daemon). Not part of the supported API.
 #[doc(hidden)]
