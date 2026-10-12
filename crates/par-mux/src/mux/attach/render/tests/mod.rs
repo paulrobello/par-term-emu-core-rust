@@ -1155,6 +1155,46 @@ fn modal_overlay_hides_the_pane_cursor() {
     );
 }
 
+/// The heartbeat: once the last placement write ages past
+/// CURSOR_HEARTBEAT, a quiet pump re-emits it anyway — the guard that
+/// heals a host terminal that lost the cursor state outside the
+/// guarded writers (the joe invisible-cursor report).
+#[test]
+fn heartbeat_re_emits_the_placement_when_quiet() {
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    session.renderer.feed_output(1, b"hello\r\n");
+    let mut sink = CursorSink {
+        placements: Vec::new(),
+    };
+    session.frame(&mut sink);
+    let placed = *sink.placements.last().expect("the first frame places");
+    let quiet_len = sink.placements.len();
+    session.frame(&mut sink);
+    assert_eq!(
+        sink.placements.len(),
+        quiet_len,
+        "a quiet frame emits nothing: {:?}",
+        sink.placements
+    );
+
+    session.last_cursor_emit = std::time::Instant::now() - crate::mux::attach::CURSOR_HEARTBEAT;
+    session.frame(&mut sink);
+    assert_eq!(
+        sink.placements.len(),
+        quiet_len + 1,
+        "the heartbeat re-emits: {:?}",
+        sink.placements
+    );
+    assert_eq!(
+        *sink.placements.last().expect("re-emitted"),
+        placed,
+        "the re-emitted placement matches"
+    );
+}
+
 /// End-to-end through the session's real frame path: a flushed frame
 /// always re-places the cursor (the diff's per-cell CUPs moved the
 /// host cursor), and a quiet pump emits nothing new. The session is
