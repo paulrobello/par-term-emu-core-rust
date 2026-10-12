@@ -196,6 +196,51 @@ mod tests {
         tempfile::tempdir().expect("temp dir")
     }
 
+    /// The text of top-level TS function `name` (`function name(` or
+    /// `async function name(` at the start of a line) through the first
+    /// following column-0 `}` line, CRLF-normalised so a Windows checkout
+    /// compares equal.
+    fn ts_function(src: &str, name: &str) -> Option<String> {
+        let src = src.replace("\r\n", "\n");
+        let start = [
+            format!("\nfunction {name}("),
+            format!("\nasync function {name}("),
+        ]
+        .iter()
+        .filter_map(|header| src.find(header.as_str()).map(|at| at + 1))
+        .min()?;
+        let len = src[start..].find("\n}\n")? + "\n}\n".len();
+        Some(src[start..start + len].to_string())
+    }
+
+    /// ARC-142: the shared hook-wire plumbing must stay identical in the pi
+    /// and omp assets. Each asset installs as one self-contained file, so
+    /// the code cannot be shared; this is the drift gate. Change both files
+    /// together. `sendState`, `releaseAgent`, `reportSession`,
+    /// `updateSessionRef`, `resumeArgv`, `enabled` differ on purpose (agent
+    /// API differences).
+    #[test]
+    fn shared_wire_functions_are_identical_in_both_assets() {
+        const SHARED: &[&str] = &[
+            "sendRequestAttempt",
+            "sendRequestNow",
+            "sendLogLine",
+            "sendRequest",
+            "nextReportSeq",
+            "withSessionRef",
+            "currentSessionRef",
+            "queueState",
+            "drainStateQueue",
+        ];
+        for name in SHARED {
+            let pi = ts_function(PI_EXTENSION_ASSET, name)
+                .unwrap_or_else(|| panic!("pi asset lost {name}"));
+            let omp = ts_function(OMP_EXTENSION_ASSET, name)
+                .unwrap_or_else(|| panic!("omp asset lost {name}"));
+            assert_eq!(pi, omp, "{name} drifted between the pi and omp extensions");
+        }
+    }
+
     #[test]
     fn install_writes_the_bundled_asset_with_markers() {
         let root = temp_root();
