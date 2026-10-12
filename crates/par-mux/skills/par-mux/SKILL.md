@@ -42,7 +42,9 @@ par-mux <name> --cmd version    # build stamp — compare against the client bui
 
 `--restart` works when nothing is running (prints a notice, still exits 0).
 The daemon detaches itself; no `&` needed. It ignores terminal hangup, exits
-when it has held zero sessions and zero clients for 5 s, and persists the
+once its tree has been empty for 5 s — zero sessions, or only dead panes;
+attached clients do NOT keep it alive (tmux's `exit-empty`; set
+`[daemon] exit-empty = false` to keep it running) — and persists the
 tree (state, scrollback, paste buffer) across restarts — panes respawn with
 fresh processes in their saved cwd. Panes it spawns are marked with
 `PAR_MUX_ENV=1` and starting a daemon from inside a pane is refused
@@ -51,8 +53,9 @@ fresh processes in their saved cwd. Panes it spawns are marked with
 `par-mux --gen-config` to seed it) carries socket/state-dir defaults and is
 hot-reloaded by `reload-config`.
 
-`par-mux attach` (built in when installed `--features mux-bin,attach`, as
-the par-term bundle and the crates.io default are) opens the interactive
+`par-mux attach` (built in only when installed with `--features mux-bin,attach`
+— the par-term bundle is; the crate's default feature set is empty, so a
+bare `cargo install par-mux` builds no binary at all) opens the interactive
 terminal client — render mode (panes, status bar, mouse, chords; the
 default) or `--mode passthrough`; `-t` targets a session/window/pane and the
 prefix chord defaults to `C-b`. That one is for humans; agents stay on
@@ -65,7 +68,11 @@ par-mux --cmd list-workspaces   # "+N: name" lines; " active" marks the daemon o
 par-mux --cmd list-sessions     # "+W: wname: $N: name" lines, every workspace when bare
 par-mux --cmd list-windows      # "@N: name" lines
 par-mux --cmd list-panes        # "%N" lines, global
-par-mux --cmd list-agents       # agent roster: "%N <agent> <state> <source> [message]"
+par-mux --cmd list-agents       # agent roster: "%N <agent> <state> <source> [key=value…]"
+                                #   extras: reason=<base64> telemetry=<base64>
+                                #   host_telemetry=<base64> ws=+N — parse fields
+                                #   1-4 by position, split the rest on the first
+                                #   "=", ignore unknown keys
 par-mux --cmd list-commands     # every dispatchable command with feature tokens —
                                 #   the discovery call for what THIS daemon supports
 ```
@@ -128,8 +135,12 @@ the command with `Enter` and poll. To wait for an agent verdict instead of
 polling its screen, read the roster:
 
 ```sh
-par-mux --cmd list-agents       # %N claude blocked hook <reason>
+par-mux --cmd list-agents       # %3 claude blocked hook reason=<base64> ws=+0
 ```
+
+The blocked reason is standard base64 of the whitespace-collapsed message
+(`echo <b64> | base64 -d`), so a reason can never be mistaken for a grammar
+token.
 
 Agent panes spawn with an env contract a script inside the pane can use:
 
@@ -150,9 +161,10 @@ valid), and `respawn-pane` re-seeds them.
 
 par-mux installs the hooks and extensions that feed the roster itself:
 `par-mux --install-agent-hooks` (claude, codex, grok), `--install-agent-extensions`
-(pi, omp), with `--uninstall-*` and `--agent-hooks-status` counterparts. par-term
-runs these after installing par-mux. The hooks are inert and instant outside a
-par-mux pane, and silent on every failure.
+(pi, omp), with `--uninstall-agent-hooks`, `--uninstall-agent-extensions` and
+`--agent-hooks-status` counterparts. par-term runs these after installing
+par-mux. The hooks are inert and instant outside a par-mux pane, and silent on
+every failure.
 
 ## Agent hook reports
 
@@ -189,5 +201,6 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   the binary you actually have.
 - Full command reference (list-commands feature tokens, client-snapshot,
   attach chords, notifications, persistence semantics): `MUX.md` in the
-  par-term-emu-core-rust repository (github.com/paulrobello/par-term-emu-core-rust);
-  a par-term checkout carries a copy at `docs/features/MUX.md`.
+  par-term-emu-core-rust repository (github.com/paulrobello/par-term-emu-core-rust).
+  par-term's `docs/features/MUX.md` is a different document: its user-facing
+  integration guide (attaching par-term windows to sessions), not a copy.
