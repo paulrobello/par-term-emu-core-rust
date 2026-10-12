@@ -1190,7 +1190,9 @@ fn heartbeat_re_emits_the_placement_when_quiet() {
         sink.placements
     );
 
-    session.last_cursor_emit = std::time::Instant::now() - crate::mux::attach::CURSOR_HEARTBEAT;
+    session
+        .cursor
+        .backdate(crate::mux::attach::CURSOR_HEARTBEAT);
     session.frame(&mut sink);
     assert_eq!(
         sink.placements.len(),
@@ -1835,7 +1837,7 @@ fn session_defaults_come_from_chords_with_defaults() {
         session.render_opts.scrollbar_gutter,
         defaults.scrollbar_gutter
     );
-    assert_eq!(session.drag_cursor_shape, defaults.drag_cursor_shape);
+    assert_eq!(session.cursor.drag_shape, defaults.drag_cursor_shape);
 }
 
 /// ARC-129: the render screen guard restores on an early `?` return —

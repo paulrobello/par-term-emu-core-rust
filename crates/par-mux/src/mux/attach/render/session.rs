@@ -6,7 +6,7 @@ use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, Window
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::{active_window_row, displayed_session, parse_session_line};
-use crate::mux::attach::{layout, status, CURSOR_HEARTBEAT};
+use crate::mux::attach::{layout, status};
 use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use ratatui::buffer::Cell as RtCell;
@@ -284,7 +284,7 @@ impl WindowSession {
         self.set_show_label_in_border(chords.show_label_in_border);
         self.set_pane_gaps(chords.pane_gaps);
         self.set_scrollbar_gutter(chords.scrollbar_gutter);
-        self.drag_cursor_shape = chords.drag_cursor_shape;
+        self.cursor.drag_shape = chords.drag_cursor_shape;
         let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
         self.set_border_colors(
             crate::mux::config::parse_hex_color(&eff.border_active_color)
@@ -462,7 +462,7 @@ impl WindowSession {
         // First frame: clear + full paint. repaint_all hides the host
         // cursor, so the frame's place_cursor must fire even if the
         // mapped state matches the hidden default.
-        self.cursor_placed = Some(None);
+        self.cursor.invalidate();
         sink.repaint_all();
         self.frame(sink);
         Ok(())
@@ -670,7 +670,7 @@ impl WindowSession {
         }
         // Same as the seed: repaint_all hid the cursor, so force the
         // next place_cursor.
-        self.cursor_placed = Some(None);
+        self.cursor.invalidate();
         // repaint_all clears the WHOLE screen — the strip rows too — and
         // the frame below flushes diff-based, so both strips forget
         // their previous frames here (the sidebar-toggle path parks the
@@ -727,7 +727,7 @@ impl WindowSession {
         // (best-effort DECSCUSR steady block — DECSCUSR has no
         // column-resize value; every drag-end path clears `drag`, so the
         // next frame restores the pane's own shape).
-        if self.drag_cursor_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
+        if self.cursor.drag_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
             cursor = cursor.map(|(x, y, _)| (x, y, CursorStyle::SteadyBlock));
         }
         // A modal overlay (help, picker) covers the focused pane: placing
@@ -737,20 +737,11 @@ impl WindowSession {
         if self.renderer.overlay.is_some() || self.modal.hides_cursor() {
             cursor = None;
         }
-        let belief_changed = self.cursor_placed.as_ref() != Some(&cursor);
-        // Heartbeat: every guard is belief-based, so a host terminal
-        // that lost the cursor state outside the guarded writers
-        // never re-syncs on its own — re-assert the placement (idempotent
-        // on a healthy host) once per heartbeat so any desync
-        // self-heals within a second.
-        let heartbeat_due = cursor.is_some() && self.last_cursor_emit.elapsed() >= CURSOR_HEARTBEAT;
-        if flushed || belief_changed || heartbeat_due {
-            super::trace_cursor(format_args!(
-                "frame emit (flushed={flushed}, belief-changed={belief_changed}, heartbeat={heartbeat_due})"
-            ));
+        if self
+            .cursor
+            .decide(cursor, flushed, std::time::Instant::now())
+        {
             sink.place_cursor(cursor);
-            self.cursor_placed = Some(cursor);
-            self.last_cursor_emit = std::time::Instant::now();
         }
     }
 

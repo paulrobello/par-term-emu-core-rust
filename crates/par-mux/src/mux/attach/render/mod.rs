@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::sync::mpsc::RecvTimeoutError;
 
+mod cursor;
 mod geometry;
 mod input_route;
 mod modal;
@@ -35,6 +36,8 @@ mod navigate;
 mod renderer;
 mod session;
 mod sidebar;
+
+use cursor::CursorState;
 
 use renderer::{RenderOptions, StdoutSink};
 
@@ -617,9 +620,6 @@ struct WindowSession {
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
     sidebar_on: bool,
-    /// While a divider drag is live, the host cursor carries the resize
-    /// shape (best-effort DECSCUSR steady block; restored on drag end).
-    drag_cursor_shape: bool,
     /// The zoom cue (the daemon's `resize-pane -Z` state, as the chord
     /// last saw it) — bolds a ` Z |` head on the status row. The daemon
     /// holds the truth; a window switch resets the cue.
@@ -644,18 +644,9 @@ struct WindowSession {
     /// assignment. Wall-clock, not a tick count: a pump woken early by a
     /// burst of events would burn a tick budget in milliseconds (QA-235).
     flash_until: Option<std::time::Instant>,
-    /// The cursor state the last `place_cursor` reported, `Some(None)`
-    /// initially (repaint_all hides the cursor): the guard that keeps a
-    /// quiet pump from re-emitting identical cursor escapes every frame
-    /// tick, while a flushed frame (whose per-cell CUP left the terminal
-    /// cursor wherever the last diff cell sits) always repositions.
-    cursor_placed: Option<Option<(u16, u16, CursorStyle)>>,
-    /// The instant the last `place_cursor` wrote, heartbeat-gated: a
-    /// quiet pump emits nothing, and a host terminal that lost the
-    /// cursor state (an output race outside the guarded writers) would
-    /// keep it lost forever — every [`Self::frame`] re-asserts the
-    /// placement after [`CURSOR_HEARTBEAT`].
-    last_cursor_emit: std::time::Instant,
+    /// Host-cursor placement bookkeeping: the emit guard, the heartbeat
+    /// clock, and the drag-shape option (see [`CursorState`]).
+    cursor: CursorState,
     /// A mouse path (the command menu's `detach` row) asked to end the
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
@@ -879,7 +870,6 @@ impl WindowSession {
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar_on: false,
-            drag_cursor_shape: false,
             zoomed: false,
             daemon_layout: Vec::new(),
             status_bar_on: true,
@@ -887,8 +877,7 @@ impl WindowSession {
             literal: chords.prefix,
             flash: None,
             flash_until: None,
-            cursor_placed: Some(None),
-            last_cursor_emit: std::time::Instant::now(),
+            cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
             pending_end: false,
             geometry,

@@ -709,7 +709,7 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
     );
 
     // Option on: the drag frame shapes the cursor.
-    session.drag_cursor_shape = true;
+    session.cursor.drag_shape = true;
     session.renderer.mark_all_dirty();
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);

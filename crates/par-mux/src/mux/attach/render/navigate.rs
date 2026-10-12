@@ -418,7 +418,7 @@ impl WindowSession {
                 show_label_in_border: self.render_opts.show_label_in_border,
                 pane_gaps: self.render_opts.pane_gaps,
                 scrollbar_gutter: self.render_opts.scrollbar_gutter,
-                drag_cursor_shape: self.drag_cursor_shape,
+                drag_cursor_shape: self.cursor.drag_shape,
                 border_lines: self.render_opts.glyphs.name().to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: resolved for the shape, never applied to
@@ -582,7 +582,7 @@ impl WindowSession {
         // what moved, and the cursor guard must reset so a
         // changed position/shape re-emits even when the recorded state
         // coincidentally matches the old window's.
-        self.cursor_placed = Some(None);
+        self.cursor.invalidate();
         // Fresh facts for the new view; a session gone mid-switch ends
         // the view through the pump's normal path on the next mark.
         let focused = self.renderer.focused().unwrap_or(0);
