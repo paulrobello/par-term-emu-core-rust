@@ -836,7 +836,7 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `COMSPEC` | Default shell lookup (Windows) | `cmd.exe` | Shell for `spawn_shell()` on Windows |
 | `PAR_MUX_CONFIG` | `par-mux` daemon and attach client | unset: `<config dir>/par-mux/config.toml` | Path of the par-mux config file; see [MUX.md Configuration file](MUX.md#configuration-file) |
 | `PAR_MUX_SOCKET` | `par-mux` binary | unset | Socket path when neither `--socket` nor a name is given; set inside every mux pane |
-| `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon |
+| `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon, or under `--pane-endpoints` for a session whose env carries `PAR_MUX_CONTROL=1` |
 | `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
 | `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
 | `PAR_MUX_CONTROL` | par-mux daemon, per session (`set-environment` / `new-session -e`) | unset | `1` in a session's env grants that session's panes `PAR_MUX_CONTROL_SOCKET` (the full control socket) under `--pane-endpoints` without `--expose-control-socket`; see [MUX.md](MUX.md#agent-hook-reports) |
