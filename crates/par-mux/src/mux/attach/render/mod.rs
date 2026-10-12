@@ -1227,11 +1227,13 @@ impl WindowSession {
                 ..
             } => {
                 self.status.patch_agent(&pane_id, &agent, Some(&state));
+                self.rebuild_agent_section();
                 self.draw_status_row();
                 EventOutcome::Continue
             }
             TmuxNotification::AgentReleased { pane_id, agent } => {
                 self.status.patch_agent(&pane_id, &agent, None);
+                self.rebuild_agent_section();
                 self.draw_status_row();
                 EventOutcome::Continue
             }

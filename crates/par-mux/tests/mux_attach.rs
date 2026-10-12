@@ -2053,6 +2053,24 @@ fn render_mode_side_panel_carries_the_agent_roster() {
         "render client enabled host mouse reporting",
     );
 
+    // The panel's workspace row painted, so the first status refresh
+    // landed; then let startup refreshes, the launch refit, and the first
+    // cursor heartbeat settle so no incidental refresh lands after the
+    // claim and repaints the panel for it.
+    let mut all = Vec::new();
+    assert!(
+        panel_ever_contains(&host, &mut all, 19, "main", Duration::from_secs(10)),
+        "the side panel never painted its workspace row; stderr: {}",
+        stderr.lock().unwrap()
+    );
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(1500),
+        Duration::from_secs(10),
+    );
+    all.clear();
+
     let reply = hook_report(
         fixture.socket(),
         &format!(
@@ -2063,11 +2081,9 @@ fn render_mode_side_panel_carries_the_agent_roster() {
         reply.contains(r#""result":"ok""#),
         "claim accepted: {reply}"
     );
-    std::thread::sleep(Duration::from_secs(2));
-    let mut all = Vec::new();
-    while let Ok(bytes) = host.output_rx.try_recv() {
-        all.extend_from_slice(&bytes);
-    }
+    // 1.5 s: the scrape liveness sweep may release the test claim after
+    // about 2 s, and `ever` still sees a row a later repaint removed.
+    let seen = panel_ever_contains(&host, &mut all, 19, "kimi", Duration::from_millis(1500));
     let (_final, ever) = reconstructed_screen(&all, 24, 80);
     let ever_grid: String = ever
         .iter()
@@ -2075,9 +2091,9 @@ fn render_mode_side_panel_carries_the_agent_roster() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        ever_grid.contains("kimi"),
-        "the roster row must appear in the side panel on %agent-state-changed (a later \
-         liveness-sweep repaint may remove the test claim again). snapshots:\n{ever_grid}\nstderr: {}",
+        seen,
+        "the side panel did not show the claim within 1.5 s of %agent-state-changed. \
+         snapshots:\n{ever_grid}\nstderr: {}",
         stderr.lock().unwrap()
     );
     host.killer.kill().ok();
@@ -4371,6 +4387,74 @@ fn screen_until(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 let (grid, _) = reconstructed_screen(all, 24, 80);
                 return grid.join("\n");
+            }
+        }
+    }
+}
+
+/// Poll `host` until some row of the left `width` columns (the side
+/// panel) has contained `needle` in any painted snapshot, or the
+/// deadline passes. Returns whether it was seen.
+#[cfg(unix)]
+fn panel_ever_contains(
+    host: &AttachHost,
+    all: &mut Vec<u8>,
+    width: usize,
+    needle: &str,
+    deadline: Duration,
+) -> bool {
+    let end = Instant::now() + deadline;
+    loop {
+        let (_, ever) = reconstructed_screen(all, 24, 80);
+        // Row 0 is the tab strip, not the panel.
+        let seen = ever.iter().skip(1).any(|snapshots| {
+            snapshots
+                .iter()
+                .any(|row| row.chars().take(width).collect::<String>().contains(needle))
+        });
+        if seen {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        match host.output_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => all.extend_from_slice(&bytes),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+}
+
+/// Keep collecting `host` output until the reconstructed final grid has
+/// not changed for `stable`, bounded by `deadline` (panics on it). Byte
+/// silence is not the signal: the cursor heartbeat re-emits the cursor
+/// placement every second, so the stream never goes quiet that long.
+#[cfg(unix)]
+fn screen_stable(host: &AttachHost, all: &mut Vec<u8>, stable: Duration, deadline: Duration) {
+    let end = Instant::now() + deadline;
+    let mut last = reconstructed_screen(all, 24, 80).0;
+    let mut since = Instant::now();
+    loop {
+        if since.elapsed() >= stable {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "screen_stable quiesce: the screen kept changing for {deadline:?}"
+        );
+        match host.output_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => {
+                all.extend_from_slice(&bytes);
+                let now = reconstructed_screen(all, 24, 80).0;
+                if now != last {
+                    last = now;
+                    since = Instant::now();
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("screen_stable quiesce: the client exited")
             }
         }
     }

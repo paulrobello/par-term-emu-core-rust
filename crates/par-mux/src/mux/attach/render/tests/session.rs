@@ -2423,44 +2423,55 @@ fn legacy_refresh_still_runs_without_the_feature() {
     );
 }
 
-/// `%agent-state-changed` and `%agent-released` patch the chips from
-/// their payload: no status mark, no query.
+/// `%agent-state-changed` and `%agent-released` patch the roster from
+/// their payload and rebuild the side panel's agents section from the
+/// cache: no status mark, no query (ARC-136).
 #[test]
 fn agent_event_patches_without_a_query() {
-    let (rx, _conn) = fake_daemon("snapagent", snapshot_script());
+    let (rx, mut conn) = fake_daemon("snapagent", snapshot_script());
     let mut session = snapshot_session();
+    session.refresh_status_facts(&mut conn).expect("seed");
     session.status_dirty = false;
     drained(&rx);
 
-    let roster = |session: &WindowSession| -> Vec<(u32, String, String, String)> {
-        session.status.agents().to_vec()
+    let rows = |session: &WindowSession| -> Vec<(String, String, bool)> {
+        session
+            .renderer
+            .sidebar_sections
+            .iter()
+            .flatten()
+            .flat_map(|section| section.rows.clone())
+            .collect()
     };
     session.handle_event(TmuxNotification::AgentStateChanged {
-        pane_id: "%2".to_string(),
-        agent: "claude".to_string(),
-        state: "blocked".to_string(),
+        pane_id: "%3".to_string(),
+        agent: "kimi".to_string(),
+        state: "working".to_string(),
         source: "hook".to_string(),
     });
     assert!(!session.status_dirty);
     assert!(
-        roster(&session)
-            .iter()
-            .any(|(p, agent, state, _)| *p == 2 && agent == "claude" && state == "blocked"),
+        rows(&session).contains(&("pane:3".to_string(), "kimi (working)".to_string(), false)),
         "{:?}",
-        roster(&session)
+        rows(&session)
+    );
+    assert!(
+        !rows(&session)
+            .iter()
+            .any(|(_, label, _)| label == "kimi (blocked)"),
+        "{:?}",
+        rows(&session)
     );
 
     session.handle_event(TmuxNotification::AgentReleased {
-        pane_id: "%2".to_string(),
-        agent: "claude".to_string(),
+        pane_id: "%3".to_string(),
+        agent: "kimi".to_string(),
     });
     assert!(!session.status_dirty);
     assert!(
-        !roster(&session)
-            .iter()
-            .any(|(p, agent, _, _)| *p == 2 && agent == "claude"),
+        !rows(&session).iter().any(|(id, _, _)| id == "pane:3"),
         "{:?}",
-        roster(&session)
+        rows(&session)
     );
     assert!(received_within_300ms(&rx).is_empty(), "no round trip");
 }

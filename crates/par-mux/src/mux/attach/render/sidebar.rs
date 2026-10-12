@@ -196,6 +196,33 @@ impl WindowSession {
         self.set_sidebar_roster(roster, &agents, &names, focused);
     }
 
+    /// Rebuild the panel's sections from the cached status (workspaces,
+    /// active workspace, agent roster) with no round trip: the agent
+    /// notifications carry their fact, so the roster patch alone must
+    /// reach the panel (ARC-136). Before the first status refresh filled
+    /// the workspace cache this only marks the status stale, so the
+    /// throttled refresh draws the panel whole.
+    pub(super) fn rebuild_agent_section(&mut self) {
+        if !self.sidebar_on {
+            return;
+        }
+        if self.status.workspaces().is_empty() {
+            self.status_dirty = true;
+            return;
+        }
+        let active = self.status.active_workspace().map(str::to_string);
+        let roster: Vec<(String, String, bool)> = self
+            .status
+            .workspaces()
+            .iter()
+            .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
+            .collect();
+        let focused = self.renderer.focused();
+        let agents = self.status.agents().to_vec();
+        let names = self.status.workspaces().to_vec();
+        self.set_sidebar_roster(roster, &agents, &names, focused);
+    }
+
     /// Fill the panel's sections: the workspace rows, then the agent
     /// roster — herdr's grouped panel. Each agent row labels with its
     /// workspace name (`{ws} · {agent} ({state})`; the bare `{agent}
