@@ -108,6 +108,135 @@ pub(crate) fn next_workspace(body: &[String], forward: bool) -> Option<String> {
     next_in_cycle(&ids, &active, forward).cloned()
 }
 
+/// The daemon's displayed session (the active workspace's active session)
+/// via the bare `switch-client` query; `None` when the daemon predates it
+/// or nothing is displayed.
+pub(crate) fn displayed_session(conn: &mut conn::AttachConn) -> Option<String> {
+    let reply = conn.send_checked("switch-client").ok()?;
+    if !reply.ok {
+        return None;
+    }
+    let id = reply.body.first()?.trim();
+    (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
+}
+
+/// Where a switch lands: a window, plus its owning session when the
+/// resolver learned it. The resolvers below own the "which target" rules
+/// both attach modes share (ARC-139); each mode keeps only its own
+/// landing step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Landing {
+    pub(crate) window: String,
+    pub(crate) session: Option<String>,
+}
+
+/// The outcome of resolving a workspace to a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkspaceLanding {
+    /// The session to land on.
+    Session(String),
+    /// The workspace has no sessions: nothing to land on.
+    Empty,
+    /// The query failed: leave the view put.
+    Failed,
+}
+
+/// `session`'s active window as a [`Landing`] that names the session.
+pub(crate) fn session_landing(conn: &mut conn::AttachConn, session: &str) -> Option<Landing> {
+    let window = session_active_window(conn, session)?;
+    Some(Landing {
+        window,
+        session: Some(session.to_string()),
+    })
+}
+
+/// prefix n/p: the window after (`forward`) or before `shown_window` in
+/// `session`'s window list, wrapping; `None` when the shown window is not
+/// listed.
+pub(crate) fn window_switch_target(
+    conn: &mut conn::AttachConn,
+    session: &str,
+    shown_window: &str,
+    forward: bool,
+) -> Option<Landing> {
+    let windows = list_window_ids(conn, session);
+    let window = next_in_cycle(&windows, shown_window, forward)?.clone();
+    Some(Landing {
+        window,
+        session: None,
+    })
+}
+
+/// prefix ( / ): the session after (`forward`) or before the current one
+/// in list-sessions order, landing on its active window. The current
+/// session counts only while it still owns `shown_window` (one
+/// `list-windows` probe); stale or absent state falls back to the roster
+/// head so a direction still moves somewhere deterministic. An empty
+/// roster is `None`.
+pub(crate) fn session_switch_target(
+    conn: &mut conn::AttachConn,
+    current: Option<&str>,
+    shown_window: &str,
+    forward: bool,
+) -> Option<Landing> {
+    let reply = conn.send_checked("list-sessions").ok().filter(|r| r.ok)?;
+    let sessions: Vec<String> = reply
+        .body
+        .iter()
+        .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
+        .collect();
+    let head = sessions.first()?.clone();
+    let current = match current {
+        Some(current)
+            if list_window_ids(conn, current)
+                .iter()
+                .any(|w| w == shown_window) =>
+        {
+            current.to_string()
+        }
+        _ => head,
+    };
+    let next = next_in_cycle(&sessions, &current, forward)?.clone();
+    session_landing(conn, &next)
+}
+
+/// The session a workspace landing goes to: the one `select-workspace`
+/// resumed (the [`displayed_session`], which the follow broadcast names,
+/// so every client lands on the same view — card 01a11bd1) when it is
+/// listed under `ws_id`, else the first listed.
+pub(crate) fn workspace_session(conn: &mut conn::AttachConn, ws_id: &str) -> WorkspaceLanding {
+    let Some(reply) = conn
+        .send_checked(&format!("list-sessions -t {ws_id}"))
+        .ok()
+        .filter(|r| r.ok)
+    else {
+        return WorkspaceLanding::Failed;
+    };
+    let listed: Vec<String> = reply
+        .body
+        .iter()
+        .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
+        .collect();
+    let resumed = displayed_session(conn).filter(|s| listed.contains(s));
+    match resumed.or_else(|| listed.first().cloned()) {
+        Some(session) => WorkspaceLanding::Session(session),
+        None => WorkspaceLanding::Empty,
+    }
+}
+
+/// prefix W / C-w: `list-workspaces`, the next/previous workspace in id
+/// order ([`next_workspace`]), then `select-workspace` on it; the
+/// selected id.
+pub(crate) fn workspace_switch_target(
+    conn: &mut conn::AttachConn,
+    forward: bool,
+) -> Option<String> {
+    let reply = conn.send_checked("list-workspaces").ok().filter(|r| r.ok)?;
+    let ws_id = next_workspace(&reply.body, forward)?;
+    let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
+    Some(ws_id)
+}
+
 /// Resolve the attach target to a pane id. A pane target (`%N` or a pane
 /// title name) goes straight to the daemon's matcher via `pane-info`; a
 /// window (`@N`/name) or session (`$N`/name) target narrows through the

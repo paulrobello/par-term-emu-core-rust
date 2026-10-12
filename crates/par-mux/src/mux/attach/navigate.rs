@@ -46,52 +46,27 @@ impl Session {
         let Some(session) = self.session_id.clone() else {
             return;
         };
-        let windows = list_window_ids(&mut self.conn, &session);
-        let Some(window) = next_in_cycle(&windows, &self.window, direction > 0).cloned() else {
-            return;
-        };
-        if !self.land(&window) {
-            return;
+        if let Some(landing) =
+            window_switch_target(&mut self.conn, &session, &self.window, direction > 0)
+        {
+            self.land_on(landing);
         }
-        self.window = window.clone();
-        self.attach_window_active_pane(&window);
     }
 
     /// prefix ( / ): the previous/next session in list-sessions order;
     /// attach to its active window's active pane, select-then-refresh.
+    /// The current session counts only while it still owns the shown
+    /// window ([`session_switch_target`]).
     pub(super) fn switch_session(&mut self, direction: i32) {
-        let Ok(reply) = self.conn.send_checked("list-sessions") else {
-            return;
-        };
-        if !reply.ok {
-            return;
+        let current = self.session_id.clone();
+        if let Some(landing) = session_switch_target(
+            &mut self.conn,
+            current.as_deref(),
+            &self.window,
+            direction > 0,
+        ) {
+            self.land_on(landing);
         }
-        let sessions: Vec<String> = reply
-            .body
-            .iter()
-            .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
-            .collect();
-        let Some(current) = self.session_id.clone() else {
-            return;
-        };
-        let Some(session) = next_in_cycle(&sessions, &current, direction > 0).cloned() else {
-            return;
-        };
-        self.land_in_session(&session);
-    }
-
-    /// Land the pump on `session`'s active window's active pane. Local
-    /// state moves only once the daemon accepted the landing.
-    fn land_in_session(&mut self, session: &str) {
-        let Some(window) = session_active_window(&mut self.conn, session) else {
-            return;
-        };
-        if !self.land(&window) {
-            return;
-        }
-        self.window = window.clone();
-        self.session_id = Some(session.to_string());
-        self.attach_window_active_pane(&window);
     }
 
     /// prefix W / C-w: the next/previous workspace in id order —
@@ -101,43 +76,42 @@ impl Session {
     /// with no sessions cannot be landed on: the selection still moves
     /// and the status refresh carries the new active marker.
     pub(super) fn switch_workspace(&mut self, direction: i32) {
-        let Ok(reply) = self.conn.send_checked("list-workspaces") else {
-            return;
-        };
-        if !reply.ok {
-            return;
+        if let Some(ws_id) = workspace_switch_target(&mut self.conn, direction > 0) {
+            self.land_in_workspace(&ws_id);
         }
-        let Some(ws_id) = next_workspace(&reply.body, direction > 0) else {
-            return;
-        };
-        let _ = self
-            .conn
-            .send_checked(&format!("select-workspace -t {ws_id}"));
-        self.land_in_workspace(&ws_id);
     }
 
     /// After a workspace select, land the pump on the workspace's
-    /// session: its first listed session's active window's active pane.
-    /// A workspace with no sessions cannot be landed on — the status
-    /// refresh carries the moved active marker instead.
+    /// session ([`workspace_session`]: the resumed one, else the first
+    /// listed) — its active window's active pane. A workspace with no
+    /// sessions cannot be landed on — the status refresh carries the
+    /// moved active marker instead.
     pub(super) fn land_in_workspace(&mut self, ws_id: &str) {
-        let Ok(reply) = self.conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
-            return;
-        };
-        if !reply.ok {
+        match workspace_session(&mut self.conn, ws_id) {
+            WorkspaceLanding::Session(session) => {
+                if let Some(landing) = session_landing(&mut self.conn, &session) {
+                    self.land_on(landing);
+                }
+            }
+            WorkspaceLanding::Empty => {
+                self.refresh_status();
+                self.draw_status();
+            }
+            WorkspaceLanding::Failed => {}
+        }
+    }
+
+    /// Land the pump on a resolved [`Landing`]. Local state moves only
+    /// once the daemon accepted the landing.
+    fn land_on(&mut self, landing: Landing) {
+        if !self.land(&landing.window) {
             return;
         }
-        let Some((session, _)) = reply
-            .body
-            .iter()
-            .filter_map(|l| parse_session_line(l))
-            .next()
-        else {
-            self.refresh_status();
-            self.draw_status();
-            return;
-        };
-        self.land_in_session(&session);
+        self.window = landing.window.clone();
+        if let Some(session) = landing.session {
+            self.session_id = Some(session);
+        }
+        self.attach_window_active_pane(&landing.window);
     }
 
     /// A user-initiated landing on `window`: `switch-client -t <window>`

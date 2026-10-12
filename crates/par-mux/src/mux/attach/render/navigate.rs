@@ -206,17 +206,9 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         direction: i32,
     ) {
-        let Ok(reply) = conn.send_checked("list-workspaces") else {
-            return;
-        };
-        if !reply.ok {
-            return;
+        if let Some(ws_id) = workspace_switch_target(conn, direction > 0) {
+            self.land_on_workspace(conn, &ws_id);
         }
-        let Some(ws_id) = next_workspace(&reply.body, direction > 0) else {
-            return;
-        };
-        let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
-        self.land_on_workspace(conn, &ws_id);
     }
 
     /// The pump's status facts in one step: the bar's state, the side
@@ -339,31 +331,20 @@ impl WindowSession {
         // manual-pass round-8 report). Idempotent for the keybind path,
         // which selects before landing.
         let _ = conn.send_checked(&format!("select-workspace -t {ws_id}"));
-        let Ok(sessions) = conn.send_checked(&format!("list-sessions -t {ws_id}")) else {
+        // The session select-workspace resumed, else the first listed
+        // (card 01a11bd1) — the rule both attach modes share.
+        let session = match workspace_session(conn, ws_id) {
+            WorkspaceLanding::Session(session) => session,
+            WorkspaceLanding::Empty => {
+                self.status_dirty = true;
+                return;
+            }
+            WorkspaceLanding::Failed => return,
+        };
+        let Some(landing) = session_landing(conn, &session) else {
             return;
         };
-        if !sessions.ok {
-            return;
-        }
-        let listed: Vec<String> = sessions
-            .body
-            .iter()
-            .filter_map(|l| super::super::parse_session_line(l).map(|(id, _)| id))
-            .collect();
-        // The session select-workspace resumed (the workspace's active
-        // one) — the session the follow broadcast names, so this client
-        // and every follower land on the same view (card 01a11bd1: the
-        // first-listed session diverged from it). The first listed is the
-        // fallback for a daemon without the displayed-session query.
-        let resumed = super::session::displayed_session(conn).filter(|s| listed.contains(s));
-        let Some(session) = resumed.or_else(|| listed.first().cloned()) else {
-            self.status_dirty = true;
-            return;
-        };
-        let Some(window) = session_active_window(conn, &session) else {
-            return;
-        };
-        self.land_window(conn, &window);
+        self.land_window(conn, &landing.window);
     }
 
     /// The reload chord in render mode: the same client-side rebind the
@@ -448,11 +429,11 @@ impl WindowSession {
         let Some(session) = self.status.session_id.clone() else {
             return;
         };
-        let windows = list_window_ids(conn, &session);
-        let Some(next) = next_in_cycle(&windows, &self.window, direction > 0).cloned() else {
+        let Some(landing) = window_switch_target(conn, &session, &self.window, direction > 0)
+        else {
             return;
         };
-        self.land_window(conn, &next);
+        self.land_window(conn, &landing.window);
     }
 
     /// prefix ( / ): the previous/next session in list-sessions order;
@@ -462,37 +443,16 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         direction: i32,
     ) {
-        let Ok(reply) = conn.send_checked("list-sessions") else {
+        // The current session counts only while it owns the shown
+        // window; stale state falls back to the roster head
+        // ([`session_switch_target`]).
+        let current = self.status.session_id.clone();
+        let Some(landing) =
+            session_switch_target(conn, current.as_deref(), &self.window, direction > 0)
+        else {
             return;
         };
-        if !reply.ok {
-            return;
-        }
-        let sessions: Vec<String> = reply
-            .body
-            .iter()
-            .filter_map(|l| super::super::parse_session_line(l).map(|(id, _)| id))
-            .collect();
-        if sessions.is_empty() {
-            return;
-        }
-        // Which session owns the shown window right now? Stale state
-        // falls back to the head so a direction still moves somewhere
-        // deterministic.
-        let shown = self.status.session_id.clone().unwrap_or_default();
-        let owns_window = list_window_ids(conn, &shown).contains(&self.window);
-        let current = if owns_window {
-            shown
-        } else {
-            sessions[0].clone()
-        };
-        let Some(next) = next_in_cycle(&sessions, &current, direction > 0).cloned() else {
-            return;
-        };
-        let Some(window) = session_active_window(conn, &next) else {
-            return;
-        };
-        self.land_window(conn, &window);
+        self.land_window(conn, &landing.window);
     }
 
     /// A user-initiated landing on `window`: `switch-client -t <window>`

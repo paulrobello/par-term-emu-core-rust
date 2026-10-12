@@ -2248,14 +2248,17 @@ fn passthrough_window_switch_wraps_and_attaches_the_marked_pane() {
 }
 
 /// Passthrough prefix ( / ): the neighbor session in roster order
-/// (wrapping), its `*` window, that window's marked pane; a session
-/// absent from the roster (or an empty roster) moves nowhere.
+/// (wrapping), its `*` window, that window's marked pane. The current
+/// session counts only while it owns the shown window (the
+/// `list-windows -t <current>` probe, ARC-139 — the render mode's rule);
+/// a stale or unknown current falls back to the roster head.
 #[test]
 fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
     let (rx, mut session) = scripted_passthrough(
         "pt-sess",
         &[
             ("list-sessions", "$0: work\n$1: lab"),
+            ("list-windows -t $0", "@0 * a"),
             ("list-windows -t $1", "@3 - x\n@4 * y"),
             ("list-panes -t @4", "%8 0 *"),
         ],
@@ -2263,8 +2266,9 @@ fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
     assert!(!session.route_bytes(&[0x02, b'(']));
     let lines = switch_lines(&rx);
     assert_eq!(
-        lines[..3].to_vec(),
+        lines[..4].to_vec(),
         vec![
+            "list-windows -t $0",
             "list-windows -t $1",
             "switch-client -t @4",
             "list-panes -t @4"
@@ -2275,10 +2279,21 @@ fn passthrough_session_switch_lands_on_the_neighbors_active_pane() {
     assert_eq!(session.window, "@4");
     assert_eq!(session.pane, "%8");
 
+    // A stale current ($7 owns nothing): the head ($0) is the base, so
+    // ( wraps to $1 again rather than freezing the view.
     session.session_id = Some("$7".to_string());
-    assert!(!session.route_bytes(&[0x02, b')']));
-    assert!(switch_lines(&rx).is_empty(), "an unknown session: no move");
-    assert_eq!(session.pane, "%8");
+    assert!(!session.route_bytes(&[0x02, b'(']));
+    let lines = switch_lines(&rx);
+    assert_eq!(
+        lines[..3].to_vec(),
+        vec![
+            "list-windows -t $7",
+            "list-windows -t $1",
+            "switch-client -t @4"
+        ],
+        "a stale current falls back to the head: {lines:?}"
+    );
+    assert_eq!(session.session_id.as_deref(), Some("$1"));
 }
 
 /// ARC-124: a landing the daemon refuses (`switch-client` AND the
@@ -2291,6 +2306,7 @@ fn passthrough_refused_landing_leaves_local_state_put() {
         "pt-refused",
         &[
             ("list-sessions", "$0: work\n$1: lab"),
+            ("list-windows -t $0", "@0 * a"),
             ("list-windows -t $1", "@4 * y"),
             ("switch-client -t @4", "!err"),
             ("select-window -t @4", "!err"),
@@ -2301,6 +2317,7 @@ fn passthrough_refused_landing_leaves_local_state_put() {
     assert_eq!(
         lines,
         vec![
+            "list-windows -t $0",
             "list-windows -t $1",
             "switch-client -t @4",
             "select-window -t @4"
@@ -2344,16 +2361,18 @@ fn passthrough_workspace_switch_lands_in_the_next_workspace() {
             ("list-workspaces", "+0: main active\n+1: lab"),
             ("list-sessions -t +1", "+1: lab: $2: build"),
             ("list-sessions", "+1: lab: $2: build"),
+            ("switch-client", "$2"),
             ("list-windows -t $2", "@6 * logs"),
             ("list-panes -t @6", "%9 0 *"),
         ],
     );
     assert!(!session.route_bytes(&[0x02, b'W']));
     assert_eq!(
-        switch_lines(&rx)[..5].to_vec(),
+        switch_lines(&rx)[..6].to_vec(),
         vec![
             "select-workspace -t +1",
             "list-sessions -t +1",
+            "switch-client",
             "list-windows -t $2",
             "switch-client -t @6",
             "list-panes -t @6"
@@ -2379,6 +2398,115 @@ fn passthrough_workspace_switch_lands_in_the_next_workspace() {
         "an empty workspace lands nowhere: {lines:?}"
     );
     assert_eq!(session.pane, "%0");
+}
+
+/// ARC-139 decision 3 (card 01a11bd1): a workspace landing goes to the
+/// session `select-workspace` resumed (the bare `switch-client` query),
+/// not the first listed one — the render mode's rule, now shared.
+#[test]
+fn passthrough_workspace_switch_lands_on_the_resumed_session() {
+    let (rx, mut session) = scripted_passthrough(
+        "pt-ws-resumed",
+        &[
+            ("list-workspaces", "+0: main active\n+1: lab"),
+            (
+                "list-sessions -t +1",
+                "+1: lab: $2: build\n+1: lab: $3: deploy",
+            ),
+            ("list-sessions", "+1: lab: $3: deploy"),
+            ("switch-client", "$3"),
+            ("list-windows -t $3", "@7 * shell"),
+            ("list-panes -t @7", "%11 0 *"),
+        ],
+    );
+    assert!(!session.route_bytes(&[0x02, b'W']));
+    let lines = switch_lines(&rx);
+    assert!(
+        lines.contains(&"list-windows -t $3".to_string())
+            && !lines.contains(&"list-windows -t $2".to_string()),
+        "the resumed session, not the first listed: {lines:?}"
+    );
+    assert_eq!(session.session_id.as_deref(), Some("$3"));
+    assert_eq!(session.window, "@7");
+    assert_eq!(session.pane, "%11");
+}
+
+/// ARC-139: the shared switch resolvers — window and session cycles
+/// wrap both ways, an unlisted shown window or an empty roster resolves
+/// to nothing, and a stale current session falls back to the head.
+#[test]
+fn passthrough_switch_resolvers_wrap_and_fall_back() {
+    let (_rx, mut session) = scripted_passthrough(
+        "pt-resolvers",
+        &[
+            ("list-windows -t $0", "@0 * a\n@1 - b\n@2 - c"),
+            ("list-sessions", "$0: work\n$1: lab\n$2: ops"),
+            ("list-windows -t $1", "@4 * y"),
+            ("list-windows -t $2", "@8 * z"),
+        ],
+    );
+    let conn = &mut session.conn;
+    let window = |w: &str| Landing {
+        window: w.to_string(),
+        session: None,
+    };
+    assert_eq!(
+        window_switch_target(conn, "$0", "@0", true),
+        Some(window("@1"))
+    );
+    assert_eq!(
+        window_switch_target(conn, "$0", "@0", false),
+        Some(window("@2"))
+    );
+    assert_eq!(
+        window_switch_target(conn, "$0", "@2", true),
+        Some(window("@0"))
+    );
+    assert_eq!(
+        window_switch_target(conn, "$0", "@9", true),
+        None,
+        "unlisted"
+    );
+    assert_eq!(
+        window_switch_target(conn, "$5", "@0", true),
+        None,
+        "no windows"
+    );
+
+    let landed = |w: &str, s: &str| Landing {
+        window: w.to_string(),
+        session: Some(s.to_string()),
+    };
+    assert_eq!(
+        session_switch_target(conn, Some("$0"), "@0", true),
+        Some(landed("@4", "$1"))
+    );
+    assert_eq!(
+        session_switch_target(conn, Some("$0"), "@0", false),
+        Some(landed("@8", "$2")),
+        "wraps backward"
+    );
+    assert_eq!(
+        session_switch_target(conn, Some("$1"), "@0", true),
+        Some(landed("@4", "$1")),
+        "$1 does not own @0: stale, so the head ($0) is the base"
+    );
+    assert_eq!(
+        session_switch_target(conn, None, "@0", true),
+        Some(landed("@4", "$1")),
+        "no current: the head is the base"
+    );
+
+    let (_rx, mut empty) = scripted_passthrough("pt-resolvers-empty", &[]);
+    assert_eq!(
+        session_switch_target(&mut empty.conn, Some("$0"), "@0", true),
+        None,
+        "empty roster"
+    );
+    assert_eq!(
+        workspace_session(&mut empty.conn, "+1"),
+        WorkspaceLanding::Empty
+    );
 }
 
 /// SEC-208 (d): passthrough tracks bracketed paste over the raw stream —

@@ -16,7 +16,9 @@ use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status::{self, Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::{
-    active_window_row, list_window_ids, next_in_cycle, next_workspace, session_active_window,
+    active_window_row, displayed_session, session_active_window, session_landing,
+    session_switch_target, window_switch_target, workspace_session, workspace_switch_target,
+    WorkspaceLanding,
 };
 use crate::mux::attach::{layout, HelpRow, ManagementKey, CURSOR_HEARTBEAT};
 use crate::mux::layout::PaneChrome;

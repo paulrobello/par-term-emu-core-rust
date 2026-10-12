@@ -4,18 +4,6 @@
 
 use super::*;
 
-/// The daemon's displayed session (the active workspace's active session)
-/// via the bare `switch-client` query; `None` when the daemon predates it
-/// or nothing is displayed.
-pub(super) fn displayed_session(conn: &mut crate::mux::attach::conn::AttachConn) -> Option<String> {
-    let reply = conn.send_checked("switch-client").ok()?;
-    if !reply.ok {
-        return None;
-    }
-    let id = reply.body.first()?.trim();
-    (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
-}
-
 /// Resolve a render target to `(window, one-of-its-panes)`. Pane targets
 /// go through pane-info (its second field is the window); window/session
 /// targets through the targeted list queries; none = the displayed
