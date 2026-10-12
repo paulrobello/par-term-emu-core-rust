@@ -1,7 +1,20 @@
 //! The pane renderer's painting and frame diffing: per-pane grids, dividers,
 //! pane boxes, the modal overlay, layout geometry, and the stdout flush sink.
 
-use super::*;
+use super::{
+    DividerHit, FlushSink, Glyphs, Overlay, PaneChrome, PaneEmulator, PaneRect, PaneRenderer,
+};
+use crate::mux::attach::HelpRow;
+use par_term_emu_core::cell::CellFlags;
+use par_term_emu_core::color::{Color as CoreColor, NamedColor};
+use par_term_emu_core::cursor::CursorStyle;
+use par_term_emu_core::terminal::Terminal;
+use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
+use ratatui::layout::Rect as RtRect;
+use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::io::Write as _;
 
 /// The focused boundary half's highlight (config `border-active-color`,
 /// `#rrggbb`; default the bright-cyan accent), always bold. Dividers

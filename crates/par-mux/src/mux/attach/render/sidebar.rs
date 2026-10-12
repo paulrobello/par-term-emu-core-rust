@@ -1,7 +1,12 @@
 //! The workspace side panel: its strip geometry, painting, row hit-test,
 //! and the toggle/refresh the session drives.
 
-use super::*;
+use super::{PaneRenderer, WindowSession};
+use crate::mux::attach::panels::compose_sidebar;
+use crate::mux::attach::status;
+use crate::mux::attach::targets::parse_workspace_line;
+use ratatui::style::{Modifier as RtModifier, Style as RtStyle};
+
 use crate::mux::attach::panels::{SidebarRow, SidebarRowId, SidebarSection};
 
 impl PaneRenderer {
@@ -53,7 +58,7 @@ impl PaneRenderer {
             return None;
         }
         let sections = self.sidebar_sections.as_ref()?;
-        let lines = super::super::compose_sidebar(sections, w, self.height);
+        let lines = compose_sidebar(sections, w, self.height);
         lines
             .into_iter()
             .find(|line| line.y == frame_y && line.id.is_some() && x >= line.x && x < line.x_end)
@@ -64,7 +69,7 @@ impl PaneRenderer {
     /// fill, a dim divider on the strip's right edge, then the sections —
     /// each header in the accent, its rows dim (the active workspace
     /// accent + bold, herdr's emphasis). Clipped to the strip; composed
-    /// by [`super::super::compose_sidebar`].
+    /// by [`compose_sidebar`].
     pub(super) fn paint_sidebar(&mut self) {
         let w = self.geometry.sidebar_w;
         if w == 0 {
@@ -87,7 +92,7 @@ impl PaneRenderer {
         let Some(sections) = self.sidebar_sections.clone() else {
             return;
         };
-        for line in super::super::compose_sidebar(&sections, w, self.height) {
+        for line in compose_sidebar(&sections, w, self.height) {
             // herdr's active treatment: an active row (the active
             // workspace, or the focused pane's agent row) is a full-width
             // inverted block. The footer chips paint at their own columns
@@ -181,7 +186,7 @@ impl WindowSession {
                     reply
                         .body
                         .iter()
-                        .filter_map(|l| super::super::parse_workspace_line(l))
+                        .filter_map(|l| parse_workspace_line(l))
                         .collect()
                 })
                 .unwrap_or_default()

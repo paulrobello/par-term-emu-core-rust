@@ -11,29 +11,20 @@
 //! caller flushes only those cells, and a whole output flood between two
 //! frames collapses into one diff.
 
-use crate::mux::attach::input::{InputParser, SgrMouse, Token};
+use crate::mux::attach::input::{InputParser, Token};
 use crate::mux::attach::layout::PaneRect;
-use crate::mux::attach::status::{self, Segment, StatusRow};
+use crate::mux::attach::status;
 use crate::mux::attach::tabs::TabStrip;
-use crate::mux::attach::targets::{
-    active_window_row, displayed_session, interactive, session_active_window, session_landing,
-    session_switch_target, window_switch_target, workspace_session, workspace_switch_target,
-    WorkspaceLanding,
-};
-use crate::mux::attach::{layout, HelpRow, ManagementKey, CURSOR_HEARTBEAT};
+use crate::mux::attach::targets::session_active_window;
+use crate::mux::attach::{layout, HelpRow};
 use crate::mux::layout::PaneChrome;
-use par_term_emu_core::cell::CellFlags;
-use par_term_emu_core::color::{Color as CoreColor, NamedColor};
 use par_term_emu_core::cursor::CursorStyle;
-use par_term_emu_core::keyboard::TermKeyEvent;
 use par_term_emu_core::mouse::MouseMode;
 use par_term_emu_core::terminal::Terminal;
 use par_term_emu_core::tmux_control::TmuxNotification;
-use ratatui::buffer::{Buffer, Cell as RtCell, CellDiffOption};
-use ratatui::layout::Rect as RtRect;
-use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
+use ratatui::buffer::{Buffer, Cell as RtCell};
+use ratatui::style::Color as RtColor;
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::sync::mpsc::RecvTimeoutError;
 
@@ -45,7 +36,7 @@ mod renderer;
 mod session;
 mod sidebar;
 
-use renderer::*;
+use renderer::{RenderOptions, StdoutSink};
 
 /// How long a status-row flash stays up.
 const FLASH_LIFETIME: std::time::Duration = std::time::Duration::from_secs(1);
@@ -610,7 +601,7 @@ struct WindowSession {
     /// The window/pane management chords (split % / split " / kill x /
     /// new-window c): the key bytes matched after the prefix. Live
     /// rebindable by the reload.
-    management: super::super::config::Management,
+    management: crate::mux::config::Management,
     /// Cells per resize step (config `resize-step`): each arrow press in
     /// resize mode and each cell of a divider drag.
     resize_step: u32,

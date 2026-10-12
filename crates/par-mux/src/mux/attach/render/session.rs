@@ -2,7 +2,15 @@
 //! cadence, host resize, the status row, the tab strip, and the
 //! config-driven display setters.
 
-use super::*;
+use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, WindowSession};
+use crate::mux::attach::status::{Segment, StatusRow};
+use crate::mux::attach::tabs::TabStrip;
+use crate::mux::attach::targets::{active_window_row, displayed_session, parse_session_line};
+use crate::mux::attach::{layout, status, CURSOR_HEARTBEAT};
+use par_term_emu_core::cursor::CursorStyle;
+use par_term_emu_core::tmux_control::TmuxNotification;
+use ratatui::buffer::Cell as RtCell;
+use ratatui::style::Color as RtColor;
 
 /// Resolve a render target to `(window, one-of-its-panes)`. Pane targets
 /// go through pane-info (its second field is the window); window/session
@@ -27,7 +35,7 @@ pub(super) fn resolve_window_and_pane(
             let newest = sessions
                 .body
                 .iter()
-                .filter_map(|l| super::super::parse_session_line(l).map(|(id, _)| id))
+                .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
                 .filter(|id| id.starts_with('$'))
                 .filter_map(|id| {
                     let n: u64 = id[1..].parse().ok()?;
@@ -118,7 +126,7 @@ impl WindowSession {
     /// that move the chrome call it too, so their same-tick paint reads
     /// the new layout.
     pub(super) fn refresh_geometry(&mut self) {
-        let (cols, rows) = super::super::conn::terminal_grid();
+        let (cols, rows) = crate::mux::attach::conn::terminal_grid();
         self.set_geometry_host(cols, rows);
     }
 

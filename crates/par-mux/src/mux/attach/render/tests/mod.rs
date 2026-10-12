@@ -3,11 +3,20 @@
 
 use super::input_route::*;
 use super::modal::*;
+use super::renderer::{
+    collect_boundaries, group_boundaries, map_color, pane_in_direction, BoundaryCell, PaneDir,
+};
 use super::session::*;
 use super::*;
+use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::{parse_layout, parse_layout_triple};
 use crate::mux::attach::panels::{SidebarRow, SidebarRowId};
+use crate::mux::attach::ManagementKey;
+use par_term_emu_core::color::{Color as CoreColor, NamedColor};
 use par_term_emu_core::keyboard::TermKey;
+use par_term_emu_core::keyboard::TermKeyEvent;
+use ratatui::buffer::CellDiffOption;
+use ratatui::style::Modifier as RtModifier;
 use std::io::BufRead as _;
 
 mod chords;

@@ -2,7 +2,21 @@
 //! workspace pickers, the rename/create prompt, the context menus, resize
 //! mode, and the scroll viewport's keys.
 
-use super::*;
+use super::renderer::{cols_overlap, rows_overlap};
+use super::{
+    HelpState, MenuAction, MenuState, MenuTarget, Modal, PickerState, PromptState, PromptTarget,
+    WindowSession,
+};
+use crate::mux::attach::panels::{
+    compose_help_panel, compose_picker_panel, compose_prompt_panel, help_content, help_rows,
+    help_window_start, next_window_name, next_workspace_name, picker_rows, wire_quote, HelpRow,
+    PickerEntry, PickerRef, HELP_OVERLAY_TITLE, NEW_PROMPT_FOOTER, PICKER_OVERLAY_TITLE,
+    PROMPT_FOOTER, PROMPT_NEW_WINDOW_OVERLAY_TITLE, PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
+    PROMPT_PANE_OVERLAY_TITLE, PROMPT_WINDOW_OVERLAY_TITLE, PROMPT_WORKSPACE_OVERLAY_TITLE,
+    WORKSPACE_PICKER_OVERLAY_TITLE,
+};
+use crate::mux::attach::targets::{active_window_row, parse_session_line, parse_workspace_line};
+use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The context menus' footer controls line.
 pub(super) const MENU_FOOTER: &str = " action click · close esc/q ";
@@ -16,7 +30,7 @@ pub(super) const COMMAND_MENU_HEADER: &str = "commands";
 
 /// Compose the context menu's overlay panel for `target`: the target's
 /// name as the accent header, one row per action, the footer controls
-/// line — [`super::super::compose_prompt_panel`]'s row/footer shape. Returns
+/// line — [`compose_prompt_panel`]'s row/footer shape. Returns
 /// the panel rows AND the action per row (`None` for the header and
 /// footer) — the click dispatch's pure mapping, so what a click
 /// highlights is exactly what painted there.
@@ -116,7 +130,7 @@ impl WindowSession {
             return;
         };
         let (filter, filtering, scroll) = (help.filter.clone(), help.filtering, help.scroll);
-        let rows = super::super::help_rows(
+        let rows = help_rows(
             self.prefix,
             self.reload_key,
             self.management,
@@ -134,11 +148,11 @@ impl WindowSession {
                 .saturating_sub(3 + filter_lines as u16),
         )
         .max(1);
-        let content_len = super::super::help_content(&rows, &filter).len();
-        let start = super::super::help_window_start(content_len, visible, scroll);
-        let lines = super::super::compose_help_panel(&rows, &filter, filtering, visible, scroll);
+        let content_len = help_content(&rows, &filter).len();
+        let start = help_window_start(content_len, visible, scroll);
+        let lines = compose_help_panel(&rows, &filter, filtering, visible, scroll);
         self.renderer.set_overlay(Some((
-            super::super::HELP_OVERLAY_TITLE,
+            HELP_OVERLAY_TITLE,
             lines,
             Some((start, visible, content_len)),
         )));
@@ -240,9 +254,9 @@ impl WindowSession {
         let Ok(Some(reply)) = self.ask(conn, "list-sessions") else {
             return;
         };
-        let mut entries: Vec<super::super::PickerEntry> = Vec::new();
+        let mut entries: Vec<PickerEntry> = Vec::new();
         for line in &reply.body {
-            let Some((sid, name)) = super::super::parse_session_line(line) else {
+            let Some((sid, name)) = parse_session_line(line) else {
                 continue;
             };
             let mut windows: Vec<(String, String)> = Vec::new();
@@ -268,7 +282,7 @@ impl WindowSession {
                 }
             }
             let current = self.status.session_id.as_deref() == Some(sid.as_str());
-            entries.push(super::super::PickerEntry {
+            entries.push(PickerEntry {
                 session_id: sid,
                 session_name: name,
                 windows,
@@ -281,10 +295,10 @@ impl WindowSession {
         }
         // The selection opens on the current session\'s header row (or the
         // first row when the view\'s session is unknown to the roster).
-        let (_rows, refs) = super::super::picker_rows(&entries, Some(&self.window));
+        let (_rows, refs) = picker_rows(&entries, Some(&self.window));
         let selected = refs
             .iter()
-            .position(|r| matches!(r, super::super::PickerRef::Session(i) if entries[*i].current))
+            .position(|r| matches!(r, PickerRef::Session(i) if entries[*i].current))
             .unwrap_or(0);
         self.open_modal(Modal::Picker(PickerState {
             entries,
@@ -306,7 +320,7 @@ impl WindowSession {
         let workspaces: Vec<(String, String, bool)> = reply
             .body
             .iter()
-            .filter_map(|l| super::super::parse_workspace_line(l))
+            .filter_map(|l| parse_workspace_line(l))
             .collect();
         if workspaces.is_empty() {
             return;
@@ -343,7 +357,7 @@ impl WindowSession {
                 .find(|(wid, _)| wid == id)
                 .map(|(_, name)| name.clone())
                 .unwrap_or_default(),
-            PromptTarget::NewWindow => super::super::next_window_name(self.status.windows()),
+            PromptTarget::NewWindow => next_window_name(self.status.windows()),
             PromptTarget::Workspace(id) => self
                 .status
                 .workspaces()
@@ -351,9 +365,7 @@ impl WindowSession {
                 .find(|(wsid, _)| wsid == id)
                 .map(|(_, name)| name.clone())
                 .unwrap_or_default(),
-            PromptTarget::NewWorkspace => {
-                super::super::next_workspace_name(self.status.workspaces())
-            }
+            PromptTarget::NewWorkspace => next_workspace_name(self.status.workspaces()),
         };
         self.open_modal(Modal::Prompt(PromptState { text: seed, target }));
         self.refresh_prompt();
@@ -523,7 +535,7 @@ impl WindowSession {
                     reply
                         .body
                         .iter()
-                        .filter_map(|l| super::super::parse_session_line(l))
+                        .filter_map(|l| parse_session_line(l))
                         .any(|(sid, _)| sid == session)
                 })
             }
@@ -545,7 +557,7 @@ impl WindowSession {
         let survivor = reply
             .body
             .iter()
-            .filter_map(|l| super::super::parse_workspace_line(l))
+            .filter_map(|l| parse_workspace_line(l))
             .map(|(id, _, _)| id)
             .next();
         let Some(survivor) = survivor else {
@@ -569,19 +581,19 @@ impl WindowSession {
             return;
         };
         let title = match &prompt.target {
-            PromptTarget::Pane => super::super::PROMPT_PANE_OVERLAY_TITLE,
-            PromptTarget::Window(_) => super::super::PROMPT_WINDOW_OVERLAY_TITLE,
-            PromptTarget::NewWindow => super::super::PROMPT_NEW_WINDOW_OVERLAY_TITLE,
-            PromptTarget::Workspace(_) => super::super::PROMPT_WORKSPACE_OVERLAY_TITLE,
-            PromptTarget::NewWorkspace => super::super::PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
+            PromptTarget::Pane => PROMPT_PANE_OVERLAY_TITLE,
+            PromptTarget::Window(_) => PROMPT_WINDOW_OVERLAY_TITLE,
+            PromptTarget::NewWindow => PROMPT_NEW_WINDOW_OVERLAY_TITLE,
+            PromptTarget::Workspace(_) => PROMPT_WORKSPACE_OVERLAY_TITLE,
+            PromptTarget::NewWorkspace => PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
         };
         let footer = match prompt.target {
-            PromptTarget::NewWindow | PromptTarget::NewWorkspace => super::super::NEW_PROMPT_FOOTER,
-            _ => super::super::PROMPT_FOOTER,
+            PromptTarget::NewWindow | PromptTarget::NewWorkspace => NEW_PROMPT_FOOTER,
+            _ => PROMPT_FOOTER,
         };
         self.renderer.set_overlay(Some((
             title,
-            super::super::compose_prompt_panel(&prompt.text, footer),
+            compose_prompt_panel(&prompt.text, footer),
             None,
         )));
     }
@@ -669,7 +681,7 @@ impl WindowSession {
                 let command = format!(
                     "select-pane -t {} -T {}",
                     self.focused_pane(),
-                    super::super::wire_quote(&text)
+                    wire_quote(&text)
                 );
                 let _ = self.ask(conn, &command);
                 self.leave_prompt();
@@ -687,10 +699,7 @@ impl WindowSession {
             PromptTarget::Workspace(id) => {
                 let _ = self.ask(
                     conn,
-                    &format!(
-                        "rename-workspace -t {id} {}",
-                        super::super::wire_quote(&text)
-                    ),
+                    &format!("rename-workspace -t {id} {}", wire_quote(&text)),
                 );
                 self.leave_prompt();
                 self.status_dirty = true;
@@ -702,10 +711,7 @@ impl WindowSession {
                 };
                 let created = self.ask(
                     conn,
-                    &format!(
-                        "new-window -t {session} -n {}",
-                        super::super::wire_quote(&text)
-                    ),
+                    &format!("new-window -t {session} -n {}", wire_quote(&text)),
                 );
                 self.leave_prompt();
                 let Ok(Some(reply)) = created else {
@@ -716,10 +722,7 @@ impl WindowSession {
                 }
             }
             PromptTarget::NewWorkspace => {
-                let created = self.ask(
-                    conn,
-                    &format!("new-workspace -n {}", super::super::wire_quote(&text)),
-                );
+                let created = self.ask(conn, &format!("new-workspace -n {}", wire_quote(&text)));
                 self.leave_prompt();
                 let Ok(Some(reply)) = created else {
                     return;
@@ -748,9 +751,9 @@ impl WindowSession {
             self.refresh_ws_picker();
             return;
         }
-        let (rows, refs) = super::super::picker_rows(&picker.entries, Some(&self.window));
+        let (rows, refs) = picker_rows(&picker.entries, Some(&self.window));
         let visible = self.picker_visible();
-        let (lines, filtered_refs, start) = super::super::compose_picker_panel(
+        let (lines, filtered_refs, start) = compose_picker_panel(
             &rows,
             &refs,
             &picker.filter,
@@ -761,7 +764,7 @@ impl WindowSession {
         );
         self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer
-            .set_overlay(Some((super::super::PICKER_OVERLAY_TITLE, lines, None)));
+            .set_overlay(Some((PICKER_OVERLAY_TITLE, lines, None)));
     }
 
     /// The picker's visible content-row count (the same window the
@@ -808,7 +811,7 @@ impl WindowSession {
         let Some(item) = picker.refs.get(idx).copied() else {
             return;
         };
-        let super::super::PickerRef::Workspace(index) = item else {
+        let PickerRef::Workspace(index) = item else {
             return self.ws_picker_activate(conn, item);
         };
         let Some(workspaces) = picker.workspaces.clone() else {
@@ -828,11 +831,11 @@ impl WindowSession {
     pub(super) fn ws_picker_activate(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
-        item: super::super::PickerRef,
+        item: PickerRef,
     ) {
         let entry_index = match item {
-            super::super::PickerRef::Session(i) | super::super::PickerRef::Window(i, _) => i,
-            super::super::PickerRef::Workspace(_) => return,
+            PickerRef::Session(i) | PickerRef::Window(i, _) => i,
+            PickerRef::Workspace(_) => return,
         };
         let Modal::Picker(picker) = &self.modal else {
             return;
@@ -840,12 +843,12 @@ impl WindowSession {
         let entry = &picker.entries[entry_index];
         let window = match item {
             // Unreachable: ws_picker_activate returned early on Workspace.
-            super::super::PickerRef::Workspace(_) => None,
-            super::super::PickerRef::Session(_) => entry
+            PickerRef::Workspace(_) => None,
+            PickerRef::Session(_) => entry
                 .active_window
                 .clone()
                 .or_else(|| entry.windows.first().map(|(id, _)| id.clone())),
-            super::super::PickerRef::Window(_, w) => entry.windows.get(w).map(|(id, _)| id.clone()),
+            PickerRef::Window(_, w) => entry.windows.get(w).map(|(id, _)| id.clone()),
         };
         let Some(window) = window else {
             // A session with no windows: nothing to land on; dismiss.
@@ -866,20 +869,20 @@ impl WindowSession {
         let Some(workspaces) = &picker.workspaces else {
             return;
         };
-        let mut rows: Vec<super::super::HelpRow> = Vec::new();
-        let mut refs: Vec<super::super::PickerRef> = Vec::new();
+        let mut rows: Vec<HelpRow> = Vec::new();
+        let mut refs: Vec<PickerRef> = Vec::new();
         for (i, (id, name, active)) in workspaces.iter().enumerate() {
             let marker = if *active { ">" } else { " " };
             let star = if *active { " *" } else { "" };
-            rows.push(super::super::HelpRow {
+            rows.push(HelpRow {
                 text: format!(" {marker}{id}  {name}{star}"),
                 accent: false,
                 footer: false,
             });
-            refs.push(super::super::PickerRef::Workspace(i));
+            refs.push(PickerRef::Workspace(i));
         }
         let visible = self.picker_visible();
-        let (lines, filtered_refs, start) = super::super::compose_picker_panel(
+        let (lines, filtered_refs, start) = compose_picker_panel(
             &rows,
             &refs,
             &picker.filter,
@@ -889,11 +892,8 @@ impl WindowSession {
             picker.start,
         );
         self.store_picker_compose(filtered_refs, start, lines.len());
-        self.renderer.set_overlay(Some((
-            super::super::WORKSPACE_PICKER_OVERLAY_TITLE,
-            lines,
-            None,
-        )));
+        self.renderer
+            .set_overlay(Some((WORKSPACE_PICKER_OVERLAY_TITLE, lines, None)));
     }
 
     /// One key while the picker is up: the same modal-key shape the help
@@ -985,12 +985,7 @@ impl WindowSession {
     /// Record a picker compose's results on the open picker: the
     /// filtered refs (the selection/click map), the panned window start,
     /// and the panel length (the click hit-test's footer boundary).
-    fn store_picker_compose(
-        &mut self,
-        refs: Vec<super::super::PickerRef>,
-        start: usize,
-        len: usize,
-    ) {
+    fn store_picker_compose(&mut self, refs: Vec<PickerRef>, start: usize, len: usize) {
         if let Modal::Picker(picker) = &mut self.modal {
             picker.refs = refs;
             picker.start = start;

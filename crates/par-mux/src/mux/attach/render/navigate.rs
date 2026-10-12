@@ -1,7 +1,12 @@
 //! Navigation: the management chords and the window, session, and
 //! workspace switches, each landing through the select+resync contract.
 
-use super::*;
+use super::{Glyphs, Modal, PromptTarget, WindowSession};
+use crate::mux::attach::targets::{
+    interactive, marked_pane, session_landing, session_switch_target, window_switch_target,
+    workspace_session, workspace_switch_target, WorkspaceLanding,
+};
+use crate::mux::attach::{layout, status, ManagementKey};
 
 /// A user-initiated command outlived [`INTERACTIVE_TIMEOUT`]: the view
 /// already flashed "daemon busy", and the chain it belonged to stops here.
@@ -50,13 +55,13 @@ impl WindowSession {
     /// on the window's survivor, new-window re-seeds the fresh window.
     pub(super) fn management_chord(
         &mut self,
-        key: super::super::ManagementKey,
+        key: ManagementKey,
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) {
         let focused = self.focused_pane();
         match key {
-            super::super::ManagementKey::SplitRight | super::super::ManagementKey::SplitDown => {
-                let flag = if matches!(key, super::super::ManagementKey::SplitRight) {
+            ManagementKey::SplitRight | ManagementKey::SplitDown => {
+                let flag = if matches!(key, ManagementKey::SplitRight) {
                     " -h"
                 } else {
                     ""
@@ -82,7 +87,7 @@ impl WindowSession {
                     let _ = self.ask(conn, &format!("select-pane -t %{new_pane}"));
                 }
             }
-            super::super::ManagementKey::KillPane => {
+            ManagementKey::KillPane => {
                 let Ok(Some(_)) = self.ask(conn, &format!("kill-pane -t {focused}")) else {
                     return;
                 };
@@ -95,8 +100,7 @@ impl WindowSession {
                 let Ok(listed) = self.ask(conn, &format!("list-panes -t {window}")) else {
                     return;
                 };
-                let survivor =
-                    listed.and_then(|reply| super::super::marked_pane(&reply.body, &window).ok());
+                let survivor = listed.and_then(|reply| marked_pane(&reply.body, &window).ok());
                 if let Some(pane) = survivor {
                     self.reseed_window(conn, &window);
                     if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
@@ -112,7 +116,7 @@ impl WindowSession {
                 // normal path decide.
                 self.status_dirty = true;
             }
-            super::super::ManagementKey::SwapPrev | super::super::ManagementKey::SwapNext => {
+            ManagementKey::SwapPrev | ManagementKey::SwapNext => {
                 // Swap with the layout-order neighbor; the %layout-change
                 // broadcast the swap queues re-seeds the window through
                 // the pump's parked-layout path (PendingWork). Fewer than two panes is
@@ -128,7 +132,7 @@ impl WindowSession {
                 else {
                     return;
                 };
-                let dir = if matches!(key, super::super::ManagementKey::SwapPrev) {
+                let dir = if matches!(key, ManagementKey::SwapPrev) {
                     -1
                 } else {
                     1
@@ -137,7 +141,7 @@ impl WindowSession {
                 let focused = self.focused_pane();
                 let _ = self.ask(conn, &format!("swap-pane -s {focused} -t %{next}"));
             }
-            super::super::ManagementKey::NewWindow => {
+            ManagementKey::NewWindow => {
                 let Some(session) = self.status.session_id.clone() else {
                     return;
                 };
@@ -149,16 +153,15 @@ impl WindowSession {
                 };
                 self.land_window(conn, &window);
             }
-            super::super::ManagementKey::WorkspaceNext
-            | super::super::ManagementKey::WorkspacePrev => {
-                let direction = if matches!(key, super::super::ManagementKey::WorkspaceNext) {
+            ManagementKey::WorkspaceNext | ManagementKey::WorkspacePrev => {
+                let direction = if matches!(key, ManagementKey::WorkspaceNext) {
                     1
                 } else {
                     -1
                 };
                 self.switch_workspace(conn, direction);
             }
-            super::super::ManagementKey::Zoom => {
+            ManagementKey::Zoom => {
                 // tmux's zoom: the daemon's `resize-pane -Z` toggle. The
                 // daemon re-lays the window to the single pane full-grid
                 // (children resize), selects away unzooms, and any layout
@@ -173,14 +176,14 @@ impl WindowSession {
                 self.flash = Some(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
                 self.draw_status_row();
             }
-            super::super::ManagementKey::RenameWindow | super::super::ManagementKey::RenamePane => {
-                self.enter_prompt(if matches!(key, super::super::ManagementKey::RenamePane) {
+            ManagementKey::RenameWindow | ManagementKey::RenamePane => {
+                self.enter_prompt(if matches!(key, ManagementKey::RenamePane) {
                     PromptTarget::Pane
                 } else {
                     PromptTarget::Window(self.window.clone())
                 });
             }
-            super::super::ManagementKey::StatusBar => {
+            ManagementKey::StatusBar => {
                 self.status_bar_on = !self.status_bar_on;
                 self.chrome_geometry_changed();
                 // No flash cue: the flash paints ON the status row, so a
@@ -191,7 +194,7 @@ impl WindowSession {
                 self.pending.grid_refit = true;
                 self.draw_status_row();
             }
-            super::super::ManagementKey::BorderCycle => {
+            ManagementKey::BorderCycle => {
                 let glyphs = self.render_opts.glyphs.next();
                 self.set_glyphs(glyphs);
                 // herdr style: every pane draws its own complete box, not
@@ -204,13 +207,13 @@ impl WindowSession {
                 self.flash = Some(format!("border style: {}", glyphs.name()));
                 self.draw_status_row();
             }
-            super::super::ManagementKey::WorkspacePicker => {
+            ManagementKey::WorkspacePicker => {
                 self.enter_ws_picker(conn);
             }
-            super::super::ManagementKey::Sidebar => {
+            ManagementKey::Sidebar => {
                 self.toggle_sidebar(conn);
             }
-            super::super::ManagementKey::Labels => {
+            ManagementKey::Labels => {
                 // Toggle each pane's title in its border: the session's
                 // bool flips, the flash cue confirms the new state, and
                 // the next frame repaints the borders.

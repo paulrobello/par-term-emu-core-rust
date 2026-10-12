@@ -1,7 +1,12 @@
 //! Input routing: plain-byte runs through the prefix scanner and the
 //! modal owners, and mouse reports through the overlay hit-testers.
 
-use super::*;
+use super::renderer::{pane_in_direction, PaneDir};
+use super::{DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, WindowSession};
+use crate::mux::attach::input::SgrMouse;
+use crate::mux::attach::layout::PaneRect;
+use crate::mux::attach::{forward_chunked, ManagementKey};
+use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// What one host mouse report hits — the pure result of
 /// [`WindowSession::mouse_hit`], which [`WindowSession::route_mouse`]
@@ -150,7 +155,7 @@ impl WindowSession {
             if let Some(id) = self.renderer.focused() {
                 self.renderer.snap_to_live(id);
             }
-            super::super::forward_chunked(conn, self.focused_pane(), &to_send);
+            forward_chunked(conn, self.focused_pane(), &to_send);
         }
         false
     }
@@ -188,7 +193,7 @@ impl WindowSession {
             return;
         }
         self.renderer.snap_to_live(id);
-        super::super::forward_chunked(conn, self.focused_pane(), &bytes);
+        forward_chunked(conn, self.focused_pane(), &bytes);
     }
 
     /// Hand a plain run to the modal that owns the keyboard, if one is
@@ -318,7 +323,7 @@ impl WindowSession {
             .map(|term| par_term_emu_core::keyboard::encode_key(ev, term))
             .unwrap_or_default();
         if !bytes.is_empty() && !focused.is_empty() {
-            super::super::forward_chunked(conn, focused, &bytes);
+            forward_chunked(conn, focused, &bytes);
         }
     }
 
@@ -854,6 +859,6 @@ impl WindowSession {
             .saturating_sub(rect.y + inset_y)
             .min(view_h.saturating_sub(1));
         let bytes = mouse.reencode_sgr(rel_col, rel_row);
-        super::super::forward_chunked(conn, format!("%{}", rect.pane), &bytes);
+        forward_chunked(conn, format!("%{}", rect.pane), &bytes);
     }
 }
