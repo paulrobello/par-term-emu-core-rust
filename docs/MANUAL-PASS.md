@@ -45,7 +45,8 @@ Per terminal, in passthrough then render mode, check:
   keys reach the pane afterwards. Passthrough — wheel reaches the pane.
 - **Status bar** (render): `$0:demo`, the herdr-shaded tab strip — the active
   workspace/window a solid block, the rest dim with `|` separators — the
-  focused pane's title, agent chips when an agent is rostered.
+  focused pane's title. The agent roster no longer rides the bar: it lives
+  in the side panel's agents section (next bullet).
 - **Zoom** (render): prefix `z` zooms the focused pane to the full window —
   the pane's prompt re-lays-out at the full width (the child resized), the
   status row carries a bold ` Z ` cue; prefix `z` again restores the split,
@@ -78,15 +79,17 @@ Per terminal, in passthrough then render mode, check:
   click activates, esc/q dismisses.
 - **Side panel** (render): the strip is up at attach by default
   (`[client] sidebar-on-launch = false` starts it hidden), so the first
-  prefix `s` closes it. Prefix `s` toggles a left strip — each workspace
-  with its windows nested dim beneath, ONLY the active workspace a
-  full-width inverted block (the shown window's row brightens); clicking a
-  workspace row lands on it, clicking a nested window row selects that
-  window, and panes re-divide narrower around the strip with the vacated
-  region fully erased (toggling off restores). While up, the top row shows
-  the active workspace's label + the tabs. Rename a window or switch
-  workspaces from another terminal and the strip's rows follow on the next
-  refresh.
+  prefix `s` closes it. Prefix `s` toggles a left strip — one flat
+  workspace row each (ONLY the active one a full-width inverted block),
+  then the agents section: one `{workspace} · {agent} ({state})` row per
+  rostered agent, grouped by workspace name, the focused pane's row
+  inverted; clicking a workspace row lands on it, clicking an agent row
+  focuses that pane (a same-window click just moves focus). Panes
+  re-divide narrower around the strip with the vacated region fully
+  erased (toggling off restores). While up, the top row shows the active
+  workspace's label + the tabs. Rename a window, switch workspaces, or
+  churn an agent from another terminal and the strip's rows follow on the
+  next refresh.
 - **Detach cleanliness**: prefix `d` in both modes; the prompt returns intact,
   colors and cursor normal, no leftover alt-screen or hidden cursor.
 - **SSH**: from another machine, `ssh <host>` then run the same attach

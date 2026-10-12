@@ -29,6 +29,7 @@ One entry point for the most common build, test, streaming, and par-mux failures
   - [par-mux attach starts a daemon instead of attaching](#par-mux-attach-starts-a-daemon-instead-of-attaching)
   - [Cannot start a daemon named attach](#cannot-start-a-daemon-named-attach)
   - [Terminal stays in the alternate screen after a crash](#terminal-stays-in-the-alternate-screen-after-a-crash)
+  - [The pane cursor disappears in render mode](#the-pane-cursor-disappears-in-render-mode)
 - [Related Documentation](#related-documentation)
 
 ## Build and Install
@@ -213,6 +214,26 @@ From 0.58.1, the GitHub release archives are built with `attach`. See [MUX.md](M
 **Cause:** the `attach` subcommand name shadows the daemon NAME form, so `par-mux attach` runs the attach client instead of serving a daemon named `attach`.
 
 **Fix:** start it with an explicit socket — `par-mux --socket <path>` — and attach with either spelling: `par-mux attach attach` still reaches it by NAME, or `par-mux attach --socket <path>` takes the socket directly.
+
+### The pane cursor disappears in render mode
+
+**Symptom:** a full-screen pane app (joe, for example) runs in a render-mode
+attach and the host cursor is not visible at the app's editing position,
+while the pane content itself paints correctly.
+
+**Cause:** the client places the host cursor from its tracked belief of
+every pane's cursor state. Every writer of a cursor hide/show is
+belief-consistent, but a host terminal that lost the cursor state outside
+those writers (a race the soaks could never pin) stayed lost: the guards
+only re-emit on a state change, and an idle app never changes one.
+
+**Fix:** main `0d26830` adds a heartbeat — `WindowSession::frame()`
+re-asserts the placement at least once per second while a pane cursor is
+shown, so any desync self-heals without output. If a cursor vanishes on a
+build carrying the heartbeat, run the attach client with
+`PAR_MUX_CURSOR_TRACE=1`: every placement write and every reason the
+tracked cursor is unplaceable (view scrolled, DECTCEM hide, out-of-bounds
+cell) lands on stderr and names the hider.
 
 ### Terminal stays in the alternate screen after a crash
 
