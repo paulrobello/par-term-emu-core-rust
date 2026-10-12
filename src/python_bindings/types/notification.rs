@@ -422,7 +422,7 @@ mod tests {
         "client-attached | None | None | None | None | None | None | Some(\"c-attached\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "client-left | None | None | Some(\"w-client-left\") | Some(\"s-client-left\") | None | None | Some(\"c-left\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "exit | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "agent-state-changed | Some(\"hook\") | Some(\"p-agent-state\") | None | None | Some(\"agent-state\") | None | None | None | None | None | None | None | None | Some(\"working\") | None | None | None | Some(\"+1\")\n",
+        "agent-state-changed | Some(\"hook\") | Some(\"p-agent-state\") | None | None | Some(\"agent-state\") | None | None | None | None | None | None | None | None | Some(\"working\") | None | None | None | None | Some(\"+1\")\n",
         "agent-released | None | Some(\"p-agent-released\") | None | None | Some(\"agent-released\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "agent-telemetry-changed | None | Some(\"p-agent-telemetry\") | None | None | Some(\"agent-telemetry\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "pane-title-changed | None | Some(\"p-title\") | None | None | Some(\"pane-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
