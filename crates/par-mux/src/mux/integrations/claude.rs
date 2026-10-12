@@ -196,7 +196,7 @@ pub fn uninstall_claude_hook_into(
     })
 }
 
-/// Whether claude's settings carry par-term's SessionStart entry (read-only).
+/// Whether claude's settings carry par-mux's SessionStart entry (read-only).
 pub(crate) fn claude_hook_installed() -> bool {
     let Ok(settings_path) = claude_settings_path() else {
         return false;

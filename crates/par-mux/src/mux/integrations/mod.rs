@@ -4,7 +4,7 @@
 //! drops a file in). claude, codex and grok have no extension directory: their
 //! hooks are ENTRIES inside config files the user owns and edits, so
 //! installing means MERGING into those files without disturbing anything
-//! par-term did not add — the user's entries, comments, and formatting
+//! par-mux did not add — the user's entries, comments, and formatting
 //! survive, proven by round-trip tests in the arm modules.
 //!
 //! Merge discipline (herdr's claude integration is the proven precedent):
@@ -61,11 +61,11 @@ pub use grok::{
     uninstall_grok_hook_into, GrokHookInstall, GrokHookUninstall, GROK_HOOK_MARKER,
 };
 
-/// Startup self-heal for the agent-hook script assets under par-term's own
+/// Startup self-heal for the agent-hook script assets under par-mux's own
 /// config directory: rewrite a script whose registration in the agent's
 /// config survived it. That directory has twice been deleted externally
 /// while the settings entries lived on, leaving every agent session start
-/// running a missing script. Best-effort, and only par-term's own assets
+/// running a missing script. Best-effort, and only par-mux's own assets
 /// are ever written — the agents' config files are never touched.
 pub fn heal_hook_assets() {
     claude::heal_claude_hook_asset();

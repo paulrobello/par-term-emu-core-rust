@@ -361,11 +361,7 @@ pub fn heal_codex_hook_asset() {
     }
 }
 
-/// Heal with explicit paths (test seam). `Ok(())` in every skip case:
-/// script present, agent not installed, or our entry not registered. A
-/// malformed hooks.json surfaces as an error with nothing written. Neither
-/// hooks.json nor config.toml is ever touched.
-/// Whether codex's hooks.json carries par-term's SessionStart entry
+/// Whether codex's hooks.json carries par-mux's SessionStart entry
 /// (read-only).
 pub(crate) fn codex_hook_installed() -> bool {
     let Ok(codex_dir) = codex_config_dir() else {
@@ -382,6 +378,10 @@ pub(crate) fn codex_hook_installed() -> bool {
     has_command(&content, &hooks_path, &command, "SessionStart").unwrap_or(false)
 }
 
+/// Heal with explicit paths (test seam). `Ok(())` in every skip case:
+/// script present, agent not installed, or our entry not registered. A
+/// malformed hooks.json surfaces as an error with nothing written. Neither
+/// hooks.json nor config.toml is ever touched.
 pub(crate) fn heal_codex_hook_asset_into(codex_dir: &Path, hook_path: &Path) -> io::Result<()> {
     if hook_path.exists() {
         return Ok(());

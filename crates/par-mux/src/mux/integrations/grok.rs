@@ -1,4 +1,4 @@
-//! grok arm: grok merges every `<config>/hooks/*.json` it finds, so par-term
+//! grok arm: grok merges every `<config>/hooks/*.json` it finds, so par-mux
 //! owns a dedicated config file beside its script and never touches a user
 //! file (herdr's proven model, ported).
 
@@ -86,7 +86,7 @@ pub fn install_grok_hook_into(dir: &Path) -> io::Result<GrokHookInstall> {
             dir.display()
         )));
     }
-    // grok merges every <config>/hooks/*.json, so par-term owns a dedicated
+    // grok merges every <config>/hooks/*.json, so par-mux owns a dedicated
     // config file there and never edits the user's other hooks (herdr's
     // proven model). The hook script and its config live side by side.
     let hooks_dir = dir.join("hooks");
@@ -101,7 +101,7 @@ pub fn install_grok_hook_into(dir: &Path) -> io::Result<GrokHookInstall> {
     })
 }
 
-/// Whether par-term's grok hook config file is present (read-only).
+/// Whether par-mux's grok hook config file is present (read-only).
 pub(crate) fn grok_hook_installed() -> bool {
     grok_config_dir().is_ok_and(|dir| {
         dir.join("hooks")
