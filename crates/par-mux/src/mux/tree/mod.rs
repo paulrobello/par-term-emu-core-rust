@@ -776,6 +776,16 @@ impl MuxTree {
         self.session_workspace.get(&session).copied()
     }
 
+    /// The workspace owning `pane` (pane → window → session → workspace).
+    /// The same `session_workspace` map `roster_rows` reads, so a
+    /// `%agent-state-changed` push and `list-agents` cannot disagree
+    /// (ENH-061).
+    pub fn workspace_of_pane(&self, pane: PaneId) -> Option<WorkspaceId> {
+        let window = self.window_of_pane(pane)?;
+        let session = self.session_of_window(window)?;
+        self.workspace_of_session(session)
+    }
+
     /// The active session of the daemon's active workspace, if any.
     pub fn active_session(&self) -> Option<SessionId> {
         let workspace = self.active_workspace()?;

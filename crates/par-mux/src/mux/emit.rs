@@ -120,15 +120,20 @@ pub fn emit(notification: &TmuxNotification) -> String {
             agent,
             state,
             source,
+            ws,
         } => {
             // The source token rides only when set, so a hand-constructed
             // notification with no provenance emits the Phase 5 line shape
-            // unchanged.
-            let tail = if source.is_empty() {
-                String::new()
-            } else {
-                format!(" source={source}")
-            };
+            // unchanged. ws comes after source: a pre-ENH-061 parser then
+            // drops the line (empty source) rather than accepting `ws=` as
+            // part of a hook-attributed state.
+            let mut tail = String::new();
+            if !source.is_empty() {
+                tail.push_str(&format!(" source={source}"));
+            }
+            if !ws.is_empty() {
+                tail.push_str(&format!(" ws={ws}"));
+            }
             format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
         }
         // No provenance token by construction: a release can only come from
@@ -635,6 +640,7 @@ mod tests {
             agent: "kimi".to_string(),
             state: "working".to_string(),
             source: "hook".to_string(),
+            ws: "+1".to_string(),
         };
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
@@ -654,12 +660,14 @@ mod tests {
                 agent,
                 state,
                 source,
+                ws,
             }] => {
                 assert_eq!(
                     (pane_id.as_str(), agent.as_str(), state.as_str()),
                     ("%4", "claude", "blocked")
                 );
                 assert!(source.is_empty(), "no source token on the wire");
+                assert!(ws.is_empty(), "no ws token on the wire either");
             }
             other => panic!("unexpected parse: {other:?}"),
         }

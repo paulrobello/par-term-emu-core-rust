@@ -215,10 +215,18 @@ impl AgentRow {
 #[cfg(any(test, fuzzing))]
 pub fn assert_round_trip(line: &str) {
     if let Some(row) = WindowRow::parse(line) {
-        assert_eq!(WindowRow::parse(&row.to_string()), Some(row), "window: {line:?}");
+        assert_eq!(
+            WindowRow::parse(&row.to_string()),
+            Some(row),
+            "window: {line:?}"
+        );
     }
     if let Some(row) = SessionRow::parse(line) {
-        assert_eq!(SessionRow::parse(&row.to_string()), Some(row), "session: {line:?}");
+        assert_eq!(
+            SessionRow::parse(&row.to_string()),
+            Some(row),
+            "session: {line:?}"
+        );
     }
     if let Some(row) = WorkspaceRow::parse(line) {
         assert_eq!(
@@ -232,7 +240,11 @@ pub fn assert_round_trip(line: &str) {
             row.extras.iter().all(|(k, _)| !k.contains('=')),
             "agent key kept '=': {line:?}"
         );
-        assert_eq!(AgentRow::parse(&row.to_string()), Some(row), "agent: {line:?}");
+        assert_eq!(
+            AgentRow::parse(&row.to_string()),
+            Some(row),
+            "agent: {line:?}"
+        );
     }
 }
 

@@ -465,11 +465,19 @@ impl StatusState {
 
     /// Patch one pane's roster entry from a notification payload:
     /// `Some(state)` upserts it (`%agent-state-changed`), `None` removes
-    /// it (`%agent-released`). The roster stays in pane-id order.
+    /// it (`%agent-released`). `ws` is the payload's owning-workspace
+    /// token (`%agent-state-changed`'s `ws=`, ENH-061); empty from a
+    /// pre-ENH-061 daemon. The roster stays in pane-id order.
     /// Returns `true` when the patch inserted a row the payload could not
-    /// place in a workspace (`%agent-state-changed` carries no `ws=`): the
-    /// caller marks the status stale so the next throttled refresh fills it.
-    pub(crate) fn patch_agent(&mut self, pane: &str, agent: &str, state: Option<&str>) -> bool {
+    /// place in a workspace (no `ws=` token): the caller marks the status
+    /// stale so the next throttled refresh fills it.
+    pub(crate) fn patch_agent(
+        &mut self,
+        pane: &str,
+        agent: &str,
+        state: Option<&str>,
+        ws: &str,
+    ) -> bool {
         let Some(pane) = pane_number(pane) else {
             return false;
         };
@@ -479,6 +487,9 @@ impl StatusState {
                     let entry = &mut self.agents[index];
                     entry.agent = agent.to_string();
                     entry.state = state.to_string();
+                    if !ws.is_empty() {
+                        entry.workspace = Some(ws.to_string());
+                    }
                     false
                 }
                 Err(index) => {
@@ -488,10 +499,10 @@ impl StatusState {
                             pane,
                             agent: agent.to_string(),
                             state: state.to_string(),
-                            workspace: None,
+                            workspace: (!ws.is_empty()).then(|| ws.to_string()),
                         },
                     );
-                    true
+                    ws.is_empty()
                 }
             },
             None => {
@@ -897,8 +908,11 @@ mod tests {
     #[test]
     fn payload_patches_update_agents_and_window_names() {
         let mut got = state();
-        assert!(!got.patch_agent("%2", "kimi", Some("working")), "update");
-        assert!(got.patch_agent("%0", "pi", Some("blocked")), "insert");
+        assert!(
+            !got.patch_agent("%2", "kimi", Some("working"), ""),
+            "update"
+        );
+        assert!(got.patch_agent("%0", "pi", Some("blocked"), "+1"), "insert");
         assert_eq!(
             got.agents,
             vec![
@@ -907,7 +921,7 @@ mod tests {
                 entry(2, "kimi", "working"),
             ]
         );
-        assert!(!got.patch_agent("%1", "claude", None), "release");
+        assert!(!got.patch_agent("%1", "claude", None, ""), "release");
         assert!(got.agents.iter().all(|e| e.pane != 1));
         got.patch_window_name("@1", "  edit  me ");
         assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));

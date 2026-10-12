@@ -58,6 +58,13 @@ pub(super) fn handle_state_report(
 
     let notification = {
         let mut guard = tree.lock();
+        // The owning workspace for the push, read before the pane_mut
+        // borrow; the same map roster_rows reads, so push and list-agents
+        // agree.
+        let ws = guard
+            .workspace_of_pane(header.pane_id)
+            .map(|w| w.to_string())
+            .unwrap_or_default();
         let Some(pane) = guard.pane_mut(header.pane_id) else {
             return (
                 error_reply(id, &format!("no such pane: {}", header.pane_id)),
@@ -118,6 +125,7 @@ pub(super) fn handle_state_report(
             agent: header.agent.clone(),
             state: state.to_string(),
             source: "hook".to_string(),
+            ws,
         })
     };
     (ok_reply(id), notification)
@@ -181,6 +189,13 @@ pub(super) fn handle_session_report(
 
     let notification = {
         let mut guard = tree.lock();
+        // The owning workspace for the push, read before the pane_mut
+        // borrow; the same map roster_rows reads, so push and list-agents
+        // agree.
+        let ws = guard
+            .workspace_of_pane(header.pane_id)
+            .map(|w| w.to_string())
+            .unwrap_or_default();
         let Some(pane) = guard.pane_mut(header.pane_id) else {
             return (
                 error_reply(id, &format!("no such pane: {}", header.pane_id)),
@@ -261,6 +276,7 @@ pub(super) fn handle_session_report(
                     .state_source
                     .clone()
                     .unwrap_or_else(|| "hook".to_string()),
+                ws,
             })
     };
     (ok_reply(id), notification)

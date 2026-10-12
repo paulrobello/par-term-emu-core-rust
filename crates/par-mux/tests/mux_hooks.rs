@@ -519,13 +519,16 @@ fn a_pi_shaped_session_report_with_resume_argv_drives_the_daemon() {
         "the path-only shape is accepted: {reply}"
     );
     // The rebroadcast is the wire-level proof the session report landed:
-    // only an accepted session report re-announces the known state.
+    // only an accepted session report re-announces the known state. The
+    // ws token is read from the roster afterwards, so the push and
+    // list-agents are asserted to agree (ENH-061).
     let rebroadcast = stage.control.line_until(
         |line| line.starts_with("%agent-state-changed"),
         "the session report's rebroadcast",
     );
+    let ws = roster_ws(&mut stage.control, &stage.pane);
     assert!(
-        rebroadcast.contains(format!("{} pi working source=hook", stage.pane).as_str()),
+        rebroadcast.contains(format!("{} pi working source=hook ws={ws}", stage.pane).as_str()),
         "the rebroadcast carries the known state: {rebroadcast}"
     );
 
@@ -554,10 +557,11 @@ fn hook_report_replies_in_place_and_broadcasts_to_control_clients() {
         |line| line.starts_with("%agent-state-changed"),
         "the state broadcast",
     );
+    let ws = roster_ws(&mut stage.control, &stage.pane);
     assert_eq!(
         broadcast,
         format!(
-            "%agent-state-changed {} kimi working source=hook\n",
+            "%agent-state-changed {} kimi working source=hook ws={ws}\n",
             stage.pane
         ),
         "the broadcast carries pane, agent, state and provenance"
@@ -776,9 +780,12 @@ fn herdr_kimi_script_env_renamed_drives(pane_endpoints: bool) {
             |line| line.starts_with("%agent-state-changed"),
             &format!("the {action} broadcast"),
         );
+        // Read once the row exists (the first report created it), so the
+        // push and the roster are asserted to agree (ENH-061).
+        let ws = roster_ws(&mut stage.control, &pane);
         assert_eq!(
             broadcast,
-            format!("%agent-state-changed {pane} kimi {action} source=hook\n"),
+            format!("%agent-state-changed {pane} kimi {action} source=hook ws={ws}\n"),
             "the ported script drove the pane's state"
         );
     }
@@ -945,9 +952,10 @@ fn a_pane_endpoint_binds_hook_reports_to_its_own_pane() {
         |line| line.starts_with("%agent-state-changed"),
         "the bound pane's broadcast",
     );
+    let ws = roster_ws(&mut stage.control, &bound);
     assert_eq!(
         broadcast,
-        format!("%agent-state-changed {bound} kimi working source=hook\n"),
+        format!("%agent-state-changed {bound} kimi working source=hook ws={ws}\n"),
         "the accepted report broadcast names the bound pane"
     );
 
@@ -979,4 +987,20 @@ fn a_pane_endpoint_binds_hook_reports_to_its_own_pane() {
 
     drop(stage.control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut stage.daemon);
+}
+
+/// The pane's owning-workspace token from `list-agents`, so a push and the
+/// roster are asserted to agree (ENH-061).
+fn roster_ws(control: &mut Control, pane: &str) -> String {
+    control
+        .command("list-agents")
+        .into_iter()
+        .find(|line| line.split_whitespace().next() == Some(pane))
+        .and_then(|line| {
+            line.split_whitespace()
+                .rev()
+                .find_map(|token| token.strip_prefix("ws="))
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
 }

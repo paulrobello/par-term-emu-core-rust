@@ -2146,6 +2146,22 @@ fn new_session_lands_in_the_lazily_created_default_workspace() {
     tree.assert_indexes_consistent();
 }
 
+/// ENH-061: the push token's lookup walks pane → window → session →
+/// workspace through the same map `roster_rows` reads.
+#[test]
+fn workspace_of_pane_walks_to_the_owning_workspace() {
+    let mut tree = tree();
+    let ws = tree.new_workspace("alpha");
+    tree.select_workspace(ws).unwrap();
+    let session = tree.new_session("one", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    assert_eq!(tree.workspace_of_pane(pane), Some(ws));
+    let missing = PaneId(9999);
+    assert_eq!(tree.workspace_of_pane(missing), None);
+    tree.assert_indexes_consistent();
+}
+
 #[test]
 fn workspace_crud_and_active_tracking() {
     let mut tree = tree();

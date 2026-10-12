@@ -8675,6 +8675,13 @@ class TmuxNotification:
         """Window visible layout (for layout-change notifications)"""
     @window_visible_layout.setter
     def window_visible_layout(self, value: Any) -> None: ...
+    @property
+    def workspace_id(self) -> Any:
+        """Owning workspace id `+N` (for `agent-state-changed`; None when the
+        daemon sent no `ws=` token)
+        """
+    @workspace_id.setter
+    def workspace_id(self, value: Any) -> None: ...
 
 class Trigger:
     """Trigger information (read-only view)"""

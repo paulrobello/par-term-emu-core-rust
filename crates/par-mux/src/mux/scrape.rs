@@ -538,6 +538,13 @@ pub(crate) fn scrape_tick_with(
         .collect();
 
     for pane_id in panes {
+        // The owning workspace for the push, read before the pane_mut
+        // borrow; the same map roster_rows reads, so push and list-agents
+        // agree.
+        let ws = guard
+            .workspace_of_pane(pane_id)
+            .map(|w| w.to_string())
+            .unwrap_or_default();
         let Some(pane) = guard.pane_mut(pane_id) else {
             continue;
         };
@@ -601,6 +608,7 @@ pub(crate) fn scrape_tick_with(
                         agent,
                         state: state.to_string(),
                         source: "scrape".to_string(),
+                        ws,
                     });
                 }
             }
@@ -1040,6 +1048,11 @@ contains = ["Override Idle"]
                 agent: "claude".to_string(),
                 state: "working".to_string(),
                 source: "scrape".to_string(),
+                ws: tree
+                    .lock()
+                    .workspace_of_pane(pane_id)
+                    .map(|w| w.to_string())
+                    .unwrap_or_default(),
             }
         );
         {

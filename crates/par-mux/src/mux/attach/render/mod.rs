@@ -1243,9 +1243,10 @@ impl WindowSession {
                 pane_id,
                 agent,
                 state,
+                ws,
                 ..
             } => {
-                if self.status.patch_agent(&pane_id, &agent, Some(&state)) {
+                if self.status.patch_agent(&pane_id, &agent, Some(&state), &ws) {
                     self.status_dirty = true;
                 }
                 self.rebuild_agent_section();
@@ -1253,7 +1254,7 @@ impl WindowSession {
                 EventOutcome::Continue
             }
             TmuxNotification::AgentReleased { pane_id, agent } => {
-                self.status.patch_agent(&pane_id, &agent, None);
+                self.status.patch_agent(&pane_id, &agent, None, "");
                 self.rebuild_agent_section();
                 self.draw_status_row();
                 EventOutcome::Continue

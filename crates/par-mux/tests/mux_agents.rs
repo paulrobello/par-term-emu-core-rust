@@ -165,9 +165,12 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
             |line| line.starts_with("%agent-state-changed"),
             &format!("the {action} broadcast"),
         );
+        // Read once the row exists (the first report created it), so the
+        // push and the roster are asserted to agree (ENH-061).
+        let ws = roster_ws(&mut control, &pane);
         assert_eq!(
             broadcast,
-            format!("%agent-state-changed {pane} kimi {action} source=hook\n"),
+            format!("%agent-state-changed {pane} kimi {action} source=hook ws={ws}\n"),
             "the second client observed the lifecycle, provenance included"
         );
     }
@@ -561,4 +564,20 @@ fn client_snapshot_matches_the_individual_queries() {
 
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut daemon);
+}
+
+/// The pane's owning-workspace token from `list-agents`, so a push and the
+/// roster are asserted to agree (ENH-061).
+fn roster_ws(control: &mut Control, pane: &str) -> String {
+    control
+        .command("list-agents")
+        .into_iter()
+        .find(|line| line.split_whitespace().next() == Some(pane))
+        .and_then(|line| {
+            line.split_whitespace()
+                .rev()
+                .find_map(|token| token.strip_prefix("ws="))
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
 }

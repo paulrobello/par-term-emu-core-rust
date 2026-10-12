@@ -275,7 +275,9 @@ pub enum TmuxNotification {
 
     /// A pane's agent reported a state change (par-mux hook-fed agent
     /// layer, Phase 5 seam S3; real tmux never emits this).
-    /// Arguments: pane_id, agent_label, state, source (`hook` or `scrape`)
+    /// Arguments: pane_id, agent_label, state, then trailing `key=value`
+    /// tokens: `source` (`hook` or `scrape`) and `ws` (the owning
+    /// workspace, ENH-061; unknown keys are ignored).
     AgentStateChanged {
         /// Pane id (e.g. `%1`).
         pane_id: String,
@@ -287,6 +289,10 @@ pub enum TmuxNotification {
         /// `scrape` (a pattern guessed it from pane content). Empty when
         /// the line carried no `source=` token.
         source: String,
+        /// Owning workspace id (`+N`), the side panel's grouping key.
+        /// Empty when the line carried no `ws=` token (a pre-ENH-061
+        /// daemon).
+        ws: String,
     },
 
     /// A pane's agent released its claim (`pane.release_agent`; the agent
@@ -998,27 +1004,34 @@ impl TmuxControlParser {
         if parts.len() < 3 {
             return None;
         }
-        // The provenance token is optional and trailing (`source=hook` /
-        // `source=scrape`), so a line without one — an older emitter or a
-        // hand-written fixture — parses with an empty source rather than
-        // folding the token into the state.
-        let has_source = parts.len() >= 4 && parts[parts.len() - 1].starts_with("source=");
-        let state_end = if has_source {
-            parts.len() - 1
-        } else {
-            parts.len()
-        };
+        // Trailing `key=value` tokens are metadata, never state. Index 2 is
+        // always state (a three-token line keeps `source=hook` as its
+        // state), and unknown keys are ignored so a future token never
+        // folds into it.
+        let mut end = parts.len();
+        let (mut source, mut ws) = (String::new(), String::new());
+        while end > 3 {
+            let Some((key, value)) = parts[end - 1].split_once('=') else {
+                break;
+            };
+            if key.is_empty() || !key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                break;
+            }
+            match key {
+                "source" => source = value.to_string(),
+                "ws" => ws = value.to_string(),
+                _ => {}
+            }
+            end -= 1;
+        }
         Some(TmuxNotification::AgentStateChanged {
             pane_id: parts[0].to_string(),
             agent: parts[1].to_string(),
             // The state is the rest of the line, so a multi-word state
             // survives the round trip.
-            state: parts[2..state_end].join(" "),
-            source: if has_source {
-                parts[parts.len() - 1]["source=".len()..].to_string()
-            } else {
-                String::new()
-            },
+            state: parts[2..end].join(" "),
+            source,
+            ws,
         })
     }
 
@@ -1930,6 +1943,7 @@ mod tests {
                 agent: "claude".into(),
                 state: "waiting for input".into(),
                 source: "hook".into(),
+                ws: String::new(),
             }]
         );
         assert_eq!(
@@ -1939,6 +1953,7 @@ mod tests {
                 agent: "claude".into(),
                 state: "busy".into(),
                 source: String::new(),
+                ws: String::new(),
             }]
         );
         assert_eq!(
@@ -1948,8 +1963,53 @@ mod tests {
                 agent: "claude".into(),
                 state: "source=hook".into(),
                 source: String::new(),
+                ws: String::new(),
             }],
             "with only three tokens the third is the state, never provenance"
+        );
+        // ENH-061: trailing key=value tokens are metadata; unknown keys are
+        // ignored and ws rides after source.
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude working source=hook ws=+2"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "working".into(),
+                source: "hook".into(),
+                ws: "+2".into(),
+            }]
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude waiting for input source=scrape ws=+0"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "waiting for input".into(),
+                source: "scrape".into(),
+                ws: "+0".into(),
+            }]
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude working source=hook future=x"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "working".into(),
+                source: "hook".into(),
+                ws: String::new(),
+            }],
+            "an unknown key is ignored, never folded into the state"
+        );
+        assert_eq!(
+            parse_one("%agent-state-changed %1 claude working ws=+2"),
+            vec![N::AgentStateChanged {
+                pane_id: "%1".into(),
+                agent: "claude".into(),
+                state: "working".into(),
+                source: String::new(),
+                ws: "+2".into(),
+            }],
+            "ws rides without a source token"
         );
     }
 

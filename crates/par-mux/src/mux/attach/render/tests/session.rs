@@ -2439,6 +2439,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
         agent: "claude".to_string(),
         state: "blocked".to_string(),
         source: "hook".to_string(),
+        ws: String::new(),
     });
     assert!(session.status_dirty);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
@@ -2579,11 +2580,16 @@ fn agent_event_patches_without_a_query() {
         agent: "kimi".to_string(),
         state: "working".to_string(),
         source: "hook".to_string(),
+        ws: "+1".to_string(),
     });
     assert!(!session.status_dirty);
     assert!(
-        rows(&session).contains(&srow(SidebarRowId::Pane(3), "kimi (working)", false)),
-        "{:?}",
+        rows(&session).contains(&srow(
+            SidebarRowId::Pane(3),
+            "side \u{b7} kimi (working)",
+            false
+        )),
+        "the ws token groups the inserted row under its workspace: {:?}",
         rows(&session)
     );
     assert!(
