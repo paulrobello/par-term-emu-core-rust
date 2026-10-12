@@ -137,7 +137,7 @@ impl WindowSession {
         self.geometry = super::geometry::FrameGeometry::new(
             cols,
             rows,
-            self.status_bar_on,
+            self.chrome.status_bar_on,
             self.effective_render_opts().sidebar_width,
         );
     }
@@ -455,9 +455,9 @@ impl WindowSession {
         {
             return Err("the target's session is gone".to_string());
         }
-        self.status_row.invalidate();
+        self.chrome.status_row.invalidate();
         self.draw_status_row();
-        self.tab_strip.invalidate();
+        self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
         // First frame: clear + full paint. repaint_all hides the host
         // cursor, so the frame's place_cursor must fire even if the
@@ -551,10 +551,10 @@ impl WindowSession {
     /// full repaint is what erased the bar exactly once.
     pub(super) fn draw_status_row(&mut self) {
         let cols = self.geometry.host_cols;
-        if self.status_row.cols() != cols {
-            self.status_row = StatusRow::new(cols);
+        if self.chrome.status_row.cols() != cols {
+            self.chrome.status_row = StatusRow::new(cols);
         }
-        if !self.status_bar_on {
+        if !self.chrome.status_bar_on {
             return;
         }
         let scroll = if matches!(self.modal, Modal::Scroll) {
@@ -580,7 +580,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        if let Some(flash) = self.flash.clone() {
+        if let Some(flash) = self.chrome.flash_text().map(str::to_owned) {
             head.push(Segment {
                 text: format!(" {flash} |"),
                 bold: true,
@@ -601,7 +601,7 @@ impl WindowSession {
         );
         let mut with_head = head;
         with_head.extend(segments);
-        self.status_row.paint(&with_head, Some(&chip));
+        self.chrome.status_row.paint(&with_head, Some(&chip));
     }
 
     /// Flush the status row's changed cells to the host's bottom row.
@@ -614,7 +614,7 @@ impl WindowSession {
         let Some(bottom) = self.geometry.status_row() else {
             return false;
         };
-        let diff = self.status_row.diff();
+        let diff = self.chrome.status_row.diff();
         if diff.is_empty() {
             return false;
         }
@@ -676,9 +676,9 @@ impl WindowSession {
         // their previous frames here (the sidebar-toggle path parks the
         // refit into the pump, which repaints nothing else on those
         // rows).
-        self.status_row.invalidate();
+        self.chrome.status_row.invalidate();
         self.draw_status_row();
-        self.tab_strip.invalidate();
+        self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
         sink.repaint_all();
         self.frame(sink);
@@ -752,12 +752,12 @@ impl WindowSession {
     /// offsets through).
     pub(super) fn draw_tab_strip(&mut self) {
         let cols = self.geometry.host_cols;
-        if self.tab_strip.cols() != cols {
-            self.tab_strip = TabStrip::new(cols);
+        if self.chrome.tab_strip.cols() != cols {
+            self.chrome.tab_strip = TabStrip::new(cols);
         }
         let strip = self.renderer.sidebar_width();
         let lead = (strip > 0).then_some(("workspaces", strip));
-        self.tab_strip.paint(
+        self.chrome.tab_strip.paint(
             self.status.windows(),
             self.status.active_window.as_deref(),
             lead,
@@ -768,7 +768,7 @@ impl WindowSession {
     /// Returns whether anything flushed (its per-cell CUPs move the host
     /// cursor, so the caller must re-place it).
     pub(super) fn flush_tab_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
-        let diff = self.tab_strip.diff();
+        let diff = self.chrome.tab_strip.diff();
         if diff.is_empty() {
             return false;
         }

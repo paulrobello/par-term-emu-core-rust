@@ -98,7 +98,7 @@ impl WindowSession {
     /// rides the frame cadence on the status row.
     pub(super) fn enter_resize(&mut self) {
         self.open_modal(Modal::Resize);
-        self.flash = Some(format!(
+        self.chrome.flash(format!(
             "resize — arrows move the edge by {}, Enter/q exits",
             self.resize_step
         ));

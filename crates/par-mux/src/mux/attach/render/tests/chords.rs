@@ -208,8 +208,9 @@ fn zoom_chord_toggles_the_cue_only_on_success() {
     chord(&mut session, &mut conn, b'z');
     assert_eq!(drained(&rx), vec!["resize-pane -t %1 -Z".to_string()]);
     assert!(session.zoomed);
-    assert_eq!(session.flash.as_deref(), Some("zoomed"));
+    assert_eq!(session.chrome.flash_text(), Some("zoomed"));
     let row: String = session
+        .chrome
         .status_row
         .diff()
         .iter()
@@ -221,7 +222,7 @@ fn zoom_chord_toggles_the_cue_only_on_success() {
     );
     chord(&mut session, &mut conn, b'z');
     assert!(!session.zoomed);
-    assert_eq!(session.flash.as_deref(), Some("unzoomed"));
+    assert_eq!(session.chrome.flash_text(), Some("unzoomed"));
 
     let mut failing = std::collections::HashSet::new();
     failing.insert("resize-pane -t %1 -Z".to_string());
@@ -234,7 +235,7 @@ fn zoom_chord_toggles_the_cue_only_on_success() {
     );
     chord(&mut session, &mut conn, b'z');
     assert!(!session.zoomed, "a refused zoom keeps the cue off");
-    assert_eq!(session.flash, None);
+    assert_eq!(session.chrome.flash_text(), None);
 }
 
 /// The border chord cycles the glyph set; reaching herdr turns on
@@ -262,7 +263,7 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     chord(&mut session, &mut conn, b'B');
     assert_eq!(session.render_opts.glyphs, Glyphs::Herdr);
     assert!(session.render_opts.pane_borders && session.renderer.pane_borders);
-    assert_eq!(session.flash.as_deref(), Some("border style: herdr"));
+    assert_eq!(session.chrome.flash_text(), Some("border style: herdr"));
     session.reseed_window(&mut conn, "@0");
     assert!(
         session.renderer.pane_borders,
@@ -369,13 +370,13 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     );
     chord(&mut session, &mut conn, b'l');
     assert!(session.render_opts.show_label_in_border);
-    assert_eq!(session.flash.as_deref(), Some("labels on"));
+    assert_eq!(session.chrome.flash_text(), Some("labels on"));
     chord(&mut session, &mut conn, b'l');
     assert!(!session.render_opts.show_label_in_border);
-    assert_eq!(session.flash.as_deref(), Some("labels off"));
+    assert_eq!(session.chrome.flash_text(), Some("labels off"));
 
     chord(&mut session, &mut conn, b'S');
-    assert!(!session.status_bar_on);
+    assert!(!session.chrome.status_bar_on);
     assert!(session.pending.grid_refit);
     let mut sink = RecordingSink::default();
     assert!(
@@ -383,7 +384,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
         "a hidden bar flushes nothing"
     );
     chord(&mut session, &mut conn, b'S');
-    assert!(session.status_bar_on);
+    assert!(session.chrome.status_bar_on);
     session.pending.grid_refit = false;
     assert!(drained(&rx).is_empty(), "the local toggles touch no wire");
 
@@ -399,7 +400,7 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     chord(&mut session, &mut conn, b's');
     assert!(!session.sidebar_on);
     assert_eq!(session.renderer.sidebar_width(), 0);
-    assert_eq!(session.flash.as_deref(), Some("sidebar off"));
+    assert_eq!(session.chrome.flash_text(), Some("sidebar off"));
     assert!(drained(&rx).is_empty(), "closing re-queries nothing");
 }
 
@@ -1181,10 +1182,13 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     let shift = par_term_emu_core::keyboard::modifiers::SHIFT;
     session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Right, shift));
     assert!(drained(&rx).is_empty());
-    assert_eq!(session.flash.as_deref(), Some("no pane in that direction"));
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("no pane in that direction")
+    );
     session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Left, shift));
     assert_eq!(drained(&rx), vec!["swap-pane -s %2 -t %1".to_string()]);
-    assert_eq!(session.flash.as_deref(), Some("swapped %2 with %1"));
+    assert_eq!(session.chrome.flash_text(), Some("swapped %2 with %1"));
 
     // Zoomed onto pane 1: the renderer holds only the zoomed rect,
     // the cached tree still knows pane 2 to the right.
@@ -1533,7 +1537,7 @@ fn tab_strip_right_press_opens_the_tab_menu() {
     session.route_mouse(&mut conn, sgr(0, 3, 1, false));
     assert!(drained(&rx).is_empty());
     let plus = (0..80u16)
-        .find(|x| session.tab_strip.plus_hit(*x))
+        .find(|x| session.chrome.tab_strip.plus_hit(*x))
         .expect("the strip paints a + button");
     session.route_mouse(&mut conn, sgr(0, plus + 1, 1, false));
     assert!(session.is_prompt());
@@ -1980,27 +1984,33 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
 fn flash_survives_a_fast_pump_and_clears_after_its_deadline() {
     use std::time::{Duration, Instant};
     let mut session = WindowSession::new(80, 25);
-    session.flash = Some("config reloaded".to_string());
+    session.chrome.flash("config reloaded".to_string());
     let start = Instant::now();
     for _ in 0..200 {
         session.tick_flash(start);
     }
     assert_eq!(
-        session.flash.as_deref(),
+        session.chrome.flash_text(),
         Some("config reloaded"),
         "200 immediate ticks must not clear the flash"
     );
     session.tick_flash(start + FLASH_LIFETIME - Duration::from_millis(1));
-    assert!(session.flash.is_some(), "still up just before the deadline");
+    assert!(
+        session.chrome.flash_text().is_some(),
+        "still up just before the deadline"
+    );
     session.tick_flash(start + FLASH_LIFETIME);
-    assert_eq!(session.flash, None, "cleared at the deadline");
-    assert_eq!(session.flash_until, None, "the deadline disarms with it");
+    assert_eq!(session.chrome.flash_text(), None, "cleared at the deadline");
+    assert_eq!(
+        session.chrome.flash_until, None,
+        "the deadline disarms with it"
+    );
 
     // A fresh flash re-arms from its own first tick, not the old deadline.
-    session.flash = Some("labels on".to_string());
+    session.chrome.flash("labels on".to_string());
     session.tick_flash(start + Duration::from_secs(5));
     assert!(
-        session.flash.is_some(),
+        session.chrome.flash_text().is_some(),
         "a new flash survives its first tick"
     );
 }

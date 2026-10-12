@@ -14,7 +14,6 @@
 use crate::mux::attach::input::{InputParser, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status;
-use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::session_active_window;
 use crate::mux::attach::{layout, HelpRow};
 use crate::mux::layout::PaneChrome;
@@ -28,6 +27,7 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::sync::mpsc::RecvTimeoutError;
 
+mod chrome;
 mod cursor;
 mod geometry;
 mod input_route;
@@ -37,6 +37,7 @@ mod renderer;
 mod session;
 mod sidebar;
 
+use chrome::ChromeRows;
 use cursor::CursorState;
 
 use renderer::{RenderOptions, StdoutSink};
@@ -587,9 +588,8 @@ struct WindowSession {
     pending: PendingWork,
     /// The bottom row: queried state + paint/diff pair.
     status: status::StatusState,
-    status_row: status::StatusRow,
-    /// The top row: the shown session's windows, clickable.
-    tab_strip: TabStrip,
+    /// The status row, tab strip, status-bar toggle and flash cue.
+    chrome: ChromeRows,
     /// Whether the status state is stale and needs a re-query before the
     /// next paint (the throttled re-query on agent/sessions churn).
     status_dirty: bool,
@@ -627,23 +627,12 @@ struct WindowSession {
     /// The daemon's last known (unzoomed) tree layout, so the
     /// prefix+arrow navigation can aim through a zoom.
     daemon_layout: Vec<PaneRect>,
-    /// The status bar's visibility (the `status_bar` chord toggles it;
-    /// shown by default).
-    status_bar_on: bool,
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
-    /// A transient confirmation/error cue drawn in place of the status
-    /// line's head and cleared after about a second.
-    flash: Option<String>,
-    /// When the current flash clears: armed by the first frame tick that
-    /// sees it, so every `self.flash = Some(..)` site stays a plain
-    /// assignment. Wall-clock, not a tick count: a pump woken early by a
-    /// burst of events would burn a tick budget in milliseconds (QA-235).
-    flash_until: Option<std::time::Instant>,
     /// Host-cursor placement bookkeeping: the emit guard, the heartbeat
     /// clock, and the drag-shape option (see [`CursorState`]).
     cursor: CursorState,
@@ -859,8 +848,7 @@ impl WindowSession {
             renderer: PaneRenderer::new(frame_w, frame_h, RenderOptions::default().glyphs),
             pending: PendingWork::default(),
             status: status::StatusState::default(),
-            status_row: status::StatusRow::new(cols),
-            tab_strip: TabStrip::new(cols),
+            chrome: ChromeRows::new(cols),
             status_dirty: true,
             modal: Modal::None,
             prefix: chords.prefix,
@@ -872,11 +860,8 @@ impl WindowSession {
             sidebar_on: false,
             zoomed: false,
             daemon_layout: Vec::new(),
-            status_bar_on: true,
             stdin_primer: Vec::new(),
             literal: chords.prefix,
-            flash: None,
-            flash_until: None,
             cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
             pending_end: false,
@@ -967,9 +952,9 @@ impl WindowSession {
                     return Ok(());
                 }
                 // A resize wiped the screen; the rows repaint whole.
-                self.status_row.invalidate();
+                self.chrome.status_row.invalidate();
                 self.draw_status_row();
-                self.tab_strip.invalidate();
+                self.chrome.tab_strip.invalidate();
                 self.draw_tab_strip();
             }
 
@@ -1092,14 +1077,7 @@ impl WindowSession {
     /// clock): arm the deadline the first time a flash is seen, clear the
     /// flash and repaint the status row once it passes.
     fn tick_flash(&mut self, now: std::time::Instant) {
-        if self.flash.is_none() {
-            self.flash_until = None;
-            return;
-        }
-        let until = *self.flash_until.get_or_insert(now + FLASH_LIFETIME);
-        if now >= until {
-            self.flash = None;
-            self.flash_until = None;
+        if self.chrome.tick(now) {
             self.draw_status_row();
         }
     }

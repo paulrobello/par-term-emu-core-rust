@@ -22,7 +22,7 @@ impl WindowSession {
     /// through the notification channel).
     pub(super) fn flash_if_busy(&mut self, err: &std::io::Error) {
         if err.kind() == std::io::ErrorKind::TimedOut {
-            self.flash = Some("daemon busy".to_string());
+            self.chrome.flash("daemon busy".to_string());
             self.draw_status_row();
         }
     }
@@ -173,7 +173,8 @@ impl WindowSession {
                     return;
                 };
                 self.zoomed = !self.zoomed;
-                self.flash = Some(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
+                self.chrome
+                    .flash(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
                 self.draw_status_row();
             }
             ManagementKey::RenameWindow | ManagementKey::RenamePane => {
@@ -184,7 +185,7 @@ impl WindowSession {
                 });
             }
             ManagementKey::StatusBar => {
-                self.status_bar_on = !self.status_bar_on;
+                self.chrome.status_bar_on = !self.chrome.status_bar_on;
                 self.chrome_geometry_changed();
                 // No flash cue: the flash paints ON the status row, so a
                 // hide would flash invisibly — the row's vanishing (or
@@ -204,7 +205,8 @@ impl WindowSession {
                 // split is one) restored the session flag and reverted
                 // the boxes to shared dividers (the manual-pass report).
                 self.set_pane_borders(matches!(glyphs, Glyphs::Herdr));
-                self.flash = Some(format!("border style: {}", glyphs.name()));
+                self.chrome
+                    .flash(format!("border style: {}", glyphs.name()));
                 self.draw_status_row();
             }
             ManagementKey::WorkspacePicker => {
@@ -219,7 +221,8 @@ impl WindowSession {
                 // the next frame repaints the borders.
                 let on = !self.render_opts.show_label_in_border;
                 self.set_show_label_in_border(on);
-                self.flash = Some(if on { "labels on" } else { "labels off" }.to_string());
+                self.chrome
+                    .flash(if on { "labels on" } else { "labels off" }.to_string());
                 self.draw_status_row();
             }
         }
@@ -402,7 +405,7 @@ impl WindowSession {
         let file = match crate::mux::config::load_canonical_checked() {
             Ok(file) => file,
             Err(err) => {
-                self.flash = Some(format!("reload failed: {err}"));
+                self.chrome.flash(format!("reload failed: {err}"));
                 let _ = self.ask(conn, "reload-config");
                 return;
             }
@@ -427,7 +430,7 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
-                self.flash = Some(if self.apply_chords(&chords, &file) {
+                let text = if self.apply_chords(&chords, &file) {
                     "config reloaded".to_string()
                 } else {
                     format!(
@@ -435,10 +438,11 @@ impl WindowSession {
                         chords.border_lines,
                         self.render_opts.glyphs.name()
                     )
-                });
+                };
+                self.chrome.flash(text);
             }
             Err(err) => {
-                self.flash = Some(format!("reload failed: {err}"));
+                self.chrome.flash(format!("reload failed: {err}"));
             }
         }
         let _ = self.ask(conn, "reload-config");
@@ -596,9 +600,9 @@ impl WindowSession {
             // (or this switch's own burst) re-evaluates.
             return;
         }
-        self.status_row.invalidate();
+        self.chrome.status_row.invalidate();
         self.draw_status_row();
-        self.tab_strip.invalidate();
+        self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
         self.pending.clear_view_work();
     }

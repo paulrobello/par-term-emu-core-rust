@@ -65,7 +65,7 @@ fn frame_flushes_the_strip_at_row_zero_and_rebases_the_panes() {
         ("@0".to_string(), "main".to_string()),
         ("@1".to_string(), "vim".to_string()),
     ];
-    session.tab_strip.paint(&windows, Some("@0"), None);
+    session.chrome.tab_strip.paint(&windows, Some("@0"), None);
     session.draw_status_row();
 
     let mut sink = RecordingSink::default();
@@ -119,7 +119,11 @@ fn strip_click_switches_windows_without_forwarding() {
     // herdr blocks: "  main  " spans cols 0..8, the gap is col 8, and
     // the second tab's block ("  vim  ") spans cols 9..16; the click
     // is a 1-based host col 13 (strip col 12).
-    assert_eq!(session.tab_strip.hit_test(8), None, "the gap hits nothing");
+    assert_eq!(
+        session.chrome.tab_strip.hit_test(8),
+        None,
+        "the gap hits nothing"
+    );
     session.tab_click(&mut conn, 12);
 
     assert_eq!(session.window, "@1", "the view moved to the clicked tab");
@@ -146,7 +150,7 @@ fn strip_click_switches_windows_without_forwarding() {
     // (The receiver is dropped with the conn at scope end; the
     // assertions above ran over every recorded line already.)
     assert_eq!(
-        session.tab_strip.hit_test(12),
+        session.chrome.tab_strip.hit_test(12),
         Some(1),
         "the strip layout still maps the clicked column"
     );
@@ -795,7 +799,7 @@ fn hidden_status_bar_flushes_nothing() {
     );
     assert!(!sink.cells.is_empty());
 
-    session.status_bar_on = false;
+    session.chrome.status_bar_on = false;
     session.chrome_geometry_changed();
     session.draw_status_row();
     let mut sink = CellSink { cells: Vec::new() };
@@ -1427,7 +1431,10 @@ fn command_menu_reload_sends_reload_config() {
     click_menu_row(&mut session, &mut conn, 2);
     assert!(session.menu().is_none(), "the menu closed");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
-    assert!(session.flash.is_some(), "the reload flashes its outcome");
+    assert!(
+        session.chrome.flash_text().is_some(),
+        "the reload flashes its outcome"
+    );
 }
 
 /// The command menu's `detach` row requests the pump's exit (the
@@ -2246,7 +2253,7 @@ fn interactive_switch_times_out_flashes_busy_and_keeps_replies_aligned() {
         took < std::time::Duration::from_millis(1400),
         "bounded by the interactive timeout: {took:?}"
     );
-    assert_eq!(session.flash.as_deref(), Some("daemon busy"));
+    assert_eq!(session.chrome.flash_text(), Some("daemon busy"));
     assert_eq!(session.window, "@0", "the view stays put");
     assert_eq!(
         drained(&rx),
@@ -2276,7 +2283,7 @@ fn focus_pane_chain_stops_at_the_first_timeout() {
         took < std::time::Duration::from_millis(1400),
         "bounded by the interactive timeout: {took:?}"
     );
-    assert_eq!(session.flash.as_deref(), Some("daemon busy"));
+    assert_eq!(session.chrome.flash_text(), Some("daemon busy"));
     let lines = drained(&rx);
     assert!(
         !lines.iter().any(|l| l.starts_with("pane-info")),
@@ -2801,5 +2808,9 @@ fn focus_pane_stops_when_select_pane_fails() {
     session.focus_pane(&mut conn, 9);
     assert_eq!(drained(&rx), vec!["select-pane -t %9"]);
     assert_eq!(session.window, "@0", "the view stays put");
-    assert_eq!(session.flash, None, "a refusal is not a busy daemon");
+    assert_eq!(
+        session.chrome.flash_text(),
+        None,
+        "a refusal is not a busy daemon"
+    );
 }

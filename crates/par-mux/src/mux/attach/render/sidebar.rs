@@ -148,7 +148,7 @@ impl WindowSession {
         if self.sidebar_on {
             self.refresh_sidebar(conn);
         }
-        self.flash = Some(
+        self.chrome.flash(
             if self.sidebar_on {
                 "sidebar on"
             } else {

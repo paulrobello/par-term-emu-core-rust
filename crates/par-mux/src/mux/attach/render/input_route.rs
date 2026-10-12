@@ -379,7 +379,7 @@ impl WindowSession {
             };
             let tree = self.tree_layout();
             let Some(next) = pane_in_direction(&tree, focused_id, dir) else {
-                self.flash = Some("no pane in that direction".to_string());
+                self.chrome.flash("no pane in that direction".to_string());
                 self.draw_status_row();
                 return;
             };
@@ -389,7 +389,8 @@ impl WindowSession {
             {
                 return;
             }
-            self.flash = Some(format!("swapped %{focused_id} with %{next}"));
+            self.chrome
+                .flash(format!("swapped %{focused_id} with %{next}"));
             self.draw_status_row();
             return;
         }
@@ -633,6 +634,7 @@ impl WindowSession {
     fn tab_strip_hit(&self, mouse: &SgrMouse, rx: u16) -> Hit {
         if mouse.is_right_press() {
             return self
+                .chrome
                 .tab_strip
                 .hit_test(rx)
                 .and_then(|index| self.status.windows().get(index))
@@ -702,11 +704,11 @@ impl WindowSession {
     /// a pad/marker column, does nothing. No pane focus, no pane
     /// forwarding.
     pub(super) fn tab_click(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, x: u16) {
-        if self.tab_strip.plus_hit(x) {
+        if self.chrome.tab_strip.plus_hit(x) {
             self.enter_prompt(PromptTarget::NewWindow);
             return;
         }
-        let Some(index) = self.tab_strip.hit_test(x) else {
+        let Some(index) = self.chrome.tab_strip.hit_test(x) else {
             return;
         };
         let Some((id, _)) = self.status.windows().get(index) else {
