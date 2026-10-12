@@ -58,174 +58,171 @@ impl WindowSession {
         key: ManagementKey,
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) {
-        let focused = self.focused_pane();
         match key {
-            ManagementKey::SplitRight | ManagementKey::SplitDown => {
-                let flag = if matches!(key, ManagementKey::SplitRight) {
-                    " -h"
-                } else {
-                    ""
-                };
-                let Ok(Some(reply)) = self.ask(conn, &format!("split-window -t {focused}{flag}"))
-                else {
-                    return;
-                };
-                // The reply body is the new pane id; re-seed the window
-                // from the fresh layout (the split broadcast rides the
-                // reply), THEN focus the fresh pane — the renderer only
-                // knows the pane once the reseed installed the new
-                // layout, so the focus must come after.
-                let new_pane = reply
-                    .body
-                    .first()
-                    .and_then(|id| id.trim().strip_prefix('%'))
-                    .and_then(|n| n.parse::<u32>().ok());
-                let window = self.window.clone();
-                self.reseed_window(conn, &window);
-                if let Some(new_pane) = new_pane {
-                    self.renderer.focus(new_pane);
-                    let _ = self.ask(conn, &format!("select-pane -t %{new_pane}"));
-                }
+            ManagementKey::SplitRight => self.chord_split(conn, true),
+            ManagementKey::SplitDown => self.chord_split(conn, false),
+            ManagementKey::KillPane => self.chord_kill_pane(conn),
+            ManagementKey::SwapPrev => self.chord_swap(conn, -1),
+            ManagementKey::SwapNext => self.chord_swap(conn, 1),
+            ManagementKey::NewWindow => self.chord_new_window(conn),
+            ManagementKey::WorkspaceNext => self.switch_workspace(conn, 1),
+            ManagementKey::WorkspacePrev => self.switch_workspace(conn, -1),
+            ManagementKey::Zoom => self.chord_zoom(conn),
+            ManagementKey::RenameWindow => {
+                self.enter_prompt(PromptTarget::Window(self.window.clone()));
             }
-            ManagementKey::KillPane => {
-                let Ok(Some(_)) = self.ask(conn, &format!("kill-pane -t {focused}")) else {
-                    return;
-                };
-                // The window survives with a new active pane, or the view
-                // is over (the last pane died; %window-close's session
-                // contract ends the view through the status refresh). The
-                // survivor focus lands AFTER the re-seed (reseed_window
-                // resets focus to the first leaf).
-                let window = self.window.clone();
-                let Ok(listed) = self.ask(conn, &format!("list-panes -t {window}")) else {
-                    return;
-                };
-                let survivor = listed.and_then(|reply| marked_pane(&reply.body, &window).ok());
-                if let Some(pane) = survivor {
-                    self.reseed_window(conn, &window);
-                    if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
-                        self.renderer.focus(n);
-                        let _ = self.ask(conn, &format!("select-pane -t %{n}"));
-                    }
-                    return;
-                }
-                // No survivor: the window closed. The pump's next status
-                // refresh lands on the session's active window, or ends
-                // the view when the session went with it. Ending NOW would
-                // skip the terminal restore; flag it and let the pump's
-                // normal path decide.
-                self.status_dirty = true;
-            }
-            ManagementKey::SwapPrev | ManagementKey::SwapNext => {
-                // Swap with the layout-order neighbor; the %layout-change
-                // broadcast the swap queues re-seeds the window through
-                // the pump's parked-layout path (PendingWork). Fewer than two panes is
-                // a no-op.
-                let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
-                if order.len() < 2 {
-                    return;
-                }
-                let Some(position) = self
-                    .renderer
-                    .focused()
-                    .and_then(|f| order.iter().position(|p| *p == f))
-                else {
-                    return;
-                };
-                let dir = if matches!(key, ManagementKey::SwapPrev) {
-                    -1
-                } else {
-                    1
-                };
-                let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
-                let focused = self.focused_pane();
-                let _ = self.ask(conn, &format!("swap-pane -s {focused} -t %{next}"));
-            }
-            ManagementKey::NewWindow => {
-                let Some(session) = self.status.session_id.clone() else {
-                    return;
-                };
-                let Ok(Some(reply)) = self.ask(conn, &format!("new-window -t {session}")) else {
-                    return;
-                };
-                let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
-                    return;
-                };
-                self.land_window(conn, &window);
-            }
-            ManagementKey::WorkspaceNext | ManagementKey::WorkspacePrev => {
-                let direction = if matches!(key, ManagementKey::WorkspaceNext) {
-                    1
-                } else {
-                    -1
-                };
-                self.switch_workspace(conn, direction);
-            }
-            ManagementKey::Zoom => {
-                // tmux's zoom: the daemon's `resize-pane -Z` toggle. The
-                // daemon re-lays the window to the single pane full-grid
-                // (children resize), selects away unzooms, and any layout
-                // mutation ends the zoom — the %layout-change broadcast
-                // re-seeds this client through the pump's pending path.
-                // The bool only drives the status row's Z cue; the daemon
-                // holds the truth.
-                let Ok(Some(_)) = self.ask(conn, &format!("resize-pane -t {focused} -Z")) else {
-                    return;
-                };
-                self.zoomed = !self.zoomed;
-                self.chrome
-                    .flash(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
-                self.draw_status_row();
-            }
-            ManagementKey::RenameWindow | ManagementKey::RenamePane => {
-                self.enter_prompt(if matches!(key, ManagementKey::RenamePane) {
-                    PromptTarget::Pane
-                } else {
-                    PromptTarget::Window(self.window.clone())
-                });
-            }
-            ManagementKey::StatusBar => {
-                self.chrome.status_bar_on = !self.chrome.status_bar_on;
-                self.chrome_geometry_changed();
-                // No flash cue: the flash paints ON the status row, so a
-                // hide would flash invisibly — the row's vanishing (or
-                // returning) is the feedback. The bottom row's presence
-                // changes the content height: park a refit so the report
-                // and re-fit follow (the sidebar toggle's contract).
-                self.pending.grid_refit = true;
-                self.draw_status_row();
-            }
-            ManagementKey::BorderCycle => {
-                let glyphs = self.render_opts.glyphs.next();
-                self.set_glyphs(glyphs);
-                // herdr style: every pane draws its own complete box, not
-                // the shared dividers — the style owns the paint mode.
-                // Through the session-level setter: the chord used to
-                // flip the renderer's flag only, so every re-seed (a
-                // split is one) restored the session flag and reverted
-                // the boxes to shared dividers (the manual-pass report).
-                self.set_pane_borders(matches!(glyphs, Glyphs::Herdr));
-                self.chrome
-                    .flash(format!("border style: {}", glyphs.name()));
-                self.draw_status_row();
-            }
-            ManagementKey::WorkspacePicker => {
-                self.enter_ws_picker(conn);
-            }
-            ManagementKey::Sidebar => {
-                self.toggle_sidebar(conn);
-            }
-            ManagementKey::Labels => {
-                // Toggle each pane's title in its border: the session's
-                // bool flips, the flash cue confirms the new state, and
-                // the next frame repaints the borders.
-                let on = !self.render_opts.show_label_in_border;
-                self.set_show_label_in_border(on);
-                self.chrome
-                    .flash(if on { "labels on" } else { "labels off" }.to_string());
-                self.draw_status_row();
-            }
+            ManagementKey::RenamePane => self.enter_prompt(PromptTarget::Pane),
+            ManagementKey::StatusBar => self.toggle_status_bar(),
+            ManagementKey::BorderCycle => self.cycle_border_style(),
+            ManagementKey::Labels => self.toggle_border_labels(),
+            ManagementKey::WorkspacePicker => self.enter_ws_picker(conn),
+            ManagementKey::Sidebar => self.toggle_sidebar(conn),
         }
+    }
+
+    fn chord_split(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, horizontal: bool) {
+        let focused = self.focused_pane();
+        let flag = if horizontal { " -h" } else { "" };
+        let Ok(Some(reply)) = self.ask(conn, &format!("split-window -t {focused}{flag}")) else {
+            return;
+        };
+        // The reply body is the new pane id; re-seed the window
+        // from the fresh layout (the split broadcast rides the
+        // reply), THEN focus the fresh pane — the renderer only
+        // knows the pane once the reseed installed the new
+        // layout, so the focus must come after.
+        let new_pane = reply
+            .body
+            .first()
+            .and_then(|id| id.trim().strip_prefix('%'))
+            .and_then(|n| n.parse::<u32>().ok());
+        let window = self.window.clone();
+        self.reseed_window(conn, &window);
+        if let Some(new_pane) = new_pane {
+            self.renderer.focus(new_pane);
+            let _ = self.ask(conn, &format!("select-pane -t %{new_pane}"));
+        }
+    }
+
+    fn chord_kill_pane(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let focused = self.focused_pane();
+        let Ok(Some(_)) = self.ask(conn, &format!("kill-pane -t {focused}")) else {
+            return;
+        };
+        // The window survives with a new active pane, or the view
+        // is over (the last pane died; %window-close's session
+        // contract ends the view through the status refresh). The
+        // survivor focus lands AFTER the re-seed (reseed_window
+        // resets focus to the first leaf).
+        let window = self.window.clone();
+        let Ok(listed) = self.ask(conn, &format!("list-panes -t {window}")) else {
+            return;
+        };
+        let survivor = listed.and_then(|reply| marked_pane(&reply.body, &window).ok());
+        if let Some(pane) = survivor {
+            self.reseed_window(conn, &window);
+            if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
+                self.renderer.focus(n);
+                let _ = self.ask(conn, &format!("select-pane -t %{n}"));
+            }
+            return;
+        }
+        // No survivor: the window closed. The pump's next status
+        // refresh lands on the session's active window, or ends
+        // the view when the session went with it. Ending NOW would
+        // skip the terminal restore; flag it and let the pump's
+        // normal path decide.
+        self.status_dirty = true;
+    }
+
+    /// Swap with the layout-order neighbor; the %layout-change
+    /// broadcast the swap queues re-seeds the window through
+    /// the pump's parked-layout path (PendingWork). Fewer than two panes is
+    /// a no-op.
+    fn chord_swap(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, dir: i32) {
+        let order: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
+        if order.len() < 2 {
+            return;
+        }
+        let Some(position) = self
+            .renderer
+            .focused()
+            .and_then(|f| order.iter().position(|p| *p == f))
+        else {
+            return;
+        };
+        let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
+        let focused = self.focused_pane();
+        let _ = self.ask(conn, &format!("swap-pane -s {focused} -t %{next}"));
+    }
+
+    fn chord_new_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Some(session) = self.status.session_id.clone() else {
+            return;
+        };
+        let Ok(Some(reply)) = self.ask(conn, &format!("new-window -t {session}")) else {
+            return;
+        };
+        let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
+            return;
+        };
+        self.land_window(conn, &window);
+    }
+
+    /// tmux's zoom: the daemon's `resize-pane -Z` toggle. The
+    /// daemon re-lays the window to the single pane full-grid
+    /// (children resize), selects away unzooms, and any layout
+    /// mutation ends the zoom — the %layout-change broadcast
+    /// re-seeds this client through the pump's pending path.
+    /// The bool only drives the status row's Z cue; the daemon
+    /// holds the truth.
+    fn chord_zoom(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let focused = self.focused_pane();
+        let Ok(Some(_)) = self.ask(conn, &format!("resize-pane -t {focused} -Z")) else {
+            return;
+        };
+        self.zoomed = !self.zoomed;
+        self.chrome
+            .flash(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
+        self.draw_status_row();
+    }
+
+    /// No flash cue: the flash paints ON the status row, so a
+    /// hide would flash invisibly — the row's vanishing (or
+    /// returning) is the feedback. The bottom row's presence
+    /// changes the content height: park a refit so the report
+    /// and re-fit follow (the sidebar toggle's contract).
+    fn toggle_status_bar(&mut self) {
+        self.chrome.status_bar_on = !self.chrome.status_bar_on;
+        self.chrome_geometry_changed();
+        self.pending.grid_refit = true;
+        self.draw_status_row();
+    }
+
+    /// herdr style: every pane draws its own complete box, not
+    /// the shared dividers — the style owns the paint mode.
+    /// Through the session-level setter: the chord used to
+    /// flip the renderer's flag only, so every re-seed (a
+    /// split is one) restored the session flag and reverted
+    /// the boxes to shared dividers (the manual-pass report).
+    fn cycle_border_style(&mut self) {
+        let glyphs = self.render_opts.glyphs.next();
+        self.set_glyphs(glyphs);
+        self.set_pane_borders(matches!(glyphs, Glyphs::Herdr));
+        self.chrome
+            .flash(format!("border style: {}", glyphs.name()));
+        self.draw_status_row();
+    }
+
+    /// Toggle each pane's title in its border: the session's
+    /// bool flips, the flash cue confirms the new state, and
+    /// the next frame repaints the borders.
+    fn toggle_border_labels(&mut self) {
+        let on = !self.render_opts.show_label_in_border;
+        self.set_show_label_in_border(on);
+        self.chrome
+            .flash(if on { "labels on" } else { "labels off" }.to_string());
+        self.draw_status_row();
     }
 
     /// prefix W / C-w: the next/previous workspace in id order —
