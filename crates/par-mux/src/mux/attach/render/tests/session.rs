@@ -495,6 +495,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
         ),
         "the picker chord opens the modal"
     );
+    settle(&mut session, &mut conn);
     assert!(session.is_picker());
     let (overlay, _, _) = session.renderer.overlay.clone().expect("the overlay is up");
     assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
@@ -514,6 +515,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'j');
     session.picker_byte(&mut conn, b'\r');
+    settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "activation dismisses the modal");
     assert_eq!(
         wait_recorded(&rx, "switch-client"),
@@ -530,6 +532,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
         &mut conn,
         &mut prefix_pending
     ));
+    settle(&mut session, &mut conn);
     assert!(session.is_picker());
     assert!(!session.picker_byte(&mut conn, b'q'));
     assert!(!session.is_picker());

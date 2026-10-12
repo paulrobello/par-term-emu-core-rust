@@ -802,6 +802,7 @@ fn closing_an_unshown_tab_only_kills_it() {
     session.status_dirty = false;
     session.open_menu(MenuTarget::Tab("@7".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     assert!(session.menu().is_none());
     assert_eq!(drained(&rx), vec!["kill-window -t @7".to_string()]);
     assert_eq!(session.window, "@0");
@@ -824,6 +825,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
     );
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
         lines[..3].to_vec(),
@@ -839,6 +841,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
     session.status_dirty = false;
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![
@@ -871,6 +874,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
     );
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
         lines[..5].to_vec(),
@@ -899,6 +903,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
     session.status_dirty = false;
     session.open_menu(MenuTarget::Workspace("+5".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![
@@ -924,6 +929,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
     session.status_dirty = false;
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![
@@ -980,6 +986,7 @@ fn menu_rows_open_their_prompts_and_q_or_escape_close() {
         "an unknown window's menu names its id"
     );
     session.menu_click(&mut conn, 9);
+    settle(&mut session, &mut conn);
     assert!(session.menu().is_some(), "an off-panel row is consumed");
     assert!(session.menu_byte(b'x'), "other bytes leave it up");
     session.menu_key(&TermKeyEvent::functional(TermKey::Down, 0));

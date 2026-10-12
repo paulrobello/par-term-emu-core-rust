@@ -1651,15 +1651,17 @@ fn reseed_replies(
 /// Wait until every command the session wrote without waiting has been
 /// answered, so the fake daemon's recorded lines are all queued. Asserts
 /// that follow a routing call read the wire only after this.
-fn settle(_session: &mut WindowSession, conn: &mut crate::mux::attach::conn::AttachConn) {
+fn settle(session: &mut WindowSession, conn: &mut crate::mux::attach::conn::AttachConn) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while conn.outstanding() > 0 {
+    session.dispatch_replies(conn);
+    while conn.outstanding() > 0 || !session.pending_cmds.is_empty() {
         assert!(
             std::time::Instant::now() < deadline,
-            "settle: {} replies still outstanding",
-            conn.outstanding()
+            "settle: {} replies outstanding, {} continuations parked",
+            conn.outstanding(),
+            !session.pending_cmds.is_empty()
         );
-        drop(conn.poll_replies());
+        session.dispatch_replies(conn);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }

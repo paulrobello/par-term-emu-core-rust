@@ -83,56 +83,83 @@ impl WindowSession {
     fn chord_split(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, horizontal: bool) {
         let focused = self.focused_pane();
         let flag = if horizontal { " -h" } else { "" };
-        let Ok(Some(reply)) = self.ask(conn, &format!("split-window -t {focused}{flag}")) else {
-            return;
-        };
-        // The reply body is the new pane id; re-seed the window
-        // from the fresh layout (the split broadcast rides the
-        // reply), THEN focus the fresh pane — the renderer only
-        // knows the pane once the reseed installed the new
-        // layout, so the focus must come after.
-        let new_pane = reply
-            .body
-            .first()
-            .and_then(|id| id.trim().strip_prefix('%'))
-            .and_then(|n| n.parse::<u32>().ok());
-        let window = self.window.clone();
-        self.reseed_window(conn, &window);
-        if let Some(new_pane) = new_pane {
-            self.renderer.focus(new_pane);
-            let _ = conn.send_forget(&format!("select-pane -t %{new_pane}"));
-        }
+        let expected = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("split-window -t {focused}{flag}"),
+            move |s, c, reply| {
+                // A landing that completed since the split was issued moved
+                // the view off the window the new pane belongs to.
+                if !reply.ok || s.window != expected {
+                    return;
+                }
+                // The reply body is the new pane id; re-seed the window
+                // from the fresh layout (the split broadcast rides the
+                // reply), THEN focus the fresh pane — the renderer only
+                // knows the pane once the reseed installed the new
+                // layout, so the focus must come after.
+                let new_pane = reply
+                    .body
+                    .first()
+                    .and_then(|id| id.trim().strip_prefix('%'))
+                    .and_then(|n| n.parse::<u32>().ok());
+                let window = s.window.clone();
+                s.reseed_window(c, &window);
+                if let Some(new_pane) = new_pane {
+                    s.renderer.focus(new_pane);
+                    let _ = c.send_forget(&format!("select-pane -t %{new_pane}"));
+                }
+            },
+        );
     }
 
     fn chord_kill_pane(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let focused = self.focused_pane();
-        let Ok(Some(_)) = self.ask(conn, &format!("kill-pane -t {focused}")) else {
-            return;
-        };
-        // The window survives with a new active pane, or the view
-        // is over (the last pane died; %window-close's session
-        // contract ends the view through the status refresh). The
-        // survivor focus lands AFTER the re-seed (reseed_window
-        // resets focus to the first leaf).
-        let window = self.window.clone();
-        let Ok(listed) = self.ask(conn, &format!("list-panes -t {window}")) else {
-            return;
-        };
-        let survivor = listed.and_then(|reply| marked_pane(&reply.body, &window).ok());
-        if let Some(pane) = survivor {
-            self.reseed_window(conn, &window);
-            if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
-                self.renderer.focus(n);
-                let _ = conn.send_forget(&format!("select-pane -t %{n}"));
-            }
-            return;
-        }
-        // No survivor: the window closed. The pump's next status
-        // refresh lands on the session's active window, or ends
-        // the view when the session went with it. Ending NOW would
-        // skip the terminal restore; flag it and let the pump's
-        // normal path decide.
-        self.status_dirty = true;
+        let expected = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("kill-pane -t {focused}"),
+            move |s, c, reply| {
+                if !reply.ok || s.window != expected {
+                    return;
+                }
+                // The window survives with a new active pane, or the view
+                // is over (the last pane died; %window-close's session
+                // contract ends the view through the status refresh). The
+                // survivor focus lands AFTER the re-seed (reseed_window
+                // resets focus to the first leaf).
+                let window = s.window.clone();
+                s.send_then(
+                    c,
+                    &format!("list-panes -t {window}"),
+                    move |s, c, listed| {
+                        if s.window != window {
+                            return;
+                        }
+                        let survivor = listed
+                            .ok
+                            .then(|| marked_pane(&listed.body, &window).ok())
+                            .flatten();
+                        if let Some(pane) = survivor {
+                            s.reseed_window(c, &window);
+                            if let Some(n) =
+                                pane.trim().strip_prefix('%').and_then(|n| n.parse().ok())
+                            {
+                                s.renderer.focus(n);
+                                let _ = c.send_forget(&format!("select-pane -t %{n}"));
+                            }
+                            return;
+                        }
+                        // No survivor: the window closed. The pump's next
+                        // status refresh lands on the session's active window,
+                        // or ends the view when the session went with it.
+                        // Ending NOW would skip the terminal restore; flag it
+                        // and let the pump's normal path decide.
+                        s.status_dirty = true;
+                    },
+                );
+            },
+        );
     }
 
     /// Swap with the layout-order neighbor; the %layout-change
@@ -160,13 +187,14 @@ impl WindowSession {
         let Some(session) = self.status.session_id.clone() else {
             return;
         };
-        let Ok(Some(reply)) = self.ask(conn, &format!("new-window -t {session}")) else {
-            return;
-        };
-        let Some(window) = reply.body.first().map(|w| w.trim().to_string()) else {
-            return;
-        };
-        self.land_window(conn, &window);
+        self.send_then(conn, &format!("new-window -t {session}"), |s, c, reply| {
+            if !reply.ok {
+                return;
+            }
+            if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
+                s.land_window(c, &window);
+            }
+        });
     }
 
     /// tmux's zoom: the daemon's `resize-pane -Z` toggle. The
@@ -178,13 +206,19 @@ impl WindowSession {
     /// holds the truth.
     fn chord_zoom(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let focused = self.focused_pane();
-        let Ok(Some(_)) = self.ask(conn, &format!("resize-pane -t {focused} -Z")) else {
-            return;
-        };
-        self.zoomed = !self.zoomed;
-        self.chrome
-            .flash(if self.zoomed { "zoomed" } else { "unzoomed" }.to_string());
-        self.draw_status_row();
+        self.send_then(
+            conn,
+            &format!("resize-pane -t {focused} -Z"),
+            |s, _c, reply| {
+                if !reply.ok {
+                    return;
+                }
+                s.zoomed = !s.zoomed;
+                s.chrome
+                    .flash(if s.zoomed { "zoomed" } else { "unzoomed" }.to_string());
+                s.draw_status_row();
+            },
+        );
     }
 
     /// No flash cue: the flash paints ON the status row, so a

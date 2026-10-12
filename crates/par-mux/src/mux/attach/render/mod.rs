@@ -35,6 +35,7 @@ mod modal;
 mod navigate;
 mod paint;
 mod pane_chrome;
+mod pending_cmd;
 mod renderer;
 mod session;
 mod sidebar;
@@ -640,6 +641,8 @@ struct WindowSession {
     /// bound, as (pane, bytes) in typed order; flushed at the head of pump
     /// step 3.
     stdin_backlog: Vec<(String, Vec<u8>)>,
+    /// Continuations awaiting their command replies: see [`pending_cmd`].
+    pending_cmds: pending_cmd::PendingCommands,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -872,6 +875,7 @@ impl WindowSession {
             daemon_layout: Vec::new(),
             stdin_primer: Vec::new(),
             stdin_backlog: Vec::new(),
+            pending_cmds: pending_cmd::PendingCommands::default(),
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
@@ -915,7 +919,7 @@ impl WindowSession {
             if self.drain_pushes(conn).is_break() {
                 return Ok(());
             }
-            drop(conn.poll_replies());
+            self.dispatch_replies(conn);
 
             // 2. Parked work the event handlers queued (a layout re-fit,
             //    shared-selection follows), so this tick's input routes
@@ -1052,7 +1056,7 @@ impl WindowSession {
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
-        drop(conn.poll_replies());
+        self.dispatch_replies(conn);
         std::ops::ControlFlow::Continue(())
     }
 

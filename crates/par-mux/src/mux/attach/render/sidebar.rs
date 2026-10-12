@@ -176,24 +176,32 @@ impl WindowSession {
                 .map(|(id, name)| (id.clone(), name.clone(), Some(id) == active.as_ref()))
                 .collect()
         } else {
-            // A timeout keeps the panel's current sections rather than
-            // blanking it (ARC-137).
-            let Ok(listed) = self.ask(conn, "list-workspaces") else {
-                return;
-            };
-            listed
-                .map(|reply| {
+            // The roster arrives on a later tick; until then the panel
+            // keeps its current sections rather than blanking.
+            self.send_then(conn, "list-workspaces", |s, _c, reply| {
+                let roster: Vec<(String, String, bool)> = if reply.ok {
                     reply
                         .body
                         .iter()
                         .filter_map(|l| parse_workspace_line(l))
                         .collect()
-                })
-                .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                s.install_sidebar_roster(&roster);
+            });
+            return;
         };
+        self.install_sidebar_roster(&roster);
+    }
+
+    fn install_sidebar_roster(&mut self, roster: &[(String, String, bool)]) {
+        if !self.sidebar.is_on() {
+            return;
+        }
         let focused = self.renderer.focused();
         let sections = Self::sidebar_sections(
-            &roster,
+            roster,
             self.status.agents(),
             self.status.workspaces(),
             focused,
