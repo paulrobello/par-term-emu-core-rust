@@ -683,7 +683,7 @@ impl WindowSession {
                     self.focused_pane(),
                     wire_quote(&text)
                 );
-                let _ = self.ask(conn, &command);
+                let _ = conn.send_forget(&command);
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -692,15 +692,13 @@ impl WindowSession {
                 // daemon grammar's documented exception) — quoting would
                 // become part of the name (the manual-pass round-8
                 // report: renamed tabs wore literal quotes).
-                let _ = self.ask(conn, &format!("rename-window -t {id} {text}"));
+                let _ = conn.send_forget(&format!("rename-window -t {id} {text}"));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
             PromptTarget::Workspace(id) => {
-                let _ = self.ask(
-                    conn,
-                    &format!("rename-workspace -t {id} {}", wire_quote(&text)),
-                );
+                let _ =
+                    conn.send_forget(&format!("rename-workspace -t {id} {}", wire_quote(&text)));
                 self.leave_prompt();
                 self.status_dirty = true;
             }
@@ -1055,7 +1053,7 @@ impl WindowSession {
             (other, _) => other,
         };
         let command = format!("resize-pane -t {focused} {flag} {}", self.resize_step);
-        let _ = self.ask(conn, &command);
+        let _ = conn.send_forget(&command);
     }
 
     /// Leave scroll mode: clear the hold and snap the focused pane to

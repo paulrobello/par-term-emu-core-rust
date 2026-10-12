@@ -674,6 +674,40 @@ pub(crate) fn forward_chunked(conn: &mut conn::AttachConn, pane: String, bytes: 
     }
 }
 
+/// Unacknowledged commands past which key forwarding stops writing: a
+/// wedged daemon then costs a bounded backlog instead of unbounded socket
+/// buffering.
+const MAX_OUTSTANDING_KEYS: usize = 64;
+
+/// [`forward_chunked`] without waiting for replies: each chunk is written
+/// with `send_forget`. Stops once the connection owes more than
+/// [`MAX_OUTSTANDING_KEYS`] replies and returns the unsent tail for the
+/// caller to retry (empty when everything went out or the write failed).
+pub(crate) fn forward_keys<'a>(
+    conn: &mut conn::AttachConn,
+    pane: &str,
+    bytes: &'a [u8],
+) -> &'a [u8] {
+    let mut sent = 0;
+    for chunk in bytes.chunks(CHUNK) {
+        if conn.outstanding() > MAX_OUTSTANDING_KEYS {
+            return &bytes[sent..];
+        }
+        if conn
+            .send_forget(&format!(
+                "send-keys -t {} -H {}",
+                pane,
+                hex_byte_list(chunk)
+            ))
+            .is_err()
+        {
+            return &[];
+        }
+        sent += chunk.len();
+    }
+    &[]
+}
+
 /// The `send-keys -H` wire spelling: one space-separated hex byte pair
 /// per byte (`1b 5b 41`), as the daemon's bounded grammar parses — a
 /// single concatenated run (`1b5b41`) is rejected as an invalid byte.

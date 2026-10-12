@@ -5,7 +5,7 @@ use super::renderer::{pane_in_direction, PaneDir};
 use super::{DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, WindowSession};
 use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::PaneRect;
-use crate::mux::attach::{forward_chunked, ManagementKey};
+use crate::mux::attach::ManagementKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// What one host mouse report hits — the pure result of
@@ -155,9 +155,43 @@ impl WindowSession {
             if let Some(id) = self.renderer.focused() {
                 self.renderer.snap_to_live(id);
             }
-            forward_chunked(conn, self.focused_pane(), &to_send);
+            self.forward_keys(conn, self.focused_pane(), &to_send);
         }
         false
+    }
+
+    /// Forward input bytes to `pane` without waiting for the daemon. Bytes
+    /// the backpressure bound refused wait in `stdin_backlog`; while any
+    /// are parked, new bytes queue behind them so the pane sees the typed
+    /// order.
+    pub(super) fn forward_keys(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        pane: String,
+        bytes: &[u8],
+    ) {
+        if self.stdin_backlog.is_empty() {
+            let tail = crate::mux::attach::forward_keys(conn, &pane, bytes);
+            if !tail.is_empty() {
+                self.stdin_backlog.push((pane, tail.to_vec()));
+            }
+        } else {
+            self.stdin_backlog.push((pane, bytes.to_vec()));
+        }
+    }
+
+    /// Pump step 3's head: retry the parked bytes in order, stopping at the
+    /// first entry the bound refuses again.
+    pub(super) fn flush_stdin_backlog(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        while !self.stdin_backlog.is_empty() {
+            let (pane, bytes) = self.stdin_backlog.remove(0);
+            let tail = crate::mux::attach::forward_keys(conn, &pane, &bytes);
+            if !tail.is_empty() {
+                let tail = tail.to_vec();
+                self.stdin_backlog.insert(0, (pane, tail));
+                return;
+            }
+        }
     }
 
     /// A bracketed-paste body. It never meets the prefix scan or the
@@ -193,7 +227,7 @@ impl WindowSession {
             return;
         }
         self.renderer.snap_to_live(id);
-        forward_chunked(conn, self.focused_pane(), &bytes);
+        self.forward_keys(conn, self.focused_pane(), &bytes);
     }
 
     /// Hand a plain run to the modal that owns the keyboard, if one is
@@ -323,7 +357,7 @@ impl WindowSession {
             .map(|term| par_term_emu_core::keyboard::encode_key(ev, term))
             .unwrap_or_default();
         if !bytes.is_empty() && !focused.is_empty() {
-            forward_chunked(conn, focused, &bytes);
+            self.forward_keys(conn, focused, &bytes);
         }
     }
 
@@ -383,8 +417,10 @@ impl WindowSession {
                 self.draw_status_row();
                 return;
             };
-            if self
-                .ask(conn, &format!("swap-pane -s %{focused_id} -t %{next}"))
+            // The daemon applies one connection's lines in order, so nothing
+            // below needs the swap's reply.
+            if conn
+                .send_forget(&format!("swap-pane -s %{focused_id} -t %{next}"))
                 .is_err()
             {
                 return;
@@ -416,7 +452,7 @@ impl WindowSession {
         // The daemon unzooms on the select of a different pane; the
         // broadcast re-seeds the view.
         self.renderer.focus(next);
-        let _ = self.ask(conn, &format!("select-pane -t %{next}"));
+        let _ = conn.send_forget(&format!("select-pane -t %{next}"));
     }
 
     /// One host mouse report. Clicks on the tab strip switch windows;
@@ -483,7 +519,7 @@ impl WindowSession {
             }
             Hit::PanePress(rect) => {
                 self.renderer.focus(rect.pane);
-                let _ = self.ask(conn, &format!("select-pane -t %{}", rect.pane));
+                let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
                 if self.pane_owns_mouse(rect.pane) {
                     self.forward_mouse(conn, &rect, &mouse);
                 }
@@ -747,7 +783,7 @@ impl WindowSession {
             if let Some(DragState::Pending { .. }) = state {
                 if let Some(rect) = self.renderer.pane_at(x, y).cloned() {
                     self.renderer.focus(rect.pane);
-                    let _ = self.ask(conn, &format!("select-pane -t %{}", rect.pane));
+                    let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
                     let mouse = SgrMouse {
                         cb: 0,
                         col: x + 1,
@@ -831,7 +867,7 @@ impl WindowSession {
             n = step.abs()
         );
         *applied = *pending;
-        let _ = self.ask(conn, &command);
+        let _ = conn.send_forget(&command);
     }
 
     /// Re-encode one host mouse report pane-relative and send it. The
@@ -861,6 +897,6 @@ impl WindowSession {
             .saturating_sub(rect.y + inset_y)
             .min(view_h.saturating_sub(1));
         let bytes = mouse.reencode_sgr(rel_col, rel_row);
-        forward_chunked(conn, format!("%{}", rect.pane), &bytes);
+        self.forward_keys(conn, format!("%{}", rect.pane), &bytes);
     }
 }

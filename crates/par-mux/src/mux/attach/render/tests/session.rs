@@ -1596,7 +1596,9 @@ fn split_mouse_report_across_pump_ticks_routes_once() {
     session.renderer.focus(2);
     let mut prefix_pending = false;
     assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[<0;10;", &mut prefix_pending));
+    settle(&mut session, &mut conn);
     assert!(!session.route_stdin_bytes(&mut conn, b"5M", &mut prefix_pending));
+    settle(&mut session, &mut conn);
     assert_eq!(
         session.renderer.focused(),
         Some(1),
@@ -1626,7 +1628,9 @@ fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
     session.renderer.feed_output(1, b"\x1b[?2004h");
     let mut prefix_pending = false;
     assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[200~ab", &mut prefix_pending));
+    settle(&mut session, &mut conn);
     assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~", &mut prefix_pending));
+    settle(&mut session, &mut conn);
     assert!(
         !prefix_pending,
         "a pasted prefix byte never arms the prefix"
@@ -1654,6 +1658,7 @@ fn paste_into_a_plain_pane_forwards_the_body_bare() {
         b"\x1b[200~ab\x02xcd\x1b[201~",
         &mut prefix_pending,
     );
+    settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"ab\x02xcd")]);
 }
 
@@ -1664,8 +1669,10 @@ fn paste_cancels_a_pending_prefix() {
     let (rx, mut conn, mut session) = paste_session("paste-prefix");
     let mut prefix_pending = false;
     session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B], &mut prefix_pending);
+    settle(&mut session, &mut conn);
     assert!(prefix_pending);
     session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~", &mut prefix_pending);
+    settle(&mut session, &mut conn);
     assert!(!prefix_pending);
     let lines = drained(&rx);
     assert_eq!(lines, vec![hex_wire("%1", b"xd")], "{lines:?}");
@@ -1684,6 +1691,7 @@ fn embedded_paste_terminator_is_stripped() {
         b"a\x1b[201~b\x1b[201\x1b[201~~c",
         &mut prefix_pending,
     );
+    settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"\x1b[200~abc\x1b[201~")]);
 }
 
@@ -2806,7 +2814,10 @@ fn focus_pane_stops_when_select_pane_fails() {
         },
     );
     session.focus_pane(&mut conn, 9);
-    assert_eq!(drained(&rx), vec!["select-pane -t %9"]);
+    settle(&mut session, &mut conn);
+    // Pipelined: the pane-info rides behind the select without waiting for
+    // its refusal; the refused select leaves no pane-info row to land on.
+    assert_eq!(drained(&rx), vec!["select-pane -t %9", "pane-info -t %9"]);
     assert_eq!(session.window, "@0", "the view stays put");
     assert_eq!(
         session.chrome.flash_text(),

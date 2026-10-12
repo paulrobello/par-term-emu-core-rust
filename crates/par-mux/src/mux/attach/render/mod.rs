@@ -636,6 +636,10 @@ struct WindowSession {
     /// Stdin bytes the OSC 11 background probe consumed before the pump
     /// started — primed back into the stdin stream on the first pump.
     stdin_primer: Vec<u8>,
+    /// Input bytes `forward_keys` could not send under the outstanding-reply
+    /// bound, as (pane, bytes) in typed order; flushed at the head of pump
+    /// step 3.
+    stdin_backlog: Vec<(String, Vec<u8>)>,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -867,6 +871,7 @@ impl WindowSession {
             zoomed: false,
             daemon_layout: Vec::new(),
             stdin_primer: Vec::new(),
+            stdin_backlog: Vec::new(),
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
@@ -906,10 +911,11 @@ impl WindowSession {
             //    below reads this snapshot rather than the live tty size.
             self.refresh_geometry();
 
-            // 1. Drain daemon pushes.
+            // 1. Drain daemon pushes, then resolve arrived replies.
             if self.drain_pushes(conn).is_break() {
                 return Ok(());
             }
+            drop(conn.poll_replies());
 
             // 2. Parked work the event handlers queued (a layout re-fit,
             //    shared-selection follows), so this tick's input routes
@@ -918,9 +924,11 @@ impl WindowSession {
                 return Ok(());
             }
 
-            // 3. Stdin: prefix routing (d detaches, [ enters scroll mode,
+            // 3. Stdin: first retry bytes the backpressure bound parked,
+            //    then prefix routing (d detaches, [ enters scroll mode,
             //    n/p/(/) switch windows/sessions), then keys/mouse to the
             //    focused pane.
+            self.flush_stdin_backlog(conn);
             if self.pump_stdin(conn, &mut stdin, &mut prefix_pending) {
                 return Ok(());
             }
@@ -1044,6 +1052,7 @@ impl WindowSession {
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
+        drop(conn.poll_replies());
         std::ops::ControlFlow::Continue(())
     }
 

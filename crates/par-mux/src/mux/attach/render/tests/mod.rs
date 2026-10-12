@@ -1648,6 +1648,22 @@ fn reseed_replies(
     replies.insert(format!("list-panes -t {window}"), panes.to_string());
 }
 
+/// Wait until every command the session wrote without waiting has been
+/// answered, so the fake daemon's recorded lines are all queued. Asserts
+/// that follow a routing call read the wire only after this.
+fn settle(_session: &mut WindowSession, conn: &mut crate::mux::attach::conn::AttachConn) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while conn.outstanding() > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "settle: {} replies still outstanding",
+            conn.outstanding()
+        );
+        drop(conn.poll_replies());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// A two-pane session showing `@0` of `$0`, the fake daemon scripted.
 fn two_pane_session(
     tag: &str,
@@ -1675,7 +1691,9 @@ fn chord(
     key: u8,
 ) -> bool {
     let mut prefix_pending = false;
-    session.route_plain(&[crate::mux::attach::C_B, key], conn, &mut prefix_pending)
+    let detached = session.route_plain(&[crate::mux::attach::C_B, key], conn, &mut prefix_pending);
+    settle(session, conn);
+    detached
 }
 
 /// Type `text` into the open prompt as plain bytes, then Enter.
@@ -1689,6 +1707,7 @@ fn type_and_commit(
     bytes.push(b'\r');
     let mut prefix_pending = false;
     session.route_plain(&bytes, conn, &mut prefix_pending);
+    settle(session, conn);
 }
 
 /// A 1-based SGR press/release/wheel at host `(col, row)`.

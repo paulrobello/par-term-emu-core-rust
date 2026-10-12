@@ -100,7 +100,7 @@ impl WindowSession {
         self.reseed_window(conn, &window);
         if let Some(new_pane) = new_pane {
             self.renderer.focus(new_pane);
-            let _ = self.ask(conn, &format!("select-pane -t %{new_pane}"));
+            let _ = conn.send_forget(&format!("select-pane -t %{new_pane}"));
         }
     }
 
@@ -123,7 +123,7 @@ impl WindowSession {
             self.reseed_window(conn, &window);
             if let Some(n) = pane.trim().strip_prefix('%').and_then(|n| n.parse().ok()) {
                 self.renderer.focus(n);
-                let _ = self.ask(conn, &format!("select-pane -t %{n}"));
+                let _ = conn.send_forget(&format!("select-pane -t %{n}"));
             }
             return;
         }
@@ -153,7 +153,7 @@ impl WindowSession {
         };
         let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
         let focused = self.focused_pane();
-        let _ = self.ask(conn, &format!("swap-pane -s {focused} -t %{next}"));
+        let _ = conn.send_forget(&format!("swap-pane -s {focused} -t %{next}"));
     }
 
     fn chord_new_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
@@ -331,9 +331,14 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         pane: u32,
     ) {
-        let Ok(Some(_)) = self.ask(conn, &format!("select-pane -t %{pane}")) else {
-            return; // the pane is gone, the select was refused, or the daemon is busy
-        };
+        // In-order daemon: the pane-info below observes the select. A gone
+        // pane yields no pane-info row, which lands in the status_dirty arm.
+        if conn
+            .send_forget(&format!("select-pane -t %{pane}"))
+            .is_err()
+        {
+            return;
+        }
         let Ok(info) = self.ask(conn, &format!("pane-info -t %{pane}")) else {
             return;
         };
@@ -369,8 +374,10 @@ impl WindowSession {
         // selecting, leaving the highlight on the old workspace (the
         // manual-pass round-8 report). Idempotent for the keybind path,
         // which selects before landing.
-        if self
-            .ask(conn, &format!("select-workspace -t {ws_id}"))
+        // The daemon applies one connection's lines in order, so the
+        // roster queries below observe the select without waiting for it.
+        if conn
+            .send_forget(&format!("select-workspace -t {ws_id}"))
             .is_err()
         {
             return;
@@ -403,7 +410,7 @@ impl WindowSession {
             Ok(file) => file,
             Err(err) => {
                 self.chrome.flash(format!("reload failed: {err}"));
-                let _ = self.ask(conn, "reload-config");
+                let _ = conn.send_forget("reload-config");
                 return;
             }
         };
@@ -442,7 +449,7 @@ impl WindowSession {
                 self.chrome.flash(format!("reload failed: {err}"));
             }
         }
-        let _ = self.ask(conn, "reload-config");
+        let _ = conn.send_forget("reload-config");
     }
 
     /// prefix o: select the next pane in the window's layout-leaf order,
@@ -460,7 +467,7 @@ impl WindowSession {
             .unwrap_or(0);
         let next = order[(current + 1) % order.len()];
         self.renderer.focus(next);
-        let _ = self.ask(conn, &format!("select-pane -t %{next}"));
+        let _ = conn.send_forget(&format!("select-pane -t %{next}"));
     }
 
     /// prefix n/p: move to the next/previous window of the shown session

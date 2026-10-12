@@ -1141,19 +1141,24 @@ fn plain_router_forwards_literals_and_consumes_unbound_keys() {
         &mut conn,
         &mut pending
     ));
+    settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["send-keys -t %1 -H 02 61".to_string()]);
     assert!(!session.route_plain(&[crate::mux::attach::C_B, b'Q'], &mut conn, &mut pending));
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "an unbound chord key is consumed");
     // A prefix at the END of one run completes in the next run.
     assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn, &mut pending));
+    settle(&mut session, &mut conn);
     assert!(pending);
     assert!(
         session.route_plain(b"d", &mut conn, &mut pending),
         "d detaches"
     );
+    settle(&mut session, &mut conn);
 
     session.modal = Modal::Resize;
     assert!(!session.route_plain(b"xyz", &mut conn, &mut pending));
+    settle(&mut session, &mut conn);
     assert!(!session.is_resize(), "a typed run leaves resize mode");
     assert!(drained(&rx).is_empty(), "and nothing leaks into the pane");
 }
@@ -1169,24 +1174,29 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     let right = TermKeyEvent::functional(TermKey::Right, 0);
     let left = TermKeyEvent::functional(TermKey::Left, 0);
     session.prefix_pane_arrow(&mut conn, &left);
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "the left edge: nowhere to go");
     session.prefix_pane_arrow(&mut conn, &right);
+    settle(&mut session, &mut conn);
     assert_eq!(session.renderer.focused(), Some(2));
     assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
     session.prefix_pane_arrow(
         &mut conn,
         &TermKeyEvent::functional(TermKey::Right, par_term_emu_core::keyboard::modifiers::ALT),
     );
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "a non-shift modifier is ignored");
 
     let shift = par_term_emu_core::keyboard::modifiers::SHIFT;
     session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Right, shift));
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty());
     assert_eq!(
         session.chrome.flash_text(),
         Some("no pane in that direction")
     );
     session.prefix_pane_arrow(&mut conn, &TermKeyEvent::functional(TermKey::Left, shift));
+    settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["swap-pane -s %2 -t %1".to_string()]);
     assert_eq!(session.chrome.flash_text(), Some("swapped %2 with %1"));
 
@@ -1199,6 +1209,7 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     session.renderer.focus(1);
     session.zoomed = true;
     session.prefix_pane_arrow(&mut conn, &right);
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec!["select-pane -t %2".to_string()],
@@ -1397,19 +1408,25 @@ fn picker_keys_move_filter_and_close() {
 fn mouse_press_focuses_and_zero_coordinates_drop() {
     let (rx, mut conn, mut session) = two_pane_session("m-press", FakeScript::default());
     session.route_mouse(&mut conn, sgr(0, 0, 5, false));
+    settle(&mut session, &mut conn);
     session.route_mouse(&mut conn, sgr(0, 60, 0, false));
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "zero coordinates are dropped");
     // Host col 61 (x 60), host row 6 (content row 4): pane 2.
     session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
     assert_eq!(session.renderer.focused(), Some(2));
     assert_eq!(drained(&rx), vec!["select-pane -t %2".to_string()]);
     // A release/motion over a pane that does not own the mouse does
     // nothing; neither does a press past the layout's last row.
     session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+    settle(&mut session, &mut conn);
     session.route_mouse(&mut conn, sgr(32, 10, 6, false));
+    settle(&mut session, &mut conn);
     // (The 24-row daemon layout overhangs the 23-row renderer, so
     // the first row past it is host row 26.)
     session.route_mouse(&mut conn, sgr(0, 10, 26, false));
+    settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty());
     assert_eq!(session.renderer.focused(), Some(2));
 }
@@ -1425,6 +1442,7 @@ fn mouse_owning_pane_receives_rebased_sgr_reports() {
     // Host (61, 6) 1-based → x 60, content row 4 → pane 2 origin
     // x 40: pane-relative (20, 4) → SGR `ESC[<0;21;5M`.
     session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
     let hex = |s: &str| {
         s.bytes()
             .map(|b| format!("{b:02x}"))
@@ -1439,6 +1457,7 @@ fn mouse_owning_pane_receives_rebased_sgr_reports() {
         ]
     );
     session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![format!("send-keys -t %2 -H {}", hex("\x1b[<0;21;5m"))]
@@ -1449,6 +1468,7 @@ fn mouse_owning_pane_receives_rebased_sgr_reports() {
             .feed_output(2, format!("h{i}\r\n").as_bytes());
     }
     session.route_mouse(&mut conn, sgr(64, 61, 6, false));
+    settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
         vec![format!("send-keys -t %2 -H {}", hex("\x1b[<64;21;5M"))]
@@ -1645,10 +1665,13 @@ fn help_panel_pointer_scrolls_and_swallows_presses() {
 fn drag_owns_the_pointer_until_release_even_on_the_strip_row() {
     let (rx, mut conn, mut session) = two_pane_session("m-drag", FakeScript::default());
     session.route_mouse(&mut conn, sgr(0, 40, 6, false));
+    settle(&mut session, &mut conn);
     assert!(matches!(session.drag, Some(DragState::Pending { .. })));
     session.route_mouse(&mut conn, sgr(64, 10, 6, false));
+    settle(&mut session, &mut conn);
     assert!(session.drag.is_some(), "the wheel waits for the drag");
     session.route_mouse(&mut conn, sgr(0, 42, 1, true));
+    settle(&mut session, &mut conn);
     assert!(session.drag.is_none(), "release on the strip row ends it");
     // A motionless drag is a click: no resize, the release point's
     // pane (content row 0 under the strip row) takes focus.
@@ -1923,6 +1946,7 @@ fn mouse_rebase_follows_the_pane_border_inset() {
     // Host (61, 6) 1-based: content (60, 4) 0-based = the pane's inner
     // cell (19, 3) under the border ring (pane x 40 + 1, y 0 + 1).
     session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
     let hex = |s: &str| {
         s.bytes()
             .map(|b| format!("{b:02x}"))
