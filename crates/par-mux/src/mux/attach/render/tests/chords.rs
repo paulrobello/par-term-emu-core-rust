@@ -1717,6 +1717,30 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     assert_eq!(session.mouse_hit(&sgr(0, 17, 24, false)), Hit::SidebarMenu);
 }
 
+/// An agent row click lands on the agent's pane: the hit resolves the
+/// `pane:` id and the handler moves the daemon's shared focus.
+#[test]
+fn sidebar_agent_row_click_focuses_the_pane() {
+    let mut session = WindowSession::new(80, 25);
+    show_sidebar(&mut session);
+    session
+        .renderer
+        .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            rows: vec![(
+                "pane:7".to_string(),
+                "main \u{b7} kimi (blocked)".to_string(),
+                false,
+            )],
+        }]));
+    // The agent row paints on the renderer's composed row 1 = SGR row 2
+    // (the same mapping the workspace rows follow).
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 2, false)),
+        Hit::SidebarPane { pane: 7 },
+        "a left press on the agent row resolves its pane"
+    );
+}
+
 /// Drags in flight, the prompt, the picker, and the help panel.
 #[test]
 fn mouse_hit_maps_drags_and_the_pointer_modals() {
