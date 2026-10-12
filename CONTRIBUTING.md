@@ -51,6 +51,7 @@ make lint-python  # Python ruff format + check + pyright
 ```
 
 - `make mux-docs-check` fails until a new mux command, notification or notification type is listed in MUX.md and API_REFERENCE, and when MUX.md, a par-mux `[Unreleased]` CHANGELOG bullet, or `config.rs` rustdoc names a `--flag` that `par-mux`'s clap surface does not define (another program's flag goes in `FOREIGN_FLAGS` with a reason).
+- Cite regression tests as `pinned by `<test_fn>`. `pinned-tests-check` fails when the named test no longer exists, so a rename must update its citation in the same change.
 - `make audit-deps` runs the dependency audits (cargo deny, `bun audit`, `pip-audit`) across the Rust graph, the web frontend and the Python environment. It needs network, is not part of `checkall`, and runs weekly in CI (`.github/workflows/deps-audit.yml`); accepted advisories and their reasons live in `deny.toml`.
 
 Do not push until `make checkall` passes cleanly. When fixing a failing test, confirm you are fixing the actual bug and not papering over a real issue in the code.
