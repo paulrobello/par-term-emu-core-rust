@@ -1491,6 +1491,65 @@ fn mouse_owning_pane_receives_rebased_sgr_reports() {
     );
 }
 
+/// The host captures in any-event mode, so every hover arrives as a
+/// report — but a pane that negotiated only mode 1000 (htop's
+/// press/release tracking) never asked for motion, and a forwarded
+/// hover (cb 35) reads as button-3 activity to an ncurses app: the
+/// manual-pass "menus on mouse-over" defect. Motion — hover AND drag
+/// — is consumed over a Normal-mode pane; press/release still land.
+#[test]
+fn motion_is_not_forwarded_to_a_normal_mode_pane() {
+    let (rx, mut conn, mut session) = two_pane_session("m-hover", FakeScript::default());
+    session.renderer.feed_output(2, b"\x1b[?1000h\x1b[?1006h");
+    // Hover motion (cb 35) over pane 2: consumed, nothing sent.
+    session.route_mouse(&mut conn, sgr(35, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert!(
+        drained(&rx).is_empty(),
+        "hover forwarded to a mode-1000 pane"
+    );
+    // Drag motion (cb 32) is also not part of mode 1000.
+    session.route_mouse(&mut conn, sgr(32, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert!(
+        drained(&rx).is_empty(),
+        "drag motion forwarded to a mode-1000 pane"
+    );
+    // A press still focuses and forwards.
+    session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 2, "select-pane + send-keys");
+    // A release still forwards (mode 1000 reports press and release).
+    session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1);
+}
+
+/// Motion forwarding follows the pane's negotiated mode: a 1002 pane
+/// receives drags (motion with a button held) but not hovers; a 1003
+/// pane asked for every motion and gets them.
+#[test]
+fn motion_forwarding_follows_the_panes_mouse_mode() {
+    let (rx, mut conn, mut session) = two_pane_session("m-motion", FakeScript::default());
+    session.renderer.feed_output(2, b"\x1b[?1002h\x1b[?1006h");
+    // Drag motion forwards to the button-event pane.
+    session.route_mouse(&mut conn, sgr(32, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1, "drag forwards in mode 1002");
+    // Hover motion does not.
+    session.route_mouse(&mut conn, sgr(35, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert!(
+        drained(&rx).is_empty(),
+        "hover forwarded to a mode-1002 pane"
+    );
+    // The same hover forwards once the pane upgrades to 1003.
+    session.renderer.feed_output(2, b"\x1b[?1003h");
+    session.route_mouse(&mut conn, sgr(35, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1, "hover forwards in mode 1003");
+}
+
 /// The side panel's pointer: a left press on a workspace row lands
 /// on it, a RIGHT press opens that workspace's menu, the `new` chip
 /// opens the new-workspace prompt, and a release in the panel does

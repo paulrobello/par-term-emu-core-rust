@@ -87,6 +87,25 @@ impl SgrMouse {
         self.cb & 32 != 0 && !self.is_wheel_up() && !self.is_wheel_down()
     }
 
+    /// For a motion report, the button held during the motion (0 left,
+    /// 1 middle, 2 right); `None` for a no-button hover report (the low
+    /// bits read 3) and for every non-motion report.
+    pub fn motion_button(&self) -> Option<u8> {
+        if !self.is_motion() {
+            return None;
+        }
+        match self.cb & 0x3 {
+            3 => None,
+            button => Some(button),
+        }
+    }
+
+    /// A button PRESS — not release, motion, or wheel: the one report
+    /// every tracking mode (X10 included) accepts.
+    pub fn is_press(&self) -> bool {
+        !self.release && !self.is_motion() && !self.is_wheel_up() && !self.is_wheel_down()
+    }
+
     /// The pressed-button index (0 left, 1 middle, 2 right); the low two
     /// bits of the button code.
     #[cfg(test)]

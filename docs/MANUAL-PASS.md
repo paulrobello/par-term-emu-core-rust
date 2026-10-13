@@ -40,6 +40,9 @@ Per terminal, in passthrough then render mode, check:
   garbage row appears, the status bar stays painted (render mode).
 - **Mouse**: a click moves the focus highlight (render); in vim with
   `:set mouse=a`, clicks and wheel land inside the pane, not the host.
+  Hovering (no button) over an htop pane must do nothing — motion reaches a
+  pane only when the pane requested it (1002 for drags, 1003 for hover);
+  menus opening on hover is the failure this checks.
 - **Scroll**: render mode — wheel scrolls the client's scrollback view when the
   pane does not own mouse mode; prefix `[` scrolls, `q` snaps back to live, and
   keys reach the pane afterwards. Passthrough — wheel reaches the pane.

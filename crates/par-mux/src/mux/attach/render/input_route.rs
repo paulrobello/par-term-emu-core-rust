@@ -505,11 +505,11 @@ impl WindowSession {
             Hit::TabMenu(id) => self.open_menu(MenuTarget::Tab(id)),
             Hit::TabPress(rx) => self.tab_click(conn, rx),
             Hit::Wheel { rect, x, cy, delta } => {
-                let owns = self.pane_owns_mouse(rect.pane);
-                if !owns && self.renderer.wheel_scroll(x, cy, delta) {
+                let forwards = self.pane_accepts_mouse(rect.pane, &mouse);
+                if !forwards && self.renderer.wheel_scroll(x, cy, delta) {
                     return; // consumed client-side
                 }
-                if owns {
+                if forwards {
                     self.forward_mouse(conn, &rect, &mouse);
                 }
             }
@@ -520,7 +520,7 @@ impl WindowSession {
             Hit::PanePress(rect) => {
                 self.renderer.focus(rect.pane);
                 let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
-                if self.pane_owns_mouse(rect.pane) {
+                if self.pane_accepts_mouse(rect.pane, &mouse) {
                     self.forward_mouse(conn, &rect, &mouse);
                 }
             }
@@ -715,10 +715,10 @@ impl WindowSession {
                     release: mouse.release,
                 };
             }
-            // Drag/release only matter to a pane that owns the mouse;
-            // focus follows press only.
+            // Drag/release only matter to a pane whose mode accepts
+            // them; focus follows press only.
             return match self.renderer.pane_at(x, cy) {
-                Some(rect) if self.pane_owns_mouse(rect.pane) => Hit::PaneForward(*rect),
+                Some(rect) if self.pane_accepts_mouse(rect.pane, mouse) => Hit::PaneForward(*rect),
                 _ => Hit::Consumed,
             };
         }
@@ -757,11 +757,26 @@ impl WindowSession {
         self.land_window(conn, &id);
     }
 
-    /// Whether `pane`'s emulator tracks the mouse (the forwarding gate).
-    pub(super) fn pane_owns_mouse(&self, pane: u32) -> bool {
-        self.renderer
-            .pane_terminal(pane)
-            .is_some_and(|t| t.mouse_mode() != par_term_emu_core::mouse::MouseMode::Off)
+    /// Whether the pane's negotiated mouse mode accepts THIS report —
+    /// the per-event forwarding gate. The host captures in any-event
+    /// mode (crossterm's `EnableMouseCapture` enables 1003), so every
+    /// hover arrives as a report, but a pane that negotiated only 1000
+    /// (htop, vim's defaults) never asked for motion, and a forwarded
+    /// hover (cb 35) reads as button-3 activity to an ncurses app.
+    /// Presses go to any tracking pane; releases need 1000+; drag
+    /// motion needs 1002+; hover motion needs 1003.
+    pub(super) fn pane_accepts_mouse(&self, pane: u32, mouse: &SgrMouse) -> bool {
+        use par_term_emu_core::mouse::MouseMode;
+        let Some(mode) = self.renderer.pane_terminal(pane).map(|t| t.mouse_mode()) else {
+            return false;
+        };
+        match mode {
+            MouseMode::Off => false,
+            MouseMode::X10 => mouse.is_press(),
+            MouseMode::Normal => !mouse.is_motion(),
+            MouseMode::ButtonEvent => mouse.motion_button().is_some() || !mouse.is_motion(),
+            MouseMode::AnyEvent => true,
+        }
     }
 
     /// One motion or release while a drag is in flight: motion promotes a
@@ -790,7 +805,7 @@ impl WindowSession {
                         row: y + 1,
                         release: true,
                     };
-                    if self.pane_owns_mouse(rect.pane) {
+                    if self.pane_accepts_mouse(rect.pane, &mouse) {
                         self.forward_mouse(conn, &rect, &mouse);
                     }
                 }
