@@ -101,7 +101,14 @@ impl Drop for MuxFixture {
 /// here with the partial block in hand. A single read that never RETURNS
 /// (a wedged daemon holding the socket open) is nextest's
 /// `terminate-after` to kill, not this loop's.
-const COMMAND_DEADLINE: Duration = Duration::from_secs(10);
+///
+/// This is a starvation bound, not a timing assertion: during a full gate
+/// the machine also runs concurrent suites, and `pane-info` was measured
+/// exceeding 10 s of dispatch latency under that load (card "mux_restart
+/// respawn test times out under full-gate load") while the isolated run
+/// finished in 1.1 s. 30 s keeps wedged-daemon detection where a healthy
+/// daemon answers in milliseconds and stops the suite in seconds.
+const COMMAND_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Run one command and drain its `%begin`…`%end` block. Pushed `%output`
 /// notifications may interleave with the reply; they are collected as body
