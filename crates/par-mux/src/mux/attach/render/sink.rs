@@ -22,12 +22,18 @@ impl FlushSink for StdoutSink {
             write_styled(&mut out, cell);
             out.push_str(cell.symbol());
         }
+        super::trace_input(format_args!(
+            "frame flush {} cells {} bytes",
+            diff.len(),
+            out.len()
+        ));
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(out.as_bytes());
         let _ = stdout.flush();
     }
 
     fn repaint_all(&mut self) {
+        super::trace_input(format_args!("repaint_all (clear screen)"));
         let mut stdout = std::io::stdout().lock();
         // Clear, home, hide the cursor — the renderer owns the screen.
         let _ = stdout.write_all(b"\x1b[2J\x1b[H\x1b[?25l");

@@ -470,6 +470,7 @@ impl WindowSession {
 
     pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8]) {
         if let Some(n) = pane_id.strip_prefix('%').and_then(|n| n.parse().ok()) {
+            super::trace_input(format_args!("feed pane %{n} {} bytes", data.len()));
             self.renderer.feed_output(n, data);
         }
     }
