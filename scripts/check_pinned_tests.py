@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,7 +38,7 @@ PY_TEST_RE = re.compile(r"^def (test_[a-z0-9_]+)\(", re.MULTILINE)
 SKIP_DIRS = {"target", "node_modules"}
 
 
-def fail(msg: str) -> None:
+def fail(msg: str) -> NoReturn:
     print(msg)
     raise SystemExit(1)
 
@@ -98,11 +99,8 @@ def check_text(
     offset: int,
 ) -> int:
     total = 0
-    base_line = (
-        text[: CLAUSE_RE.search(text).start()].count("\n") + 1
-        if CLAUSE_RE.search(text)
-        else 1
-    )
+    first = CLAUSE_RE.search(text)
+    base_line = text[: first.start()].count("\n") + 1 if first else 1
     for m in CLAUSE_RE.finditer(text):
         total += 1
         line = offset + base_line + text[m.start() : m.start()].count("\n")

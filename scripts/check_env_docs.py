@@ -20,6 +20,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_mux_docs import strip_test_modules
@@ -88,7 +89,7 @@ HELPER_PARAMS = {
 }
 
 
-def fail(msg: str) -> None:
+def fail(msg: str) -> NoReturn:
     print(msg)
     raise SystemExit(1)
 
