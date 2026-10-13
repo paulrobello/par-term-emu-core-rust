@@ -207,7 +207,8 @@ fn embedded_extension_drives_the_daemon(agent: &str, file: &str, expected: usize
         String::from_utf8_lossy(&run.stderr)
     );
 
-    let state_line = format!("%agent-state-changed {pane} {agent} working source=hook");
+    // ENH-061: every push carries the pane's owning workspace after source=.
+    let state_line = format!("%agent-state-changed {pane} {agent} working source=hook ws=+0");
     let released_line = format!("%agent-released {pane} {agent}");
     let mut broadcasts = 0usize;
     let mut released = false;
