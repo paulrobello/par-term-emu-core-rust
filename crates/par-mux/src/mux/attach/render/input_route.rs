@@ -473,6 +473,10 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         mouse: SgrMouse,
     ) {
+        super::trace_input(format_args!(
+            "mouse cb={} col={} row={} release={}",
+            mouse.cb, mouse.col, mouse.row, mouse.release
+        ));
         match self.mouse_hit(&mouse) {
             Hit::Consumed => {}
             Hit::MenuRow(row) => self.menu_click(conn, row),
@@ -524,6 +528,10 @@ impl WindowSession {
                 // as the menu opening twice. Focus follows press on
                 // change alone.
                 let changed = self.renderer.focused() != Some(rect.pane);
+                super::trace_input(format_args!(
+                    "PanePress pane=%{} changed={}",
+                    rect.pane, changed
+                ));
                 self.renderer.focus(rect.pane);
                 if changed {
                     let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
@@ -814,6 +822,11 @@ impl WindowSession {
             .saturating_sub(rect.y + inset_y)
             .min(view_h.saturating_sub(1));
         let bytes = mouse.reencode_sgr(rel_col, rel_row);
+        super::trace_input(format_args!(
+            "forward pane=%{} bytes={:?}",
+            rect.pane,
+            String::from_utf8_lossy(&bytes)
+        ));
         self.forward_keys(conn, format!("%{}", rect.pane), &bytes);
     }
 }

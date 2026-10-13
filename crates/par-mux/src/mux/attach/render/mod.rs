@@ -422,6 +422,30 @@ pub(crate) fn trace_none<T>(reason: std::fmt::Arguments<'_>) -> Option<T> {
     None
 }
 
+/// Opt-in input diagnostics (`PAR_MUX_INPUT_TRACE=1`): every host mouse
+/// report, the router's hit, and every byte forwarded to a pane land on
+/// stderr with timestamps, so a live misbehavior repro names the events
+/// that reached the pane (the htop menu defect hunt). Redirect stderr
+/// (`2>/tmp/input.log`) or the lines paint into the screen.
+pub(crate) fn input_trace() -> bool {
+    use std::sync::OnceLock;
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| {
+        std::env::var("PAR_MUX_INPUT_TRACE").is_ok_and(|v| v != "0" && !v.is_empty())
+    })
+}
+
+/// Write one input-trace line to stderr when `PAR_MUX_INPUT_TRACE` is set.
+pub(crate) fn trace_input(line: std::fmt::Arguments<'_>) {
+    if input_trace() {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(std::io::stderr(), "par-mux input-trace[{t}]: {line}");
+    }
+}
+
 /// The Phase B render-mode attach session: connect, seed the window's
 /// panes from the daemon (layout via a size-report `%layout-change`,
 /// per-pane state via the `refresh-client -t` replays), then pump
