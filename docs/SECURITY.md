@@ -1382,7 +1382,7 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
-| `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:25` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
+| `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:26` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:572` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:574` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:576` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
