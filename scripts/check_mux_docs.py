@@ -899,7 +899,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help=f"copy the inputs to a temp dir, inject one drift per contract, assert each is reported",
+        help="copy the inputs to a temp dir, inject one drift per contract, assert each is reported",
     )
     args = parser.parse_args(argv)
     if args.self_test:

@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # A pinned clause: the word "pinned" to the end of its sentence (". ", ";"
 # or end of line). Qualifiers may sit between "pinned" and "by".
-CLAUSE_RE = re.compile(r"\b[Pp]inned\b(?P<clause>[^\n]*?)(?=\.(?:\s|$)|;|$)", re.MULTILINE)
+CLAUSE_RE = re.compile(
+    r"\b[Pp]inned\b(?P<clause>[^\n]*?)(?=\.(?:\s|$)|;|$)", re.MULTILINE
+)
 # Candidate test names: lowercase snake_case only (skips `_Static_assert`,
 # paths, flags).
 CITED_RE = re.compile(r"`([a-z][a-z0-9_]*)`")
@@ -73,22 +75,34 @@ def citations(root: Path, names: set[str]) -> tuple[list[tuple[str, int, str]], 
     dangling: list[tuple[str, int, str]] = []
     total = 0
     for doc in sorted(root.glob("docs/*.md")):
-        total += check_text(doc.read_text(encoding="utf-8"), doc.name, names, dangling, 0)
+        total += check_text(
+            doc.read_text(encoding="utf-8"), doc.name, names, dangling, 0
+        )
     changelog = root / "CHANGELOG.md"
     if changelog.is_file():
         text = changelog.read_text(encoding="utf-8")
         m = UNRELEASED_RE.search(text)
         if m:
             offset = text[: m.start("body")].count("\n") + 1
-            total += check_text(m.group("body"), "CHANGELOG.md", names, dangling, offset)
+            total += check_text(
+                m.group("body"), "CHANGELOG.md", names, dangling, offset
+            )
     return dangling, total
 
 
 def check_text(
-    text: str, where: str, names: set[str], dangling: list[tuple[str, int, str]], offset: int
+    text: str,
+    where: str,
+    names: set[str],
+    dangling: list[tuple[str, int, str]],
+    offset: int,
 ) -> int:
     total = 0
-    base_line = text[: CLAUSE_RE.search(text).start()].count("\n") + 1 if CLAUSE_RE.search(text) else 1
+    base_line = (
+        text[: CLAUSE_RE.search(text).start()].count("\n") + 1
+        if CLAUSE_RE.search(text)
+        else 1
+    )
     for m in CLAUSE_RE.finditer(text):
         total += 1
         line = offset + base_line + text[m.start() : m.start()].count("\n")
@@ -102,10 +116,14 @@ def check(root: Path) -> None:
     names = test_names(root)
     dangling, total = citations(root, names)
     if total == 0:
-        fail("parsed nothing: no pinned clauses matched in docs/*.md or CHANGELOG [Unreleased]")
+        fail(
+            "parsed nothing: no pinned clauses matched in docs/*.md or CHANGELOG [Unreleased]"
+        )
     if dangling:
         for where, line, name in dangling:
-            print(f"{where}:{line}: pinned clause cites `{name}`, which is not a test fn or test target in the tree")
+            print(
+                f"{where}:{line}: pinned clause cites `{name}`, which is not a test fn or test target in the tree"
+            )
         raise SystemExit(1)
     print(f"pinned tests ok: {total} citations resolve")
 
@@ -119,7 +137,9 @@ def build_synthetic_tree(root: Path) -> None:
     (crate / "lib.rs").write_text("".join(fns), encoding="utf-8")
     targets = root / "crates/x/tests"
     targets.mkdir(parents=True, exist_ok=True)
-    (targets / "suite_a.rs").write_text("#[test]\nfn in_target() {}\n", encoding="utf-8")
+    (targets / "suite_a.rs").write_text(
+        "#[test]\nfn in_target() {}\n", encoding="utf-8"
+    )
     docs = root / "docs"
     docs.mkdir(exist_ok=True)
     (docs / "guide.md").write_text(
@@ -162,7 +182,9 @@ def self_test() -> None:
         )
         (root / "docs").mkdir(exist_ok=True)
         (root / "docs" / "opus").mkdir(exist_ok=True)
-        (root / "docs" / "opus" / "x.md").write_text("Pinned by `also_gone`.\n", encoding="utf-8")
+        (root / "docs" / "opus" / "x.md").write_text(
+            "Pinned by `also_gone`.\n", encoding="utf-8"
+        )
         buf = _capture(lambda: check(root), expect_failure=True)
         if "CHANGELOG.md" not in buf:
             fail("self-test: a dangling [Unreleased] citation was not reported")
@@ -173,17 +195,23 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="enh057-selftest2-") as tmp:
         root = Path(tmp)
         (root / "docs").mkdir()
-        (root / "docs" / "guide.md").write_text("Pinned by `real_one`.\n", encoding="utf-8")
+        (root / "docs" / "guide.md").write_text(
+            "Pinned by `real_one`.\n", encoding="utf-8"
+        )
         _capture(lambda: check(root), expect_failure=True, needle="parsed nothing")
 
     # Real tree: the grammar must keep matching the known baseline.
     names = test_names(ROOT)
     dangling, total = citations(ROOT, names)
     if total < 17:
-        fail(f"self-test: the real tree yields only {total} citations; the grammar regressed")
+        fail(
+            f"self-test: the real tree yields only {total} citations; the grammar regressed"
+        )
     if dangling:
         for where, line, name in dangling:
-            print(f"{where}:{line}: pinned clause cites `{name}`, which is not a test fn or test target in the tree")
+            print(
+                f"{where}:{line}: pinned clause cites `{name}`, which is not a test fn or test target in the tree"
+            )
         raise SystemExit(1)
     print(
         f"self-test ok: synthetic drifts reported, out-of-scope text ignored, "
@@ -212,7 +240,9 @@ def _capture(fn, expect_failure: bool, needle: str | None = None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=ROOT, help="repository root to check")
+    parser.add_argument(
+        "--root", type=Path, default=ROOT, help="repository root to check"
+    )
     parser.add_argument(
         "--self-test",
         action="store_true",

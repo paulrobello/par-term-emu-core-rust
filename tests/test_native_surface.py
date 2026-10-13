@@ -5,7 +5,12 @@ from pathlib import Path
 
 from par_term_emu_core_rust import _native
 
-STUB = Path(__file__).resolve().parents[1] / "python" / "par_term_emu_core_rust" / "_native.pyi"
+STUB = (
+    Path(__file__).resolve().parents[1]
+    / "python"
+    / "par_term_emu_core_rust"
+    / "_native.pyi"
+)
 
 
 def _stub_classes() -> set[str]:
@@ -24,8 +29,12 @@ def _registered_classes() -> set[str]:
 
 def test_registered_classes_match_the_stub() -> None:
     stub, live = _stub_classes(), _registered_classes()
-    assert live - stub == set(), f"registered but missing from the stub: {sorted(live - stub)}"
-    assert stub - live == set(), f"in the stub but not registered: {sorted(stub - live)}"
+    assert live - stub == set(), (
+        f"registered but missing from the stub: {sorted(live - stub)}"
+    )
+    assert stub - live == set(), (
+        f"in the stub but not registered: {sorted(stub - live)}"
+    )
 
 
 def test_registered_class_count_is_pinned() -> None:

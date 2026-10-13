@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_mux_docs import strip_test_modules  # noqa: E402
+from check_mux_docs import strip_test_modules
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,7 +39,9 @@ LIT_RE = re.compile(r'\benv::var(?:_os)?\(\s*"([A-Z][A-Z0-9_]*)"')
 IDENT_RE = re.compile(
     r"\b(?:env::var(?:_os)?|env_var_nonempty|agent_dir_from_env_or_home)\(\s*([A-Za-z_]\w*)\s*[,)]"
 )
-CONST_RE = re.compile(r'const\s+([A-Z_][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([A-Z][A-Z0-9_]*)"')
+CONST_RE = re.compile(
+    r'const\s+([A-Z_][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([A-Z][A-Z0-9_]*)"'
+)
 CLAP_ENV_RE = re.compile(r'\benv\s*=\s*"([A-Z][A-Z0-9_]*)"')
 
 TS_PATTERNS = (
@@ -97,7 +99,9 @@ def rust_files(root: Path) -> list[Path]:
         base = root / rel
         if not base.is_dir():
             fail(f"missing scan root {rel}")
-        out.extend(p for p in base.rglob("*.rs") if not TEST_PATH_RE.search(p.as_posix()))
+        out.extend(
+            p for p in base.rglob("*.rs") if not TEST_PATH_RE.search(p.as_posix())
+        )
     return sorted(out)
 
 
@@ -165,7 +169,9 @@ def config_reference_rows(root: Path) -> set[str]:
         r"^## Environment Variables\s*\n(.*?)(?=^## |\Z)", doc, re.MULTILINE | re.DOTALL
     )
     if not m:
-        fail("parsed nothing from docs/CONFIG_REFERENCE.md: no Environment Variables section")
+        fail(
+            "parsed nothing from docs/CONFIG_REFERENCE.md: no Environment Variables section"
+        )
     rows = set(re.findall(r"^\| `([A-Z][A-Z0-9_]*\*?)`", m.group(1), re.MULTILINE))
     if not rows:
         fail("parsed nothing from docs/CONFIG_REFERENCE.md: no table rows")
@@ -174,7 +180,9 @@ def config_reference_rows(root: Path) -> set[str]:
 
 def mux_pane_env_rows(root: Path) -> set[str]:
     doc = read(root, "docs/MUX.md")
-    m = re.search(r"^## Agent Hook Reports\s*\n(.*?)(?=^### )", doc, re.MULTILINE | re.DOTALL)
+    m = re.search(
+        r"^## Agent Hook Reports\s*\n(.*?)(?=^### )", doc, re.MULTILINE | re.DOTALL
+    )
     if not m:
         fail("parsed nothing from docs/MUX.md: no Agent Hook Reports section")
     return set(re.findall(r"^\| `([A-Z][A-Z0-9_]*)`", m.group(1), re.MULTILINE))
@@ -208,6 +216,7 @@ def expect_ok(root: Path, what: str) -> None:
     except SystemExit as e:
         fail(f"self-test: {what} unexpectedly failed: {e} {buf.getvalue()}")
 
+
 def check(root: Path) -> None:
     reads, clap = collect_rust_reads(root)
     reads |= collect_script_reads(root)
@@ -233,7 +242,9 @@ def check(root: Path) -> None:
 
     # Every documented row must be read (allowing the std/dirs indirect set).
     for row in sorted(config_rows - reads - STD_INDIRECT.keys() - {"PAR_TERM_*"}):
-        problems.append(f"CONFIG_REFERENCE row {row}: nothing in production code reads it")
+        problems.append(
+            f"CONFIG_REFERENCE row {row}: nothing in production code reads it"
+        )
 
     # The wildcard row covers exactly the clap set, and STREAMING.md names them.
     if wildcard_row is not None:
@@ -245,7 +256,9 @@ def check(root: Path) -> None:
                 f"the clap set has {len(clap)}"
             )
     for name in sorted(clap - stream_names):
-        problems.append(f"streamer env var {name} is not documented in docs/STREAMING.md")
+        problems.append(
+            f"streamer env var {name} is not documented in docs/STREAMING.md"
+        )
 
     if not clap:
         fail("parsed nothing from the clap env attributes")
@@ -256,10 +269,14 @@ def check(root: Path) -> None:
             fail(f"stale NOT_OURS entry {name}: nothing reads it any more")
     for name in STD_INDIRECT:
         if name not in config_rows:
-            fail(f"stale STD_INDIRECT entry {name}: not documented in CONFIG_REFERENCE.md")
+            fail(
+                f"stale STD_INDIRECT entry {name}: not documented in CONFIG_REFERENCE.md"
+            )
     for name, rel in EXTRA_READS.items():
         if name in LIT_RE.findall(strip_test_modules(read(root, rel))):
-            fail(f"EXTRA_READS entry {name} is now a literal read in {rel}; drop the entry")
+            fail(
+                f"EXTRA_READS entry {name} is now a literal read in {rel}; drop the entry"
+            )
 
     if problems:
         for problem in problems:
@@ -304,9 +321,17 @@ def self_test() -> None:
 
         # Drift 1: drop a documented row that is read.
         cfg = root / "docs/CONFIG_REFERENCE.md"
-        cfg.write_text(cfg.read_text(encoding="utf-8").replace("| `DEBUG_LEVEL` |", "| `DEBUG_LEVEL_X` |", 1))
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace(
+                "| `DEBUG_LEVEL` |", "| `DEBUG_LEVEL_X` |", 1
+            )
+        )
         expect_failure(root, "DEBUG_LEVEL_X", "dropping the DEBUG_LEVEL row")
-        cfg.write_text(cfg.read_text(encoding="utf-8").replace("| `DEBUG_LEVEL_X` |", "| `DEBUG_LEVEL` |", 1))
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace(
+                "| `DEBUG_LEVEL_X` |", "| `DEBUG_LEVEL` |", 1
+            )
+        )
 
         # Drift 2: a production read of an undocumented variable.
         mod = root / "crates/par-mux/src/mux/mod.rs"
@@ -324,18 +349,25 @@ def self_test() -> None:
         # Drift 4: a fake documented row nothing reads.
         ghost = "| `PAR_MUX_GHOST` | fake | unset | fake row |\n"
         cfg.write_text(
-            cfg.read_text(encoding="utf-8").replace("| `DEBUG_LEVEL` |", ghost + "| `DEBUG_LEVEL` |", 1)
+            cfg.read_text(encoding="utf-8").replace(
+                "| `DEBUG_LEVEL` |", ghost + "| `DEBUG_LEVEL` |", 1
+            )
         )
         expect_failure(root, "PAR_MUX_GHOST", "a ghost CONFIG_REFERENCE row")
         cfg.write_text(cfg.read_text(encoding="utf-8").replace(ghost, "", 1))
 
         # Drift 5: an extension read of an undocumented variable.
         omp = next(iter(glob_one(root, TS_GLOB)))
-        omp.write_text(omp.read_text(encoding="utf-8") + "\nconst PROBE = process.env.PAR_MUX_FAKE_MS;\n")
+        omp.write_text(
+            omp.read_text(encoding="utf-8")
+            + "\nconst PROBE = process.env.PAR_MUX_FAKE_MS;\n"
+        )
         expect_failure(root, "PAR_MUX_FAKE_MS", "an undocumented extension read")
-        omp.write_text(omp.read_text(encoding="utf-8").replace(
-            "\nconst PROBE = process.env.PAR_MUX_FAKE_MS;\n", ""
-        ))
+        omp.write_text(
+            omp.read_text(encoding="utf-8").replace(
+                "\nconst PROBE = process.env.PAR_MUX_FAKE_MS;\n", ""
+            )
+        )
 
         # Exclusion holds: a #[cfg(test)] read and a tests/ read are not
         # reported.
@@ -354,13 +386,21 @@ def self_test() -> None:
         copy_inputs(ROOT, root)
         cfg = root / "docs/CONFIG_REFERENCE.md"
         section = re.search(
-            r"^## Environment Variables\s*\n.*?(?=^## )", cfg.read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL
+            r"^## Environment Variables\s*\n.*?(?=^## )",
+            cfg.read_text(encoding="utf-8"),
+            re.MULTILINE | re.DOTALL,
         )
         assert section is not None
-        cfg.write_text(cfg.read_text(encoding="utf-8").replace(section.group(0), "## Environment Variables\n\nEmpty.\n\n"))
+        cfg.write_text(
+            cfg.read_text(encoding="utf-8").replace(
+                section.group(0), "## Environment Variables\n\nEmpty.\n\n"
+            )
+        )
         expect_failure(root, "parsed nothing", "an empty CONFIG table")
 
-    print("env docs self-test ok: every injected drift was reported and the exclusions hold")
+    print(
+        "env docs self-test ok: every injected drift was reported and the exclusions hold"
+    )
 
 
 def main() -> None:
