@@ -29,6 +29,7 @@ use std::sync::mpsc::RecvTimeoutError;
 
 mod chrome;
 mod cursor;
+mod drag;
 mod geometry;
 mod input_route;
 mod modal;
