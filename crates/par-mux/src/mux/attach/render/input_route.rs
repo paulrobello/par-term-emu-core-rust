@@ -518,8 +518,16 @@ impl WindowSession {
                 self.drag = Some(DragState::Pending { divider, x, y });
             }
             Hit::PanePress(rect) => {
+                // A re-click on the focused pane must not re-select it:
+                // `select-pane` always broadcasts `%layout-change`, and
+                // the re-seed repaints the whole window — htop read it
+                // as the menu opening twice. Focus follows press on
+                // change alone.
+                let changed = self.renderer.focused() != Some(rect.pane);
                 self.renderer.focus(rect.pane);
-                let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+                if changed {
+                    let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+                }
                 if self.pane_accepts_mouse(rect.pane, &mouse) {
                     self.forward_mouse(conn, &rect, &mouse);
                 }
@@ -797,8 +805,11 @@ impl WindowSession {
             self.renderer.set_drag_divider(None);
             if let Some(DragState::Pending { .. }) = state {
                 if let Some(rect) = self.renderer.pane_at(x, y).cloned() {
+                    let changed = self.renderer.focused() != Some(rect.pane);
                     self.renderer.focus(rect.pane);
-                    let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+                    if changed {
+                        let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+                    }
                     let mouse = SgrMouse {
                         cb: 0,
                         col: x + 1,

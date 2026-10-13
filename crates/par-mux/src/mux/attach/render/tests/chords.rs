@@ -1550,6 +1550,36 @@ fn motion_forwarding_follows_the_panes_mouse_mode() {
     assert_eq!(drained(&rx).len(), 1, "hover forwards in mode 1003");
 }
 
+/// A click on the already-focused pane must not re-select it: every
+/// press used to send `select-pane`, the daemon broadcasts
+/// `%layout-change` for it, and the client re-seeds the whole window —
+/// the flash-and-redraw htop showed as the menu opening twice (the
+/// manual-pass report). The wire for a re-click carries ONLY the
+/// forwarded press; focus follows press on change alone.
+#[test]
+fn reclicking_the_focused_pane_does_not_reselect_it() {
+    let (rx, mut conn, mut session) = two_pane_session("m-recl", FakeScript::default());
+    session.renderer.feed_output(2, b"\x1b[?1000h\x1b[?1006h");
+    let hex = |s: &str| {
+        s.bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let press = format!("send-keys -t %2 -H {}", hex("\x1b[<0;21;5M"));
+    // First click: focus switches, one select-pane + one press.
+    session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec!["select-pane -t %2".to_string(), press.clone()]
+    );
+    // Second click on the same pane: the press alone, no reselect.
+    session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec![press]);
+}
+
 /// The side panel's pointer: a left press on a workspace row lands
 /// on it, a RIGHT press opens that workspace's menu, the `new` chip
 /// opens the new-workspace prompt, and a release in the panel does
