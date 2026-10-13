@@ -29,6 +29,7 @@ path = "src/bin/par_mux/main.rs"
 required-features = ["mux-bin"]
 
 [dependencies]
+unicode-width = "0.2.2"
 # The terminal core. Exact pin + lockstep version (`make core-version-check`).
 par-term-emu-core = { path = "../par-term-emu-core", version = "=0.60.0", features = ["mux", "pty_session", "serde"] }
 log = "0.4"

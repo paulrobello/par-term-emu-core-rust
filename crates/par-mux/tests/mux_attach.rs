@@ -23,6 +23,7 @@ use std::io::{Read, Write};
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthChar as _;
 
 /// One PTY-master side of a spawned `par-mux attach`.
 struct AttachHost {
@@ -893,21 +894,40 @@ fn render_mode_zoom_rename_border_chords() {
     // borders), so the first press turns them off.
     host.to_child.write_all(&[0x02, b'l']).expect("prefix l");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"labels off", Duration::from_secs(10));
+    let mut got = wait_for_output(&host, b"labels", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    // The diff may skip the flash text's unchanged space cell, so the
+    // raw bytes can split the words — read the reconstructed screen,
+    // where the gap keeps its prior (space) content.
+    let (_, ever) = reconstructed_screen(&got, 24, 80);
     assert!(
-        plain_text(&got).contains("labels off"),
-        "prefix l must flash labels off. stderr: {}",
-        stderr.lock().unwrap()
+        ever.last()
+            .is_some_and(|snaps| snaps.iter().any(|r| r.contains("labels off"))),
+        "prefix l must flash labels off. stderr: {} bytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
     );
     host.to_child
         .write_all(&[0x02, b'l'])
         .expect("prefix l again");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
+    let mut got = wait_for_output(&host, b"labels", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    let (_, ever) = reconstructed_screen(&got, 24, 80);
     assert!(
-        plain_text(&got).contains("labels on"),
-        "prefix l again must flash labels on. stderr: {}",
-        stderr.lock().unwrap()
+        ever.last()
+            .is_some_and(|snaps| snaps.iter().any(|r| r.contains("labels on"))),
+        "prefix l again must flash labels on. stderr: {} bytes: {:?}",
+        stderr.lock().unwrap(),
+        String::from_utf8_lossy(&got)
     );
 
     // prefix g opens the workspace picker: the themed modal titles itself
@@ -1840,6 +1860,57 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
 /// liveness sweep clearing a test claim) is still observable. Style is
 /// not tracked.
 #[cfg(unix)]
+/// Decode `pending` incrementally, invoking `place` for every complete
+/// char (advancing `cur` by the char's width) and recovering from an
+/// invalid byte by dropping it — a wedged pending buffer would otherwise
+/// swallow the rest of the stream. An incomplete tail stays pending.
+fn place_pending(
+    pending: &mut Vec<u8>,
+    cur: &mut Option<(u16, u16)>,
+    place: &mut dyn FnMut(char, (u16, u16)),
+) {
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(text) => {
+                let Some(ch) = text.chars().next() else {
+                    return;
+                };
+                if let Some(pos) = *cur {
+                    place(ch, pos);
+                    *cur = Some((pos.0, pos.1 + ch.width().unwrap_or(0) as u16));
+                }
+                pending.drain(..ch.len_utf8());
+                if pending.is_empty() {
+                    return;
+                }
+            }
+            Err(err) => {
+                let valid = err.valid_up_to();
+                if valid > 0 {
+                    let head = String::from_utf8_lossy(&pending[..valid]).into_owned();
+                    pending.drain(..valid);
+                    for ch in head.chars() {
+                        if let Some(pos) = *cur {
+                            place(ch, pos);
+                            *cur = Some((pos.0, pos.1 + ch.width().unwrap_or(0) as u16));
+                        }
+                    }
+                    continue;
+                }
+                match err.error_len() {
+                    Some(_) => {
+                        pending.remove(0);
+                        if pending.is_empty() {
+                            return;
+                        }
+                    }
+                    None => return, // incomplete tail: wait for more bytes
+                }
+            }
+        }
+    }
+}
+
 fn reconstructed_screen(
     bytes: &[u8],
     rows: u16,
@@ -1849,81 +1920,77 @@ fn reconstructed_screen(
     let mut ever: Vec<std::collections::BTreeSet<String>> = (0..rows)
         .map(|_| std::collections::BTreeSet::new())
         .collect();
+    // The live 1-based cursor a terminal keeps: a CUP sets it, every
+    // glyph advances it by its width, and glyphs following a mid-run SGR
+    // (a style change without a re-address — the run-length encoding's
+    // normal shape) land where the cursor already is. The per-cell
+    // spelling CUP'd every glyph; this walk reads both identically.
+    let mut cur: Option<(u16, u16)> = None;
+    let mut pending: Vec<u8> = Vec::new();
     let mut i = 0;
-    let text = bytes;
-    while i < text.len() {
-        // CUP: ESC [ row ; col H
-        if text[i] == 0x1b && i + 1 < text.len() && text[i + 1] == b'[' {
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b != 0x1b {
+            pending.push(b);
+            place_pending(&mut pending, &mut cur, &mut |ch, pos| {
+                let (r, c) = ((pos.0 - 1) as usize, (pos.1 - 1) as usize);
+                if r < rows as usize && c < cols as usize {
+                    let mut buf = [0u8; 4];
+                    grid[r][c] = *ch.encode_utf8(&mut buf).as_bytes().first().unwrap_or(&b' ');
+                    ever[r].insert(String::from_utf8_lossy(&grid[r]).into_owned());
+                }
+            });
+            i += 1;
+            continue;
+        }
+        pending.clear();
+        if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // CSI: parameters and intermediates up to the final byte.
             let mut j = i + 2;
-            let mut row = 0usize;
-            let mut col = 0usize;
-            let mut part = 0; // 0 = row, 1 = col
-            while j < text.len() {
-                match text[j] {
-                    b'0'..=b'9' if part == 0 => row = row * 10 + (text[j] - b'0') as usize,
-                    b'0'..=b'9' => col = col * 10 + (text[j] - b'0') as usize,
-                    b';' => part = 1,
-                    b'H' => {
-                        j += 1;
-                        // Skip any CSI sequences between the CUP and the
-                        // symbol — SGR runs (`…m`), but also the cursor
-                        // placements the render client emits per frame:
-                        // DECSCUSR (`CSI Ps SP q`) and DECTCEM (`CSI ?25
-                        // h/l`). Parameter bytes (0x30-0x3F) and
-                        // intermediates (0x20-0x2F, the SP) precede the
-                        // final byte (0x40-0x7E). An `H`-final sequence
-                        // (another CUP — the next cell write) stops the
-                        // skip so the main loop re-parses it.
-                        while j + 1 < text.len() && text[j] == 0x1b && text[j + 1] == b'[' {
-                            let mut k = j + 2;
-                            while k < text.len() && (0x20..0x40).contains(&text[k]) {
-                                k += 1;
-                            }
-                            if k >= text.len() {
-                                break;
-                            }
-                            if text[k] == b'H' {
-                                break;
-                            }
-                            j = k + 1;
-                        }
-                        if j < text.len() && row > 0 && col > 0 {
-                            if text[j] == 0x1b {
-                                // A CUP with no symbol after the CSI
-                                // runs — the cursor placement's CUP
-                                // (followed by DECSCUSR/DECTCEM, skipped
-                                // above). Resume AT the next sequence:
-                                // the loop's i += 1 lands on its ESC.
-                                i = j.saturating_sub(1);
-                            } else {
-                                // One UTF-8 scalar.
-                                let rest = &text[j..];
-                                if let Ok(s) = std::str::from_utf8(&rest[..rest.len().min(4)]) {
-                                    if let Some(ch) = s.chars().next() {
-                                        let (r, c) = (row - 1, col - 1);
-                                        if r < rows as usize && c < cols as usize {
-                                            let mut buf = [0u8; 4];
-                                            grid[r][c] = *ch
-                                                .encode_utf8(&mut buf)
-                                                .as_bytes()
-                                                .first()
-                                                .unwrap_or(&b' ');
-                                            ever[r].insert(
-                                                String::from_utf8_lossy(&grid[r]).into_owned(),
-                                            );
-                                        }
-                                    }
-                                }
-                                i = j;
-                            }
-                        }
-                        break;
-                    }
-                    _ => break,
+            while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+                j += 1;
+            }
+            if j < bytes.len() {
+                let params = &bytes[i + 2..j];
+                if bytes[j] == b'H' {
+                    let text = String::from_utf8_lossy(params);
+                    let mut parts = text.split(';');
+                    let (row, col) = (
+                        parts.next().and_then(|r| r.parse::<u16>().ok()),
+                        parts.next().and_then(|c| c.parse::<u16>().ok()),
+                    );
+                    cur = match (row, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
+                }
+                // Any other CSI (SGR runs, DECSCUSR, DECTCEM) never moves
+                // the cursor.
+                i = j + 1;
+                continue;
+            }
+            i = bytes.len();
+            continue;
+        }
+        if i + 1 < bytes.len() && bytes[i + 1] == b']' {
+            // OSC: swallow through BEL or ST (ESC \).
+            let mut j = i + 2;
+            while j < bytes.len() {
+                if bytes[j] == 0x07 {
+                    j += 1;
+                    break;
+                }
+                if bytes[j] == 0x1b && j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                    j += 2;
+                    break;
                 }
                 j += 1;
             }
+            i = j;
+            continue;
         }
+        // A bare ESC (or an ESC-prefixed sequence the walk does not
+        // model): step past it.
         i += 1;
     }
     let final_grid: Vec<String> = grid
@@ -3289,14 +3356,23 @@ fn render_mode_sidebar_toggle_minimal() {
 /// column and attach it to every plain char, then locate the needle in
 /// the stripped text. The geometry read for the sidebar-refit asserts.
 fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
-    let mut last_cup: Option<u16> = None;
+    // The live 1-based cursor: CUPs set it, glyphs advance it by their
+    // width (the client's run-length encoding rides the auto-advance; the
+    // per-cell spelling CUP'd every glyph, which the old inherited-column
+    // walker assumed).
+    let mut cur: Option<(u16, u16)> = None;
     let mut cells: Vec<(char, Option<u16>)> = Vec::new();
+    let mut pending: Vec<u8> = Vec::new();
     let mut iter = bytes.iter().copied();
     while let Some(b) = iter.next() {
         if b != 0x1b {
-            cells.push((b as char, last_cup));
+            pending.push(b);
+            place_pending(&mut pending, &mut cur, &mut |ch, pos| {
+                cells.push((ch, Some(pos.1)));
+            });
             continue;
         }
+        pending.clear();
         match iter.next() {
             Some(b'[') => {
                 let mut params: Vec<u8> = Vec::new();
@@ -3310,7 +3386,14 @@ fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
                 }
                 if final_byte == b'H' {
                     let text = String::from_utf8_lossy(&params);
-                    last_cup = text.split(';').nth(1).and_then(|c| c.parse::<u16>().ok());
+                    let (row, col) = (
+                        text.split(';').next().and_then(|r| r.parse::<u16>().ok()),
+                        text.split(';').nth(1).and_then(|c| c.parse::<u16>().ok()),
+                    );
+                    cur = match (row, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
                 }
             }
             Some(b']') => {
@@ -3338,14 +3421,21 @@ fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
 /// positioned it, read from the same per-cell CUP stream
 /// [`cup_col_of_text`] walks.
 fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
-    let mut last_cup: Option<u16> = None;
+    // Same live-cursor walk as [`cup_col_of_text`], recording each glyph's
+    // row instead of its column.
+    let mut cur: Option<(u16, u16)> = None;
     let mut cells: Vec<(char, Option<u16>)> = Vec::new();
+    let mut pending: Vec<u8> = Vec::new();
     let mut iter = bytes.iter().copied();
     while let Some(b) = iter.next() {
         if b != 0x1b {
-            cells.push((b as char, last_cup));
+            pending.push(b);
+            place_pending(&mut pending, &mut cur, &mut |ch, pos| {
+                cells.push((ch, Some(pos.0)));
+            });
             continue;
         }
+        pending.clear();
         match iter.next() {
             Some(b'[') => {
                 let mut params: Vec<u8> = Vec::new();
@@ -3359,7 +3449,14 @@ fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
                 }
                 if final_byte == b'H' {
                     let text = String::from_utf8_lossy(&params);
-                    last_cup = text.split(';').next().and_then(|r| r.parse::<u16>().ok());
+                    let (row, col) = (
+                        text.split(';').next().and_then(|r| r.parse::<u16>().ok()),
+                        text.split(';').nth(1).and_then(|c| c.parse::<u16>().ok()),
+                    );
+                    cur = match (row, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
                 }
             }
             Some(b']') => {
@@ -3386,29 +3483,106 @@ fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
 /// Whether any row-24 CUP is followed (within its CUP+SGR+cell run) by
 /// `glyph`'s bytes — the wire shape the frame flushes one painted cell
 /// in. Used to see WHICH content owns the bottom row.
-fn row24_paints(bytes: &[u8], glyph: &[u8]) -> bool {
+/// Whether any `glyph` paints on host row 24 — the live-cursor walk
+/// (CUPs move it, glyphs advance by width) that reads per-cell and
+/// run-length encodings identically. The byte-window form
+/// [`row24_paints`] assumed a CUP+SGR immediately before the glyph.
+fn row24_paints_char(bytes: &[u8], glyph: char) -> bool {
+    let mut cur: Option<(u16, u16)> = None;
+    let mut pending: Vec<u8> = Vec::new();
     let mut i = 0;
-    while let Some(off) = bytes[i..].windows(5).position(|w| w == b"\x1b[24;") {
-        let mut j = i + off + 5;
-        while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
-            j += 1;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b != 0x1b {
+            pending.push(b);
+            let mut hit = false;
+            place_pending(&mut pending, &mut cur, &mut |ch, pos| {
+                if ch == glyph && pos.0 == 24 {
+                    hit = true;
+                }
+            });
+            if hit {
+                return true;
+            }
+            i += 1;
+            continue;
         }
-        j += 1; // past the CUP final byte
-                // The style is a CHAIN of CSI sequences (reset + fg + modifiers);
-                // skip every one before the glyph bytes.
-        while j + 1 < bytes.len() && bytes[j] == 0x1b && bytes[j + 1] == b'[' {
-            j += 2;
+        pending.clear();
+        if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            let mut j = i + 2;
             while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
                 j += 1;
             }
-            j += 1; // past this sequence's final byte
+            if j < bytes.len() {
+                if bytes[j] == b'H' {
+                    let text = String::from_utf8_lossy(&bytes[i + 2..j]);
+                    let mut parts = text.split(';');
+                    let (row, col) = (
+                        parts.next().and_then(|r| r.parse::<u16>().ok()),
+                        parts.next().and_then(|c| c.parse::<u16>().ok()),
+                    );
+                    cur = match (row, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
+                }
+                i = j + 1;
+                continue;
+            }
+            break;
         }
-        if j + glyph.len() <= bytes.len() && &bytes[j..j + glyph.len()] == glyph {
-            return true;
-        }
-        i += off + 1;
+        i += 1;
     }
     false
+}
+
+/// The furthest column painted on `row_want` (0 when the row never
+/// paints) — a full-row repaint reaches the last column; a partial one
+/// stops early.
+fn row24_furthest_col_on(bytes: &[u8], row_want: u16) -> usize {
+    let mut furthest = 0usize;
+    let mut cur: Option<(u16, u16)> = None;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b != 0x1b {
+            pending.push(b);
+            place_pending(&mut pending, &mut cur, &mut |ch, pos| {
+                if pos.0 == row_want {
+                    furthest = furthest.max(pos.1 as usize + ch.width().unwrap_or(0));
+                }
+            });
+            i += 1;
+            continue;
+        }
+        pending.clear();
+        if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            let mut j = i + 2;
+            while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
+                j += 1;
+            }
+            if j < bytes.len() {
+                if bytes[j] == b'H' {
+                    let text = String::from_utf8_lossy(&bytes[i + 2..j]);
+                    let mut parts = text.split(';');
+                    let (row, col) = (
+                        parts.next().and_then(|r| r.parse::<u16>().ok()),
+                        parts.next().and_then(|c| c.parse::<u16>().ok()),
+                    );
+                    cur = match (row, col) {
+                        (Some(r), Some(c)) => Some((r, c)),
+                        _ => None,
+                    };
+                }
+                i = j + 1;
+                continue;
+            }
+            break;
+        }
+        i += 1;
+    }
+    furthest
 }
 
 /// Sidebar toggle geometry: the refit must re-divide the panes to the
@@ -3683,10 +3857,13 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
     ));
     // Bottom row, last column (host 80x24): the status row's tail only
     // flushes on a full-row diff, which only the invalidate produces.
-    let needle = b"\x1b[24;80H";
+    // Run-length encoding reaches the tail via the cursor's
+    // auto-advance instead of a CUP on the last cell, so the proof is
+    // the row-24 paint's reach, not a byte needle.
     assert!(
-        flash.windows(needle.len()).any(|w| w == needle),
-        "the refit must repaint the status row's tail. tail: {:?}",
+        row24_furthest_col_on(&flash, 24) >= 80,
+        "the refit must repaint the status row's tail (row 24 reaches col {}). tail: {:?}",
+        row24_furthest_col_on(&flash, 24),
         String::from_utf8_lossy(&flash)
             .chars()
             .rev()
@@ -3694,20 +3871,19 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
             .collect::<String>()
     );
     // Top row: the tab strip under the same rule. The invalidate
-    // repaints every strip column, so both the head (col 1) and the bar
-    // tail (col 80, unchanged since the seed frame) flush.
-    for needle in [b"\x1b[1;1H".as_slice(), b"\x1b[1;80H".as_slice()] {
-        assert!(
-            flash.windows(needle.len()).any(|w| w == needle),
-            "the refit must repaint the whole tab strip row ({:?}). tail: {:?}",
-            String::from_utf8_lossy(needle),
-            String::from_utf8_lossy(&flash)
-                .chars()
-                .rev()
-                .take(400)
-                .collect::<String>()
-        );
-    }
+    // repaints every strip column, head through the bar tail (col 80,
+    // unchanged since the seed frame) — under run-length encoding the
+    // proof is the row's painted reach, not CUP byte needles.
+    assert!(
+        row24_furthest_col_on(&flash, 1) >= 80,
+        "the refit must repaint the whole tab strip row (row 1 reaches col {}). tail: {:?}",
+        row24_furthest_col_on(&flash, 1),
+        String::from_utf8_lossy(&flash)
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
+    );
     host.killer.kill().ok();
 }
 
@@ -3772,7 +3948,7 @@ fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
     // row 24 — a row no flush could target while the bar owned it, since
     // the hidden state never writes the row at all.
     assert!(
-        row24_paints(&hidden, b"\xe2\x94\x80"),
+        row24_paints_char(&hidden, '─'),
         "the pane box's bottom edge must move onto the vacated row"
     );
 

@@ -2062,6 +2062,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "unicode-width",
  "widestring",
  "windows-sys 0.61.2",
 ]
