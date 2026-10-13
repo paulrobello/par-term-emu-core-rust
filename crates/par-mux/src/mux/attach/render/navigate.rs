@@ -696,6 +696,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) {
+        super::trace_input(format_args!("reseed_window {window}"));
         let pane = self.focused_pane_or_first(conn, window);
         // Re-fit at the CURRENT renderer's frame extent — the host grid
         // the seed and resize_to derived — then report the renderer's

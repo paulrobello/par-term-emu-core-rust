@@ -495,6 +495,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         panes: &[u32],
     ) {
+        super::trace_input(format_args!("replay panes {panes:?}"));
         for &id in panes {
             if let Ok(reply) = conn.send_checked(&format!("refresh-client -t %{id}")) {
                 if reply.ok {
