@@ -412,11 +412,14 @@ def notification_type_map(tmux_rs: str) -> dict[str, str]:
 
 ROSTER_KEY_RE = re.compile(r'extras\.push\(\(\s*"([a-z_]+)"\.to_string\(\)')
 
+
 def roster_extra_keys(client_rs: str) -> list[str]:
     """The trailing key=value keys roster_row appends, in emit order."""
     keys = ROSTER_KEY_RE.findall(fn_block(client_rs, "fn roster_row(", ROSTER_RS))
     if not keys:
-        fail(f'parsed nothing from {ROSTER_RS}: no extras.push(("key"… in fn roster_row(')
+        fail(
+            f'parsed nothing from {ROSTER_RS}: no extras.push(("key"… in fn roster_row('
+        )
     return keys
 
 
@@ -429,7 +432,9 @@ def list_agents_bullet(mux_md: str) -> str:
         re.MULTILINE,
     )
     if not m:
-        fail("parsed nothing from docs/MUX.md: no `- **`list-agents`**` bullet in Command Reference")
+        fail(
+            "parsed nothing from docs/MUX.md: no `- **`list-agents`**` bullet in Command Reference"
+        )
     return m.group(0)
 
 
@@ -636,7 +641,10 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     skill_md_text = read(root, SKILL_MD)
     roster_keys = roster_extra_keys(client_rs)
     bullet = list_agents_bullet(mux_md)
-    for where, text in (("docs/MUX.md `list-agents` bullet", bullet), (SKILL_MD, skill_md_text)):
+    for where, text in (
+        ("docs/MUX.md `list-agents` bullet", bullet),
+        (SKILL_MD, skill_md_text),
+    ):
         for key in roster_keys:
             if f"`{key}=" not in text and f" {key}=" not in text:
                 problems.append(
@@ -783,8 +791,10 @@ def run_self_test(root: Path) -> int:
         (
             "restore the stale [message] form in SKILL.md",
             SKILL_MD,
-            lambda t: t
-            + '\npar-mux --cmd list-agents  # "%N <agent> <state> <source> [message]"\n',
+            lambda t: (
+                t
+                + '\npar-mux --cmd list-agents  # "%N <agent> <state> <source> [message]"\n'
+            ),
             "free-text",
         ),
     ]
