@@ -612,4 +612,3 @@ mod tests {
         assert_eq!(graphic.get_pixel(3, 0), Some((128, 128, 128, 64)));
     }
 }
-

@@ -350,4 +350,3 @@ mod tests {
         assert_eq!(shell_int1.username, shell_int2.username);
     }
 }
-

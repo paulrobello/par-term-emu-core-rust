@@ -672,4 +672,3 @@ mod tests {
         assert_eq!(rendered.join("\n") + "\n", GOLDEN);
     }
 }
-

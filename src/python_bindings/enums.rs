@@ -704,4 +704,3 @@ mod tests {
         assert_ne!(PyUnderlineStyle::Curly, PyUnderlineStyle::Dotted);
     }
 }
-
