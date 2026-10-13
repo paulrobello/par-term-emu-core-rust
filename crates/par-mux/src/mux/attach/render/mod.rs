@@ -684,6 +684,11 @@ struct WindowSession {
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
     detach_requested: bool,
+    /// When the frame hold started (step 9's coalescing window): a push
+    /// burst still streaming must not frame a partial state and re-frame
+    /// a millisecond later — the whole-screen flash-and-repaint of the
+    /// manual-pass htop report. `None` while no hold is running.
+    frame_hold_since: Option<std::time::Instant>,
     /// An `%exit` (or other `End` outcome) the synchronous drain around
     /// a refit's layout change consumed ([`Self::drain_around_layout`]);
     /// the pump ends the view on it right after the refit returns.
@@ -911,6 +916,7 @@ impl WindowSession {
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             detach_requested: false,
+            frame_hold_since: None,
             pending_end: false,
             geometry,
             parser: InputParser::default(),
@@ -1002,7 +1008,25 @@ impl WindowSession {
 
             // 9. Frame whatever accumulated (panes + the status row's own
             //    diff), then wait for the next push — the frame cadence
-            //    floods coalesce into.
+            //    floods coalesce into. But hold the frame while pushes
+            //    keep arriving: a burst still streaming (htop's dialog
+            //    redraw lands as dozens of chunks) framed a partial state
+            //    and re-framed a millisecond later — the whole-screen
+            //    flash-and-repaint of the manual-pass report. The extra
+            //    drain costs one try_recv when idle; the 8 ms bound keeps
+            //    a firehose pane from starving frames entirely.
+            let mut handled = false;
+            let flow = self.drain_pushes_counting(conn, &mut handled);
+            if flow.is_break() {
+                return Ok(());
+            }
+            let hold = *self
+                .frame_hold_since
+                .get_or_insert_with(std::time::Instant::now);
+            if handled && hold.elapsed() < std::time::Duration::from_millis(8) {
+                continue; // the loop re-runs every step against the new events
+            }
+            self.frame_hold_since = None;
             self.frame(sink);
             if self.wait_next_push(conn).is_break() {
                 return Ok(());
@@ -1016,9 +1040,24 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> std::ops::ControlFlow<()> {
+        let mut handled = false;
+        match self.drain_pushes_counting(conn, &mut handled) {
+            std::ops::ControlFlow::Break(()) => std::ops::ControlFlow::Break(()),
+            std::ops::ControlFlow::Continue(()) => std::ops::ControlFlow::Continue(()),
+        }
+    }
+
+    /// [`Self::drain_pushes`] reporting whether any event was handled —
+    /// the frame-hold's signal that the burst is still streaming.
+    fn drain_pushes_counting(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        handled: &mut bool,
+    ) -> std::ops::ControlFlow<()> {
         loop {
             match conn.try_recv() {
                 Ok(event) => {
+                    *handled = true;
                     if self.handle_event(event) == EventOutcome::End {
                         return std::ops::ControlFlow::Break(());
                     }

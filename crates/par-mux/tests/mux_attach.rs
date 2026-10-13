@@ -314,6 +314,153 @@ fn child_exit(host: &mut AttachHost, timeout: Duration) -> Option<i32> {
 /// A live daemon (the real binary — the production shape an attach client
 /// meets) + one seeded session/pane, by the plain control client. The
 /// DaemonGuard outlives the client and reaps the daemon even on panic.
+/// Whether real htop exists (the frame-coalescing test's pane app; the
+/// brew paths cover the dev machines, PATH the rest).
+fn htop_available() -> bool {
+    std::path::Path::new("/opt/homebrew/bin/htop").exists()
+        || std::path::Path::new("/usr/local/bin/htop").exists()
+        || std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).any(|d| d.join("htop").exists()))
+            .unwrap_or(false)
+}
+
+/// Frame coalescing (pump step 9): a click's big pane redraw must land
+/// as ONE frame. Before the hold, htop's post-click redraw streamed as
+/// dozens of %output chunks, the pump framed a partial state mid-burst
+/// and re-framed the rest a millisecond later — two whole-screen frames
+/// 1 ms apart, the visible flash-and-repaint of the manual-pass report.
+/// PAR_MUX_INPUT_TRACE rides the PTY with the frames; within 400 ms of
+/// the click's release at most one frame may exceed 500 cells (htop's
+/// periodic 1.5 s meter refresh stays outside the window).
+#[cfg(unix)]
+#[test]
+fn render_mode_click_repaint_coalesces_into_one_frame() {
+    use portable_pty::CommandBuilder as PtyCommand;
+
+    if !htop_available() {
+        eprintln!("htop not found; skipping");
+        return;
+    }
+    let (fixture, _daemon, mut client) = fixture_with_session("coalesce");
+    let panes = client.send("list-panes").expect("list-panes");
+    let pane = panes.first().cloned().unwrap_or_default();
+    client
+        .send(&format!("split-window -t {pane} -h"))
+        .expect("split");
+    client
+        .send(&format!("send-keys -t {pane} htop Enter"))
+        .expect("start htop");
+
+    std::fs::write(
+        fixture.client_config_path(),
+        "[client]\nsidebar-on-launch = false\n",
+    )
+    .expect("client config");
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            ..Default::default()
+        })
+        .expect("openpty");
+    let mut cmd = PtyCommand::new(env!("CARGO_BIN_EXE_par-mux"));
+    cmd.arg("attach");
+    cmd.arg("--socket");
+    cmd.arg(fixture.socket());
+    cmd.arg("--mode");
+    cmd.arg("render");
+    cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
+    cmd.env("PAR_MUX_INPUT_TRACE", "1");
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn attach");
+    let mut to_child = pair.master.take_writer().expect("writer");
+    let mut from_child = pair.master.try_clone_reader().expect("reader");
+    let (tx, rx) = channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match from_child.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    tx.send(buf[..n].to_vec()).ok();
+                }
+            }
+        }
+    });
+    let drain = |budget: Duration| -> Vec<u8> {
+        let mut out = Vec::new();
+        let end = Instant::now() + budget;
+        while Instant::now() < end {
+            match rx.recv_timeout(Duration::from_millis(300)) {
+                Ok(c) => out.extend_from_slice(&c),
+                Err(_) => break,
+            }
+        }
+        out
+    };
+    let wait_for = |needle: &[u8], budget: Duration| -> Vec<u8> {
+        let mut out = Vec::new();
+        let end = Instant::now() + budget;
+        while Instant::now() < end {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(c) => {
+                    let hit = out.windows(needle.len()).any(|w| w == needle);
+                    out.extend_from_slice(&c);
+                    if hit {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        out
+    };
+
+    // Boot: htop's legend names Setup.
+    let _ = wait_for(b"Setup", Duration::from_secs(10));
+    let _ = drain(Duration::from_millis(500));
+
+    // The legend's Setup cell opens the dialog; the Screens category row
+    // is the measured click (host 1-based (4,17) in the 80x24 grid).
+    for (col, row, settle) in [(14u16, 22u16, 600u64), (4, 17, 0)] {
+        to_child
+            .write_all(format!("\x1b[<0;{col};{row}M").as_bytes())
+            .expect("press");
+        to_child.flush().ok();
+        std::thread::sleep(Duration::from_millis(150));
+        to_child
+            .write_all(format!("\x1b[<0;{col};{row}m").as_bytes())
+            .expect("release");
+        to_child.flush().ok();
+        if settle > 0 {
+            let _ = wait_for(b"[Setup]", Duration::from_secs(5));
+            let _ = drain(Duration::from_millis(500));
+        }
+    }
+    // The release's trace line anchors the window; drain 400 ms of it.
+    let _ = wait_for(b"release=true", Duration::from_secs(5));
+    let window = drain(Duration::from_millis(400));
+
+    let text = String::from_utf8_lossy(&window);
+    let big = text
+        .lines()
+        .filter(|l| l.contains("frame flush"))
+        .filter_map(|l| {
+            let toks: Vec<&str> = l.split_whitespace().collect();
+            toks.iter()
+                .position(|t| *t == "flush")
+                .and_then(|i| toks.get(i + 1))
+                .and_then(|n| n.parse::<usize>().ok())
+        })
+        .filter(|&cells| cells > 500)
+        .count();
+    assert!(
+        big <= 1,
+        "the click's repaint must coalesce into one big frame, saw {big}. window: {text:?}"
+    );
+    child.kill().ok();
+    let _ = child.wait();
+}
+
 fn fixture_with_session(tag: &str) -> (MuxFixture, common::DaemonGuard, par_mux::mux::MuxClient) {
     let fixture = MuxFixture::new(tag);
     let daemon = common::spawn_daemon(&fixture);
