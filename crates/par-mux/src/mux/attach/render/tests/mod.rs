@@ -2,7 +2,7 @@
 //! plus the scripted-daemon helpers the session and chord suites share.
 
 use super::input_route::*;
-use super::modal::*;
+use super::modal_menu::*;
 use super::renderer::{
     collect_boundaries, group_boundaries, map_color, pane_in_direction, BoundaryCell, PaneDir,
 };
