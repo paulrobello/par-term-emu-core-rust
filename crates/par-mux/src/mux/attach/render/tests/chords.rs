@@ -1939,6 +1939,67 @@ fn sidebar_edges_resize_the_panel_and_the_areas() {
     );
 }
 
+/// herdr's active entry: a subtle band lifted from the host background
+/// (never REVERSED), the entry's first line in the full foreground and
+/// bold, its later lines still dim, and the status glyph keeping its
+/// state color on the band. A failed background probe falls back to
+/// herdr's default band.
+#[test]
+fn sidebar_active_entry_paints_a_subtle_band() {
+    use crate::mux::attach::panels::SidebarSection;
+    use ratatui::style::{Color as RtColor, Modifier as RtModifier};
+    let mut session = WindowSession::new(80, 25);
+    show_sidebar(&mut session);
+    session.renderer.set_background(Some(RtColor::Rgb(0, 0, 0)));
+    let mut agent = srow(SidebarRowId::Pane(7), "\u{25CF} main", true);
+    agent.status = crate::mux::attach::panels::AgentStatus::Working;
+    agent.continuation = vec!["claude".to_string()];
+    session.renderer.set_sidebar_sections(Some(vec![
+        SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
+            ],
+        },
+        SidebarSection {
+            title: "agents",
+            rows: vec![agent],
+        },
+    ]));
+    session.renderer.paint_sidebar();
+    let band = RtColor::Rgb(28, 28, 41);
+    let buf = &session.renderer.buffer;
+    // The active workspace (composed row 1): band across the content
+    // width, bold, never reversed.
+    for x in 0..19 {
+        assert_eq!(buf[(x, 1)].bg, band, "col {x} of the active workspace");
+        assert!(!buf[(x, 1)].modifier.contains(RtModifier::REVERSED));
+    }
+    assert!(buf[(3, 1)].modifier.contains(RtModifier::BOLD));
+    assert!(!buf[(3, 1)].modifier.contains(RtModifier::DIM));
+    // An inactive row: the host bg, dim.
+    assert_eq!(buf[(3, 2)].bg, RtColor::Rgb(0, 0, 0));
+    assert!(buf[(3, 2)].modifier.contains(RtModifier::DIM));
+    // The active agent entry (rows 14 and 15 of the 23-row frame: the
+    // rule at 12, the header at 13): the band on both lines, the glyph
+    // yellow on it, the second line dim.
+    assert_eq!(buf[(3, 14)].symbol(), "\u{25CF}");
+    assert_eq!(buf[(3, 14)].fg, RtColor::Indexed(3), "working stays yellow");
+    assert_eq!(buf[(3, 14)].bg, band);
+    assert_eq!(buf[(3, 15)].bg, band);
+    assert!(buf[(3, 15)].modifier.contains(RtModifier::DIM));
+    // The band follows the probed background; no probe uses herdr's.
+    assert_eq!(
+        super::super::sidebar::active_row_bg(Some(RtColor::Rgb(250, 250, 250))),
+        RtColor::Rgb(225, 228, 234)
+    );
+    assert_eq!(
+        super::super::sidebar::active_row_bg(None),
+        RtColor::Rgb(30, 30, 46)
+    );
+}
+
 /// The chevron collapses the panel to herdr's 2-column status rail and
 /// expands it back: the strip width follows (the grid re-reports), the
 /// rail's entries stay clickable, its edge column is no resize handle,

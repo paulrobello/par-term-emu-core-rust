@@ -740,8 +740,11 @@ pub(crate) struct SidebarLine {
 /// One composed side-panel row's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarLineKind {
-    /// A workspace/agent entry row.
+    /// A workspace/agent entry row (an entry's first line).
     Row,
+    /// A multi-line entry's later line: it clicks and highlights with
+    /// its entry but stays dim, like herdr's secondary lines.
+    Continuation,
     /// An area header: ` workspaces` / ` agents`.
     Header,
     /// The full-width rule dividing the areas — the split-drag handle.
@@ -798,7 +801,7 @@ pub(crate) fn compose_sidebar(
                 .continuation
                 .iter()
                 .map(|line| format!("   {}", super::chrome_safe(line)));
-            for text in std::iter::once(first).chain(rest) {
+            for (i, text) in std::iter::once(first).chain(rest).enumerate() {
                 if y >= end {
                     return;
                 }
@@ -809,7 +812,11 @@ pub(crate) fn compose_sidebar(
                     text: clip(text),
                     id: Some(row.id.clone()),
                     active: row.active,
-                    kind: SidebarLineKind::Row,
+                    kind: if i == 0 {
+                        SidebarLineKind::Row
+                    } else {
+                        SidebarLineKind::Continuation
+                    },
                 });
                 y += 1;
             }

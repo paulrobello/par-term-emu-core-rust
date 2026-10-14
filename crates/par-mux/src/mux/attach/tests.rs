@@ -1822,6 +1822,12 @@ fn compose_sidebar_lays_out_multi_line_agent_entries() {
         "the continuation clicks too"
     );
     assert!(at(13).active, "the active block covers the whole entry");
+    assert_eq!(at(12).kind, super::SidebarLineKind::Row);
+    assert_eq!(
+        at(13).kind,
+        super::SidebarLineKind::Continuation,
+        "later lines paint as the entry's secondary lines"
+    );
     assert_eq!(at(14).text, "   kimi (blocked)");
     assert_eq!(at(15).text, "   agent");
     assert!(!at(15).active);

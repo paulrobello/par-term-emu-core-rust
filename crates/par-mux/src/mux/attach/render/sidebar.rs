@@ -130,8 +130,10 @@ impl PaneRenderer {
     /// Paint the workspace side panel over the strip columns: theme-bg
     /// fill, a dim divider on the strip's right edge, then the composed
     /// lines — each area's header dim + bold (herdr's ` spaces` lead
-    /// row), the rule and rows dim (the active workspace/agent row a
-    /// full-width reversed + bold block). The collapsed rail has no
+    /// row), the rule and rows dim. The active workspace/agent entry is
+    /// herdr's subtle band: every line of it on [`active_row_bg`], its
+    /// first line in the full foreground + bold, later lines still dim,
+    /// status glyphs keeping their color. The collapsed rail has no
     /// divider column (the pane area's own edge bounds it): its index
     /// digits paint dim and each status glyph in its state's color.
     pub(super) fn paint_sidebar(&mut self) {
@@ -156,38 +158,41 @@ impl PaneRenderer {
                 }
             }
         }
-        let block = RtStyle::default()
-            .add_modifier(RtModifier::REVERSED)
-            .add_modifier(RtModifier::BOLD);
+        let band = active_row_bg(self.bg);
         for line in self.sidebar_lines() {
-            // herdr's active treatment: an active row (the active
-            // workspace, or the focused pane's agent row) is a full-width
-            // inverted block. The footer chips paint at their own columns
-            // (line.x), body rows at col 0.
+            // herdr's active treatment: the active entry (the active
+            // workspace, or the focused pane's agent) sits on a subtle
+            // full-width band. The footer chips paint at their own
+            // columns (line.x), body rows at col 0.
             if line.active {
                 for x in 0..content_w {
                     let cell = &mut self.buffer[(x, line.y)];
                     cell.reset();
-                    if let Some(bg) = self.bg {
-                        cell.set_bg(bg);
-                    }
-                    cell.set_style(block);
+                    cell.set_bg(band);
                 }
             }
-            let style = if line.active {
-                block
-            } else if line.kind == SidebarLineKind::Header {
-                dim.add_modifier(RtModifier::BOLD)
-            } else {
-                dim
+            let style = match (line.active, line.kind) {
+                (true, SidebarLineKind::Row) => {
+                    RtStyle::default().bg(band).add_modifier(RtModifier::BOLD)
+                }
+                (true, _) => dim.bg(band),
+                (false, SidebarLineKind::Header) => dim.add_modifier(RtModifier::BOLD),
+                (false, _) => dim,
             };
             // The status glyph paints in its state's color: the rail's
             // second column, and an expanded agent line's state icon.
             let glyph = line
                 .id
                 .as_ref()
-                .filter(|id| !line.active && !matches!(id, SidebarRowId::Collapse))
-                .map(|id| status_style(self.sidebar_row_status(id)));
+                .filter(|id| !matches!(id, SidebarRowId::Collapse))
+                .map(|id| {
+                    let glyph = status_style(self.sidebar_row_status(id));
+                    if line.active {
+                        glyph.bg(band)
+                    } else {
+                        glyph
+                    }
+                });
             let agent_line = matches!(line.id, Some(SidebarRowId::Pane(_)));
             for (j, ch) in line.text.chars().enumerate() {
                 let x = line.x + j as u16;
@@ -218,6 +223,31 @@ impl PaneRenderer {
             .find(|row| &row.id == id)
             .map(|row| row.status)
             .unwrap_or_default()
+    }
+}
+
+/// The active entry's band: the host background lifted a step toward
+/// the foreground — herdr's `active_row_bg`, which on a black panel is
+/// `#1c1c29`. A dark host lifts toward a cool tint, a light one darkens;
+/// a failed background probe uses herdr's default (catppuccin's
+/// `#1e1e2e`).
+pub(super) fn active_row_bg(bg: Option<RtColor>) -> RtColor {
+    let Some(RtColor::Rgb(r, g, b)) = bg else {
+        return RtColor::Rgb(30, 30, 46);
+    };
+    let luma = (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000;
+    if luma < 128 {
+        RtColor::Rgb(
+            r.saturating_add(28),
+            g.saturating_add(28),
+            b.saturating_add(41),
+        )
+    } else {
+        RtColor::Rgb(
+            r.saturating_sub(25),
+            g.saturating_sub(22),
+            b.saturating_sub(16),
+        )
     }
 }
 
