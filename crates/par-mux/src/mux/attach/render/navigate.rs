@@ -502,6 +502,8 @@ impl WindowSession {
                 // the live panel below.
                 sidebar_on_launch: self.sidebar.is_on(),
                 agent_rows: self.agent_rows.clone(),
+                notify_delivery: self.notify.delivery.name().to_string(),
+                notify_states: self.notify.states.clone(),
             },
         ) {
             Ok(chords) => {

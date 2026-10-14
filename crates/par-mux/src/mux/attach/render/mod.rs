@@ -38,6 +38,7 @@ mod modal_menu;
 mod modal_picker;
 mod modal_prompt;
 mod navigate;
+mod notify;
 mod paint;
 mod pane_chrome;
 mod pending_cmd;
@@ -398,6 +399,10 @@ pub(crate) trait FlushSink {
     fn place_cursor(&mut self, _cursor: Option<(u16, u16, CursorStyle)>) {
         let _ = _cursor;
     }
+    /// Write raw bytes to the host between frames — a notification
+    /// escape, which moves no cursor and paints no cell. Default: drop
+    /// them.
+    fn write_raw(&mut self, _bytes: &[u8]) {}
 }
 
 /// Opt-in diagnostics (`PAR_MUX_CURSOR_TRACE=1`) for the intermittent
@@ -675,6 +680,9 @@ struct WindowSession {
     resize_step: u32,
     /// The side panel's agent entry lines (config `agent-rows`).
     agent_rows: Vec<Vec<String>>,
+    /// Agent state-change notifications: the delivery, the states that
+    /// notify, and the terminal escapes the next frame writes.
+    notify: notify::NotifyState,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
@@ -938,6 +946,7 @@ impl WindowSession {
             management: chords.management,
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),
+            notify: notify::NotifyState::default(),
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),

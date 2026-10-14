@@ -273,6 +273,9 @@ impl WindowSession {
             self.agent_rows = chords.agent_rows.clone();
             self.rebuild_agent_section();
         }
+        self.notify.delivery = super::notify::NotifyDelivery::parse(&chords.notify_delivery)
+            .unwrap_or(super::notify::NotifyDelivery::Off);
+        self.notify.states = chords.notify_states.clone();
         // The border style first, the explicit `pane-borders` flag after
         // it — the style implies a paint mode (herdr = per-pane boxes),
         // and the explicit config key still overrides for any glyph set.
@@ -704,6 +707,9 @@ impl WindowSession {
     /// host row; the strip flushes at host row 0 and the status row at
     /// the host's bottom row.
     pub(super) fn frame(&mut self, sink: &mut dyn FlushSink) {
+        if !self.notify.outbox.is_empty() {
+            sink.write_raw(&std::mem::take(&mut self.notify.outbox));
+        }
         let geometry = self.geometry;
         let mut flushed = false;
         if self.renderer.needs_frame() {

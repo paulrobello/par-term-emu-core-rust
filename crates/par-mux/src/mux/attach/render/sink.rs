@@ -26,6 +26,12 @@ impl FlushSink for StdoutSink {
         let _ = stdout.flush();
     }
 
+    fn write_raw(&mut self, bytes: &[u8]) {
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(bytes);
+        let _ = stdout.flush();
+    }
+
     fn repaint_all(&mut self) {
         super::trace_input(format_args!("repaint_all (clear screen)"));
         let mut stdout = std::io::stdout().lock();

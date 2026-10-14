@@ -43,6 +43,21 @@ impl WindowSession {
         state: Option<&str>,
         ws: &str,
     ) {
+        // The notification compares against the state BEFORE the patch.
+        if let (Some(state), Some(pane)) = (
+            state,
+            pane_id
+                .strip_prefix('%')
+                .and_then(|p| p.parse::<u32>().ok()),
+        ) {
+            let previous = self
+                .status
+                .agents()
+                .iter()
+                .find(|entry| entry.pane == pane)
+                .map(|entry| entry.state.clone());
+            self.notify_agent_state(pane, agent, previous.as_deref(), state, ws);
+        }
         let patched = self.status.patch_agent(pane_id, agent, state, ws);
         if state.is_some() && patched {
             self.status_dirty = true;

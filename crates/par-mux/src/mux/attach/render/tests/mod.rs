@@ -1504,6 +1504,7 @@ fn wait_recorded(rx: &std::sync::mpsc::Receiver<(String, String)>, name: &str) -
 struct RecordingSink {
     cells: Vec<(u16, u16, RtCell)>,
     placements: Vec<Option<(u16, u16, CursorStyle)>>,
+    raw: Vec<u8>,
 }
 
 impl FlushSink for RecordingSink {
@@ -1513,6 +1514,9 @@ impl FlushSink for RecordingSink {
     fn repaint_all(&mut self) {}
     fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
         self.placements.push(cursor);
+    }
+    fn write_raw(&mut self, bytes: &[u8]) {
+        self.raw.extend_from_slice(bytes);
     }
 }
 

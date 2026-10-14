@@ -2782,6 +2782,50 @@ fn legacy_refresh_still_runs_without_the_feature() {
     );
 }
 
+/// A pushed transition into a selected state queues one notification
+/// escape the next frame writes to the host; the refresh that seeded the
+/// roster, a repeat of the same state, an unselected state, and
+/// delivery `off` queue nothing.
+#[test]
+fn agent_state_push_notifies_selected_transitions_only() {
+    use super::super::notify::NotifyDelivery;
+    let (_rx, mut conn) = fake_daemon("snapnotify", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.states = vec!["blocked".to_string(), "idle".to_string()];
+    session.refresh_status_facts(&mut conn).expect("seed");
+    assert!(
+        session.notify.outbox.is_empty(),
+        "the refresh that loads the roster notifies nothing"
+    );
+    let push = |session: &mut WindowSession, pane: &str, state: &str| {
+        session.handle_event(TmuxNotification::AgentStateChanged {
+            pane_id: pane.to_string(),
+            agent: "claude".to_string(),
+            state: state.to_string(),
+            source: "hook".to_string(),
+            ws: "+0".to_string(),
+        });
+    };
+    // %1 claude working -> idle: selected, one OSC 9.
+    push(&mut session, "%1", "idle");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]9;par-mux: main \u{b7} claude: idle\x1b\\"
+    );
+    assert!(session.notify.outbox.is_empty(), "the frame drained it");
+    // The same state again, then an unselected one: nothing.
+    push(&mut session, "%1", "idle");
+    push(&mut session, "%1", "working");
+    assert!(session.notify.outbox.is_empty());
+    // Off: a selected transition queues nothing.
+    session.notify.delivery = NotifyDelivery::Off;
+    push(&mut session, "%1", "blocked");
+    assert!(session.notify.outbox.is_empty());
+}
+
 /// `%agent-state-changed` and `%agent-released` patch the roster from
 /// their payload and rebuild the side panel's agents section from the
 /// cache: no status mark, no query (ARC-136).

@@ -347,6 +347,10 @@ The workspace menu (reached by a right press on a workspace row) carries `rename
 With the panel up the TAB STRIP paints the panel's ` workspaces ` title accent in the panel's columns and lays the tabs out from them onward with ` + ` pinned at the strip's right edge, hit-testing the RAW host column through that offset — the panel-up top row stays clickable coherently (the round-5 plus-defect: the content rebase ran before the strip branch and shifted every panel-up top-row click one panel width left, leaving ` + ` unclickable — pinned red-to-green by `render_mode_plus_click_works_with_the_panel_up`).
 Toggling reports the restored grid, so panes re-divide back to the full width.
 
+#### Agent state notifications
+
+A render client announces an agent's arrival in a selected state (herdr's background toasts). `[client] notify-states` picks the states (`working`, `blocked`, `idle`; default `["blocked", "idle"]` — needs attention, and finished) and `[client] notify-delivery` the channel: `terminal` (the default) writes the host terminal's notification escape with the next frame — kitty's OSC 99 under kitty, OSC 9 elsewhere (iTerm2, Ghostty, WezTerm) — `system` hands it to the OS notifier (`osascript` on macOS, `notify-send` on Linux; argv only, detached, never waited on), and `off` disables them. The notification reads `par-mux: {workspace} · {agent}: {state}`. Only a pushed `%agent-state-changed` whose state differs from the roster's last one notifies; the status refresh replaces the roster wholesale and never notifies, so attaching or reconnecting does not replay every agent's state. Agent and workspace names are pane-controlled, so ESC, BEL, and ST are stripped before they ride inside the escape (pinned by `agent_state_push_notifies_selected_transitions_only`, `terminal_notification_escapes_are_sanitized` and `notify_keys_resolve_defaults_explicit_and_reject_unknowns`).
+
 #### Herdr-parity display options
 
 `[client] pane-gaps` (cells, default 0) insets every pane's rect per side so theme-background gap bands separate the panes (content, borders, labels, and the cursor mapping all follow the inset; the shared dividers keep their geometry and stay drag handles); `[client] scrollbar-gutter` (default off) reserves the right-edge column of every pane rect — content narrows by one cell and the gutter shows a minimal `▐` scroll-position indicator; without the reserved gutter nothing paints — the cue is suppressed rather than land outside the pane, and the boundary divider stays continuous; `[client] drag-cursor-shape` (default off) shapes the host cursor to the resize shape (best-effort DECSCUSR steady block — DECSCUSR has no column-resize value) while a divider drag is live, restoring the pane's own shape on drag end.
@@ -424,6 +428,8 @@ sidebar = "s"         # toggle the workspace side panel (render mode)
 sidebar-width = 20    # the side panel's columns when shown (6-60)
 sidebar-on-launch = true  # show the side panel when a render client attaches (prefix s still toggles it)
 agent-rows = [["state_icon", "workspace", "project"], ["agent"]]  # side-panel agent entry lines (tokens: state_icon state workspace project agent pane)
+notify-delivery = "terminal"  # agent state notifications: terminal (OSC 9/99), system (osascript/notify-send), off
+notify-states = ["blocked", "idle"]  # the agent states whose arrival notifies (working, blocked, idle)
 status-bar = "S"      # toggle the bottom status bar (render mode; shown by default)
 zoom = "z"            # zoom the focused pane (render mode; the daemon's resize-pane -Z)
 rename-window = ","   # rename the shown window via the prompt (render mode)

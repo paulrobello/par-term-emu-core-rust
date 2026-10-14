@@ -213,6 +213,25 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub agent_rows: Option<Vec<Vec<String>>>,
+    /// How an agent state change is announced (herdr's `[ui.toast]
+    /// delivery`): `terminal` (default — the host terminal's
+    /// notification escape, OSC 9 or kitty's OSC 99), `system` (the OS
+    /// notifier), or `off`.
+    #[serde(
+        default,
+        rename = "notify-delivery",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub notify_delivery: Option<String>,
+    /// The agent states whose arrival notifies (`working`, `blocked`,
+    /// `idle`). Default `["blocked", "idle"]` — needs attention, and
+    /// finished.
+    #[serde(
+        default,
+        rename = "notify-states",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub notify_states: Option<Vec<String>>,
     /// The divider/border line style: `herdr` (default), `unicode`,
     /// `double`, `heavy`, or `ascii`. An unknown value warns and uses
     /// the default.
@@ -568,6 +587,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             sidebar_width: Some(defaults.sidebar_width),
             sidebar_on_launch: Some(defaults.sidebar_on_launch),
             agent_rows: Some(defaults.agent_rows.clone()),
+            notify_delivery: Some(defaults.notify_delivery.clone()),
+            notify_states: Some(defaults.notify_states.clone()),
             border_lines: Some(defaults.border_lines.clone()),
             pane_borders: None,
             show_label_in_border: Some(defaults.show_label_in_border),
@@ -673,7 +694,19 @@ pub struct Chords {
     /// The side panel's agent entry lines (config `agent-rows`): token
     /// spellings per line, validated by the renderer.
     pub agent_rows: Vec<Vec<String>>,
+    /// The agent-state notification delivery (config `notify-delivery`):
+    /// one of [`NOTIFY_DELIVERIES`].
+    pub notify_delivery: String,
+    /// The agent states that notify (config `notify-states`): a subset of
+    /// [`NOTIFY_STATES`].
+    pub notify_states: Vec<String>,
 }
+
+/// The `notify-delivery` spellings.
+pub const NOTIFY_DELIVERIES: &[&str] = &["off", "terminal", "system"];
+
+/// The agent states `notify-states` may select.
+pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "idle"];
 
 /// The agent entry's tokens a line may name (config `agent-rows`).
 pub const AGENT_ROW_TOKENS: &[&str] = &[
@@ -712,6 +745,8 @@ impl Chords {
             sidebar_width: 20,
             sidebar_on_launch: true,
             agent_rows: default_agent_rows(),
+            notify_delivery: "terminal".to_string(),
+            notify_states: vec!["blocked".to_string(), "idle".to_string()],
         }
     }
 }
@@ -914,6 +949,28 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         }
         None => current.agent_rows.clone(),
     };
+    let notify_delivery = match file.client.notify_delivery.as_deref() {
+        Some(spec) if NOTIFY_DELIVERIES.contains(&spec) => spec.to_string(),
+        Some(spec) => {
+            return Err(format!(
+                "[client] notify-delivery {spec:?} is unknown (expected one of {})",
+                NOTIFY_DELIVERIES.join(", ")
+            ))
+        }
+        None => current.notify_delivery.clone(),
+    };
+    let notify_states = match file.client.notify_states.as_ref() {
+        Some(states) => {
+            if let Some(bad) = states.iter().find(|s| !NOTIFY_STATES.contains(&s.as_str())) {
+                return Err(format!(
+                    "[client] notify-states {bad:?} is unknown (expected any of {})",
+                    NOTIFY_STATES.join(", ")
+                ));
+            }
+            states.clone()
+        }
+        None => current.notify_states.clone(),
+    };
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -954,6 +1011,8 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         sidebar_width,
         sidebar_on_launch,
         agent_rows,
+        notify_delivery,
+        notify_states,
     })
 }
 
@@ -1714,6 +1773,38 @@ remain-on-exit = true
         let generated = render(&EffectiveConfig::default());
         let file: ConfigFile = toml::from_str(&generated).expect("parses");
         assert_eq!(file.client.agent_rows, Some(default_agent_rows()));
+    }
+
+    /// The notification keys resolve to `terminal` + blocked/idle when
+    /// absent, follow explicit values (an empty state list notifies
+    /// nothing), and reject unknown spellings by name.
+    #[test]
+    fn notify_keys_resolve_defaults_explicit_and_reject_unknowns() {
+        let resolve_with = |text: &str| {
+            let file: ConfigFile = toml::from_str(text).expect("parses");
+            reload_client_chords(&file, &Chords::with_defaults())
+                .map(|c| (c.notify_delivery, c.notify_states))
+        };
+        assert_eq!(
+            resolve_with("").unwrap(),
+            (
+                "terminal".to_string(),
+                vec!["blocked".to_string(), "idle".to_string()]
+            )
+        );
+        assert_eq!(
+            resolve_with("[client]\nnotify-delivery = \"system\"\nnotify-states = []\n").unwrap(),
+            ("system".to_string(), Vec::new())
+        );
+        let err = resolve_with("[client]\nnotify-delivery = \"toast\"\n").unwrap_err();
+        assert!(err.contains("\"toast\""), "{err}");
+        let err = resolve_with("[client]\nnotify-states = [\"done\"]\n").unwrap_err();
+        assert!(err.contains("\"done\""), "{err}");
+        let generated = render(&EffectiveConfig::default());
+        assert!(
+            generated.contains("notify-delivery = \"terminal\""),
+            "{generated}"
+        );
     }
 
     /// `sidebar-on-launch` resolves to true when absent, and follows an
