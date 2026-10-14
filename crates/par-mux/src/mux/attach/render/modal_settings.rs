@@ -55,7 +55,7 @@ impl SettingsSection {
             ),
             Self::Integrations => (
                 "agent integrations",
-                "session hooks that report agent state (par-mux --install-agent-hooks)",
+                "agent hooks (par-mux --install-agent-hooks)",
             ),
         }
     }
@@ -474,13 +474,24 @@ mod tests {
         assert_eq!(panel.rows[7].text.trim_end(), " \u{25B8}   system");
         assert_eq!(panel.highlights[1], (7, 0, PANEL_WIDTH), "the selection");
         assert!(panel.rows.last().unwrap().footer);
-        assert!(
-            panel
-                .rows
-                .iter()
-                .all(|r| r.text.chars().count() == PANEL_WIDTH),
-            "every row pads to the fixed width"
-        );
+        for section in SettingsSection::ALL {
+            let composed = compose_settings(
+                &SettingsState {
+                    section,
+                    selected: 0,
+                    integrations: vec![("claude".to_string(), true)],
+                },
+                &values(),
+            );
+            assert!(
+                composed
+                    .rows
+                    .iter()
+                    .all(|r| r.text.chars().count() == PANEL_WIDTH),
+                "{section:?}: every row pads to the fixed width: {:?}",
+                composed.rows
+            );
+        }
         let states = compose_settings(
             &SettingsState {
                 section: SettingsSection::States,

@@ -4382,6 +4382,79 @@ fn render_mode_panel_menu_chip_detaches() {
     );
 }
 
+/// An agent in a window the client is NOT showing announces its
+/// selected state through the host terminal: the real client writes
+/// OSC 9 with the agent's name when the push lands, and the claim's own
+/// first state (a background claim straight into `blocked`) notifies
+/// too, while an agent in the shown window stays quiet.
+#[cfg(unix)]
+#[test]
+fn render_mode_background_agent_state_notifies_the_host() {
+    let (fixture, _daemon, mut client) = fixture_with_session("notifyhost");
+    let shown = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let background_window = client
+        .send("new-window -d")
+        .expect("new-window")
+        .join("")
+        .trim()
+        .to_string();
+    let background = client
+        .send(&format!("list-panes -t {background_window}"))
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("the background pane")
+        .to_string();
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &shown], "render", "[client]\n");
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    let mut all = Vec::new();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(1000),
+        Duration::from_secs(10),
+    );
+    let report = |pane: &str, agent: &str, state: &str, seq: u32| {
+        hook_report(
+            fixture.socket(),
+            &format!(
+                r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"{state}","seq":{seq},"source":"par-mux:test"}}}}"#
+            ),
+        )
+    };
+    // The shown pane's agent: in view, no notification.
+    assert!(report(&shown, "fgagent", "blocked", 1).contains(r#""result":"ok""#));
+    // The background pane's agent goes blocked: OSC 9 with its name.
+    assert!(report(&background, "bgagent", "blocked", 1).contains(r#""result":"ok""#));
+    let got = wait_for_output(&host, b"bgagent: blocked", Duration::from_secs(10));
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("\x1b]9;par-mux: ") && text.contains("bgagent: blocked\x1b\\"),
+        "the background agent's state reaches the host as OSC 9. stderr: {} bytes: {text:?}",
+        stderr.lock().unwrap()
+    );
+    let all_text = String::from_utf8_lossy(&all).to_string() + &text;
+    assert!(
+        !all_text.contains("fgagent: blocked"),
+        "the shown window's agent stays quiet: {all_text:?}"
+    );
+    host.killer.kill().ok();
+}
+
 /// The command menu's `settings` row opens herdr's tabbed settings
 /// dialog in the real client, and Escape closes it.
 #[cfg(unix)]
@@ -4439,6 +4512,19 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
     );
     host.to_child.write_all(b"\x1b").expect("escape");
     host.to_child.flush().ok();
+    // Escape closes it: the panes repaint over the box, so the final
+    // screen no longer shows the dialog's tab row.
+    screen_stable(
+        &host,
+        &mut got,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
+    assert!(
+        !screen.contains("integrations"),
+        "Escape closed the dialog: {screen}"
+    );
     host.killer.kill().ok();
 }
 

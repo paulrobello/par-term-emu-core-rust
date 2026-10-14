@@ -514,14 +514,18 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
-                let text = if self.apply_chords(&chords, &file) {
-                    "config reloaded".to_string()
-                } else {
-                    format!(
+                let known_border = self.apply_chords(&chords, &file);
+                let warning = crate::mux::config::display_option_warnings(&chords)
+                    .into_iter()
+                    .next();
+                let text = match warning {
+                    Some(warning) => warning,
+                    None if known_border => "config reloaded".to_string(),
+                    None => format!(
                         "border-lines {:?} unknown — using {}",
                         chords.border_lines,
                         self.render_opts.glyphs.name()
-                    )
+                    ),
                 };
                 self.chrome.flash(text);
             }

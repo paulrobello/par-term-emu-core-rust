@@ -253,6 +253,10 @@ pub(super) enum SidebarDrag {
     Split { anchor_y: u16, start_rule: u16 },
 }
 
+/// How often the roster re-queries while a panel agent's project is
+/// unknown — a third of the host probe's 30 s sweep.
+pub(super) const PROJECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The panel width bounds: the footer chips need 12 columns; 60 keeps
 /// the panes usable on every host this targets.
 pub(super) const SIDEBAR_WIDTH_MIN: u16 = 12;
@@ -323,6 +327,25 @@ impl WindowSession {
         if let Err(err) = crate::mux::attach::prefs::store(path, &prefs) {
             self.chrome.flash(format!("sidebar state not saved: {err}"));
         }
+    }
+
+    /// Whether the roster is due a re-query for a missing project: the
+    /// panel is up, an agent's project is unknown, and the last poll is
+    /// [`PROJECT_POLL_INTERVAL`] old (the poll restarts the clock). A
+    /// project-less pane outside a repo still gets its directory's name,
+    /// so the poll stops once the probe reached every agent.
+    pub(super) fn project_poll_due(&mut self, now: std::time::Instant) -> bool {
+        let missing = self.sidebar.is_on()
+            && self
+                .status
+                .agents()
+                .iter()
+                .any(|entry| entry.project.is_none());
+        if missing && now.duration_since(self.project_poll) >= PROJECT_POLL_INTERVAL {
+            self.project_poll = now;
+            return true;
+        }
+        false
     }
 
     /// Press on the strip's right edge: start a width drag.

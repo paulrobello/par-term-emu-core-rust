@@ -635,6 +635,15 @@ impl StatusState {
         }
     }
 
+    /// Give every roster entry `project` (test seam for the project
+    /// poll).
+    #[cfg(test)]
+    pub(crate) fn set_projects_for_test(&mut self, project: &str) {
+        for entry in &mut self.agents {
+            entry.project = Some(project.to_string());
+        }
+    }
+
     /// Patch a window's tab name from a `%window-renamed` payload. A
     /// window this view does not list is ignored.
     pub(crate) fn patch_window_name(&mut self, window: &str, name: &str) {

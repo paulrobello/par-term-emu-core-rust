@@ -540,6 +540,9 @@ fn render_session_inner(
             chords.border_lines
         );
     }
+    for warning in crate::mux::config::display_option_warnings(chords) {
+        eprintln!("par-mux: {warning}");
+    }
 
     // The host probe: OSC 11 background + XTWINOPS CSI 16 t cell pixels,
     // run with raw mode up and before the pump's stdin reader starts, so
@@ -693,6 +696,8 @@ struct WindowSession {
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
     settings_path: Option<std::path::PathBuf>,
+    /// When the roster was last re-queried for a missing project.
+    project_poll: std::time::Instant,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
@@ -979,6 +984,7 @@ impl WindowSession {
             nav_gen: 0,
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
+            project_poll: std::time::Instant::now(),
             detach_requested: false,
             frame_hold_since: None,
             pending_end: false,
@@ -1048,6 +1054,13 @@ impl WindowSession {
             // 5. Host resize (SIGWINCH): report the new grid, re-fit.
             if self.pump_resize(conn, sink, &mut current_size)?.is_break() {
                 return Ok(());
+            }
+
+            // 6a. A panel agent with no project yet: the host probe fills it
+            //     on its 30 s sweep and broadcasts nothing, so re-query
+            //     the roster on a slow cadence until every agent has one.
+            if self.project_poll_due(std::time::Instant::now()) {
+                self.status_dirty = true;
             }
 
             // 6. Status: the throttled re-query. Any %sessions-changed /

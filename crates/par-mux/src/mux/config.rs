@@ -705,6 +705,38 @@ pub struct Chords {
 /// The `notify-delivery` spellings.
 pub const NOTIFY_DELIVERIES: &[&str] = &["off", "terminal", "system"];
 
+/// One warning per display-option value the client does not know: an
+/// `agent-rows` token (skipped when rendering), a `notify-delivery`
+/// (the default `terminal` applies), a `notify-states` entry (ignored).
+/// Pure — what the launch prints and the reload flashes.
+pub fn display_option_warnings(chords: &Chords) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for token in chords.agent_rows.iter().flatten() {
+        if !AGENT_ROW_TOKENS.contains(&token.as_str()) {
+            warnings.push(format!(
+                "[client] agent-rows token {token:?} unknown — skipped (valid: {})",
+                AGENT_ROW_TOKENS.join(", ")
+            ));
+        }
+    }
+    if !NOTIFY_DELIVERIES.contains(&chords.notify_delivery.as_str()) {
+        warnings.push(format!(
+            "[client] notify-delivery {:?} unknown — using terminal (valid: {})",
+            chords.notify_delivery,
+            NOTIFY_DELIVERIES.join(", ")
+        ));
+    }
+    for state in &chords.notify_states {
+        if !NOTIFY_STATES.contains(&state.as_str()) {
+            warnings.push(format!(
+                "[client] notify-states {state:?} unknown — ignored (valid: {})",
+                NOTIFY_STATES.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
 /// The agent states `notify-states` may select.
 pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "idle"];
 
@@ -926,20 +958,12 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .sidebar_on_launch
         .unwrap_or(current.sidebar_on_launch);
-    // An unknown token is a config error the caller surfaces, like a
-    // malformed chord; an empty table falls back to the default entry.
+    // Display options keep their spelling: an unknown token or value is
+    // the renderer's warn-and-default (the border-lines rule, and
+    // [`display_option_warnings`]), never a reload error. An empty
+    // agent-rows table falls back to the default entry.
     let agent_rows = match file.client.agent_rows.as_ref() {
         Some(rows) => {
-            if let Some(bad) = rows
-                .iter()
-                .flatten()
-                .find(|token| !AGENT_ROW_TOKENS.contains(&token.as_str()))
-            {
-                return Err(format!(
-                    "[client] agent-rows token {bad:?} is unknown (expected one of {})",
-                    AGENT_ROW_TOKENS.join(", ")
-                ));
-            }
             let rows: Vec<Vec<String>> = rows.iter().filter(|r| !r.is_empty()).cloned().collect();
             if rows.is_empty() {
                 default_agent_rows()
@@ -949,28 +973,16 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         }
         None => current.agent_rows.clone(),
     };
-    let notify_delivery = match file.client.notify_delivery.as_deref() {
-        Some(spec) if NOTIFY_DELIVERIES.contains(&spec) => spec.to_string(),
-        Some(spec) => {
-            return Err(format!(
-                "[client] notify-delivery {spec:?} is unknown (expected one of {})",
-                NOTIFY_DELIVERIES.join(", ")
-            ))
-        }
-        None => current.notify_delivery.clone(),
-    };
-    let notify_states = match file.client.notify_states.as_ref() {
-        Some(states) => {
-            if let Some(bad) = states.iter().find(|s| !NOTIFY_STATES.contains(&s.as_str())) {
-                return Err(format!(
-                    "[client] notify-states {bad:?} is unknown (expected any of {})",
-                    NOTIFY_STATES.join(", ")
-                ));
-            }
-            states.clone()
-        }
-        None => current.notify_states.clone(),
-    };
+    let notify_delivery = file
+        .client
+        .notify_delivery
+        .clone()
+        .unwrap_or_else(|| current.notify_delivery.clone());
+    let notify_states = file
+        .client
+        .notify_states
+        .clone()
+        .unwrap_or_else(|| current.notify_states.clone());
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -1746,10 +1758,11 @@ remain-on-exit = true
     }
 
     /// `agent-rows` resolves to the two-line default when absent, follows
-    /// an explicit table, drops empty lines, and rejects an unknown token
-    /// by name; the generated config spells the default.
+    /// an explicit table, drops empty lines, and keeps an unknown token
+    /// for the renderer's warning (never a reload error); the generated
+    /// config spells the default.
     #[test]
-    fn agent_rows_resolve_default_explicit_and_reject_unknown_tokens() {
+    fn agent_rows_resolve_default_explicit_and_warn_on_unknown_tokens() {
         let resolve_with = |text: &str| {
             let file: ConfigFile = toml::from_str(text).expect("parses");
             reload_client_chords(&file, &Chords::with_defaults()).map(|c| c.agent_rows)
@@ -1768,8 +1781,12 @@ remain-on-exit = true
             default_agent_rows(),
             "an empty table is the default"
         );
-        let err = resolve_with("[client]\nagent-rows = [[\"agent\", \"bogus\"]]\n").unwrap_err();
-        assert!(err.contains("\"bogus\""), "{err}");
+        let file: ConfigFile =
+            toml::from_str("[client]\nagent-rows = [[\"agent\", \"bogus\"]]\n").unwrap();
+        let chords = reload_client_chords(&file, &Chords::with_defaults()).expect("never an error");
+        let warnings = display_option_warnings(&chords);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("\"bogus\""), "{warnings:?}");
         let generated = render(&EffectiveConfig::default());
         let file: ConfigFile = toml::from_str(&generated).expect("parses");
         assert_eq!(file.client.agent_rows, Some(default_agent_rows()));
@@ -1777,9 +1794,9 @@ remain-on-exit = true
 
     /// The notification keys resolve to `terminal` + blocked/idle when
     /// absent, follow explicit values (an empty state list notifies
-    /// nothing), and reject unknown spellings by name.
+    /// nothing), and warn on unknown spellings without failing.
     #[test]
-    fn notify_keys_resolve_defaults_explicit_and_reject_unknowns() {
+    fn notify_keys_resolve_defaults_explicit_and_warn_on_unknowns() {
         let resolve_with = |text: &str| {
             let file: ConfigFile = toml::from_str(text).expect("parses");
             reload_client_chords(&file, &Chords::with_defaults())
@@ -1796,10 +1813,16 @@ remain-on-exit = true
             resolve_with("[client]\nnotify-delivery = \"system\"\nnotify-states = []\n").unwrap(),
             ("system".to_string(), Vec::new())
         );
-        let err = resolve_with("[client]\nnotify-delivery = \"toast\"\n").unwrap_err();
-        assert!(err.contains("\"toast\""), "{err}");
-        let err = resolve_with("[client]\nnotify-states = [\"done\"]\n").unwrap_err();
-        assert!(err.contains("\"done\""), "{err}");
+        let file: ConfigFile = toml::from_str(
+            "[client]\nnotify-delivery = \"toast\"\nnotify-states = [\"done\", \"idle\"]\n",
+        )
+        .unwrap();
+        let chords = reload_client_chords(&file, &Chords::with_defaults()).expect("never an error");
+        let warnings = display_option_warnings(&chords);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("\"toast\""), "{warnings:?}");
+        assert!(warnings[1].contains("\"done\""), "{warnings:?}");
+        assert!(display_option_warnings(&Chords::with_defaults()).is_empty());
         let generated = render(&EffectiveConfig::default());
         assert!(
             generated.contains("notify-delivery = \"terminal\""),

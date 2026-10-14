@@ -5,6 +5,8 @@
 //! (OSC 9, kitty's OSC 99) or the OS notifier. Only a pushed TRANSITION
 //! notifies: the status refresh replaces the roster wholesale and never
 //! notifies, so neither the first load nor a reconnect floods the user.
+//! Like herdr's, notifications are for the background: an agent in the
+//! window the client shows never notifies.
 
 use super::WindowSession;
 
@@ -118,7 +120,11 @@ impl WindowSession {
         state: &str,
         ws: &str,
     ) {
+        // Background-only (herdr's rule): an agent in the window this
+        // client shows is already in view, so it never notifies.
+        let in_view = self.renderer.layout().iter().any(|r| r.pane == pane);
         if self.notify.delivery == NotifyDelivery::Off
+            || in_view
             || previous == Some(state)
             || !self.notify.states.iter().any(|s| s == state)
         {

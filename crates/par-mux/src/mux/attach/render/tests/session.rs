@@ -2872,7 +2872,17 @@ fn agent_state_push_notifies_selected_transitions_only() {
             ws: "+0".to_string(),
         });
     };
-    // %1 claude working -> idle: selected, one OSC 9.
+    // The snapshot session shows %1..%3, so their agents are in view and
+    // never notify; drop the layout to put them in the background.
+    push(&mut session, "%1", "blocked");
+    assert!(
+        session.notify.outbox.is_empty(),
+        "an agent in the shown window does not notify"
+    );
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,80x24,0,0,9").expect("parses"));
+    // %1 claude blocked -> idle: selected, one OSC 9.
     push(&mut session, "%1", "idle");
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
@@ -2889,6 +2899,38 @@ fn agent_state_push_notifies_selected_transitions_only() {
     session.notify.delivery = NotifyDelivery::Off;
     push(&mut session, "%1", "blocked");
     assert!(session.notify.outbox.is_empty());
+}
+
+/// An agent whose project the probe has not reported yet keeps the
+/// roster polling on a slow cadence (the probe broadcasts nothing), and
+/// the poll stops once every agent has one.
+#[test]
+fn missing_project_polls_the_roster_until_it_arrives() {
+    let (_rx, mut conn) = fake_daemon("snapproject", snapshot_script());
+    let mut session = snapshot_session();
+    session.refresh_status_facts(&mut conn).expect("seed");
+    let start = session.project_poll;
+    assert!(
+        !session.project_poll_due(start),
+        "the clock starts at construction"
+    );
+    let later = start + super::super::sidebar::PROJECT_POLL_INTERVAL;
+    assert!(session.project_poll_due(later), "an agent lacks a project");
+    assert!(
+        !session.project_poll_due(later),
+        "the poll restarted the clock"
+    );
+    for pane in [1, 3] {
+        session
+            .status
+            .patch_agent(&format!("%{pane}"), "x", Some("idle"), "+0");
+    }
+    session.status.set_projects_for_test("par-term");
+    let much_later = later + super::super::sidebar::PROJECT_POLL_INTERVAL;
+    assert!(
+        !session.project_poll_due(much_later),
+        "every agent has its project: no poll"
+    );
 }
 
 /// `%agent-state-changed` and `%agent-released` patch the roster from
