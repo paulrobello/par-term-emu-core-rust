@@ -335,50 +335,57 @@ fn snapshot_metas() -> Option<Vec<ProcMeta>> {
     let stride = kinfo_layout()?;
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_ALL];
     let mut len: libc::size_t = 0;
-    // SAFETY: `mib` holds the 3 names passed; the sizing call passes a NULL
-    // buffer, and the fill passes `buf` with `len` = its length, so the
-    // kernel writes at most `buf.len()` bytes.
-    unsafe {
-        if libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            std::ptr::null_mut(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        ) != 0
-            || len < stride
-        {
-            return None;
-        }
-        let mut buf = vec![0u8; len];
-        if libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            buf.as_mut_ptr().cast(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        ) != 0
-        {
-            return None;
-        }
-        buf.truncate(len);
-        let mut metas = Vec::with_capacity(buf.len() / stride);
-        let mut offset = 0;
-        while offset + stride <= buf.len() {
-            let pid = i32::from_ne_bytes(*buf[offset + KP_PID_OFFSET..].first_chunk::<4>()?);
-            let ppid = i32::from_ne_bytes(*buf[offset + KP_PPID_OFFSET..].first_chunk::<4>()?);
-            // pid 0 is the kernel slot the ALL listing leads with; the
-            // calibration entry has already verified the layout, so a
-            // non-process entry is skipped, not fatal.
-            if pid > 0 {
-                metas.push(ProcMeta { pid, ppid });
+    // The table can grow between the sizing call and the fill — the fill
+    // then fails with ENOMEM after the kernel has written the length it
+    // actually needs into `len` (measured under load, where the suite's
+    // real-table positive control flaked). Retry with that length.
+    for _ in 0..4 {
+        // SAFETY: `mib` holds the 3 names passed; the sizing call passes a
+        // NULL buffer, and the fill passes `buf` with `len` = its length,
+        // so the kernel writes at most `buf.len()` bytes.
+        unsafe {
+            if libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            ) != 0
+                || len < stride
+            {
+                return None;
             }
-            offset += stride;
+            let mut buf = vec![0u8; len];
+            if libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            ) != 0
+            {
+                continue;
+            }
+            buf.truncate(len);
+            let mut metas = Vec::with_capacity(buf.len() / stride);
+            let mut offset = 0;
+            while offset + stride <= buf.len() {
+                let pid = i32::from_ne_bytes(*buf[offset + KP_PID_OFFSET..].first_chunk::<4>()?);
+                let ppid = i32::from_ne_bytes(*buf[offset + KP_PPID_OFFSET..].first_chunk::<4>()?);
+                // pid 0 is the kernel slot the ALL listing leads with; the
+                // calibration entry has already verified the layout, so a
+                // non-process entry is skipped, not fatal.
+                if pid > 0 {
+                    metas.push(ProcMeta { pid, ppid });
+                }
+                offset += stride;
+            }
+            return Some(metas);
         }
-        Some(metas)
     }
+    None
 }
 
 /// A process's argv, or `None` when unreadable (permissions, zombie,
