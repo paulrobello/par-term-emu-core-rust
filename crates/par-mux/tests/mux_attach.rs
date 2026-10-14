@@ -4344,10 +4344,11 @@ fn render_mode_panel_menu_chip_detaches() {
     );
     // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(600));
-    // The panel's footer row is the 22-row content area's last row
-    // (host row 22, SGR row 23); ` menu ` spans 0-based cols 13..19.
+    // The chips sit on the workspace area's last row: the 22-row frame
+    // splits 11/11, so composed row 10 = host row 11 (SGR row 12);
+    // ` menu ` spans 0-based cols 13..19.
     host.to_child
-        .write_all(b"\x1b[<0;17;23M")
+        .write_all(b"\x1b[<0;17;12M")
         .expect("menu chip press");
     host.to_child.flush().ok();
     let mut flash = wait_for_output(&host, b"reload config", Duration::from_secs(10));
