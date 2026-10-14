@@ -117,8 +117,8 @@ mod protocol;
 mod reap;
 use broadcast::*;
 pub(crate) use broadcast::{
-    broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink,
-    replay_pane_exited_lines,
+    broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
+    pane_output_sink, replay_pane_exited_lines,
 };
 use client::*;
 pub use endpoint::sweep_pane_endpoint_remnants;

@@ -28,9 +28,9 @@ pub(crate) fn deliver_pending_observer_events(tree: &Mutex<MuxTree>) {
 
 /// One connected render client's sizing contribution: the grid it reported
 /// (`refresh-client -C`) and the window it is displaying. A window's extent
-/// is the componentwise minimum over the clients displaying it; a client
-/// that never reported a size (a plain control or hook connection) has no
-/// entry and constrains nothing.
+/// is owned by its latest-attached viewer (the highest connection id with
+/// an entry displaying it); a client that never reported a size (a plain
+/// control or hook connection) has no entry and constrains nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientView {
     /// The reported grid width in columns.
@@ -431,7 +431,7 @@ pub struct MuxTree {
     /// that changes which workspace a session belongs to — a session is
     /// immutable in this respect for its whole life.
     pub(crate) session_workspace: HashMap<SessionId, WorkspaceId>,
-    /// Per-connection sizing state behind the smallest-attached-client
+    /// Per-connection sizing state behind the latest-attached-client
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
     pub(crate) client_views: HashMap<u64, ClientView>,

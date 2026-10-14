@@ -642,12 +642,17 @@ impl MuxTree {
 
     /// Record `client_id`'s sizing contribution — the grid it reported via
     /// `refresh-client -C` and the window it is displaying — and re-fit the
-    /// windows the smallest-attached-client rule governs.
+    /// windows the latest-attached-client rule governs.
     ///
-    /// Returns the windows whose extent actually changed (a grow or shrink
-    /// under the new minimum), so the caller broadcasts `%layout-change`
-    /// only for those. Extents are clamped positive: a sub-minimum report
-    /// that would make the window 0 wide/tall cannot land.
+    /// Returns the windows whose extent actually changed (the owner's
+    /// report moving the grid, or a released window re-fitting to its new
+    /// owner), so the caller broadcasts `%layout-change` only for those,
+    /// and whether THIS report was applied: `true` when the reporter is
+    /// the window's sizing owner (its most recently attached viewer),
+    /// `false` when a later client owns the window and the report only
+    /// records the view for a later takeover. Extents are clamped
+    /// positive: a report that would make the window 0 wide/tall cannot
+    /// land.
     pub fn set_client_view(
         &mut self,
         client_id: u64,
@@ -655,7 +660,7 @@ impl MuxTree {
         cols: u16,
         rows: u16,
         chrome: PaneChrome,
-    ) -> Vec<WindowId> {
+    ) -> (Vec<WindowId>, bool) {
         let view = ClientView {
             window,
             cols: cols.max(1),
@@ -667,8 +672,9 @@ impl MuxTree {
             None => (None, false),
         };
         self.client_views.insert(client_id, view);
+        let applied = self.view_owner(window) == Some(client_id);
         if updated {
-            return Vec::new();
+            return (Vec::new(), applied);
         }
         // Only the windows the change can move: the displayed one and, when
         // the view switched windows, the one it left.
@@ -678,12 +684,25 @@ impl MuxTree {
                 candidates.push(previous_window);
             }
         }
-        self.refit_reported_windows(&candidates)
+        (self.refit_reported_windows(&candidates), applied)
+    }
+
+    /// The window's sizing owner under the latest-attached-client rule:
+    /// the highest connection id among the views displaying `window`.
+    /// Connection ids are monotonic, so the maximum is the most recent
+    /// attach.
+    fn view_owner(&self, window: WindowId) -> Option<u64> {
+        self.client_views
+            .iter()
+            .filter(|(_, view)| view.window == window)
+            .map(|(id, _)| *id)
+            .max()
     }
 
     /// Drop `client_id`'s sizing contribution and re-fit the window it was
-    /// displaying — the disconnect path: with the constraining report gone
-    /// the window may grow to the remaining viewers' minimum.
+    /// displaying — the disconnect path: with the owner gone the latest
+    /// remaining viewer takes over, and the window re-fits to its
+    /// recorded report.
     pub fn clear_client_view(&mut self, client_id: u64) -> Vec<WindowId> {
         let Some(removed) = self.client_views.remove(&client_id) else {
             return Vec::new();
@@ -769,39 +788,36 @@ impl MuxTree {
         Vec::new()
     }
 
-    /// Re-fit every window in `candidates` to the componentwise minimum of
-    /// its contributors' reported sizes and the merge of their declared
-    /// chrome. A window with no contributors is left at its current extent
-    /// and chrome (it re-fits when next displayed); a window whose minimum
-    /// and chrome equal its current ones is left alone — the idempotence
-    /// that keeps repeated identical reports and the follow moves from
-    /// looping. A chrome-only change (a border toggle at an unchanged host
-    /// size) re-fits too: the pane PTYs shrink or grow by the ring.
+    /// Re-fit every window in `candidates` to its sizing owner's reported
+    /// extent and chrome — the latest-attached-client rule (tmux
+    /// `window-size latest`): the most recently attached viewer's report
+    /// IS the window's size, and every other viewer's recorded report
+    /// applies nothing until its owner detaches. A window with no viewers
+    /// is left at its current extent and chrome (it re-fits when next
+    /// displayed); an owner whose extent and chrome equal the window's
+    /// current ones leaves it alone — the idempotence that keeps repeated
+    /// identical reports and the follow moves from looping. A chrome-only
+    /// change (a border toggle at an unchanged host size) re-fits too:
+    /// the pane PTYs shrink or grow by the ring.
     fn refit_reported_windows(&mut self, candidates: &[WindowId]) -> Vec<WindowId> {
         let mut resized = Vec::new();
         for window_id in candidates {
-            let mut cols: Option<u16> = None;
-            let mut rows: Option<u16> = None;
-            let mut chrome = PaneChrome::default();
-            for view in self.client_views.values() {
-                if view.window == *window_id {
-                    cols = Some(cols.map_or(view.cols, |c: u16| c.min(view.cols)));
-                    rows = Some(rows.map_or(view.rows, |r: u16| r.min(view.rows)));
-                    chrome = chrome.merge(view.chrome);
+            let Some(owner) = self.view_owner(*window_id) else {
+                continue;
+            };
+            let view = self.client_views[&owner];
+            let changed = self
+                .window(*window_id)
+                .map(|win| {
+                    win.cols != view.cols || win.rows != view.rows || win.chrome != view.chrome
+                })
+                .unwrap_or(false);
+            if changed {
+                if let Some(window) = self.windows.get_mut(window_id) {
+                    window.chrome = view.chrome;
                 }
-            }
-            if let (Some(cols), Some(rows)) = (cols, rows) {
-                let changed = self
-                    .window(*window_id)
-                    .map(|win| win.cols != cols || win.rows != rows || win.chrome != chrome)
-                    .unwrap_or(false);
-                if changed {
-                    if let Some(window) = self.windows.get_mut(window_id) {
-                        window.chrome = chrome;
-                    }
-                    let _ = self.resize_window(*window_id, cols, rows);
-                    resized.push(*window_id);
-                }
+                let _ = self.resize_window(*window_id, view.cols, view.rows);
+                resized.push(*window_id);
             }
         }
         resized

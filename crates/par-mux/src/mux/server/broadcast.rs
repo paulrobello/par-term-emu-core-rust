@@ -150,6 +150,17 @@ pub(super) fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Client
 /// registration replay so the broadcast and replay forms cannot drift.
 /// `None` when the window is gone.
 pub(super) fn render_layout_change(tree: &MuxTree, window_id: WindowId) -> Option<String> {
+    layout_change_notification(tree, window_id).map(|n| emit(&n))
+}
+
+/// The `%layout-change` notification for `window_id` against `tree` —
+/// the shared builder of the broadcast form and the issuer-only form a
+/// non-owner size report answers with: the reporting client still needs
+/// the geometry, but its report moved nothing, so nobody else is woken.
+pub(crate) fn layout_change_notification(
+    tree: &MuxTree,
+    window_id: WindowId,
+) -> Option<TmuxNotification> {
     let window = tree.window(window_id)?;
     let layout = window
         .layout
@@ -162,12 +173,12 @@ pub(super) fn render_layout_change(tree: &MuxTree, window_id: WindowId) -> Optio
         ),
         None => (layout.clone(), String::new()),
     };
-    Some(emit(&TmuxNotification::LayoutChange {
+    Some(TmuxNotification::LayoutChange {
         window_id: window_id.to_string(),
         window_layout: layout,
         window_visible_layout: visible_layout,
         window_raw_flags: raw_flags,
-    }))
+    })
 }
 
 pub(crate) fn broadcast_layout_change(

@@ -18,10 +18,10 @@
 //! `create_session` blocks on daemon I/O, so the streaming server calls it
 //! off the async runtime (`spawn_blocking`).
 //!
-//! Size policy: the daemon's smallest-attached-client rule — a window's
-//! extent is the componentwise minimum over the render clients displaying
-//! it, and a streaming viewer's `Resize` becomes `refresh-client -t %N -C
-//! WxH`, one sizing contribution per streaming server connection. The
+//! Size policy: the daemon's latest-attached-client rule — a window's
+//! extent is owned by its most recently attached viewer, and a streaming
+//! viewer's `Resize` becomes `refresh-client -t %N -C WxH`, one sizing
+//! contribution per streaming server connection. The
 //! mirror is seeded at the pane's current size (`pane-info`), never the
 //! viewer's, and re-fits only when a `%layout-change` changes that pane's
 //! rectangle.
@@ -890,8 +890,8 @@ mod tests {
         );
 
         // A viewer resize is a deliberate request: it is recorded as the
-        // viewer's sizing contribution and the pane re-fits to the
-        // smallest-viewer minimum — here the viewer alone, 70x20. The
+        // viewer's sizing contribution, and as the latest-attached
+        // connection the viewer owns the window — here 70x20. The
         // mirror follows via %layout-change.
         session.resize_tx.send((70, 20)).expect("resize request");
         wait("the pane and mirror at 70x20", || {
@@ -901,10 +901,10 @@ mod tests {
                 .then(|| format!("pane {pane_now:?}, mirror {mirror_now:?}"))
         });
 
-        // A larger report from elsewhere (the desktop) does NOT lift the
-        // grid: the attached viewer still displays the window at 70x20,
-        // and the window's extent is the componentwise minimum over its
-        // viewers. The desktop's report only becomes its own contribution.
+        // A report from elsewhere (the desktop, an earlier connection)
+        // does NOT move the grid: the viewer still owns the window at
+        // 70x20, and the desktop's report is only recorded for a later
+        // takeover.
         control
             .send(&format!("refresh-client -t {pane} -C 90x25"))
             .expect("desktop resize");

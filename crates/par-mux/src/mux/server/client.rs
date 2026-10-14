@@ -366,10 +366,11 @@ impl Connection {
         }
         let client_id = self.client_id;
         self.clients.lock().retain(|(id, _, _, _)| *id != client_id);
-        // The disconnect drops the connection's sizing contribution; the
-        // windows it constrained may grow to the remaining viewers'
-        // minimum, and the grown windows broadcast `%layout-change` to the
-        // clients that are still attached. The displayed view is read
+        // The disconnect drops the connection's sizing contribution; a
+        // window it owned re-fits to the latest remaining viewer's
+        // recorded report, and the moved windows broadcast
+        // `%layout-change` to the clients that are still attached. The
+        // displayed view is read
         // first, for the `%client-left` line that follows the layout
         // changes (dispatch's layout-then-lifecycle order).
         let (resized, displayed) = {

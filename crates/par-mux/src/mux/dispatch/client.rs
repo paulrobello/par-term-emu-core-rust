@@ -60,10 +60,10 @@ pub(super) fn cmd_refresh_client(
 /// a pane the client never named would push it screen bytes of the wrong
 /// pane. `-C` records the report as the connection's sizing contribution
 /// against the window it displays (the bare form's documented stand-in:
-/// the newest session's active window) and re-fits that window to the
-/// smallest-attached-client minimum.
+/// the newest session's active window) and re-fits that window to its
+/// sizing owner's report (the latest-attached-client rule).
 fn refresh_newest_window(ctx: &Ctx<'_>, size: (u16, u16), chrome: PaneChrome) -> Outcome {
-    let outcome: Result<(WindowId, Vec<WindowId>), String> = {
+    let outcome: Result<(WindowId, Vec<WindowId>, bool), String> = {
         let mut guard = ctx.tree.lock();
         // Newest = highest id (ids are monotonic). The map has no
         // insertion order, so this is the deterministic spelling of bare
@@ -75,7 +75,7 @@ fn refresh_newest_window(ctx: &Ctx<'_>, size: (u16, u16), chrome: PaneChrome) ->
                     .and_then(|s| s.windows.get(s.active).copied());
                 match window {
                     Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
-                        .map(|resized| (window_id, resized))
+                        .map(|(resized, applied)| (window_id, resized, applied))
                         .map_err(|err| err.to_string()),
                     None => Err(format!("no such session: {session}")),
                 }
@@ -84,18 +84,18 @@ fn refresh_newest_window(ctx: &Ctx<'_>, size: (u16, u16), chrome: PaneChrome) ->
         }
     };
     match outcome {
-        Ok((window_id, resized)) => size_report_outcome(ctx, window_id, resized),
+        Ok((window_id, resized, applied)) => size_report_outcome(ctx, window_id, resized, applied),
         Err(err) => Outcome::err(ctx, &err),
     }
 }
 
 /// The window-size policy's input: a client's renderer reports its grid
 /// against one of the window's panes; the report is recorded as that
-/// connection's sizing contribution and the window re-fits to the
-/// smallest-attached-client minimum. Every pane terminal re-fits to the
-/// re-divided geometry (less the declared `-I` chrome) — followed by a
-/// %layout-change so clients re-render (the seed path requires one even
-/// when the minimum did not move the grid).
+/// connection's sizing contribution and the window re-fits to its sizing
+/// owner's report (the latest-attached-client rule). Every pane terminal
+/// re-fits to the re-divided geometry (less the declared `-I` chrome) —
+/// followed by a %layout-change so clients re-render (the seed path
+/// requires one even when the grid did not move).
 fn refresh_pane_window(
     ctx: &Ctx<'_>,
     pane: PaneId,
@@ -106,12 +106,12 @@ fn refresh_pane_window(
         let mut guard = ctx.tree.lock();
         match guard.window_of_pane(pane) {
             Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
-                .map(|resized| (window_id, resized)),
+                .map(|(resized, applied)| (window_id, resized, applied)),
             None => Err(MuxError::NoSuchPane(pane)),
         }
     };
     match outcome {
-        Ok((window_id, resized)) => size_report_outcome(ctx, window_id, resized),
+        Ok((window_id, resized, applied)) => size_report_outcome(ctx, window_id, resized, applied),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
@@ -140,25 +140,47 @@ fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
 /// Record a `-C` size report against `window_id` — the connection's
 /// sizing contribution, or the legacy direct resize when dispatch has no
 /// connection identity (embedder/test dispatch) — and return every
-/// window the re-fit moved.
+/// window the re-fit moved plus whether THIS report was applied (the
+/// reporter owns the window; a non-owner's report moves nothing).
 fn apply_size_report(
     ctx: &Ctx<'_>,
     guard: &mut MuxTree,
     window_id: WindowId,
     (cols, rows): (u16, u16),
     chrome: PaneChrome,
-) -> Result<Vec<WindowId>, MuxError> {
+) -> Result<(Vec<WindowId>, bool), MuxError> {
     match ctx.client_id {
         Some(client_id) => Ok(guard.set_client_view(client_id, window_id, cols, rows, chrome)),
         None => guard
             .resize_window_with_chrome(window_id, cols, rows, chrome)
-            .map(|()| vec![window_id]),
+            .map(|()| (vec![window_id], true)),
     }
 }
 
-/// The ok reply for a size report: the reported window's
+/// The ok reply for an applied size report: the reported window's
 /// `%layout-change` first, then every other window the re-fit moved.
-fn size_report_outcome(ctx: &Ctx<'_>, window_id: WindowId, resized: Vec<WindowId>) -> Outcome {
+/// An ignored report (a non-owner's) moves nothing, so it broadcasts
+/// nothing — but the reporter still needs the geometry: a client that
+/// just switched windows learns the layout from its own re-seed report,
+/// so the window's `%layout-change` goes to the issuer alone. Without
+/// this, two attached clients re-reporting in turn woke each other into
+/// a re-seed flip-flop (the manual-pass htop sort-panel oscillation).
+fn size_report_outcome(
+    ctx: &Ctx<'_>,
+    window_id: WindowId,
+    resized: Vec<WindowId>,
+    applied: bool,
+) -> Outcome {
+    if !applied {
+        let notification = {
+            let guard = ctx.tree.lock();
+            layout_change_notification(&guard, window_id)
+        };
+        return match notification {
+            Some(notification) => Outcome::ok(ctx, "").telling_issuer(notification),
+            None => Outcome::ok(ctx, ""),
+        };
+    }
     resized
         .into_iter()
         .filter(|extra| *extra != window_id)

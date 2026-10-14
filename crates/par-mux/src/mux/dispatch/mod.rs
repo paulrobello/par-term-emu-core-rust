@@ -22,8 +22,8 @@ use crate::mux::layout::SplitDirection;
 use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
-    broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink,
-    replay_pane_exited_lines, Clients,
+    broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
+    pane_output_sink, replay_pane_exited_lines, Clients,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use base64::Engine as _;

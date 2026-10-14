@@ -163,6 +163,129 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
     );
 }
 
+/// The latest-attached-client arbitration over `-C` reports: only the
+/// window's owning (most recently attached) client's report moves the
+/// window. A non-owner's report applies nothing, answers the issuer
+/// alone (the reporter still needs the geometry for its re-seed), and
+/// wakes nobody else — without the issuer scoping, two differently-sized
+/// attach clients re-reporting in turn broadcast each other into a
+/// re-seed flip-flop (the manual-pass htop sort-panel oscillation).
+#[test]
+fn size_reports_follow_the_latest_attached_client() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(DeadPaneFactory))));
+    let clients: crate::mux::server::Clients = Arc::new(Mutex::new(Vec::new()));
+    let channel = |clients: &crate::mux::server::Clients,
+                   id: u64|
+     -> (
+        std::sync::mpsc::SyncSender<String>,
+        std::sync::mpsc::Receiver<String>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+        clients.lock().push((
+            id,
+            tx.clone(),
+            Arc::new(AtomicBool::new(false)),
+            crate::mux::ipc::ConnectionAbort::none(),
+        ));
+        (tx, rx)
+    };
+    let (tx1, one) = channel(&clients, 1);
+    let (_tx2, two) = channel(&clients, 2);
+    let (_tx3, three) = channel(&clients, 3);
+    let run_as =
+        |client_id: u64, line: &str, issuer: &std::sync::mpsc::SyncSender<String>| -> String {
+            let ctx = Ctx {
+                tree: &tree,
+                clients: &clients,
+                command_number: 7,
+                shutdown: None,
+                config: None,
+                client_id: Some(client_id),
+            };
+            dispatch_command(parse_command(line).unwrap(), &ctx, None, Some(issuer))
+        };
+    let extent = || {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        let window = guard.window(window).unwrap();
+        (window.id, window.cols, window.rows)
+    };
+
+    run_as(1, "new-session -s main", &tx1);
+
+    // The spawn's own pushes (%window-add and friends) are background
+    // noise for this test; only %layout-change lines are asserted.
+    let next_layout = |rx: &std::sync::mpsc::Receiver<String>| -> String {
+        loop {
+            let line = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("a %layout-change arrives");
+            if line.starts_with("%layout-change") {
+                return line;
+            }
+        }
+    };
+    let no_layout = |rx: &std::sync::mpsc::Receiver<String>| {
+        while let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
+            assert!(
+                !line.starts_with("%layout-change"),
+                "a non-owner's report must not wake any other client: {line}"
+            );
+        }
+    };
+
+    // The only viewer's report sizes the window: broadcast, so every
+    // client re-renders.
+    let reply = run_as(1, "refresh-client -C 100x30", &tx1);
+    assert!(!reply.contains("%error"), "the report must land: {reply}");
+    let (window_id, cols, rows) = extent();
+    assert_eq!((cols, rows), (100, 30));
+    for rx in [&one, &two, &three] {
+        next_layout(rx);
+    }
+
+    // A later client takes ownership — the attach-order change.
+    run_as(2, "refresh-client -C 60x20", &_tx2);
+    let (_, cols, rows) = extent();
+    assert_eq!((cols, rows), (60, 20), "the latest viewer owns the size");
+    for rx in [&one, &two, &three] {
+        next_layout(rx);
+    }
+
+    // The displaced client re-reports its own size: recorded for a later
+    // takeover, applied nothing.
+    run_as(1, "refresh-client -C 100x30", &tx1);
+    let (_, cols, rows) = extent();
+    assert_eq!(
+        (cols, rows),
+        (60, 20),
+        "a non-owner's report must not move the window"
+    );
+    // The issuer alone is answered — its re-seed still needs the
+    // geometry — and nobody else is woken.
+    let line = next_layout(&one);
+    assert!(
+        line.contains(&window_id.to_string()),
+        "issuer-scoped geometry for the reported window: {line}"
+    );
+    no_layout(&two);
+    no_layout(&three);
+
+    // The owner detaches (the server teardown's clearing): the latest
+    // remaining viewer takes over at its recorded size, and its next
+    // report applies again.
+    let resized = tree.lock().clear_client_view(2);
+    assert_eq!(resized, vec![window_id], "the takeover re-fits the window");
+    let (_, cols, rows) = extent();
+    assert_eq!((cols, rows), (100, 30));
+    let reply = run_as(1, "refresh-client -C 100x30", &tx1);
+    assert!(
+        !reply.contains("%error"),
+        "the takeover owner reports: {reply}"
+    );
+}
+
 /// Target-less with no sessions at all: an error naming the absence,
 /// not a panic — the same outcome bare `new-window` gives.
 #[test]
@@ -1075,8 +1198,8 @@ fn kill_server_without_a_running_server_errors() {
 }
 
 /// select-workspace moves every client view shown in the workspace it
-/// leaves onto the newly displayed window, re-fits that window to the
-/// smallest reporting client, and tells clients which session they now
+/// leaves onto the newly displayed window, re-fits that window to its
+/// reporting owner's size, and tells clients which session they now
 /// show.
 #[test]
 fn select_workspace_moves_reporting_client_views_and_refits() {
