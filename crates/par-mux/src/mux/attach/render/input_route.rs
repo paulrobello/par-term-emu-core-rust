@@ -496,7 +496,11 @@ impl WindowSession {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
-            Hit::SidebarMenu => self.open_menu(MenuTarget::Commands),
+            Hit::SidebarMenu => {
+                let anchor = self.renderer.sidebar_menu_chip_anchor();
+                self.open_menu(MenuTarget::Commands);
+                self.renderer.set_overlay_anchor(anchor);
+            }
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
             Hit::SidebarWorkspace { id, menu: true } => {
                 self.open_menu(MenuTarget::Workspace(id));

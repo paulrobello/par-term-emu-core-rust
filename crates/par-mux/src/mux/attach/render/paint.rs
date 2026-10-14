@@ -225,20 +225,11 @@ impl PaneRenderer {
         let accent_style = RtStyle::default()
             .fg(RtColor::Indexed(14))
             .add_modifier(RtModifier::BOLD);
-        // Inner width: the widest row, clamped so the ring fits.
-        let inner = rows
-            .iter()
-            .map(|r| r.text.chars().count())
-            .max()
-            .unwrap_or(0)
-            .min(self.width.saturating_sub(2) as usize)
-            .max(1);
-        let height = rows
-            .len()
-            .min(self.height.saturating_sub(2) as usize)
-            .max(1);
-        let x0 = (self.width as usize).saturating_sub(inner + 2) / 2;
-        let y0 = (self.height as usize).saturating_sub(height + 2) / 2;
+        // The box: the widest row clamped so the ring fits, centered or
+        // anchored — the same geometry every overlay hit-test reads.
+        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
+            return;
+        };
         // Fill every cell of the box with the theme background first.
         for y in y0..y0 + height + 2 {
             for x in x0..x0 + inner + 2 {

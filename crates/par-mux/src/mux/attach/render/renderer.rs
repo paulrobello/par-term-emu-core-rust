@@ -109,6 +109,7 @@ impl PaneRenderer {
             bg: options.bg,
             drag_divider: None,
             overlay: None,
+            overlay_anchor: None,
             overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
             show_label_in_border: options.show_label_in_border,
@@ -314,9 +315,44 @@ impl PaneRenderer {
             .len()
             .min(self.height.saturating_sub(2) as usize)
             .max(1);
-        let x0 = (self.width as usize).saturating_sub(inner + 2) / 2;
-        let y0 = (self.height as usize).saturating_sub(height + 2) / 2;
+        let (x0, y0) = match self.overlay_anchor {
+            // Anchored (the command menu beside its chip): the box's left
+            // ring at the anchor column, its bottom ring on the anchor
+            // row — pulled back inside the frame when it would overflow.
+            Some((ax, ay)) => {
+                let w = inner + 2;
+                let h = height + 2;
+                let x0 = usize::from(ax).min((self.width as usize).saturating_sub(w));
+                let y0 = (usize::from(ay) + 1)
+                    .saturating_sub(h)
+                    .min((self.height as usize).saturating_sub(h));
+                (x0, y0)
+            }
+            None => (
+                (self.width as usize).saturating_sub(inner + 2) / 2,
+                (self.height as usize).saturating_sub(height + 2) / 2,
+            ),
+        };
         Some((x0, y0, inner, height))
+    }
+
+    /// Anchor the NEXT overlay at frame cell `(x, y)` (its left ring at
+    /// `x`, bottom ring on row `y`) instead of centering it; a new
+    /// overlay without an anchor clears it.
+    pub(crate) fn set_overlay_anchor(&mut self, anchor: Option<(u16, u16)>) {
+        if self.overlay_anchor != anchor {
+            self.overlay_anchor = anchor;
+            self.dirty = true;
+        }
+    }
+
+    /// The command menu chip's frame cell `(x_end, y)`: the column just
+    /// right of the chip and its row — where the command menu anchors.
+    pub(crate) fn sidebar_menu_chip_anchor(&self) -> Option<(u16, u16)> {
+        self.sidebar_lines()
+            .into_iter()
+            .find(|line| line.id == Some(crate::mux::attach::panels::SidebarRowId::Menu))
+            .map(|line| (line.x_end, line.y))
     }
 
     /// The overlay's composed panel row (index into the panel's rows:
@@ -352,6 +388,9 @@ impl PaneRenderer {
             _ => false,
         };
         if !same {
+            if overlay.is_none() {
+                self.overlay_anchor = None;
+            }
             self.overlay = overlay;
             self.overlay_highlights.clear();
             self.dirty = true;

@@ -75,7 +75,7 @@ impl PaneRenderer {
     /// The panel's composed lines at its current width, height, split,
     /// and collapse state — the one source painting and every hit-test
     /// read.
-    fn sidebar_lines(&self) -> Vec<SidebarLine> {
+    pub(super) fn sidebar_lines(&self) -> Vec<SidebarLine> {
         let w = self.geometry.sidebar_w;
         let Some(sections) = self.sidebar_sections.as_ref().filter(|_| w > 0) else {
             return Vec::new();

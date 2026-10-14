@@ -333,6 +333,9 @@ pub struct PaneRenderer {
     overlay: Option<Overlay>,
     /// Reversed spans `(row, from, to)` over the overlay's inner columns.
     overlay_highlights: Vec<(usize, usize, usize)>,
+    /// Where the overlay anchors instead of centering (the command menu
+    /// beside its chip); cleared with the overlay.
+    overlay_anchor: Option<(u16, u16)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.

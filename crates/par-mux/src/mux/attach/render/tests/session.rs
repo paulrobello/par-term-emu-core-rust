@@ -1558,6 +1558,39 @@ fn menu_chip_opens_the_command_menu() {
     let overlay = session.renderer.overlay.as_ref().expect("overlay up");
     assert_eq!(overlay.0, MENU_TITLE);
     assert_eq!(overlay.1[1].text, " settings ");
+    // The menu opens beside its chip: the left ring just right of the
+    // chip's cells (x 19 on the 20-wide strip, frame row 10 of the
+    // 22-row frame), the bottom ring on the chip's row.
+    let (x0, y0, _, height) = session.renderer.overlay_geometry().expect("menu up");
+    assert_eq!(x0, 19, "the box starts right of the chip");
+    assert_eq!(y0 + height + 1, 10, "the bottom ring sits on the chip row");
+}
+
+/// An anchored box that would overflow the frame pulls back inside it,
+/// and a closed overlay drops its anchor (the next one centers).
+#[test]
+fn anchored_overlay_stays_inside_the_frame() {
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.apply_layout(parse_layout("0000,80x24,0,0,1").expect("parses"));
+    let rows = |n: usize| -> Vec<crate::mux::attach::HelpRow> {
+        (0..n)
+            .map(|i| crate::mux::attach::HelpRow {
+                text: format!("row {i} xxxxxxxxxx"),
+                accent: false,
+                footer: false,
+            })
+            .collect()
+    };
+    renderer.set_overlay(Some((MENU_TITLE, rows(5), None)));
+    renderer.set_overlay_anchor(Some((75, 2)));
+    let (x0, y0, inner, height) = renderer.overlay_geometry().expect("up");
+    assert!(x0 + inner + 2 <= 80, "pulled left inside the frame");
+    assert_eq!(y0, 0, "a box taller than the rows above pins to the top");
+    assert!(y0 + height + 2 <= 24);
+    renderer.set_overlay(None);
+    renderer.set_overlay(Some((MENU_TITLE, rows(5), None)));
+    let (cx, _, cinner, _) = renderer.overlay_geometry().expect("up");
+    assert_eq!(cx, (80 - (cinner + 2)) / 2, "the next overlay centers");
 }
 
 /// The command menu's `keybinds` row opens the help panel.

@@ -4364,11 +4364,11 @@ fn render_mode_panel_menu_chip_detaches() {
         plain_text(&flash)
     );
 
-    // The menu box: the 28-char footer is the widest row, so 30 wide
-    // over the 80-col host (x0 = 25); 6 rows plus the ring over 22
-    // content rows (y0 = 7). `detach` is panel row 4 at host y0+6.
-    let x0 = (80usize - 30) / 2;
-    let y0 = (22usize - 8) / 2;
+    // The menu opens beside its chip: the box's left ring at x0 = 19
+    // (just right of the chip on the 20-wide strip) and its bottom ring
+    // on the chip's frame row 10, so the 8-row box starts at y0 = 3.
+    // `detach` is panel row 4 at host y0+6.
+    let (x0, y0) = (19usize, 3usize);
     host.to_child
         .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 7).as_bytes())
         .expect("detach click");
@@ -4455,6 +4455,68 @@ fn render_mode_background_agent_state_notifies_the_host() {
     host.killer.kill().ok();
 }
 
+/// Paul's flow (2026-10-14): an agent claimed while its workspace is
+/// shown, then the view switches to another workspace, then the agent
+/// changes state — the now-background agent must notify.
+#[cfg(unix)]
+#[test]
+fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
+    let (fixture, _daemon, mut client) = fixture_with_session("notifyws");
+    client.send("new-workspace -n lab").expect("new-workspace");
+    client
+        .send("new-session -s work -t lab")
+        .expect("session in lab");
+    std::thread::sleep(Duration::from_millis(300));
+    let pane_main = session_first_pane(&mut client, "$0");
+    let pane_lab = session_first_pane(&mut client, "$2");
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &pane_lab], "render", "[client]\n");
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up on the lab workspace",
+    );
+    let mut all = Vec::new();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(1000),
+        Duration::from_secs(10),
+    );
+    let report = |state: &str, seq: u32| {
+        hook_report(
+            fixture.socket(),
+            &format!(
+                r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane_lab}","agent":"labagent","state":"{state}","seq":{seq},"source":"par-mux:test"}}}}"#
+            ),
+        )
+    };
+    // Claimed while shown: quiet.
+    assert!(report("working", 1).contains(r#""result":"ok""#));
+    std::thread::sleep(Duration::from_millis(500));
+    // The user switches to `main` (the side panel's workspace row press
+    // lands the view: select-workspace + the session's window).
+    client
+        .send("select-workspace -t main")
+        .expect("select main");
+    client
+        .send(&format!("select-pane -t {pane_main}"))
+        .expect("focus main");
+    let mut moved = wait_for_output(&host, b"\x00-never", Duration::from_millis(1500));
+    all.append(&mut moved);
+    // Now in the background: working -> idle notifies.
+    assert!(report("idle", 2).contains(r#""result":"ok""#));
+    let got = wait_for_output(&host, b"labagent: idle", Duration::from_secs(10));
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("\x1b]9;par-mux: ") && text.contains("labagent: idle"),
+        "the left-behind agent notifies. stderr: {} bytes: {text:?}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
 /// The command menu's `settings` row opens herdr's tabbed settings
 /// dialog in the real client, and Escape closes it.
 #[cfg(unix)]
@@ -4490,10 +4552,9 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
         Duration::from_secs(10),
         "the chip opens the command menu",
     );
-    // `settings` is panel row 1 of the 6-row menu (y0 = 7): frame row
-    // y0 + 2, host row y0 + 3, SGR y0 + 4; the 30-wide box starts at
-    // x0 = 25.
-    let (x0, y0) = ((80usize - 30) / 2, (22usize - 8) / 2);
+    // `settings` is panel row 1 of the menu anchored beside its chip
+    // (x0 = 19, y0 = 3): frame row y0 + 2, host row y0 + 3, SGR y0 + 4.
+    let (x0, y0) = (19usize, 3usize);
     host.to_child
         .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
         .expect("settings click");
