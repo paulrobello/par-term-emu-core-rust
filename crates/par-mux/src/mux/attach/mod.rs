@@ -63,6 +63,7 @@ mod navigate;
 mod panels;
 mod prefs;
 mod pump;
+mod settings_write;
 mod status_row;
 mod targets;
 use panels::*;

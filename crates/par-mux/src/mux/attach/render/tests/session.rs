@@ -1521,19 +1521,22 @@ fn panel_up_menu_click_maps_raw_host_columns() {
 }
 
 /// The command menu's pure mapping: a fixed header, one row per
-/// client command (keybinds, reload config, detach), the footer.
+/// client command (settings, keybinds, reload config, detach), the
+/// footer.
 #[test]
 fn compose_command_menu_maps_rows_to_actions() {
     let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, "commands");
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
     assert_eq!(rows[0].text, " commands ");
-    assert_eq!(rows[1].text, " keybinds ");
-    assert_eq!(rows[2].text, " reload config ");
-    assert_eq!(rows[3].text, " detach ");
+    assert_eq!(rows[1].text, " settings ");
+    assert_eq!(rows[2].text, " keybinds ");
+    assert_eq!(rows[3].text, " reload config ");
+    assert_eq!(rows[4].text, " detach ");
     assert_eq!(
         mapping,
         vec![
             None,
+            Some(MenuAction::Settings),
             Some(MenuAction::Keybinds),
             Some(MenuAction::ReloadConfig),
             Some(MenuAction::Detach),
@@ -1554,14 +1557,14 @@ fn menu_chip_opens_the_command_menu() {
     );
     let overlay = session.renderer.overlay.as_ref().expect("overlay up");
     assert_eq!(overlay.0, MENU_TITLE);
-    assert_eq!(overlay.1[1].text, " keybinds ");
+    assert_eq!(overlay.1[1].text, " settings ");
 }
 
 /// The command menu's `keybinds` row opens the help panel.
 #[test]
 fn command_menu_keybinds_opens_help() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-help");
-    click_menu_row(&mut session, &mut conn, 1);
+    click_menu_row(&mut session, &mut conn, 2);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.is_help(), "keybinds opened the help panel");
     assert_eq!(
@@ -1575,7 +1578,7 @@ fn command_menu_keybinds_opens_help() {
 #[test]
 fn command_menu_reload_sends_reload_config() {
     let (rx, mut conn, mut session) = command_menu_session("cmdmenu-reload");
-    click_menu_row(&mut session, &mut conn, 2);
+    click_menu_row(&mut session, &mut conn, 3);
     assert!(session.menu().is_none(), "the menu closed");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert!(
@@ -1592,9 +1595,71 @@ fn command_menu_detach_requests_exit() {
     click_menu_row(&mut session, &mut conn, 0);
     assert!(session.menu().is_some(), "the header consumes the click");
     assert!(!session.detach_requested);
-    click_menu_row(&mut session, &mut conn, 3);
+    click_menu_row(&mut session, &mut conn, 4);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.detach_requested, "detach was requested");
+}
+
+/// The command menu's `settings` row opens the settings dialog: herdr's
+/// tabbed panel. Tab switches sections, `j` moves the selection, Enter
+/// writes the chosen key into the config file — keeping the user's
+/// comments — and reloads (the daemon's `reload-config` rides the wire),
+/// a click on a tab switches to it, and Escape closes.
+#[test]
+fn command_menu_settings_opens_the_dialog_and_applies() {
+    use super::super::modal_settings::SettingsSection;
+    let (rx, mut conn, mut session) = command_menu_session("cmdmenu-settings");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# keep me\n[client]\nprefix = \"C-b\"\n").unwrap();
+    session.settings_path = Some(path.clone());
+    click_menu_row(&mut session, &mut conn, 1);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("settings opened: {:?}", session.modal);
+    };
+    assert_eq!(state.section, SettingsSection::Sidebar);
+    assert_eq!(
+        session.renderer.overlay.as_ref().map(|o| o.0),
+        Some(super::super::modal_settings::SETTINGS_TITLE)
+    );
+    // Tab twice: the notify section, its selection on `off` (the test
+    // session's delivery).
+    let mut prefix_pending = false;
+    session.route_stdin_bytes(&mut conn, b"\t\t", &mut prefix_pending);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("still open");
+    };
+    assert_eq!(state.section, SettingsSection::Notify);
+    assert_eq!(state.selected, 0);
+    // j j Enter: `system` written, the reload ran.
+    session.route_stdin_bytes(&mut conn, b"jj\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.starts_with("# keep me\n"), "{written}");
+    assert!(
+        written.contains("notify-delivery = \"system\""),
+        "{written}"
+    );
+    assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
+    assert_eq!(
+        session.notify.delivery,
+        super::super::notify::NotifyDelivery::System,
+        "the reload applied the written key"
+    );
+    // A click on the `borders` tab (inner columns 9..18 of row 0).
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("dialog up");
+    session.route_mouse(
+        &mut conn,
+        sgr(0, (x0 + 2 + 10) as u16, (y0 + 3) as u16, false),
+    );
+    let Modal::Settings(state) = &session.modal else {
+        panic!("still open");
+    };
+    assert_eq!(state.section, SettingsSection::Borders);
+    // Escape closes.
+    session.route_stdin_bytes(&mut conn, b"q", &mut prefix_pending);
+    assert!(matches!(session.modal, Modal::None));
+    assert!(session.renderer.overlay.is_none());
 }
 
 /// The new-tab prompt's default name: one past the highest window

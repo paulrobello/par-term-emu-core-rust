@@ -475,8 +475,14 @@ impl WindowSession {
     /// daemon's `reload-config` — best-effort either way.
     pub(super) fn reload_config(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         // The file drives both the chord rebind and the pane-borders
-        // resolution below, so it loads once, here.
-        let file = match crate::mux::config::load_canonical_checked() {
+        // resolution below, so it loads once, here — the file the
+        // settings dialog writes when the attach knows it (the canonical
+        // path in practice).
+        let loaded = match &self.settings_path {
+            Some(path) => crate::mux::config::load_file(path).map(Option::unwrap_or_default),
+            None => crate::mux::config::load_canonical_checked(),
+        };
+        let file = match loaded {
             Ok(file) => file,
             Err(err) => {
                 self.chrome.flash(format!("reload failed: {err}"));
@@ -498,9 +504,10 @@ impl WindowSession {
                 drag_cursor_shape: self.cursor.drag_shape,
                 border_lines: self.render_opts.glyphs.name().to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
-                // Launch-only: resolved for the shape, never applied to
-                // the live panel below.
-                sidebar_on_launch: self.sidebar.is_on(),
+                // Launch-only: the live panel's visibility stays as it
+                // is; the session keeps the configured value for the
+                // settings dialog.
+                sidebar_on_launch: self.sidebar_on_launch,
                 agent_rows: self.agent_rows.clone(),
                 notify_delivery: self.notify.delivery.name().to_string(),
                 notify_states: self.notify.states.clone(),

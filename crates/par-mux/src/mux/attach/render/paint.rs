@@ -198,6 +198,24 @@ impl PaneRenderer {
     /// line inside the box. Clamped to the window; paints last in
     /// `render_frame`, covering panes and dividers; dismissal lets the
     /// next frame's pane repaint restore the covered cells.
+    /// Reverse the overlay's highlight spans (the settings dialog's tab
+    /// and selection bands), clipped to its inner box.
+    pub(super) fn paint_overlay_highlights(&mut self) {
+        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
+            return;
+        };
+        for &(row, from, to) in &self.overlay_highlights {
+            if row >= height {
+                continue;
+            }
+            for col in from..to.min(inner) {
+                let cell = &mut self.buffer[((x0 + 1 + col) as u16, (y0 + 1 + row) as u16)];
+                let style = cell.style().add_modifier(RtModifier::REVERSED);
+                cell.set_style(style);
+            }
+        }
+    }
+
     pub(super) fn paint_overlay(
         &mut self,
         title: &str,

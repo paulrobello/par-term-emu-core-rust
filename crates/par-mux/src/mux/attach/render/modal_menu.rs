@@ -32,6 +32,7 @@ pub(super) fn compose_menu_panel(
             MenuAction::NewWorkspace,
         ],
         MenuTarget::Commands => &[
+            MenuAction::Settings,
             MenuAction::Keybinds,
             MenuAction::ReloadConfig,
             MenuAction::Detach,
@@ -40,7 +41,7 @@ pub(super) fn compose_menu_panel(
     let labels: &[&str] = match target {
         MenuTarget::Tab(_) => &["rename", "close", "add tab"],
         MenuTarget::Workspace(_) => &["rename", "close", "new"],
-        MenuTarget::Commands => &["keybinds", "reload config", "detach"],
+        MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
     };
     let mut rows = vec![HelpRow {
         text: format!(" {name} "),
@@ -152,6 +153,7 @@ impl WindowSession {
             (MenuTarget::Workspace(workspace), MenuAction::Close) => {
                 self.close_workspace_from_menu(conn, &workspace);
             }
+            (MenuTarget::Commands, MenuAction::Settings) => self.enter_settings(),
             (MenuTarget::Commands, MenuAction::Keybinds) => self.enter_help(),
             (MenuTarget::Commands, MenuAction::ReloadConfig) => self.reload_config(conn),
             (MenuTarget::Commands, MenuAction::Detach) => self.detach_requested = true,

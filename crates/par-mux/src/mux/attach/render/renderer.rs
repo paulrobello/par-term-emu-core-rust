@@ -109,6 +109,7 @@ impl PaneRenderer {
             bg: options.bg,
             drag_divider: None,
             overlay: None,
+            overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
             show_label_in_border: options.show_label_in_border,
             pane_gaps: options.pane_gaps,
@@ -352,8 +353,27 @@ impl PaneRenderer {
         };
         if !same {
             self.overlay = overlay;
+            self.overlay_highlights.clear();
             self.dirty = true;
         }
+    }
+
+    /// Highlight spans `(row, from, to)` in the overlay's inner columns,
+    /// painted reversed (the settings dialog's tab and selection). A new
+    /// overlay clears them.
+    pub(crate) fn set_overlay_highlights(&mut self, highlights: Vec<(usize, usize, usize)>) {
+        if self.overlay_highlights != highlights {
+            self.overlay_highlights = highlights;
+            self.dirty = true;
+        }
+    }
+
+    /// The overlay's inner column at window-relative `x`, while one is up
+    /// and `x` is inside its box.
+    pub(crate) fn overlay_col_at(&self, x: u16) -> Option<usize> {
+        let (x0, _, inner, _) = self.overlay_geometry()?;
+        let x = usize::from(x);
+        (x > x0 && x <= x0 + inner).then(|| x - x0 - 1)
     }
 
     /// Swap the divider/border glyph set (the border-cycle chord and
@@ -840,6 +860,7 @@ impl PaneRenderer {
         self.paint_sidebar();
         if let Some((title, rows, scroll)) = self.overlay.clone() {
             self.paint_overlay(title, &rows, scroll);
+            self.paint_overlay_highlights();
         }
 
         let diff = self

@@ -20,6 +20,9 @@ pub(super) enum Hit {
     Consumed,
     /// A press on the open context menu's panel row.
     MenuRow(usize),
+    /// A press on the settings dialog at overlay row `row`, inner column
+    /// `col`.
+    SettingsAt { row: usize, col: usize },
     /// The side panel's ` new ` chip: open the new-workspace prompt.
     SidebarNewWorkspace,
     /// The side panel's ` menu ` chip: open the command menu.
@@ -263,6 +266,7 @@ impl WindowSession {
                 Modal::Prompt(_) => |s, conn, byte| s.prompt_byte(conn, byte),
                 Modal::Menu(_) => |s, _, byte| s.menu_byte(byte),
                 Modal::Help(_) => |s, _, byte| s.help_byte(byte),
+                Modal::Settings(_) => |s, conn, byte| s.settings_byte(conn, byte),
                 Modal::Picker(_) => |s, conn, byte| s.picker_byte(conn, byte),
             };
         for &byte in bytes {
@@ -354,6 +358,7 @@ impl WindowSession {
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
             Modal::Menu(_) => return self.menu_key(ev),
             Modal::Help(_) => return self.help_key(ev),
+            Modal::Settings(_) => return self.settings_key(ev),
             Modal::Picker(_) => return self.picker_key(conn, ev),
             Modal::Resize => return self.resize_key(conn, ev),
             Modal::None => {}
@@ -489,6 +494,7 @@ impl WindowSession {
         match self.mouse_hit(&mouse) {
             Hit::Consumed => {}
             Hit::MenuRow(row) => self.menu_click(conn, row),
+            Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => self.open_menu(MenuTarget::Commands),
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
@@ -573,6 +579,22 @@ impl WindowSession {
         if matches!(self.modal, Modal::Menu(_)) {
             return self.menu_hit(mouse, x, y);
         }
+        // The settings dialog is modal for the pointer, like the menu:
+        // a press on a tab or a choice acts, everything else is consumed.
+        if matches!(self.modal, Modal::Settings(_)) {
+            let is_press = !mouse.release
+                && !mouse.is_motion()
+                && !mouse.is_wheel_up()
+                && !mouse.is_wheel_down();
+            return match (
+                is_press,
+                self.renderer.overlay_row_at(x, y),
+                self.renderer.overlay_col_at(x),
+            ) {
+                (true, Some(row), Some(col)) => Hit::SettingsAt { row, col },
+                _ => Hit::Consumed,
+            };
+        }
         // The TOP row stays the tab strip's (the panel begins under it),
         // so a click there falls through to the tab strip even inside
         // the strip's width — the sidebar path used to consume it (the
@@ -618,7 +640,7 @@ impl WindowSession {
             Modal::Prompt(_) => return Hit::Consumed,
             Modal::Picker(picker) => return self.picker_hit(picker, mouse, x, y),
             Modal::Help(_) => return help_hit(mouse),
-            Modal::None | Modal::Scroll | Modal::Menu(_) | Modal::Resize => {}
+            Modal::None | Modal::Scroll | Modal::Menu(_) | Modal::Settings(_) | Modal::Resize => {}
         }
         if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);

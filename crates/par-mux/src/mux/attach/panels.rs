@@ -225,7 +225,7 @@ pub(crate) fn help_rows(
             ),
             (
                 "panel menu".to_string(),
-                "keybinds / reload config / detach".to_string(),
+                "settings, keybinds, reload, detach".to_string(),
             ),
         ],
     );

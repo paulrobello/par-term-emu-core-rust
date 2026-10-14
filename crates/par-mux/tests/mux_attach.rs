@@ -4365,12 +4365,12 @@ fn render_mode_panel_menu_chip_detaches() {
     );
 
     // The menu box: the 28-char footer is the widest row, so 30 wide
-    // over the 80-col host (x0 = 25); 5 rows plus the ring over 22
-    // content rows (y0 = 7). `detach` is panel row 3 at host y0+5.
+    // over the 80-col host (x0 = 25); 6 rows plus the ring over 22
+    // content rows (y0 = 7). `detach` is panel row 4 at host y0+6.
     let x0 = (80usize - 30) / 2;
-    let y0 = (22usize - 7) / 2;
+    let y0 = (22usize - 8) / 2;
     host.to_child
-        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 6).as_bytes())
+        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 7).as_bytes())
         .expect("detach click");
     host.to_child.flush().ok();
     let code = child_exit(&mut host, Duration::from_secs(10));
@@ -4380,6 +4380,66 @@ fn render_mode_panel_menu_chip_detaches() {
         "the detach row must end the client with exit 0. stderr: {}",
         stderr.lock().unwrap()
     );
+}
+
+/// The command menu's `settings` row opens herdr's tabbed settings
+/// dialog in the real client, and Escape closes it.
+#[cfg(unix)]
+#[test]
+fn render_mode_settings_dialog_opens_from_the_panel_menu() {
+    let (fixture, _daemon, mut client) = fixture_with_session("settingsdlg");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &pane_a], "render", "[client]\n");
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
+    // output settle: the panel is up at launch; let the first frames land
+    std::thread::sleep(Duration::from_millis(600));
+    // The ` menu ` chip on the workspace area's last row (SGR 17;12).
+    host.to_child
+        .write_all(b"\x1b[<0;17;12M")
+        .expect("menu chip press");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"reload config",
+        Duration::from_secs(10),
+        "the chip opens the command menu",
+    );
+    // `settings` is panel row 1 of the 6-row menu (y0 = 7): frame row
+    // y0 + 2, host row y0 + 3, SGR y0 + 4; the 30-wide box starts at
+    // x0 = 25.
+    let (x0, y0) = ((80usize - 30) / 2, (22usize - 8) / 2);
+    host.to_child
+        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
+        .expect("settings click");
+    host.to_child.flush().ok();
+    let mut got = wait_for_output(&host, b"integrations", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(400),
+    ));
+    let text = plain_text(&got);
+    assert!(
+        text.contains("integrations") && text.contains("side panel"),
+        "the dialog paints its tabs and the first section. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    host.to_child.write_all(b"\x1b").expect("escape");
+    host.to_child.flush().ok();
+    host.killer.kill().ok();
 }
 
 /// The tab context menu must be CLICKABLE with the side panel up: the

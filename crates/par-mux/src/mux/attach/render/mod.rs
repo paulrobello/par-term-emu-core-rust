@@ -37,6 +37,7 @@ mod modal_help;
 mod modal_menu;
 mod modal_picker;
 mod modal_prompt;
+mod modal_settings;
 mod navigate;
 mod notify;
 mod paint;
@@ -330,6 +331,8 @@ pub struct PaneRenderer {
     /// accent color; the scroll state draws a border thumb when the
     /// content overflows.
     overlay: Option<Overlay>,
+    /// Reversed spans `(row, from, to)` over the overlay's inner columns.
+    overlay_highlights: Vec<(usize, usize, usize)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -524,6 +527,7 @@ fn render_session_inner(
         session.renderer.set_sidebar_collapsed(collapsed);
         session.sidebar.set_prefs_path(path);
     }
+    session.settings_path = crate::mux::config::config_file_path();
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.
@@ -683,6 +687,12 @@ struct WindowSession {
     /// Agent state-change notifications: the delivery, the states that
     /// notify, and the terminal escapes the next frame writes.
     notify: notify::NotifyState,
+    /// The config's `sidebar-on-launch` (the settings dialog shows and
+    /// edits it; the live panel's visibility is `sidebar`).
+    sidebar_on_launch: bool,
+    /// The config file the settings dialog writes; set only by a real
+    /// attach, so a unit-test session never writes.
+    settings_path: Option<std::path::PathBuf>,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
@@ -789,6 +799,7 @@ enum MenuAction {
     AddTab,
     NewWorkspace,
     Keybinds,
+    Settings,
     ReloadConfig,
     Detach,
 }
@@ -829,6 +840,8 @@ enum Modal {
     Help(HelpState),
     /// The session/window picker or the workspace picker.
     Picker(PickerState),
+    /// The settings dialog (the command menu's `settings`).
+    Settings(modal_settings::SettingsState),
     /// Sticky resize mode: arrows adjust the focused pane's edges; Enter,
     /// Escape, and `q` exit; any other key leaves the mode (consumed, so
     /// keys never leak into the pane during a modal chord).
@@ -842,7 +855,12 @@ impl Modal {
     fn hides_cursor(&self) -> bool {
         matches!(
             self,
-            Modal::Prompt(_) | Modal::Menu(_) | Modal::Help(_) | Modal::Picker(_) | Modal::Resize
+            Modal::Prompt(_)
+                | Modal::Menu(_)
+                | Modal::Help(_)
+                | Modal::Picker(_)
+                | Modal::Settings(_)
+                | Modal::Resize
         )
     }
 }
@@ -947,6 +965,8 @@ impl WindowSession {
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),
             notify: notify::NotifyState::default(),
+            sidebar_on_launch: chords.sidebar_on_launch,
+            settings_path: None,
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),

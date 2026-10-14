@@ -56,6 +56,9 @@ clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
 # renderer (ratatui's crossterm backend).
 crossterm = { version = "0.29", optional = true, default-features = false, features = ["events", "windows"] }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
+# The attach settings dialog's config writes: one key edited in place, the
+# user's comments and layout preserved.
+toml_edit = { version = "0.25", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
@@ -91,7 +94,7 @@ serde = ["par-term-emu-core/serde"]
 # agent-integration / skill installers its one-shot flags run (ARC-143).
 mux-bin = ["mux", "dep:clap", "dep:jsonc-parser"]
 # The `par-mux attach` client TUI; rides the daemon binary's clap surface.
-attach = ["mux-bin", "dep:crossterm", "dep:ratatui"]
+attach = ["mux-bin", "dep:crossterm", "dep:ratatui", "dep:toml_edit"]
 
 # cargo-fuzz builds with `--cfg fuzzing` (the ENH-046 attach_input entry point).
 [lints.rust]
