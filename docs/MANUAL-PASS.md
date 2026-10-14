@@ -46,6 +46,12 @@ Per terminal, in passthrough then render mode, check:
   column RIGHT beside a divider (e.g. htop's last column) must reach the
   app exactly as it would in a plain terminal — no drag highlight, no
   layout resize; a drag engages only on the painted divider cell itself.
+  A click on a `htop` column header must SORT exactly like the same click
+  in a plain terminal — not open htop's sort-selection dialog (the
+  `[Main]` tree panel). That dialog opening is the classic-dialect
+  failure: htop under iTerm.app's bundled terminfo (its `TERMINFO_DIRS`
+  is inherited by panes) enables only 1000, so the forwarded report must
+  be spelled classic `ESC[M`, not SGR.
 - **Scroll**: render mode — wheel scrolls the client's scrollback view when the
   pane does not own mouse mode; prefix `[` scrolls, `q` snaps back to live, and
   keys reach the pane afterwards. Passthrough — wheel reaches the pane.

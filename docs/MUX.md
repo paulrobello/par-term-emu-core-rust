@@ -261,7 +261,7 @@ A pane running vim gets `ESC O A` for Up; a plain shell gets `ESC [ A`. Full kit
 
 #### Mouse
 
-SGR reports from the host are located in the layout rects. A click on the TAB STRIP (top row) switches to that window (see below); a RIGHT press on a tab opens that window's context menu (`rename` / `close` / `add tab` — modal: esc/q closes it, a click on an action row dispatches, a click elsewhere is consumed); a click in the content area focuses the pane under the pointer — locally (divider highlight) and daemon-side (`select-pane`, only when focus actually changes: a re-click re-selecting the pane broadcasts a `%layout-change` and repaints the whole window) — and forwards a pane-relative SGR report when that pane owns mouse tracking (its emulator tracked DECSET 1000/1002/1003 from the pane's own bytes).
+SGR reports from the host are located in the layout rects. A click on the TAB STRIP (top row) switches to that window (see below); a RIGHT press on a tab opens that window's context menu (`rename` / `close` / `add tab` — modal: esc/q closes it, a click on an action row dispatches, a click elsewhere is consumed); a click in the content area focuses the pane under the pointer — locally (divider highlight) and daemon-side (`select-pane`, only when focus actually changes: a re-click re-selecting the pane broadcasts a `%layout-change` and repaints the whole window) — and forwards a pane-relative report when that pane owns mouse tracking (its emulator tracked DECSET 1000/1002/1003 from the pane's own bytes), spelled SGR when the pane enabled 1006 and otherwise in the classic `ESC[M`/urxvt dialect it negotiated — an SGR report a pane never asked for is misparsed as keystrokes (the manual-pass htop report: htop under iTerm.app's bundled terminfo, whose `TERMINFO_DIRS` the daemon's panes inherit, enables only 1000, and the misparsed header clicks opened its sort-selection dialog instead of sorting).
 Drag and release forward the same path, gated by what the pane's mode asked for: the host captures in any-event mode, but motion reaches the pane only when it negotiated it — drag motion needs DECSET 1002+, hover motion 1003; release is part of 1000. A pane without mouse ownership consumes nothing and its wheel scrolls the client.
 
 #### Wheel
@@ -384,7 +384,7 @@ Passthrough mode tracks the paste markers and skips the prefix scan inside a pas
 
 #### Limitations
 
-Forward-only mouse re-encoding (always SGR spelling regardless of the pane's negotiated legacy encoding) and wheel scrollback is view-only (no pane resize probe).
+Forward-only mouse re-encoding (the pane's negotiated dialect — SGR, or classic/urxvt when 1006 was never enabled) and wheel scrollback is view-only (no pane resize probe).
 A host resize re-fits the render client end to end (the new grid is reported with the content height, the daemon re-divides, panes re-seed, the status row repaints at the new bottom row — pinned by `render_mode_host_resize_refits_window_layout_and_status_row`), and a daemon-side zoom (`resize-pane -Z`) re-renders the visible layout — the zoomed pane alone — with `-Z` again restoring the split (`render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split`); both in `crates/par-mux/tests/mux_attach.rs`. [MANUAL-PASS.md](MANUAL-PASS.md) carries the human checklist for Ghostty / iTerm2 / Terminal.app / SSH.
 
 ## Socket and State Paths

@@ -120,12 +120,22 @@ impl SgrMouse {
         !self.release && !self.is_motion() && self.cb & !0x3 & 0x40 == 0 && self.cb & 0x3 == 2
     }
 
-    /// Re-encode as a pane-relative SGR sequence: coordinates rebased to
-    /// the pane's own 0-based origin. Always SGR, per tmux's
-    /// re-encode-to-the-pane behavior with the modern encoding every mouse
-    /// app negotiates (legacy pane encodings are a documented
-    /// simplification).
-    pub fn reencode_sgr(&self, rel_col: u16, rel_row: u16) -> Vec<u8> {
+    /// Re-encode as a pane-relative report in the dialect the pane
+    /// negotiated: coordinates rebased to the pane's own 0-based origin,
+    /// then emitted SGR (1006) or classic `ESC[M`/urxvt per the pane
+    /// terminal's tracked encoding. A pane that enabled only 1000 — its
+    /// terminfo lacked the SGR caps; htop under iTerm.app's bundled
+    /// terminfo is the manual-pass case — must be answered in classic:
+    /// an SGR report it never asked for is misparsed as keystrokes (the
+    /// htop header click that opened the sort dialog instead of
+    /// sorting). The core's encoder owns the dialects; classic clamps
+    /// coordinates at 223 the way a real terminal does.
+    pub fn reencode(
+        &self,
+        encoding: par_term_emu_core::mouse::MouseEncoding,
+        rel_col: u16,
+        rel_row: u16,
+    ) -> Vec<u8> {
         let event = par_term_emu_core::mouse::MouseEvent::new(
             self.cb,
             rel_col as usize,
@@ -133,10 +143,7 @@ impl SgrMouse {
             !self.release,
             0,
         );
-        event.encode(
-            par_term_emu_core::mouse::MouseMode::AnyEvent,
-            par_term_emu_core::mouse::MouseEncoding::Sgr,
-        )
+        event.encode(par_term_emu_core::mouse::MouseMode::AnyEvent, encoding)
     }
 }
 
@@ -677,14 +684,31 @@ mod tests {
             row: 6,
             release: false,
         };
-        assert_eq!(m.reencode_sgr(1, 6), b"\x1b[<0;2;7M");
+        assert_eq!(
+            m.reencode(par_term_emu_core::mouse::MouseEncoding::Sgr, 1, 6),
+            b"\x1b[<0;2;7M"
+        );
+        // The classic dialect a 1000-only pane negotiated: press cb 0 ->
+        // byte 32, coordinates 1-based then +32.
+        assert_eq!(
+            m.reencode(par_term_emu_core::mouse::MouseEncoding::Default, 1, 6),
+            b"\x1b[M\x20\x22\x27"
+        );
         let m = SgrMouse {
             cb: 0,
             col: 11,
             row: 6,
             release: true,
         };
-        assert_eq!(m.reencode_sgr(1, 6), b"\x1b[<0;2;7m");
+        assert_eq!(
+            m.reencode(par_term_emu_core::mouse::MouseEncoding::Sgr, 1, 6),
+            b"\x1b[<0;2;7m"
+        );
+        // Release in classic: the button bits read 3 -> byte 35.
+        assert_eq!(
+            m.reencode(par_term_emu_core::mouse::MouseEncoding::Default, 1, 6),
+            b"\x1b[M\x23\x22\x27"
+        );
     }
 
     #[test]

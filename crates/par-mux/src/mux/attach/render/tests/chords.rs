@@ -2055,6 +2055,42 @@ fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
     );
 }
 
+/// Same rebase, opposite dialect: a pane that enabled only 1000 (its
+/// terminfo lacked the SGR caps - htop under iTerm.app's bundled
+/// terminfo, whose TERMINFO_DIRS the daemon's panes inherit) is answered
+/// in the classic `ESC[M` spelling. The manual-pass report: an
+/// always-SGR forwarder handed htop reports it never asked for, and
+/// ncurses' misparse opened the sort-selection dialog instead of
+/// sorting.
+#[test]
+fn a_pane_that_skipped_sgr_is_answered_in_classic_reports() {
+    let (rx, mut conn, mut session) = two_pane_session("m-fwd-x10", FakeScript::default());
+    session.renderer.feed_output(2, b"\x1b[?1000h");
+    // Host (61, 6) -> pane-relative (20, 4): press `ESC[M` + 32/53/37;
+    // the release's button bits read 3 -> +35.
+    session.route_mouse(&mut conn, sgr(0, 61, 6, false));
+    settle(&mut session, &mut conn);
+    let hex = |s: &str| {
+        s.bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(
+        drained(&rx),
+        vec![
+            "select-pane -t %2".to_string(),
+            format!("send-keys -t %2 -H {}", hex("\x1b[M\x20\x35\x25"))
+        ]
+    );
+    session.route_mouse(&mut conn, sgr(0, 61, 6, true));
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec![format!("send-keys -t %2 -H {}", hex("\x1b[M\x23\x35\x25"))]
+    );
+}
+
 /// Same click as `mouse_owning_pane_receives_rebased_sgr_reports`, with
 /// the per-pane border boxes on (the shipped default config): the border
 /// ring insets the content by one cell, and the rebase must follow the

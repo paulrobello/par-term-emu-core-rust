@@ -798,10 +798,10 @@ impl WindowSession {
         }
     }
 
-    /// Re-encode one host mouse report pane-relative and send it. The
-    /// report's row is host 1-based; the pane rects live in content
-    /// coordinates (below the strip row), so the strip comes off
-    /// first.
+    /// Re-encode one host mouse report pane-relative, in the dialect the
+    /// pane negotiated, and send it. The report's row is host 1-based;
+    /// the pane rects live in content coordinates (below the strip row),
+    /// so the strip comes off first.
     pub(super) fn forward_mouse(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -824,7 +824,17 @@ impl WindowSession {
         let rel_row = cy
             .saturating_sub(rect.y + inset_y)
             .min(view_h.saturating_sub(1));
-        let bytes = mouse.reencode_sgr(rel_col, rel_row);
+        // The pane's dialect picks the wire format: a pane that skipped
+        // 1006 gets the classic `ESC[M` spelling it can decode — an SGR
+        // report it never asked for is misparsed as keystrokes (the
+        // manual-pass htop sort-dialog report: htop under iTerm.app's
+        // bundled terminfo enables only 1000).
+        let encoding = self
+            .renderer
+            .pane_terminal(rect.pane)
+            .map(|t| t.mouse_encoding())
+            .unwrap_or(par_term_emu_core::mouse::MouseEncoding::Sgr);
+        let bytes = mouse.reencode(encoding, rel_col, rel_row);
         super::trace_input(format_args!(
             "forward pane=%{} bytes={:?}",
             rect.pane,
