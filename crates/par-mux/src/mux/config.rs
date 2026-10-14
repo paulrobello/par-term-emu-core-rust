@@ -215,8 +215,8 @@ pub struct ClientSection {
     pub agent_rows: Option<Vec<Vec<String>>>,
     /// How an agent state change is announced (herdr's `[ui.toast]
     /// delivery`): `terminal` (default — the host terminal's
-    /// notification escape, OSC 9 or kitty's OSC 99), `system` (the OS
-    /// notifier), or `off`.
+    /// notification escape, OSC 9 or kitty's OSC 99), `inside` (a toast
+    /// card over the panes), `system` (the OS notifier), or `off`.
     #[serde(
         default,
         rename = "notify-delivery",
@@ -703,7 +703,7 @@ pub struct Chords {
 }
 
 /// The `notify-delivery` spellings.
-pub const NOTIFY_DELIVERIES: &[&str] = &["off", "terminal", "system"];
+pub const NOTIFY_DELIVERIES: &[&str] = &["off", "inside", "terminal", "system"];
 
 /// One warning per display-option value the client does not know: an
 /// `agent-rows` token (skipped when rendering), a `notify-delivery`

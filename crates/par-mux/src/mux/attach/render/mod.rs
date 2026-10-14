@@ -49,6 +49,7 @@ mod sidebar;
 mod sidebar_state;
 mod sink;
 mod status_patch;
+mod toast;
 
 use chrome::ChromeRows;
 use cursor::CursorState;
@@ -336,6 +337,8 @@ pub struct PaneRenderer {
     /// Where the overlay anchors instead of centering (the command menu
     /// beside its chip); cleared with the overlay.
     overlay_anchor: Option<(u16, u16)>,
+    /// The in-app notification card (notify-delivery `inside`).
+    toast: Option<toast::Toast>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -1296,6 +1299,10 @@ impl WindowSession {
     fn tick_flash(&mut self, now: std::time::Instant) {
         if self.chrome.tick(now) {
             self.draw_status_row();
+        }
+        if self.notify.toast_until.is_some_and(|until| now >= until) {
+            self.notify.toast_until = None;
+            self.renderer.set_toast(None);
         }
     }
 

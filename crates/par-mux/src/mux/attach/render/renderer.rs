@@ -110,6 +110,7 @@ impl PaneRenderer {
             drag_divider: None,
             overlay: None,
             overlay_anchor: None,
+            toast: None,
             overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
             show_label_in_border: options.show_label_in_border,
@@ -334,6 +335,19 @@ impl PaneRenderer {
             ),
         };
         Some((x0, y0, inner, height))
+    }
+
+    /// Whether HOST cell `(x, y)` lies on the overlay's box, ring
+    /// included.
+    pub(crate) fn overlay_contains(&self, x: u16, y: u16) -> bool {
+        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
+            return false;
+        };
+        let Some((_, frame_y)) = self.geometry.host_to_frame(0, y) else {
+            return false;
+        };
+        let (x, frame_y) = (usize::from(x), usize::from(frame_y));
+        x >= x0 && x <= x0 + inner + 1 && frame_y >= y0 && frame_y <= y0 + height + 1
     }
 
     /// Anchor the NEXT overlay at frame cell `(x, y)` (its left ring at
@@ -897,6 +911,7 @@ impl PaneRenderer {
             self.paint_dividers();
         }
         self.paint_sidebar();
+        self.paint_toast();
         if let Some((title, rows, scroll)) = self.overlay.clone() {
             self.paint_overlay(title, &rows, scroll);
             self.paint_overlay_highlights();

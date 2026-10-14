@@ -4517,6 +4517,89 @@ fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
     host.killer.kill().ok();
 }
 
+/// `notify-delivery = "inside"` paints the notification as a toast card
+/// in the real client — no host escape — when a background agent goes
+/// blocked.
+#[cfg(unix)]
+#[test]
+fn render_mode_inside_delivery_paints_a_toast() {
+    let (fixture, _daemon, mut client) = fixture_with_session("notifytoast");
+    let shown = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let background_window = client
+        .send("new-window -d")
+        .expect("new-window")
+        .join("")
+        .trim()
+        .to_string();
+    let background = client
+        .send(&format!("list-panes -t {background_window}"))
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("the background pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &shown],
+        "render",
+        "[client]\nnotify-delivery = \"inside\"\n",
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    let mut all = Vec::new();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(1000),
+        Duration::from_secs(10),
+    );
+    all.clear();
+    let reply = hook_report(
+        fixture.socket(),
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{background}","agent":"toastagent","state":"blocked","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "claim accepted: {reply}"
+    );
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+    let screen = reconstructed_screen(&all, 24, 80).1;
+    let ever: String = screen
+        .iter()
+        .map(|row| row.iter().cloned().collect::<Vec<_>>().join("|"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        ever.contains("toastagent blocked"),
+        "the toast card paints over the panes. stderr: {} screen: {ever}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !String::from_utf8_lossy(&all).contains("\x1b]9;"),
+        "inside delivery writes no host notification escape"
+    );
+    host.killer.kill().ok();
+}
+
 /// The command menu's `settings` row opens herdr's tabbed settings
 /// dialog in the real client, and Escape closes it.
 #[cfg(unix)]

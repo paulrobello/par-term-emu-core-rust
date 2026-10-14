@@ -23,6 +23,10 @@ pub(super) enum Hit {
     /// A press on the settings dialog at overlay row `row`, inner column
     /// `col`.
     SettingsAt { row: usize, col: usize },
+    /// A press outside the settings dialog: close it.
+    SettingsClose,
+    /// A press on the in-app toast: focus its agent's pane.
+    ToastPress { pane: u32 },
     /// The side panel's ` new ` chip: open the new-workspace prompt.
     SidebarNewWorkspace,
     /// The side panel's ` menu ` chip: open the command menu.
@@ -495,6 +499,12 @@ impl WindowSession {
             Hit::Consumed => {}
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
+            Hit::SettingsClose => self.leave_settings(),
+            Hit::ToastPress { pane } => {
+                self.notify.toast_until = None;
+                self.renderer.set_toast(None);
+                self.focus_pane(conn, pane);
+            }
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => {
                 let anchor = self.renderer.sidebar_menu_chip_anchor();
@@ -596,8 +606,27 @@ impl WindowSession {
                 self.renderer.overlay_col_at(x),
             ) {
                 (true, Some(row), Some(col)) => Hit::SettingsAt { row, col },
+                // A press outside the box closes the dialog (herdr's
+                // click-away dismissal).
+                (true, _, _) if !self.renderer.overlay_contains(x, y) => Hit::SettingsClose,
                 _ => Hit::Consumed,
             };
+        }
+        // The in-app toast sits over the panes: a press on it focuses the
+        // agent's pane and dismisses the card.
+        if matches!(self.modal, Modal::None | Modal::Scroll)
+            && !mouse.release
+            && !mouse.is_motion()
+            && !mouse.is_wheel_up()
+            && !mouse.is_wheel_down()
+        {
+            if let Some(pane) = self
+                .geometry
+                .host_to_frame(x, y)
+                .and_then(|(fx, fy)| self.renderer.toast_pane_at(fx, fy))
+            {
+                return Hit::ToastPress { pane };
+            }
         }
         // The TOP row stays the tab strip's (the panel begins under it),
         // so a click there falls through to the tab strip even inside

@@ -73,6 +73,17 @@ impl SettingsSection {
     }
 }
 
+/// A choice's display label: herdr's wording for the delivery options,
+/// the config spelling for everything else.
+fn choice_label(choice: &str) -> &str {
+    match choice {
+        "inside" => "inside par-mux",
+        "terminal" => "via terminal",
+        "system" => "via system",
+        other => other,
+    }
+}
+
 /// The open dialog: its section, the selected row, and the integration
 /// rows read when it opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +198,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
                         }
                     }
                 };
-                format!(" {pointer} {mark} {choice}")
+                format!(" {pointer} {mark} {}", choice_label(choice))
             })
             .collect(),
     };
@@ -458,7 +469,7 @@ mod tests {
     fn compose_settings_marks_the_tab_selection_and_value() {
         let state = SettingsState {
             section: SettingsSection::Notify,
-            selected: 2,
+            selected: 3,
             integrations: Vec::new(),
         };
         let panel = compose_settings(&state, &values());
@@ -470,9 +481,10 @@ mod tests {
         assert!(panel.rows[2].accent);
         assert_eq!(panel.body_start, 5);
         assert_eq!(panel.rows[5].text.trim_end(), "     off");
-        assert_eq!(panel.rows[6].text.trim_end(), "   \u{25CF} terminal");
-        assert_eq!(panel.rows[7].text.trim_end(), " \u{25B8}   system");
-        assert_eq!(panel.highlights[1], (7, 0, PANEL_WIDTH), "the selection");
+        assert_eq!(panel.rows[6].text.trim_end(), "     inside par-mux");
+        assert_eq!(panel.rows[7].text.trim_end(), "   \u{25CF} via terminal");
+        assert_eq!(panel.rows[8].text.trim_end(), " \u{25B8}   via system");
+        assert_eq!(panel.highlights[1], (8, 0, PANEL_WIDTH), "the selection");
         assert!(panel.rows.last().unwrap().footer);
         for section in SettingsSection::ALL {
             let composed = compose_settings(

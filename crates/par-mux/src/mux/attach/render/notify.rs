@@ -15,6 +15,8 @@ use super::WindowSession;
 pub(crate) enum NotifyDelivery {
     /// No notifications.
     Off,
+    /// The in-app toast card over the panes (herdr's `inside herdr`).
+    Inside,
     /// The host terminal's notification escape, written with the frame.
     Terminal,
     /// The OS notifier (`osascript` on macOS, `notify-send` elsewhere).
@@ -26,6 +28,7 @@ impl NotifyDelivery {
     pub(crate) fn parse(spec: &str) -> Option<Self> {
         match spec {
             "off" => Some(Self::Off),
+            "inside" => Some(Self::Inside),
             "terminal" => Some(Self::Terminal),
             "system" => Some(Self::System),
             _ => None,
@@ -35,6 +38,7 @@ impl NotifyDelivery {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Off => "off",
+            Self::Inside => "inside",
             Self::Terminal => "terminal",
             Self::System => "system",
         }
@@ -154,6 +158,21 @@ impl WindowSession {
         };
         match self.notify.delivery {
             NotifyDelivery::Off => {}
+            NotifyDelivery::Inside => {
+                let status = crate::mux::attach::panels::AgentStatus::from_state(state);
+                let (title, detail) = match body.split_once(": ") {
+                    Some((who, what)) => (format!("{agent} {what}"), who.to_string()),
+                    None => (body.clone(), String::new()),
+                };
+                self.notify.toast_until =
+                    Some(std::time::Instant::now() + super::toast::toast_lifetime(status));
+                self.renderer.set_toast(Some(super::toast::Toast {
+                    title: sanitize(&title),
+                    body: sanitize(&detail),
+                    status,
+                    pane,
+                }));
+            }
             NotifyDelivery::Terminal => {
                 let bytes = terminal_notification("par-mux", &body, host_is_kitty());
                 self.notify.outbox.extend_from_slice(&bytes);
@@ -172,6 +191,8 @@ pub(super) struct NotifyState {
     pub states: Vec<String>,
     /// Terminal escapes the next frame writes to the host.
     pub outbox: Vec<u8>,
+    /// When the in-app toast on screen expires.
+    pub toast_until: Option<std::time::Instant>,
 }
 
 impl Default for NotifyState {
@@ -180,6 +201,7 @@ impl Default for NotifyState {
             delivery: NotifyDelivery::Off,
             states: Vec::new(),
             outbox: Vec::new(),
+            toast_until: None,
         }
     }
 }

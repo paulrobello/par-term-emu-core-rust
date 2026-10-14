@@ -1664,8 +1664,22 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     };
     assert_eq!(state.section, SettingsSection::Notify);
     assert_eq!(state.selected, 0);
-    // j j Enter: `system` written, the reload ran.
-    session.route_stdin_bytes(&mut conn, b"jj\r", &mut prefix_pending);
+    // herdr's labels for the four deliveries.
+    let rows: Vec<String> = session.renderer.overlay.as_ref().expect("up").1[5..9]
+        .iter()
+        .map(|r| r.text.trim_end().to_string())
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            " \u{25B8} \u{25CF} off",
+            "     inside par-mux",
+            "     via terminal",
+            "     via system"
+        ]
+    );
+    // j j j Enter: `system` written, the reload ran.
+    session.route_stdin_bytes(&mut conn, b"jjj\r", &mut prefix_pending);
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.starts_with("# keep me\n"), "{written}");
@@ -1689,10 +1703,35 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
         panic!("still open");
     };
     assert_eq!(state.section, SettingsSection::Borders);
-    // Escape closes.
+    // A press on the box's ring stays inside; a press outside it closes
+    // the dialog (herdr's click-away).
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("dialog up");
+    session.route_mouse(&mut conn, sgr(0, (x0 + 1) as u16, (y0 + 2) as u16, false));
+    assert!(
+        matches!(session.modal, Modal::Settings(_)),
+        "the ring is inside"
+    );
+    session.route_mouse(&mut conn, sgr(0, 1, (y0 + 3) as u16, false));
+    assert!(
+        matches!(session.modal, Modal::None),
+        "a click outside closes"
+    );
+    assert!(session.renderer.overlay.is_none());
+    // Escape closes too.
+    click_menu_row_after_reopen(&mut session, &mut conn);
     session.route_stdin_bytes(&mut conn, b"q", &mut prefix_pending);
     assert!(matches!(session.modal, Modal::None));
     assert!(session.renderer.overlay.is_none());
+}
+
+/// Reopen the settings dialog straight from the session (the menu is
+/// already exercised above).
+fn click_menu_row_after_reopen(
+    session: &mut WindowSession,
+    _conn: &mut crate::mux::attach::conn::AttachConn,
+) {
+    session.enter_settings();
+    assert!(matches!(session.modal, Modal::Settings(_)));
 }
 
 /// The new-tab prompt's default name: one past the highest window
@@ -2884,6 +2923,71 @@ fn legacy_refresh_still_runs_without_the_feature() {
 /// escape the next frame writes to the host; the refresh that seeded the
 /// roster, a repeat of the same state, an unselected state, and
 /// delivery `off` queue nothing.
+#[test]
+fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
+    use super::super::notify::NotifyDelivery;
+    let (rx, mut conn) = fake_daemon("snaptoast", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    session.refresh_status_facts(&mut conn).expect("seed");
+    // Put the agents in the background (the shown window holds pane 9).
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    drained(&rx);
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%1".to_string(),
+        agent: "claude".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+    });
+    assert!(session.notify.outbox.is_empty(), "no terminal escape");
+    let toast = session.renderer.toast.clone().expect("a toast is up");
+    assert_eq!(toast.title, "claude blocked");
+    assert_eq!(toast.body, "main \u{b7} claude");
+    assert_eq!(toast.pane, 1);
+    // It paints at the content area's bottom-right, over the panes.
+    let (tx, ty, tw, th) = session.renderer.toast_rect().expect("on screen");
+    assert_eq!(tx + tw, session.renderer.width, "flush right");
+    assert_eq!(ty + th, session.renderer.height, "flush bottom");
+    session.renderer.render_frame();
+    let title_row: String = (tx..tx + tw)
+        .map(|x| session.renderer.buffer[(x, ty + 1)].symbol().to_string())
+        .collect();
+    assert!(title_row.contains("claude blocked"), "{title_row:?}");
+    // A click on the card focuses the pane and dismisses the toast.
+    let (hx, hy) = session.geometry.frame_to_host(tx + 2, ty + 1);
+    session.route_mouse(&mut conn, sgr(0, hx + 1, hy + 1, false));
+    assert!(session.renderer.toast.is_none(), "the click dismisses it");
+    settle(&mut session, &mut conn);
+    assert!(
+        drained(&rx).iter().any(|line| line == "select-pane -t %1"),
+        "the click lands on the agent's pane"
+    );
+    // A later toast expires on its own.
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%3".to_string(),
+        agent: "kimi".to_string(),
+        state: "idle".to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+    });
+    session.notify.states.push("idle".to_string());
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%3".to_string(),
+        agent: "kimi".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+    });
+    assert!(session.renderer.toast.is_some());
+    let until = session.notify.toast_until.expect("deadline set");
+    session.tick_flash(until);
+    assert!(session.renderer.toast.is_none(), "the toast expired");
+}
+
 #[test]
 fn agent_state_push_notifies_selected_transitions_only() {
     use super::super::notify::NotifyDelivery;
