@@ -704,7 +704,10 @@ impl WindowSession {
     /// The pane area (content coordinates `x`, `cy`): wheels go to the
     /// pane under the pointer (unless a held button owns the pointer);
     /// motion and release continue a drag or forward to a mouse-owning
-    /// pane; a press near a divider starts a drag — unless the cell is an
+    /// pane; a press ON a divider cell starts a drag — only the painted
+    /// divider column/row itself, never the pane content cells beside it
+    /// (a one-cell tolerance hijacked edge clicks from the app: the
+    /// manual-pass trace's swallowed htop click) — unless the cell is an
     /// embedded border label (text cells are not drag handles, herdr's
     /// semantics; the plain border segments around a label stay
     /// draggable) — and otherwise focuses the pane.
@@ -738,7 +741,7 @@ impl WindowSession {
                 _ => Hit::Consumed,
             };
         }
-        if let Some(divider) = self.renderer.divider_near(x, cy, 1) {
+        if let Some(divider) = self.renderer.divider_near(x, cy, 0) {
             if !self.renderer.label_cell_at(x, cy) {
                 return Hit::DragStart { divider, x, y: cy };
             }

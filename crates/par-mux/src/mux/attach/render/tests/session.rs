@@ -157,8 +157,8 @@ fn strip_click_switches_windows_without_forwarding() {
     );
 }
 
-/// The drag affordance, headless end-to-end: a press within one cell
-/// of the two-pane divider starts a PENDING drag (no focus, no
+/// The drag affordance, headless end-to-end: a press ON the
+/// two-pane divider column starts a PENDING drag (no focus, no
 /// forward), motion promotes it and the pump's apply_drag sends one
 /// relative resize-pane for the boundary's left pane at the full
 /// delta, the divider highlights while dragging, and release clears
@@ -293,6 +293,129 @@ fn click_near_divider_without_drag_still_focuses() {
         "select-pane -t %1",
         "the focus rides select-pane"
     );
+}
+
+/// A press on the pane content cell BESIDE the divider is a pane
+/// click, not a drag start: the manual-pass trace's swallowed htop
+/// click (a press one cell off the divider hijacked as a divider drag,
+/// whose drift motions then resized the layout at pointer speed).
+#[test]
+fn a_press_beside_the_divider_is_a_pane_click_not_a_drag() {
+    let (rx, mut conn) = recording_conn("edge-click");
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    session.renderer.focus(2);
+
+    // 1-based col 39 = content col 38: pane 1's second-to-last column,
+    // one cell left of the divider at col 39 — a content cell.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 39,
+            row: 6,
+            release: false,
+        },
+    );
+    assert!(
+        session.drag.is_none(),
+        "a content-cell press must not start a drag"
+    );
+    assert_eq!(
+        session.renderer.focused(),
+        Some(1),
+        "the press focuses the pane under the pointer"
+    );
+    assert_eq!(
+        wait_recorded(&rx, "select-pane"),
+        "select-pane -t %1",
+        "the focus rides select-pane"
+    );
+    // And the mirrored release is a plain pane release (no drag state).
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 39,
+            row: 6,
+            release: true,
+        },
+    );
+    assert!(session.drag.is_none());
+}
+
+/// The drag's resize steps are throttled: one `resize-pane` per
+/// interval at most, the unapplied remainder held back while motions
+/// keep arriving faster, and the release flushes what is left so the
+/// drag lands exactly where it is let go.
+#[test]
+fn drag_resizes_throttle_and_the_release_flushes_the_remainder() {
+    let (rx, mut conn) = recording_conn("drag-throttle");
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+
+    let press = SgrMouse {
+        cb: 0,
+        col: 40,
+        row: 6,
+        release: false,
+    };
+    session.route_mouse(&mut conn, press);
+    // Motion +5, then +3 more before the interval can pass.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 45,
+            row: 6,
+            release: false,
+        },
+    );
+    session.apply_drag(&mut conn);
+    assert_eq!(
+        wait_recorded(&rx, "resize-pane"),
+        "resize-pane -t %1 -R 5",
+        "the first step sends the full delta"
+    );
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 48,
+            row: 6,
+            release: false,
+        },
+    );
+    session.apply_drag(&mut conn);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a step inside the interval sends nothing"
+    );
+    // Release: the held remainder (+3) flushes immediately.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 48,
+            row: 6,
+            release: true,
+        },
+    );
+    assert_eq!(
+        wait_recorded(&rx, "resize-pane"),
+        "resize-pane -t %1 -R 3",
+        "the release flushes the throttled remainder"
+    );
+    assert!(session.drag.is_none());
 }
 
 /// The tmux divider convention (the owner's manual pass): the HALF of
@@ -699,6 +822,7 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
         y: 0,
         applied: 0,
         pending: 0,
+        last_sent: None,
     });
 
     // Option off: the pane's tracked shape survives a drag frame.
@@ -1032,7 +1156,8 @@ fn drag_survives_active_motion_and_resizes_per_cell() {
         "resize-pane -t %1 -R 1",
         "the first motion resizes one cell"
     );
-    // A SECOND motion while active must extend the drag, not kill it.
+    // A SECOND motion while active must extend the drag, not kill it —
+    // but its step is THROTTLED: nothing sends inside the interval…
     session.route_mouse(
         &mut conn,
         SgrMouse {
@@ -1043,10 +1168,18 @@ fn drag_survives_active_motion_and_resizes_per_cell() {
         },
     );
     session.apply_drag(&mut conn);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a step inside the throttle interval sends nothing"
+    );
+    // …and once the interval has passed the accumulated delta sends.
+    std::thread::sleep(std::time::Duration::from_millis(90));
+    session.apply_drag(&mut conn);
     assert_eq!(
         wait_recorded(&rx, "resize-pane"),
         "resize-pane -t %1 -R 2",
-        "the second motion resizes its unapplied delta"
+        "the held delta sends once the interval passes"
     );
 }
 

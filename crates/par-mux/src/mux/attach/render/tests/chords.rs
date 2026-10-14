@@ -2037,14 +2037,21 @@ fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
         session.mouse_hit(&sgr(0, 61, 6, true)),
         Hit::PaneForward(pane2)
     );
-    let divider = session.renderer.divider_near(40, 4, 1).expect("divider");
+    // The divider cell itself (content col 39; the painted column that
+    // overlays pane 2's first cell boundary) is the drag handle…
+    let divider = session.renderer.divider_near(39, 4, 0).expect("divider");
     assert_eq!(
-        session.mouse_hit(&sgr(0, 41, 6, false)),
+        session.mouse_hit(&sgr(0, 40, 6, false)),
         Hit::DragStart {
             divider,
-            x: 40,
+            x: 39,
             y: 4
         }
+    );
+    // …and the content cells beside it are pane clicks, never drags.
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 41, 6, false)),
+        Hit::PanePress(pane2)
     );
 }
 

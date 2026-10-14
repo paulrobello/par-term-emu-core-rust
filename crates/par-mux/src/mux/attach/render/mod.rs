@@ -608,6 +608,11 @@ enum DragState {
         y: u16,
         applied: i32,
         pending: i32,
+        /// When the last resize step was sent — the drag's send
+        /// throttle. Every step is a daemon layout change that repaints
+        /// the whole window, and pointer motion arrives far faster than
+        /// that should happen.
+        last_sent: Option<std::time::Instant>,
     },
 }
 
