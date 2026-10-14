@@ -1388,7 +1388,8 @@ sections; the numbers live here.
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:576` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
-| `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:163` | Bytes of git branch name the host probe serves for one pane cwd. |
+| `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:172` | Bytes of git branch name the host probe serves for one pane cwd. |
+| `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:283` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |

@@ -280,6 +280,7 @@ fn git_branch(cwd: &Path, bounds: &ProbeBounds) -> Option<String> {
 
 /// The cap on a project name the probe serves, in bytes (a directory
 /// name; the side panel clips it to the strip anyway).
+/// cap: Bytes of project name the host probe serves for one pane cwd.
 const MAX_PROJECT_LEN: usize = 128;
 
 /// The pane's project: the basename of the git work tree containing
