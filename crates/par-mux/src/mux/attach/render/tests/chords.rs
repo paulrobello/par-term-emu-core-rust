@@ -393,9 +393,9 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     assert_eq!(session.renderer.sidebar_width(), 20);
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 2),
+        session.renderer.sidebar_row_at(2, 3),
         Some(SidebarRowId::Workspace("+1".into())),
-        "the queried roster fills the panel"
+        "the queried roster fills the panel below its header"
     );
     chord(&mut session, &mut conn, b's');
     assert!(!session.sidebar.is_on());
@@ -1592,13 +1592,15 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            title: "workspaces",
             rows: vec![
                 srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
                 srow(SidebarRowId::Workspace("+1".into()), "beta", false),
             ],
         }]));
-    // Host row 2 (1-based 3) is the second workspace row.
-    session.route_mouse(&mut conn, sgr(2, 3, 3, false));
+    // Host row 3 (1-based 4) is the second workspace row (the area
+    // header owns host row 1).
+    session.route_mouse(&mut conn, sgr(2, 3, 4, false));
     settle(&mut session, &mut conn);
     assert_eq!(
         session.menu().map(|m| m.target.clone()),
@@ -1606,10 +1608,10 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     );
     assert!(drained(&rx).is_empty(), "opening the menu sends nothing");
     session.leave_menu();
-    session.route_mouse(&mut conn, sgr(0, 3, 3, true));
+    session.route_mouse(&mut conn, sgr(0, 3, 4, true));
     settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "a release does nothing");
-    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 4, false));
     settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx)[..2].to_vec(),
@@ -1827,18 +1829,21 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            title: "workspaces",
             rows: vec![srow(SidebarRowId::Workspace("+1".into()), "beta", false)],
         }]));
-    // Host row 1 (SGR row 2) is the first workspace row.
+    // Host row 1 (SGR row 2) is the area header — filler, consumed.
+    assert_eq!(session.mouse_hit(&sgr(0, 3, 2, false)), Hit::Consumed);
+    // Host row 2 (SGR row 3) is the first workspace row.
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 2, false)),
+        session.mouse_hit(&sgr(0, 3, 3, false)),
         Hit::SidebarWorkspace {
             id: "+1".to_string(),
             menu: false
         }
     );
     assert_eq!(
-        session.mouse_hit(&sgr(2, 3, 2, false)),
+        session.mouse_hit(&sgr(2, 3, 3, false)),
         Hit::SidebarWorkspace {
             id: "+1".to_string(),
             menu: true
@@ -1846,7 +1851,7 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
         "a right press opens the workspace menu"
     );
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 2, true)),
+        session.mouse_hit(&sgr(0, 3, 3, true)),
         Hit::Consumed,
         "a release in the strip is consumed"
     );
@@ -1858,6 +1863,70 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     assert_eq!(session.mouse_hit(&sgr(0, 17, 24, false)), Hit::SidebarMenu);
 }
 
+/// The side panel's resize affordances: a press on the strip's right
+/// edge starts a WIDTH drag (the motion re-reports the reduced grid,
+/// throttled, the release landing the final width), a press on the rule
+/// row starts a SPLIT drag (the rule follows the pointer locally), and
+/// a motion with no drag in flight is consumed by the strip.
+#[test]
+fn sidebar_edges_resize_the_panel_and_the_areas() {
+    let (rx, mut conn, mut session) = two_pane_session("m-sbresize", FakeScript::default());
+    show_sidebar(&mut session);
+    session.renderer.set_sidebar_sections(Some(vec![
+        super::super::super::SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
+            ],
+        },
+        super::super::super::SidebarSection {
+            title: "agents",
+            rows: vec![srow(SidebarRowId::Pane(7), "kimi (blocked)", false)],
+        },
+    ]));
+    // The width handle: the strip's right-edge column (SGR col 20 at
+    // width 20; host x 19).
+    assert_eq!(session.mouse_hit(&sgr(0, 20, 5, false)), Hit::SidebarResize);
+    // The rule row: natural flow puts it at host row 4 (header, two
+    // rows, rule) = SGR row 5.
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 5, false)),
+        Hit::SidebarSplitDrag
+    );
+    // Rows still classify around the handles (beta at host row 3).
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 3, 4, false)),
+        Hit::SidebarWorkspace {
+            id: "+1".to_string(),
+            menu: false
+        }
+    );
+
+    // Split drag: press the rule, drag down two rows, release — the
+    // rule lands two rows lower (local, no daemon round trip).
+    session.route_mouse(&mut conn, sgr(0, 3, 5, false));
+    session.route_mouse(&mut conn, sgr(32, 3, 7, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 7, true));
+    settle(&mut session, &mut conn);
+    assert_eq!(session.renderer.sidebar_rule_y(), Some(5));
+    assert!(drained(&rx).is_empty(), "the split drag sends nothing");
+
+    // Width drag: press the edge, drag right 5, release — the panel
+    // widens by 5 and the release lands the final width (the grid
+    // re-report is parked for the pump).
+    session.route_mouse(&mut conn, sgr(0, 20, 5, false));
+    session.pending.grid_refit = false;
+    session.route_mouse(&mut conn, sgr(32, 25, 5, false));
+    session.route_mouse(&mut conn, sgr(0, 25, 5, true));
+    settle(&mut session, &mut conn);
+    assert_eq!(session.renderer.sidebar_width(), 25);
+    assert!(
+        session.pending.grid_refit,
+        "the new width re-reports the grid"
+    );
+}
+
 /// An agent row click lands on the agent's pane: the hit resolves the
 /// `pane:` id and the handler moves the daemon's shared focus.
 #[test]
@@ -1867,16 +1936,17 @@ fn sidebar_agent_row_click_focuses_the_pane() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            title: "workspaces",
             rows: vec![srow(
                 SidebarRowId::Pane(7),
                 "main \u{b7} kimi (blocked)",
                 false,
             )],
         }]));
-    // The agent row paints on the renderer's composed row 1 = SGR row 2
-    // (the same mapping the workspace rows follow).
+    // The agent row paints under its area's header: composed row 2 =
+    // SGR row 3 (the same mapping the workspace rows follow).
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 2, false)),
+        session.mouse_hit(&sgr(0, 3, 3, false)),
         Hit::SidebarPane { pane: 7 },
         "a left press on the agent row resolves its pane"
     );

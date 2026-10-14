@@ -569,6 +569,9 @@ pub(crate) fn compose_picker_panel(
 /// segment (round 6), so the section carries only its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarSection {
+    /// The area's dim header label ("workspaces" / "agents") — herdr's
+    /// ` spaces` lead row.
+    pub title: &'static str,
     pub rows: Vec<SidebarRow>,
 }
 
@@ -611,12 +614,30 @@ pub(crate) struct SidebarLine {
     pub id: Option<SidebarRowId>,
     /// The active entry: painted as herdr's full-width inverted block.
     pub active: bool,
+    /// The row's kind: body rows are clickable; a header paints dim +
+    /// bold (herdr's ` spaces` lead); the rule is the draggable
+    /// area-divider.
+    pub kind: SidebarLineKind,
 }
 
-/// Compose the side panel's lines from its sections: the rows top-down
-/// (NO section header rows — the title lives in the tab strip's lead
-/// segment since round 6, so workspace rows start at composed row 0 =
-/// host row 1), clipped to `width - 1` columns (the divider column
+/// One composed side-panel row's kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarLineKind {
+    /// A workspace/agent entry row.
+    Row,
+    /// An area header: ` workspaces` / ` agents`.
+    Header,
+    /// The full-width rule dividing the areas — the split-drag handle.
+    Rule,
+    /// Blank padding holding an area's fixed extent.
+    Blank,
+}
+
+/// Compose the side panel's lines from its sections, herdr's separated
+/// panel shape: each area opens with its dim header row (` workspaces`,
+/// ` agents`), a full-width rule row divides the areas (herdr's
+/// `─`.repeat(width) section divider), the rows follow top-down
+/// (workspace rows start at composed row 1 = host row 2), clipped to `width - 1` columns (the divider column
 /// owns the strip's right edge), plus a footer row pinned to the
 /// panel's LAST row: ` new ` bottom-left and ` menu ` bottom-right
 /// (the mock's panel shape; each chip its own clickable span). Pure —
@@ -625,6 +646,7 @@ pub(crate) fn compose_sidebar(
     sections: &[SidebarSection],
     width: u16,
     height: u16,
+    rule_row: Option<u16>,
 ) -> Vec<SidebarLine> {
     let mut lines: Vec<SidebarLine> = Vec::new();
     let max = usize::from(height);
@@ -634,9 +656,49 @@ pub(crate) fn compose_sidebar(
     let text_width = usize::from(width.saturating_sub(1));
     // Body rows fill everything above the footer row.
     let body_cap = max - 1;
-    for section in sections {
-        for row in &section.rows {
+    let filler = |lines: &mut Vec<SidebarLine>, text: String, kind: SidebarLineKind| {
+        lines.push(SidebarLine {
+            y: lines.len() as u16,
+            x: 0,
+            x_end: width.saturating_sub(1),
+            text,
+            id: None,
+            active: false,
+            kind,
+        });
+    };
+    // The rule's composed row: an explicit `rule_row` (a dragged split)
+    // clips the workspace area to it and pads with blanks so the agents
+    // area follows at a fixed position; absent, the rule trails the
+    // workspace rows naturally.
+    let rule_at = rule_row.map(|r| r.min(body_cap.saturating_sub(2) as u16));
+    for (index, section) in sections.iter().enumerate() {
+        // The rule divides the areas; each area's header opens it (a
+        // panel with no rows after it still names the area).
+        if index > 0 {
             if lines.len() >= body_cap {
+                break;
+            }
+            filler(&mut lines, "─".repeat(text_width), SidebarLineKind::Rule);
+        }
+        if lines.len() < body_cap {
+            let title: String = format!(" {}", section.title)
+                .chars()
+                .take(text_width)
+                .collect();
+            filler(&mut lines, title, SidebarLineKind::Header);
+        }
+        // The workspace area's extent: an explicit rule row caps it.
+        let cap = if index == 0 {
+            match rule_at {
+                Some(r) => usize::from(r),
+                None => body_cap,
+            }
+        } else {
+            body_cap
+        };
+        for row in &section.rows {
+            if lines.len() >= cap || lines.len() >= body_cap {
                 break;
             }
             let marker = if row.active { "▸" } else { " " };
@@ -651,7 +713,17 @@ pub(crate) fn compose_sidebar(
                 text,
                 id: Some(row.id.clone()),
                 active: row.active,
+                kind: SidebarLineKind::Row,
             });
+        }
+        // Pad the workspace area out to the dragged rule's row so the
+        // rule and the agents area stay where the drag put them.
+        if index == 0 {
+            if let Some(r) = rule_at {
+                while lines.len() < usize::from(r) && lines.len() < body_cap {
+                    filler(&mut lines, String::new(), SidebarLineKind::Blank);
+                }
+            }
         }
     }
     // The footer chips pin to the panel's last row; a strip too narrow
@@ -666,6 +738,7 @@ pub(crate) fn compose_sidebar(
             text: new_chip.to_string(),
             id: Some(SidebarRowId::New),
             active: false,
+            kind: SidebarLineKind::Row,
         });
         let menu_chip = " menu ";
         if text_width >= new_chip.len() + menu_chip.len() {
@@ -677,6 +750,7 @@ pub(crate) fn compose_sidebar(
                 text: menu_chip.to_string(),
                 id: Some(SidebarRowId::Menu),
                 active: false,
+                kind: SidebarLineKind::Row,
             });
         }
     }

@@ -7,7 +7,7 @@ use crate::mux::attach::status;
 use crate::mux::attach::targets::parse_workspace_line;
 use ratatui::style::{Modifier as RtModifier, Style as RtStyle};
 
-use crate::mux::attach::panels::{SidebarRow, SidebarRowId, SidebarSection};
+use crate::mux::attach::panels::{SidebarLineKind, SidebarRow, SidebarRowId, SidebarSection};
 
 impl PaneRenderer {
     /// The side panel's width (0 = hidden).
@@ -46,6 +46,43 @@ impl PaneRenderer {
         }
     }
 
+    /// Set the dragged area split (the rule's composed row); `None`
+    /// returns to the natural flow. Repaints.
+    pub(crate) fn set_sidebar_rule_row(&mut self, row: Option<u16>) {
+        if self.sidebar_rule_row != row {
+            self.sidebar_rule_row = row;
+            self.dirty = true;
+        }
+    }
+
+    /// The composed lines' rule row, if the panel shows one (either the
+    /// dragged split or the natural flow) — the split drag's anchor.
+    pub(crate) fn sidebar_rule_y(&self) -> Option<u16> {
+        let w = self.geometry.sidebar_w;
+        if w == 0 {
+            return None;
+        }
+        let sections = self.sidebar_sections.as_ref()?;
+        compose_sidebar(sections, w, self.height, self.sidebar_rule_row)
+            .into_iter()
+            .find(|line| line.kind == SidebarLineKind::Rule)
+            .map(|line| line.y)
+    }
+
+    /// Whether the panel's HOST cell `(x, y)` is the rule row — the
+    /// split drag's handle (the same host-to-frame shift the row
+    /// hit-test applies).
+    pub(crate) fn sidebar_rule_at(&self, x: u16, y: u16) -> bool {
+        let w = self.geometry.sidebar_w;
+        if w == 0 || x >= w {
+            return false;
+        }
+        let Some(frame_y) = self.geometry.host_to_frame(x, y).map(|(_, y)| y) else {
+            return false;
+        };
+        self.sidebar_rule_y() == Some(frame_y)
+    }
+
     /// The clickable side-panel id under the HOST cell `(x, y)`, if any.
     /// Host row 0 is the tab-strip row (no panel there), and a panel
     /// line composed at row `y` paints at HOST row `y + 1` — the frame
@@ -58,7 +95,7 @@ impl PaneRenderer {
             return None;
         }
         let sections = self.sidebar_sections.as_ref()?;
-        let lines = compose_sidebar(sections, w, self.height);
+        let lines = compose_sidebar(sections, w, self.height, self.sidebar_rule_row);
         lines
             .into_iter()
             .find(|line| line.y == frame_y && line.id.is_some() && x >= line.x && x < line.x_end)
@@ -67,8 +104,9 @@ impl PaneRenderer {
 
     /// Paint the workspace side panel over the strip columns: theme-bg
     /// fill, a dim divider on the strip's right edge, then the sections —
-    /// each header in the accent, its rows dim (the active workspace
-    /// accent + bold, herdr's emphasis). Clipped to the strip; composed
+    /// each area's header dim + bold (herdr's ` spaces` lead row), the
+    /// rule rows and rows dim (the active workspace/agent row a
+    /// full-width reversed + bold block). Clipped to the strip; composed
     /// by [`compose_sidebar`].
     pub(super) fn paint_sidebar(&mut self) {
         let w = self.geometry.sidebar_w;
@@ -92,7 +130,7 @@ impl PaneRenderer {
         let Some(sections) = self.sidebar_sections.clone() else {
             return;
         };
-        for line in compose_sidebar(&sections, w, self.height) {
+        for line in compose_sidebar(&sections, w, self.height, self.sidebar_rule_row) {
             // herdr's active treatment: an active row (the active
             // workspace, or the focused pane's agent row) is a full-width
             // inverted block. The footer chips paint at their own columns
@@ -114,6 +152,8 @@ impl PaneRenderer {
                 RtStyle::default()
                     .add_modifier(RtModifier::REVERSED)
                     .add_modifier(RtModifier::BOLD)
+            } else if line.kind == SidebarLineKind::Header {
+                dim.add_modifier(RtModifier::BOLD)
             } else {
                 dim
             };
@@ -129,6 +169,30 @@ impl PaneRenderer {
         }
     }
 }
+
+/// A sidebar drag in flight: the width handle on the strip's right
+/// edge, or the split rule between the areas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SidebarDrag {
+    /// The press's host column and the width then, what has been
+    /// applied, and when — the width change re-reports the grid to
+    /// the daemon, so it throttles like a pane divider drag.
+    Width {
+        anchor_x: u16,
+        start_w: u16,
+        applied: u16,
+        last_applied: Option<std::time::Instant>,
+    },
+    /// The rule's composed row at the press; dragging moves the rule
+    /// by the pointer's row delta. Local repaint, no daemon round
+    /// trip.
+    Split { anchor_y: u16, start_rule: u16 },
+}
+
+/// The panel width bounds: the footer chips need 12 columns; 60 keeps
+/// the panes usable on every host this targets.
+const SIDEBAR_WIDTH_MIN: i32 = 12;
+const SIDEBAR_WIDTH_MAX: i32 = 60;
 
 impl WindowSession {
     /// Toggle the side panel: flip the strip width on the renderer, then
@@ -157,6 +221,93 @@ impl WindowSession {
             .to_string(),
         );
         self.draw_status_row();
+    }
+
+    /// Press on the strip's right edge: start a width drag.
+    pub(super) fn start_sidebar_width_drag(&mut self, x: u16) {
+        if !self.sidebar.is_on() {
+            return;
+        }
+        self.sidebar_drag = Some(SidebarDrag::Width {
+            anchor_x: x,
+            start_w: self.render_opts.sidebar_width,
+            applied: self.render_opts.sidebar_width,
+            last_applied: None,
+        });
+    }
+
+    /// Press on the rule row: start a split drag anchored to the rule's
+    /// composed row.
+    pub(super) fn start_sidebar_split_drag(&mut self, y: u16) {
+        let Some(start_rule) = self.renderer.sidebar_rule_y() else {
+            return;
+        };
+        self.sidebar_drag = Some(SidebarDrag::Split {
+            anchor_y: y,
+            start_rule,
+        });
+    }
+
+    /// One motion or release while a sidebar drag is in flight (host
+    /// coordinates). The split follows the pointer directly — a local
+    /// recompose; the width re-reports the reduced grid, so it applies
+    /// at the pane drags' cadence with the remainder flushed on
+    /// release.
+    pub(super) fn sidebar_drag_event(&mut self, x: u16, y: u16, release: bool) {
+        let Some(drag) = self.sidebar_drag else {
+            return;
+        };
+        match drag {
+            SidebarDrag::Split {
+                anchor_y,
+                start_rule,
+            } => {
+                let max = self.renderer.frame_height().saturating_sub(3);
+                let rule =
+                    (start_rule as i32 + y as i32 - anchor_y as i32).clamp(2, max as i32) as u16;
+                self.renderer.set_sidebar_rule_row(Some(rule));
+                if release {
+                    self.sidebar_drag = None;
+                }
+            }
+            SidebarDrag::Width {
+                anchor_x,
+                start_w,
+                applied,
+                last_applied,
+            } => {
+                let target = (start_w as i32 + x as i32 - anchor_x as i32)
+                    .clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+                    as u16;
+                let due = last_applied
+                    .is_none_or(|at| at.elapsed() >= super::drag::DRAG_SEND_MIN_INTERVAL);
+                if release || (due && target != applied) {
+                    self.apply_sidebar_width(target);
+                    self.sidebar_drag = Some(SidebarDrag::Width {
+                        anchor_x,
+                        start_w,
+                        applied: target,
+                        last_applied: Some(std::time::Instant::now()),
+                    });
+                }
+                if release {
+                    self.sidebar_drag = None;
+                }
+            }
+        }
+    }
+
+    /// Apply a dragged panel width: the render option, the geometry, and
+    /// the parked grid re-report (`refresh-client -C`) the pump applies —
+    /// the same plumbing a toggle runs.
+    fn apply_sidebar_width(&mut self, w: u16) {
+        if self.render_opts.sidebar_width == w {
+            return;
+        }
+        self.render_opts.sidebar_width = w;
+        self.chrome_geometry_changed();
+        self.renderer.set_geometry(self.geometry);
+        self.pending.grid_refit = true;
     }
 
     /// Re-query the workspace roster into the panel's sections — on
@@ -264,7 +415,10 @@ impl WindowSession {
                     active: *active,
                 })
                 .collect();
-            sections.push(SidebarSection { rows });
+            sections.push(SidebarSection {
+                title: "workspaces",
+                rows,
+            });
         }
         if !agents.is_empty() {
             // Group by workspace ID in the daemon's id order (`ws_names` is
@@ -299,7 +453,10 @@ impl WindowSession {
                 .collect();
             keyed.sort_by_key(|(key, _)| *key);
             let rows = keyed.into_iter().map(|(_, row)| row).collect();
-            sections.push(SidebarSection { rows });
+            sections.push(SidebarSection {
+                title: "agents",
+                rows,
+            });
         }
         if sections.is_empty() {
             None

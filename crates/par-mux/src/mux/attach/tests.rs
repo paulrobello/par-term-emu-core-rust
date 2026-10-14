@@ -1607,19 +1607,127 @@ fn srow(id: super::SidebarRowId, label: &str, active: bool) -> super::SidebarRow
 #[test]
 fn compose_sidebar_drops_spoofing_chars() {
     let sections = vec![super::SidebarSection {
+        title: "workspaces",
         rows: vec![srow(
             super::SidebarRowId::Workspace("+0".into()),
             "\u{202E}evil",
             false,
         )],
     }];
-    let lines = super::compose_sidebar(&sections, 20, 4);
-    assert_eq!(lines[0].text, "   evil");
+    let lines = super::compose_sidebar(&sections, 20, 4, None);
+    assert_eq!(lines[0].text, " workspaces");
+    assert_eq!(lines[1].text, "   evil");
+}
+
+#[test]
+fn compose_sidebar_separates_the_areas_like_herdr() {
+    let sections = vec![
+        super::SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(super::SidebarRowId::Workspace("+0".into()), "main", true),
+                srow(super::SidebarRowId::Workspace("+1".into()), "dev", false),
+            ],
+        },
+        super::SidebarSection {
+            title: "agents",
+            rows: vec![srow(
+                super::SidebarRowId::Pane(3),
+                "main · claude (busy)",
+                false,
+            )],
+        },
+    ];
+    let lines = super::compose_sidebar(&sections, 20, 10, None);
+    // header, two workspace rows, the rule, then the agents area.
+    assert_eq!(lines[0].text, " workspaces");
+    assert_eq!(lines[1].text, " ▸ main");
+    assert_eq!(lines[2].text, "   dev");
+    assert_eq!(
+        lines[3].text,
+        "─".repeat(19),
+        "the full-width rule divides the areas"
+    );
+    assert_eq!(lines[3].id, None, "the rule is never clickable");
+    assert_eq!(lines[3].kind, super::SidebarLineKind::Rule);
+    assert_eq!(lines[4].text, " agents");
+    assert_eq!(lines[4].kind, super::SidebarLineKind::Header);
+    assert_eq!(
+        lines[5].text, "   main · claude (b",
+        "inactive marker, clipped to width - 1"
+    );
+    assert_eq!(
+        lines[5].id,
+        Some(super::SidebarRowId::Pane(3)),
+        "agent rows keep their click target"
+    );
+}
+
+#[test]
+fn compose_sidebar_split_clips_pads_and_pins_the_rule() {
+    let sections = vec![
+        super::SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(super::SidebarRowId::Workspace("+0".into()), "main", true),
+                srow(super::SidebarRowId::Workspace("+1".into()), "dev", false),
+                srow(super::SidebarRowId::Workspace("+2".into()), "ops", false),
+            ],
+        },
+        super::SidebarSection {
+            title: "agents",
+            rows: vec![
+                srow(super::SidebarRowId::Pane(1), "claude (working)", true),
+                srow(super::SidebarRowId::Pane(3), "kimi (blocked)", false),
+            ],
+        },
+    ];
+    // A dragged rule at row 4: the workspace rows fill up to it, the
+    // rule pinned at 4, the agents area following at a fixed spot.
+    let lines = super::compose_sidebar(&sections, 20, 12, Some(4));
+    assert_eq!(lines[0].text, " workspaces");
+    assert_eq!(lines[1].text, " ▸ main");
+    assert_eq!(lines[3].text, "   ops");
+    assert_eq!(lines[4].text, "─".repeat(19));
+    assert_eq!(lines[4].y, 4, "the rule sits on the dragged row");
+    assert_eq!(lines[5].text, " agents");
+    assert_eq!(lines[6].text, " ▸ claude (working)");
+    assert_eq!(lines[7].text, "   kimi (blocked)");
+    // A rule BETWEEN rows squeezes the rest out and pads to itself.
+    let mid = super::compose_sidebar(&sections, 20, 12, Some(2));
+    assert_eq!(mid[0].text, " workspaces");
+    assert_eq!(mid[1].text, " ▸ main");
+    assert_eq!(mid[2].text, "─".repeat(19), "dev and ops clipped");
+    assert_eq!(mid[3].text, " agents");
+    // A rule BELOW every row pads with blanks to reach it.
+    let low = super::compose_sidebar(&sections, 20, 12, Some(8));
+    assert_eq!(low[3].text, "   ops");
+    assert_eq!(low[5].kind, super::SidebarLineKind::Blank);
+    assert_eq!(low[6].kind, super::SidebarLineKind::Blank);
+    assert_eq!(low[8].kind, super::SidebarLineKind::Rule);
+    assert_eq!(low[8].y, 8);
+    // A rule ABOVE the workspace rows squeezes them out entirely.
+    let squeezed = super::compose_sidebar(&sections, 20, 12, Some(1));
+    assert_eq!(squeezed[0].text, " workspaces");
+    assert_eq!(squeezed[1].text, "─".repeat(19));
+    assert_eq!(squeezed[2].text, " agents");
+    // An off-panel rule clamps to leave the agents area its room.
+    let clamped = super::compose_sidebar(&sections, 20, 12, Some(99));
+    let rule = clamped
+        .iter()
+        .find(|l| l.kind == super::SidebarLineKind::Rule)
+        .expect("rule");
+    assert!(
+        rule.y <= 9,
+        "clamped to leave header+row room: y={}",
+        rule.y
+    );
 }
 
 #[test]
 fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     let sections = vec![super::SidebarSection {
+        title: "workspaces",
         rows: vec![
             srow(super::SidebarRowId::Workspace("+0".into()), "main", true),
             srow(super::SidebarRowId::Workspace("+1".into()), "dev", false),
@@ -1630,20 +1738,23 @@ fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
             ),
         ],
     }];
-    let lines = super::compose_sidebar(&sections, 20, 12);
-    // Row 0 is the first workspace — no header row above it.
-    assert_eq!(lines[0].text, " ▸ main");
-    assert_eq!(
-        lines[0].id,
-        Some(super::SidebarRowId::Workspace("+0".into()))
-    );
-    assert!(lines[0].active, "the active row is flagged");
-    assert_eq!(lines[1].text, "   dev");
+    let lines = super::compose_sidebar(&sections, 20, 12, None);
+    // The area's dim header opens the panel; rows follow.
+    assert_eq!(lines[0].text, " workspaces");
+    assert_eq!(lines[0].id, None, "the header is filler, never clickable");
+    assert_eq!(lines[0].kind, super::SidebarLineKind::Header);
+    assert_eq!(lines[1].text, " ▸ main");
     assert_eq!(
         lines[1].id,
+        Some(super::SidebarRowId::Workspace("+0".into()))
+    );
+    assert!(lines[1].active, "the active row is flagged");
+    assert_eq!(lines[2].text, "   dev");
+    assert_eq!(
+        lines[2].id,
         Some(super::SidebarRowId::Workspace("+1".into()))
     );
-    assert_eq!(lines[2].text, "   a very long work", "clipped to width - 1");
+    assert_eq!(lines[3].text, "   a very long work", "clipped to width - 1");
     // The footer chips pin to the panel's LAST row (footer_y = 11 of
     // 12 rows), never at a body row's position.
     let new_chip = lines
@@ -1665,7 +1776,7 @@ fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
     );
     // A strip too narrow for both chips drops the one that does not
     // fit; a strip too narrow for either drops both.
-    let narrow = super::compose_sidebar(&sections, 7, 4);
+    let narrow = super::compose_sidebar(&sections, 7, 4, None);
     assert!(
         narrow
             .iter()
@@ -1678,7 +1789,7 @@ fn compose_sidebar_lists_rows_and_pins_the_footer_chips() {
             .any(|l| l.id == Some(super::SidebarRowId::Menu)),
         "the menu chip does not fit: {narrow:?}"
     );
-    let tiny = super::compose_sidebar(&sections, 4, 3);
+    let tiny = super::compose_sidebar(&sections, 4, 3, None);
     assert!(
         !tiny.iter().any(|l| matches!(
             l.id,

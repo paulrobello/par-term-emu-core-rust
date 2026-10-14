@@ -1571,7 +1571,10 @@ fn command_menu_session(
     show_sidebar(&mut session);
     session
         .renderer
-        .set_sidebar_sections(Some(vec![super::super::SidebarSection { rows: vec![] }]));
+        .set_sidebar_sections(Some(vec![super::super::SidebarSection {
+            title: "workspaces",
+            rows: vec![],
+        }]));
     session.route_mouse(
         &mut conn,
         SgrMouse {

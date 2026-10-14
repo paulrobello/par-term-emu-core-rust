@@ -10,7 +10,7 @@ use super::{DividerHit, DragState, WindowSession};
 /// sixty whole-window repaints inside one held click. The unapplied
 /// remainder is held until the interval passes and flushed on release,
 /// so the drag still lands exactly where it is let go.
-const DRAG_SEND_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
+pub(super) const DRAG_SEND_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
 
 /// The relative resize command for one drag step, aimed at the
 /// boundary's left/top pane (the daemon re-divides the neighbor).

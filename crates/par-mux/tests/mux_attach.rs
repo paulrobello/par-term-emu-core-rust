@@ -4704,9 +4704,9 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
     );
 
     // A press ON the painted workspace row lands on it: 1-based host
-    // rows are 1 = tab strip, 2 = the FIRST workspace row (round 6: no
-    // section header above it — the title moved to the strip row; the
-    // panel begins under the strip row). The select+resync re-seed must
+    // rows are 1 = tab strip, 2 = the area header, 3 = the FIRST
+    // workspace row (the separated panel's areas each open with their
+    // header). The select+resync re-seed must
     // re-emit the panel's full frame (a fresh renderer diffs against an
     // empty buffer) with the panes still offset by the panel's width —
     // and REPEATED clicks must not ratchet the layout left: the re-seed
@@ -4715,7 +4715,7 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
     // shrank again (the manual-pass click-shrinks-the-panes report).
     for click in 1..=2 {
         host.to_child
-            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'2', b'M'])
+            .write_all(&[0x1b, b'[', b'<', b'0', b';', b'3', b';', b'3', b'M'])
             .expect("panel click");
         host.to_child.flush().ok();
         let mut got = wait_for_output(&host, b"workspaces", Duration::from_secs(10));

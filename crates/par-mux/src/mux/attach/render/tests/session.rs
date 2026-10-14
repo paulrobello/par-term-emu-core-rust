@@ -938,11 +938,12 @@ fn hidden_status_bar_flushes_nothing() {
     assert!(sink.cells.is_empty());
 }
 
-/// Side-panel click geometry after round 6: the lookup takes the
-/// HOST row (row 0 is the tab strip's — nothing there), shifted one
-/// row so a click lands on the row as painted — the FIRST workspace
-/// row at host row 1 (no section header above it), the footer chips
-/// at the panel's last row, each chip only its own cell.
+/// Side-panel click geometry under the separated layout: the lookup
+/// takes the HOST row (row 0 is the tab strip's — nothing there),
+/// shifted one row so a click lands on the row as painted — the area
+/// header at host row 1 (filler: no click), the FIRST workspace row at
+/// host row 2, the footer chips at the panel's last row, each chip
+/// only its own cell.
 #[test]
 fn sidebar_clicks_land_on_the_painted_row() {
     let mut session = WindowSession::new(80, 24);
@@ -950,6 +951,7 @@ fn sidebar_clicks_land_on_the_painted_row() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            title: "workspaces",
             rows: vec![
                 srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
                 srow(SidebarRowId::Workspace("+1".into()), "beta", false),
@@ -957,16 +959,17 @@ fn sidebar_clicks_land_on_the_painted_row() {
         }]));
     // Host row 0 (the tab strip row): nothing.
     assert_eq!(session.renderer.sidebar_row_at(2, 0), None);
-    // Host row 1: the first workspace row, as painted (no header
-    // above it since round 6).
+    // Host row 1: the area's header row — filler, never clickable.
+    assert_eq!(session.renderer.sidebar_row_at(2, 1), None);
+    // Host row 2: the first workspace row, as painted.
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 1),
+        session.renderer.sidebar_row_at(2, 2),
         Some(SidebarRowId::Workspace("+0".into())),
         "the click lands on the row as painted"
     );
-    // Host row 2: the second workspace row.
+    // Host row 3: the second workspace row.
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 2),
+        session.renderer.sidebar_row_at(2, 3),
         Some(SidebarRowId::Workspace("+1".into()))
     );
     // The footer row (host row = renderer height - 1 + 1 = 24... the
@@ -991,11 +994,11 @@ fn sidebar_clicks_land_on_the_painted_row() {
     // A body row answers across its full content width (the active
     // row's inverted block is clickable anywhere on it).
     assert_eq!(
-        session.renderer.sidebar_row_at(17, 1),
+        session.renderer.sidebar_row_at(17, 2),
         Some(SidebarRowId::Workspace("+0".into()))
     );
     // Past the strip's width: nothing.
-    assert_eq!(session.renderer.sidebar_row_at(20, 2), None);
+    assert_eq!(session.renderer.sidebar_row_at(20, 3), None);
 }
 
 /// The probe FAILED (`bg: None`): the frame fill paints NO color -
@@ -2652,12 +2655,14 @@ fn snapshot_refresh_is_one_round_trip() {
         session.renderer.sidebar_sections,
         Some(vec![
             crate::mux::attach::panels::SidebarSection {
+                title: "workspaces",
                 rows: vec![
                     srow(SidebarRowId::Workspace("+0".into()), "main", true),
                     srow(SidebarRowId::Workspace("+1".into()), "side", false),
                 ],
             },
             crate::mux::attach::panels::SidebarSection {
+                title: "agents",
                 rows: vec![
                     srow(SidebarRowId::Pane(1), "claude (working)", true),
                     srow(SidebarRowId::Pane(3), "kimi (blocked)", false),
@@ -2989,11 +2994,12 @@ fn slow_daemon_does_not_block_key_forwarding() {
     session
         .renderer
         .set_sidebar_sections(Some(vec![super::super::super::SidebarSection {
+            title: "workspaces",
             rows: vec![srow(SidebarRowId::Pane(2), "main \u{b7} agent", false)],
         }]));
 
     let started = std::time::Instant::now();
-    session.route_mouse(&mut conn, sgr(0, 3, 2, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
     let click = started.elapsed();
     let started = std::time::Instant::now();
     let mut prefix_pending = false;

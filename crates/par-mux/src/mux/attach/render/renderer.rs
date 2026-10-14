@@ -102,6 +102,7 @@ impl PaneRenderer {
                 options.sidebar_width,
             ),
             sidebar_sections: None,
+            sidebar_rule_row: None,
             user_titles: HashMap::new(),
             glyphs: options.glyphs,
             bg: options.bg,
@@ -664,6 +665,12 @@ impl PaneRenderer {
         self.layout
             .iter()
             .find(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+    }
+
+    /// The frame's row count (the pane renderer's grid height — the
+    /// sidebar composes against it).
+    pub(crate) fn frame_height(&self) -> u16 {
+        self.height
     }
 
     /// A pane's tracked input-mode state (its emulator's terminal), by

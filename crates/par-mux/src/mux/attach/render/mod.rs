@@ -348,6 +348,10 @@ pub struct PaneRenderer {
     /// The panel's sections (queried workspace roster, more to come) —
     /// `None` while hidden or before the first refresh.
     sidebar_sections: Option<Vec<super::SidebarSection>>,
+    /// The dragged area split: the composed row the workspace/agents
+    /// rule sits on (`None` = the natural flow, the rule trailing the
+    /// workspace rows). Set by the split drag.
+    sidebar_rule_row: Option<u16>,
     /// Per-pane effective titles (`pane-title`: the user `-T` label when
     /// set, else the pane's OSC title) — what border labels paint. The
     /// daemon is authoritative; the client re-queries on the throttled
@@ -661,6 +665,8 @@ struct WindowSession {
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
     sidebar: SidebarState,
+    /// A sidebar drag in flight (width or split); `None` idle.
+    pub(super) sidebar_drag: Option<sidebar::SidebarDrag>,
     /// The zoom cue (the daemon's `resize-pane -Z` state, as the chord
     /// last saw it) — bolds a ` Z |` head on the status row. The daemon
     /// holds the truth; a window switch resets the cue.
@@ -912,6 +918,7 @@ impl WindowSession {
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),
+            sidebar_drag: None,
             zoomed: false,
             daemon_layout: Vec::new(),
             stdin_primer: Vec::new(),

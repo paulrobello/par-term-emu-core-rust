@@ -53,6 +53,13 @@ pub(super) enum Hit {
     },
     /// Motion or release over a mouse-owning pane: forward it.
     PaneForward(PaneRect),
+    /// A press on the side panel's right edge: start a width drag.
+    SidebarResize,
+    /// A press on the side panel's rule row: start a split drag.
+    SidebarSplitDrag,
+    /// Motion or release while a sidebar drag (width or split) is in
+    /// flight — host coordinates, like the press stored them.
+    SidebarDrag { x: u16, y: u16, release: bool },
     /// A press near a divider: start a (pending) drag.
     DragStart { divider: DividerHit, x: u16, y: u16 },
     /// A press on a pane: focus it, forwarding when it owns the mouse.
@@ -487,6 +494,9 @@ impl WindowSession {
             }
             Hit::SidebarWorkspace { id, menu: false } => self.land_on_workspace(conn, &id),
             Hit::SidebarPane { pane } => self.focus_pane(conn, pane),
+            Hit::SidebarResize => self.start_sidebar_width_drag(mouse.col - 1),
+            Hit::SidebarSplitDrag => self.start_sidebar_split_drag(mouse.row - 1),
+            Hit::SidebarDrag { x, y, release } => self.sidebar_drag_event(x, y, release),
             Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::PickerMove(delta) => self.picker_move(delta),
             Hit::PickerFilter => {
@@ -564,6 +574,16 @@ impl WindowSession {
         // so a click there falls through to the tab strip even inside
         // the strip's width — the sidebar path used to consume it (the
         // round-5 report).
+        // A sidebar drag in flight follows the pointer anywhere (a
+        // pointer over the panes must not strand it), like the pane
+        // divider drags below.
+        if self.sidebar_drag.is_some() && (mouse.release || mouse.is_motion()) {
+            return Hit::SidebarDrag {
+                x,
+                y,
+                release: mouse.release,
+            };
+        }
         if strip > 0 && y > 0 && x < strip {
             return self.sidebar_hit(mouse, x, y);
         }
@@ -627,6 +647,15 @@ impl WindowSession {
     fn sidebar_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
         if mouse.release || mouse.is_motion() {
             return Hit::Consumed;
+        }
+        // The strip's right edge — the painted divider column — is the
+        // width-drag handle; the rule row is the split-drag handle.
+        // Both before the row lookup: neither is a row.
+        if x + 1 == self.renderer.sidebar_width() {
+            return Hit::SidebarResize;
+        }
+        if self.renderer.sidebar_rule_at(x, y) {
+            return Hit::SidebarSplitDrag;
         }
         use crate::mux::attach::panels::SidebarRowId;
         let Some(id) = self.renderer.sidebar_row_at(x, y) else {
