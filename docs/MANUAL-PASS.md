@@ -36,6 +36,11 @@ Per terminal, in passthrough then render mode, check:
 
 - **Byte fidelity**: `ls --color=always` shows colors; `htop` or `vim` fills,
   scrolls, and redraws cleanly on exit; a long CJK line does not split a glyph.
+  CJK showing as boxed/missing glyphs in ONE host but not another is that host's
+  font config, not the pipeline — the daemon grid and the paint's wide-char
+  handling are pinned by tests (`wide_glyphs_readdress_the_next_cell`), so
+  check the terminal's fallback first (iTerm2: Settings → Profiles → Text →
+  "Use a different font for non-ASCII text"; verified 2026-10-13).
 - **Resize**: drag the window edge larger and smaller; panes re-divide, no
   garbage row appears, the status bar stays painted (render mode).
 - **Mouse**: a click moves the focus highlight (render); in vim with
