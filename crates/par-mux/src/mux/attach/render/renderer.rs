@@ -733,6 +733,43 @@ impl PaneRenderer {
         self.dirty
     }
 
+    /// Fill the content area past the window's extent with dim `.` cells
+    /// (tmux's padding): the daemon sizes a window to its smallest viewer,
+    /// so a larger client shows the window in its top-left corner and the
+    /// rest marks where the other client's screen ends.
+    fn paint_window_padding(&mut self) {
+        let window_w = self.layout.iter().map(|r| r.x + r.width).max().unwrap_or(0);
+        let window_h = self
+            .layout
+            .iter()
+            .map(|r| r.y + r.height)
+            .max()
+            .unwrap_or(0);
+        let content = self.geometry.content_rect();
+        if self.layout.is_empty() || (window_w >= content.width && window_h >= content.height) {
+            return;
+        }
+        let mut style = RtStyle::default().add_modifier(ratatui::style::Modifier::DIM);
+        if let Some(bg) = self.bg {
+            style = style.bg(bg);
+        }
+        for row in 0..content.height {
+            for col in 0..content.width {
+                if col < window_w && row < window_h {
+                    continue;
+                }
+                let (x, y) = self.geometry.content_to_frame(col, row);
+                if x >= self.width || y >= self.height {
+                    continue;
+                }
+                let cell = &mut self.buffer[(x, y)];
+                cell.reset();
+                cell.set_symbol(".");
+                cell.set_style(style);
+            }
+        }
+    }
+
     /// The pane rect containing window-relative `(x, y)`, else `None`
     /// (dividers belong to no pane).
     pub fn pane_at(&self, x: u16, y: u16) -> Option<&PaneRect> {
@@ -910,6 +947,7 @@ impl PaneRenderer {
         } else {
             self.paint_dividers();
         }
+        self.paint_window_padding();
         self.paint_sidebar();
         self.paint_toast();
         if let Some((title, rows, scroll)) = self.overlay.clone() {

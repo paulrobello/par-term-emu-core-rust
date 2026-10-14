@@ -2015,7 +2015,7 @@ fn poll_times(
 }
 
 #[test]
-fn window_sizes_to_the_latest_viewing_client_and_grows_on_disconnect() {
+fn window_sizes_to_the_smallest_viewing_client_and_grows_on_disconnect() {
     let fixture = MuxFixture::new("minsize");
     let path = fixture.socket();
     let server = MuxServer::bind(path).expect("bind");
@@ -2043,10 +2043,9 @@ fn window_sizes_to_the_latest_viewing_client_and_grows_on_disconnect() {
         "B's size report must succeed: {b_report:?}"
     );
 
-    // A reports larger: B (the later connection) owns the window, so the
-    // extent stays 60x20 and A's report is answered on A's stream alone
-    // — the poll seeds from B's earlier broadcast and A's issuer-scoped
-    // layout line.
+    // A reports larger: the window takes the componentwise minimum (60x20).
+    // The broadcast precedes the issuer's reply on the wire, so A's own
+    // report read carries B's %layout-change line — the poll seeds from it.
     let report = command(
         &mut writer_a,
         &mut reader_a,
@@ -2068,8 +2067,9 @@ fn window_sizes_to_the_latest_viewing_client_and_grows_on_disconnect() {
         );
         std::thread::sleep(Duration::from_millis(25));
     }
-    // Repeated identical reports from B never move the grid again — the
-    // no-feedback-loop property, observed live.
+    // Repeated identical reports from B never move the grid again, and a
+    // report that moves nothing wakes no other client — the
+    // no-feedback-loop property, observed live from A's stream.
     for _ in 0..3 {
         command(
             &mut writer_b,
@@ -2080,13 +2080,13 @@ fn window_sizes_to_the_latest_viewing_client_and_grows_on_disconnect() {
     let stable = poll_times(&mut writer_a, &mut reader_a, "list-panes", 4);
     assert_eq!(
         last_layout_size(&stable),
-        Some((60, 20)),
-        "the owned size is stable under repeated reports; stream: {}",
+        None,
+        "repeated reports must not re-broadcast the layout; stream: {}",
         stable.escape_debug()
     );
 
-    // B disconnects: the owner is gone, A takes over at its recorded
-    // report and the window grows to it.
+    // B disconnects: its contribution is dropped and the window grows to
+    // A's report.
     drop(writer_b);
     drop(reader_b);
     poll_until(

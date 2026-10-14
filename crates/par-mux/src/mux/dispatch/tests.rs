@@ -163,15 +163,15 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
     );
 }
 
-/// The latest-attached-client arbitration over `-C` reports: only the
-/// window's owning (most recently attached) client's report moves the
-/// window. A non-owner's report applies nothing, answers the issuer
-/// alone (the reporter still needs the geometry for its re-seed), and
-/// wakes nobody else — without the issuer scoping, two differently-sized
-/// attach clients re-reporting in turn broadcast each other into a
-/// re-seed flip-flop (the manual-pass htop sort-panel oscillation).
+/// The smallest-attached-client rule over `-C` reports: the window takes
+/// the componentwise minimum of its viewers' reports, and a report that
+/// does not move the window answers the issuer alone (the reporter still
+/// needs the geometry for its re-seed) and wakes nobody else — without
+/// the issuer scoping, two differently-sized attach clients re-reporting
+/// in turn broadcast each other into a re-seed flip-flop (the manual-pass
+/// htop sort-panel oscillation).
 #[test]
-fn size_reports_follow_the_latest_attached_client() {
+fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
     let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(DeadPaneFactory))));
     let clients: crate::mux::server::Clients = Arc::new(Mutex::new(Vec::new()));
     let channel = |clients: &crate::mux::server::Clients,
@@ -230,7 +230,7 @@ fn size_reports_follow_the_latest_attached_client() {
         while let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
             assert!(
                 !line.starts_with("%layout-change"),
-                "a non-owner's report must not wake any other client: {line}"
+                "a report that moved nothing must not wake any other client: {line}"
             );
         }
     };
@@ -245,22 +245,23 @@ fn size_reports_follow_the_latest_attached_client() {
         next_layout(rx);
     }
 
-    // A later client takes ownership — the attach-order change.
-    run_as(2, "refresh-client -C 60x20", &_tx2);
+    // A second client wide but short: each dimension takes the smaller
+    // report (the asymmetric two-terminal case).
+    run_as(2, "refresh-client -C 140x20", &_tx2);
     let (_, cols, rows) = extent();
-    assert_eq!((cols, rows), (60, 20), "the latest viewer owns the size");
+    assert_eq!((cols, rows), (100, 20), "the componentwise minimum");
     for rx in [&one, &two, &three] {
         next_layout(rx);
     }
 
-    // The displaced client re-reports its own size: recorded for a later
-    // takeover, applied nothing.
+    // The first client re-reports its own size: the minimum holds, so
+    // nothing moves.
     run_as(1, "refresh-client -C 100x30", &tx1);
     let (_, cols, rows) = extent();
     assert_eq!(
         (cols, rows),
-        (60, 20),
-        "a non-owner's report must not move the window"
+        (100, 20),
+        "a report above the minimum must not move the window"
     );
     // The issuer alone is answered — its re-seed still needs the
     // geometry — and nobody else is woken.
@@ -272,18 +273,12 @@ fn size_reports_follow_the_latest_attached_client() {
     no_layout(&two);
     no_layout(&three);
 
-    // The owner detaches (the server teardown's clearing): the latest
-    // remaining viewer takes over at its recorded size, and its next
-    // report applies again.
+    // The constraining client detaches (the server teardown's clearing):
+    // the window grows to the remaining viewer's report.
     let resized = tree.lock().clear_client_view(2);
-    assert_eq!(resized, vec![window_id], "the takeover re-fits the window");
+    assert_eq!(resized, vec![window_id], "the window grows back");
     let (_, cols, rows) = extent();
     assert_eq!((cols, rows), (100, 30));
-    let reply = run_as(1, "refresh-client -C 100x30", &tx1);
-    assert!(
-        !reply.contains("%error"),
-        "the takeover owner reports: {reply}"
-    );
 }
 
 /// Target-less with no sessions at all: an error naming the absence,
@@ -1199,7 +1194,7 @@ fn kill_server_without_a_running_server_errors() {
 
 /// select-workspace moves every client view shown in the workspace it
 /// leaves onto the newly displayed window, re-fits that window to its
-/// reporting owner's size, and tells clients which session they now
+/// smallest reporting client, and tells clients which session they now
 /// show.
 #[test]
 fn select_workspace_moves_reporting_client_views_and_refits() {

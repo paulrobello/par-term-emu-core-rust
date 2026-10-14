@@ -97,6 +97,46 @@ fn unreserved_chrome_keeps_full_rect_emulators() {
     assert_eq!(renderer.emulators[&1].terminal().size(), (80, 22));
 }
 
+/// A window smaller than the client's frame (the daemon sized it to a
+/// smaller attached client) pads the rest of the content area with dim
+/// `.` cells, as tmux does; a window that fills the frame paints none.
+#[test]
+fn a_window_smaller_than_the_frame_pads_with_dots() {
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.apply_layout(vec![PaneRect {
+        pane: 1,
+        x: 0,
+        y: 0,
+        width: 50,
+        height: 10,
+    }]);
+    renderer.feed_output(1, b"HELLO");
+    renderer.render_frame();
+    let symbol = |x: u16, y: u16| renderer.buffer[(x, y)].symbol().to_string();
+    assert_eq!(symbol(0, 0), "H", "the window keeps its cells");
+    assert_eq!(symbol(49, 9), " ", "the window's last cell is not padding");
+    assert_eq!(symbol(50, 0), ".", "right of the window");
+    assert_eq!(symbol(0, 10), ".", "below the window");
+    assert_eq!(symbol(79, 23), ".", "the far corner");
+    assert!(renderer.buffer[(50, 0)]
+        .modifier
+        .contains(ratatui::style::Modifier::DIM));
+
+    renderer.apply_layout(vec![PaneRect {
+        pane: 1,
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    }]);
+    renderer.render_frame();
+    let dots = (0..24u16)
+        .flat_map(|y| (0..80u16).map(move |x| (x, y)))
+        .filter(|&(x, y)| renderer.buffer[(x, y)].symbol() == ".")
+        .count();
+    assert_eq!(dots, 0, "a full-size window pads nothing");
+}
+
 /// Criterion 2: two panes fed distinct content render at the rects
 /// the daemon's layout names — pane 1's bytes land in cols 0..40,
 /// pane 2's in cols 40..80, same rows.

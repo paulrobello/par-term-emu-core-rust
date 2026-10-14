@@ -160,11 +160,9 @@ pub enum MuxCommand {
         /// `new-window` uses), and there is never a screen-restore replay —
         /// replay is what the `-t` form is for.
         pane: Option<Target<PaneId>>,
-        /// `-C WxH`: the client's renderer grid size. The window-size
-        /// policy (par-mux.md Phase 4): the LATEST such report wins —
-        /// par-mux has no other client-size input, so latest-attached-client
-        /// and latest `-C` are the same rule here. `None` keeps the
-        /// replay-only behavior.
+        /// `-C WxH`: the client's renderer grid size — the connection's
+        /// sizing contribution; the window takes the minimum over the
+        /// clients displaying it. `None` keeps the replay-only behavior.
         size: Option<(u16, u16)>,
         /// `-p WxH`: the client's per-CELL pixel size (font metrics), the
         /// one renderer measurement every pane shares. Applied daemon-wide

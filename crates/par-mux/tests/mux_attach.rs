@@ -461,47 +461,55 @@ fn render_mode_click_repaint_coalesces_into_one_frame() {
     let _ = child.wait();
 }
 
-/// The latest-attached-client window-size arbitration (the two-client
-/// size war): only the most recently attached client's `-C` reports own
-/// the window. A second, differently-sized attach client takes
-/// ownership at its seed, the displaced client's later reports (its own
-/// host resized) move nothing — before the arbitration, ANY client's
-/// report re-fit the shared window, and the two clients' re-reports
-/// coupled into a %layout-change re-seed flip-flop (the manual-pass
-/// htop sort-panel oscillation) — and the owner detaching hands the
-/// window back to the remaining client at its recorded size.
+/// The smallest-attached-client window size with two differently-shaped
+/// attach clients (a wide-short and a narrow-tall terminal): the window
+/// takes the minimum in EACH dimension, so neither client's screen runs
+/// past its host, and each larger dimension pads with dim `.` cells. The
+/// size holds still with both attached — before reports that moved
+/// nothing were answered to the issuer alone, the two clients' re-reports
+/// coupled into a %layout-change re-seed flip-flop (the manual-pass htop
+/// sort-panel oscillation) — and the constraining client detaching grows
+/// the window back.
 #[cfg(unix)]
 #[test]
 fn two_attach_clients_do_not_war_over_the_window_size() {
     let (fixture, _daemon, mut client) = fixture_with_session("sizewar");
     let panes = client.send("list-panes").expect("list-panes");
     let pane = panes.first().cloned().unwrap_or_default();
-    fn pane_cols(client: &mut par_mux::mux::MuxClient, pane: &str) -> u16 {
+    fn pane_size(client: &mut par_mux::mux::MuxClient, pane: &str) -> (u16, u16) {
         let body = client
             .send(&format!("pane-info -t {pane}"))
             .expect("pane-info");
         let row = body.first().expect("pane-info row");
         let size = row.split_whitespace().nth(2).expect("size token");
-        size.split_once('x').expect("WxH").0.parse().expect("cols")
+        let (cols, rows) = size.split_once('x').expect("WxH");
+        (cols.parse().expect("cols"), rows.parse().expect("rows"))
     }
-    fn wait_cols(client: &mut par_mux::mux::MuxClient, pane: &str, want: u16, what: &str) {
-        let end = Instant::now() + Duration::from_secs(10);
+    // Poll until `done` holds, then until the size stops moving (the
+    // chrome report lands just after the grid report, so a transient
+    // pre-ring size is never the value to pin).
+    fn settle(
+        client: &mut par_mux::mux::MuxClient,
+        pane: &str,
+        what: &str,
+        done: impl Fn((u16, u16)) -> bool,
+    ) -> (u16, u16) {
+        let end = Instant::now() + Duration::from_secs(15);
+        let mut last = pane_size(client, pane);
+        let mut since = Instant::now();
         loop {
-            let cols = pane_cols(client, pane);
-            if cols == want {
-                return;
-            }
-            assert!(
-                Instant::now() < end,
-                "{what}: pane cols {cols}, wanted {want}"
-            );
             std::thread::sleep(Duration::from_millis(100));
+            let now = pane_size(client, pane);
+            if now != last {
+                last = now;
+                since = Instant::now();
+            } else if done(now) && since.elapsed() >= Duration::from_millis(600) {
+                return now;
+            }
+            assert!(Instant::now() < end, "{what}: pane size {last:?}");
         }
     }
 
-    // The helper spawns at 80x24; the host-side resize right after is
-    // the SIGWINCH shape the existing resize test drives, and the
-    // client reports the resized grid as its seed.
     let spawn_sized = |fixture: &MuxFixture, cols: u16, rows: u16| {
         let (host, stderr) = spawn_attach_with_config(
             fixture,
@@ -520,93 +528,71 @@ fn two_attach_clients_do_not_war_over_the_window_size() {
         (host, stderr)
     };
 
-    // The first client's seed sizes the window (90, not the 80 default,
-    // so the report's landing is observable).
-    let (mut big, _big_stderr) = spawn_sized(&fixture, 90, 24);
-    wait_cols(
-        &mut client,
-        &pane,
-        90,
-        "the first client's seed report lands",
+    // The narrow-tall client alone sizes the window (90 wide, not the 80
+    // default, so the report's landing is observable).
+    let (tall, _tall_stderr) = spawn_sized(&fixture, 90, 30);
+    let alone = settle(&mut client, &pane, "the first client's seed lands", |s| {
+        s.0 > 80 && s.1 > 24
+    });
+
+    // The wide-short client attaches: the window keeps the narrow
+    // client's width and takes the short client's height.
+    let (wide, _wide_stderr) = spawn_sized(&fixture, 130, 14);
+    let both = settle(&mut client, &pane, "the componentwise minimum", |s| {
+        s.1 < 14
+    });
+    assert_eq!(
+        both.0, alone.0,
+        "the wider client must not widen the window"
     );
 
-    // A second, smaller client attaches: IT owns the window now. The
-    // pane settles just under 40 (the renderer's border-chrome report
-    // reserves its ring after the grid report lands), so the steady
-    // value is the baseline the rest of the test pins against.
-    let (mut small, _small_stderr) = spawn_sized(&fixture, 40, 12);
-    wait_cols(&mut client, &pane, 40, "the latest attach owns the size");
-    std::thread::sleep(Duration::from_millis(800));
-    let stable = pane_cols(&mut client, &pane);
-    assert!(
-        (35..=40).contains(&stable),
-        "the small owner's grid minus its chrome ring: {stable}"
-    );
-
-    // Several status-refresh cycles with no input: the pane size must
-    // not move again — the war's re-seed churn showed up as exactly
-    // this window re-fitting between the two clients' reports.
+    // Several status-refresh cycles with no input: the size must not move
+    // again — the war's re-seed churn showed up as exactly this window
+    // re-fitting between the two clients' reports.
     let end = Instant::now() + Duration::from_millis(2500);
     while Instant::now() < end {
         std::thread::sleep(Duration::from_millis(250));
         assert_eq!(
-            pane_cols(&mut client, &pane),
-            stable,
-            "the owned size must hold"
+            pane_size(&mut client, &pane),
+            both,
+            "the size must hold with both clients attached"
         );
     }
 
-    // The displaced client's host shrinks: its report is recorded for a
-    // later takeover but applies nothing. Before the arbitration this
-    // crushed the window to the componentwise minimum (stable - 10).
-    big.master
-        .resize(PtySize {
-            rows: 10,
-            cols: 30,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("resize the first client's host");
-    let end = Instant::now() + Duration::from_millis(1500);
-    while Instant::now() < end {
-        std::thread::sleep(Duration::from_millis(250));
-        assert_eq!(
-            pane_cols(&mut client, &pane),
-            stable,
-            "a non-owner's report must not move the window"
+    // Each client pads the dimension it has to spare: the wide client to
+    // the right of the window, the tall one below it.
+    for (host, what) in [(&wide, "the wide client"), (&tall, "the tall client")] {
+        let out = wait_for_output(host, b"..........", Duration::from_secs(10));
+        assert!(
+            out.windows(10).any(|w| w == b".........."),
+            "{what} pads past the window with dots"
         );
     }
 
-    // The owner detaches: the remaining client takes over at its
-    // recorded report (the 30-wide resize above), not at whatever the
-    // owner left — the same chrome ring off both.
-    small.killer.kill().ok();
-    small.child.wait().ok();
-    wait_cols(
-        &mut client,
-        &pane,
-        stable - 10,
-        "the takeover restores the remaining client's size",
-    );
-
-    // The takeover owner's reports apply again.
-    big.master
+    // The constraining client shrinks further: its report applies.
+    wide.master
         .resize(PtySize {
-            rows: 15,
-            cols: 60,
+            rows: 11,
+            cols: 130,
             pixel_width: 0,
             pixel_height: 0,
         })
-        .expect("resize the surviving client's host");
-    wait_cols(
-        &mut client,
-        &pane,
-        stable + 20,
-        "the surviving owner's report applies",
-    );
+        .expect("resize the wide client's host");
+    let shorter = settle(&mut client, &pane, "the smaller report applies", |s| {
+        s.1 == both.1 - 3
+    });
+    assert_eq!(shorter.0, alone.0);
 
-    big.killer.kill().ok();
-    big.child.wait().ok();
+    // The constraining client detaches: the window grows back to the
+    // remaining client's report.
+    let mut wide = wide;
+    wide.killer.kill().ok();
+    wide.child.wait().ok();
+    settle(&mut client, &pane, "the window grows back", |s| s == alone);
+
+    let mut tall = tall;
+    tall.killer.kill().ok();
+    tall.child.wait().ok();
 }
 
 fn fixture_with_session(tag: &str) -> (MuxFixture, common::DaemonGuard, par_mux::mux::MuxClient) {

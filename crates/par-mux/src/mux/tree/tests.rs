@@ -2295,66 +2295,60 @@ fn extent(tree: &MuxTree, window: WindowId) -> (u16, u16) {
 }
 
 #[test]
-fn window_size_follows_the_latest_attached_viewer() {
+fn window_size_is_the_componentwise_minimum_of_viewers_reports() {
     let mut tree = tree();
     let session = tree.new_session("sync", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
 
     // The first viewer's report sizes the window outright.
-    let (resized, applied) = tree.set_client_view(1, window, 100, 30, Default::default());
-    assert_eq!(resized, vec![window]);
-    assert!(applied, "the only viewer is the owner");
+    assert_eq!(
+        tree.set_client_view(1, window, 100, 30, Default::default()),
+        vec![window]
+    );
     assert_eq!(extent(&tree, window), (100, 30));
 
-    // A later viewer takes ownership: its report IS the window's size,
-    // larger or smaller than the displaced owner's.
-    let (resized, applied) = tree.set_client_view(2, window, 60, 20, Default::default());
-    assert_eq!(resized, vec![window]);
-    assert!(applied);
+    // A smaller viewer pulls the window down to the componentwise minimum.
+    assert_eq!(
+        tree.set_client_view(2, window, 60, 20, Default::default()),
+        vec![window]
+    );
     assert_eq!(extent(&tree, window), (60, 20));
 
-    // The displaced viewer's re-report is recorded but applies nothing —
-    // the rule that keeps two differently-sized clients from coupling
-    // into a resize flip-flop.
-    let (resized, applied) = tree.set_client_view(1, window, 100, 30, Default::default());
-    assert!(resized.is_empty());
-    assert!(!applied, "a non-owner's report moves nothing");
+    // A viewer larger than the current minimum contributes nothing.
+    assert!(tree
+        .set_client_view(3, window, 90, 28, Default::default())
+        .is_empty());
     assert_eq!(extent(&tree, window), (60, 20));
 
-    // Repeated identical owner reports are idempotent — the property
-    // that keeps the re-fit from feeding back into a resize loop.
+    // Repeated identical reports are idempotent — the property that keeps
+    // the re-fit from feeding back into a resize loop.
     for _ in 0..3 {
-        let (resized, applied) = tree.set_client_view(2, window, 60, 20, Default::default());
-        assert!(resized.is_empty());
-        assert!(applied);
+        assert!(tree
+            .set_client_view(1, window, 100, 30, Default::default())
+            .is_empty());
     }
     assert_eq!(extent(&tree, window), (60, 20));
 }
 
 #[test]
-fn owner_disconnect_hands_the_window_to_the_latest_remaining_viewer() {
+fn disconnect_removes_a_contribution_and_the_window_grows() {
     let mut tree = tree();
     let session = tree.new_session("sync", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
     tree.set_client_view(1, window, 100, 30, Default::default());
     tree.set_client_view(2, window, 60, 20, Default::default());
-    tree.set_client_view(3, window, 90, 28, Default::default());
-    assert_eq!(extent(&tree, window), (90, 28));
-
-    // A non-owner leaving changes nothing: its report never applied.
-    assert!(tree.clear_client_view(1).is_empty());
-    assert_eq!(extent(&tree, window), (90, 28));
-
-    // The owner leaves: the latest remaining viewer takes over, and the
-    // window re-fits to its recorded report.
-    assert_eq!(tree.clear_client_view(3), vec![window]);
     assert_eq!(extent(&tree, window), (60, 20));
+
+    // The constraining viewer leaves: the window re-fits to the remaining
+    // viewers' minimum.
+    assert_eq!(tree.clear_client_view(2), vec![window]);
+    assert_eq!(extent(&tree, window), (100, 30));
     // Clearing an unknown connection is a no-op.
-    assert!(tree.clear_client_view(3).is_empty());
+    assert!(tree.clear_client_view(2).is_empty());
     // The last viewer leaving leaves the extent where it is (it re-fits
     // when next displayed).
-    assert!(tree.clear_client_view(2).is_empty());
-    assert_eq!(extent(&tree, window), (60, 20));
+    assert!(tree.clear_client_view(1).is_empty());
+    assert_eq!(extent(&tree, window), (100, 30));
 }
 
 #[test]
@@ -2368,10 +2362,9 @@ fn switching_away_releases_the_old_window_from_the_switched_client() {
     tree.set_client_view(2, w1, 60, 20, Default::default());
     assert_eq!(extent(&tree, w1), (60, 20));
 
-    // Client 2's renderer lands on the other window: its ownership moves,
-    // and the old window re-fits to its remaining (now latest) viewer.
-    let (resized, applied) = tree.set_client_view(2, w2, 60, 20, Default::default());
-    assert!(applied, "the switcher owns the window it now displays");
+    // Client 2's renderer lands on the other window: its contribution
+    // moves, and the old window grows back to the remaining minimum.
+    let resized = tree.set_client_view(2, w2, 60, 20, Default::default());
     assert!(
         resized.contains(&w2),
         "the new window takes the report: {resized:?}"
@@ -2394,7 +2387,7 @@ fn a_selection_follow_moves_every_viewer_of_the_session() {
     tree.set_client_view(2, w1, 60, 20, Default::default());
 
     // The shared selection lands the session on w2: both viewers follow,
-    // and the target window re-fits to the moved owner's extent. The left window
+    // and the target window re-fits to the moved minimum. The left window
     // has no viewer left, so it keeps its extent (it re-fits when next
     // displayed) — neither client constrains it anymore.
     let resized = tree.follow_session_window(session, w2);
@@ -2716,7 +2709,7 @@ fn declared_ring_sizes_stacked_panes_to_the_interior() {
     assert_eq!(size_of(&tree, bottom), (80, 12));
 
     assert_eq!(
-        tree.set_client_view(1, window, 80, 24, ring()).0,
+        tree.set_client_view(1, window, 80, 24, ring()),
         vec![window]
     );
     assert_eq!(size_of(&tree, top), (78, 10), "rect 80x12 less the ring");
@@ -2793,38 +2786,34 @@ fn a_chrome_only_report_refits_and_undeclaring_restores_full_rects() {
     tree.set_client_view(1, window, 80, 24, PaneChrome::default());
     assert_eq!(size_of(&tree), (80, 24));
     assert_eq!(
-        tree.set_client_view(1, window, 80, 24, ring()).0,
+        tree.set_client_view(1, window, 80, 24, ring()),
         vec![window]
     );
     assert_eq!(size_of(&tree), (78, 22));
     assert!(
-        tree.set_client_view(1, window, 80, 24, ring()).0.is_empty(),
+        tree.set_client_view(1, window, 80, 24, ring()).is_empty(),
         "an identical re-declaration is idempotent"
     );
     assert_eq!(
-        tree.set_client_view(1, window, 80, 24, PaneChrome::default())
-            .0,
+        tree.set_client_view(1, window, 80, 24, PaneChrome::default()),
         vec![window]
     );
     assert_eq!(size_of(&tree), (80, 24));
 }
 
-/// Chrome follows the owner like the extent: the latest viewer's
-/// declaration reserves the window, and an earlier viewer's conflicting
-/// declaration applies nothing until it takes over.
+/// Several viewers: the window reserves the union, so the PTY is never
+/// larger than any declaring client's painted interior.
 #[test]
-fn chrome_follows_the_owner() {
+fn viewers_chrome_merges_to_the_union() {
     let mut tree = tree();
-    let session = tree.new_session("chrome", 80, 24).unwrap();
+    let session = tree.new_session("merge", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
     let pane = tree.window(window).unwrap().panes()[0];
     tree.set_client_view(1, window, 80, 24, PaneChrome::default());
-    // A later ring-declaring viewer owns the window: the ring reserves.
     tree.set_client_view(2, window, 80, 24, ring());
     assert_eq!(tree.window(window).unwrap().chrome, ring());
     assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (78, 22));
-    // The ring-declaring owner leaves: back to the remaining viewer's
-    // full rects.
+    // The ring-declaring viewer leaves: back to full rects.
     tree.clear_client_view(2);
     assert_eq!(tree.pane(pane).unwrap().terminal().read().size(), (80, 24));
 }
