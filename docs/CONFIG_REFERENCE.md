@@ -850,6 +850,8 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `GROK_HOME` | `par-mux --install-agent-hooks` (grok) | `~/.grok` | Where the grok session hook is installed instead of the default config directory |
 | `PI_CODING_AGENT_DIR` | `par-mux --install-agent-extensions` (pi) | `~/.pi` | Where the pi agent extension is installed instead of the default agent directory |
 | `PI_CONFIG_DIR` | `par-mux --install-agent-extensions` (pi) | `~/.config/pi` | Where the pi agent extension reads its config instead of the default config directory |
+| `KITTY_WINDOW_ID` | `par-mux attach` agent-state notifications | unset | Set (by kitty) selects kitty's OSC 99 notification escape instead of OSC 9 |
+| `TERM` | `par-mux attach` agent-state notifications | — | `xterm-kitty` selects kitty's OSC 99 notification escape instead of OSC 9 |
 | `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
 | `TMPDIR` | System temp directory (Unix) | `/tmp` | Base for the per-UID socket fallback and debug logs |
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |

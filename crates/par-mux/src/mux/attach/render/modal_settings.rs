@@ -55,7 +55,7 @@ impl SettingsSection {
             ),
             Self::Integrations => (
                 "agent integrations",
-                "session hooks that report agent state (par-mux --install-*)",
+                "session hooks that report agent state (par-mux --install-agent-hooks)",
             ),
         }
     }
