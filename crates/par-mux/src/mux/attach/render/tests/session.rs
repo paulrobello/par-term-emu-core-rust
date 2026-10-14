@@ -2494,6 +2494,7 @@ fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) ->
         agent: agent.to_string(),
         state: state.to_string(),
         workspace: workspace.map(str::to_string),
+        project: None,
     }
 }
 
@@ -2526,20 +2527,71 @@ fn sidebar_agents_section_groups_by_workspace() {
         ("+0".to_string(), "main".to_string()),
         ("+1".to_string(), "zeta".to_string()),
     ];
-    let sections = WindowSession::sidebar_sections(&roster, &agents, &names, Some(2));
+    let sections = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        Some(2),
+        &crate::mux::config::default_agent_rows(),
+    );
     session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
     assert_eq!(sections.len(), 2, "{sections:?}");
     let rows = &sections[1].rows;
+    assert_eq!(rows[0], arow(2, Some("main"), "claude", "working", true));
+    assert_eq!(rows[1], arow(3, Some("zeta"), "kimi", "blocked", false));
+    assert_eq!(rows[2], arow(5, None, "pi", "idle", false));
+}
+
+/// The agent entry follows `agent-rows`: the default puts the project
+/// beside the workspace (once a probe reported it), a custom table
+/// renders its own tokens and lines, and the entry's workspace row
+/// carries its agents' most urgent state.
+#[test]
+fn sidebar_agent_entries_follow_agent_rows() {
+    use crate::mux::attach::panels::{AgentStatus, STATE_ICON};
+    let roster = vec![("+0".to_string(), "main".to_string(), true)];
+    let mut agents = vec![
+        roster_entry(2, "claude", "working", Some("+0")),
+        roster_entry(3, "kimi", "blocked", Some("+0")),
+    ];
+    agents[0].project = Some("par-term".to_string());
+    let names = vec![("+0".to_string(), "main".to_string())];
+    let default = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        None,
+        &crate::mux::config::default_agent_rows(),
+    )
+    .expect("sections");
     assert_eq!(
-        rows[0],
-        srow(SidebarRowId::Pane(2), "main \u{b7} claude (working)", true)
+        default[1].rows[0].label,
+        format!("{STATE_ICON} main \u{b7} par-term")
     );
+    assert_eq!(default[1].rows[0].continuation, vec!["claude".to_string()]);
     assert_eq!(
-        rows[1],
-        srow(SidebarRowId::Pane(3), "zeta \u{b7} kimi (blocked)", false)
+        default[0].rows[0].status,
+        AgentStatus::Blocked,
+        "the workspace carries its most urgent agent"
     );
-    assert_eq!(rows[2], srow(SidebarRowId::Pane(5), "pi (idle)", false));
+    let custom = vec![
+        vec!["agent".to_string(), "state".to_string()],
+        vec!["pane".to_string(), "project".to_string()],
+    ];
+    let sections =
+        WindowSession::sidebar_sections(&roster, &agents, &names, None, &custom).expect("sections");
+    assert_eq!(sections[1].rows[0].label, "claude \u{b7} working");
+    assert_eq!(
+        sections[1].rows[0].continuation,
+        vec!["%2 \u{b7} par-term".to_string()]
+    );
+    assert_eq!(sections[1].rows[1].label, "kimi \u{b7} blocked");
+    assert_eq!(
+        sections[1].rows[1].continuation,
+        vec!["%3".to_string()],
+        "an unprobed project drops out of its line"
+    );
 }
 
 /// Two workspaces sharing a display name stay two groups: the key is the
@@ -2557,7 +2609,13 @@ fn sidebar_agents_group_by_workspace_id_not_name() {
         ("+0".to_string(), "dev".to_string()),
         ("+1".to_string(), "dev".to_string()),
     ];
-    let sections = WindowSession::sidebar_sections(&roster, &agents, &names, None);
+    let sections = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        None,
+        &crate::mux::config::default_agent_rows(),
+    );
     session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
     let ids: Vec<SidebarRowId> = sections[1].rows.iter().map(|row| row.id.clone()).collect();
@@ -2613,9 +2671,9 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
     assert_eq!(
         sections[1].rows,
         vec![
-            srow(SidebarRowId::Pane(1), "main \u{b7} claude (working)", true),
-            srow(SidebarRowId::Pane(3), "side \u{b7} kimi (blocked)", false),
-            srow(SidebarRowId::Pane(2), "claude (blocked)", false),
+            arow(1, Some("main"), "claude", "working", true),
+            arow(3, Some("side"), "kimi", "blocked", false),
+            arow(2, None, "claude", "blocked", false),
         ]
     );
     assert!(received_within_300ms(&rx).is_empty(), "no round trip");
@@ -2671,8 +2729,8 @@ fn snapshot_refresh_is_one_round_trip() {
             crate::mux::attach::panels::SidebarSection {
                 title: "agents",
                 rows: vec![
-                    srow(SidebarRowId::Pane(1), "claude (working)", true),
-                    srow(SidebarRowId::Pane(3), "kimi (blocked)", false),
+                    arow(1, None, "claude", "working", true),
+                    arow(3, None, "kimi", "blocked", false),
                 ],
             },
         ])
@@ -2753,18 +2811,14 @@ fn agent_event_patches_without_a_query() {
     });
     assert!(!session.status_dirty);
     assert!(
-        rows(&session).contains(&srow(
-            SidebarRowId::Pane(3),
-            "side \u{b7} kimi (working)",
-            false
-        )),
+        rows(&session).contains(&arow(3, Some("side"), "kimi", "working", false)),
         "the ws token groups the inserted row under its workspace: {:?}",
         rows(&session)
     );
     assert!(
         !rows(&session)
             .iter()
-            .any(|row| row.label == "kimi (blocked)"),
+            .any(|row| row.status == crate::mux::attach::panels::AgentStatus::Blocked),
         "{:?}",
         rows(&session)
     );

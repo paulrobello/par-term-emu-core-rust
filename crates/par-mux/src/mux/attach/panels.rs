@@ -592,14 +592,70 @@ pub(crate) enum SidebarRowId {
     Collapse,
 }
 
-/// One side-panel row: its click target, label, active flag, and the
-/// status glyph the collapsed rail paints for it.
+/// One side-panel entry: its click target, first-line label, any
+/// continuation lines (a multi-line agent entry, config `agent-rows`),
+/// active flag, and the status glyph the collapsed rail paints for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarRow {
     pub id: SidebarRowId,
     pub label: String,
     pub active: bool,
     pub status: AgentStatus,
+    pub continuation: Vec<String>,
+}
+
+/// One agent's facts the entry tokens render from.
+pub(crate) struct AgentFacts<'a> {
+    pub pane: u32,
+    pub agent: &'a str,
+    pub state: &'a str,
+    pub workspace: Option<&'a str>,
+    pub project: Option<&'a str>,
+}
+
+/// The status-glyph placeholder an `agent-rows` line leads with: the
+/// panel paints the entry's status glyph in its color there.
+pub(crate) const STATE_ICON: char = '\u{25CF}';
+
+/// Render an agent entry's lines from the `agent-rows` token lines
+/// (herdr's `[ui.sidebar.agents] rows`): each line joins its tokens'
+/// texts with ` · `, a `state_icon` with one space; a token with nothing
+/// to show (an unprobed project, an unknown workspace) drops out, and a
+/// line left empty drops entirely. Never returns no lines — an entry
+/// whose every line is empty falls back to the agent name. Pure — the
+/// unit-test surface.
+pub(crate) fn agent_entry_lines(rows: &[Vec<String>], facts: &AgentFacts<'_>) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for tokens in rows {
+        let mut line = String::new();
+        let mut after_icon = false;
+        for token in tokens {
+            let text = match token.as_str() {
+                "state_icon" => Some(STATE_ICON.to_string()),
+                "state" => Some(facts.state.to_string()),
+                "workspace" => facts.workspace.map(str::to_string),
+                "project" => facts.project.map(str::to_string),
+                "agent" => Some(facts.agent.to_string()),
+                "pane" => Some(format!("%{}", facts.pane)),
+                _ => None,
+            };
+            let Some(text) = text.filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            if !line.is_empty() {
+                line.push_str(if after_icon { " " } else { " \u{b7} " });
+            }
+            after_icon = token == "state_icon";
+            line.push_str(&text);
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        lines.push(facts.agent.to_string());
+    }
+    lines
 }
 
 /// An agent's state as the side panel shows it (herdr's status dot): a
@@ -728,19 +784,35 @@ pub(crate) fn compose_sidebar(
         });
     };
     let clip = |text: String| -> String { text.chars().take(text_width).collect() };
-    // The rows of one area, `rows` written from `top` while below `end`.
+    // The entries of one area written from `top` while below `end`:
+    // each entry's first line carries the `▸` marker, its continuation
+    // lines indent under the label, and every line keeps the entry's
+    // click target and active block. An entry that does not fit whole
+    // still shows the lines that do.
     let entries = |lines: &mut Vec<SidebarLine>, rows: &[SidebarRow], top: u16, end: u16| {
-        for (y, row) in (top..end).zip(rows) {
+        let mut y = top;
+        for row in rows {
             let marker = if row.active { "▸" } else { " " };
-            lines.push(SidebarLine {
-                y,
-                x: 0,
-                x_end: content_end,
-                text: clip(format!(" {marker} {}", super::chrome_safe(&row.label))),
-                id: Some(row.id.clone()),
-                active: row.active,
-                kind: SidebarLineKind::Row,
-            });
+            let first = format!(" {marker} {}", super::chrome_safe(&row.label));
+            let rest = row
+                .continuation
+                .iter()
+                .map(|line| format!("   {}", super::chrome_safe(line)));
+            for text in std::iter::once(first).chain(rest) {
+                if y >= end {
+                    return;
+                }
+                lines.push(SidebarLine {
+                    y,
+                    x: 0,
+                    x_end: content_end,
+                    text: clip(text),
+                    id: Some(row.id.clone()),
+                    active: row.active,
+                    kind: SidebarLineKind::Row,
+                });
+                y += 1;
+            }
         }
     };
     let workspaces = sections.iter().find(|s| s.title == "workspaces");

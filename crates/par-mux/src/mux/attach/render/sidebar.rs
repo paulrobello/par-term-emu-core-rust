@@ -8,7 +8,8 @@ use crate::mux::attach::targets::parse_workspace_line;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
 
 use crate::mux::attach::panels::{
-    AgentStatus, SidebarLine, SidebarLineKind, SidebarRow, SidebarRowId, SidebarSection,
+    agent_entry_lines, AgentFacts, AgentStatus, SidebarLine, SidebarLineKind, SidebarRow,
+    SidebarRowId, SidebarSection, STATE_ICON,
 };
 
 impl PaneRenderer {
@@ -180,21 +181,28 @@ impl PaneRenderer {
             } else {
                 dim
             };
-            // The rail's second column is the entry's status glyph.
+            // The status glyph paints in its state's color: the rail's
+            // second column, and an expanded agent line's state icon.
             let glyph = line
                 .id
                 .as_ref()
-                .filter(|id| rail && !line.active && !matches!(id, SidebarRowId::Collapse))
+                .filter(|id| !line.active && !matches!(id, SidebarRowId::Collapse))
                 .map(|id| status_style(self.sidebar_row_status(id)));
+            let agent_line = matches!(line.id, Some(SidebarRowId::Pane(_)));
             for (j, ch) in line.text.chars().enumerate() {
                 let x = line.x + j as u16;
                 if x >= content_w {
                     break;
                 }
+                let is_glyph = if rail {
+                    j == 1
+                } else {
+                    agent_line && ch == STATE_ICON
+                };
                 let cell = &mut self.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(match glyph {
-                    Some(glyph) if j == 1 => glyph,
+                    Some(glyph) if is_glyph => glyph,
                     _ => style,
                 });
             }
@@ -457,6 +465,7 @@ impl WindowSession {
             self.status.agents(),
             self.status.workspaces(),
             focused,
+            &self.agent_rows,
         );
         self.renderer.set_sidebar_sections(sections);
     }
@@ -488,23 +497,24 @@ impl WindowSession {
             self.status.agents(),
             self.status.workspaces(),
             focused,
+            &self.agent_rows,
         );
         self.renderer.set_sidebar_sections(sections);
     }
 
     /// The panel's sections: the workspace rows (`roster` is `(id, name,
     /// active)`), then the agent roster — herdr's grouped panel. Each
-    /// agent row labels with its workspace name (`{ws} · {agent}
-    /// ({state})`; the bare `{agent} ({state})` when the daemon pre-`ws=`
-    /// or the workspace is unknown) and activates when its pane is the
-    /// view's focus. Grouped by workspace id in id order (unknown
-    /// workspaces last), panes ascending within a group. `None` when
-    /// both are empty.
+    /// agent entry renders its `agent_rows` lines ([`agent_entry_lines`]:
+    /// by default the state icon, workspace name, and project, then the
+    /// agent) and activates when its pane is the view's focus. Grouped by
+    /// workspace id in id order (unknown workspaces last), panes
+    /// ascending within a group. `None` when both are empty.
     pub(super) fn sidebar_sections(
         roster: &[(String, String, bool)],
         agents: &[status::RosterEntry],
         ws_names: &[(String, String)],
         focused: Option<u32>,
+        agent_rows: &[Vec<String>],
     ) -> Option<Vec<SidebarSection>> {
         let mut sections: Vec<SidebarSection> = Vec::new();
         if !roster.is_empty() {
@@ -524,6 +534,7 @@ impl WindowSession {
                     label: name.clone(),
                     active: *active,
                     status: workspace_status(id),
+                    continuation: Vec::new(),
                 })
                 .collect();
             sections.push(SidebarSection {
@@ -549,16 +560,23 @@ impl WindowSession {
                         .iter()
                         .find(|(id, _)| Some(id.as_str()) == ws)
                         .map(|(_, name)| name.as_str());
-                    let (agent, state) = (&entry.agent, &entry.state);
-                    let label = match ws_name {
-                        Some(name) => format!("{name} · {agent} ({state})"),
-                        None => format!("{agent} ({state})"),
-                    };
+                    let mut lines = agent_entry_lines(
+                        agent_rows,
+                        &AgentFacts {
+                            pane: entry.pane,
+                            agent: &entry.agent,
+                            state: &entry.state,
+                            workspace: ws_name,
+                            project: entry.project.as_deref(),
+                        },
+                    );
+                    let label = lines.remove(0);
                     let row = SidebarRow {
                         id: SidebarRowId::Pane(entry.pane),
                         label,
                         active: focused == Some(entry.pane),
-                        status: AgentStatus::from_state(state),
+                        status: AgentStatus::from_state(&entry.state),
+                        continuation: lines,
                     };
                     ((group(ws), entry.pane), row)
                 })

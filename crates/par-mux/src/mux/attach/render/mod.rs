@@ -673,6 +673,8 @@ struct WindowSession {
     /// Cells per resize step (config `resize-step`): each arrow press in
     /// resize mode and each cell of a divider drag.
     resize_step: u32,
+    /// The side panel's agent entry lines (config `agent-rows`).
+    agent_rows: Vec<Vec<String>>,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
     /// The session's configured display options (background probe,
@@ -935,6 +937,7 @@ impl WindowSession {
             reload_key: chords.reload,
             management: chords.management,
             resize_step: chords.resize_step,
+            agent_rows: chords.agent_rows.clone(),
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),

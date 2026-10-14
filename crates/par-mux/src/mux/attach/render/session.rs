@@ -269,6 +269,10 @@ impl WindowSession {
         self.reload_key = chords.reload;
         self.management = chords.management;
         self.resize_step = chords.resize_step;
+        if self.agent_rows != chords.agent_rows {
+            self.agent_rows = chords.agent_rows.clone();
+            self.rebuild_agent_section();
+        }
         // The border style first, the explicit `pane-borders` flag after
         // it — the style implies a paint mode (herdr = per-pane boxes),
         // and the explicit config key still overrides for any glyph set.

@@ -52,6 +52,7 @@ pub(crate) struct HostTelemetry {
     pub(crate) disk_free_percent: Option<Stamped<u64>>,
     pub(crate) git_branch: Option<Stamped<String>>,
     pub(crate) git_dirty: Option<Stamped<bool>>,
+    pub(crate) project: Option<Stamped<String>>,
 }
 
 impl HostTelemetry {
@@ -67,6 +68,7 @@ impl HostTelemetry {
             disk_free_percent: stamp(&probe.disk_free_percent, sampled_at_unix_ms),
             git_branch: stamp(&probe.git_branch, sampled_at_unix_ms),
             git_dirty: stamp(&probe.git_dirty, sampled_at_unix_ms),
+            project: stamp(&probe.project, sampled_at_unix_ms),
         }
     }
 
@@ -109,6 +111,13 @@ impl HostTelemetry {
                 "git_dirty",
                 serde_json::Value::Bool(dirty.value),
                 dirty.sampled_at_unix_ms,
+            );
+        }
+        if let Some(project) = &self.project {
+            field(
+                "project",
+                serde_json::Value::String(project.value.clone()),
+                project.sampled_at_unix_ms,
             );
         }
         if object.is_empty() {
@@ -169,6 +178,7 @@ struct HostProbe {
     disk_free_percent: Option<u64>,
     git_branch: Option<String>,
     git_dirty: Option<bool>,
+    project: Option<String>,
 }
 
 /// What bounds one pane's probe (SEC-133): when its git runs must end, the
@@ -205,11 +215,13 @@ fn probe_cwd(cwd: &Path, bounds: &ProbeBounds) -> HostProbe {
         disk_free_percent: None,
         git_branch: None,
         git_dirty: None,
+        project: None,
     };
     if bounds.shutdown.load(Ordering::Relaxed) {
         return probe;
     }
     probe.disk_free_percent = disk_free_percent(cwd);
+    probe.project = project_name(cwd);
     probe.git_branch = git_branch(cwd, bounds);
     probe.git_dirty = git_dirty(cwd, bounds);
     probe
@@ -264,6 +276,53 @@ fn git_branch(cwd: &Path, bounds: &ProbeBounds) -> Option<String> {
         return None;
     }
     Some(branch)
+}
+
+/// The cap on a project name the probe serves, in bytes (a directory
+/// name; the side panel clips it to the strip anyway).
+const MAX_PROJECT_LEN: usize = 128;
+
+/// The pane's project: the basename of the git work tree containing
+/// `cwd` — a linked worktree (`.git` a file naming
+/// `<repo>/.git/worktrees/<name>`) resolves to its main repo's — else
+/// `cwd`'s own basename. Reads directory entries and at most one small
+/// file; runs no git, so nothing the repo configures can execute
+/// (SEC-115). A name with control characters or over the cap serves
+/// nothing.
+fn project_name(cwd: &Path) -> Option<String> {
+    let root = cwd
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(|dir| linked_worktree_main(dir).unwrap_or_else(|| dir.to_path_buf()))
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let name = root.file_name()?.to_str()?;
+    (!name.is_empty() && name.len() <= MAX_PROJECT_LEN && !name.chars().any(char::is_control))
+        .then(|| name.to_string())
+}
+
+/// A linked worktree's main repo directory: `<dir>/.git` is a FILE
+/// reading `gitdir: <repo>/.git/worktrees/<name>`, and the repo is the
+/// parent of that `.git`. `None` for a plain checkout or any other shape.
+fn linked_worktree_main(dir: &Path) -> Option<PathBuf> {
+    use std::io::Read as _;
+    let mut text = String::new();
+    std::fs::File::open(dir.join(".git"))
+        .ok()?
+        .take(4096)
+        .read_to_string(&mut text)
+        .ok()?;
+    let gitdir = PathBuf::from(text.strip_prefix("gitdir:")?.trim());
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        dir.join(gitdir)
+    };
+    let worktrees = gitdir.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    let dot_git = worktrees.parent()?;
+    (dot_git.file_name()? == ".git").then(|| dot_git.parent().map(Path::to_path_buf))?
 }
 
 /// Whether the worktree has changes: `diff-index --cached --quiet HEAD
@@ -1074,6 +1133,7 @@ mod tests {
             disk_free_percent: Some(37),
             git_branch: Some("main".to_string()),
             git_dirty: Some(true),
+            project: Some("par-term".to_string()),
         };
         let parsed: serde_json::Value = serde_json::from_str(
             &HostTelemetry::from_probe(&probe, 1_000)
@@ -1087,6 +1147,38 @@ mod tests {
         assert_eq!(parsed["disk_free_percent"]["sampled_at_unix_ms"], 1_000);
         assert_eq!(parsed["git_branch"]["value"], "main");
         assert_eq!(parsed["git_dirty"]["value"], true);
+        assert_eq!(parsed["project"]["value"], "par-term");
+    }
+
+    /// The project is the work tree's basename from any depth inside it;
+    /// a linked worktree names its main repo; outside a repo the cwd's
+    /// own name serves.
+    #[test]
+    fn project_name_is_the_repo_root_basename() {
+        let base = tempfile::tempdir().unwrap();
+        let repo = base.path().join("par-term");
+        std::fs::create_dir_all(repo.join(".git/worktrees/feat")).unwrap();
+        std::fs::create_dir_all(repo.join("src/deep")).unwrap();
+        assert_eq!(project_name(&repo), Some("par-term".to_string()));
+        assert_eq!(
+            project_name(&repo.join("src/deep")),
+            Some("par-term".to_string())
+        );
+        let linked = base.path().join("wt").join("feat");
+        std::fs::create_dir_all(linked.join("sub")).unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git/worktrees/feat").display()),
+        )
+        .unwrap();
+        assert_eq!(
+            project_name(&linked.join("sub")),
+            Some("par-term".to_string()),
+            "a linked worktree names its main repo"
+        );
+        let plain = base.path().join("scratch");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(project_name(&plain), Some("scratch".to_string()));
     }
 
     /// ARC-113: the typed sample renders the exact bytes the stored-JSON
@@ -1099,6 +1191,7 @@ mod tests {
             disk_free_percent: Some(37),
             git_branch: Some("main".to_string()),
             git_dirty: Some(true),
+            project: None,
         };
         assert_eq!(
             HostTelemetry::from_probe(&full, 1_000)
@@ -1110,6 +1203,7 @@ mod tests {
             disk_free_percent: None,
             git_branch: Some("feat x".to_string()),
             git_dirty: None,
+            project: None,
         };
         assert_eq!(
             HostTelemetry::from_probe(&partial, 1_000)
@@ -1132,6 +1226,7 @@ mod tests {
                 sampled_at_unix_ms: now - 2 * 3_600_000,
             }),
             git_dirty: None,
+            project: None,
         };
         use base64::Engine as _;
         let encoded = fresh_host_telemetry_b64(Some(&telemetry)).expect("fresh fields remain");

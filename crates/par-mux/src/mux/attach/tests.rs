@@ -1602,6 +1602,7 @@ fn srow(id: super::SidebarRowId, label: &str, active: bool) -> super::SidebarRow
         label: label.to_string(),
         active,
         status: super::AgentStatus::None,
+        continuation: Vec::new(),
     }
 }
 
@@ -1752,6 +1753,88 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
         .any(|l| l.y == 6 && l.id == Some(SidebarRowId::Pane(1))));
     assert!(!short.iter().any(|l| l.id == Some(SidebarRowId::Pane(3))));
     assert_eq!(line_with(&short, &SidebarRowId::Collapse).y, 7);
+}
+
+/// An agent entry renders its `agent-rows` token lines: tokens join with
+/// ` · ` (one space after the state icon), a token with nothing to show
+/// drops out, an empty line drops, and an all-empty entry still names
+/// the agent.
+#[test]
+fn agent_entry_lines_render_the_token_rows() {
+    let facts = super::AgentFacts {
+        pane: 4,
+        agent: "claude",
+        state: "working",
+        workspace: Some("main"),
+        project: Some("par-term"),
+    };
+    let rows = crate::mux::config::default_agent_rows();
+    assert_eq!(
+        super::agent_entry_lines(&rows, &facts),
+        vec![
+            "\u{25CF} main \u{b7} par-term".to_string(),
+            "claude".to_string()
+        ]
+    );
+    let bare = super::AgentFacts {
+        workspace: None,
+        project: None,
+        ..facts
+    };
+    assert_eq!(
+        super::agent_entry_lines(&rows, &bare),
+        vec!["\u{25CF}".to_string(), "claude".to_string()]
+    );
+    let custom = vec![
+        vec!["project".to_string()],
+        vec!["pane".to_string(), "state".to_string(), "agent".to_string()],
+    ];
+    assert_eq!(
+        super::agent_entry_lines(&custom, &bare),
+        vec!["%4 \u{b7} working \u{b7} claude".to_string()],
+        "the empty project line drops"
+    );
+    assert_eq!(
+        super::agent_entry_lines(&[vec!["project".to_string()]], &bare),
+        vec!["claude".to_string()],
+        "an entry with nothing to show still names the agent"
+    );
+}
+
+/// A multi-line entry composes one panel line per entry line, the `▸`
+/// marker on the first and the rest indented under the label; every line
+/// keeps the entry's click target and active block, and an entry the
+/// area cannot hold whole shows the lines that fit.
+#[test]
+fn compose_sidebar_lays_out_multi_line_agent_entries() {
+    use super::SidebarRowId;
+    let mut sections = two_area_sections();
+    for row in &mut sections[1].rows {
+        row.continuation = vec!["agent".to_string()];
+    }
+    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let at = |y: u16| lines.iter().find(|l| l.y == y).cloned().expect("line");
+    assert_eq!(at(12).text, " ▸ claude (working)");
+    assert_eq!(at(13).text, "   agent");
+    assert_eq!(
+        at(13).id,
+        Some(SidebarRowId::Pane(1)),
+        "the continuation clicks too"
+    );
+    assert!(at(13).active, "the active block covers the whole entry");
+    assert_eq!(at(14).text, "   kimi (blocked)");
+    assert_eq!(at(15).text, "   agent");
+    assert!(!at(15).active);
+    // The 8-row panel's agents area holds one line before the chevron:
+    // the first entry's first line only.
+    let short = super::compose_sidebar(&sections, 20, 8, 0.5);
+    assert_eq!(
+        short
+            .iter()
+            .filter(|l| matches!(l.id, Some(SidebarRowId::Pane(_))))
+            .count(),
+        1
+    );
 }
 
 /// A strip too narrow for a chip drops it; one too narrow for either

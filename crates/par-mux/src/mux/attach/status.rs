@@ -121,11 +121,13 @@ impl StatusFacts {
     /// The single agent-row projection, shared by both wire shapes.
     fn agent_entry(row: AgentRow) -> Option<RosterEntry> {
         let workspace = row.workspace().map(str::to_string);
+        let project = row.project();
         Some(RosterEntry {
             pane: pane_number(&row.pane)?,
             agent: row.agent,
             state: row.state,
             workspace,
+            project,
         })
     }
 
@@ -214,6 +216,10 @@ pub(crate) struct RosterEntry {
     /// The owning workspace id (`+N`); `None` when unknown (a pre-`ws`
     /// daemon, or a row a patch inserted before a refresh placed it).
     pub workspace: Option<String>,
+    /// The pane's project (the host probe's git work-tree basename);
+    /// `None` until a probe sweep reached the pane. A state push carries
+    /// no project, so a patch keeps the known one.
+    pub project: Option<String>,
 }
 
 /// A window row's display name: an unnamed window shows its id, and a
@@ -616,6 +622,7 @@ impl StatusState {
                             agent: agent.to_string(),
                             state: state.to_string(),
                             workspace: (!ws.is_empty()).then(|| ws.to_string()),
+                            project: None,
                         },
                     );
                     ws.is_empty()
@@ -932,6 +939,7 @@ mod tests {
             agent: agent.to_string(),
             state: state.to_string(),
             workspace: None,
+            project: None,
         }
     }
 
@@ -1122,6 +1130,7 @@ mod tests {
                     agent: "pi".to_string(),
                     state: "blocked".to_string(),
                     workspace: Some("+1".to_string()),
+                    project: None,
                 },
                 entry(1, "claude", "working"),
                 entry(2, "kimi", "working"),

@@ -1636,6 +1636,24 @@ fn srow(id: SidebarRowId, label: &str, active: bool) -> SidebarRow {
         label: label.to_string(),
         active,
         status,
+        continuation: Vec::new(),
+    }
+}
+
+/// An agent entry in the default `agent-rows` shape: the state icon and
+/// workspace name (absent when unknown) on the first line, the agent on
+/// the second.
+fn arow(pane: u32, ws: Option<&str>, agent: &str, state: &str, active: bool) -> SidebarRow {
+    use crate::mux::attach::panels::{AgentStatus, STATE_ICON};
+    SidebarRow {
+        id: SidebarRowId::Pane(pane),
+        label: match ws {
+            Some(ws) => format!("{STATE_ICON} {ws}"),
+            None => STATE_ICON.to_string(),
+        },
+        active,
+        status: AgentStatus::from_state(state),
+        continuation: vec![agent.to_string()],
     }
 }
 

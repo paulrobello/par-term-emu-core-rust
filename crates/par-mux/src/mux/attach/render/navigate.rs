@@ -292,6 +292,7 @@ impl WindowSession {
                     self.status.agents(),
                     self.status.workspaces(),
                     focused,
+                    &self.agent_rows,
                 );
                 self.renderer.set_sidebar_sections(sections);
             }
@@ -500,6 +501,7 @@ impl WindowSession {
                 // Launch-only: resolved for the shape, never applied to
                 // the live panel below.
                 sidebar_on_launch: self.sidebar.is_on(),
+                agent_rows: self.agent_rows.clone(),
             },
         ) {
             Ok(chords) => {

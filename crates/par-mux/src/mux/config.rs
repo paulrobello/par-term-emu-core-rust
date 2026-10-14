@@ -201,6 +201,18 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub sidebar_on_launch: Option<bool>,
+    /// The side panel's agent entry, one inner array per line, each a
+    /// list of tokens joined by ` · ` (herdr's `[ui.sidebar.agents]
+    /// rows`): `state_icon`, `state`, `workspace`, `project`, `agent`,
+    /// `pane`. A token with nothing to show drops out; an unknown token
+    /// warns and is skipped. Default `[["state_icon", "workspace",
+    /// "project"], ["agent"]]`.
+    #[serde(
+        default,
+        rename = "agent-rows",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agent_rows: Option<Vec<Vec<String>>>,
     /// The divider/border line style: `herdr` (default), `unicode`,
     /// `double`, `heavy`, or `ascii`. An unknown value warns and uses
     /// the default.
@@ -555,6 +567,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             status_bar: None,
             sidebar_width: Some(defaults.sidebar_width),
             sidebar_on_launch: Some(defaults.sidebar_on_launch),
+            agent_rows: Some(defaults.agent_rows.clone()),
             border_lines: Some(defaults.border_lines.clone()),
             pane_borders: None,
             show_label_in_border: Some(defaults.show_label_in_border),
@@ -657,6 +670,28 @@ pub struct Chords {
     /// (config `sidebar-on-launch`). Default on. Launch-only: the reload
     /// path resolves it but never applies it to a live session.
     pub sidebar_on_launch: bool,
+    /// The side panel's agent entry lines (config `agent-rows`): token
+    /// spellings per line, validated by the renderer.
+    pub agent_rows: Vec<Vec<String>>,
+}
+
+/// The agent entry's tokens a line may name (config `agent-rows`).
+pub const AGENT_ROW_TOKENS: &[&str] = &[
+    "state_icon",
+    "state",
+    "workspace",
+    "project",
+    "agent",
+    "pane",
+];
+
+/// The default agent entry: the state icon, workspace, and project on
+/// the first line, the agent on the second (herdr's two-line entry).
+pub fn default_agent_rows() -> Vec<Vec<String>> {
+    vec![
+        vec!["state_icon".into(), "workspace".into(), "project".into()],
+        vec!["agent".into()],
+    ]
 }
 
 impl Chords {
@@ -676,6 +711,7 @@ impl Chords {
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
+            agent_rows: default_agent_rows(),
         }
     }
 }
@@ -855,6 +891,29 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .sidebar_on_launch
         .unwrap_or(current.sidebar_on_launch);
+    // An unknown token is a config error the caller surfaces, like a
+    // malformed chord; an empty table falls back to the default entry.
+    let agent_rows = match file.client.agent_rows.as_ref() {
+        Some(rows) => {
+            if let Some(bad) = rows
+                .iter()
+                .flatten()
+                .find(|token| !AGENT_ROW_TOKENS.contains(&token.as_str()))
+            {
+                return Err(format!(
+                    "[client] agent-rows token {bad:?} is unknown (expected one of {})",
+                    AGENT_ROW_TOKENS.join(", ")
+                ));
+            }
+            let rows: Vec<Vec<String>> = rows.iter().filter(|r| !r.is_empty()).cloned().collect();
+            if rows.is_empty() {
+                default_agent_rows()
+            } else {
+                rows
+            }
+        }
+        None => current.agent_rows.clone(),
+    };
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -894,6 +953,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         border_lines,
         sidebar_width,
         sidebar_on_launch,
+        agent_rows,
     })
 }
 
@@ -1624,6 +1684,36 @@ remain-on-exit = true
             reload_client_chords(&file, &Chords::with_defaults()).expect("resolves"),
             defaults
         );
+    }
+
+    /// `agent-rows` resolves to the two-line default when absent, follows
+    /// an explicit table, drops empty lines, and rejects an unknown token
+    /// by name; the generated config spells the default.
+    #[test]
+    fn agent_rows_resolve_default_explicit_and_reject_unknown_tokens() {
+        let resolve_with = |text: &str| {
+            let file: ConfigFile = toml::from_str(text).expect("parses");
+            reload_client_chords(&file, &Chords::with_defaults()).map(|c| c.agent_rows)
+        };
+        assert_eq!(resolve_with("").unwrap(), default_agent_rows());
+        assert_eq!(
+            resolve_with("[client]\nagent-rows = [[\"agent\", \"state\"], [], [\"pane\"]]\n")
+                .unwrap(),
+            vec![
+                vec!["agent".to_string(), "state".to_string()],
+                vec!["pane".to_string()]
+            ]
+        );
+        assert_eq!(
+            resolve_with("[client]\nagent-rows = []\n").unwrap(),
+            default_agent_rows(),
+            "an empty table is the default"
+        );
+        let err = resolve_with("[client]\nagent-rows = [[\"agent\", \"bogus\"]]\n").unwrap_err();
+        assert!(err.contains("\"bogus\""), "{err}");
+        let generated = render(&EffectiveConfig::default());
+        let file: ConfigFile = toml::from_str(&generated).expect("parses");
+        assert_eq!(file.client.agent_rows, Some(default_agent_rows()));
     }
 
     /// `sidebar-on-launch` resolves to true when absent, and follows an

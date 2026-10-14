@@ -208,6 +208,23 @@ impl AgentRow {
             .find(|(k, _)| k == "ws")
             .map(|(_, v)| v.as_str())
     }
+
+    /// The pane's project — the host probe's `project` field (the git
+    /// work tree's basename) from the `host_telemetry=` extra. `None`
+    /// when the token is absent, aged out, or does not decode.
+    pub fn project(&self) -> Option<String> {
+        use base64::Engine as _;
+        let token = self
+            .extras
+            .iter()
+            .find(|(k, _)| k == "host_telemetry")
+            .map(|(_, v)| v)?;
+        let json = base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
+        value["project"]["value"].as_str().map(str::to_string)
+    }
 }
 
 /// Fuzz/test invariant (ENH-060): every parser either rejects `line` or
@@ -424,6 +441,23 @@ mod tests {
             extras: vec![("reason".to_string(), "aGk=".to_string())],
         };
         assert_eq!(agent.to_string(), "%2 claude blocked hook reason=aGk=");
+    }
+
+    /// The project rides the `host_telemetry=` token's `project` field;
+    /// an absent or undecodable token is no project.
+    #[test]
+    fn agent_row_project_reads_the_host_telemetry_token() {
+        use base64::Engine as _;
+        let token = base64::engine::general_purpose::STANDARD.encode(
+            r#"{"project":{"sampled_at_unix_ms":1,"value":"par-term"},"source":"host-probe","version":1}"#,
+        );
+        let row = AgentRow::parse(&format!("%2 claude idle hook host_telemetry={token} ws=+0"))
+            .expect("parses");
+        assert_eq!(row.project().as_deref(), Some("par-term"));
+        let none = AgentRow::parse("%2 claude idle hook ws=+0").expect("parses");
+        assert_eq!(none.project(), None);
+        let garbage = AgentRow::parse("%2 claude idle hook host_telemetry=@@@").expect("parses");
+        assert_eq!(garbage.project(), None);
     }
 
     #[test]
