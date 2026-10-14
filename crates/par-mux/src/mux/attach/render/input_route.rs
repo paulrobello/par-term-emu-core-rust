@@ -24,6 +24,8 @@ pub(super) enum Hit {
     SidebarNewWorkspace,
     /// The side panel's ` menu ` chip: open the command menu.
     SidebarMenu,
+    /// The side panel's chevron: collapse to the rail, or expand it.
+    SidebarCollapse,
     /// A side panel workspace row (`+N`): land on it, or open its
     /// context menu on a right press (`menu`).
     SidebarWorkspace { id: String, menu: bool },
@@ -489,6 +491,7 @@ impl WindowSession {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => self.open_menu(MenuTarget::Commands),
+            Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
             Hit::SidebarWorkspace { id, menu: true } => {
                 self.open_menu(MenuTarget::Workspace(id));
             }
@@ -648,22 +651,31 @@ impl WindowSession {
         if mouse.release || mouse.is_motion() {
             return Hit::Consumed;
         }
+        use crate::mux::attach::panels::SidebarRowId;
+        // The chevron sits beside the divider on the panel's last row,
+        // and on the rail (no divider) in its glyph column: it wins
+        // over both drag handles.
+        if self.renderer.sidebar_row_at(x, y) == Some(SidebarRowId::Collapse) {
+            return Hit::SidebarCollapse;
+        }
         // The strip's right edge — the painted divider column — is the
         // width-drag handle; the rule row is the split-drag handle.
-        // Both before the row lookup: neither is a row.
-        if x + 1 == self.renderer.sidebar_width() {
+        // Both before the row lookup: neither is a row. The rail has no
+        // divider (its edge column is the status glyph's) and a fixed
+        // width.
+        if !self.sidebar.is_collapsed() && x + 1 == self.renderer.sidebar_width() {
             return Hit::SidebarResize;
         }
         if self.renderer.sidebar_rule_at(x, y) {
             return Hit::SidebarSplitDrag;
         }
-        use crate::mux::attach::panels::SidebarRowId;
         let Some(id) = self.renderer.sidebar_row_at(x, y) else {
             return Hit::Consumed;
         };
         match id {
             SidebarRowId::New => Hit::SidebarNewWorkspace,
             SidebarRowId::Menu => Hit::SidebarMenu,
+            SidebarRowId::Collapse => Hit::SidebarCollapse,
             SidebarRowId::Pane(pane) => Hit::SidebarPane { pane },
             SidebarRowId::Workspace(id) => Hit::SidebarWorkspace {
                 id,

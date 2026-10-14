@@ -587,14 +587,75 @@ pub(crate) enum SidebarRowId {
     /// The footer's ` menu ` chip: opens the command menu (keybinds,
     /// reload config, detach).
     Menu,
+    /// The bottom-right chevron: collapses the panel to the status rail
+    /// (or expands the rail back).
+    Collapse,
 }
 
-/// One side-panel row: its click target, label, and active flag.
+/// One side-panel row: its click target, label, active flag, and the
+/// status glyph the collapsed rail paints for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarRow {
     pub id: SidebarRowId,
     pub label: String,
     pub active: bool,
+    pub status: AgentStatus,
+}
+
+/// An agent's state as the side panel shows it (herdr's status dot): a
+/// workspace row carries its agents' most urgent state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) enum AgentStatus {
+    /// No agent, or a state the panel does not know.
+    #[default]
+    None,
+    Idle,
+    Working,
+    Blocked,
+}
+
+impl AgentStatus {
+    /// The roster's state word (`list-agents`' third column).
+    pub(crate) fn from_state(state: &str) -> Self {
+        match state {
+            "idle" => Self::Idle,
+            "working" => Self::Working,
+            "blocked" => Self::Blocked,
+            _ => Self::None,
+        }
+    }
+
+    /// The rail glyph: herdr's dots (`●` busy, `○` idle, `·` nothing).
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Self::None => "·",
+            Self::Idle => "○",
+            Self::Working | Self::Blocked => "●",
+        }
+    }
+}
+
+/// The side panel's default area split: the workspace area takes this
+/// share of the panel's rows (herdr's 0.5).
+pub(crate) const SIDEBAR_SPLIT_DEFAULT: f32 = 0.5;
+
+/// The collapsed panel's width: an index column and a status column.
+pub(crate) const SIDEBAR_RAIL_WIDTH: u16 = 2;
+
+/// The expanded panel's chevron (collapse) and the rail's (expand).
+pub(crate) const CHEVRON_COLLAPSE: &str = "«";
+pub(crate) const CHEVRON_EXPAND: &str = "»";
+
+/// The workspace area's row count for a panel `height` rows tall at
+/// `split` — herdr's `sidebar_section_heights`: each area keeps at
+/// least 3 rows (a header, one entry, its last row), a short panel
+/// halves.
+pub(crate) fn sidebar_workspace_rows(height: u16, split: f32) -> u16 {
+    if height < 6 {
+        return height.div_ceil(2);
+    }
+    let rows = (f32::from(height) * split.clamp(0.1, 0.9)).round() as u16;
+    rows.clamp(3, height - 3)
 }
 
 /// One composed sidebar line: buffer-row-relative `y`, the clickable
@@ -629,108 +690,76 @@ pub(crate) enum SidebarLineKind {
     Header,
     /// The full-width rule dividing the areas — the split-drag handle.
     Rule,
-    /// Blank padding holding an area's fixed extent.
-    Blank,
 }
 
 /// Compose the side panel's lines from its sections, herdr's separated
-/// panel shape: each area opens with its dim header row (` workspaces`,
-/// ` agents`), a full-width rule row divides the areas (herdr's
-/// `─`.repeat(width) section divider), the rows follow top-down
-/// (workspace rows start at composed row 1 = host row 2), clipped to `width - 1` columns (the divider column
-/// owns the strip's right edge), plus a footer row pinned to the
-/// panel's LAST row: ` new ` bottom-left and ` menu ` bottom-right
-/// (the mock's panel shape; each chip its own clickable span). Pure —
-/// the unit-test surface.
+/// panel shape split by `split` (the workspace area's share of the rows,
+/// [`sidebar_workspace_rows`]): the workspace area opens with its dim
+/// header row (` workspaces`), lists its rows, and ends with the footer
+/// chips on its LAST row — ` new ` bottom-left, ` menu ` bottom-right,
+/// each its own clickable span. A full-width rule (herdr's
+/// `─`.repeat(width) section divider) opens the agents area, then its
+/// header (` agents`) and rows; the panel's last row carries the
+/// collapse chevron `«` at the right edge. Every text is clipped to
+/// `width - 1` columns (the divider column owns the strip's right edge).
+/// Pure — the unit-test surface.
 pub(crate) fn compose_sidebar(
     sections: &[SidebarSection],
     width: u16,
     height: u16,
-    rule_row: Option<u16>,
+    split: f32,
 ) -> Vec<SidebarLine> {
     let mut lines: Vec<SidebarLine> = Vec::new();
-    let max = usize::from(height);
-    if max == 0 {
+    if height == 0 {
         return lines;
     }
     let text_width = usize::from(width.saturating_sub(1));
-    // Body rows fill everything above the footer row.
-    let body_cap = max - 1;
-    let filler = |lines: &mut Vec<SidebarLine>, text: String, kind: SidebarLineKind| {
+    let content_end = width.saturating_sub(1);
+    let ws_rows = sidebar_workspace_rows(height, split);
+    let filler = |lines: &mut Vec<SidebarLine>, y: u16, text: String, kind: SidebarLineKind| {
         lines.push(SidebarLine {
-            y: lines.len() as u16,
+            y,
             x: 0,
-            x_end: width.saturating_sub(1),
+            x_end: content_end,
             text,
             id: None,
             active: false,
             kind,
         });
     };
-    // The rule's composed row: an explicit `rule_row` (a dragged split)
-    // clips the workspace area to it and pads with blanks so the agents
-    // area follows at a fixed position; absent, the rule trails the
-    // workspace rows naturally.
-    let rule_at = rule_row.map(|r| r.min(body_cap.saturating_sub(2) as u16));
-    for (index, section) in sections.iter().enumerate() {
-        // The rule divides the areas; each area's header opens it (a
-        // panel with no rows after it still names the area).
-        if index > 0 {
-            if lines.len() >= body_cap {
-                break;
-            }
-            filler(&mut lines, "─".repeat(text_width), SidebarLineKind::Rule);
-        }
-        if lines.len() < body_cap {
-            let title: String = format!(" {}", section.title)
-                .chars()
-                .take(text_width)
-                .collect();
-            filler(&mut lines, title, SidebarLineKind::Header);
-        }
-        // The workspace area's extent: an explicit rule row caps it.
-        let cap = if index == 0 {
-            match rule_at {
-                Some(r) => usize::from(r),
-                None => body_cap,
-            }
-        } else {
-            body_cap
-        };
-        for row in &section.rows {
-            if lines.len() >= cap || lines.len() >= body_cap {
-                break;
-            }
+    let clip = |text: String| -> String { text.chars().take(text_width).collect() };
+    // The rows of one area, `rows` written from `top` while below `end`.
+    let entries = |lines: &mut Vec<SidebarLine>, rows: &[SidebarRow], top: u16, end: u16| {
+        for (y, row) in (top..end).zip(rows) {
             let marker = if row.active { "▸" } else { " " };
-            let text: String = format!(" {marker} {}", super::chrome_safe(&row.label))
-                .chars()
-                .take(text_width)
-                .collect();
             lines.push(SidebarLine {
-                y: lines.len() as u16,
+                y,
                 x: 0,
-                x_end: width.saturating_sub(1),
-                text,
+                x_end: content_end,
+                text: clip(format!(" {marker} {}", super::chrome_safe(&row.label))),
                 id: Some(row.id.clone()),
                 active: row.active,
                 kind: SidebarLineKind::Row,
             });
         }
-        // Pad the workspace area out to the dragged rule's row so the
-        // rule and the agents area stay where the drag put them.
-        if index == 0 {
-            if let Some(r) = rule_at {
-                while lines.len() < usize::from(r) && lines.len() < body_cap {
-                    filler(&mut lines, String::new(), SidebarLineKind::Blank);
-                }
-            }
-        }
+    };
+    let workspaces = sections.iter().find(|s| s.title == "workspaces");
+    let agents = sections.iter().find(|s| s.title == "agents");
+
+    // The workspace area: header, rows, footer chips on its last row.
+    let footer_y = ws_rows.saturating_sub(1);
+    filler(
+        &mut lines,
+        0,
+        clip(" workspaces".to_string()),
+        SidebarLineKind::Header,
+    );
+    if let Some(section) = workspaces {
+        entries(&mut lines, &section.rows, 1, footer_y.max(1));
     }
-    // The footer chips pin to the panel's last row; a strip too narrow
-    // for a chip drops it.
-    let footer_y = (max - 1) as u16;
     let new_chip = " new ";
-    if text_width >= new_chip.len() {
+    let menu_chip = " menu ";
+    if footer_y > 0 && text_width >= new_chip.len() {
         lines.push(SidebarLine {
             y: footer_y,
             x: 0,
@@ -740,7 +769,6 @@ pub(crate) fn compose_sidebar(
             active: false,
             kind: SidebarLineKind::Row,
         });
-        let menu_chip = " menu ";
         if text_width >= new_chip.len() + menu_chip.len() {
             let mx = text_width - menu_chip.len();
             lines.push(SidebarLine {
@@ -754,5 +782,106 @@ pub(crate) fn compose_sidebar(
             });
         }
     }
+
+    // The agents area: the rule (the split-drag handle), its header,
+    // then rows above the panel's last row (the chevron's).
+    if ws_rows < height {
+        filler(
+            &mut lines,
+            ws_rows,
+            "─".repeat(text_width),
+            SidebarLineKind::Rule,
+        );
+    }
+    if ws_rows + 1 < height {
+        filler(
+            &mut lines,
+            ws_rows + 1,
+            clip(" agents".to_string()),
+            SidebarLineKind::Header,
+        );
+    }
+    let last = height - 1;
+    if let Some(section) = agents {
+        entries(&mut lines, &section.rows, ws_rows + 2, last);
+    }
+    if text_width >= 2 && last > ws_rows {
+        let cx = content_end - 1;
+        lines.push(SidebarLine {
+            y: last,
+            x: cx,
+            x_end: content_end,
+            text: CHEVRON_COLLAPSE.to_string(),
+            id: Some(SidebarRowId::Collapse),
+            active: false,
+            kind: SidebarLineKind::Row,
+        });
+    }
+    lines
+}
+
+/// Compose the collapsed panel — herdr's status rail — `height` rows of
+/// a [`SIDEBAR_RAIL_WIDTH`]-column strip: per workspace its 1-based
+/// index (a digit; `+` past 9) and its agents' most urgent status glyph,
+/// the same split's rule, per agent its index and glyph, and the expand
+/// chevron `»` on the last row. Every entry stays clickable (land on the
+/// workspace, focus the agent's pane). Pure — the unit-test surface.
+pub(crate) fn compose_sidebar_rail(
+    sections: &[SidebarSection],
+    height: u16,
+    split: f32,
+) -> Vec<SidebarLine> {
+    let mut lines: Vec<SidebarLine> = Vec::new();
+    if height == 0 {
+        return lines;
+    }
+    let ws_rows = sidebar_workspace_rows(height, split);
+    let last = height - 1;
+    let index = |i: usize| {
+        if i < 9 {
+            char::from(b'1' + i as u8)
+        } else {
+            '+'
+        }
+    };
+    let entries = |lines: &mut Vec<SidebarLine>, rows: &[SidebarRow], top: u16, end: u16| {
+        for (i, (y, row)) in (top..end).zip(rows).enumerate() {
+            lines.push(SidebarLine {
+                y,
+                x: 0,
+                x_end: SIDEBAR_RAIL_WIDTH,
+                text: format!("{}{}", index(i), row.status.glyph()),
+                id: Some(row.id.clone()),
+                active: row.active,
+                kind: SidebarLineKind::Row,
+            });
+        }
+    };
+    if let Some(section) = sections.iter().find(|s| s.title == "workspaces") {
+        entries(&mut lines, &section.rows, 0, ws_rows.min(last));
+    }
+    if ws_rows < last {
+        lines.push(SidebarLine {
+            y: ws_rows,
+            x: 0,
+            x_end: SIDEBAR_RAIL_WIDTH,
+            text: "──".to_string(),
+            id: None,
+            active: false,
+            kind: SidebarLineKind::Rule,
+        });
+        if let Some(section) = sections.iter().find(|s| s.title == "agents") {
+            entries(&mut lines, &section.rows, ws_rows + 1, last);
+        }
+    }
+    lines.push(SidebarLine {
+        y: last,
+        x: 0,
+        x_end: SIDEBAR_RAIL_WIDTH,
+        text: format!(" {CHEVRON_EXPAND}"),
+        id: Some(SidebarRowId::Collapse),
+        active: false,
+        kind: SidebarLineKind::Row,
+    });
     lines
 }

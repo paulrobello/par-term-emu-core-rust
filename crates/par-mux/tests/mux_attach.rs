@@ -4079,6 +4079,53 @@ fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
     host.killer.kill().ok();
 }
 
+/// The persisted panel state (`client-state.json` beside the client's
+/// config) applies at launch: a collapsed panel attaches as the 2-column
+/// status rail — the daemon's first division reserves 2 columns, not the
+/// 20 of an expanded panel (the marker at 43, not 52) — and the attach
+/// writes nothing back on launch.
+#[cfg(unix)]
+#[test]
+fn render_mode_persisted_collapsed_panel_launches_as_the_rail() {
+    let (fixture, _daemon, mut client) = fixture_with_session("sbrail");
+    let pane_a = split_with_right_marker(&mut client, "RAIL-MARK-7");
+    let state = fixture
+        .client_config_path()
+        .with_file_name("client-state.json");
+    let body = r#"{"sidebar_width":30,"sidebar_collapsed":true}"#;
+    std::fs::write(&state, body).expect("write client state");
+
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &pane_a], "render", "[client]\n");
+    let mut got = wait_for_output(&host, b"RAIL-MARK-7", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(600),
+    ));
+    let text = plain_text(&got);
+    assert_eq!(
+        cup_col_of_text(&got, "RAIL-MARK-7"),
+        Some(43),
+        "the rail reserves 2 columns (78 = 39 | 38). stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        got.windows("»".len()).any(|w| w == "»".as_bytes()),
+        "the rail paints its expand chevron: {text:?}"
+    );
+    assert!(
+        !text.contains("workspaces"),
+        "the rail paints no area header or tab-strip title: {text:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&state).expect("state"),
+        body,
+        "launching does not rewrite the state"
+    );
+    host.killer.kill().ok();
+}
+
 /// `sidebar-on-launch = false`: the panel stays hidden on launch and the
 /// panes divide the full width (the marker at column 42).
 #[cfg(unix)]

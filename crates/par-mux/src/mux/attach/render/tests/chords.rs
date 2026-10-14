@@ -1618,9 +1618,9 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
         vec!["select-workspace -t +1", "list-sessions -t +1"],
         "a left press lands on the workspace"
     );
-    // The ` new ` chip: the 23-row renderer's footer row is host
-    // row 23 (SGR 24); col 2.
-    session.route_mouse(&mut conn, sgr(0, 3, 24, false));
+    // The ` new ` chip: the workspace area's last row (12 of the
+    // 23-row frame: composed row 11 = host row 12, SGR 13); col 2.
+    session.route_mouse(&mut conn, sgr(0, 3, 13, false));
     settle(&mut session, &mut conn);
     assert!(session.is_prompt());
     assert_eq!(session.prompt().target, PromptTarget::NewWorkspace);
@@ -1855,12 +1855,18 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
         Hit::Consumed,
         "a release in the strip is consumed"
     );
-    // The footer chips on the renderer's last row (SGR row 24 here).
+    // The footer chips on the workspace area's last row (SGR row 13).
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 24, false)),
+        session.mouse_hit(&sgr(0, 3, 13, false)),
         Hit::SidebarNewWorkspace
     );
-    assert_eq!(session.mouse_hit(&sgr(0, 17, 24, false)), Hit::SidebarMenu);
+    assert_eq!(session.mouse_hit(&sgr(0, 17, 13, false)), Hit::SidebarMenu);
+    // The chevron: the panel's last row beside the divider (composed
+    // 22, host row 23, SGR 24; col 18 = SGR 19).
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 19, 24, false)),
+        Hit::SidebarCollapse
+    );
 }
 
 /// The side panel's resize affordances: a press on the strip's right
@@ -1888,10 +1894,10 @@ fn sidebar_edges_resize_the_panel_and_the_areas() {
     // The width handle: the strip's right-edge column (SGR col 20 at
     // width 20; host x 19).
     assert_eq!(session.mouse_hit(&sgr(0, 20, 5, false)), Hit::SidebarResize);
-    // The rule row: natural flow puts it at host row 4 (header, two
-    // rows, rule) = SGR row 5.
+    // The rule row: the default split puts it at composed row 12 of
+    // the 23-row frame = host row 13 = SGR row 14.
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 5, false)),
+        session.mouse_hit(&sgr(0, 3, 14, false)),
         Hit::SidebarSplitDrag
     );
     // Rows still classify around the handles (beta at host row 3).
@@ -1903,14 +1909,20 @@ fn sidebar_edges_resize_the_panel_and_the_areas() {
         }
     );
 
-    // Split drag: press the rule, drag down two rows, release — the
-    // rule lands two rows lower (local, no daemon round trip).
-    session.route_mouse(&mut conn, sgr(0, 3, 5, false));
-    session.route_mouse(&mut conn, sgr(32, 3, 7, false));
-    session.route_mouse(&mut conn, sgr(0, 3, 7, true));
+    // Split drag: press the rule, drag up four rows, release — the
+    // rule lands four rows higher, held as the ratio (local, no daemon
+    // round trip).
+    session.route_mouse(&mut conn, sgr(0, 3, 14, false));
+    session.route_mouse(&mut conn, sgr(32, 3, 10, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 10, true));
     settle(&mut session, &mut conn);
-    assert_eq!(session.renderer.sidebar_rule_y(), Some(5));
+    assert_eq!(session.renderer.sidebar_rule_y(), Some(8));
+    assert!((session.renderer.sidebar_split() - 8.0 / 23.0).abs() < 1e-6);
     assert!(drained(&rx).is_empty(), "the split drag sends nothing");
+    // A drag past the top clamps: the workspace area keeps 3 rows.
+    session.route_mouse(&mut conn, sgr(0, 3, 10, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 1, true));
+    assert_eq!(session.renderer.sidebar_rule_y(), Some(3));
 
     // Width drag: press the edge, drag right 5, release — the panel
     // widens by 5 and the release lands the final width (the grid
@@ -1925,6 +1937,96 @@ fn sidebar_edges_resize_the_panel_and_the_areas() {
         session.pending.grid_refit,
         "the new width re-reports the grid"
     );
+}
+
+/// The chevron collapses the panel to herdr's 2-column status rail and
+/// expands it back: the strip width follows (the grid re-reports), the
+/// rail's entries stay clickable, its edge column is no resize handle,
+/// and the drag/toggle state persists only when the session has a prefs
+/// path (a real attach) — a unit-test session never writes.
+#[test]
+fn sidebar_chevron_collapses_to_the_rail_and_persists() {
+    use crate::mux::attach::panels::{SidebarSection, SIDEBAR_RAIL_WIDTH};
+    let (_rx, mut conn, mut session) = two_pane_session("m-sbrail", FakeScript::default());
+    show_sidebar(&mut session);
+    let sections = vec![
+        SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
+            ],
+        },
+        SidebarSection {
+            title: "agents",
+            rows: vec![srow(SidebarRowId::Pane(7), "kimi (blocked)", false)],
+        },
+    ];
+    session
+        .renderer
+        .set_sidebar_sections(Some(sections.clone()));
+    session.pending.grid_refit = false;
+    // Collapse: the chevron at the panel's last row (SGR 19, 24).
+    session.route_mouse(&mut conn, sgr(0, 19, 24, false));
+    settle(&mut session, &mut conn);
+    assert!(session.sidebar.is_collapsed());
+    assert_eq!(session.renderer.sidebar_width(), SIDEBAR_RAIL_WIDTH);
+    assert!(session.pending.grid_refit, "the narrower strip re-reports");
+    session
+        .renderer
+        .set_sidebar_sections(Some(sections.clone()));
+    // The rail: workspace 2 at composed row 1 (SGR row 3), the agent
+    // below the rule, the expand chevron on the last row.
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 1, 3, false)),
+        Hit::SidebarWorkspace {
+            id: "+1".to_string(),
+            menu: false
+        }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 1, 14, false)),
+        Hit::SidebarSplitDrag,
+        "the rail's rule still drags the split"
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 2, 15, false)),
+        Hit::SidebarPane { pane: 7 }
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 2, 10, false)),
+        Hit::Consumed,
+        "the rail's edge column is no width handle"
+    );
+    assert_eq!(
+        session.mouse_hit(&sgr(0, 2, 24, false)),
+        Hit::SidebarCollapse
+    );
+    // The rail paints its glyphs, no divider column.
+    session.renderer.paint_sidebar();
+    assert_eq!(session.renderer.buffer[(0, 1)].symbol(), "2");
+    assert_eq!(session.renderer.buffer[(1, 0)].symbol(), "·");
+    assert_eq!(session.renderer.buffer[(1, 22)].symbol(), "»");
+    // Expand: the configured width returns.
+    session.pending.grid_refit = false;
+    session.route_mouse(&mut conn, sgr(0, 2, 24, false));
+    settle(&mut session, &mut conn);
+    assert!(!session.sidebar.is_collapsed());
+    assert_eq!(session.renderer.sidebar_width(), 20);
+    assert!(session.pending.grid_refit);
+
+    // Persistence: a prefs path makes the chevron and drag releases
+    // write the state.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("client-state.json");
+    session.sidebar.set_prefs_path(path.clone());
+    session.renderer.set_sidebar_sections(Some(sections));
+    session.route_mouse(&mut conn, sgr(0, 19, 24, false));
+    settle(&mut session, &mut conn);
+    let saved = crate::mux::attach::prefs::load(&path);
+    assert_eq!(saved.sidebar_collapsed, Some(true));
+    assert_eq!(saved.sidebar_width, Some(20));
+    assert_eq!(saved.sidebar_split, Some(0.5));
 }
 
 /// An agent row click lands on the agent's pane: the hit resolves the

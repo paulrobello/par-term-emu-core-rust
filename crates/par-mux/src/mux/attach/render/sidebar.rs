@@ -2,12 +2,14 @@
 //! and the toggle/refresh the session drives.
 
 use super::{PaneRenderer, WindowSession};
-use crate::mux::attach::panels::compose_sidebar;
+use crate::mux::attach::panels::{compose_sidebar, compose_sidebar_rail};
 use crate::mux::attach::status;
 use crate::mux::attach::targets::parse_workspace_line;
-use ratatui::style::{Modifier as RtModifier, Style as RtStyle};
+use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
 
-use crate::mux::attach::panels::{SidebarLineKind, SidebarRow, SidebarRowId, SidebarSection};
+use crate::mux::attach::panels::{
+    AgentStatus, SidebarLine, SidebarLineKind, SidebarRow, SidebarRowId, SidebarSection,
+};
 
 impl PaneRenderer {
     /// The side panel's width (0 = hidden).
@@ -46,24 +48,48 @@ impl PaneRenderer {
         }
     }
 
-    /// Set the dragged area split (the rule's composed row); `None`
-    /// returns to the natural flow. Repaints.
-    pub(crate) fn set_sidebar_rule_row(&mut self, row: Option<u16>) {
-        if self.sidebar_rule_row != row {
-            self.sidebar_rule_row = row;
+    /// Set the area split (the workspace area's share of the panel's
+    /// rows). Repaints.
+    pub(crate) fn set_sidebar_split(&mut self, split: f32) {
+        if self.sidebar_split != split {
+            self.sidebar_split = split;
             self.dirty = true;
         }
     }
 
-    /// The composed lines' rule row, if the panel shows one (either the
-    /// dragged split or the natural flow) — the split drag's anchor.
-    pub(crate) fn sidebar_rule_y(&self) -> Option<u16> {
-        let w = self.geometry.sidebar_w;
-        if w == 0 {
-            return None;
+    /// The area split the panel composes with.
+    pub(crate) fn sidebar_split(&self) -> f32 {
+        self.sidebar_split
+    }
+
+    /// Show the panel collapsed to the status rail, or expanded.
+    /// Repaints.
+    pub(crate) fn set_sidebar_collapsed(&mut self, collapsed: bool) {
+        if self.sidebar_collapsed != collapsed {
+            self.sidebar_collapsed = collapsed;
+            self.dirty = true;
         }
-        let sections = self.sidebar_sections.as_ref()?;
-        compose_sidebar(sections, w, self.height, self.sidebar_rule_row)
+    }
+
+    /// The panel's composed lines at its current width, height, split,
+    /// and collapse state — the one source painting and every hit-test
+    /// read.
+    fn sidebar_lines(&self) -> Vec<SidebarLine> {
+        let w = self.geometry.sidebar_w;
+        let Some(sections) = self.sidebar_sections.as_ref().filter(|_| w > 0) else {
+            return Vec::new();
+        };
+        if self.sidebar_collapsed {
+            compose_sidebar_rail(sections, self.height, self.sidebar_split)
+        } else {
+            compose_sidebar(sections, w, self.height, self.sidebar_split)
+        }
+    }
+
+    /// The composed rule row, if the panel shows one — the split drag's
+    /// anchor.
+    pub(crate) fn sidebar_rule_y(&self) -> Option<u16> {
+        self.sidebar_lines()
             .into_iter()
             .find(|line| line.kind == SidebarLineKind::Rule)
             .map(|line| line.y)
@@ -94,26 +120,28 @@ impl PaneRenderer {
         if x >= w {
             return None;
         }
-        let sections = self.sidebar_sections.as_ref()?;
-        let lines = compose_sidebar(sections, w, self.height, self.sidebar_rule_row);
-        lines
+        self.sidebar_lines()
             .into_iter()
             .find(|line| line.y == frame_y && line.id.is_some() && x >= line.x && x < line.x_end)
             .and_then(|line| line.id)
     }
 
     /// Paint the workspace side panel over the strip columns: theme-bg
-    /// fill, a dim divider on the strip's right edge, then the sections —
-    /// each area's header dim + bold (herdr's ` spaces` lead row), the
-    /// rule rows and rows dim (the active workspace/agent row a
-    /// full-width reversed + bold block). Clipped to the strip; composed
-    /// by [`compose_sidebar`].
+    /// fill, a dim divider on the strip's right edge, then the composed
+    /// lines — each area's header dim + bold (herdr's ` spaces` lead
+    /// row), the rule and rows dim (the active workspace/agent row a
+    /// full-width reversed + bold block). The collapsed rail has no
+    /// divider column (the pane area's own edge bounds it): its index
+    /// digits paint dim and each status glyph in its state's color.
     pub(super) fn paint_sidebar(&mut self) {
         let w = self.geometry.sidebar_w;
         if w == 0 {
             return;
         }
         let dim = RtStyle::default().add_modifier(RtModifier::DIM);
+        let rail = self.sidebar_collapsed;
+        // The expanded panel's text stops at its divider column.
+        let content_w = if rail { w } else { w - 1 };
         for y in 0..self.height {
             for x in 0..w {
                 let cell = &mut self.buffer[(x, y)];
@@ -121,25 +149,22 @@ impl PaneRenderer {
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
                 }
-                if x + 1 == w {
+                if !rail && x + 1 == w {
                     cell.set_symbol(self.glyphs.vertical());
                     cell.set_style(dim);
                 }
             }
         }
-        let Some(sections) = self.sidebar_sections.clone() else {
-            return;
-        };
-        for line in compose_sidebar(&sections, w, self.height, self.sidebar_rule_row) {
+        let block = RtStyle::default()
+            .add_modifier(RtModifier::REVERSED)
+            .add_modifier(RtModifier::BOLD);
+        for line in self.sidebar_lines() {
             // herdr's active treatment: an active row (the active
             // workspace, or the focused pane's agent row) is a full-width
             // inverted block. The footer chips paint at their own columns
             // (line.x), body rows at col 0.
             if line.active {
-                let block = RtStyle::default()
-                    .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(RtModifier::BOLD);
-                for x in 0..w - 1 {
+                for x in 0..content_w {
                     let cell = &mut self.buffer[(x, line.y)];
                     cell.reset();
                     if let Some(bg) = self.bg {
@@ -149,24 +174,55 @@ impl PaneRenderer {
                 }
             }
             let style = if line.active {
-                RtStyle::default()
-                    .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(RtModifier::BOLD)
+                block
             } else if line.kind == SidebarLineKind::Header {
                 dim.add_modifier(RtModifier::BOLD)
             } else {
                 dim
             };
+            // The rail's second column is the entry's status glyph.
+            let glyph = line
+                .id
+                .as_ref()
+                .filter(|id| rail && !line.active && !matches!(id, SidebarRowId::Collapse))
+                .map(|id| status_style(self.sidebar_row_status(id)));
             for (j, ch) in line.text.chars().enumerate() {
                 let x = line.x + j as u16;
-                if x >= w - 1 {
+                if x >= content_w {
                     break;
                 }
                 let cell = &mut self.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
-                cell.set_style(style);
+                cell.set_style(match glyph {
+                    Some(glyph) if j == 1 => glyph,
+                    _ => style,
+                });
             }
         }
+    }
+
+    /// The status a row id carries in the current sections.
+    fn sidebar_row_status(&self, id: &SidebarRowId) -> AgentStatus {
+        self.sidebar_sections
+            .iter()
+            .flatten()
+            .flat_map(|section| section.rows.iter())
+            .find(|row| &row.id == id)
+            .map(|row| row.status)
+            .unwrap_or_default()
+    }
+}
+
+/// A rail status glyph's style: herdr's palette mapped onto the host's
+/// indexed colors (so the host theme applies) — working yellow, blocked
+/// red, idle green, no agent dim.
+fn status_style(status: AgentStatus) -> RtStyle {
+    let base = RtStyle::default();
+    match status {
+        AgentStatus::Working => base.fg(RtColor::Indexed(3)),
+        AgentStatus::Blocked => base.fg(RtColor::Indexed(1)),
+        AgentStatus::Idle => base.fg(RtColor::Indexed(2)),
+        AgentStatus::None => base.add_modifier(RtModifier::DIM),
     }
 }
 
@@ -184,15 +240,15 @@ pub(super) enum SidebarDrag {
         last_applied: Option<std::time::Instant>,
     },
     /// The rule's composed row at the press; dragging moves the rule
-    /// by the pointer's row delta. Local repaint, no daemon round
-    /// trip.
+    /// by the pointer's row delta, re-expressed as the split ratio.
+    /// Local repaint, no daemon round trip.
     Split { anchor_y: u16, start_rule: u16 },
 }
 
 /// The panel width bounds: the footer chips need 12 columns; 60 keeps
 /// the panes usable on every host this targets.
-const SIDEBAR_WIDTH_MIN: i32 = 12;
-const SIDEBAR_WIDTH_MAX: i32 = 60;
+pub(super) const SIDEBAR_WIDTH_MIN: u16 = 12;
+pub(super) const SIDEBAR_WIDTH_MAX: u16 = 60;
 
 impl WindowSession {
     /// Toggle the side panel: flip the strip width on the renderer, then
@@ -223,9 +279,47 @@ impl WindowSession {
         self.draw_status_row();
     }
 
+    /// The panel's chevron: collapse it to the status rail, or expand
+    /// the rail back. The strip width changes, so the grid re-reports
+    /// (the toggle's parked refit); the state persists.
+    pub(super) fn toggle_sidebar_collapse(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) {
+        if !self.sidebar.is_on() {
+            return;
+        }
+        let collapsed = !self.sidebar.is_collapsed();
+        self.sidebar.set_collapsed(collapsed);
+        self.renderer.set_sidebar_collapsed(collapsed);
+        self.chrome_geometry_changed();
+        self.renderer.set_geometry(self.geometry);
+        self.pending.grid_refit = true;
+        self.refresh_sidebar(conn);
+        self.draw_tab_strip();
+        self.persist_sidebar();
+    }
+
+    /// Write the panel's dragged/toggled state to the client prefs file
+    /// (a real attach only — the path is unset in unit-test sessions).
+    /// A failed write flashes; the live panel keeps its state.
+    pub(super) fn persist_sidebar(&mut self) {
+        let Some(path) = self.sidebar.prefs_path() else {
+            return;
+        };
+        let prefs = crate::mux::attach::prefs::ClientPrefs {
+            sidebar_width: Some(self.render_opts.sidebar_width),
+            sidebar_split: Some(self.renderer.sidebar_split()),
+            sidebar_collapsed: Some(self.sidebar.is_collapsed()),
+        };
+        if let Err(err) = crate::mux::attach::prefs::store(path, &prefs) {
+            self.chrome.flash(format!("sidebar state not saved: {err}"));
+        }
+    }
+
     /// Press on the strip's right edge: start a width drag.
     pub(super) fn start_sidebar_width_drag(&mut self, x: u16) {
-        if !self.sidebar.is_on() {
+        if !self.sidebar.is_on() || self.sidebar.is_collapsed() {
             return;
         }
         self.sidebar_drag = Some(SidebarDrag::Width {
@@ -262,12 +356,18 @@ impl WindowSession {
                 anchor_y,
                 start_rule,
             } => {
-                let max = self.renderer.frame_height().saturating_sub(3);
-                let rule =
-                    (start_rule as i32 + y as i32 - anchor_y as i32).clamp(2, max as i32) as u16;
-                self.renderer.set_sidebar_rule_row(Some(rule));
+                // Each area keeps 3 rows (the compose's own clamp); the
+                // ratio that rounds back to the dragged row is rule/height.
+                let height = self.renderer.frame_height();
+                if height >= 6 {
+                    let rule = (i32::from(start_rule) + i32::from(y) - i32::from(anchor_y))
+                        .clamp(3, i32::from(height) - 3);
+                    self.renderer
+                        .set_sidebar_split(rule as f32 / f32::from(height));
+                }
                 if release {
                     self.sidebar_drag = None;
+                    self.persist_sidebar();
                 }
             }
             SidebarDrag::Width {
@@ -276,8 +376,8 @@ impl WindowSession {
                 applied,
                 last_applied,
             } => {
-                let target = (start_w as i32 + x as i32 - anchor_x as i32)
-                    .clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+                let target = (i32::from(start_w) + i32::from(x) - i32::from(anchor_x))
+                    .clamp(i32::from(SIDEBAR_WIDTH_MIN), i32::from(SIDEBAR_WIDTH_MAX))
                     as u16;
                 let due = last_applied
                     .is_none_or(|at| at.elapsed() >= super::drag::DRAG_SEND_MIN_INTERVAL);
@@ -292,6 +392,7 @@ impl WindowSession {
                 }
                 if release {
                     self.sidebar_drag = None;
+                    self.persist_sidebar();
                 }
             }
         }
@@ -407,12 +508,22 @@ impl WindowSession {
     ) -> Option<Vec<SidebarSection>> {
         let mut sections: Vec<SidebarSection> = Vec::new();
         if !roster.is_empty() {
+            // A workspace's rail glyph is its agents' most urgent state.
+            let workspace_status = |ws: &str| {
+                agents
+                    .iter()
+                    .filter(|entry| entry.workspace.as_deref() == Some(ws))
+                    .map(|entry| AgentStatus::from_state(&entry.state))
+                    .max()
+                    .unwrap_or_default()
+            };
             let rows = roster
                 .iter()
                 .map(|(id, name, active)| SidebarRow {
                     id: SidebarRowId::Workspace(id.clone()),
                     label: name.clone(),
                     active: *active,
+                    status: workspace_status(id),
                 })
                 .collect();
             sections.push(SidebarSection {
@@ -447,6 +558,7 @@ impl WindowSession {
                         id: SidebarRowId::Pane(entry.pane),
                         label,
                         active: focused == Some(entry.pane),
+                        status: AgentStatus::from_state(state),
                     };
                     ((group(ws), entry.pane), row)
                 })

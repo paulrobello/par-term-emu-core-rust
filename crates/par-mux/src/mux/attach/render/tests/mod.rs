@@ -1579,8 +1579,10 @@ fn command_menu_session(
         &mut conn,
         SgrMouse {
             cb: 0,
+            // The workspace area's last row (11 of a 22-row frame = host
+            // row 11, SGR 12): the ` menu ` chip's cells.
             col: 17,
-            row: 23,
+            row: 12,
             release: false,
         },
     );
@@ -1617,12 +1619,23 @@ fn show_sidebar(session: &mut WindowSession) {
         .set_sidebar_width(session.geometry.sidebar_w);
 }
 
-/// A side-panel row.
+/// A side-panel row. An agent row's status is its label's `(state)`
+/// suffix, the way the section builder derives it; a workspace row
+/// carries none.
 fn srow(id: SidebarRowId, label: &str, active: bool) -> SidebarRow {
+    use crate::mux::attach::panels::AgentStatus;
+    let status = match id {
+        SidebarRowId::Pane(_) => label
+            .rsplit_once('(')
+            .and_then(|(_, state)| state.strip_suffix(')'))
+            .map_or(AgentStatus::None, AgentStatus::from_state),
+        _ => AgentStatus::None,
+    };
     SidebarRow {
         id,
         label: label.to_string(),
         active,
+        status,
     }
 }
 

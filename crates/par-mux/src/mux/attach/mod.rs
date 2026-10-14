@@ -61,6 +61,7 @@ pub mod fuzz_support {
 mod actions;
 mod navigate;
 mod panels;
+mod prefs;
 mod pump;
 mod status_row;
 mod targets;

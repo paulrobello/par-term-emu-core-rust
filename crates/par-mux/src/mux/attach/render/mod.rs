@@ -348,10 +348,13 @@ pub struct PaneRenderer {
     /// The panel's sections (queried workspace roster, more to come) —
     /// `None` while hidden or before the first refresh.
     sidebar_sections: Option<Vec<super::SidebarSection>>,
-    /// The dragged area split: the composed row the workspace/agents
-    /// rule sits on (`None` = the natural flow, the rule trailing the
-    /// workspace rows). Set by the split drag.
-    sidebar_rule_row: Option<u16>,
+    /// The area split: the workspace area's share of the panel's rows
+    /// (default [`super::SIDEBAR_SPLIT_DEFAULT`]). Set by the split drag
+    /// and the persisted client state.
+    sidebar_split: f32,
+    /// The panel is collapsed to the status rail (its strip is
+    /// [`super::SIDEBAR_RAIL_WIDTH`] columns).
+    sidebar_collapsed: bool,
     /// Per-pane effective titles (`pane-title`: the user `-T` label when
     /// set, else the pane's OSC title) — what border labels paint. The
     /// daemon is authoritative; the client re-queries on the throttled
@@ -499,6 +502,23 @@ fn render_session_inner(
     // terminal was touched; the session seeds from it.
     let chords = &client.chords;
     session.render_opts.sidebar_width = chords.sidebar_width;
+    // The panel's persisted state (the dragged width and split, the
+    // chevron's collapse) overrides the config's defaults; the session
+    // writes it back on every drag release and chevron press.
+    if let Some(path) = super::prefs::prefs_path() {
+        let prefs = super::prefs::load(&path);
+        if let Some(width) = prefs.sidebar_width {
+            session.render_opts.sidebar_width =
+                width.clamp(sidebar::SIDEBAR_WIDTH_MIN, sidebar::SIDEBAR_WIDTH_MAX);
+        }
+        if let Some(split) = prefs.sidebar_split.filter(|s| s.is_finite()) {
+            session.renderer.set_sidebar_split(split.clamp(0.1, 0.9));
+        }
+        let collapsed = prefs.sidebar_collapsed.unwrap_or(false);
+        session.sidebar.set_collapsed(collapsed);
+        session.renderer.set_sidebar_collapsed(collapsed);
+        session.sidebar.set_prefs_path(path);
+    }
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.

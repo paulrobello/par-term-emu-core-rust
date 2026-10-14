@@ -972,25 +972,32 @@ fn sidebar_clicks_land_on_the_painted_row() {
         session.renderer.sidebar_row_at(2, 3),
         Some(SidebarRowId::Workspace("+1".into()))
     );
-    // The footer row (host row = renderer height - 1 + 1 = 24... the
-    // 22-row renderer's LAST row at host row 22): the chips answer
-    // only within their own cells — ` new ` spans cols 0..5, ` menu
-    // ` the content's right edge.
+    // The workspace area's last row (the 22-row frame splits 11/11:
+    // composed row 10 = host row 11): the chips answer only within
+    // their own cells — ` new ` spans cols 0..5, ` menu ` the
+    // content's right edge.
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 22),
+        session.renderer.sidebar_row_at(2, 11),
         Some(SidebarRowId::New),
         "the new chip's cell"
     );
     assert_eq!(
-        session.renderer.sidebar_row_at(16, 22),
+        session.renderer.sidebar_row_at(16, 11),
         Some(SidebarRowId::Menu),
         "the menu chip's cell"
     );
     assert_eq!(
-        session.renderer.sidebar_row_at(10, 22),
+        session.renderer.sidebar_row_at(10, 11),
         None,
         "the gap between the chips hits nothing"
     );
+    // The panel's last row (host row 22) carries the chevron beside
+    // the divider column, and only there.
+    assert_eq!(
+        session.renderer.sidebar_row_at(18, 22),
+        Some(SidebarRowId::Collapse)
+    );
+    assert_eq!(session.renderer.sidebar_row_at(2, 22), None);
     // A body row answers across its full content width (the active
     // row's inverted block is clickable anywhere on it).
     assert_eq!(

@@ -108,13 +108,13 @@ pub(super) fn marked_pane_of(
 impl WindowSession {
     /// The display options a renderer built NOW paints with: the
     /// configured [`RenderOptions`], the side-panel width zeroed while
-    /// the panel is hidden.
+    /// the panel is hidden and the rail's while it is collapsed.
     pub(super) fn effective_render_opts(&self) -> RenderOptions {
         RenderOptions {
-            sidebar_width: if self.sidebar.is_on() {
-                self.render_opts.sidebar_width
-            } else {
-                0
+            sidebar_width: match (self.sidebar.is_on(), self.sidebar.is_collapsed()) {
+                (false, _) => 0,
+                (true, true) => crate::mux::attach::panels::SIDEBAR_RAIL_WIDTH,
+                (true, false) => self.render_opts.sidebar_width,
             },
             ..self.render_opts.clone()
         }
@@ -757,8 +757,14 @@ impl WindowSession {
         if self.chrome.tab_strip.cols() != cols {
             self.chrome.tab_strip = TabStrip::new(cols);
         }
+        // The rail is too narrow for the title; its columns stay blank.
         let strip = self.renderer.sidebar_width();
-        let lead = (strip > 0).then_some(("workspaces", strip));
+        let title = if self.sidebar.is_collapsed() {
+            ""
+        } else {
+            "workspaces"
+        };
+        let lead = (strip > 0).then_some((title, strip));
         self.chrome.tab_strip.paint(
             self.status.windows(),
             self.status.active_window.as_deref(),
