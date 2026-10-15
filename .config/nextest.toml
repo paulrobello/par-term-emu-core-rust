@@ -19,3 +19,11 @@ threads = 1
 [[profile.ci.overrides]]
 filter = "test(render_mode_zoom_rename_border_chords)"
 slow-timeout = { period = "30s", terminate-after = 8 }
+
+# The resize-storm race measurement is legitimately long under load, not
+# wedged: the emitter's 300 shell sleeps overshoot under contention, and
+# the storm, the fitted-wait and the quiet-beat waits ride on top (card
+# 01a13c1464c374489bd71fd69b0e3aa9). Same rationale as the chords test.
+[[profile.ci.overrides]]
+filter = "test(resize_storm_post_reply_output_matches_daemon_ground_truth)"
+slow-timeout = { period = "30s", terminate-after = 8 }

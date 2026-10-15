@@ -2010,10 +2010,30 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
     // wheel. (Render mode's size report carries content height — grid
     // minus the status row — so the visible line count is one fewer than
     // the host grid; never pin a specific history line here.)
-    let before = client
-        .send(&format!("capture-pane -t {pane}"))
-        .expect("capture")
-        .join("\n");
+    // The shell's next prompt lands AFTER the loop's last line: baselining
+    // `before` while the prompt was still arriving made the post-wheel
+    // `after` capture differ spuriously (card 01a13c1f0c). Baseline only
+    // once the daemon grid holds still — two identical captures 300ms
+    // apart — so `after` can only differ by a real wheel effect.
+    let settle_deadline = Instant::now() + Duration::from_secs(10);
+    let before = loop {
+        let a = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        std::thread::sleep(Duration::from_millis(300));
+        let b = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if a == b {
+            break a;
+        }
+        assert!(
+            Instant::now() < settle_deadline,
+            "the pane never settled on a prompt: {a:?} vs {b:?}"
+        );
+    };
     assert!(!before.is_empty(), "the pane settled with a live view");
     host.to_child
         .write_all(b"\x1b[<64;10;5M")
@@ -4652,7 +4672,7 @@ fn render_mode_inside_delivery_paints_a_toast() {
         &host,
         &mut all,
         Duration::from_millis(1000),
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     );
     all.clear();
     let reply = hook_report(
@@ -4665,11 +4685,16 @@ fn render_mode_inside_delivery_paints_a_toast() {
         reply.contains(r#""result":"ok""#),
         "claim accepted: {reply}"
     );
+    // Under load the client's frames pace out past one second; a 10s
+    // deadline exhausted before the toast's frames all landed (card
+    // 01a13e1c). The stable window needs no change — it resets on screen
+    // CHANGE, so the 1s cursor heartbeat cannot starve it — but the
+    // deadline must tolerate slow frame pacing.
     screen_stable(
         &host,
         &mut all,
         Duration::from_millis(800),
-        Duration::from_secs(10),
+        Duration::from_secs(30),
     );
     let screen = reconstructed_screen(&all, 24, 80).1;
     let ever: String = screen
@@ -6569,7 +6594,11 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         false
     };
     let mut all_host: Vec<u8> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // 60s, not 30s: under load the emitter's 300 shell sleeps overshoot
+    // past the old bound while the test remains healthy (card
+    // 01a13c1464); nextest's ci profile now grants this test 30s x8, so
+    // the in-test bound sits under the harness kill instead of racing it.
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         while let Ok(bytes) = host.output_rx.try_recv() {
             all_host.extend_from_slice(&bytes);
