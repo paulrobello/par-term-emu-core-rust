@@ -1884,6 +1884,40 @@ fn parses_workspace_commands() {
 }
 
 #[test]
+fn parses_set_workspace_respawn_values_and_query() {
+    for (word, change) in [
+        ("on", RespawnChange::On),
+        ("off", RespawnChange::Off),
+        ("toggle", RespawnChange::Toggle),
+    ] {
+        let command = parse_command(&format!("set-workspace-respawn -t +1 {word}")).unwrap();
+        assert_eq!(
+            command,
+            MuxCommand::SetWorkspaceRespawn {
+                workspace: Target::Id(WorkspaceId(1)),
+                change: Some(change),
+            }
+        );
+        assert!(command.mutates(), "{word} saves");
+    }
+    let query = parse_command("set-workspace-respawn -t main").unwrap();
+    assert_eq!(
+        query,
+        MuxCommand::SetWorkspaceRespawn {
+            workspace: Target::Name("main".to_string()),
+            change: None,
+        }
+    );
+    assert!(!query.mutates(), "the query form reads only");
+    assert!(
+        parse_command("set-workspace-respawn on").is_err(),
+        "-t required"
+    );
+    assert!(parse_command("set-workspace-respawn -t +1 maybe").is_err());
+    assert!(parse_command("set-workspace-respawn -t +1 on off").is_err());
+}
+
+#[test]
 fn parses_list_sessions_with_and_without_a_workspace_filter() {
     assert_eq!(
         parse_command("list-sessions").unwrap(),

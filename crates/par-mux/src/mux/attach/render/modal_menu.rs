@@ -29,6 +29,7 @@ pub(super) fn compose_menu_panel(
             MenuAction::Rename,
             MenuAction::Close,
             MenuAction::NewWorkspace,
+            MenuAction::RespawnToggle,
         ],
         MenuTarget::Commands => &[
             MenuAction::Settings,
@@ -39,7 +40,7 @@ pub(super) fn compose_menu_panel(
     };
     let labels: &[&str] = match target {
         MenuTarget::Tab(_) => &["rename", "close", "add tab"],
-        MenuTarget::Workspace(_) => &["rename", "close", "new"],
+        MenuTarget::Workspace(_) => &["rename", "close", "new", "respawn on exit"],
         MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
     };
     let mut rows = Vec::new();
@@ -210,6 +211,9 @@ impl WindowSession {
             (MenuTarget::Workspace(workspace), MenuAction::Close) => {
                 self.close_workspace_from_menu(conn, &workspace);
             }
+            (MenuTarget::Workspace(workspace), MenuAction::RespawnToggle) => {
+                self.toggle_workspace_respawn(conn, &workspace);
+            }
             (MenuTarget::Commands, MenuAction::Settings) => self.enter_settings(),
             (MenuTarget::Commands, MenuAction::Keybinds) => self.enter_help(),
             (MenuTarget::Commands, MenuAction::ReloadConfig) => self.reload_config(conn),
@@ -219,6 +223,33 @@ impl WindowSession {
             _ => {}
         }
     }
+    /// The workspace menu's `respawn on exit`: flip the workspace's
+    /// keep-one-tab respawn option (`set-workspace-respawn -t {id}
+    /// toggle`) and flash the state the daemon replies.
+    pub(super) fn toggle_workspace_respawn(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        workspace: &str,
+    ) {
+        self.send_then(
+            conn,
+            &format!("set-workspace-respawn -t {workspace} toggle"),
+            |s, _, reply| {
+                let text = if reply.ok {
+                    let state = reply.body.first().map(String::as_str).unwrap_or("?");
+                    format!("respawn on exit: {state}")
+                } else {
+                    format!(
+                        "respawn on exit: {}",
+                        reply.body.first().map(String::as_str).unwrap_or("failed")
+                    )
+                };
+                s.chrome.flash(text);
+                s.draw_status_row();
+            },
+        );
+    }
+
     /// The tab menu's close: `kill-window -t {id}`; when the killed
     /// window is the SHOWN one, land on the session's surviving
     /// daemon-active (or first) window through the select+resync — a

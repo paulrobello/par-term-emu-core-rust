@@ -163,6 +163,9 @@ pub struct MuxPane {
     /// The recorded exit code, valid once `dead` — `None` when the OS had
     /// no exit status to report as the death was observed.
     exit_code: Option<i32>,
+    /// When this pane's process was spawned (a respawn is a new pane) —
+    /// the keep-one-tab respawn's crash-loop guard reads its age.
+    spawned_at: std::time::Instant,
     metadata: HashMap<String, String>,
     /// The hook-reported telemetry, parsed and encoded once on write so the
     /// roster reads it without re-parsing JSON under the tree lock
@@ -449,6 +452,11 @@ impl MuxPane {
     pub fn mark_dead_with_code(&mut self, exit_code: Option<i32>) {
         self.dead = true;
         self.exit_code = exit_code;
+    }
+
+    /// How long ago this pane's process was spawned.
+    pub fn age(&self) -> std::time::Duration {
+        self.spawned_at.elapsed()
     }
 
     /// The exit code captured at [`Self::mark_dead`] — `None` before the
@@ -890,6 +898,7 @@ impl ShellPaneFactory {
             user_title: None,
             dead: false,
             exit_code: None,
+            spawned_at: std::time::Instant::now(),
             metadata: HashMap::new(),
             telemetry: None,
             host_telemetry: None,

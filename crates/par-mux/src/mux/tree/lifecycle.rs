@@ -26,6 +26,7 @@ impl MuxTree {
                 name: strip_controls(name).into_owned(),
                 sessions: Vec::new(),
                 active: 0,
+                respawn_last: false,
             },
         );
         self.active_workspace = Some(id);
@@ -44,6 +45,30 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchWorkspace(workspace_id))?;
         workspace.name = strip_controls(name).into_owned();
         Ok(())
+    }
+
+    /// Set a workspace's keep-one-tab respawn flag
+    /// ([`MuxWorkspace::respawn_last`]).
+    pub fn set_workspace_respawn(
+        &mut self,
+        workspace_id: WorkspaceId,
+        on: bool,
+    ) -> Result<(), MuxError> {
+        self.workspaces
+            .get_mut(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?
+            .respawn_last = on;
+        Ok(())
+    }
+
+    /// Whether `pane` is its workspace's last pane AND that workspace
+    /// restarts its last pane on exit — the reaper's respawn test.
+    pub fn respawns_as_workspace_last_pane(&self, pane: PaneId) -> bool {
+        self.is_workspace_last_pane(pane)
+            && self
+                .workspace_of_pane(pane)
+                .and_then(|id| self.workspaces.get(&id))
+                .is_some_and(|ws| ws.respawn_last)
     }
 
     /// Make `workspace_id` the daemon's active workspace. The workspace's

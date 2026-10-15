@@ -65,6 +65,17 @@ impl SendKeysPayload {
     }
 }
 
+/// What `set-workspace-respawn` does to the flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RespawnChange {
+    /// Turn it on.
+    On,
+    /// Turn it off.
+    Off,
+    /// Flip it.
+    Toggle,
+}
+
 /// How a `resize-pane` moves a pane's borders (T4.C).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResizeAdjustment {
@@ -463,6 +474,17 @@ pub enum MuxCommand {
         /// New name.
         name: String,
     },
+    /// Set, toggle, or read a workspace's keep-one-tab respawn flag
+    /// (`set-workspace-respawn -t +N [on|off|toggle]`): when on, the
+    /// workspace's last pane restarts in place when its process exits
+    /// instead of being held dead. Replies the resulting state (`on` /
+    /// `off`); the bare form is a read-only query.
+    SetWorkspaceRespawn {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+        /// `None` = query.
+        change: Option<RespawnChange>,
+    },
     /// Kill a workspace and every session, window, and pane in it
     /// (`kill-workspace -t +N`).
     KillWorkspace {
@@ -517,6 +539,8 @@ impl MuxCommand {
             | MuxCommand::SelectWorkspace { .. }
             | MuxCommand::RenameWorkspace { .. }
             | MuxCommand::KillWorkspace { .. } => true,
+            // The query form reads only.
+            MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             // The query form reads only; a switch moves persisted pointers.
             MuxCommand::SwitchClient { target } => target.is_some(),
@@ -1082,6 +1106,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("switch-client", parse_switch_client, &[]),
     ("rename-workspace", parse_rename_workspace, &[]),
     ("kill-workspace", parse_kill_workspace, &[]),
+    ("set-workspace-respawn", parse_set_workspace_respawn, &[]),
     ("list-panes", parse_list_panes, &["targeted"]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),

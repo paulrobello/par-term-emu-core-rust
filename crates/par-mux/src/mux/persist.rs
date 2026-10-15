@@ -191,6 +191,14 @@ pub struct PersistWorkspace {
     pub sessions: Vec<u32>,
     /// Index into `sessions` of the workspace's active session.
     pub active_session_index: usize,
+    /// Keep-one-tab respawn ([`crate::mux::tree::MuxWorkspace::respawn_last`]).
+    /// Absent (off) in files written before the option existed, and
+    /// omitted while off so those files keep their shape.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub respawn_last: bool,
 }
 
 /// One persisted session.
@@ -371,6 +379,7 @@ struct WorkspaceCapture {
     name: String,
     active: usize,
     sessions: Vec<SessionId>,
+    respawn_last: bool,
 }
 
 struct SessionCapture {
@@ -414,6 +423,7 @@ impl PersistCapture {
                 id: workspace.id.0,
                 name: workspace.name,
                 active_session_index: workspace.active,
+                respawn_last: workspace.respawn_last,
                 sessions: workspace
                     .sessions
                     .into_iter()
@@ -500,6 +510,7 @@ impl MuxTree {
                     name: workspace.name.clone(),
                     active: workspace.active,
                     sessions: workspace.sessions.clone(),
+                    respawn_last: workspace.respawn_last,
                 })
                 .collect(),
             active_workspace: self.active_workspace,
@@ -708,6 +719,7 @@ impl MuxTree {
                     name: crate::mux::strip_controls(&workspace.name).into_owned(),
                     sessions,
                     active,
+                    respawn_last: workspace.respawn_last,
                 },
             );
             if state.active_workspace == Some(workspace.id) {

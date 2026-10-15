@@ -137,6 +137,11 @@ pub struct MuxWorkspace {
     pub sessions: Vec<SessionId>,
     /// Index into `sessions` of the active session.
     pub active: usize,
+    /// Keep-one-tab respawn (`set-workspace-respawn`): when the
+    /// workspace's LAST pane exits on its own, the reaper restarts it in
+    /// place (`respawn-pane` mechanics — same pane id, its stored command
+    /// and cwd) instead of holding it dead. Off by default; persisted.
+    pub respawn_last: bool,
 }
 
 /// A pane spawn reserved under the tree lock but not yet run — the first
@@ -903,6 +908,7 @@ impl MuxTree {
                 name: "main".to_string(),
                 sessions: Vec::new(),
                 active: 0,
+                respawn_last: false,
             },
         );
         self.active_workspace = Some(id);

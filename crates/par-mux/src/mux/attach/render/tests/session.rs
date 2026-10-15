@@ -40,6 +40,7 @@ fn compose_menu_panel_maps_rows_to_actions() {
             Some(MenuAction::Rename),
             Some(MenuAction::Close),
             Some(MenuAction::NewWorkspace),
+            Some(MenuAction::RespawnToggle),
             None
         ]
     );

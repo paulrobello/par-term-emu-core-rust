@@ -211,6 +211,7 @@ fn route_command(
         | MuxCommand::SwitchClient { .. }
         | MuxCommand::RenameWorkspace { .. }
         | MuxCommand::KillWorkspace { .. }
+        | MuxCommand::SetWorkspaceRespawn { .. }
         | MuxCommand::KillServer) => route_session_command(ctx, command),
         command @ (MuxCommand::NewWindow { .. }
         | MuxCommand::SelectWindow { .. }

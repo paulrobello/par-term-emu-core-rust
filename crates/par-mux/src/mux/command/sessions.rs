@@ -178,6 +178,38 @@ pub(super) fn parse_rename_workspace(a: &Args<'_>) -> Result<MuxCommand, String>
     }
 }
 
+/// `set-workspace-respawn -t +N [on|off|toggle]` — at most one value
+/// word; none is the query form.
+pub(super) fn parse_set_workspace_respawn(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let workspace = a.workspace("-t")?;
+    let words = shell_split(a.line);
+    let mut positional = Vec::new();
+    let mut iter = words.iter().skip(1);
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "-t" => {
+                iter.next();
+            }
+            _ => positional.push(word.clone()),
+        }
+    }
+    let change = match positional.as_slice() {
+        [] => None,
+        [value] => Some(match value.as_str() {
+            "on" => RespawnChange::On,
+            "off" => RespawnChange::Off,
+            "toggle" => RespawnChange::Toggle,
+            other => {
+                return Err(format!(
+                    "set-workspace-respawn: expected on, off, or toggle, got {other:?}"
+                ))
+            }
+        }),
+        _ => return Err("set-workspace-respawn takes at most one value".to_string()),
+    };
+    Ok(MuxCommand::SetWorkspaceRespawn { workspace, change })
+}
+
 /// `kill-workspace -t +N`.
 pub(super) fn parse_kill_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillWorkspace {

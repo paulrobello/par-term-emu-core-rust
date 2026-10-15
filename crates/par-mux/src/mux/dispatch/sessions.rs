@@ -23,6 +23,9 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
             cmd_rename_workspace(ctx, workspace, name)
         }
         MuxCommand::KillWorkspace { workspace } => cmd_kill_workspace(ctx, workspace),
+        MuxCommand::SetWorkspaceRespawn { workspace, change } => {
+            cmd_set_workspace_respawn(ctx, workspace, change)
+        }
         MuxCommand::KillServer => cmd_kill_server(ctx),
         other => unreachable!("route_command sent a non-session command: {other:?}"),
     }
@@ -415,6 +418,37 @@ pub(super) fn cmd_rename_workspace(
         Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
+}
+
+/// `set-workspace-respawn`: apply the change (if any) and reply the
+/// flag's resulting state, `on` or `off`.
+pub(super) fn cmd_set_workspace_respawn(
+    ctx: &Ctx<'_>,
+    workspace: Target<WorkspaceId>,
+    change: Option<crate::mux::command::RespawnChange>,
+) -> Outcome {
+    use crate::mux::command::RespawnChange;
+    let mut guard = ctx.tree.lock();
+    let workspace = match guard.resolve_workspace_target(workspace) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    let current = guard
+        .workspace(workspace)
+        .map(|ws| ws.respawn_last)
+        .unwrap_or(false);
+    let next = match change {
+        None => current,
+        Some(RespawnChange::On) => true,
+        Some(RespawnChange::Off) => false,
+        Some(RespawnChange::Toggle) => !current,
+    };
+    if next != current {
+        if let Err(err) = guard.set_workspace_respawn(workspace, next) {
+            return Outcome::err(ctx, &err.to_string());
+        }
+    }
+    Outcome::ok(ctx, if next { "on" } else { "off" })
 }
 
 pub(super) fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {

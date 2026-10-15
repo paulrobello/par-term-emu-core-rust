@@ -941,6 +941,34 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
     assert_eq!(session.window, "@0");
 }
 
+/// The workspace menu's `respawn on exit` row sends the toggle and
+/// flashes the state the daemon replies.
+#[test]
+fn workspace_menu_respawn_row_toggles_and_flashes_the_state() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "set-workspace-respawn -t +2 toggle".to_string(),
+        "on".to_string(),
+    );
+    let (rx, mut conn, mut session) = two_pane_session(
+        "menu-respawn",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.open_menu(MenuTarget::Workspace("+2".to_string()));
+    assert_eq!(overlay_text(&session)[4].trim(), "respawn on exit");
+    session.menu_click(&mut conn, 4);
+    assert!(session.menu().is_none(), "the click closes the menu");
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec!["set-workspace-respawn -t +2 toggle".to_string()]
+    );
+    assert_eq!(session.chrome.flash_text(), Some("respawn on exit: on"));
+}
+
 /// The tab and workspace menus' remaining rows open their prompts
 /// with the right target and seed; keys/bytes other than q/Escape
 /// leave the menu up.

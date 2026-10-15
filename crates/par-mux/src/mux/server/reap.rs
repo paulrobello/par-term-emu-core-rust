@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// The keep-one-tab respawn's crash-loop guard: a last pane whose
+/// process lived less than this is held dead instead of restarted, so a
+/// command that exits at once (a broken shell rc, a typo'd agent) cannot
+/// respawn on every reap tick.
+pub(super) const RESPAWN_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// One auto-remove removal: the window that held the pane, its active pane
 /// when the window survived (the `%window-pane-changed` target), and
 /// whether the cascade removed a session (the `%sessions-changed` cue).
@@ -36,6 +42,13 @@ pub(super) struct Removal {
 /// (see [`EXIT_EMPTY_GRACE`] and [`MuxTree::all_panes_dead`]) — held panes
 /// are for clients that might come back, and with nobody connected and
 /// nothing alive the daemon collects itself.
+///
+/// Keep-one-tab respawn: a workspace with `respawn_last` on (the
+/// `set-workspace-respawn` option) restarts its LAST pane instead of
+/// holding it — under either remain-on-exit setting — through the
+/// `respawn-pane` command itself, after the `%pane-exited` broadcast, so
+/// clients see the death, then `%pane-respawned`, on the same pane id. A
+/// pane that lived under [`RESPAWN_MIN_AGE`] is held dead instead.
 pub(super) fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -150,6 +163,45 @@ pub(super) fn reap_dead_panes(
     }
     if workspaces_changed {
         broadcast_notification(clients, &TmuxNotification::WorkspacesChanged);
+    }
+    // Keep-one-tab respawn, evaluated after the removals: of two same-tick
+    // deaths the survivor is the last pane by now. Collected under one
+    // lock, dispatched after it drops (the command takes the tree itself).
+    let respawns: Vec<PaneId> = {
+        let guard = tree.lock();
+        just_died
+            .iter()
+            .map(|&(pane_id, _)| pane_id)
+            .filter(|&pane_id| {
+                guard.respawns_as_workspace_last_pane(pane_id)
+                    && guard
+                        .pane(pane_id)
+                        .is_some_and(|pane| pane.age() >= RESPAWN_MIN_AGE)
+            })
+            .collect()
+    };
+    for pane_id in respawns {
+        let ctx = Ctx {
+            client_id: None,
+            tree,
+            clients,
+            command_number: 0,
+            shutdown: None,
+            config: config.map(|config| &**config),
+        };
+        // The reply has no reader; the command broadcasts
+        // `%pane-respawned` and saves the state itself.
+        let _ = dispatch_command(
+            crate::mux::command::MuxCommand::RespawnPane {
+                pane: crate::mux::ids::Target::Id(pane_id),
+                kill: false,
+                start_dir: None,
+                command: None,
+            },
+            &ctx,
+            persist,
+            None,
+        );
     }
     if !just_died.is_empty() {
         if let Some(tx) = persist {

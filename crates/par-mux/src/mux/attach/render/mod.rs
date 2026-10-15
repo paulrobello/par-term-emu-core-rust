@@ -826,6 +826,8 @@ enum MenuAction {
     Close,
     AddTab,
     NewWorkspace,
+    /// Toggle the workspace's keep-one-tab respawn option.
+    RespawnToggle,
     Keybinds,
     Settings,
     ReloadConfig,
