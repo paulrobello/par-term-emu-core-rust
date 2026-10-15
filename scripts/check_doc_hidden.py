@@ -36,7 +36,10 @@ DESIGN_REL = "crates/par-term-emu-core/DESIGN.md"
 BEGIN = "<!-- doc-hidden-baseline:begin -->"
 END = "<!-- doc-hidden-baseline:end -->"
 
-HIDDEN_RE = re.compile(r"^\s*#\[doc\(hidden\)\]\s*$")
+# `#[doc(hidden)]` alone on its line, or followed by its item on the same line.
+HIDDEN_RE = re.compile(r"^(?P<indent>\s*)#\[doc\(hidden\)\]\s*(?P<rest>.*)$")
+# Lines whose item is deliberately not a leak: restricted visibility or no `pub`.
+NOT_EXPORTED_RE = re.compile(r"^\s*(pub\(|(?!pub\b))")
 # Lines that may sit between `#[doc(hidden)]` and the item it marks.
 ATTR_OR_COMMENT_RE = re.compile(r"^\s*(#\[|///|//)")
 # `pub` exactly: `pub(crate)` / `pub(super)` items are not a leak.
@@ -93,16 +96,30 @@ def extract(root: Path) -> set[str]:
         lines = path.read_text(encoding="utf-8").splitlines()
         module = top_module(rel)
         for i, line in enumerate(lines):
-            if not HIDDEN_RE.match(line):
+            hidden = HIDDEN_RE.match(line)
+            if not hidden:
                 continue
-            j = i + 1
-            while j < len(lines) and ATTR_OR_COMMENT_RE.match(lines[j]):
-                j += 1
-            if j >= len(lines):
-                continue
-            m = ITEM_RE.match(lines[j])
+            if hidden.group("rest"):
+                # Inline form: `#[doc(hidden)] pub fn x()` on one line.
+                j = i
+                item_line = hidden.group("indent") + hidden.group("rest")
+            else:
+                j = i + 1
+                while j < len(lines) and ATTR_OR_COMMENT_RE.match(lines[j]):
+                    j += 1
+                if j >= len(lines):
+                    fail(
+                        f"cannot classify {SRC_REL}/{rel}:{i + 1}: #[doc(hidden)] at end of file"
+                    )
+                item_line = lines[j]
+            m = ITEM_RE.match(item_line)
             if not m:
-                continue  # `pub(crate)` or non-`pub`: hidden but not exported
+                if NOT_EXPORTED_RE.match(item_line):
+                    continue  # `pub(crate)` or non-`pub`: hidden but not exported
+                fail(
+                    f"cannot classify {SRC_REL}/{rel}:{j + 1}: `{item_line.strip()}` "
+                    "follows #[doc(hidden)] but matches no known pub item form"
+                )
             if m.group("use"):
                 name = m.group("use").rsplit("::", 1)[-1]
                 found.add(f"{module}::{name} (re-export)")
@@ -239,6 +256,18 @@ def self_test() -> None:
             encoding="utf-8",
         )
         _expect_failure(root, "no longer #[doc(hidden)] pub")
+
+        # The inline form `#[doc(hidden)] pub fn x()` is extracted, not skipped.
+        build_synthetic_tree(root)
+        with mod_rs.open("a", encoding="utf-8") as fh:
+            fh.write("#[doc(hidden)] pub fn inline_leak() {}\n")
+        _expect_failure(root, "terminal::inline_leak (fn)")
+
+        # An unparseable pub item after #[doc(hidden)] fails closed.
+        build_synthetic_tree(root)
+        with mod_rs.open("a", encoding="utf-8") as fh:
+            fh.write("#[doc(hidden)]\npub macro_rules_like! odd\n")
+        _expect_failure(root, "cannot classify")
 
         # Missing markers fail closed.
         build_synthetic_tree(root)
