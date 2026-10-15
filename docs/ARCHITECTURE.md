@@ -51,7 +51,7 @@ The repository is a Cargo workspace (ARC-007 O2). Three crates carry the code, a
 graph LR
     Root["par-term-emu-core-rust (root)<br/>src/: streaming/, python_bindings/, ffi.rs,<br/>prelude.rs, bin/streaming_server/<br/>re-exports the pre-split public paths"]
     Mux["par-mux<br/>crates/par-mux/<br/>src/mux/, bin/par_mux/"]
-    Core["par-term-emu-core<br/>crates/par-term-emu-core/<br/>terminal/, grid/, pty_session/, graphics/,<br/>screenshot/, tmux_control.rs"]
+    Core["par-term-emu-core<br/>crates/par-term-emu-core/<br/>terminal/, grid/, pty_session/, graphics/,<br/>screenshot/, tmux_control/"]
     Derive["par-term-emu-derive<br/>derive/ (proc macros)"]
 
     Root --> Core
@@ -69,7 +69,7 @@ graph LR
     class Derive neutral
 ```
 
-- **`par-term-emu-core`** holds the terminal state machine, grid, PTY session, graphics protocols, screenshot renderer, and the tmux control-mode parser (`tmux_control.rs`). With no features it is the headless (`sim`) profile. Design and invariants: [crates/par-term-emu-core/DESIGN.md](../crates/par-term-emu-core/DESIGN.md).
+- **`par-term-emu-core`** holds the terminal state machine, grid, PTY session, graphics protocols, screenshot renderer, and the tmux control-mode parser (`tmux_control/`). With no features it is the headless (`sim`) profile. Design and invariants: [crates/par-term-emu-core/DESIGN.md](../crates/par-term-emu-core/DESIGN.md).
 - **`par-mux`** is the multiplexer library (feature `mux`), the `par-mux` daemon binary (feature `mux-bin`), and the attach client (feature `attach`). It depends on the core only and never on the root, so the daemon builds without Python or the streaming stack. Its integration suites live in `crates/par-mux/tests/`.
 - **The root** keeps the streaming server, the PyO3 bindings, the C FFI, the curated `prelude` (`src/prelude.rs`), and the `par-term-streamer` binary. Its `src/lib.rs` re-exports the core's modules (and `par_mux::mux` as `mux` behind the `mux` feature), so every pre-split `par_term_emu_core_rust::…` path still resolves.
 - `par-term-emu-core` and `par-mux` share the root's version, and each dependent pins them with `=X.Y.Z`. The derive crate versions independently (bump it only when the derive code changes; `make derive-version-check` gates the spec). Publishing to crates.io runs in dependency order: derive, then `par-term-emu-core`, then `par-mux`, then the root.
@@ -390,7 +390,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `conformance_level.rs` - VT terminal conformance level support
   - VT100/VT220/VT320/VT420/VT520 level definitions
   - Feature compatibility management
-- `tmux_control.rs` - Tmux control protocol support
+- `tmux_control/` - Tmux control protocol support (`notification.rs` notification taxonomy, `parser.rs` parse state machine)
   - Control mode protocol parsing (`tmux -C`)
   - Asynchronous notification handling
   - Pane output management
