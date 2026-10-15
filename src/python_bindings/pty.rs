@@ -93,6 +93,34 @@ crate::python_bindings::common::impl_terminal_debug_snapshots!(PyPtyTerminal);
 crate::python_bindings::common::impl_terminal_file_transfer!(PyPtyTerminal);
 crate::python_bindings::common::impl_terminal_exports!(PyPtyTerminal);
 crate::python_bindings::common::impl_terminal_screenshot_methods!(PyPtyTerminal);
+crate::python_bindings::common::impl_terminal_resize_pixels!(
+    PyPtyTerminal,
+    /// Resize the PTY, including pixel dimensions
+    ///
+    /// Args:
+    ///     cols: New columns
+    ///     rows: New rows
+    ///     pixel_width: Text area width in pixels
+    ///     pixel_height: Text area height in pixels
+);
+
+impl crate::python_bindings::common::PixelResize for PyPtyTerminal {
+    fn apply_pixel_resize(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: usize,
+        pixel_height: usize,
+    ) -> PyResult<()> {
+        self.inner.resize_with_pixels(
+            to_u16("cols", cols)?,
+            to_u16("rows", rows)?,
+            to_u16("pixel_width", pixel_width)?,
+            to_u16("pixel_height", pixel_height)?,
+        )?;
+        Ok(())
+    }
+}
 
 /// QA-224: PtySession's write_all can park on a full PTY buffer for as long
 /// as the child refuses to read, so the GIL must not be held across it
@@ -226,30 +254,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Resize the PTY, including pixel dimensions
-    ///
-    /// Args:
-    ///     cols: New columns
-    ///     rows: New rows
-    ///     pixel_width: Text area width in pixels
-    ///     pixel_height: Text area height in pixels
-    #[pyo3(signature = (cols, rows, pixel_width, pixel_height))]
-    fn resize_pixels(
-        &mut self,
-        cols: usize,
-        rows: usize,
-        pixel_width: usize,
-        pixel_height: usize,
-    ) -> PyResult<()> {
-        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
-        self.inner.resize_with_pixels(
-            to_u16("cols", cols)?,
-            to_u16("rows", rows)?,
-            to_u16("pixel_width", pixel_width)?,
-            to_u16("pixel_height", pixel_height)?,
-        )?;
-        Ok(())
-    }
+    // resize_pixels: provided by impl_terminal_resize_pixels! (ARC-006)
 
     /// Send a resize pulse (SIGWINCH) with the current size
     ///

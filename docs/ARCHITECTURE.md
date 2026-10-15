@@ -51,7 +51,7 @@ The repository is a Cargo workspace (ARC-007 O2). Three crates carry the code, a
 graph LR
     Root["par-term-emu-core-rust (root)<br/>src/: streaming/, python_bindings/, ffi.rs,<br/>prelude.rs, bin/streaming_server/<br/>re-exports the pre-split public paths"]
     Mux["par-mux<br/>crates/par-mux/<br/>src/mux/, bin/par_mux/"]
-    Core["par-term-emu-core<br/>crates/par-term-emu-core/<br/>terminal/, grid/, pty_session/, graphics/,<br/>screenshot/, tmux_control.rs"]
+    Core["par-term-emu-core<br/>crates/par-term-emu-core/<br/>terminal/, grid/, pty_session/, graphics/,<br/>screenshot/, tmux_control/"]
     Derive["par-term-emu-derive<br/>derive/ (proc macros)"]
 
     Root --> Core
@@ -69,7 +69,7 @@ graph LR
     class Derive neutral
 ```
 
-- **`par-term-emu-core`** holds the terminal state machine, grid, PTY session, graphics protocols, screenshot renderer, and the tmux control-mode parser (`tmux_control.rs`). With no features it is the headless (`sim`) profile. Design and invariants: [crates/par-term-emu-core/DESIGN.md](../crates/par-term-emu-core/DESIGN.md).
+- **`par-term-emu-core`** holds the terminal state machine, grid, PTY session, graphics protocols, screenshot renderer, and the tmux control-mode parser (`tmux_control/`). With no features it is the headless (`sim`) profile. Design and invariants: [crates/par-term-emu-core/DESIGN.md](../crates/par-term-emu-core/DESIGN.md).
 - **`par-mux`** is the multiplexer library (feature `mux`), the `par-mux` daemon binary (feature `mux-bin`), and the attach client (feature `attach`). It depends on the core only and never on the root, so the daemon builds without Python or the streaming stack. Its integration suites live in `crates/par-mux/tests/`.
 - **The root** keeps the streaming server, the PyO3 bindings, the C FFI, the curated `prelude` (`src/prelude.rs`), and the `par-term-streamer` binary. Its `src/lib.rs` re-exports the core's modules (and `par_mux::mux` as `mux` behind the `mux` feature), so every pre-split `par_term_emu_core_rust::…` path still resolves.
 - `par-term-emu-core` and `par-mux` share the root's version, and each dependent pins them with `=X.Y.Z`. The derive crate versions independently (bump it only when the derive code changes; `make derive-version-check` gates the spec). Publishing to crates.io runs in dependency order: derive, then `par-term-emu-core`, then `par-mux`, then the root.
@@ -390,7 +390,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `conformance_level.rs` - VT terminal conformance level support
   - VT100/VT220/VT320/VT420/VT520 level definitions
   - Feature compatibility management
-- `tmux_control.rs` - Tmux control protocol support
+- `tmux_control/` - Tmux control protocol support (`notification.rs` notification taxonomy, `parser.rs` parse state machine)
   - Control mode protocol parsing (`tmux -C`)
   - Asynchronous notification handling
   - Pane output management
@@ -605,6 +605,8 @@ The Python bindings live in the root crate under `src/python_bindings/`. `src/py
 - `trigger_api.rs` - Trigger registration and matching
 
 The split is a relocation out of a single monolithic `#[pymethods]` block; all methods resolve on the same `Terminal` Python class because Rust allows multiple `impl` blocks for one type (pyo3's `multiple-pymethods` feature).
+
+**Surface freeze (ARC-001).** `Terminal` (389 methods) and `PtyTerminal` (206) do not grow. New API areas ship as separate pyclasses with their own cohesive surface, following `ScreenshotConfig`, `StreamingConfig`, `WidthConfig`, `Macro`, and the `types/` data classes, and are reached from `Terminal` through at most one accessor. `make api-surface-check` (`scripts/check_api_surface.py`, part of `checkall`) counts the unique non-dunder methods of both classes in `_native.pyi` and fails when a count exceeds its baseline, or drops without the baseline being lowered to match. Splitting the existing flat surface into per-area classes is a long-term roadmap item, not done yet.
 
 Other submodules:
 - `pty.rs` - `PyPtyTerminal` (`inner: PtySession`), the PTY-backed class. It reaches the `Terminal` through `PtySession`'s `Arc<RwLock<Terminal>>` rather than owning it directly.

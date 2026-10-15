@@ -1161,40 +1161,100 @@ pub fn encode_server_message<'py>(
     message_type: &str,
     kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    use crate::streaming::protocol::ServerMessage;
-
-    encode_tagged_message(
-        py,
-        message_type,
-        ServerMessage::from_py_kwargs(message_type, kwargs)?,
-        ServerMessage::py_type_tags(),
-        crate::streaming::encode_server_message,
-    )
+    encode_message::<crate::streaming::protocol::ServerMessage>(py, message_type, kwargs)
 }
 
-/// The shared tail of `encode_server_message`/`encode_client_message`:
-/// reject an unknown `message_type` (listing `type_tags`), then protobuf-
-/// encode the decoded message with `encode`.
+/// One message direction's Python-dict and protobuf codec: the seam that lets
+/// `encode_message`/`decode_message` serve both `ServerMessage` and
+/// `ClientMessage` (ARC-006).
 #[cfg(feature = "streaming")]
-fn encode_tagged_message<'py, M>(
+trait MessageCodec: Sized {
+    fn from_py_kwargs(
+        tag: &str,
+        kwargs: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<Option<Self>>;
+    fn py_type_tags() -> &'static [&'static str];
+    fn to_py_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>>;
+    fn encode(&self) -> crate::streaming::Result<Vec<u8>>;
+    fn decode(data: &[u8]) -> crate::streaming::Result<Self>;
+}
+
+#[cfg(feature = "streaming")]
+macro_rules! impl_message_codec {
+    ($msg:ty, $encode:path, $decode:path) => {
+        impl MessageCodec for $msg {
+            fn from_py_kwargs(
+                tag: &str,
+                kwargs: Option<&Bound<'_, pyo3::types::PyDict>>,
+            ) -> PyResult<Option<Self>> {
+                <$msg>::from_py_kwargs(tag, kwargs)
+            }
+            fn py_type_tags() -> &'static [&'static str] {
+                <$msg>::py_type_tags()
+            }
+            fn to_py_dict<'py>(
+                &self,
+                py: Python<'py>,
+            ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+                <$msg>::to_py_dict(self, py)
+            }
+            fn encode(&self) -> crate::streaming::Result<Vec<u8>> {
+                $encode(self)
+            }
+            fn decode(data: &[u8]) -> crate::streaming::Result<Self> {
+                $decode(data)
+            }
+        }
+    };
+}
+
+#[cfg(feature = "streaming")]
+impl_message_codec!(
+    crate::streaming::protocol::ServerMessage,
+    crate::streaming::encode_server_message,
+    crate::streaming::decode_server_message
+);
+#[cfg(feature = "streaming")]
+impl_message_codec!(
+    crate::streaming::protocol::ClientMessage,
+    crate::streaming::encode_client_message,
+    crate::streaming::decode_client_message
+);
+
+/// Shared body of `encode_server_message`/`encode_client_message`: build the
+/// message from its `"type"` tag and kwargs, reject an unknown tag (listing
+/// every valid one), then protobuf-encode it.
+#[cfg(feature = "streaming")]
+fn encode_message<'py, M: MessageCodec>(
     py: Python<'py>,
     message_type: &str,
-    msg: Option<M>,
-    type_tags: &[&str],
-    encode: impl FnOnce(&M) -> crate::streaming::Result<Vec<u8>>,
+    kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let msg = msg.ok_or_else(|| {
+    let msg = M::from_py_kwargs(message_type, kwargs)?.ok_or_else(|| {
         PyRuntimeError::new_err(format!(
             "Unknown message type: {}. Valid types: {}",
             message_type,
-            type_tags.join(", ")
+            M::py_type_tags().join(", ")
         ))
     })?;
 
-    let encoded =
-        encode(&msg).map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
+    let encoded = msg
+        .encode()
+        .map_err(|e| PyRuntimeError::new_err(format!("Encoding error: {}", e)))?;
 
     Ok(PyBytes::new(py, &encoded))
+}
+
+/// Shared body of `decode_server_message`/`decode_client_message`.
+#[cfg(feature = "streaming")]
+fn decode_message<'py, M: MessageCodec>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let msg =
+        M::decode(data).map_err(|e| PyRuntimeError::new_err(format!("Decoding error: {}", e)))?;
+
+    msg.to_py_dict(py)
 }
 
 /// Decode a binary protobuf server message
@@ -1220,10 +1280,7 @@ pub fn decode_server_message<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let msg = crate::streaming::decode_server_message(data)
-        .map_err(|e| PyRuntimeError::new_err(format!("Decoding error: {}", e)))?;
-
-    msg.to_py_dict(py)
+    decode_message::<crate::streaming::protocol::ServerMessage>(py, data)
 }
 
 /// Encode a client message to binary protobuf format
@@ -1254,15 +1311,7 @@ pub fn encode_client_message<'py>(
     message_type: &str,
     kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    use crate::streaming::protocol::ClientMessage;
-
-    encode_tagged_message(
-        py,
-        message_type,
-        ClientMessage::from_py_kwargs(message_type, kwargs)?,
-        ClientMessage::py_type_tags(),
-        crate::streaming::encode_client_message,
-    )
+    encode_message::<crate::streaming::protocol::ClientMessage>(py, message_type, kwargs)
 }
 
 /// Decode a binary protobuf client message
@@ -1288,13 +1337,16 @@ pub fn decode_client_message<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let msg = crate::streaming::decode_client_message(data)
-        .map_err(|e| PyRuntimeError::new_err(format!("Decoding error: {}", e)))?;
-
-    msg.to_py_dict(py)
+    decode_message::<crate::streaming::protocol::ClientMessage>(py, data)
 }
 
 // Stub functions for non-streaming builds
+/// The error every non-streaming codec stub raises.
+#[cfg(not(feature = "streaming"))]
+fn streaming_disabled() -> PyErr {
+    PyRuntimeError::new_err("Streaming feature not enabled. Rebuild with --features streaming")
+}
+
 #[cfg(not(feature = "streaming"))]
 /// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
@@ -1304,9 +1356,7 @@ pub fn encode_server_message<'py>(
     _message_type: &str,
     _kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    Err(PyRuntimeError::new_err(
-        "Streaming feature not enabled. Rebuild with --features streaming",
-    ))
+    Err(streaming_disabled())
 }
 
 #[cfg(not(feature = "streaming"))]
@@ -1316,9 +1366,7 @@ pub fn decode_server_message<'py>(
     _py: Python<'py>,
     _data: &[u8],
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    Err(PyRuntimeError::new_err(
-        "Streaming feature not enabled. Rebuild with --features streaming",
-    ))
+    Err(streaming_disabled())
 }
 
 #[cfg(not(feature = "streaming"))]
@@ -1330,9 +1378,7 @@ pub fn encode_client_message<'py>(
     _message_type: &str,
     _kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    Err(PyRuntimeError::new_err(
-        "Streaming feature not enabled. Rebuild with --features streaming",
-    ))
+    Err(streaming_disabled())
 }
 
 #[cfg(not(feature = "streaming"))]
@@ -1342,9 +1388,7 @@ pub fn decode_client_message<'py>(
     _py: Python<'py>,
     _data: &[u8],
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    Err(PyRuntimeError::new_err(
-        "Streaming feature not enabled. Rebuild with --features streaming",
-    ))
+    Err(streaming_disabled())
 }
 
 /// Registers this module's pyclasses on the `_native` module (ENH-054).

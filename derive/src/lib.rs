@@ -84,12 +84,126 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   the wrong type (mirrors the previous hand-written `unwrap_or` defaults).
 /// - `#[pydict(encode_skip)]` — the Python encode API never reads this field;
 ///   it is constructed with `Default::default()` (e.g. `Output::timestamp`).
+/// - `#[pydict(nested)]` — the field is an `Option<T>` or `Vec<T>` of a
+///   struct that itself derives `PyDictConvert`: the value becomes `T`'s
+///   dict (or a list of them), and the key is **omitted** when the `Option`
+///   is `None` or the `Vec` is empty. Nested values are never read back from
+///   kwargs; encode constructs them with `Default::default()`.
 ///
 /// Missing/wrong-typed kwargs silently fall back to defaults, matching the
 /// hand-written conversion this derive replaces.
+///
+/// # On a struct
+///
+/// A struct with named fields gets only `to_py_dict(&self, py)`: one key per
+/// field (field name == key name), no `"type"` key, and `#[pydict(nested)]`
+/// honored as above. It exists so `#[pydict(nested)]` enum fields (the
+/// `SystemStats` cpu/memory/disk/network/load-average payloads) derive their
+/// dict shape from the struct definition instead of a hand-written copy.
 #[proc_macro_derive(PyDictConvert, attributes(pydict))]
 pub fn derive_py_dict_convert(input: TokenStream) -> TokenStream {
     expand_py_dict_convert(input.into()).into()
+}
+
+/// The `__d.set_item(..)` statement(s) for one field whose value is the
+/// reference expression `value` (`&FieldType`).
+fn set_field_tokens(
+    key: &str,
+    value: proc_macro2::TokenStream,
+    ty: &syn::Type,
+    to_with: Option<&Path>,
+    nested: bool,
+) -> proc_macro2::TokenStream {
+    if nested {
+        if is_option_type(ty) {
+            quote! {
+                if let Some(__v) = #value {
+                    __d.set_item(#key, __v.to_py_dict(py)?)?;
+                }
+            }
+        } else {
+            quote! {
+                if !(#value).is_empty() {
+                    let __l = pyo3::types::PyList::empty(py);
+                    for __v in #value {
+                        pyo3::types::PyListMethods::append(&__l, __v.to_py_dict(py)?)?;
+                    }
+                    __d.set_item(#key, __l)?;
+                }
+            }
+        }
+    } else {
+        match to_with {
+            Some(path) => quote! { __d.set_item(#key, #path(py, #value)?)?; },
+            None => quote! { __d.set_item(#key, #value)?; },
+        }
+    }
+}
+
+/// Parse the `#[pydict(..)]` attributes of a struct field for the struct
+/// form, which accepts only `nested` and `to_with`/`with`.
+fn struct_field_attrs(field: &syn::Field) -> syn::Result<(Option<Path>, bool)> {
+    let mut to_with = None;
+    let mut nested = false;
+    for attr in &field.attrs {
+        if !attr.path().is_ident("pydict") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("with") || meta.path.is_ident("to_with") {
+                to_with = Some(parse_path_value(&meta)?);
+            } else if meta.path.is_ident("nested") {
+                nested = true;
+            } else {
+                return Err(meta.error("unknown pydict struct-field attribute"));
+            }
+            Ok(())
+        })?;
+    }
+    Ok((to_with, nested))
+}
+
+fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_macro2::TokenStream {
+    let name = &input.ident;
+    let Fields::Named(named) = &data.fields else {
+        return syn::Error::new_spanned(input, "PyDictConvert structs need named fields")
+            .to_compile_error();
+    };
+    let mut sets = Vec::new();
+    for field in &named.named {
+        let (to_with, nested) = match struct_field_attrs(field) {
+            Ok(parsed) => parsed,
+            Err(err) => return err.to_compile_error(),
+        };
+        let ident = field.ident.as_ref().expect("named field has ident");
+        sets.push(set_field_tokens(
+            &ident.to_string(),
+            quote! { &self.#ident },
+            &field.ty,
+            to_with.as_ref(),
+            nested,
+        ));
+    }
+    quote! {
+        #[cfg(any(feature = "python", feature = "python-test"))]
+        const _: () = {
+            use pyo3::types::PyDictMethods;
+
+            #[automatically_derived]
+            impl #name {
+                /// Convert this struct into its Python dict form: one key per
+                /// named field.
+                pub fn to_py_dict<'py>(
+                    &self,
+                    py: pyo3::Python<'py>,
+                ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+                    let __d = pyo3::types::PyDict::new(py);
+                    #( #sets )*
+                    Ok(__d)
+                }
+            }
+        };
+    }
 }
 
 fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
@@ -101,9 +215,13 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
 
     let variants = match &input.data {
         syn::Data::Enum(data) => &data.variants,
-        _ => {
-            return syn::Error::new_spanned(&input, "PyDictConvert only supports enums")
-                .to_compile_error();
+        syn::Data::Struct(data) => return expand_py_dict_struct(&input, data),
+        syn::Data::Union(_) => {
+            return syn::Error::new_spanned(
+                &input,
+                "PyDictConvert only supports enums and named-field structs",
+            )
+            .to_compile_error();
         }
     };
 
@@ -114,6 +232,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
         from_with: Option<Path>,
         default: Option<Expr>,
         encode_skip: bool,
+        nested: bool,
     }
 
     struct VariantInfo {
@@ -161,6 +280,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
                 let mut from_with = None;
                 let mut default = None;
                 let mut encode_skip = false;
+                let mut nested = false;
                 for attr in &field.attrs {
                     if !attr.path().is_ident("pydict") {
                         continue;
@@ -178,6 +298,8 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
                                 return Err(meta.error("encode_skip takes no value"));
                             }
                             encode_skip = true;
+                        } else if meta.path.is_ident("nested") {
+                            nested = true;
                         } else {
                             return Err(meta.error("unknown pydict field attribute"));
                         }
@@ -193,6 +315,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
                     from_with,
                     default,
                     encode_skip,
+                    nested,
                 });
             }
         }
@@ -252,11 +375,13 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
             let set_type = quote! { __d.set_item("type", #tag)?; };
             let set_fields = info.fields.iter().map(|f| {
                 let ident = &f.ident;
-                let key = ident.to_string();
-                match &f.to_with {
-                    Some(path) => quote! { __d.set_item(#key, #path(py, #ident)?)?; },
-                    None => quote! { __d.set_item(#key, #ident)?; },
-                }
+                set_field_tokens(
+                    &ident.to_string(),
+                    quote! { #ident },
+                    &f.ty,
+                    f.to_with.as_ref(),
+                    f.nested,
+                )
             });
             if info.fields.is_empty() {
                 quote! {
@@ -294,7 +419,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
             let ident = &f.ident;
             let key = ident.to_string();
             let ty = &f.ty;
-            if f.encode_skip {
+            if f.encode_skip || f.nested {
                 quote! { #ident: ::core::default::Default::default() }
             } else if let Some(path) = &f.from_with {
                 quote! { #ident: #path(__kv(#key).as_ref()) }
@@ -498,6 +623,52 @@ mod tests {
             }
         "#,
         );
+    }
+
+    #[test]
+    fn expansion_handles_nested_fields() {
+        expansion_parses(
+            r#"
+            enum Test {
+                A {
+                    #[pydict(nested)]
+                    x: Option<Inner>,
+                    #[pydict(nested)]
+                    y: Vec<Inner>,
+                },
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn struct_expansion_gets_dict_only() {
+        let ts: proc_macro2::TokenStream =
+            "struct S { a: u32, #[pydict(nested)] b: Option<T>, #[pydict(nested)] c: Vec<T> }"
+                .parse()
+                .unwrap();
+        let out = expand_py_dict_convert(ts);
+        syn::parse2::<syn::Item>(out.clone()).expect("expansion must be syntactically valid");
+        let out = out.to_string();
+        assert!(out.contains("to_py_dict"));
+        assert!(
+            !out.contains("py_type_tag") && !out.contains("from_py_kwargs"),
+            "structs are nested payloads: no tag, no kwargs constructor"
+        );
+        assert!(!out.contains("\"type\""), "struct dicts carry no type key");
+    }
+
+    #[test]
+    fn struct_expansion_rejects_tuple_structs_and_enum_only_attrs() {
+        let tuple = expand_py_dict_convert("struct S(u32);".parse().unwrap()).to_string();
+        assert!(tuple.contains("compile_error"));
+        let bad = expand_py_dict_convert(
+            "struct S { #[pydict(default = 1)] a: u32 }"
+                .parse()
+                .unwrap(),
+        )
+        .to_string();
+        assert!(bad.contains("compile_error"));
     }
 
     #[test]

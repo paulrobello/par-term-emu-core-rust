@@ -91,6 +91,30 @@ crate::python_bindings::common::impl_terminal_debug_snapshots!(PyTerminal);
 crate::python_bindings::common::impl_terminal_file_transfer!(PyTerminal);
 crate::python_bindings::common::impl_terminal_exports!(PyTerminal);
 crate::python_bindings::common::impl_terminal_screenshot_methods!(PyTerminal);
+crate::python_bindings::common::impl_terminal_resize_pixels!(
+    PyTerminal,
+    /// Resize and set pixel dimensions for XTWINOPS reporting
+    ///
+    /// Args:
+    ///     cols: New columns
+    ///     rows: New rows
+    ///     pixel_width: Text area width in pixels
+    ///     pixel_height: Text area height in pixels
+);
+
+impl crate::python_bindings::common::PixelResize for PyTerminal {
+    fn apply_pixel_resize(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: usize,
+        pixel_height: usize,
+    ) -> PyResult<()> {
+        self.inner.resize(cols, rows);
+        self.inner.set_pixel_size(pixel_width, pixel_height);
+        Ok(())
+    }
+}
 
 #[pymethods]
 impl PyTerminal {
@@ -152,26 +176,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Resize and set pixel dimensions for XTWINOPS reporting
-    ///
-    /// Args:
-    ///     cols: New columns
-    ///     rows: New rows
-    ///     pixel_width: Text area width in pixels
-    ///     pixel_height: Text area height in pixels
-    #[pyo3(signature = (cols, rows, pixel_width, pixel_height))]
-    fn resize_pixels(
-        &mut self,
-        cols: usize,
-        rows: usize,
-        pixel_width: usize,
-        pixel_height: usize,
-    ) -> PyResult<()> {
-        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
-        self.inner.resize(cols, rows);
-        self.inner.set_pixel_size(pixel_width, pixel_height);
-        Ok(())
-    }
+    // resize_pixels: provided by impl_terminal_resize_pixels! (ARC-006)
 
     /// Reset the terminal to default state (RIS).
     ///
