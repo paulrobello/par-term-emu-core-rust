@@ -20,58 +20,77 @@ use crate::grid::Grid;
 /// conflation: an EXPLICIT `ESC[37m`/`ESC[40m` also exports as default.
 fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags) {
     result.push_str("\x1b[0");
-    match fg {
-        Color::Named(NamedColor::White) => {}
+    push_sgr_color(result, fg, NamedColor::White, SgrLayer::Foreground);
+    push_sgr_color(result, bg, NamedColor::Black, SgrLayer::Background);
+    push_sgr_flags(result, flags);
+    result.push('m');
+}
+
+/// Which SGR color slot a color is emitted into.
+#[derive(Clone, Copy)]
+enum SgrLayer {
+    Foreground,
+    Background,
+}
+
+impl SgrLayer {
+    /// The extended-color introducer (`38` / `48`).
+    fn extended(self) -> u8 {
+        match self {
+            SgrLayer::Foreground => 38,
+            SgrLayer::Background => 48,
+        }
+    }
+
+    /// Offset added to a named color's foreground code: background codes
+    /// sit exactly 10 above (`30..=37` → `40..=47`, `90..=97` → `100..=107`).
+    fn named_offset(self) -> u8 {
+        match self {
+            SgrLayer::Foreground => 0,
+            SgrLayer::Background => 10,
+        }
+    }
+}
+
+/// Append one color's SGR parameters (with leading `;`), omitting `default`.
+fn push_sgr_color(result: &mut String, color: &Color, default: NamedColor, layer: SgrLayer) {
+    match color {
+        Color::Named(nc) if *nc == default => {}
         Color::Named(nc) => {
-            let code = match nc {
-                NamedColor::Black => 30,
-                NamedColor::Red => 31,
-                NamedColor::Green => 32,
-                NamedColor::Yellow => 33,
-                NamedColor::Blue => 34,
-                NamedColor::Magenta => 35,
-                NamedColor::Cyan => 36,
-                NamedColor::White => 37,
-                NamedColor::BrightBlack => 90,
-                NamedColor::BrightRed => 91,
-                NamedColor::BrightGreen => 92,
-                NamedColor::BrightYellow => 93,
-                NamedColor::BrightBlue => 94,
-                NamedColor::BrightMagenta => 95,
-                NamedColor::BrightCyan => 96,
-                NamedColor::BrightWhite => 97,
-            };
+            let code = named_fg_code(*nc) + layer.named_offset();
             result.push_str(&format!(";{}", code));
         }
-        Color::Indexed(i) => result.push_str(&format!(";38;5;{}", i)),
-        Color::Rgb(r, g, b) => result.push_str(&format!(";38;2;{};{};{}", r, g, b)),
-    }
-    match bg {
-        Color::Named(NamedColor::Black) => {}
-        Color::Named(nc) => {
-            let code = match nc {
-                NamedColor::Black => unreachable!("handled by the default-omission guard"),
-                NamedColor::Red => 41,
-                NamedColor::Green => 42,
-                NamedColor::Yellow => 43,
-                NamedColor::Blue => 44,
-                NamedColor::Magenta => 45,
-                NamedColor::Cyan => 46,
-                NamedColor::White => 47,
-                NamedColor::BrightBlack => 100,
-                NamedColor::BrightRed => 101,
-                NamedColor::BrightGreen => 102,
-                NamedColor::BrightYellow => 103,
-                NamedColor::BrightBlue => 104,
-                NamedColor::BrightMagenta => 105,
-                NamedColor::BrightCyan => 106,
-                NamedColor::BrightWhite => 107,
-            };
-            result.push_str(&format!(";{}", code));
+        Color::Indexed(i) => result.push_str(&format!(";{};5;{}", layer.extended(), i)),
+        Color::Rgb(r, g, b) => {
+            result.push_str(&format!(";{};2;{};{};{}", layer.extended(), r, g, b))
         }
-        Color::Indexed(i) => result.push_str(&format!(";48;5;{}", i)),
-        Color::Rgb(r, g, b) => result.push_str(&format!(";48;2;{};{};{}", r, g, b)),
     }
+}
+
+/// The SGR foreground code for a named color (`30..=37`, `90..=97`).
+fn named_fg_code(nc: NamedColor) -> u8 {
+    match nc {
+        NamedColor::Black => 30,
+        NamedColor::Red => 31,
+        NamedColor::Green => 32,
+        NamedColor::Yellow => 33,
+        NamedColor::Blue => 34,
+        NamedColor::Magenta => 35,
+        NamedColor::Cyan => 36,
+        NamedColor::White => 37,
+        NamedColor::BrightBlack => 90,
+        NamedColor::BrightRed => 91,
+        NamedColor::BrightGreen => 92,
+        NamedColor::BrightYellow => 93,
+        NamedColor::BrightBlue => 94,
+        NamedColor::BrightMagenta => 95,
+        NamedColor::BrightCyan => 96,
+        NamedColor::BrightWhite => 97,
+    }
+}
+
+/// Append the attribute-flag SGR parameters (with leading `;`).
+fn push_sgr_flags(result: &mut String, flags: &crate::cell::CellFlags) {
     if flags.bold() {
         result.push_str(";1");
     }
@@ -96,7 +115,6 @@ fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::ce
     if flags.strikethrough() {
         result.push_str(";9");
     }
-    result.push('m');
 }
 
 /// The SGR attributes a styled export last emitted; starts (and resets) at

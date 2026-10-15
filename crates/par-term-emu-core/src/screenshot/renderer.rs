@@ -303,99 +303,60 @@ impl Renderer {
     ) -> ScreenshotResult<()> {
         let cell_w = self.cell_width;
         let cell_h = self.cell_height;
+        let origin = (x, y);
 
         match c {
             // Upper half block: foreground on top, background on bottom
             '\u{2580}' => {
-                // Top half = foreground
-                for py in 0..cell_h / 2 {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([fg.0, fg.1, fg.2, 255]));
-                        }
-                    }
-                }
-                // Bottom half = background
-                for py in cell_h / 2..cell_h {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([bg.0, bg.1, bg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w, 0..cell_h / 2, fg);
+                self.fill_block_rect(image, origin, 0..cell_w, cell_h / 2..cell_h, bg);
             }
             // Lower half block: background on top, foreground on bottom
             '\u{2584}' => {
-                // Top half = background
-                for py in 0..cell_h / 2 {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([bg.0, bg.1, bg.2, 255]));
-                        }
-                    }
-                }
-                // Bottom half = foreground
-                for py in cell_h / 2..cell_h {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([fg.0, fg.1, fg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w, 0..cell_h / 2, bg);
+                self.fill_block_rect(image, origin, 0..cell_w, cell_h / 2..cell_h, fg);
             }
             // Full block: all foreground
             '\u{2588}' => {
-                for py in 0..cell_h {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([fg.0, fg.1, fg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w, 0..cell_h, fg);
             }
             // Left half block
             '\u{258C}' => {
-                for py in 0..cell_h {
-                    for px in 0..cell_w / 2 {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([fg.0, fg.1, fg.2, 255]));
-                        }
-                    }
-                    for px in cell_w / 2..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([bg.0, bg.1, bg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w / 2, 0..cell_h, fg);
+                self.fill_block_rect(image, origin, cell_w / 2..cell_w, 0..cell_h, bg);
             }
             // Right half block
             '\u{2590}' => {
-                for py in 0..cell_h {
-                    for px in 0..cell_w / 2 {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([bg.0, bg.1, bg.2, 255]));
-                        }
-                    }
-                    for px in cell_w / 2..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([fg.0, fg.1, fg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w / 2, 0..cell_h, bg);
+                self.fill_block_rect(image, origin, cell_w / 2..cell_w, 0..cell_h, fg);
             }
             // For other block elements, fall back to background rendering
             _ => {
-                for py in 0..cell_h {
-                    for px in 0..cell_w {
-                        if x + px < self.canvas_width && y + py < self.canvas_height {
-                            image.put_pixel(x + px, y + py, Rgba([bg.0, bg.1, bg.2, 255]));
-                        }
-                    }
-                }
+                self.fill_block_rect(image, origin, 0..cell_w, 0..cell_h, bg);
             }
         }
 
         Ok(())
+    }
+
+    /// Fill the cell-relative rectangle `cols` × `rows` at `origin` with
+    /// `rgb`, clipped to the canvas.
+    fn fill_block_rect(
+        &self,
+        image: &mut RgbaImage,
+        origin: (u32, u32),
+        cols: std::ops::Range<u32>,
+        rows: std::ops::Range<u32>,
+        rgb: (u8, u8, u8),
+    ) {
+        let (x, y) = origin;
+        for py in rows {
+            for px in cols.clone() {
+                if x + px < self.canvas_width && y + py < self.canvas_height {
+                    image.put_pixel(x + px, y + py, Rgba([rgb.0, rgb.1, rgb.2, 255]));
+                }
+            }
+        }
     }
 
     /// Render cell background
