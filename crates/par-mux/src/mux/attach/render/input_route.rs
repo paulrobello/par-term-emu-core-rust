@@ -20,6 +20,8 @@ pub(super) enum Hit {
     Consumed,
     /// A press on the open context menu's panel row.
     MenuRow(usize),
+    /// A press outside the open context menu: close it.
+    MenuClose,
     /// A press on the settings dialog at overlay row `row`, inner column
     /// `col`.
     SettingsAt { row: usize, col: usize },
@@ -500,6 +502,7 @@ impl WindowSession {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SettingsClose => self.leave_settings(),
+            Hit::MenuClose => self.leave_menu(),
             Hit::ToastPress { pane } => {
                 self.notify.toast_until = None;
                 self.renderer.set_toast(None);
@@ -684,13 +687,17 @@ impl WindowSession {
     }
 
     /// The context menu is modal for the pointer: a press on an action
-    /// row dispatches it, everything else is consumed while it is up.
-    /// The modal centers over the HOST width (the pane layout already
+    /// row dispatches it, a press outside the box closes it (click-away,
+    /// like the settings dialog), everything else is consumed while it is
+    /// up. The modal centers over the HOST width (the pane layout already
     /// carries the strip offset), so the click maps by the raw column.
     fn menu_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
         if !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down() {
             if let Some(row) = self.renderer.overlay_row_at(x, y) {
                 return Hit::MenuRow(row);
+            }
+            if !self.renderer.overlay_contains(x, y) {
+                return Hit::MenuClose;
             }
         }
         Hit::Consumed

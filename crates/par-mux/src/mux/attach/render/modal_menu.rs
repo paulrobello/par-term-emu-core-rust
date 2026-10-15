@@ -12,17 +12,16 @@ pub(super) const MENU_FOOTER: &str = " action click · close esc/q ";
 /// The context menus' overlay title (the target's name rides the panel's
 /// accent header row).
 pub(super) const MENU_TITLE: &str = " menu ";
-/// The command menu's accent header (it has no target entity to name).
-pub(super) const COMMAND_MENU_HEADER: &str = "commands";
 /// Compose the context menu's overlay panel for `target`: the target's
-/// name as the accent header, one row per action, the footer controls
-/// line — [`compose_prompt_panel`]'s row/footer shape. Returns
-/// the panel rows AND the action per row (`None` for the header and
-/// footer) — the click dispatch's pure mapping, so what a click
-/// highlights is exactly what painted there.
+/// name as the accent header (the command menu has no target entity, so
+/// no header), one row per action, the footer controls line —
+/// [`compose_prompt_panel`]'s row/footer shape. Returns the panel rows
+/// AND the action per row (`None` for the header and footer) — the
+/// click dispatch's pure mapping, so what a click highlights is exactly
+/// what painted there.
 pub(super) fn compose_menu_panel(
     target: &MenuTarget,
-    name: &str,
+    name: Option<&str>,
 ) -> (Vec<HelpRow>, Vec<Option<MenuAction>>) {
     let actions: &[MenuAction] = match target {
         MenuTarget::Tab(_) => &[MenuAction::Rename, MenuAction::Close, MenuAction::AddTab],
@@ -43,12 +42,16 @@ pub(super) fn compose_menu_panel(
         MenuTarget::Workspace(_) => &["rename", "close", "new"],
         MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
     };
-    let mut rows = vec![HelpRow {
-        text: format!(" {name} "),
-        accent: true,
-        footer: false,
-    }];
-    let mut mapping = vec![None];
+    let mut rows = Vec::new();
+    let mut mapping = Vec::new();
+    if let Some(name) = name {
+        rows.push(HelpRow {
+            text: format!(" {name} "),
+            accent: true,
+            footer: false,
+        });
+        mapping.push(None);
+    }
     for (action, label) in actions.iter().zip(labels.iter()) {
         rows.push(HelpRow {
             text: format!(" {label} "),
@@ -73,23 +76,25 @@ impl WindowSession {
     /// the same modal machinery the picker uses.
     pub(super) fn open_menu(&mut self, target: MenuTarget) {
         let name = match &target {
-            MenuTarget::Tab(id) => self
-                .status
-                .windows()
-                .iter()
-                .find(|(wid, _)| wid == id)
-                .map(|(_, name)| name.clone())
-                .unwrap_or_else(|| id.clone()),
-            MenuTarget::Workspace(id) => self
-                .status
-                .workspaces()
-                .iter()
-                .find(|(wsid, _)| wsid == id)
-                .map(|(_, name)| name.clone())
-                .unwrap_or_else(|| id.clone()),
-            MenuTarget::Commands => COMMAND_MENU_HEADER.to_string(),
+            MenuTarget::Tab(id) => Some(
+                self.status
+                    .windows()
+                    .iter()
+                    .find(|(wid, _)| wid == id)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| id.clone()),
+            ),
+            MenuTarget::Workspace(id) => Some(
+                self.status
+                    .workspaces()
+                    .iter()
+                    .find(|(wsid, _)| wsid == id)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| id.clone()),
+            ),
+            MenuTarget::Commands => None,
         };
-        let (rows, actions) = compose_menu_panel(&target, &name);
+        let (rows, actions) = compose_menu_panel(&target, name.as_deref());
         self.open_modal(Modal::Menu(MenuState { target, actions }));
         self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
     }

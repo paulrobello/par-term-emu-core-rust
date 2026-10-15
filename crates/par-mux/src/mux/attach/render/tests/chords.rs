@@ -1738,8 +1738,9 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     assert_eq!(drained(&rx)[0], "select-workspace -t +2");
 }
 
-/// With a context menu up, wheels, motion and releases are swallowed
-/// and a press outside the panel is consumed without dispatching.
+/// With a context menu up, wheels, motion and releases are swallowed;
+/// a press outside the panel closes the menu without reaching the pane
+/// under it (click-away, like the settings dialog).
 #[test]
 fn open_menu_swallows_non_press_pointer_events() {
     let (rx, mut conn, mut session) = two_pane_session("m-menu", FakeScript::default());
@@ -1748,11 +1749,12 @@ fn open_menu_swallows_non_press_pointer_events() {
         sgr(64, 40, 12, false),
         sgr(32, 40, 12, false),
         sgr(0, 40, 12, true),
-        sgr(0, 1, 2, false),
     ] {
         session.route_mouse(&mut conn, event);
     }
     assert!(session.menu().is_some(), "still up");
+    session.route_mouse(&mut conn, sgr(0, 1, 2, false));
+    assert!(session.menu().is_none(), "a press outside closes it");
     assert!(!session.detach_requested && !session.is_help());
     assert!(drained(&rx).is_empty());
     assert_eq!(session.renderer.focused(), Some(1), "no click-through");
@@ -1820,8 +1822,8 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
     );
     assert_eq!(
         session.mouse_hit(&sgr(0, 1, 2, false)),
-        Hit::Consumed,
-        "off the panel"
+        Hit::MenuClose,
+        "a press off the panel closes the menu"
     );
     session.leave_menu();
 

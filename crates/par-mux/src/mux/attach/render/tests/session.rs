@@ -19,7 +19,7 @@ fn session_height_carves_the_strip_and_status_out() {
 /// menus' vocabularies differ in the third action only.
 #[test]
 fn compose_menu_panel_maps_rows_to_actions() {
-    let (rows, mapping) = compose_menu_panel(&MenuTarget::Tab("@1".to_string()), "vim");
+    let (rows, mapping) = compose_menu_panel(&MenuTarget::Tab("@1".to_string()), Some("vim"));
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
     assert_eq!(rows[0].text, " vim ", "the header carries the name");
     assert_eq!(mapping[0], None, "the header consumes its clicks");
@@ -31,7 +31,8 @@ fn compose_menu_panel_maps_rows_to_actions() {
     assert_eq!(rows[3].text, " add tab ");
     assert_eq!(mapping[4], None, "the footer consumes its clicks");
 
-    let (_, ws_mapping) = compose_menu_panel(&MenuTarget::Workspace("+0".to_string()), "main");
+    let (_, ws_mapping) =
+        compose_menu_panel(&MenuTarget::Workspace("+0".to_string()), Some("main"));
     assert_eq!(
         ws_mapping,
         vec![
@@ -1520,22 +1521,20 @@ fn panel_up_menu_click_maps_raw_host_columns() {
     );
 }
 
-/// The command menu's pure mapping: a fixed header, one row per
-/// client command (settings, keybinds, reload config, detach), the
-/// footer.
+/// The command menu's pure mapping: no header (the box's ` menu `
+/// title already names it), one row per client command (settings,
+/// keybinds, reload config, detach), the footer.
 #[test]
 fn compose_command_menu_maps_rows_to_actions() {
-    let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, "commands");
+    let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, None);
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
-    assert_eq!(rows[0].text, " commands ");
-    assert_eq!(rows[1].text, " settings ");
-    assert_eq!(rows[2].text, " keybinds ");
-    assert_eq!(rows[3].text, " reload config ");
-    assert_eq!(rows[4].text, " detach ");
+    assert_eq!(rows[0].text, " settings ");
+    assert_eq!(rows[1].text, " keybinds ");
+    assert_eq!(rows[2].text, " reload config ");
+    assert_eq!(rows[3].text, " detach ");
     assert_eq!(
         mapping,
         vec![
-            None,
             Some(MenuAction::Settings),
             Some(MenuAction::Keybinds),
             Some(MenuAction::ReloadConfig),
@@ -1557,7 +1556,7 @@ fn menu_chip_opens_the_command_menu() {
     );
     let overlay = session.renderer.overlay.as_ref().expect("overlay up");
     assert_eq!(overlay.0, MENU_TITLE);
-    assert_eq!(overlay.1[1].text, " settings ");
+    assert_eq!(overlay.1[0].text, " settings ");
     // The menu opens beside its chip: the left ring just right of the
     // chip's cells (x 19 on the 20-wide strip, frame row 10 of the
     // 22-row frame), the bottom ring on the chip's row.
@@ -1597,7 +1596,7 @@ fn anchored_overlay_stays_inside_the_frame() {
 #[test]
 fn command_menu_keybinds_opens_help() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-help");
-    click_menu_row(&mut session, &mut conn, 2);
+    click_menu_row(&mut session, &mut conn, 1);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.is_help(), "keybinds opened the help panel");
     assert_eq!(
@@ -1611,7 +1610,7 @@ fn command_menu_keybinds_opens_help() {
 #[test]
 fn command_menu_reload_sends_reload_config() {
     let (rx, mut conn, mut session) = command_menu_session("cmdmenu-reload");
-    click_menu_row(&mut session, &mut conn, 3);
+    click_menu_row(&mut session, &mut conn, 2);
     assert!(session.menu().is_none(), "the menu closed");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert!(
@@ -1621,14 +1620,14 @@ fn command_menu_reload_sends_reload_config() {
 }
 
 /// The command menu's `detach` row requests the pump's exit (the
-/// prefix-d path), and the header/footer rows do nothing.
+/// prefix-d path), and the footer row does nothing.
 #[test]
 fn command_menu_detach_requests_exit() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-detach");
-    click_menu_row(&mut session, &mut conn, 0);
-    assert!(session.menu().is_some(), "the header consumes the click");
-    assert!(!session.detach_requested);
     click_menu_row(&mut session, &mut conn, 4);
+    assert!(session.menu().is_some(), "the footer consumes the click");
+    assert!(!session.detach_requested);
+    click_menu_row(&mut session, &mut conn, 3);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.detach_requested, "detach was requested");
 }
@@ -1646,7 +1645,7 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "# keep me\n[client]\nprefix = \"C-b\"\n").unwrap();
     session.settings_path = Some(path.clone());
-    click_menu_row(&mut session, &mut conn, 1);
+    click_menu_row(&mut session, &mut conn, 0);
     let Modal::Settings(state) = &session.modal else {
         panic!("settings opened: {:?}", session.modal);
     };
