@@ -1,5 +1,6 @@
 // Unit tests for terminal.rs
 use crate::color::{Color, NamedColor};
+use crate::mouse::{MouseEncoding, MouseEvent, MouseMode};
 use crate::terminal::*;
 
 #[test]

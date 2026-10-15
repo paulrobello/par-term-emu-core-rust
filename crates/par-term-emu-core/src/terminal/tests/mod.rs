@@ -1,6 +1,8 @@
 //! Terminal implementation tests
 
 #[cfg(test)]
+mod arc001_observer_dispatch;
+#[cfg(test)]
 mod attributes;
 #[cfg(test)]
 mod basic;

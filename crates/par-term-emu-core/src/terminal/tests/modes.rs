@@ -1,5 +1,5 @@
 // Mode-related terminal tests
-use crate::mouse::{MouseEncoding, MouseMode};
+use crate::mouse::{MouseEncoding, MouseEvent, MouseMode};
 use crate::terminal::*;
 
 #[test]
