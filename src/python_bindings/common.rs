@@ -5,7 +5,7 @@
 //! a shared read lock, mutators take a write lock). Historically every shared
 //! method was hand-duplicated between the two — ~155 copies that drift on every PR.
 //!
-//! [`TerminalAccess`] abstracts the "give me the terminal" step (returning a
+//! The crate-private `TerminalAccess` trait abstracts the "give me the terminal" step (returning a
 //! `Deref<Target=Terminal>` guard for each type's native form), and the macros
 //! below emit the shared `#[pymethods]` definitions ONCE, invoked per type.
 //! Behavior is preserved (the macros use the clean `Terminal`-method form;

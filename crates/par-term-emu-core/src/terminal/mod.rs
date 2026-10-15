@@ -1060,15 +1060,16 @@ impl Terminal {
     /// hyperlinks, graphics, title, selection — but not the embedder's
     /// configuration.
     ///
-    /// [`HostConfig`] is carried whole with one swap (ARC-100): the OSC
+    /// The crate-private `HostConfig` is carried whole with one swap (ARC-100): the OSC
     /// 1337 transfer cap, bold brightening, window position/iconified
     /// state, and the mouse/inline-image/command/cwd history caps. The
     /// conformance level and bell volumes, which programs can also set
     /// (DECSCL/DECSWBV/DECSMBV), restore to the host-configured baseline,
     /// not the live value. The fields below the swap are still carried one
     /// by one (moving them into `HostConfig` is ARC-102): security policy
-    /// ([`set_accept_osc7`], [`set_disable_insecure_sequences`],
-    /// [`set_max_osc_data_length`]), file-media and clipboard policy,
+    /// ([`set_accept_osc7`](Self::set_accept_osc7),
+    /// [`set_disable_insecure_sequences`](Self::set_disable_insecure_sequences),
+    /// [`set_max_osc_data_length`](Self::set_max_osc_data_length)), file-media and clipboard policy,
     /// graphics/clipboard limits, the answerback string, theme colors,
     /// unicode config, observers, event subscriptions, triggers, macros,
     /// notification config, the badge format, active recordings, tmux

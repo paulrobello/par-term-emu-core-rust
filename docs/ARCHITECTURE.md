@@ -207,7 +207,7 @@ pub struct Grid {
 
 ### 5. Terminal
 
-**Location:** `crates/par-term-emu-core/src/terminal/mod.rs` (modular implementation)
+**Location:** `crates/par-term-emu-core/src/terminal/` — `mod.rs` holds the `Terminal` struct, construction, and `process()`; `state.rs` holds the state sub-structs; themed `impl Terminal` blocks live in sibling files (ARC-003)
 
 The main terminal emulator that ties everything together, organized into submodules:
 
@@ -237,12 +237,14 @@ The main terminal emulator that ties everything together, organized into submodu
 - `screen.rs` - Screen buffer management
 - `search.rs` - Text search functionality
 - `semantic_snapshot.rs` - Semantic (prompt/command/output) snapshot capture
+- `state.rs` - `Terminal` state sub-structs (`TerminalModes`, `TmuxState`, `HostConfig`, `GraphicsState`, …; ARC-003)
 - `sequences/` - VTE sequence handlers, split into `csi/`, `osc/`, `dcs/` directories plus `esc.rs`
 - `shell_integration.rs` - OSC 133 markers
 - `snapshot_manager.rs` - Snapshot lifecycle
 - `tests/` - Terminal unit tests, one file per topic
 - `trigger.rs` - Regex pattern matching (`TriggerEngine` service, `TriggerState`)
 - `write.rs` - Character writing logic
+- Themed `impl Terminal` files (ARC-003): `damage.rs`, `events_api.rs`, `host_config.rs`, `input.rs`, `keyboard_api.rs`, `modes_api.rs`, `notify_progress.rs`, `rect_api.rs`, `sixel_api.rs`, `title_badge.rs`, `tmux_api.rs`, `unicode_api.rs`, `zone_api.rs`
 
 **Features:**
 - Owns the grid and cursor
@@ -422,7 +424,7 @@ Separately, `PtySession` also holds a `parking_lot::Mutex` around the PTY writer
   - `kill()` is called.
 - There may be a short window where the OS still considers the process live even though `running == false`, or vice versa (between a process exit and the reader thread seeing EOF). Callers that need precise exit status should use `try_wait()`/`wait()` instead of relying solely on `is_running()`.
 
-**As of ARC-001, `Terminal` is no longer one flat ~150-field struct.** It is decomposed into cohesive sub-structs, each grouping the fields for one feature area. Most are `pub(crate) struct` definitions in `crates/par-term-emu-core/src/terminal/mod.rs`; four live elsewhere or are declared differently: `EventBroker` (`terminal/event_broker.rs`), `TriggerState` (`terminal/trigger.rs`), `MacroState` (`terminal/macros.rs`), and `GraphicsState` (a `pub struct` in `mod.rs`). `Terminal` itself holds a handful of "hot path" fields directly (grid, cursor, the VTE parser) plus one field per sub-struct. Abridged, in feature groups rather than declaration order:
+**As of ARC-001, `Terminal` is no longer one flat ~150-field struct.** It is decomposed into cohesive sub-structs, each grouping the fields for one feature area. Most are `pub(crate) struct` definitions in `crates/par-term-emu-core/src/terminal/state.rs` (moved out of `mod.rs` by ARC-003); four live elsewhere or are declared differently: `EventBroker` (`terminal/event_broker.rs`), `TriggerState` (`terminal/trigger.rs`), `MacroState` (`terminal/macros.rs`), and `GraphicsState` (a `pub struct` in `state.rs`, re-exported from `terminal`). `Terminal` itself holds a handful of "hot path" fields directly (grid, cursor, the VTE parser) plus one field per sub-struct. Abridged, in feature groups rather than declaration order:
 
 ```rust
 pub struct Terminal {

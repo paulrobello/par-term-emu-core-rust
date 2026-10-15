@@ -3,7 +3,7 @@
 //! This module handles animation frames and playback control for
 //! the Kitty graphics protocol.
 //!
-//! Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation
+//! Reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation>
 
 use std::collections::HashMap;
 use std::sync::Arc;

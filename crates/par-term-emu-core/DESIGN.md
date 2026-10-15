@@ -36,7 +36,7 @@ core only. The root depends on both and on the derive crate.
 ### Deviation from the original O2 sketch: `tmux_control` lives in core
 
 The O2 sketch put `tmux_control` with par-mux. It cannot go there: `Terminal`
-owns a `TmuxControlParser` field (`terminal/mod.rs`, `TmuxState`), runs it in
+owns a `TmuxControlParser` field (`TmuxState` in `terminal/state.rs`), runs it in
 `Terminal::process`, and returns `TmuxNotification` from public methods
 (`tmux_notifications`, `drain_tmux_notifications`). With the DAG above, core
 cannot reach into par-mux, so the parser moves with the Terminal. **par-mux is

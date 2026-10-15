@@ -165,7 +165,7 @@ impl Terminal {
 
     /// Set whether clipboard write operations are allowed (security flag for OSC 52 writes)
     ///
-    /// When enabled (default), OSC 52 writes (ESC ] 52 ; c ; <base64> ST) store the
+    /// When enabled (default), OSC 52 writes (`ESC ] 52 ; c ; <base64> ST`) store the
     /// decoded payload as the terminal clipboard content. When disabled, they are
     /// silently ignored, so untrusted output cannot place text on the clipboard.
     pub fn set_allow_clipboard_write(&mut self, allow: bool) {

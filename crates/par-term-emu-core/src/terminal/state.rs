@@ -573,7 +573,6 @@ impl Default for ColorThemeState {
     }
 }
 
-/// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
 /// DECSACE attribute-change extent: whether DECCARA/DECRARA change the
 /// rectangle or the stream between the two corners (VT420).
 ///
@@ -587,6 +586,7 @@ pub enum AttributeChangeExtent {
     Rectangle,
 }
 
+/// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
 pub(crate) struct TerminalModes {
     /// Auto wrap mode (DECAWM)
     pub(crate) auto_wrap: bool,

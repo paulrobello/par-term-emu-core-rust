@@ -166,7 +166,7 @@ Commands (run from the repo root):
 
 ## Rollback
 
-All additions. The invariant fn and `fuzz_support` are `cfg(any(test, fuzzing))` / `cfg(fuzzing)`, so release builds and the public API are unchanged. `#[doc(hidden)]` keeps the module out of rustdoc, so `mux-rustdoc-check` is unaffected. Revert by deleting the target, the seeds and the `[[bin]]`, and by reverting the count edits. If the 60 s run finds a real round-trip break, keep the target and seeds, mark the failing seed's assertion as the regression test per CONTRIBUTING.md:94, and file the parser defect separately. Do not loosen `assert_round_trip`.
+All additions. The invariant fn and `fuzz_support` are `cfg(any(test, fuzzing))` / `cfg(fuzzing)`, so release builds and the public API are unchanged. `#[doc(hidden)]` keeps the module out of rustdoc, so `rustdoc-check` (formerly `mux-rustdoc-check`) is unaffected. Revert by deleting the target, the seeds and the `[[bin]]`, and by reverting the count edits. If the 60 s run finds a real round-trip break, keep the target and seeds, mark the failing seed's assertion as the regression test per CONTRIBUTING.md:94, and file the parser defect separately. Do not loosen `assert_round_trip`.
 
 ## Dependencies / sequencing
 

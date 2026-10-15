@@ -4,8 +4,8 @@
 //! used with the U+10EEEE placeholder character to specify row, column,
 //! and most significant byte of image ID for virtual placement rendering.
 //!
-//! Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
-//! Diacritic table: https://github.com/kovidgoyal/kitty/blob/master/kittens/unicode_input/rowcolumn-diacritics.txt
+//! Reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
+//! Diacritic table: <https://github.com/kovidgoyal/kitty/blob/master/kittens/unicode_input/rowcolumn-diacritics.txt>
 //!
 //! Per the spec there are 297 diacritics indexed 0..=296.  The earlier
 //! 64-entry table caused images wider/taller than 64 cells to lose

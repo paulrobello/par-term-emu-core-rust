@@ -304,7 +304,7 @@ make lint-python      # Lint and type-check Python code (ruff format + ruff chec
 make lint-check       # Non-mutating lint gate checkall runs (fmt --check, clippy, ruff --check, pyright)
 ```
 
-> **Note:** The `make checkall` target runs: the FFI header and surface checks, the derive/core version-sync checks, the mux-docs, stub-docstring, mux-package, and mux-rustdoc checks, the doc-links check, the Rust tests (`test-rust`, `test-rust-streaming`), the non-mutating lint gate (`lint-check`), the Python stub check, the Python tests (`test-python` - rebuilds the package with `make dev` first), the web frontend tests (`test-web`), and the caps-table check. It is non-mutating: `make lint lint-python` auto-fixes findings.
+> **Note:** The `make checkall` target runs: the FFI header and surface checks, the derive/core version-sync checks, the mux-docs, stub-docstring, and mux-package checks, the rustdoc check (par-mux, par-term-emu-core, and the root crate under `-D warnings`), the doc-links check, the Rust tests (`test-rust`, `test-rust-streaming`), the non-mutating lint gate (`lint-check`), the Python stub check, the Python tests (`test-python` - rebuilds the package with `make dev` first), the web frontend tests (`test-web`), and the caps-table check. It is non-mutating: `make lint lint-python` auto-fixes findings.
 
 ### Pre-commit Hooks
 
