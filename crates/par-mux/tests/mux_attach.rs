@@ -5905,22 +5905,23 @@ fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
     b.killer.kill().ok();
 }
 
-/// Card 01a11c3a, the boundary the tab-close landing must not cross: when
-/// the exiting shell is the session's LAST pane, the cascade removes the
-/// session too, and both render clients end cleanly (the session-gone
-/// contract) instead of landing anywhere.
+/// Card 01a13d03, the exit cascade lands up the tree: when the exiting
+/// shell is its session's LAST pane, the cascade removes the session, but
+/// the workspace keeps a sibling session — so both render clients land on
+/// the sibling's active window and repaint it instead of ending.
 #[cfg(unix)]
 #[test]
-fn render_mode_ctrl_d_on_the_last_pane_ends_both_clients() {
+fn render_mode_ctrl_d_on_a_sessions_last_pane_lands_on_the_sibling_session() {
     let fixture = MuxFixture::new("ctrldlast");
     let _daemon = common::spawn_daemon_auto_remove(&fixture);
     wait_listening(fixture.socket());
     let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
     client.send("new-session -s att").expect("new-session");
-    // A second session keeps the daemon's roster non-empty, so the
-    // clients' end comes from their own session vanishing.
+    // A second session in the same workspace: the landing site once the
+    // shown session cascades away.
     let pane = session_first_pane(&mut client, "$0");
     client.send("new-session -s other").expect("second session");
+    let sibling = session_first_pane(&mut client, "$1");
     // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
@@ -5948,17 +5949,150 @@ fn render_mode_ctrl_d_on_the_last_pane_ends_both_clients() {
         saw_pane_exited(&client, Duration::from_secs(10)),
         "the shell's exit must reach observers as %pane-exited"
     );
+    let end = Instant::now() + Duration::from_secs(5);
+    while client
+        .send("list-sessions")
+        .expect("list-sessions")
+        .iter()
+        .any(|l| l.contains("$0:"))
+    {
+        assert!(
+            Instant::now() < end,
+            "the emptied session must cascade away"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // negative check: nothing positive to wait on, so the window is fixed
+    std::thread::sleep(Duration::from_secs(2));
     assert_eq!(
-        child_exit(&mut a, Duration::from_secs(5)),
-        Some(0),
-        "client A must end cleanly when its session is gone. stderr: {}",
+        child_exit(&mut a, Duration::from_millis(200)),
+        None,
+        "client A must land on the sibling session, not end. stderr: {}",
         a_err.lock().unwrap()
     );
     assert_eq!(
-        child_exit(&mut b, Duration::from_secs(5)),
-        Some(0),
-        "client B must end cleanly when its session is gone. stderr: {}",
+        child_exit(&mut b, Duration::from_millis(200)),
+        None,
+        "client B must land on the sibling session, not end. stderr: {}",
         b_err.lock().unwrap()
+    );
+    // Both repaint the sibling session's window.
+    echo_marker(&mut client, &sibling, "LANDED-SIBLING");
+    for (host, name) in [(&a, "A"), (&b, "B")] {
+        let mut all = Vec::new();
+        let shown = screen_until(host, &mut all, Duration::from_secs(10), |s| {
+            s.contains("LANDED-SIBLING")
+        });
+        assert!(
+            shown.contains("LANDED-SIBLING"),
+            "client {name} must land on the sibling session's window:\n{shown}"
+        );
+    }
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}
+
+/// Card 01a13d03, keep-one-tab end to end: Ctrl+D exits the ONLY pane of
+/// the only workspace under auto-remove. The daemon holds the pane dead
+/// (the workspace never empties on an app exit) and the attached client
+/// holds the all-dead daemon past its 5 s exit-when-empty grace, so the
+/// render client stays attached instead of detaching.
+#[cfg(unix)]
+#[test]
+fn render_mode_ctrl_d_on_the_workspaces_last_pane_keeps_the_client() {
+    let fixture = MuxFixture::new("ctrldkeep");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    let pane = session_first_pane(&mut client, "$0");
+    // settle: the fresh pane's shell starts before the client attaches
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    expect_output(
+        &a,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: collect the trailing redraw burst before draining
+    std::thread::sleep(Duration::from_millis(800));
+    while client.notifications().try_recv().is_ok() {}
+
+    a.to_child.write_all(&[0x04]).expect("Ctrl+D");
+    a.to_child.flush().ok();
+    assert!(
+        saw_pane_exited(&client, Duration::from_secs(10)),
+        "the shell's exit must reach observers as %pane-exited"
+    );
+    // The control client disconnects: only the render client holds the
+    // all-dead daemon now.
+    drop(client);
+    // negative check: past the 5 s grace, nothing positive to wait on
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(
+        child_exit(&mut a, Duration::from_millis(200)),
+        None,
+        "the client must stay attached to the held pane. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("daemon serves");
+    let info = client
+        .send(&format!("pane-info -t {pane}"))
+        .expect("pane-info")
+        .join("\n");
+    assert!(info.contains(" exited="), "the pane is held dead: {info}");
+    a.killer.kill().ok();
+}
+
+/// Card 01a13d03, the all-gone boundary: an explicit `kill-workspace` of
+/// the daemon's only workspace leaves nothing to land on, so the render
+/// client ends cleanly. It must end well inside the daemon's 5 s
+/// exit-when-empty grace — the daemon still serving proves the end came
+/// from the client's own landing walk, not the broadcast `%exit`.
+#[cfg(unix)]
+#[test]
+fn render_mode_kill_workspace_of_the_only_workspace_ends_the_client() {
+    let fixture = MuxFixture::new("killallws");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    // settle: the fresh pane's shell starts before the client attaches
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    expect_output(
+        &a,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: collect the trailing redraw burst
+    std::thread::sleep(Duration::from_millis(800));
+
+    let workspace = client
+        .send("list-workspaces")
+        .expect("list-workspaces")
+        .first()
+        .and_then(|l| l.split(':').next())
+        .expect("one workspace")
+        .to_string();
+    let killed = client
+        .send_checked(&format!("kill-workspace -t {workspace}"))
+        .expect("kill-workspace");
+    assert!(killed.ok, "kill-workspace succeeds: {:?}", killed.body);
+    assert_eq!(
+        child_exit(&mut a, Duration::from_secs(3)),
+        Some(0),
+        "the client must end cleanly when nothing is left to show. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    assert!(
+        client.send("list-workspaces").is_ok(),
+        "the daemon still serves: the client ended on its own landing walk"
     );
 }
 

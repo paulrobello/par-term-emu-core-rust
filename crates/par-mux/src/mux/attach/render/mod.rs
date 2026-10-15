@@ -14,7 +14,7 @@
 use crate::mux::attach::input::{InputParser, Token};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status;
-use crate::mux::attach::targets::session_active_window;
+use crate::mux::attach::targets::{cascade_landing, session_active_window};
 use crate::mux::attach::{layout, HelpRow};
 use crate::mux::layout::PaneChrome;
 use par_term_emu_core::cursor::CursorStyle;
@@ -1093,11 +1093,12 @@ impl WindowSession {
             // 6. Status: the throttled re-query. Any %sessions-changed /
             //     %window-add / %window-close (and the other events whose
             //     payload lacks the fact) marked the state stale; one
-            //     re-query per burst serves them all. The shown session being gone ends the
-            //     view (docs/MUX.md's %sessions-changed client contract);
-            //     only the shown WINDOW being gone (its last pane exited
-            //     or was killed) lands on the session's active window
-            //     instead — tmux semantics: the session outlives a tab.
+            //     re-query per burst serves them all. A gone view lands up
+            //     the tree (docs/MUX.md's %sessions-changed client
+            //     contract): the shown window gone lands on the session's
+            //     active window, the session gone on its workspace's
+            //     landing session, the workspace gone on the daemon's
+            //     active workspace. Only nothing left to show ends it.
             if self.status_dirty && self.refresh_status(conn) == EventOutcome::End {
                 return Ok(());
             }
@@ -1283,7 +1284,8 @@ impl WindowSession {
 
     /// The pump's throttled status step: re-query the bar's facts, reuse
     /// the reply rows for the side panel and pane titles, and repaint the
-    /// bar and the strip. `End` when the shown session is gone.
+    /// bar and the strip. A gone session lands up the tree
+    /// ([`cascade_landing`]); `End` only when nothing is left to show.
     fn refresh_status(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) -> EventOutcome {
         self.status_dirty = false;
         match self.refresh_status_facts(conn) {
@@ -1292,16 +1294,15 @@ impl WindowSession {
             // tick retries, instead of the pump blocking on it.
             Err(status::StatusError::TimedOut) => self.status_dirty = true,
             Err(status::StatusError::SessionGone) => {
-                let landing = self
-                    .status
-                    .session_id
-                    .clone()
-                    .and_then(|session| session_active_window(conn, &session));
-                match landing {
+                let session = self.status.session_id.clone();
+                let workspace = self.status.session_workspace.clone();
+                match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
                     // The reseed refreshes the status itself.
-                    Some(window) if window != self.window => {
+                    Ok(Some(window)) if window != self.window => {
                         self.reseed_window(conn, &window);
                     }
+                    // A wedged daemon: retry the landing on the next tick.
+                    Err(_) => self.status_dirty = true,
                     _ => return EventOutcome::End,
                 }
             }

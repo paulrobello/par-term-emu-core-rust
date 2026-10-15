@@ -273,6 +273,49 @@ pub(crate) fn workspace_session(
     })
 }
 
+/// Where a view lands when its shown session is gone (the exit cascade,
+/// or an explicit kill): the shown session's active window while the
+/// session survives, else the active window of `workspace`'s landing
+/// session ([`workspace_session`]), else that of the daemon's active
+/// workspace (the `list-workspaces` `active` row, else the first). Reads
+/// only: the daemon already moved its pointers, so every client showing
+/// the gone view resolves the same landing. `Ok(None)` only when the
+/// daemon has nothing left to show; `Err(TimedOut)` past the interactive
+/// bound.
+pub(crate) fn cascade_landing(
+    conn: &mut conn::AttachConn,
+    session: Option<&str>,
+    workspace: Option<&str>,
+) -> std::io::Result<Option<String>> {
+    if let Some(session) = session {
+        if let Some(window) = try_session_active_window(conn, session)? {
+            return Ok(Some(window));
+        }
+    }
+    let mut workspaces: Vec<String> = workspace.map(str::to_string).into_iter().collect();
+    if let Some(reply) = interactive(conn, "list-workspaces")? {
+        let rows: Vec<(String, String, bool)> = reply
+            .body
+            .iter()
+            .filter_map(|l| parse_workspace_line(l))
+            .collect();
+        workspaces.extend(
+            rows.iter()
+                .find(|(_, _, active)| *active)
+                .or_else(|| rows.first())
+                .map(|(id, _, _)| id.clone()),
+        );
+    }
+    for ws_id in workspaces {
+        if let WorkspaceLanding::Session(session) = workspace_session(conn, &ws_id)? {
+            if let Some(window) = try_session_active_window(conn, &session)? {
+                return Ok(Some(window));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// prefix W / C-w: `list-workspaces`, the next/previous workspace in id
 /// order ([`next_workspace`]), then `select-workspace` on it; the
 /// selected id.

@@ -96,6 +96,7 @@ struct StatusFacts {
     workspaces: Option<Vec<(String, String, bool)>>,
     sessions: Option<Vec<(String, String)>>,
     session_id: Option<String>,
+    session_workspace: Option<String>,
     windows: Option<Vec<(String, String)>>,
     active_window: Option<String>,
     pane_title: Option<String>,
@@ -164,6 +165,12 @@ impl StatusFacts {
                 Self::push_window_row(&mut windows, &mut active_window, row);
             }
         }
+        facts.session_workspace = sessions
+            .iter()
+            .filter_map(|line| crate::mux::ipc::SessionRow::parse(line))
+            .find(|row| row.id == owner.0)
+            .and_then(|row| row.workspace)
+            .map(|(id, _)| id);
         facts.session_id = Some(owner.0);
         facts.active_window = active_window.or_else(|| windows.first().map(|(id, _)| id.clone()));
         facts.windows = Some(windows);
@@ -193,6 +200,9 @@ pub(crate) struct StatusState {
     sessions: Vec<(String, String)>,
     /// The session this view's window belongs to, `"$N"`.
     pub session_id: Option<String>,
+    /// The workspace that session belongs to, `"+W"` — kept after the
+    /// session is gone, so the landing can walk up to the workspace.
+    pub session_workspace: Option<String>,
     /// The shown session's windows as `(id, name)`, window order.
     windows: Vec<(String, String)>,
     /// The shown session's active window id, `"@N"`.
@@ -303,6 +313,7 @@ impl StatusState {
             workspaces,
             sessions,
             session_id,
+            session_workspace,
             windows,
             active_window,
             pane_title,
@@ -325,6 +336,9 @@ impl StatusState {
         }
         if let Some(session_id) = session_id {
             self.session_id = Some(session_id);
+        }
+        if let Some(session_workspace) = session_workspace {
+            self.session_workspace = Some(session_workspace);
         }
         if let Some(windows) = windows {
             self.active_window =
@@ -360,6 +374,7 @@ impl StatusState {
         }
         let mut facts = StatusFacts::default();
         let mut owner = None;
+        let mut owner_workspace = None;
         for line in &body[1..] {
             let Some((kind, rest)) = line.split_once(' ') else {
                 continue;
@@ -379,7 +394,7 @@ impl StatusState {
                 }
                 "session" => {
                     let mut parts = rest.splitn(4, ' ');
-                    let (Some(id), Some(marker), Some(_ws)) =
+                    let (Some(id), Some(marker), Some(ws)) =
                         (parts.next(), parts.next(), parts.next())
                     else {
                         continue;
@@ -387,6 +402,7 @@ impl StatusState {
                     let name = parts.next().unwrap_or_default();
                     if marker == "*" {
                         owner = Some(id.to_string());
+                        owner_workspace = Some(ws.to_string());
                     }
                     facts
                         .sessions
@@ -427,6 +443,7 @@ impl StatusState {
             return Err(StatusError::SessionGone);
         };
         facts.session_id = Some(owner);
+        facts.session_workspace = owner_workspace;
         // The snapshot is authoritative: empty lists are real facts, not
         // failed queries.
         facts.workspaces.get_or_insert_with(Vec::new);
@@ -930,6 +947,7 @@ mod tests {
                 ("$1".to_string(), "play".to_string()),
             ],
             session_id: Some("$0".to_string()),
+            session_workspace: Some("+0".to_string()),
             windows: vec![
                 ("@0".to_string(), "main".to_string()),
                 ("@1".to_string(), "vim".to_string()),

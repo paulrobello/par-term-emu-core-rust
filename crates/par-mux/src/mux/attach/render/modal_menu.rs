@@ -222,8 +222,8 @@ impl WindowSession {
     /// The tab menu's close: `kill-window -t {id}`; when the killed
     /// window is the SHOWN one, land on the session's surviving
     /// daemon-active (or first) window through the select+resync — a
-    /// session that died with its last window ends the view through the
-    /// next status refresh's SessionGone. Any other target just marks
+    /// session that died with its last window lands up the tree through
+    /// the next status refresh's SessionGone. Any other target just marks
     /// the status stale.
     pub(super) fn close_window_from_menu(
         &mut self,
@@ -255,7 +255,7 @@ impl WindowSession {
                 }
                 let Some(survivor) = active_window_row(&reply.body) else {
                     // The session died with the window: the next status
-                    // refresh reports SessionGone and the view ends cleanly.
+                    // refresh reports SessionGone and lands up the tree.
                     s.status_dirty = true;
                     return;
                 };
