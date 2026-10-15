@@ -1540,8 +1540,10 @@ impl ServerMessage {
 
     /// Create a fully-specified connected message with all terminal state
     #[deprecated(note = "use connected_builder()")]
-    // Deprecated public API kept for embedders; `ConnectedBuilder` replaces it.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "deprecated public API, one argument per `Connected` field, kept for embedders; `ConnectedBuilder` replaces it"
+    )]
     pub fn connected_full(
         cols: u16,
         rows: u16,
@@ -1807,9 +1809,10 @@ impl ServerMessage {
     }
 
     /// Create a system stats message
-    // Public API, one argument per `SystemStats` field; a parameter struct
-    // would break embedders.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public API, one argument per `SystemStats` field; a parameter struct would break embedders"
+    )]
     pub fn system_stats(
         cpu: Option<CpuStats>,
         memory: Option<MemoryStats>,

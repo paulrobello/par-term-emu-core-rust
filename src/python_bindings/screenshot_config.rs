@@ -82,8 +82,10 @@ impl PyScreenshotConfig {
         faint_text_alpha = 0.5,
         minimum_contrast = 0.5
     ))]
-    // Python keyword arguments; a struct would change the Python API.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python keyword arguments, one per ScreenshotConfig field; a struct would change the Python API"
+    )]
     fn new(
         format: &str,
         font_path: Option<String>,

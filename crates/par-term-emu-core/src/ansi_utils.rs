@@ -64,8 +64,10 @@ pub fn measure_text_width_with_config(text: &str, config: &WidthConfig) -> usize
 }
 
 /// Generate SGR (Select Graphic Rendition) sequence
-// Public API; a parameter struct would break embedders.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "public API, one flag per SGR attribute; a parameter struct would break embedders"
+)]
 pub fn generate_sgr(
     reset: bool,
     bold: bool,
