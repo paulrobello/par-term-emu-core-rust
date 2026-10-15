@@ -181,7 +181,60 @@ the documented API; they are the root's private reach into the core.
 | `terminal::event_fields` module + `EventField` + `event_fields()` (`python`/`ffi`) | ffi, python_bindings observer |
 | `pty_session::PtyInputHandle` + `::write` + `PtySession::input_handle` (`mux`) | mux pane, mux dispatch |
 | `pty_session::pixel_extent` | mux pane |
+| `PtySession::{resize_deferred, resize_with_pixels_deferred}` (`mux`) | mux pane |
 | `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (+ its 4 fields) | python_bindings graphics |
+| `terminal::fuzz_apc_filter` (`cfg(fuzzing)`) | the `apc_filter` cargo-fuzz target |
+
+**Gate (ARC-005).** `make doc-hidden-check` (`scripts/check_doc_hidden.py`,
+part of `checkall`) extracts the member's `#[doc(hidden)] pub` set from
+`src/**/*.rs` and fails when it differs from the baseline below. Adding a
+promotion fails, and so does leaving an entry here after it went back to
+`pub(crate)`. Update the baseline and the table together. Entries are
+`<module>::<owner>::<name> (<kind>)`, keyed by module rather than file, so
+moving an item between files of one module keeps the baseline valid.
+
+**Policy: promote methods, never fields.** A promoted field lets any
+embedder of the published crate write core state directly and bypass every
+invariant. A promoted method keeps the invariant inside the core. The
+`field` entries below predate the gate. Do not add new ones. Replace
+existing ones with accessor methods when their consumers are next touched.
+
+<!-- doc-hidden-baseline:begin -->
+- `cell::Cell::c (field)`
+- `cell::Cell::flags (field)`
+- `cell::Cell::width (field)`
+- `graphics::PlacedPixels (struct)`
+- `graphics::PlacedPixels::height (field)`
+- `graphics::PlacedPixels::pixels (field)`
+- `graphics::PlacedPixels::position (field)`
+- `graphics::PlacedPixels::width (field)`
+- `graphics::cell_size_for (fn)`
+- `graphics::pixel_at_in (fn)`
+- `graphics::sample_half_block_in (fn)`
+- `pty_session::PtyInputHandle (re-export)`
+- `pty_session::PtyInputHandle (struct)`
+- `pty_session::PtyInputHandle::write (fn)`
+- `pty_session::PtySession::input_handle (fn)`
+- `pty_session::PtySession::resize_deferred (fn)`
+- `pty_session::PtySession::resize_with_pixels_deferred (fn)`
+- `pty_session::pixel_extent (fn)`
+- `pty_session::pixel_extent (re-export)`
+- `terminal::EventField (enum)`
+- `terminal::GraphicsState (struct)`
+- `terminal::GraphicsState::cell_dimensions (field)`
+- `terminal::GraphicsState::graphics_store (field)`
+- `terminal::Terminal::for_each_dirty_range (fn)`
+- `terminal::Terminal::for_each_dirty_range_since (fn)`
+- `terminal::Terminal::graphics (field)`
+- `terminal::Terminal::grid (field)`
+- `terminal::Terminal::pixel_height (field)`
+- `terminal::Terminal::pixel_width (field)`
+- `terminal::Terminal::resize_deferred (fn)`
+- `terminal::Terminal::set_retain_kitty_temp_files (fn)`
+- `terminal::event_fields (fn)`
+- `terminal::event_fields (mod)`
+- `terminal::fuzz_apc_filter (fn)`
+<!-- doc-hidden-baseline:end -->
 
 Not promoted: `Cell::{combining, fg, bg, underline_color}`. One root test
 helper (`crates/par-mux/src/mux/persist.rs` `marker_cell`, in the root at
