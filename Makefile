@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check mux-rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -72,6 +72,7 @@ help:
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
 	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
+	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; also lints that section's structure (duplicate subsections, detached bullets, <this>, stale paths, [Unreleased] link base); then runs the script's --self-test (release-time only, not part of checkall)"
@@ -495,6 +496,12 @@ doc-hidden-check:
 	python3 scripts/check_doc_hidden.py
 	python3 scripts/check_doc_hidden.py --self-test
 
+# ARC-001: Terminal/PtyTerminal flat-method ratchet over the committed
+# _native.pyi (no build needed). New API areas ship as separate pyclasses.
+api-surface-check:
+	python3 scripts/check_api_surface.py
+	python3 scripts/check_api_surface.py --self-test
+
 # DOC-004: docstring coverage of the generated Python stub. Pure python3
 # over the committed _native.pyi, so no build or venv is needed.
 stub-docs-check:
@@ -577,7 +584,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
