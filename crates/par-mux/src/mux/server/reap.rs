@@ -16,8 +16,11 @@ pub(super) struct Removal {
 /// `respawn-pane` can restart the process in place — the recovery path a
 /// client offers on a crashed program) or REMOVE them (remain-on-exit
 /// `= false`, the default: the kill-pane contract runs — the pane goes, its
-/// window closes when it was the last pane, and an emptied session (and its
-/// workspace, when that empties too) cascade with it). The PTY reader flips
+/// window closes when it was the last pane, and an emptied session cascades
+/// with it). Auto-remove never empties a workspace: a pane that is its
+/// workspace's last ([`MuxTree::is_workspace_last_pane`]) is held dead as
+/// under remain-on-exit (keep-one-tab). Explicit `kill-*` commands keep
+/// their full cascade. The PTY reader flips
 /// `is_running` on EOF; this pass (the accept loop's idle tick,
 /// [`REAP_INTERVAL`]) observes the death ONCE, records the exit code while
 /// the child handle can still be asked, and broadcasts `%pane-exited` — the
@@ -27,13 +30,12 @@ pub(super) struct Removal {
 /// notifications, so an observer sees the death before the geometry: a
 /// surviving window gets `%layout-change` + `%window-pane-changed`, an
 /// emptied one gets `%window-close`, then `%sessions-changed` when the
-/// cascade removed a session, then `%workspaces-changed` when that removal
-/// emptied a workspace — the same line order an explicit `kill-pane`
-/// produces. A persisting daemon whose every pane is dead (or gone) exits
-/// once the last client is gone (see [`EXIT_EMPTY_GRACE`] and
-/// [`MuxTree::all_panes_dead`]) — held panes are for clients that might
-/// come back, and with nobody connected and nothing alive the daemon
-/// collects itself.
+/// cascade removed a session — the same line order an explicit `kill-pane`
+/// produces. A held pane gets only its `%pane-exited`. A persisting daemon
+/// whose every pane is dead (or gone) exits once the last client is gone
+/// (see [`EXIT_EMPTY_GRACE`] and [`MuxTree::all_panes_dead`]) — held panes
+/// are for clients that might come back, and with nobody connected and
+/// nothing alive the daemon collects itself.
 pub(super) fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -78,11 +80,23 @@ pub(super) fn reap_dead_panes(
     if !remain_on_exit && !just_died.is_empty() {
         let fingerprint = workspace_roster_fingerprint(tree);
         for &(pane_id, _) in &just_died {
+            // Keep-one-tab: an app exit never empties a workspace. The
+            // workspace's last pane is HELD dead (window, session, and
+            // workspace stay; `respawn-pane` restarts it) and announces
+            // only its `%pane-exited`. The test and the kill share one
+            // lock, so of two same-tick deaths in a two-pane workspace the
+            // first is removed and the second, now the last, is held.
             // Let-bound, NOT an `if let` scrutinee: the scrutinee's lock
             // temporary would live through the body (parking_lot is not
             // reentrant) and the window lookup below would deadlock on the
             // tree — the same trap cmd_kill_pane documents.
-            let killed = tree.lock().kill_pane(pane_id);
+            let killed = {
+                let mut guard = tree.lock();
+                if guard.is_workspace_last_pane(pane_id) {
+                    continue;
+                }
+                guard.kill_pane(pane_id)
+            };
             if let Ok((window_id, removed_session)) = killed {
                 let active = tree.lock().window(window_id).map(|w| w.active);
                 removals.push(Removal {

@@ -423,6 +423,29 @@ impl MuxTree {
         !self.panes.is_empty() && self.panes.values().all(|pane| pane.dead())
     }
 
+    /// Whether `pane` is the only pane left in its workspace: the last pane
+    /// of the last window of the last session. Dead and live panes count
+    /// alike. The auto-remove reaper's keep-one-tab test — an app exit
+    /// never empties a workspace, so this pane is held dead instead of
+    /// removed. `false` for a pane the tree does not hold.
+    pub fn is_workspace_last_pane(&self, pane: PaneId) -> bool {
+        let Some(workspace) = self
+            .workspace_of_pane(pane)
+            .and_then(|id| self.workspaces.get(&id))
+        else {
+            return false;
+        };
+        let [session] = workspace.sessions.as_slice() else {
+            return false;
+        };
+        let Some([window]) = self.sessions.get(session).map(|s| s.windows.as_slice()) else {
+            return false;
+        };
+        self.windows
+            .get(window)
+            .is_some_and(|w| w.layout == LayoutTree::leaf(pane))
+    }
+
     /// Phase 1 of `respawn-pane`: resolve the pane, refuse a live one
     /// without `kill`, and snapshot everything the restart needs. The
     /// caller DROPS the tree lock, spawns through the factory, and

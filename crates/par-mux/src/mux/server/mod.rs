@@ -55,14 +55,14 @@ const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250)
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
 
-/// How long a persisting daemon tolerates an empty tree — zero sessions,
-/// or only dead panes — before exiting, CONNECTED CLIENTS NOTWITHSTANDING
-/// (tmux's `exit-empty`: the last session dying under an attached client
-/// still ends the server, and the client learns through the broadcast
-/// %exit). The grace keeps the two races it could lose won instead: a
-/// session created (or a pane respawned) within the window resets the
-/// clock, and a logout's SIGTERM — which follows pane deaths within
-/// moments — beats the grace, so the reboot-race resurrection
+/// How long a persisting daemon tolerates an empty tree — zero sessions
+/// (connected clients notwithstanding), or only dead panes with no client
+/// connected — before exiting (tmux's `exit-empty`: the last session dying
+/// under an attached client still ends the server, and the client learns
+/// through the broadcast %exit). The grace keeps the two races it could
+/// lose won instead: a session created (or a pane respawned) within the
+/// window resets the clock, and a logout's SIGTERM — which follows pane
+/// deaths within moments — beats the grace, so the reboot-race resurrection
 /// ([`SaveOrigin::Shutdown`]) stays intact. `daemon.exit-empty = false`
 /// (the live config) holds the daemon past the grace however long it sits
 /// empty.
@@ -148,8 +148,8 @@ enum LoopExit {
     Requested,
     /// A listener fault ended the loop.
     Fault,
-    /// An empty tree — zero sessions, or only dead panes — held past
-    /// [`EXIT_EMPTY_GRACE`]: tmux's exit-empty. Clients do not hold it.
+    /// An empty tree — zero sessions, or only dead panes with no client
+    /// connected — held past [`EXIT_EMPTY_GRACE`]: tmux's exit-empty.
     Empty,
 }
 
@@ -338,7 +338,8 @@ impl MuxServer {
         let mut last_scrape = std::time::Instant::now();
         let mut last_reap = std::time::Instant::now();
         // When the daemon (persisting only) first observed an empty tree —
-        // zero sessions, or only dead panes; clients do not hold it —
+        // zero sessions (clients do not hold it), or only dead panes with
+        // no client connected —
         // reset to None the moment a session (or live pane) returns. Held
         // past EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty]
         // (when `daemon.exit-empty` is on, the default; off, it never
@@ -426,12 +427,15 @@ impl MuxServer {
                             .is_none_or(|config| config.lock().exit_empty)
                     {
                         // "Empty" counts a tree whose every pane is dead
-                        // too: held panes (remain-on-exit) are for clients
-                        // that might come back — with nothing alive
-                        // anywhere, the daemon collects itself instead of
-                        // lingering on frozen screens.
+                        // too, but only with no client connected: held
+                        // panes (remain-on-exit, keep-one-tab) are what an
+                        // attached client shows its exit cue and respawns
+                        // over, so a client holds them; with nobody
+                        // connected and nothing alive, the daemon collects
+                        // itself instead of lingering on frozen screens.
                         let idle_empty = self.tree.lock().sessions().is_empty()
-                            || self.tree.lock().all_panes_dead();
+                            || (self.tree.lock().all_panes_dead()
+                                && self.clients.lock().is_empty());
                         empty_since = match (idle_empty, empty_since) {
                             (true, Some(since)) => Some(since),
                             (true, None) => Some(std::time::Instant::now()),

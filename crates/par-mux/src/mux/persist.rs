@@ -722,10 +722,12 @@ impl MuxTree {
 
     /// Auto-remove (remain-on-exit = false): a persisted dead entry is
     /// dropped, honoring the CURRENT setting at restore time. The
-    /// kill-pane cascade does the pruning — window, session, and
-    /// workspace go with a pane that was a window's last — so the
-    /// restored tree is exactly what a live daemon with the setting off
-    /// would have held. No PTY concern: a dead entry is processless.
+    /// kill-pane cascade does the pruning — window and session go with a
+    /// pane that was their last — so the restored tree is exactly what a
+    /// live daemon with the setting off would have held: the reaper's
+    /// keep-one-tab rule applies here too, so a dead entry that is (or,
+    /// after earlier drops, becomes) its workspace's last pane is kept
+    /// held dead. No PTY concern: a dead entry is processless.
     fn drop_restored_dead_entries(&mut self, state: &PersistState) {
         let dead_ids: Vec<PaneId> = state
             .sessions
@@ -736,7 +738,9 @@ impl MuxTree {
             .map(|pane| PaneId(pane.id))
             .collect();
         for pane_id in dead_ids {
-            let _ = self.kill_pane(pane_id);
+            if !self.is_workspace_last_pane(pane_id) {
+                let _ = self.kill_pane(pane_id);
+            }
         }
     }
 }
@@ -2161,12 +2165,36 @@ mod tests {
         tree_consistency(&restored);
     }
 
-    /// remain-on-exit off, dead-only save: the whole window, session, and
-    /// workspace cascade — the restored tree is empty, exactly what a live
-    /// daemon with the setting off would have been left holding.
+    /// remain-on-exit off, dead-only save: the workspace's last pane is
+    /// kept held dead (keep-one-tab), exactly what a live daemon with the
+    /// setting off would have been left holding — the reaper holds it too.
     #[test]
-    fn auto_remove_restore_of_a_dead_only_save_empties_the_tree() {
-        let (tree, _pane_id) = held_dead_tree(Some(3));
+    fn auto_remove_restore_keeps_a_workspaces_last_dead_pane_held() {
+        let (tree, pane_id) = held_dead_tree(Some(3));
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            false,
+        )
+        .unwrap();
+        let pane = restored.pane(pane_id).expect("the last pane is kept");
+        assert!(pane.dead());
+        assert_eq!(pane.exit_code(), Some(3));
+        assert_eq!(restored.sessions.len(), 1, "its session stays");
+        tree_consistency(&restored);
+    }
+
+    /// remain-on-exit off, two dead panes in one workspace (separate
+    /// windows): the first is dropped through the cascade, the second —
+    /// now the workspace's last — is kept held dead.
+    #[test]
+    fn auto_remove_restore_drops_dead_entries_down_to_the_last() {
+        let (mut tree, first) = held_dead_tree(Some(3));
+        let session = tree.sessions()[0];
+        let window = tree.new_window(session, "two", 80, 24).unwrap();
+        let second = tree.window(window).unwrap().panes()[0];
+        tree.pane_mut(second).unwrap().mark_dead_with_code(Some(4));
         let state = tree.to_persist_state();
         let restored = MuxTree::from_persist_state_with_policy(
             &state,
@@ -2175,9 +2203,10 @@ mod tests {
         )
         .unwrap();
         assert!(
-            restored.panes.is_empty() && restored.sessions.is_empty(),
-            "the dead-only save restores to nothing"
+            restored.pane(first).is_none(),
+            "the first dead entry is gone"
         );
+        assert!(restored.pane(second).unwrap().dead(), "the last is held");
         tree_consistency(&restored);
     }
 

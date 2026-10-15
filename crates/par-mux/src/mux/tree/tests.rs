@@ -2162,6 +2162,53 @@ fn workspace_of_pane_walks_to_the_owning_workspace() {
     tree.assert_indexes_consistent();
 }
 
+/// Keep-one-tab: only the sole pane of the sole window of the sole
+/// session of a workspace counts as the workspace's last pane. A sibling
+/// pane, window, or session anywhere in the workspace means it is not —
+/// and another workspace's panes do not matter.
+#[test]
+fn is_workspace_last_pane_needs_one_pane_window_and_session() {
+    let mut tree = tree();
+    let ws = tree.new_workspace("alpha");
+    tree.select_workspace(ws).unwrap();
+    let session = tree.new_session("one", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane = tree.window(window).unwrap().panes()[0];
+    assert!(
+        tree.is_workspace_last_pane(pane),
+        "sole pane of the workspace"
+    );
+    assert!(!tree.is_workspace_last_pane(PaneId(9999)), "unknown pane");
+
+    // Another workspace's session does not change this workspace's answer.
+    let other_ws = tree.new_workspace("beta");
+    tree.select_workspace(other_ws).unwrap();
+    tree.new_session("other", 80, 24).unwrap();
+    assert!(tree.is_workspace_last_pane(pane));
+
+    // A split sibling: not the last pane.
+    let sibling = tree
+        .split_pane(pane, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    assert!(!tree.is_workspace_last_pane(pane));
+    tree.kill_pane(sibling).unwrap();
+    assert!(tree.is_workspace_last_pane(pane));
+
+    // A second window in the session: not the last pane.
+    let second = tree.new_window(session, "two", 80, 24).unwrap();
+    assert!(!tree.is_workspace_last_pane(pane));
+    tree.kill_window(second).unwrap();
+    assert!(tree.is_workspace_last_pane(pane));
+
+    // A second session in the workspace: not the last pane.
+    tree.select_workspace(ws).unwrap();
+    let second_session = tree.new_session("two", 80, 24).unwrap();
+    assert!(!tree.is_workspace_last_pane(pane));
+    tree.kill_session(second_session).unwrap();
+    assert!(tree.is_workspace_last_pane(pane));
+    tree.assert_indexes_consistent();
+}
+
 #[test]
 fn workspace_crud_and_active_tracking() {
     let mut tree = tree();

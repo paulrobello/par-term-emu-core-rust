@@ -12,7 +12,7 @@ mod common;
 
 use common::{command, pane_ids, wait_listening, MuxFixture};
 use interprocess::TryClone as _;
-use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxServer};
+use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxClient, MuxServer};
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 
@@ -453,11 +453,52 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     );
 }
 
-/// remain-on-exit off (the daemon config default): a pane whose child exits
-/// is auto-REMOVED through the kill-pane contract — `%pane-exited` queues
-/// ahead of the geometry, the pane leaves `list-panes`, the window (and the
-/// session, emptied) cascade, and `respawn-pane` answers "no such pane"
-/// (the pane is gone, not held).
+/// Poll `list-panes` until `pane` is gone, panicking with `what` past 10 s.
+fn wait_pane_gone(client: &mut MuxClient, pane: &str, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = client.send("list-panes").expect("list-panes").join("\n");
+        if !pane_ids(&listed).iter().any(|p| p == pane) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{what}: {listed}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll `pane-info -t <pane>` until it reports `exited=<code>`.
+fn wait_pane_exited(client: &mut MuxClient, pane: &str, code: i32) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .unwrap_or_default()
+            .join("\n");
+        if info.contains(&format!(" exited={code}")) {
+            return info;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{pane} was never held with exited={code}: {info}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The `list-sessions` reply body as one string.
+fn session_names(client: &mut MuxClient) -> String {
+    client
+        .send("list-sessions")
+        .expect("list-sessions")
+        .join("\n")
+}
+
+/// remain-on-exit off (the daemon config default), keep-one-tab: a pane
+/// whose child exits while it is NOT its workspace's last pane is
+/// auto-REMOVED through the kill-pane contract — the pane leaves
+/// `list-panes`, its emptied window and session cascade, and
+/// `respawn-pane` answers "no such pane" (gone, not held). A sibling
+/// session keeps the workspace, so the removal never empties it.
 #[test]
 fn the_auto_remove_default_deletes_a_dead_pane() {
     let fixture = MuxFixture::new("autoremove");
@@ -468,13 +509,14 @@ fn the_auto_remove_default_deletes_a_dead_pane() {
     let mut reader = BufReader::new(stream);
 
     command(&mut writer, &mut reader, "new-session -s auto");
+    command(&mut writer, &mut reader, "new-session -s keep");
     // The deterministic death: `-k` replaces the shell with `exit 3`, which
     // is gone before the next reap pass.
     command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 3");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let listed = command(&mut writer, &mut reader, "list-panes").join("");
-        if !listed.contains("%0") {
+        if !pane_ids(&listed).iter().any(|p| p == "%0") {
             break;
         }
         assert!(
@@ -484,11 +526,11 @@ fn the_auto_remove_default_deletes_a_dead_pane() {
         std::thread::sleep(Duration::from_millis(50));
     }
     // The cascade: the window went with the pane, and the emptied session
-    // with it.
+    // with it; the sibling keeps the workspace.
     let sessions = command(&mut writer, &mut reader, "list-sessions").join("");
     assert!(
-        !sessions.contains("auto"),
-        "the emptied session cascaded away: {sessions}"
+        !sessions.contains("auto") && sessions.contains("keep"),
+        "the emptied session cascaded away, its sibling stays: {sessions}"
     );
     // The pane is gone, not held: respawn answers no-such-pane.
     let respawn = command(&mut writer, &mut reader, "respawn-pane -t %0").join("");
@@ -512,6 +554,9 @@ fn reload_config_flips_remain_on_exit_live() {
     let mut reader = BufReader::new(stream);
 
     command(&mut writer, &mut reader, "new-session -s live");
+    // A sibling session: the post-flip death below is not the workspace's
+    // last pane, so auto-remove removes it (keep-one-tab holds a last one).
+    command(&mut writer, &mut reader, "new-session -s sibling");
     command(&mut writer, &mut reader, "respawn-pane -t %0 -k exit 3");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -551,6 +596,222 @@ fn reload_config_flips_remain_on_exit_live() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Keep-one-tab, the single-pane workspace: under auto-remove the app exit
+/// of a workspace's LAST pane holds it dead instead of removing it — the
+/// pane stays listed with its exit code; its window, session, and
+/// workspace survive; the death is announced with `%pane-exited` and no
+/// removal notification; and `respawn-pane` restarts it in place. The
+/// client stays connected past the exit-when-empty grace (5 s): an
+/// all-dead tree with a client connected is not collected.
+#[test]
+fn auto_remove_holds_a_workspaces_last_pane_on_app_exit() {
+    use par_term_emu_core::tmux_control::TmuxNotification;
+    let fixture = MuxFixture::new("keeplast");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s only").expect("new-session");
+    let windows_before = client.send("list-windows -t $0").expect("list-windows");
+    while client.notifications().try_recv().is_ok() {}
+    client
+        .send("respawn-pane -t %0 -k exit 3")
+        .expect("respawn -k");
+    let info = wait_pane_exited(&mut client, "%0", 3);
+    assert!(
+        info.starts_with("%0 "),
+        "the pane is still in the tree: {info}"
+    );
+
+    // The broadcast tail: the death, and none of the removal geometry.
+    let mut exited = false;
+    let end = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < end {
+        match client
+            .notifications()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            Ok(TmuxNotification::PaneExited { pane_id, exit_code }) => {
+                assert_eq!((pane_id.as_str(), exit_code), ("%0", Some(3)));
+                exited = true;
+            }
+            Ok(
+                event @ (TmuxNotification::WindowClose { .. }
+                | TmuxNotification::SessionsChanged
+                | TmuxNotification::WorkspacesChanged),
+            ) => panic!("a held pane emits no removal notification: {event:?}"),
+            _ => {}
+        }
+    }
+    assert!(exited, "the death is announced with %pane-exited");
+
+    let listed = client.send("list-panes").expect("list-panes").join("\n");
+    assert!(
+        pane_ids(&listed).contains(&"%0".to_string()),
+        "list-panes still shows the held pane: {listed}"
+    );
+    assert_eq!(
+        client.send("list-windows -t $0").expect("list-windows"),
+        windows_before,
+        "the window survives untouched"
+    );
+    assert!(
+        session_names(&mut client).contains("only"),
+        "the session survives"
+    );
+    let workspaces = client.send("list-workspaces").expect("list-workspaces");
+    assert_eq!(
+        workspaces.len(),
+        1,
+        "the workspace survives: {workspaces:?}"
+    );
+
+    // Past the 5 s exit-when-empty grace: the connected client holds the
+    // all-dead tree, so the daemon still answers.
+    // negative check: nothing positive to wait on, so the window is fixed
+    std::thread::sleep(Duration::from_secs(7));
+    let info = client
+        .send("pane-info -t %0")
+        .expect("the daemon still serves past the grace")
+        .join("\n");
+    assert!(
+        info.contains(" exited=3"),
+        "still held past the grace: {info}"
+    );
+
+    // respawn-pane restarts it in place.
+    let respawn = client
+        .send_checked("respawn-pane -t %0")
+        .expect("respawn-pane");
+    assert!(respawn.ok, "respawn succeeds: {:?}", respawn.body);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send("pane-info -t %0")
+            .expect("pane-info")
+            .join("\n");
+        if info.starts_with("%0 ") && !info.contains("exited=") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the respawn never took: {info}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Keep-one-tab, two panes in one workspace (different windows of one
+/// session): the first exit removes normally (its window closes, the
+/// workspace keeps the other window), and the second — now the
+/// workspace's last pane — is held.
+#[test]
+fn auto_remove_removes_down_to_the_workspaces_last_pane() {
+    let fixture = MuxFixture::new("keeptwo");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s two").expect("new-session");
+    let second_window = client
+        .send("new-window -t $0")
+        .expect("new-window")
+        .first()
+        .expect("window id")
+        .trim()
+        .to_string();
+    let second_pane = client
+        .send(&format!("list-panes -t {second_window}"))
+        .expect("list-panes")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next())
+        .find(|t| t.starts_with('%'))
+        .expect("the second window's pane")
+        .to_string();
+
+    client
+        .send("respawn-pane -t %0 -k exit 3")
+        .expect("respawn -k");
+    wait_pane_gone(&mut client, "%0", "the first exit must remove normally");
+    let windows = client.send("list-windows -t $0").expect("list-windows");
+    assert_eq!(
+        windows.len(),
+        1,
+        "the first pane's window closed: {windows:?}"
+    );
+    assert!(
+        windows[0].starts_with(&second_window),
+        "the other window stays: {windows:?}"
+    );
+
+    client
+        .send(&format!("respawn-pane -t {second_pane} -k exit 4"))
+        .expect("respawn -k");
+    wait_pane_exited(&mut client, &second_pane, 4);
+    assert!(
+        session_names(&mut client).contains("two"),
+        "the session survives the last pane's exit"
+    );
+    assert_eq!(
+        client.send("list-windows -t $0").expect("list-windows"),
+        windows,
+        "the held pane's window stays"
+    );
+}
+
+/// remain-on-exit on: unchanged — every exit is held, the workspace's last
+/// pane or not.
+#[test]
+fn remain_on_exit_holds_every_exit_unchanged() {
+    let fixture = MuxFixture::new("holdall");
+    let _daemon = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s hold").expect("new-session");
+    client.send("new-session -s also").expect("new-session");
+    client
+        .send("respawn-pane -t %0 -k exit 3")
+        .expect("respawn -k");
+    wait_pane_exited(&mut client, "%0", 3);
+    let sessions = session_names(&mut client);
+    assert!(
+        sessions.contains("hold") && sessions.contains("also"),
+        "a held pane's session stays even with a sibling: {sessions}"
+    );
+}
+
+/// Explicit `kill-pane` is deliberate destruction: keep-one-tab is the
+/// reap path's rule only, so killing a workspace's last LIVE pane still
+/// cascades its window, session, and workspace away.
+#[test]
+fn kill_pane_of_a_workspaces_last_pane_still_cascades() {
+    let fixture = MuxFixture::new("killlast");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s doomed").expect("new-session");
+    // A second workspace keeps the daemon non-empty for the assertions.
+    let other = client
+        .send("new-workspace -n other")
+        .expect("new-workspace")
+        .first()
+        .expect("workspace id")
+        .trim()
+        .to_string();
+    let killed = client.send_checked("kill-pane -t %0").expect("kill-pane");
+    assert!(killed.ok, "kill-pane succeeds: {:?}", killed.body);
+    assert!(
+        !session_names(&mut client).contains("doomed"),
+        "the killed pane's session cascaded away"
+    );
+    let workspaces = client.send("list-workspaces").expect("list-workspaces");
+    assert_eq!(
+        workspaces.len(),
+        1,
+        "the emptied workspace cascaded away: {workspaces:?}"
+    );
+    assert!(workspaces[0].starts_with(&other), "{workspaces:?}");
 }
 
 /// SEC-126: `respawn-pane` flags stop at the first command word, so a
