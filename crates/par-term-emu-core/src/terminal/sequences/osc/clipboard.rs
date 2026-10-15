@@ -30,6 +30,9 @@ pub(crate) fn handle_osc_clipboard(
                             }
                         }
                     } else if !data.is_empty() {
+                        if !clipboard.allow_clipboard_write {
+                            return;
+                        }
                         if let Ok(decoded_bytes) = BASE64.decode(data.as_bytes()) {
                             if let Ok(text) = String::from_utf8(decoded_bytes) {
                                 clipboard.clipboard_content = Some(text);

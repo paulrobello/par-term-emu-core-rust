@@ -1395,6 +1395,49 @@ fn test_osc52_clipboard_query_denied() {
 }
 
 #[test]
+fn test_osc52_clipboard_write_allowed_by_default() {
+    let mut term = Terminal::new(80, 24);
+
+    assert!(term.allow_clipboard_write());
+
+    // Base64("Hello") = "SGVsbG8="
+    term.process(b"\x1b]52;c;SGVsbG8=\x1b\\");
+    assert_eq!(term.clipboard(), Some("Hello"));
+}
+
+#[test]
+fn test_osc52_clipboard_write_denied() {
+    let mut term = Terminal::new(80, 24);
+    term.set_clipboard(Some("Existing".to_string()));
+
+    term.set_allow_clipboard_write(false);
+    assert!(!term.allow_clipboard_write());
+
+    // Write is ignored: existing content stays and nothing is replied.
+    term.process(b"\x1b]52;c;SGVsbG8=\x1b\\");
+    assert_eq!(term.clipboard(), Some("Existing"));
+    assert_eq!(term.drain_responses(), b"");
+
+    // The query path is independent of the write flag.
+    term.set_allow_clipboard_read(true);
+    term.process(b"\x1b]52;c;?\x1b\\");
+    // Base64("Existing") = "RXhpc3Rpbmc="
+    assert_eq!(term.drain_responses(), b"\x1b]52;c;RXhpc3Rpbmc=\x1b\\");
+}
+
+#[test]
+fn test_osc52_clipboard_write_flag_survives_ris() {
+    let mut term = Terminal::new(80, 24);
+    term.set_allow_clipboard_write(false);
+
+    term.process(b"\x1bc"); // RIS
+    assert!(!term.allow_clipboard_write());
+
+    term.process(b"\x1b]52;c;SGVsbG8=\x1b\\");
+    assert_eq!(term.clipboard(), None);
+}
+
+#[test]
 fn test_osc52_clipboard_empty_write_is_noop() {
     let mut term = Terminal::new(80, 24);
 
@@ -4222,6 +4265,7 @@ fn ris_preserves_host_config() {
     term.set_cell_dimensions(9, 19);
     term.set_answerback_string(Some("par-test".to_string()));
     term.set_allow_clipboard_read(true);
+    term.set_allow_clipboard_write(false);
     term.set_ansi_palette_color(1, Color::Rgb(1, 2, 3)).unwrap();
     term.set_faint_text_alpha(0.25);
     // HostConfig (ARC-100): these reverted before the carried struct.
@@ -4266,6 +4310,7 @@ fn ris_preserves_host_config() {
     assert_eq!(term.cell_dimensions(), (9, 19));
     assert_eq!(term.answerback_string(), Some("par-test"));
     assert!(term.allow_clipboard_read());
+    assert!(!term.allow_clipboard_write());
     assert_eq!(term.get_ansi_color(1), Some(Color::Rgb(1, 2, 3)));
     assert_eq!(term.faint_text_alpha(), 0.25);
 

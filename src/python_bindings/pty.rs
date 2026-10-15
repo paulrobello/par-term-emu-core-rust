@@ -598,6 +598,10 @@ impl PyPtyTerminal {
 
     // set_allow_clipboard_read: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
+    // allow_clipboard_write: provided by impl_terminal_simple_getters! (SEC-003)
+
+    // set_allow_clipboard_write: provided by impl_terminal_state_setters! (SEC-003)
+
     // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // set_default_fg: provided by impl_terminal_state_setters! (ARC-003/QA-001)

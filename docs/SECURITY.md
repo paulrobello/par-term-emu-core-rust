@@ -628,7 +628,11 @@ internal clipboard, where the embedding application can read it. The query
 form — `OSC 52 ; c ; ?`, which returns the clipboard content to the program
 that asked — receives a reply **only** when
 `Terminal.set_allow_clipboard_read(True)` is set; the default is `False`, so
-untrusted output cannot read the clipboard back.
+untrusted output cannot read the clipboard back. The write form is gated
+separately by `Terminal.set_allow_clipboard_write`: the default `True` keeps
+OSC 52 writes working, and `False` makes them a silent no-op, so a host that
+mirrors the terminal clipboard to the system clipboard can refuse writes
+from untrusted output (SEC-003). Both flags survive RIS.
 `set_disable_insecure_sequences(True)` blocks both directions.
 
 ## Graphics Protocol File Loading Security

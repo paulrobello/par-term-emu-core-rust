@@ -120,6 +120,10 @@ PROBES: dict[str, Probe] = {
         lambda t: t.set_allow_clipboard_read(True),
         lambda t: t.allow_clipboard_read(),
     ),
+    "set_allow_clipboard_write": (
+        lambda t: t.set_allow_clipboard_write(False),
+        lambda t: t.allow_clipboard_write(),
+    ),
     "set_max_clipboard_event_bytes": (
         lambda t: t.set_max_clipboard_event_bytes(99),
         lambda t: t.get_max_clipboard_event_bytes(),

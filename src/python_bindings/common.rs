@@ -84,6 +84,19 @@ macro_rules! impl_terminal_simple_getters {
                 Ok(t.allow_clipboard_read())
             }
 
+            /// Whether OSC 52 clipboard writes are allowed
+            ///
+            /// Returns:
+            ///     bool: True if applications may set the clipboard via OSC 52 (default)
+            ///
+            /// Example:
+            ///     >>> term.allow_clipboard_write()
+            ///     True
+            fn allow_clipboard_write(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.allow_clipboard_write())
+            }
+
             /// Whether OSC 7 directory-tracking sequences are accepted
             ///
             /// Returns:
@@ -467,6 +480,29 @@ macro_rules! impl_terminal_state_setters {
             fn set_allow_clipboard_read(&mut self, allow: bool) -> pyo3::PyResult<()> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 t.set_allow_clipboard_read(allow);
+                Ok(())
+            }
+
+            /// Set whether clipboard write operations are allowed
+            ///
+            /// When enabled (default), OSC 52 writes store their decoded payload as the
+            /// terminal clipboard content. When disabled, OSC 52 writes are silently
+            /// ignored, so untrusted terminal output cannot place text on the clipboard.
+            /// Survives RIS (ESC c) like the other embedder security flags.
+            ///
+            /// Args:
+            ///     allow: True to allow clipboard writes (default), False to block them
+            ///
+            /// Returns:
+            ///     None
+            ///
+            /// Example:
+            ///     >>> term.set_allow_clipboard_write(False)
+            ///     >>> term.allow_clipboard_write()
+            ///     False
+            fn set_allow_clipboard_write(&mut self, allow: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_allow_clipboard_write(allow);
                 Ok(())
             }
 
