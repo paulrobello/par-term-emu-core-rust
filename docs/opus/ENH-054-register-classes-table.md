@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (AUDIT.md "Detailed Findings → Architecture & Design"). Board card: `[ENH-054]`.
 > Sequencing: independent of every audit phase. It touches only the root crate (`src/lib.rs`, `src/python_bindings/`) and none of the files under `crates/par-mux/src/mux/attach/` that ARC-136…141, QA-243 and SEC-212 edit. It can land at any time.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

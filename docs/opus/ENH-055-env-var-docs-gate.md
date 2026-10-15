@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass. Board card: `[ENH-055]`.
 > Sequencing: land **after DOC-150** (which adds three of the missing rows). This card adds the remaining rows itself, so the gate is green on the tree it lands on.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: M
 

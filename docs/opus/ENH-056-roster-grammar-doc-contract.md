@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass. Board card: `[ENH-056]`.
 > Sequencing: land **after DOC-146** (which rewrites SKILL.md's `list-agents` lines into the `key=value` form) and **after DOC-147** (which adds SKILL.md to the mux-docs inputs). Before DOC-146, the new check fails on the current SKILL.md, and that failure is the defect this card exists to catch.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: S
 

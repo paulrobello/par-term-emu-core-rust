@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass. Board card: `[ENH-057]`.
 > Sequencing: independent. All 17 citations on HEAD aaf35ef resolve today (measured), so the gate lands green.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

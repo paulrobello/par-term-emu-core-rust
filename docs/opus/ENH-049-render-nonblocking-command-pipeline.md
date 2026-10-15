@@ -8,6 +8,7 @@
 > - It needs **DOC-144/DOC-145**, which rewrite the `docs/MUX.md` render-attach sections this card adds a paragraph to.
 >
 > Run it in four phases, each a separate commit with the gate green. Phases 2–4 can stop at any boundary, and the pump is still correct.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: L
 

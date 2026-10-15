@@ -6,6 +6,7 @@
 > - ARC-139 may lift `switch_workspace` landing into `attach/targets.rs`.
 >
 > Land it **after ENH-050** as well. ENH-050 replaces the `use super::*` glob and the `super::super::` paths in this file, and doing that first keeps the two diffs from colliding. Land it **before ENH-049**, which turns these handlers into queued continuations. Named handlers give that card one function per chord to convert.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: S
 

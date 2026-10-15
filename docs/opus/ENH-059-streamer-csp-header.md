@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (Security posture, "Hardening ideas"). Board card: `[ENH-059]`.
 > Sequencing: independent. Touches only `src/streaming/server/http.rs`, `origin_tests.rs` and docs. No frontend rebuild is needed.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

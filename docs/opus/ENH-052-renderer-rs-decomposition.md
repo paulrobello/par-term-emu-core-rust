@@ -6,6 +6,7 @@
 > - Land it **after QA-243**, which collapses the seven `cursor_trace()` blocks in `focused_cursor` (`:765-832`) and `StdoutSink::place_cursor` (`:209-214`) into one helper. Both edit exactly the regions this card moves. Moving the code first would make each of those cards a cross-file conflict.
 > - Land it **after ENH-050**, whose phase 1 replaces `renderer.rs:4`'s `use super::*` and `mod.rs:46`'s `use renderer::*` with explicit lists. This card then extends those lists rather than fighting globs.
 > - Land it **before ENH-049**. ENH-049 does not touch `renderer.rs`, but it edits `render/mod.rs` and needs the render tree in its final shape.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: M
 

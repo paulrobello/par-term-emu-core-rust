@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (Security posture hardening ideas, AUDIT.md `:239`). Board card: `[ENH-060]`.
 > Sequencing: independent of the ARC-136/138/140 render fixes. ARC-140 retypes `AgentRow` consumers in `attach/status.rs` and `render/sidebar.rs` but not `ipc/rows.rs` itself, so this card can land before or after it. If ENH-061 (`ws=` on `%agent-state-changed`) lands first, nothing here changes, because that notification is parsed by `tmux_control.rs` (already fuzzed by `tmux_control`), not by `AgentRow::parse`.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 
