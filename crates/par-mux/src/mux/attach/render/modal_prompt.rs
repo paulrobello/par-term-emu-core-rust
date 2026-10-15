@@ -1,11 +1,13 @@
 //! The rename/create prompt: enter/leave, the seeded text, its
 //! refresh, keys and bytes, and the commit paths per target.
 
+use super::modal_settings::SettingKind;
 use super::{Modal, PromptState, PromptTarget, WindowSession};
 use crate::mux::attach::panels::{
     compose_prompt_panel, next_window_name, next_workspace_name, wire_quote, NEW_PROMPT_FOOTER,
     PROMPT_FOOTER, PROMPT_NEW_WINDOW_OVERLAY_TITLE, PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
-    PROMPT_PANE_OVERLAY_TITLE, PROMPT_WINDOW_OVERLAY_TITLE, PROMPT_WORKSPACE_OVERLAY_TITLE,
+    PROMPT_PANE_OVERLAY_TITLE, PROMPT_SETTING_OVERLAY_TITLE, PROMPT_WINDOW_OVERLAY_TITLE,
+    PROMPT_WORKSPACE_OVERLAY_TITLE,
 };
 use par_term_emu_core::keyboard::TermKeyEvent;
 
@@ -33,13 +35,25 @@ impl WindowSession {
                 .map(|(_, name)| name.clone())
                 .unwrap_or_default(),
             PromptTarget::NewWorkspace => next_workspace_name(self.status.workspaces()),
+            // The settings rows open through `enter_setting_prompt`
+            // (which owns the seed); this arm is unreachable.
+            PromptTarget::Setting(_) => String::new(),
         };
         self.open_modal(Modal::Prompt(PromptState { text: seed, target }));
         self.refresh_prompt();
     }
     /// Dismiss the prompt: the next frame's pane repaint restores the
-    /// covered cells.
+    /// covered cells. A settings-row prompt returns to the settings
+    /// dialog instead of dismissing it.
     pub(super) fn leave_prompt(&mut self) {
+        if let Modal::Prompt(prompt) = &self.modal {
+            if let PromptTarget::Setting(edit) = &prompt.target {
+                let back = edit.back.clone();
+                self.modal = Modal::Settings(back);
+                self.refresh_settings();
+                return;
+            }
+        }
         if matches!(self.modal, Modal::Prompt(_)) {
             self.modal = Modal::None;
         }
@@ -56,9 +70,11 @@ impl WindowSession {
             PromptTarget::NewWindow => PROMPT_NEW_WINDOW_OVERLAY_TITLE,
             PromptTarget::Workspace(_) => PROMPT_WORKSPACE_OVERLAY_TITLE,
             PromptTarget::NewWorkspace => PROMPT_NEW_WORKSPACE_OVERLAY_TITLE,
+            PromptTarget::Setting(_) => PROMPT_SETTING_OVERLAY_TITLE,
         };
         let footer = match prompt.target {
             PromptTarget::NewWindow | PromptTarget::NewWorkspace => NEW_PROMPT_FOOTER,
+            PromptTarget::Setting(_) => NEW_PROMPT_FOOTER,
             _ => PROMPT_FOOTER,
         };
         self.renderer.set_overlay(Some((
@@ -139,11 +155,23 @@ impl WindowSession {
         };
         let text = prompt.text.trim().to_string();
         let target = prompt.target.clone();
-        if text.is_empty() {
+        // An empty commit clears a hex color override (the built-in
+        // look); for every other target it cancels.
+        let empty_clears = matches!(
+            &target,
+            PromptTarget::Setting(edit) if matches!(edit.kind, SettingKind::Hex)
+        );
+        if text.is_empty() && !empty_clears {
             self.leave_prompt();
             return;
         }
         match target {
+            PromptTarget::Setting(edit) => {
+                // Validates first: a bad value flashes and the prompt
+                // stays up; a good one writes, reloads, and restores the
+                // dialog (the same restore as leave_prompt).
+                self.setting_prompt_commit(conn, &edit, &text);
+            }
             PromptTarget::Pane => {
                 let command = format!(
                     "select-pane -t {} -T {}",

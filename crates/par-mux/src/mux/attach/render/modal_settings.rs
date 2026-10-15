@@ -1,14 +1,17 @@
 //! The settings dialog (herdr's settings overlay): tabbed sections of
-//! config-file choices — reached from the side panel's command menu.
+//! `[client]` config keys — reached from the side panel's command menu.
+//! Every TUI-facing `[client]` key has a row here (the CLAUDE.md rule):
+//! toggles flip on Enter, small choice lists cycle on Enter, and
+//! numbers, hex colors, and chords edit through the prompt modal seeded
+//! with the value in force and validated before anything is written.
 //! Arrows (or `j`/`k`) move the selection, Tab/←/→ (or `h`/`l`) switch
-//! sections, Enter (or space) applies the selection — the key is written
-//! into `config.toml` with the user's comments kept, then the reload
-//! chord's path rebinds the client and sends `reload-config` — and
-//! Escape (or `q`) closes. The integrations section is read-only.
+//! sections, Escape (or `q`) closes. The integrations section is
+//! read-only, and the states section is a multi-select (space toggles).
 
 use super::{Modal, WindowSession};
-use crate::mux::attach::panels::HelpRow;
+use crate::mux::attach::panels::{spell_key, HelpRow};
 use crate::mux::attach::settings_write::{write_client_key, SettingValue};
+use crate::mux::config::Management;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The dialog's overlay title.
@@ -19,17 +22,39 @@ pub(super) const SETTINGS_TITLE: &str = " settings ";
 pub(super) enum SettingsSection {
     Sidebar,
     Borders,
+    General,
     Notify,
     States,
+    Keys,
     Integrations,
 }
 
+/// The named `agent-rows` layouts the dialog cycles through: each is the
+/// token spelling written to the config (herdr's default, a one-line
+/// compact form, and everything the sidebar can show).
+const AGENT_ROWS_PRESETS: &[(&str, &[&[&str]])] = &[
+    (
+        "default",
+        &[&["state_icon", "workspace", "project"], &["agent"]],
+    ),
+    ("compact", &[&["state_icon", "agent"]]),
+    (
+        "detailed",
+        &[
+            &["state_icon", "state", "workspace", "project"],
+            &["agent", "pane"],
+        ],
+    ),
+];
+
 impl SettingsSection {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::Sidebar,
         Self::Borders,
+        Self::General,
         Self::Notify,
         Self::States,
+        Self::Keys,
         Self::Integrations,
     ];
 
@@ -37,8 +62,10 @@ impl SettingsSection {
         match self {
             Self::Sidebar => "sidebar",
             Self::Borders => "borders",
+            Self::General => "general",
             Self::Notify => "notify",
             Self::States => "states",
+            Self::Keys => "keys",
             Self::Integrations => "integrations",
         }
     }
@@ -46,13 +73,15 @@ impl SettingsSection {
     /// The section's heading and one-line description.
     fn heading(self) -> (&'static str, &'static str) {
         match self {
-            Self::Sidebar => ("side panel", "show the side panel when a client attaches"),
-            Self::Borders => ("pane borders", "the divider and border line style"),
+            Self::Sidebar => ("side panel", "what the workspace side panel shows"),
+            Self::Borders => ("borders", "the divider and border look"),
+            Self::General => ("general", "client behavior and the attach mode"),
             Self::Notify => ("notifications", "how agent state changes are announced"),
             Self::States => (
                 "notify on",
                 "the agent states whose arrival notifies (space toggles)",
             ),
+            Self::Keys => ("keys", "the prefix and every management chord"),
             Self::Integrations => (
                 "agent integrations",
                 "agent hooks (par-mux --install-agent-hooks)",
@@ -60,55 +89,383 @@ impl SettingsSection {
         }
     }
 
-    /// The section's choices (the integrations section lists its hook
-    /// rows instead).
+    /// The multi-select states section's entries.
     fn choices(self) -> &'static [&'static str] {
         match self {
-            Self::Sidebar => &["on", "off"],
-            Self::Borders => &["herdr", "unicode", "double", "heavy", "ascii"],
-            Self::Notify => crate::mux::config::NOTIFY_DELIVERIES,
             Self::States => crate::mux::config::NOTIFY_STATES,
-            Self::Integrations => &[],
+            _ => &[],
+        }
+    }
+
+    /// The section's editable rows (the states and integrations sections
+    /// keep their own shapes).
+    fn rows(self) -> &'static [SettingSpec] {
+        match self {
+            Self::Sidebar => &[
+                SettingSpec {
+                    key: "sidebar-on-launch",
+                    label: "show on attach",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "sidebar-width",
+                    label: "width",
+                    kind: SettingKind::Number { min: 6, max: 60 },
+                },
+                SettingSpec {
+                    key: "agent-rows",
+                    label: "agent lines",
+                    kind: SettingKind::Choice(&["default", "compact", "detailed"]),
+                },
+            ],
+            Self::Borders => &[
+                SettingSpec {
+                    key: "border-lines",
+                    label: "line style",
+                    kind: SettingKind::Choice(&["herdr", "unicode", "double", "heavy", "ascii"]),
+                },
+                SettingSpec {
+                    key: "pane-borders",
+                    label: "pane boxes",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "show-label-in-border",
+                    label: "labels in border",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "pane-gaps",
+                    label: "pane gaps",
+                    kind: SettingKind::Number { min: 0, max: 8 },
+                },
+                SettingSpec {
+                    key: "border-active-color",
+                    label: "focus color",
+                    kind: SettingKind::Hex,
+                },
+                SettingSpec {
+                    key: "border-color",
+                    label: "border color",
+                    kind: SettingKind::Hex,
+                },
+            ],
+            Self::General => &[
+                SettingSpec {
+                    key: "mode",
+                    label: "attach mode",
+                    kind: SettingKind::Choice(&["render", "passthrough"]),
+                },
+                SettingSpec {
+                    key: "scrollbar-gutter",
+                    label: "scroll gutter",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "drag-cursor-shape",
+                    label: "drag cursor shape",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "resize-step",
+                    label: "resize step",
+                    kind: SettingKind::Number { min: 1, max: 99 },
+                },
+            ],
+            Self::Notify => &[SettingSpec {
+                key: "notify-delivery",
+                label: "delivery",
+                kind: SettingKind::Choice(crate::mux::config::NOTIFY_DELIVERIES),
+            }],
+            Self::Keys => &[
+                SettingSpec {
+                    key: "prefix",
+                    label: "prefix",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "reload",
+                    label: "reload config",
+                    kind: SettingKind::ReloadChord,
+                },
+                SettingSpec {
+                    key: "split-right",
+                    label: "split right",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "split-down",
+                    label: "split down",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "kill-pane",
+                    label: "kill pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "new-window",
+                    label: "new window",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "resize",
+                    label: "resize mode",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "swap-prev",
+                    label: "swap prev pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "swap-next",
+                    label: "swap next pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "workspace-next",
+                    label: "next workspace",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "workspace-prev",
+                    label: "prev workspace",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "help",
+                    label: "keybinds",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "picker",
+                    label: "window picker",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "zoom",
+                    label: "zoom pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "rename-window",
+                    label: "rename window",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "rename-pane",
+                    label: "rename pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "border-cycle",
+                    label: "cycle borders",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "label-toggle",
+                    label: "toggle labels",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "workspace-picker",
+                    label: "workspace picker",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "sidebar",
+                    label: "toggle sidebar",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "status-bar",
+                    label: "toggle status bar",
+                    kind: SettingKind::Chord,
+                },
+            ],
+            Self::States | Self::Integrations => &[],
+        }
+    }
+
+    /// The section's selectable row count (its rows, or the states
+    /// multi-select's entries).
+    pub(super) fn row_count(self) -> usize {
+        match self {
+            Self::States => self.choices().len(),
+            Self::Integrations => 0,
+            _ => self.rows().len(),
         }
     }
 }
 
-/// A choice's display label: herdr's wording for the delivery options,
-/// the config spelling for everything else.
-fn choice_label(choice: &str) -> &str {
-    match choice {
-        "inside" => "inside par-mux",
-        "terminal" => "via terminal",
-        "system" => "via system",
-        other => other,
-    }
+/// What one row edits and how Enter applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SettingKind {
+    /// on/off — Enter flips it.
+    Toggle,
+    /// A fixed choice list — Enter cycles to the next (wrapping).
+    Choice(&'static [&'static str]),
+    /// A whole number in range — Enter edits it in the prompt.
+    Number { min: u32, max: u32 },
+    /// A `#rrggbb` hex color (an empty prompt clears to the built-in).
+    Hex,
+    /// A chord in the tmux spelling (one after-prefix key).
+    Chord,
+    /// The reload chord (prefix + key spelling; the last token binds).
+    ReloadChord,
 }
 
-/// The open dialog: its section, the selected row, and the integration
-/// rows read when it opened.
+/// One editable `[client]` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SettingSpec {
+    pub(super) key: &'static str,
+    pub(super) label: &'static str,
+    pub(super) kind: SettingKind,
+}
+
+/// A prompt-edited row handed to the prompt modal: what to validate and
+/// write on commit, plus the dialog state to restore when the prompt
+/// closes (commit or cancel both return to the dialog).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SettingEdit {
+    pub(super) key: &'static str,
+    pub(super) label: &'static str,
+    pub(super) kind: SettingKind,
+    pub(super) back: SettingsState,
+}
+
+/// The open dialog: its section, the selected row, the body's first
+/// visible row (the keys section scrolls), the integration rows read
+/// when it opened, and the file's `mode` (no live mirror exists — it is
+/// chosen at launch).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SettingsState {
     pub section: SettingsSection,
     pub selected: usize,
+    pub top: usize,
     pub integrations: Vec<(String, bool)>,
+    pub file_mode: String,
 }
 
-/// The current config values the dialog marks: which choice each
-/// section holds now.
+/// The current config values the dialog shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SettingsValues {
     pub sidebar_on_launch: bool,
+    pub sidebar_width: u16,
+    pub agent_rows: Vec<Vec<String>>,
     pub border_lines: String,
+    pub pane_borders: bool,
+    pub show_label_in_border: bool,
+    pub pane_gaps: u16,
+    pub border_active_color: String,
+    pub border_color: String,
+    pub scrollbar_gutter: bool,
+    pub drag_cursor_shape: bool,
+    pub resize_step: u32,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
+    pub prefix: u8,
+    pub reload: u8,
+    pub management: Management,
+}
+
+/// One row's current value: what the row displays and what Enter acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FieldVal {
+    Bool(bool),
+    Num(u32),
+    Text(String),
+}
+
+impl SettingsValues {
+    /// The value in force for `key` (`file_mode` covers `mode`, which
+    /// has no live mirror).
+    fn field(&self, key: &str, file_mode: &str) -> FieldVal {
+        let m = &self.management;
+        match key {
+            "sidebar-on-launch" => FieldVal::Bool(self.sidebar_on_launch),
+            "sidebar-width" => FieldVal::Num(self.sidebar_width as u32),
+            "agent-rows" => FieldVal::Text(self.agent_rows_preset()),
+            "border-lines" => FieldVal::Text(self.border_lines.clone()),
+            "pane-borders" => FieldVal::Bool(self.pane_borders),
+            "show-label-in-border" => FieldVal::Bool(self.show_label_in_border),
+            "pane-gaps" => FieldVal::Num(self.pane_gaps as u32),
+            "border-active-color" => FieldVal::Text(self.border_active_color.clone()),
+            "border-color" => FieldVal::Text(self.border_color.clone()),
+            "mode" => FieldVal::Text(file_mode.to_string()),
+            "scrollbar-gutter" => FieldVal::Bool(self.scrollbar_gutter),
+            "drag-cursor-shape" => FieldVal::Bool(self.drag_cursor_shape),
+            "resize-step" => FieldVal::Num(self.resize_step),
+            "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
+            "prefix" => FieldVal::Text(spell_key(self.prefix)),
+            "reload" => FieldVal::Text(format!(
+                "{} {}",
+                spell_key(self.prefix),
+                spell_key(self.reload)
+            )),
+            "split-right" => FieldVal::Text(spell_key(m.split_right)),
+            "split-down" => FieldVal::Text(spell_key(m.split_down)),
+            "kill-pane" => FieldVal::Text(spell_key(m.kill_pane)),
+            "new-window" => FieldVal::Text(spell_key(m.new_window)),
+            "resize" => FieldVal::Text(spell_key(m.resize)),
+            "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
+            "swap-next" => FieldVal::Text(spell_key(m.swap_next)),
+            "workspace-next" => FieldVal::Text(spell_key(m.workspace_next)),
+            "workspace-prev" => FieldVal::Text(spell_key(m.workspace_prev)),
+            "help" => FieldVal::Text(spell_key(m.help)),
+            "picker" => FieldVal::Text(spell_key(m.picker)),
+            "zoom" => FieldVal::Text(spell_key(m.zoom)),
+            "rename-window" => FieldVal::Text(spell_key(m.rename_window)),
+            "rename-pane" => FieldVal::Text(spell_key(m.rename_pane)),
+            "border-cycle" => FieldVal::Text(spell_key(m.border_cycle)),
+            "label-toggle" => FieldVal::Text(spell_key(m.label_toggle)),
+            "workspace-picker" => FieldVal::Text(spell_key(m.workspace_picker)),
+            "sidebar" => FieldVal::Text(spell_key(m.sidebar)),
+            "status-bar" => FieldVal::Text(spell_key(m.status_bar)),
+            _ => FieldVal::Text(String::new()),
+        }
+    }
+
+    /// The preset name the live `agent-rows` matches (`custom` when it
+    /// matches none — a hand-edited layout the dialog leaves alone
+    /// until a preset is chosen).
+    fn agent_rows_preset(&self) -> String {
+        for (name, lines) in AGENT_ROWS_PRESETS {
+            let rendered: Vec<Vec<String>> = lines
+                .iter()
+                .map(|line| line.iter().map(|token| token.to_string()).collect())
+                .collect();
+            if rendered == self.agent_rows {
+                return name.to_string();
+            }
+        }
+        "custom".to_string()
+    }
+
+    /// The preset's token lines, for writing.
+    fn preset_rows(name: &str) -> Vec<Vec<String>> {
+        for (preset, lines) in AGENT_ROWS_PRESETS {
+            if *preset == name {
+                return lines
+                    .iter()
+                    .map(|line| line.iter().map(|token| token.to_string()).collect())
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
 }
 
 /// The panel's fixed content width — every row pads to it so the box
 /// keeps its size across sections.
-const PANEL_WIDTH: usize = 62;
+const PANEL_WIDTH: usize = 64;
 
-/// The body's fixed row count (the integrations list's height).
-const BODY_ROWS: usize = 6;
+/// The body's fixed row count (the keys section scrolls inside it).
+const BODY_ROWS: usize = 8;
+
+/// The label column's width.
+const LABEL_WIDTH: usize = 20;
 
 /// The rows of one composed dialog plus each highlighted span
 /// `(row, from_col, to_col)` and the row index the body starts at.
@@ -127,12 +484,24 @@ fn row(text: String, accent: bool, footer: bool) -> HelpRow {
     }
 }
 
+/// One row's display text: `on`/`off` for toggles, digits for numbers,
+/// the text itself otherwise (an empty hex color reads `built-in`).
+fn field_display(field: &FieldVal) -> String {
+    match field {
+        FieldVal::Bool(on) => if *on { "on" } else { "off" }.to_string(),
+        FieldVal::Num(n) => n.to_string(),
+        FieldVal::Text(text) if text.is_empty() => "built-in".to_string(),
+        FieldVal::Text(text) => text.clone(),
+    }
+}
+
 /// Compose the dialog (herdr's layout): the tab row with the current
 /// section highlighted, a blank, the section heading (accent) and its
-/// description, a blank, the choices — `▸` on the selection, which is
-/// highlighted, and `●` on the value in force (`[x]` / `[ ]` in the
-/// multi-select states list) — padded to a fixed height, then the
-/// footer controls. Pure — the unit-test surface.
+/// description, a blank, the body — one row per editable key with the
+/// value in force right-aligned (`▸` on the selection), the states
+/// multi-select (`[x]`/`[ ]`), or the integrations list — scrolled by
+/// the dialog's `top`, padded to a fixed height, then the footer
+/// controls. Pure — the unit-test surface.
 pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -> SettingsPanel {
     let mut rows: Vec<HelpRow> = Vec::new();
     let mut highlights = Vec::new();
@@ -165,46 +534,57 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
                 format!(" {mark} {agent:<10} {status}")
             })
             .collect(),
-        section => section
+        SettingsSection::States => state
+            .section
             .choices()
             .iter()
             .enumerate()
-            .map(|(i, choice)| {
-                let pointer = if i == state.selected { "\u{25B8}" } else { " " };
-                let mark = match section {
-                    SettingsSection::States => {
-                        if values.notify_states.iter().any(|s| s == choice) {
-                            "[x]"
-                        } else {
-                            "[ ]"
-                        }
-                    }
-                    _ => {
-                        let current = match section {
-                            SettingsSection::Sidebar => {
-                                if values.sidebar_on_launch {
-                                    "on"
-                                } else {
-                                    "off"
-                                }
-                            }
-                            SettingsSection::Borders => values.border_lines.as_str(),
-                            _ => values.notify_delivery.as_str(),
-                        };
-                        if current == *choice {
-                            "\u{25CF}"
-                        } else {
-                            " "
-                        }
-                    }
+            .map(|(at, choice)| {
+                let pointer = if at == state.selected {
+                    "\u{25B8}"
+                } else {
+                    " "
                 };
-                format!(" {pointer} {mark} {}", choice_label(choice))
+                let mark = if values.notify_states.iter().any(|s| s == choice) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                format!(" {pointer} {mark} {choice}")
+            })
+            .collect(),
+        section => section
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(at, spec)| {
+                let pointer = if at == state.selected {
+                    "\u{25B8}"
+                } else {
+                    " "
+                };
+                let value = field_display(&values.field(spec.key, &state.file_mode));
+                format!(
+                    " {} {:<width$} {:>vwidth$}",
+                    pointer,
+                    spec.label,
+                    value,
+                    width = LABEL_WIDTH,
+                    vwidth = PANEL_WIDTH - 4 - LABEL_WIDTH
+                )
             })
             .collect(),
     };
+    // The selection's highlight rides the composed pointer row inside
+    // the body's scrolled window.
+    let selected_in_body = state
+        .selected
+        .saturating_sub(state.top)
+        .min(BODY_ROWS.saturating_sub(1));
     for i in 0..BODY_ROWS {
-        let text = body.get(i).cloned().unwrap_or_default();
-        if i == state.selected && state.section != SettingsSection::Integrations {
+        let at = state.top + i;
+        let text = body.get(at).cloned().unwrap_or_default();
+        if state.section != SettingsSection::Integrations && i == selected_in_body {
             highlights.push((rows.len(), 0, PANEL_WIDTH));
         }
         rows.push(row(text, false, false));
@@ -214,7 +594,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
         SettingsSection::States => {
             " \u{2191}\u{2193} select \u{b7} space toggle \u{b7} tab section \u{b7} esc close "
         }
-        _ => " \u{2191}\u{2193} select \u{b7} enter apply \u{b7} tab section \u{b7} esc close ",
+        _ => " \u{2191}\u{2193} select \u{b7} enter edit \u{b7} tab section \u{b7} esc close ",
     };
     rows.push(row(controls.to_string(), false, true));
     SettingsPanel {
@@ -225,53 +605,57 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
 }
 
 impl WindowSession {
-    /// Open the settings dialog on its first section, the selection on
-    /// the value in force.
+    /// Open the settings dialog on its first section.
     pub(super) fn enter_settings(&mut self) {
         let integrations = crate::mux::integrations::hook_status()
             .into_iter()
             .map(|hook| (hook.agent, hook.installed))
             .collect();
-        let mut state = SettingsState {
+        // `mode` is chosen at launch: the file is the only record of it.
+        let file_mode = match &self.settings_path {
+            Some(path) => crate::mux::config::load_file(path)
+                .ok()
+                .flatten()
+                .and_then(|file| file.client.mode)
+                .unwrap_or_else(|| "render".to_string()),
+            None => "render".to_string(),
+        };
+        let state = SettingsState {
             section: SettingsSection::Sidebar,
             selected: 0,
+            top: 0,
             integrations,
+            file_mode,
         };
-        state.selected = self.settings_current_index(state.section);
         self.open_modal(Modal::Settings(state));
         self.refresh_settings();
     }
 
-    /// The values the dialog marks as in force.
+    /// The values the dialog shows as in force.
     fn settings_values(&self) -> SettingsValues {
+        let hex = |color: Option<ratatui::style::Color>| match color {
+            Some(ratatui::style::Color::Rgb(r, g, b)) => format!("#{r:02x}{g:02x}{b:02x}"),
+            _ => String::new(),
+        };
         SettingsValues {
             sidebar_on_launch: self.sidebar_on_launch,
+            sidebar_width: self.render_opts.sidebar_width,
+            agent_rows: self.agent_rows.clone(),
             border_lines: self.render_opts.glyphs.name().to_string(),
+            pane_borders: self.render_opts.pane_borders,
+            show_label_in_border: self.render_opts.show_label_in_border,
+            pane_gaps: self.render_opts.pane_gaps,
+            border_active_color: hex(self.render_opts.border_active),
+            border_color: hex(self.render_opts.border_plain),
+            scrollbar_gutter: self.render_opts.scrollbar_gutter,
+            drag_cursor_shape: self.cursor.drag_shape,
+            resize_step: self.resize_step,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
+            prefix: self.prefix,
+            reload: self.reload_key,
+            management: self.management,
         }
-    }
-
-    /// The row of `section`'s value in force (0 when none matches).
-    fn settings_current_index(&self, section: SettingsSection) -> usize {
-        let values = self.settings_values();
-        let current = match section {
-            SettingsSection::Sidebar => {
-                if values.sidebar_on_launch {
-                    "on"
-                } else {
-                    "off"
-                }
-            }
-            SettingsSection::Borders => values.border_lines.as_str(),
-            SettingsSection::Notify => values.notify_delivery.as_str(),
-            SettingsSection::States | SettingsSection::Integrations => return 0,
-        };
-        section
-            .choices()
-            .iter()
-            .position(|choice| *choice == current)
-            .unwrap_or(0)
     }
 
     /// Re-compose the overlay from the dialog's state.
@@ -293,8 +677,7 @@ impl WindowSession {
         self.renderer.set_overlay(None);
     }
 
-    /// Switch section by `delta` (wrapping), the selection landing on the
-    /// new section's value in force.
+    /// Switch section by `delta` (wrapping).
     fn settings_move_section(&mut self, delta: isize) {
         let Modal::Settings(state) = &self.modal else {
             return;
@@ -305,43 +688,49 @@ impl WindowSession {
             .unwrap_or(0) as isize;
         let next = SettingsSection::ALL
             [(at + delta).rem_euclid(SettingsSection::ALL.len() as isize) as usize];
-        let selected = self.settings_current_index(next);
         if let Modal::Settings(state) = &mut self.modal {
             state.section = next;
-            state.selected = selected;
+            state.selected = 0;
+            state.top = 0;
         }
         self.refresh_settings();
     }
 
-    /// Move the selection by `delta`, clamped to the section's choices.
+    /// Move the selection by `delta`, clamped to the section's rows, the
+    /// body's window following the selection.
     fn settings_move_selection(&mut self, delta: isize) {
         if let Modal::Settings(state) = &mut self.modal {
-            let count = state.section.choices().len();
+            let count = state.section.row_count();
             if count > 0 {
                 state.selected =
                     (state.selected as isize + delta).clamp(0, count as isize - 1) as usize;
+                if state.selected < state.top {
+                    state.top = state.selected;
+                } else if state.selected >= state.top + BODY_ROWS {
+                    state.top = state.selected + 1 - BODY_ROWS;
+                }
             }
         }
         self.refresh_settings();
     }
 
-    /// Apply the selection: write its key into the config file, then run
-    /// the reload chord's path (the client rebinds from the file it just
-    /// wrote, the daemon re-reads too). The integrations section applies
-    /// nothing.
+    /// Apply the selection: a toggle flips, a choice cycles, and a
+    /// number/hex/chord opens the prompt seeded with the value in force
+    /// (the prompt's commit validates and writes). The states section
+    /// toggles its entry; the integrations section applies nothing.
     pub(super) fn settings_apply(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let Modal::Settings(state) = &self.modal else {
             return;
         };
         let section = state.section;
-        let Some(choice) = section.choices().get(state.selected).copied() else {
-            return;
-        };
-        let (key, value) = match section {
-            SettingsSection::Sidebar => ("sidebar-on-launch", SettingValue::Bool(choice == "on")),
-            SettingsSection::Borders => ("border-lines", SettingValue::Str(choice.to_string())),
-            SettingsSection::Notify => ("notify-delivery", SettingValue::Str(choice.to_string())),
+        let selected = state.selected;
+        let file_mode = state.file_mode.clone();
+        let back = state.clone();
+        match section {
             SettingsSection::States => {
+                let Some(choice) = section.choices().get(selected).copied() else {
+                    return;
+                };
                 let mut states = self.notify.states.clone();
                 if let Some(at) = states.iter().position(|s| s == choice) {
                     states.remove(at);
@@ -354,25 +743,174 @@ impl WindowSession {
                         .iter()
                         .position(|known| known == s)
                 });
-                ("notify-states", SettingValue::List(states))
+                self.settings_write_and_reload(conn, "notify-states", SettingValue::List(states));
             }
-            SettingsSection::Integrations => return,
+            SettingsSection::Integrations => {}
+            section => {
+                let Some(spec) = section.rows().get(selected) else {
+                    return;
+                };
+                let values = self.settings_values();
+                match spec.kind {
+                    SettingKind::Toggle => {
+                        let FieldVal::Bool(on) = values.field(spec.key, &file_mode) else {
+                            return;
+                        };
+                        self.settings_write_and_reload(conn, spec.key, SettingValue::Bool(!on));
+                    }
+                    SettingKind::Choice(choices) => {
+                        let FieldVal::Text(current) = values.field(spec.key, &file_mode) else {
+                            return;
+                        };
+                        let next = match choices.iter().position(|choice| *choice == current) {
+                            Some(at) => choices[(at + 1) % choices.len()].to_string(),
+                            None => choices[0].to_string(),
+                        };
+                        let value = if spec.key == "agent-rows" {
+                            SettingValue::Rows(SettingsValues::preset_rows(&next))
+                        } else {
+                            SettingValue::Str(next)
+                        };
+                        self.settings_write_and_reload(conn, spec.key, value);
+                    }
+                    kind @ (SettingKind::Number { .. }
+                    | SettingKind::Hex
+                    | SettingKind::Chord
+                    | SettingKind::ReloadChord) => {
+                        let seed = match values.field(spec.key, &file_mode) {
+                            FieldVal::Text(text) => text,
+                            FieldVal::Num(n) => n.to_string(),
+                            FieldVal::Bool(on) => on.to_string(),
+                        };
+                        self.enter_setting_prompt(spec, kind, seed, back);
+                    }
+                }
+            }
+        }
+        self.refresh_settings();
+    }
+
+    /// Open the prompt modal on one setting row, seeded with its value in
+    /// force; the prompt's commit validates and writes, and closing it
+    /// (either way) restores this dialog.
+    fn enter_setting_prompt(
+        &mut self,
+        spec: &SettingSpec,
+        kind: SettingKind,
+        seed: String,
+        back: SettingsState,
+    ) {
+        let edit = SettingEdit {
+            key: spec.key,
+            label: spec.label,
+            kind,
+            back,
         };
+        self.open_modal(Modal::Prompt(super::PromptState {
+            text: seed,
+            target: super::PromptTarget::Setting(Box::new(edit)),
+        }));
+        self.refresh_prompt();
+    }
+
+    /// Commit a setting edited in the prompt: validate `text` against the
+    /// row's kind (a bad value flashes and the prompt stays up, nothing
+    /// written), write it, reload, and restore the dialog. Returns
+    /// whether the prompt closed.
+    pub(super) fn setting_prompt_commit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        edit: &SettingEdit,
+        text: &str,
+    ) -> bool {
+        let text = text.trim();
+        let value = match edit.kind {
+            // An empty hex color clears the override (the built-in).
+            SettingKind::Hex if text.is_empty() => Some(SettingValue::Str(String::new())),
+            SettingKind::Hex => {
+                if crate::mux::config::parse_hex_color(text).is_some() {
+                    Some(SettingValue::Str(text.to_string()))
+                } else {
+                    self.chrome
+                        .flash(format!("{}: expected #rrggbb", edit.label));
+                    None
+                }
+            }
+            SettingKind::Number { min, max } => match text.parse::<u32>() {
+                Ok(n) if (min..=max).contains(&n) => Some(SettingValue::Int(n as i64)),
+                _ => {
+                    self.chrome
+                        .flash(format!("{}: expected {min}..={max}", edit.label));
+                    None
+                }
+            },
+            SettingKind::Chord => {
+                if crate::mux::config::parse_prefix(text).is_some() {
+                    Some(SettingValue::Str(text.to_string()))
+                } else {
+                    self.chrome.flash(format!(
+                        "{}: expected one key, tmux spelling (e.g. x or C-x)",
+                        edit.label
+                    ));
+                    None
+                }
+            }
+            SettingKind::ReloadChord => {
+                if crate::mux::config::reload_chord_key(text).is_ok() {
+                    Some(SettingValue::Str(text.to_string()))
+                } else {
+                    self.chrome
+                        .flash(format!("{}: expected e.g. \"C-b C-r\"", edit.label));
+                    None
+                }
+            }
+            _ => None,
+        };
+        let Some(value) = value else {
+            self.draw_status_row();
+            return false;
+        };
+        self.settings_write_and_reload(conn, edit.key, value);
+        // Back to the dialog either way: a failed write already flashed
+        // on the status row.
+        self.open_modal(Modal::Settings(edit.back.clone()));
+        self.refresh_settings();
+        true
+    }
+
+    /// Write one `[client]` key and run the reload chord's path (the
+    /// client rebinds from the file it just wrote, the daemon re-reads
+    /// too). Returns whether the write happened.
+    fn settings_write_and_reload(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        key: &str,
+        value: SettingValue,
+    ) -> bool {
         let Some(path) = self.settings_path.clone() else {
             self.chrome
                 .flash("settings: no config file location known".to_string());
-            return;
+            return false;
         };
         if let Err(err) = write_client_key(&path, key, &value) {
             self.chrome.flash(format!("settings not saved: {err}"));
             self.draw_status_row();
-            return;
+            return false;
         }
-        if let (SettingsSection::Sidebar, SettingValue::Bool(on)) = (section, &value) {
-            self.sidebar_on_launch = *on;
+        // The width applies to the live panel like a drag release (the
+        // reload path resolves sidebar-width but never applies it, and
+        // the persisted panel state would mask the config at the next
+        // launch — so it is re-persisted with the new width too).
+        if key == "sidebar-width" {
+            if let SettingValue::Int(n) = value {
+                let width = n.clamp(6, 60) as u16;
+                self.render_opts.sidebar_width = width;
+                self.chrome_geometry_changed();
+                self.persist_sidebar();
+            }
         }
         self.reload_config(conn);
-        self.refresh_settings();
+        true
     }
 
     /// One key while the dialog is up: the arrows select and switch
@@ -410,7 +948,7 @@ impl WindowSession {
     }
 
     /// A press at overlay row `row`, column `col` (inner-relative): a
-    /// tab switches to its section, a choice selects and applies.
+    /// tab switches to its section, a row selects and applies.
     pub(super) fn settings_click(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -440,9 +978,11 @@ impl WindowSession {
         let Some(index) = row.checked_sub(panel.body_start) else {
             return;
         };
-        if index < state.section.choices().len() {
+        let count = state.section.row_count();
+        if index < BODY_ROWS && state.top + index < count {
+            let selected = state.top + index;
             if let Modal::Settings(state) = &mut self.modal {
-                state.selected = index;
+                state.selected = selected;
             }
             self.settings_apply(conn);
         }
@@ -456,82 +996,112 @@ mod tests {
     fn values() -> SettingsValues {
         SettingsValues {
             sidebar_on_launch: true,
+            sidebar_width: 31,
+            agent_rows: SettingsValues::preset_rows("default"),
             border_lines: "herdr".to_string(),
+            pane_borders: false,
+            show_label_in_border: true,
+            pane_gaps: 0,
+            border_active_color: String::new(),
+            border_color: "#00ffff".to_string(),
+            scrollbar_gutter: false,
+            drag_cursor_shape: false,
+            resize_step: 1,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
+            prefix: 0x02,
+            reload: 0x12,
+            management: Management::default(),
         }
     }
 
-    /// herdr's dialog shape: the tab row with the section highlighted,
-    /// heading and description, the choices with the selection and the
-    /// value in force marked, a fixed body height, and the footer.
-    #[test]
-    fn compose_settings_marks_the_tab_selection_and_value() {
-        let state = SettingsState {
-            section: SettingsSection::Notify,
-            selected: 3,
+    fn state(section: SettingsSection) -> SettingsState {
+        SettingsState {
+            section,
+            selected: 0,
+            top: 0,
             integrations: Vec::new(),
-        };
-        let panel = compose_settings(&state, &values());
-        assert!(panel.rows[0]
-            .text
-            .starts_with(" sidebar  borders  notify  states  integrations "));
-        assert_eq!(panel.highlights[0], (0, 18, 26), "the notify tab");
-        assert_eq!(panel.rows[2].text.trim_end(), " notifications");
-        assert!(panel.rows[2].accent);
-        assert_eq!(panel.body_start, 5);
-        assert_eq!(panel.rows[5].text.trim_end(), "     off");
-        assert_eq!(panel.rows[6].text.trim_end(), "     inside par-mux");
-        assert_eq!(panel.rows[7].text.trim_end(), "   \u{25CF} via terminal");
-        assert_eq!(panel.rows[8].text.trim_end(), " \u{25B8}   via system");
-        assert_eq!(panel.highlights[1], (8, 0, PANEL_WIDTH), "the selection");
-        assert!(panel.rows.last().unwrap().footer);
-        for section in SettingsSection::ALL {
-            let composed = compose_settings(
-                &SettingsState {
-                    section,
-                    selected: 0,
-                    integrations: vec![("claude".to_string(), true)],
-                },
-                &values(),
-            );
-            assert!(
-                composed
-                    .rows
-                    .iter()
-                    .all(|r| r.text.chars().count() == PANEL_WIDTH),
-                "{section:?}: every row pads to the fixed width: {:?}",
-                composed.rows
-            );
+            file_mode: "render".to_string(),
         }
-        let states = compose_settings(
-            &SettingsState {
-                section: SettingsSection::States,
-                selected: 0,
-                integrations: Vec::new(),
-            },
-            &values(),
-        );
-        assert_eq!(states.rows[5].text.trim_end(), " \u{25B8} [ ] working");
-        assert_eq!(states.rows[6].text.trim_end(), "   [x] blocked");
+    }
+
+    /// The tabs row keeps every section's tab inside the fixed panel
+    /// width, and every composed row pads to that width.
+    #[test]
+    fn tabs_and_rows_fit_the_panel() {
+        for section in SettingsSection::ALL {
+            let composed = compose_settings(&state(section), &values());
+            assert!(
+                composed.rows[0].text.chars().count() <= PANEL_WIDTH,
+                "{section:?}: tabs overflow: {:?}",
+                composed.rows[0].text
+            );
+            for row in &composed.rows {
+                assert_eq!(
+                    row.text.chars().count(),
+                    PANEL_WIDTH,
+                    "{section:?}: every row pads to the fixed width: {:?}",
+                    row.text
+                );
+            }
+            assert!(composed.rows.last().unwrap().footer);
+        }
+    }
+
+    /// A row section shows each key's label with its value in force
+    /// right-aligned (an empty hex reads `built-in`), the pointer on the
+    /// selection.
+    #[test]
+    fn row_sections_show_labels_and_values() {
+        let mut st = state(SettingsSection::Borders);
+        st.selected = 4; // focus color
+        let composed = compose_settings(&st, &values());
+        let rows: Vec<&str> = composed.rows[5..13]
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(rows[0].starts_with("   line style"), "{rows:?}");
+        assert!(rows[0].trim_end().ends_with("herdr"), "{rows:?}");
+        assert!(rows[4].starts_with(" \u{25B8} focus color"), "{rows:?}");
+        assert!(rows[1].trim_end().ends_with("off"), "{rows:?}");
+        assert!(rows[4].trim_end().ends_with("built-in"), "{rows:?}");
+        assert!(rows[5].trim_end().ends_with("#00ffff"), "{rows:?}");
+    }
+
+    /// The keys section scrolls its window with the selection; the
+    /// reload row shows the documented prefix+key spelling.
+    #[test]
+    fn keys_section_scrolls_and_spells_chords() {
+        let mut st = state(SettingsSection::Keys);
+        let count = st.section.row_count();
+        // The reload chord's spelling (row 1, top of the window).
+        st.selected = 1;
+        let composed = compose_settings(&st, &values());
+        let reload = composed.rows[5 + 1].text.clone();
+        assert!(reload.starts_with(" \u{25B8} reload config"), "{reload}");
+        assert!(reload.trim_end().ends_with("C-b C-r"), "{reload}");
+        // The window's tail: the last row stays visible.
+        st.selected = count - 1;
+        st.top = count - BODY_ROWS;
+        let composed = compose_settings(&st, &values());
+        let last = composed.rows[5 + BODY_ROWS - 1].text.clone();
+        assert!(last.contains("status bar"), "{last}");
+        assert!(last.trim_end().ends_with("S"), "{last}");
+    }
+
+    /// The preset mapping round-trips: a live default reads `default`,
+    /// an unknown layout reads `custom`, and preset_rows renders the
+    /// token lines for writing.
+    #[test]
+    fn agent_rows_presets_round_trip() {
+        let mut v = values();
+        assert_eq!(v.agent_rows_preset(), "default");
+        v.agent_rows = vec![vec!["agent".to_string()]];
+        assert_eq!(v.agent_rows_preset(), "custom");
         assert_eq!(
-            states.rows.len(),
-            panel.rows.len(),
-            "the box keeps its height across sections"
+            SettingsValues::preset_rows("compact"),
+            vec![vec!["state_icon".to_string(), "agent".to_string()]]
         );
-        let hooks = compose_settings(
-            &SettingsState {
-                section: SettingsSection::Integrations,
-                selected: 0,
-                integrations: vec![("claude".to_string(), true), ("grok".to_string(), false)],
-            },
-            &values(),
-        );
-        assert_eq!(
-            hooks.rows[5].text.trim_end(),
-            " \u{2713} claude     installed"
-        );
-        assert_eq!(hooks.rows[6].text.trim_end(), " - grok       not installed");
-        assert_eq!(hooks.highlights.len(), 1, "read-only: no selection band");
+        assert!(SettingsValues::preset_rows("custom").is_empty());
     }
 }

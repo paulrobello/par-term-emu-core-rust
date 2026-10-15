@@ -267,6 +267,7 @@ pub(crate) const PROMPT_WORKSPACE_OVERLAY_TITLE: &str = " rename workspace ";
 /// The modal overlay's title for the new-workspace prompt (the panel's
 /// ` new ` chip).
 pub(crate) const PROMPT_NEW_WORKSPACE_OVERLAY_TITLE: &str = " new workspace ";
+pub(crate) const PROMPT_SETTING_OVERLAY_TITLE: &str = " setting ";
 
 /// Spell a NAME for the control wire: unconditional single quotes, the
 /// embedded-quote `'\''` idiom — the same bounded quoting grammar the

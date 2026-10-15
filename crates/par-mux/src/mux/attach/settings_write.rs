@@ -10,7 +10,10 @@ use std::path::Path;
 pub(crate) enum SettingValue {
     Bool(bool),
     Str(String),
+    Int(i64),
     List(Vec<String>),
+    /// An array of arrays (the `agent-rows` token lines).
+    Rows(Vec<Vec<String>>),
 }
 
 /// `text` with `[client] <key> = value` set: the key's existing entry is
@@ -34,12 +37,24 @@ pub(crate) fn set_client_key(
     let new = match value {
         SettingValue::Bool(b) => toml_edit::value(*b),
         SettingValue::Str(s) => toml_edit::value(s.as_str()),
+        SettingValue::Int(n) => toml_edit::value(*n),
         SettingValue::List(items) => {
             let mut array = toml_edit::Array::new();
             for item in items {
                 array.push(item.as_str());
             }
             toml_edit::value(array)
+        }
+        SettingValue::Rows(lines) => {
+            let mut outer = toml_edit::Array::new();
+            for line in lines {
+                let mut inner = toml_edit::Array::new();
+                for item in line {
+                    inner.push(item.as_str());
+                }
+                outer.push(inner);
+            }
+            toml_edit::value(outer)
         }
     };
     match client.get_mut(key).and_then(|item| item.as_value_mut()) {
@@ -109,6 +124,9 @@ mod tests {
         let parsed: crate::mux::config::ConfigFile = toml::from_str(&out).unwrap();
         assert_eq!(parsed.client.prefix.as_deref(), Some("C-a"));
         assert_eq!(parsed.daemon.exit_empty, Some(false));
+        let out = set_client_key(&out, "resize-step", &SettingValue::Int(3)).unwrap();
+        let parsed: crate::mux::config::ConfigFile = toml::from_str(&out).unwrap();
+        assert_eq!(parsed.client.resize_step, Some(3), "{out}");
         let fresh = set_client_key("", "sidebar-on-launch", &SettingValue::Bool(false)).unwrap();
         assert_eq!(fresh, "[client]\nsidebar-on-launch = false\n");
         assert!(set_client_key("[client\nbroken", "x", &SettingValue::Bool(true)).is_err());

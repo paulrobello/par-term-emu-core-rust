@@ -784,6 +784,10 @@ enum PromptTarget {
     Workspace(String),
     /// A new workspace's name (the daemon creates it on commit).
     NewWorkspace,
+    /// A `[client]` setting edited as text (the settings dialog's
+    /// number/hex/chord rows): what to validate and write on commit,
+    /// plus the dialog state to restore when the prompt closes.
+    Setting(Box<modal_settings::SettingEdit>),
 }
 
 /// Which entity an open context menu targets.

@@ -1654,42 +1654,34 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
         session.renderer.overlay.as_ref().map(|o| o.0),
         Some(super::super::modal_settings::SETTINGS_TITLE)
     );
-    // Tab twice: the notify section, its selection on `off` (the test
-    // session's delivery).
+    // Tab three times: the notify section (sidebar, borders, general
+    // first), its single row showing the test session's delivery.
     let mut prefix_pending = false;
-    session.route_stdin_bytes(&mut conn, b"\t\t", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\t\t\t", &mut prefix_pending);
     let Modal::Settings(state) = &session.modal else {
         panic!("still open");
     };
     assert_eq!(state.section, SettingsSection::Notify);
     assert_eq!(state.selected, 0);
-    // herdr's labels for the four deliveries.
-    let rows: Vec<String> = session.renderer.overlay.as_ref().expect("up").1[5..9]
-        .iter()
-        .map(|r| r.text.trim_end().to_string())
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            " \u{25B8} \u{25CF} off",
-            "     inside par-mux",
-            "     via terminal",
-            "     via system"
-        ]
-    );
-    // j j j Enter: `system` written, the reload ran.
-    session.route_stdin_bytes(&mut conn, b"jjj\r", &mut prefix_pending);
+    let row = session.renderer.overlay.as_ref().expect("up").1[5]
+        .text
+        .trim_end()
+        .to_string();
+    assert!(row.starts_with(" \u{25B8} delivery"), "{row}");
+    assert!(row.ends_with("off"), "{row}");
+    // Enter: cycles to the next delivery (`inside`), written and reloaded.
+    session.route_stdin_bytes(&mut conn, b"\r", &mut prefix_pending);
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.starts_with("# keep me\n"), "{written}");
     assert!(
-        written.contains("notify-delivery = \"system\""),
+        written.contains("notify-delivery = \"inside\""),
         "{written}"
     );
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert_eq!(
-        session.notify.delivery,
-        super::super::notify::NotifyDelivery::System,
+        session.notify.delivery.name(),
+        "inside",
         "the reload applied the written key"
     );
     // A click on the `borders` tab (inner columns 9..18 of row 0).
@@ -1721,6 +1713,167 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     session.route_stdin_bytes(&mut conn, b"q", &mut prefix_pending);
     assert!(matches!(session.modal, Modal::None));
     assert!(session.renderer.overlay.is_none());
+}
+
+/// The row sections: a toggle writes its bool and the reload applies it
+/// live, and a choice row cycles (the borders tab's `line style` and the
+/// sidebar tab's `agent lines` preset).
+#[test]
+fn settings_rows_write_and_apply_live() {
+    let (rx, mut conn, mut session) = command_menu_session("cmdmenu-rows");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    let mut prefix_pending = false;
+    session.enter_settings();
+    // The borders tab (one Tab), `pane boxes` (row 1): Enter flips it on.
+    session.route_stdin_bytes(&mut conn, b"\tj\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("pane-borders = true"), "{written}");
+    assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
+    assert!(session.render_opts.pane_borders, "applied live");
+    // Enter again flips it back off.
+    session.route_stdin_bytes(&mut conn, b"\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("pane-borders = false"), "{written}");
+    assert!(!session.render_opts.pane_borders);
+    // The sidebar tab (one back-Tab), `agent lines` (row 2): cycles
+    // default → compact and writes the nested token arrays.
+    session.route_stdin_bytes(&mut conn, b"hjj\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("agent-rows = [[\"state_icon\", \"agent\"]]"),
+        "{written}"
+    );
+    assert_eq!(
+        session.agent_rows,
+        vec![vec!["state_icon".to_string(), "agent".to_string()],],
+        "the reload rebuilt the agent section"
+    );
+}
+
+/// The prompt-edited rows: numbers, hex colors, and chords open the
+/// prompt seeded with the value in force; a bad value flashes and writes
+/// nothing; a good one writes, reloads, applies live, and returns to the
+/// dialog (Escape cancels back to the dialog too).
+#[test]
+fn settings_prompt_rows_edit_numbers_hex_and_chords() {
+    let (rx, mut conn, mut session) = command_menu_session("cmdmenu-prompt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    let mut prefix_pending = false;
+    session.enter_settings();
+    // General tab (two Tabs), `resize step` (row 3): Enter opens the
+    // prompt seeded with 1.
+    session.route_stdin_bytes(&mut conn, b"\t\tjjj\r", &mut prefix_pending);
+    let Modal::Prompt(prompt) = &session.modal else {
+        panic!("prompt opened: {:?}", session.modal)
+    };
+    assert_eq!(prompt.text, "1");
+    // A bad number flashes and keeps the prompt up (nothing written).
+    session.route_stdin_bytes(&mut conn, b"\x03zzz\r", &mut prefix_pending);
+    assert!(
+        matches!(session.modal, Modal::Prompt(_)),
+        "invalid value keeps the prompt: {:?}",
+        session.modal
+    );
+    assert!(!std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("resize-step"));
+    // Clear, type 3, commit: written, reloaded, applied, dialog back.
+    session.route_stdin_bytes(&mut conn, b"\x033\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("resize-step = 3"), "{written}");
+    assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
+    assert_eq!(session.resize_step, 3, "applied live");
+    assert!(
+        matches!(session.modal, Modal::Settings(_)),
+        "the dialog is back"
+    );
+    // The borders tab (one back-Tab from general), `focus color` (row
+    // 4): the empty seed means the built-in; a hex commits and applies.
+    session.route_stdin_bytes(&mut conn, b"hjjjj\r", &mut prefix_pending);
+    let Modal::Prompt(prompt) = &session.modal else {
+        panic!("hex prompt opened: {:?}", session.modal)
+    };
+    assert_eq!(prompt.text, "", "an unset hex seeds empty");
+    session.route_stdin_bytes(&mut conn, b"#ff0000\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("border-active-color = \"#ff0000\""),
+        "{written}"
+    );
+    assert_eq!(
+        session.render_opts.border_active,
+        Some(ratatui::style::Color::Rgb(255, 0, 0)),
+        "applied live"
+    );
+    // The keys tab (four more Tabs from borders), `prefix` (row 0): a
+    // chord that does not parse is refused; a good one rebinds.
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\r", &mut prefix_pending);
+    let Modal::Prompt(prompt) = &session.modal else {
+        panic!("chord prompt opened: {:?}", session.modal)
+    };
+    assert_eq!(prompt.text, "C-b");
+    session.route_stdin_bytes(&mut conn, b"\x03zz\r", &mut prefix_pending);
+    assert!(matches!(session.modal, Modal::Prompt(_)), "refused");
+    session.route_stdin_bytes(&mut conn, b"\x03C-a\r", &mut prefix_pending);
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("prefix = \"C-a\""), "{written}");
+    assert_eq!(session.prefix, 0x01, "rebound live");
+    // Escape from a prompt returns to the dialog, not out of it.
+    session.route_stdin_bytes(&mut conn, b"\r\x1b", &mut prefix_pending);
+    assert!(matches!(session.modal, Modal::Settings(_)));
+}
+
+/// The keys section scrolls: every chord row is reachable and the
+/// selection stays visible.
+#[test]
+fn settings_keys_section_scrolls_to_every_row() {
+    use super::super::modal_settings::SettingsSection;
+    let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-keys");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    let mut prefix_pending = false;
+    session.enter_settings();
+    // Five Tabs: the keys section (sidebar borders general notify keys).
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t", &mut prefix_pending);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("open")
+    };
+    assert_eq!(state.section, SettingsSection::Keys);
+    assert_eq!(state.selected, 0);
+    assert_eq!(state.top, 0);
+    // Down to the last row: the window follows the selection.
+    session.route_stdin_bytes(&mut conn, &[b'j'; 21][..], &mut prefix_pending);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("open")
+    };
+    let last = state.section.row_count() - 1;
+    assert_eq!(state.selected, last);
+    assert_eq!(state.top, last + 1 - 8);
+    // The composed body shows the last row visible with its value.
+    let overlay = session.renderer.overlay.as_ref().expect("up");
+    let last_row = overlay.1[5 + (last - state.top)].text.clone();
+    assert!(last_row.contains("status bar"), "{last_row}");
+    assert!(last_row.trim_end().ends_with("S"), "{last_row}");
+    // Up to the first: the window snaps back.
+    session.route_stdin_bytes(&mut conn, &[b'k'; 21][..], &mut prefix_pending);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("open")
+    };
+    assert_eq!((state.selected, state.top), (0, 0));
 }
 
 /// Reopen the settings dialog straight from the session (the menu is

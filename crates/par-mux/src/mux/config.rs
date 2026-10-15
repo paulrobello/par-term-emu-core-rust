@@ -874,7 +874,9 @@ impl Default for Management {
 /// prefix parser. A management chord is ONE key matched by byte after the
 /// prefix (the reload chord's multi-token spelling exists for
 /// documentation only; a management chord keeps the single-key shape).
-fn management_key(chord: &str, name: &str) -> Result<u8, String> {
+/// Public for the settings dialog's chord validation, which must accept
+/// exactly what a reload would.
+pub fn management_key(chord: &str, name: &str) -> Result<u8, String> {
     let token = chord
         .split_whitespace()
         .last()
