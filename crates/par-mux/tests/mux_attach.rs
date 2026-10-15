@@ -4368,6 +4368,109 @@ fn render_mode_panel_menu_chip_detaches() {
     );
 }
 
+/// The drag-cursor-shape pointer cue END TO END (card 01a13d8c): the
+/// live render client under a PTY writes OSC 22 to the host terminal —
+/// the bytes ghostty/kitty turn into the resize pointer — when the
+/// pointer hovers or drags a divider, and restores `text` after.
+#[cfg(unix)]
+#[test]
+fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
+    let (fixture, _daemon, mut client) = fixture_with_session("ptr22");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let pane_b = client
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("");
+    assert!(
+        pane_b.trim().starts_with('%'),
+        "split returned a pane id: {pane_b:?}"
+    );
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &pane_a],
+        "render",
+        "[client]\ndrag-cursor-shape = true\nsidebar-on-launch = false\n",
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1003h",
+        Duration::from_secs(10),
+        "render client up (any-event mouse reporting)",
+    );
+    // Settle the seed paint before probing, then drain the tail.
+    std::thread::sleep(Duration::from_millis(600));
+    let _ = wait_for_output(&host, b"\x00-never", Duration::from_millis(300));
+
+    // Two side-by-side panes in the 80-col window put the divider at
+    // host col 40 (SGR col 40); content rows sit under the tab strip.
+    // 1) A no-button hover ON the divider (cb 35).
+    host.to_child
+        .write_all(b"\x1b[<35;40;6M")
+        .expect("hover divider");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"]22;ew-resize",
+        Duration::from_secs(5),
+        "hover on the divider writes the resize pointer",
+    );
+    // 2) The same hover off the divider restores the terminal's own.
+    host.to_child
+        .write_all(b"\x1b[<35;10;6M")
+        .expect("hover off");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"]22;text",
+        Duration::from_secs(5),
+        "leaving the divider restores the pointer",
+    );
+    // 3) A live drag: press on the divider, motion with the button
+    //    held over a pane (cb 32) — the drag keeps the shape wherever
+    //    the pointer wanders.
+    host.to_child
+        .write_all(b"\x1b[<0;40;6M")
+        .expect("press divider");
+    host.to_child
+        .write_all(b"\x1b[<32;36;6M")
+        .expect("drag motion");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"]22;ew-resize",
+        Duration::from_secs(5),
+        "a live drag keeps the resize pointer",
+    );
+    // 4) Release ends the drag off the divider: the pointer restores.
+    host.to_child.write_all(b"\x1b[<0;36;6m").expect("release");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"]22;text",
+        Duration::from_secs(5),
+        "release restores the pointer",
+    );
+
+    // Detach clean: prefix d, exit 0 — and the exit path's own restore
+    // rides the same bytes.
+    host.to_child.write_all(&[0x02, b'd']).expect("prefix d");
+    host.to_child.flush().ok();
+    let code = child_exit(&mut host, Duration::from_secs(10));
+    assert_eq!(
+        code,
+        Some(0),
+        "prefix d must end the client with exit 0. stderr: {}",
+        stderr.lock().unwrap()
+    );
+}
+
 /// An agent in a window the client is NOT showing announces its
 /// selected state through the host terminal: the real client writes
 /// OSC 9 with the agent's name when the push lands, and the claim's own

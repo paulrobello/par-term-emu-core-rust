@@ -834,11 +834,14 @@ enum MenuAction {
 
 /// The open menu's state: its target plus the action dispatched per
 /// overlay row (the parallel mapping `compose_menu_panel` returns; row
-/// `None` entries — the header and the footer — consume the click).
+/// `None` entries — the header and the footer — consume the click) and
+/// the action row the pointer currently hovers (the subtle highlight
+/// no-button motion drives).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MenuState {
     target: MenuTarget,
     actions: Vec<Option<MenuAction>>,
+    hover: Option<usize>,
 }
 
 /// The modal that owns input. At most one is up; opening one assigns

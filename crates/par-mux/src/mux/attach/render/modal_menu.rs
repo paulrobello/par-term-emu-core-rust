@@ -70,12 +70,10 @@ pub(super) fn compose_menu_panel(
 }
 
 impl WindowSession {
-    /// Open the context menu for `target`: the tab menu (right-press on
-    /// a tab), the workspace menu (a right-press on a workspace row), or
-    /// the command menu (the panel's ` menu ` chip). The overlay rides
-    /// the same modal machinery the picker uses.
-    pub(super) fn open_menu(&mut self, target: MenuTarget) {
-        let name = match &target {
+    /// The target's display name for the menu header (tab menus and
+    /// workspace menus carry one; the command menu does not).
+    fn menu_name(&self, target: &MenuTarget) -> Option<String> {
+        match target {
             MenuTarget::Tab(id) => Some(
                 self.status
                     .windows()
@@ -93,10 +91,64 @@ impl WindowSession {
                     .unwrap_or_else(|| id.clone()),
             ),
             MenuTarget::Commands => None,
-        };
+        }
+    }
+    /// Open the context menu for `target`: the tab menu (right-press on
+    /// a tab), the workspace menu (a right-press on a workspace row), or
+    /// the command menu (the panel's ` menu ` chip). The overlay rides
+    /// the same modal machinery the picker uses.
+    pub(super) fn open_menu(&mut self, target: MenuTarget) {
+        let name = self.menu_name(&target);
         let (rows, actions) = compose_menu_panel(&target, name.as_deref());
-        self.open_modal(Modal::Menu(MenuState { target, actions }));
+        self.open_modal(Modal::Menu(MenuState {
+            target,
+            actions,
+            hover: None,
+        }));
         self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
+    }
+    /// One no-button motion while the menu is up, at window-relative
+    /// `(x, y)`: the action row under the pointer becomes the hovered
+    /// row (its label span reversed — the same subtle highlight the
+    /// settings dialog's selection uses); a motion off the panel or
+    /// onto the header/footer clears it. No-op when the hover did not
+    /// move rows.
+    pub(super) fn menu_hover(&mut self, x: u16, y: u16) {
+        let hover = match &self.modal {
+            Modal::Menu(state) => self.renderer.overlay_row_at(x, y).filter(|&row| {
+                state
+                    .actions
+                    .get(row)
+                    .is_some_and(|action| action.is_some())
+            }),
+            _ => return,
+        };
+        if let Modal::Menu(state) = &mut self.modal {
+            if state.hover == hover {
+                return;
+            }
+            state.hover = hover;
+        }
+        self.repaint_menu();
+    }
+    /// Recompose the open menu's overlay rows with the current hover
+    /// highlight. The highlight spans the hovered row's own label, not
+    /// the panel width — the subtle cue, distinct from a selection.
+    fn repaint_menu(&mut self) {
+        let (target, hover) = match &self.modal {
+            Modal::Menu(state) => (state.target.clone(), state.hover),
+            _ => return,
+        };
+        let name = self.menu_name(&target);
+        let (rows, _actions) = compose_menu_panel(&target, name.as_deref());
+        let highlights = match hover
+            .and_then(|row| rows.get(row).map(|label| (row, label.text.chars().count())))
+        {
+            Some((row, len)) => vec![(row, 0, len)],
+            None => Vec::new(),
+        };
+        self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
+        self.renderer.set_overlay_highlights(highlights);
     }
     /// Dismiss the menu: the next frame's pane repaint restores the
     /// covered cells.

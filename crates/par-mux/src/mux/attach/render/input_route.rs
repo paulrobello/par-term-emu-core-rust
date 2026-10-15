@@ -505,7 +505,18 @@ impl WindowSession {
             "mouse cb={} col={} row={} release={}",
             mouse.cb, mouse.col, mouse.row, mouse.release
         ));
-        self.update_pointer(&mouse);
+        // The menu's hover highlight rides no-button motion (any-event
+        // tracking): the row under the pointer lights up; a motion off
+        // the panel or onto the header/footer clears it.
+        if matches!(self.modal, Modal::Menu(_))
+            && mouse.is_motion()
+            && !mouse.release
+            && mouse.motion_button().is_none()
+        {
+            if let (Some(x), Some(y)) = (mouse.col.checked_sub(1), mouse.row.checked_sub(1)) {
+                self.menu_hover(x, y);
+            }
+        }
         match self.mouse_hit(&mouse) {
             Hit::Consumed => {}
             Hit::MenuRow(row) => self.menu_click(conn, row),
@@ -586,14 +597,19 @@ impl WindowSession {
                 }
             }
         }
+        // After the dispatch, not before: a release that ends a drag
+        // must already see `drag` cleared, or the pointer would keep
+        // the resize shape until an unrelated motion report arrives.
+        self.update_pointer(&mouse);
     }
 
     /// The pointer-shape routing (config `drag-cursor-shape`): a live
     /// divider drag or a hover report ON a divider wants the resize
     /// shape — the OSC 22 the next frame writes; everything else
     /// (option off, a modal up, the pointer elsewhere) restores the
-    /// terminal's own pointer. Runs before the hit dispatch: the shape
-    /// is the pointer's state, not the event's action.
+    /// terminal's own pointer. Runs after the hit dispatch: the shape
+    /// is the pointer's state, and a drag-ending release must compute
+    /// its want from the cleared drag.
     fn update_pointer(&mut self, mouse: &SgrMouse) {
         if !self.cursor.drag_shape || !matches!(self.modal, Modal::None) {
             self.pointer.want(None);

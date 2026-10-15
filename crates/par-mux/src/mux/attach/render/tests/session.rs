@@ -847,7 +847,7 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
 
 /// The `drag-cursor-shape` pointer half: a no-button hover over a
 /// divider wants the axis-correct resize POINTER (OSC 22
-/// `col-resize`), a hover off it or the option off restores `text`,
+/// `ew-resize`), a hover off it or the option off restores `text`,
 /// and a live drag keeps the shape wherever the pointer wanders.
 #[test]
 fn drag_cursor_shape_option_shapes_the_pointer() {
@@ -864,7 +864,7 @@ fn drag_cursor_shape_option_shapes_the_pointer() {
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
     assert!(
-        String::from_utf8_lossy(&sink.raw).contains("]22;col-resize"),
+        String::from_utf8_lossy(&sink.raw).contains("]22;ew-resize"),
         "the hover shapes the pointer: {:?}",
         String::from_utf8_lossy(&sink.raw)
     );
@@ -895,7 +895,7 @@ fn drag_cursor_shape_option_shapes_the_pointer() {
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
     assert!(
-        String::from_utf8_lossy(&sink.raw).contains("]22;col-resize"),
+        String::from_utf8_lossy(&sink.raw).contains("]22;ew-resize"),
         "the drag keeps the shape: {:?}",
         String::from_utf8_lossy(&sink.raw)
     );
@@ -907,8 +907,47 @@ fn drag_cursor_shape_option_shapes_the_pointer() {
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
     let raw = String::from_utf8_lossy(&sink.raw).to_string();
-    assert!(!raw.contains("]22;col-resize"), "off shapes nothing: {raw}");
+    assert!(!raw.contains("]22;ew-resize"), "off shapes nothing: {raw}");
     assert!(raw.contains("]22;text"), "off restores: {raw}");
+}
+
+/// The drag END: the release report itself must restore the pointer
+/// (OSC 22 `text`) — `update_pointer` runs after the dispatch clears
+/// the drag, so no unrelated motion report is needed to un-shape it
+/// (the live PTY report: the resize pointer stuck after release).
+#[test]
+fn drag_release_restores_the_pointer_shape() {
+    let (rx, mut conn) = recording_conn("ptr-release");
+    let mut session = WindowSession::new(80, 24);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    drained(&rx);
+    session.cursor.drag_shape = true;
+    // Press on the divider (host col 40), drag left, release over the
+    // left pane — all through the real hit dispatch.
+    session.route_mouse(&mut conn, sgr(0, 40, 5, false));
+    session.route_mouse(&mut conn, sgr(32, 36, 5, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;ew-resize"),
+        "the live drag shapes the pointer: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    session.route_mouse(&mut conn, sgr(0, 36, 5, true));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;text"),
+        "the release itself restores the pointer: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    assert!(
+        !String::from_utf8_lossy(&sink.raw).contains("]22;ew-resize"),
+        "no resize shape outlives the drag: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
 }
 
 /// Sidebar paint geometry: with the panel up, the re-divided

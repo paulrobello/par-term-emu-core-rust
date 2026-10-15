@@ -1748,6 +1748,55 @@ fn open_menu_swallows_non_press_pointer_events() {
     assert_eq!(session.renderer.focused(), Some(1), "no click-through");
 }
 
+/// The menu's subtle hover cue: a no-button motion over an action row
+/// reverses that row's label span on the next frame (the settings
+/// dialog's selection mechanism), a motion off the panel clears it,
+/// and the footer never highlights.
+#[test]
+fn menu_hover_highlights_the_row_under_the_pointer() {
+    use ratatui::style::Modifier as RtModifier;
+    let (rx, mut conn, mut session) = two_pane_session("m-hover", FakeScript::default());
+    session.open_menu(MenuTarget::Commands);
+    let (x0, y0, _inner, _height) = session.renderer.overlay_geometry().expect("menu up");
+    // Panel row 1 (" keybinds ") paints at host row y0+3; SGR rows are
+    // 1-based.
+    session.route_mouse(&mut conn, sgr(35, (x0 + 4) as u16, (y0 + 4) as u16, false));
+    assert_eq!(session.menu().unwrap().hover, Some(1), "the row is hovered");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    let reversed = sink
+        .cells
+        .iter()
+        .filter(|row| row.1 as usize == y0 + 3)
+        .filter(|(_, _, cell)| cell.modifier.contains(RtModifier::REVERSED))
+        .count();
+    assert!(
+        reversed > 0,
+        "the hovered row paints reversed: {:?}",
+        sink.cells
+    );
+    // The footer row (the last one) never highlights, nor the header.
+    let footer_off = sink
+        .cells
+        .iter()
+        .filter(|row| row.1 as usize != y0 + 3)
+        .all(|(_, _, cell)| !cell.modifier.contains(RtModifier::REVERSED));
+    assert!(footer_off, "no other row carries the highlight");
+    // A motion off the panel clears the hover (and the span).
+    session.route_mouse(&mut conn, sgr(35, 2, 2, false));
+    assert_eq!(session.menu().unwrap().hover, None, "off the panel clears");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        sink.cells
+            .iter()
+            .all(|(_, _, cell)| !cell.modifier.contains(RtModifier::REVERSED)),
+        "the highlight repaints away: {:?}",
+        sink.cells
+    );
+    assert!(drained(&rx).is_empty(), "hover sends nothing");
+}
+
 /// The help panel owns the pointer: the wheel scrolls the panel (up
 /// clamped at 0) and a press neither focuses nor closes.
 #[test]

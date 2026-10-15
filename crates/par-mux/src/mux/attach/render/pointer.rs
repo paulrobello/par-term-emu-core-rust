@@ -3,13 +3,17 @@
 //! ghostty/kitty/xterm accept (CSS cursor names, best-effort: a
 //! terminal without it keeps its own pointer; the DECSCUSR
 //! steady-block during a live drag remains the fallback cue there).
+//! The resize names are `ew-resize`/`ns-resize`, NOT the axis-named
+//! `col-resize`/`row-resize`: ghostty's macOS apprt maps only the
+//! former pair to a pointer and silently drops the latter (its
+//! `setCursorShape` `default:` arm), while kitty accepts both.
 
 use super::FlushSink;
 
 /// A vertical divider column drags left/right.
-pub(super) const RESIZE_COL: &str = "col-resize";
+pub(super) const RESIZE_COL: &str = "ew-resize";
 /// A horizontal divider row drags up/down.
-pub(super) const RESIZE_ROW: &str = "row-resize";
+pub(super) const RESIZE_ROW: &str = "ns-resize";
 /// The restore shape: the terminal's own hover-over-text pointer.
 const RESTORE: &str = "text";
 
@@ -79,7 +83,7 @@ mod tests {
         pointer.want(Some(RESIZE_COL));
         pointer.emit(&mut sink);
         pointer.emit(&mut sink);
-        assert_eq!(sink.raw, b"\x1b]22;col-resize\x1b\\");
+        assert_eq!(sink.raw, b"\x1b]22;ew-resize\x1b\\");
 
         sink.raw.clear();
         pointer.want(None);

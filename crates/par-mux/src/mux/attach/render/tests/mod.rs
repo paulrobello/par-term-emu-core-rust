@@ -1370,6 +1370,7 @@ fn modal_hides_cursor_per_variant() {
     let menu = Modal::Menu(MenuState {
         target: MenuTarget::Commands,
         actions: Vec::new(),
+        hover: None,
     });
     assert!(!Modal::None.hides_cursor());
     assert!(!Modal::Scroll.hides_cursor());
