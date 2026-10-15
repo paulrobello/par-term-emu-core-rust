@@ -3287,7 +3287,16 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
         source: "hook".to_string(),
         ws: "+0".to_string(),
     });
-    assert!(session.notify.outbox.is_empty(), "no terminal escape");
+    assert_eq!(
+        session.notify.outbox,
+        vec![0x07],
+        "no terminal escape, only the bell that flags the host tab"
+    );
+    // The bell reaches the host with the next frame.
+    let mut sink = super::RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(sink.raw, vec![0x07], "the frame rings the host bell");
+    assert!(session.notify.outbox.is_empty(), "rung once");
     let toast = session.renderer.toast.clone().expect("a toast is up");
     assert_eq!(toast.title, "claude blocked");
     assert_eq!(toast.body, "main \u{b7} claude");

@@ -188,6 +188,10 @@ impl WindowSession {
                     status,
                     pane,
                 }));
+                // The card only shows while the user looks at this
+                // window; the bell makes the host flag the tab/window
+                // unread (its bell setting decides sound or badge).
+                self.notify.outbox.push(0x07);
             }
             NotifyDelivery::Terminal => {
                 let bytes = terminal_notification("par-mux", &body, host_is_kitty());
