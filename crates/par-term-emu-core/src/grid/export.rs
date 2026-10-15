@@ -295,31 +295,45 @@ impl Grid {
     /// significant cell, then a reset. No cursor movement or line ending.
     pub(crate) fn export_row_styled(&self, row_cells: &[Cell]) -> String {
         let mut result = String::new();
+        if self.push_standalone_row(&mut result, row_cells).is_some() {
+            result.push_str("\x1b[0m");
+        }
+        result
+    }
+
+    /// Append one row's cells up to its last significant cell, SGR-diffed
+    /// from the default state (no style carries in from a previous row).
+    /// Returns `None` when the row has no significant cell (nothing is
+    /// appended), else whether an SGR run was emitted. The caller frames
+    /// the row (cursor addressing, trailing reset, newline).
+    fn push_standalone_row(&self, result: &mut String, row_cells: &[Cell]) -> Option<bool> {
         let last_sig = self.find_last_significant(row_cells);
         if last_sig == 0 {
-            return result;
+            return None;
         }
-        push_styled_cells(&mut result, row_cells, last_sig, &mut SgrState::reset());
-        result.push_str("\x1b[0m");
-        result
+        Some(push_styled_cells(
+            result,
+            row_cells,
+            last_sig,
+            &mut SgrState::reset(),
+        ))
     }
 
     /// Export only the visible screen with ANSI styling
     pub fn export_visible_screen_styled(&self) -> String {
         let mut result = String::new();
         result.push_str("\x1b[H");
-        let mut state = SgrState::reset();
 
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
-                let last_sig = self.find_last_significant(row_cells);
-                if last_sig == 0 {
-                    continue;
-                }
+                let row_start = result.len();
                 result.push_str(&format!("\x1b[{};1H", row + 1));
-                push_styled_cells(&mut result, row_cells, last_sig, &mut state);
-                result.push_str("\x1b[0m");
-                state = SgrState::reset();
+                if self.push_standalone_row(&mut result, row_cells).is_some() {
+                    result.push_str("\x1b[0m");
+                } else {
+                    // Blank row: drop the cursor address just written.
+                    result.truncate(row_start);
+                }
             }
         }
         result
@@ -337,12 +351,10 @@ impl Grid {
     pub fn export_visible_screen_styled_lines(&self) -> String {
         let mut result = String::new();
         for row in 0..self.rows {
-            let mut emitted_sgr = false;
-            if let Some(row_cells) = self.row(row) {
-                let last_sig = self.find_last_significant(row_cells);
-                emitted_sgr =
-                    push_styled_cells(&mut result, row_cells, last_sig, &mut SgrState::reset());
-            }
+            let emitted_sgr = self
+                .row(row)
+                .and_then(|row_cells| self.push_standalone_row(&mut result, row_cells))
+                .unwrap_or(false);
             if emitted_sgr {
                 result.push_str("\x1b[0m");
             }

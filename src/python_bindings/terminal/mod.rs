@@ -774,16 +774,7 @@ impl PyTerminal {
             .inner
             .named_progress_bars()
             .iter()
-            .map(|(id, bar)| {
-                let mut map = HashMap::new();
-                map.insert("id".to_string(), bar.id.clone());
-                map.insert("state".to_string(), bar.state.description().to_string());
-                map.insert("percent".to_string(), bar.percent.to_string());
-                if let Some(label) = &bar.label {
-                    map.insert("label".to_string(), label.clone());
-                }
-                (id.clone(), map)
-            })
+            .map(|(id, bar)| (id.clone(), named_progress_bar_dict(bar)))
             .collect())
     }
 
@@ -795,16 +786,10 @@ impl PyTerminal {
     /// Returns:
     ///     Dict with keys: id, state, percent, label (optional), or None if not found
     fn get_named_progress_bar(&self, id: &str) -> PyResult<Option<HashMap<String, String>>> {
-        Ok(self.inner.get_named_progress_bar(id).map(|bar| {
-            let mut map = HashMap::new();
-            map.insert("id".to_string(), bar.id.clone());
-            map.insert("state".to_string(), bar.state.description().to_string());
-            map.insert("percent".to_string(), bar.percent.to_string());
-            if let Some(label) = &bar.label {
-                map.insert("label".to_string(), label.clone());
-            }
-            map
-        }))
+        Ok(self
+            .inner
+            .get_named_progress_bar(id)
+            .map(named_progress_bar_dict))
     }
 
     /// Manually set or update a named progress bar
@@ -1613,6 +1598,19 @@ pub(super) fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::Clip
         }
         _ => Err(PyValueError::new_err("Invalid clipboard slot")),
     }
+}
+
+/// The `{id, state, percent, label?}` dict shape both named-progress-bar
+/// getters return; `label` is present only when the bar has one.
+fn named_progress_bar_dict(bar: &crate::terminal::NamedProgressBar) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert("id".to_string(), bar.id.clone());
+    map.insert("state".to_string(), bar.state.description().to_string());
+    map.insert("percent".to_string(), bar.percent.to_string());
+    if let Some(label) = &bar.label {
+        map.insert("label".to_string(), label.clone());
+    }
+    map
 }
 
 /// Convert a `FileTransfer` to a Python dictionary

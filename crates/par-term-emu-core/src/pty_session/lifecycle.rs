@@ -576,25 +576,7 @@ impl PtySession {
     /// Returns None if the process hasn't exited yet. Once the exit has
     /// been observed, every later call returns the recorded code.
     pub fn try_wait(&mut self) -> Result<Option<i32>, PtyError> {
-        if let Some(ref mut child) = self.child {
-            let mut record = self.reaped.lock();
-            if let Some(code) = *record {
-                self.running.store(false, Ordering::SeqCst);
-                return Ok(Some(code));
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    let code = status.exit_code() as i32;
-                    *record = Some(code);
-                    self.running.store(false, Ordering::SeqCst);
-                    Ok(Some(code))
-                }
-                Ok(None) => Ok(None),
-                Err(e) => Err(PtyError::IoError(e)),
-            }
-        } else {
-            Err(PtyError::NotStartedError)
-        }
+        self.observe_exit(|child| child.try_wait())
     }
 
     /// Wait for the process to exit and return its exit code
@@ -603,21 +585,38 @@ impl PtySession {
     /// through the wait; the reader thread only `try_lock`s it, so a child
     /// blocked on PTY output cannot deadlock against this call.
     pub fn wait(&mut self) -> Result<i32, PtyError> {
-        if let Some(ref mut child) = self.child {
-            let mut record = self.reaped.lock();
-            let code = match *record {
-                Some(code) => code,
-                None => {
-                    let code = child.wait().map_err(PtyError::IoError)?.exit_code() as i32;
+        let code = self.observe_exit(|child| child.wait().map(Some))?;
+        Ok(code.expect("a blocking wait always yields an exit status"))
+    }
+
+    /// The exit-observation shared by [`Self::try_wait`] and [`Self::wait`]:
+    /// with the reap record locked, return the recorded code, or run
+    /// `query` against the child and record the status it reports. Once a
+    /// code is known the session is marked not running. `query` returning
+    /// `None` (still running) leaves the record untouched.
+    fn observe_exit(
+        &mut self,
+        query: impl FnOnce(
+            &mut (dyn Child + Send + Sync),
+        ) -> std::io::Result<Option<portable_pty::ExitStatus>>,
+    ) -> Result<Option<i32>, PtyError> {
+        let Some(child) = self.child.as_mut() else {
+            return Err(PtyError::NotStartedError);
+        };
+        let mut record = self.reaped.lock();
+        let code = match *record {
+            Some(code) => code,
+            None => match query(child.as_mut()).map_err(PtyError::IoError)? {
+                Some(status) => {
+                    let code = status.exit_code() as i32;
                     *record = Some(code);
                     code
                 }
-            };
-            self.running.store(false, Ordering::SeqCst);
-            Ok(code)
-        } else {
-            Err(PtyError::NotStartedError)
-        }
+                None => return Ok(None),
+            },
+        };
+        self.running.store(false, Ordering::SeqCst);
+        Ok(Some(code))
     }
 
     /// Kill the process
