@@ -343,6 +343,7 @@ impl WindowSession {
             (m.workspace_picker, ManagementKey::WorkspacePicker),
             (m.sidebar, ManagementKey::Sidebar),
             (m.status_bar, ManagementKey::StatusBar),
+            (m.respawn, ManagementKey::Respawn),
         ];
         table
             .into_iter()

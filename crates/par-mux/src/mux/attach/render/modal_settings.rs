@@ -283,6 +283,11 @@ impl SettingsSection {
                     label: "toggle status bar",
                     kind: SettingKind::Chord,
                 },
+                SettingSpec {
+                    key: "respawn",
+                    label: "respawn dead pane",
+                    kind: SettingKind::Chord,
+                },
             ],
             Self::States | Self::Integrations => &[],
         }
@@ -423,6 +428,7 @@ impl SettingsValues {
             "workspace-picker" => FieldVal::Text(spell_key(m.workspace_picker)),
             "sidebar" => FieldVal::Text(spell_key(m.sidebar)),
             "status-bar" => FieldVal::Text(spell_key(m.status_bar)),
+            "respawn" => FieldVal::Text(spell_key(m.respawn)),
             _ => FieldVal::Text(String::new()),
         }
     }
@@ -1119,8 +1125,8 @@ mod tests {
         st.top = count - BODY_ROWS;
         let composed = compose_settings(&st, &values());
         let last = composed.rows[5 + BODY_ROWS - 1].text.clone();
-        assert!(last.contains("status bar"), "{last}");
-        assert!(last.trim_end().ends_with("S"), "{last}");
+        assert!(last.contains("respawn dead pane"), "{last}");
+        assert!(last.trim_end().ends_with(" r"), "{last}");
     }
 
     /// The preset mapping round-trips: a live default reads `default`,

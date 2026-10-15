@@ -164,6 +164,7 @@ impl Session {
             k if k == m.swap_next => Some(ManagementKey::SwapNext),
             k if k == m.workspace_next => Some(ManagementKey::WorkspaceNext),
             k if k == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
+            k if k == m.respawn => Some(ManagementKey::Respawn),
             _ => None,
         }
     }

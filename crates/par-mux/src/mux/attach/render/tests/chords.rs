@@ -2554,3 +2554,62 @@ fn reload_chord_flash_paints_on_the_arming_tick() {
     );
     assert_eq!(drained(&rx), vec!["reload-config".to_string()]);
 }
+
+/// The exit cue and the respawn chord (render mode): a `%pane-exited`
+/// for the focused pane paints `(exited N — C-b r respawns)` on the
+/// status row; the chord sends `respawn-pane -t <focused>` only while it
+/// is held (a live pane gets a flash, never a `-k`); `%pane-respawned`
+/// clears the cue and parks the pane's emulator reset + replay.
+#[test]
+fn exit_cue_and_respawn_chord_follow_the_held_pane() {
+    let (rx, mut conn, mut session) = two_pane_session("respawn-chord", FakeScript::default());
+    session.renderer.focus(1);
+    // A live pane: the chord refuses locally and sends nothing.
+    chord(&mut session, &mut conn, b'r');
+    assert!(drained(&rx).is_empty(), "a live pane is never respawned");
+    assert_eq!(session.chrome.flash_text(), Some("pane is running"));
+
+    session.handle_event(TmuxNotification::PaneExited {
+        pane_id: "%1".to_string(),
+        exit_code: Some(3),
+    });
+    session.draw_status_row();
+    let row = status_row_text(&mut session);
+    assert!(row.contains("(exited 3 — C-b r respawns)"), "{row}");
+
+    // The other pane focused: the cue names the held one.
+    session.renderer.focus(2);
+    assert_eq!(session.exit_cue().as_deref(), Some("(%1 exited 3)"));
+    session.renderer.focus(1);
+
+    chord(&mut session, &mut conn, b'r');
+    assert_eq!(drained(&rx), vec!["respawn-pane -t %1".to_string()]);
+
+    // Seed the dead screen, then the respawn broadcast: the cue clears
+    // and the pane is parked for a reset + replay.
+    session.renderer.feed_output(1, b"DEAD-SCREEN");
+    session.handle_event(TmuxNotification::PaneRespawned {
+        pane_id: "%1".to_string(),
+    });
+    assert!(session.exit_cue().is_none(), "the cue clears");
+    assert_eq!(session.pending.respawned, vec![1]);
+    session.renderer.reset_pane(1);
+    let text = session.renderer.pane_terminal(1).expect("pane 1").content();
+    assert!(
+        !text.contains("DEAD-SCREEN"),
+        "the dead screen is gone: {text:?}"
+    );
+
+    // The chord is configurable: a rebound key drives it.
+    session.handle_event(TmuxNotification::PaneExited {
+        pane_id: "%1".to_string(),
+        exit_code: None,
+    });
+    session.management.respawn = b'!';
+    assert_eq!(
+        session.exit_cue().as_deref(),
+        Some("(exited ? — C-b ! respawns)")
+    );
+    chord(&mut session, &mut conn, b'!');
+    assert_eq!(drained(&rx), vec!["respawn-pane -t %1".to_string()]);
+}

@@ -706,6 +706,10 @@ struct WindowSession {
     /// Agent state-change notifications: the delivery, the states that
     /// notify, and the terminal escapes the next frame writes.
     notify: notify::NotifyState,
+    /// Panes the daemon holds dead (`%pane-exited`, including the
+    /// registration replay), with their exit code — the status row's exit
+    /// cue and the respawn chord's gate. `%pane-respawned` clears one.
+    held: std::collections::HashMap<u32, Option<i32>>,
     /// The config's `sidebar-on-launch` (the settings dialog shows and
     /// edits it; the live panel's visibility is `sidebar`).
     sidebar_on_launch: bool,
@@ -960,6 +964,9 @@ struct PendingWork {
     /// Refit the grid (resize_to + full repaint) on the next loop: set by
     /// the sidebar and status-bar toggles, whose chords have no sink.
     grid_refit: bool,
+    /// Panes a `%pane-respawned` restarted: their emulators still hold
+    /// the dead process's screen, so the pump resets and replays them.
+    respawned: Vec<u32>,
 }
 
 impl PendingWork {
@@ -999,6 +1006,7 @@ impl WindowSession {
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),
             notify: notify::NotifyState::default(),
+            held: std::collections::HashMap::new(),
             sidebar_on_launch: chords.sidebar_on_launch,
             settings_path: None,
             drag: None,
@@ -1268,6 +1276,13 @@ impl WindowSession {
                 }
             }
         }
+        let respawned = std::mem::take(&mut self.pending.respawned);
+        if !respawned.is_empty() {
+            for &pane in &respawned {
+                self.renderer.reset_pane(pane);
+            }
+            self.replay_panes(conn, &respawned);
+        }
         if std::mem::take(&mut self.pending.grid_refit) {
             // The toggle that parked this moved the status bar or the
             // side panel: re-derive the frame before refitting to it. The
@@ -1441,6 +1456,14 @@ impl WindowSession {
             }
             TmuxNotification::AgentReleased { pane_id, agent } => {
                 self.on_agent_changed(&pane_id, &agent, None, "");
+                EventOutcome::Continue
+            }
+            TmuxNotification::PaneExited { pane_id, exit_code } => {
+                self.on_pane_exited(&pane_id, exit_code);
+                EventOutcome::Continue
+            }
+            TmuxNotification::PaneRespawned { pane_id } => {
+                self.on_pane_respawned(&pane_id);
                 EventOutcome::Continue
             }
             // Neither the status row nor the side panel renders

@@ -81,7 +81,10 @@ pub(crate) fn help_rows(
                 format!("{p} {}", spell_key(reload)),
                 "reload the config".to_string(),
             ),
-            (format!("{p} r"), "respawn the held-dead pane".to_string()),
+            (
+                format!("{p} {}", spell_key(m.respawn)),
+                "respawn the held-dead pane".to_string(),
+            ),
         ],
     );
     push_cat(

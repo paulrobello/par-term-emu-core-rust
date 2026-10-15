@@ -2067,7 +2067,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection.
-    session.route_stdin_bytes(&mut conn, &[b'j'; 21][..]);
+    session.route_stdin_bytes(&mut conn, &[b'j'; 22][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2077,10 +2077,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     // The composed body shows the last row visible with its value.
     let overlay = session.renderer.overlay.as_ref().expect("up");
     let last_row = overlay.1[5 + (last - state.top)].text.clone();
-    assert!(last_row.contains("status bar"), "{last_row}");
-    assert!(last_row.trim_end().ends_with("S"), "{last_row}");
+    assert!(last_row.contains("respawn dead pane"), "{last_row}");
+    assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 21][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 22][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };

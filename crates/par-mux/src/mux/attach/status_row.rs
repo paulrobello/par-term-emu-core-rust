@@ -67,9 +67,14 @@ impl Session {
             line.push_str(&format!(" | {} agent(s)", self.agents));
         }
         if let Some(code) = self.exited {
+            let chord = format!(
+                "{} {}",
+                crate::mux::attach::panels::spell_key(self.prefix),
+                crate::mux::attach::panels::spell_key(self.management.respawn)
+            );
             match code {
-                Some(code) => line.push_str(&format!(" | (exited {code} — C-b r respawns)")),
-                None => line.push_str(" | (exited ? — C-b r respawns)"),
+                Some(code) => line.push_str(&format!(" | (exited {code} — {chord} respawns)")),
+                None => line.push_str(&format!(" | (exited ? — {chord} respawns)")),
             }
         }
         // The prefix cue: while the prefix chord is armed (sent, awaiting

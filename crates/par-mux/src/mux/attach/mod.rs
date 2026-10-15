@@ -598,6 +598,7 @@ impl Session {
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
                     Some(ManagementKey::WorkspaceNext) => self.switch_workspace(1),
                     Some(ManagementKey::WorkspacePrev) => self.switch_workspace(-1),
+                    Some(ManagementKey::Respawn) => self.respawn_if_dead(),
                     // Render-mode-only chords: passthrough has no zoom,
                     // no overlay surface for the rename prompt, no
                     // divider glyphs to cycle, and no status bar or
@@ -633,7 +634,6 @@ impl Session {
                             PrefixKey::PrevWindow => self.switch_window(-1),
                             PrefixKey::NextSession => self.switch_session(1),
                             PrefixKey::PrevSession => self.switch_session(-1),
-                            PrefixKey::Respawn => self.respawn_if_dead(),
                             PrefixKey::None => {}
                         }
                     }
@@ -735,8 +735,6 @@ enum PrefixKey {
     /// `)` / `(` — next / previous session.
     NextSession,
     PrevSession,
-    /// `r` — respawn the pane when it is held dead.
-    Respawn,
     /// Consume the byte, do nothing (unbound keys).
     None,
 }
@@ -785,11 +783,14 @@ pub(crate) enum ManagementKey {
     Sidebar,
     /// Toggle the status bar (render mode).
     StatusBar,
+    /// Respawn the focused pane when it is held dead (`respawn-pane`).
+    Respawn,
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
-/// next/prev window; ( ) prev/next session; r respawn-pane when held
-/// dead. An unbound key is consumed silently (tmux drops it too).
+/// next/prev window; ( ) prev/next session (the respawn chord is a
+/// configurable management chord). An unbound key is consumed silently
+/// (tmux drops it too).
 fn prefix_command(key: u8) -> PrefixKey {
     match key {
         b'd' => PrefixKey::Detach,
@@ -798,7 +799,6 @@ fn prefix_command(key: u8) -> PrefixKey {
         b'p' => PrefixKey::PrevWindow,
         b'(' => PrefixKey::PrevSession,
         b')' => PrefixKey::NextSession,
-        b'r' => PrefixKey::Respawn,
         other if other == b' ' || other.is_ascii_alphabetic() || other.is_ascii_digit() => {
             // A printable key that means nothing in Phase A: consumed.
             PrefixKey::None

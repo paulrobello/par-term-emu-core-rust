@@ -185,6 +185,11 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub status_bar: Option<String>,
+    /// The respawn chord: the key matched after the prefix that restarts
+    /// the focused pane when it is held dead (`respawn-pane`; a live pane
+    /// is left alone).
+    #[serde(default, rename = "respawn", skip_serializing_if = "Option::is_none")]
+    pub respawn: Option<String>,
     /// The side panel's width in columns (render mode; clamped 6..=60).
     #[serde(
         default,
@@ -584,6 +589,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_picker: None,
             sidebar: None,
             status_bar: None,
+            respawn: None,
             sidebar_width: Some(defaults.sidebar_width),
             sidebar_on_launch: Some(defaults.sidebar_on_launch),
             agent_rows: Some(defaults.agent_rows.clone()),
@@ -843,6 +849,9 @@ pub struct Management {
     /// Toggle the bottom status bar (render mode): shown by default;
     /// hiding it hands the row back to the pane grid.
     pub status_bar: u8,
+    /// Respawn the focused pane when it is held dead — `respawn-pane -t
+    /// <pane>`. A live pane is left alone.
+    pub respawn: u8,
 }
 
 impl Default for Management {
@@ -867,6 +876,7 @@ impl Default for Management {
             workspace_picker: b'g',
             sidebar: b's',
             status_bar: b'S',
+            respawn: b'r',
         }
     }
 }
@@ -944,6 +954,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         workspace_picker: chord!(workspace_picker, "workspace-picker"),
         sidebar: chord!(sidebar, "sidebar"),
         status_bar: chord!(status_bar, "status-bar"),
+        respawn: chord!(respawn, "respawn"),
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -1504,6 +1515,7 @@ remain-on-exit = true
                 workspace_picker: b'g',
                 sidebar: b's',
                 status_bar: b'S',
+                respawn: b'r',
             }
         );
         // Full override, tmux spellings and literals alike.

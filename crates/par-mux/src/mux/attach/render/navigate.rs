@@ -61,7 +61,30 @@ impl WindowSession {
             ManagementKey::Labels => self.toggle_border_labels(),
             ManagementKey::WorkspacePicker => self.enter_ws_picker(conn),
             ManagementKey::Sidebar => self.toggle_sidebar(conn),
+            ManagementKey::Respawn => self.chord_respawn(conn),
         }
+    }
+
+    /// The respawn chord: `respawn-pane -t <focused>`, but only when the
+    /// focused pane is held dead — never `-k`, so a live pane is never
+    /// restarted by a stray chord. The `%pane-respawned` broadcast clears
+    /// the cue and resets the pane's screen; a refused respawn flashes.
+    fn chord_respawn(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        if !self.held.contains_key(&pane) {
+            self.chrome.flash("pane is running".to_string());
+            self.draw_status_row();
+            return;
+        }
+        self.send_then(conn, &format!("respawn-pane -t %{pane}"), |s, _, reply| {
+            if !reply.ok {
+                let why = reply.body.first().cloned().unwrap_or_default();
+                s.chrome.flash(format!("respawn failed: {why}"));
+                s.draw_status_row();
+            }
+        });
     }
 
     fn chord_split(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, horizontal: bool) {

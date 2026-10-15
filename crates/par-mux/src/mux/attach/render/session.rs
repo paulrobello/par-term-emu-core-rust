@@ -411,8 +411,15 @@ impl WindowSession {
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
         // Registration replay (held panes, zoomed windows) is drained
-        // ahead of the queries like passthrough does.
-        let _replay = conn.drain_pending_events();
+        // ahead of the queries like passthrough does; the held panes'
+        // `%pane-exited` lines seed the exit cue.
+        for event in conn.drain_pending_events() {
+            if let TmuxNotification::PaneExited { pane_id, exit_code } = event {
+                if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                    self.held.insert(pane, exit_code);
+                }
+            }
+        }
 
         let (window, pane) = resolve_window_and_pane(conn, target)?;
         self.window = window;
@@ -595,6 +602,14 @@ impl WindowSession {
         if self.prefix_pending {
             head.push(Segment {
                 text: " prefix |".to_string(),
+                bold: true,
+                dim: false,
+                shaded: false,
+            });
+        }
+        if let Some(cue) = self.exit_cue() {
+            head.push(Segment {
+                text: format!(" {cue} |"),
                 bold: true,
                 dim: false,
                 shaded: false,

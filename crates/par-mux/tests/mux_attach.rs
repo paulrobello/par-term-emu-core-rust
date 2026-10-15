@@ -7070,3 +7070,206 @@ fn strip_sgr(row: &str) -> String {
     }
     String::from_utf8_lossy(&out).into_owned()
 }
+
+/// Card 01a13d03's render-mode gap: a held pane shows the exit cue on the
+/// status row, and the respawn chord (`C-b r`) restarts it — the client
+/// repaints the live shell on the same pane. Driven through Ctrl+D on the
+/// workspace's last pane (keep-one-tab holds it under the product
+/// default).
+#[cfg(unix)]
+#[test]
+fn render_mode_held_pane_shows_the_exit_cue_and_the_chord_respawns_it() {
+    let fixture = MuxFixture::new("rendercue");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    let pane = session_first_pane(&mut client, "$0");
+    // settle: the fresh pane's shell starts before the client attaches
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    let mut all = Vec::new();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+
+    host.to_child.write_all(&[0x04]).expect("Ctrl+D");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"respawns)", Duration::from_secs(10));
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("(exited 0 \u{2014} C-b r respawns)"),
+        "the status row shows the exit cue. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+
+    // The chord restarts it; the fresh shell runs a command whose output
+    // only a live pane could paint.
+    host.to_child.write_all(&[0x02, b'r']).expect("prefix r");
+    host.to_child.flush().ok();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info")
+            .join("\n");
+        if !info.contains("exited=") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the chord never respawned: {info}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // settle: the respawned shell's prompt before typing
+    std::thread::sleep(Duration::from_millis(500));
+    host.to_child
+        .write_all(b"echo CUE-LIVE | tr A-Z a-z\r")
+        .expect("type");
+    host.to_child.flush().ok();
+    let mut got = wait_for_output(&host, b"cue-live", Duration::from_secs(10));
+    screen_stable(
+        &host,
+        &mut got,
+        Duration::from_millis(600),
+        Duration::from_secs(10),
+    );
+    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
+    assert!(
+        screen.contains("cue-live"),
+        "the client repaints the live shell: {screen}"
+    );
+    assert!(
+        !screen.contains("respawns)"),
+        "the cue clears after the respawn: {screen}"
+    );
+    host.killer.kill().ok();
+}
+
+/// A pane held dead BEFORE the render client attaches: the registration
+/// replay's `%pane-exited` seeds the cue on the first status row.
+#[cfg(unix)]
+#[test]
+fn render_mode_pane_held_before_attach_shows_the_exit_cue() {
+    let (fixture, _daemon, mut client) = fixture_with_session("rendercuelate");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("respawn-pane -t {pane} -k exit 4"))
+        .expect("respawn -k");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info")
+            .join("");
+        if info.contains("exited=4") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the pane never died: {info}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let got = wait_for_output(&host, b"respawns)", Duration::from_secs(10));
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("(exited 4 \u{2014} C-b r respawns)"),
+        "the replayed held pane shows the cue. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
+/// The respawn chord ships in the settings dialog's keys tab (project
+/// rule: every TUI chord is editable there): the tab's last row is
+/// `respawn dead pane` at its live binding.
+#[cfg(unix)]
+#[test]
+fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
+    let (fixture, _daemon, mut client) = fixture_with_session("setrespawn");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) =
+        spawn_attach_with_config(&fixture, &["-t", &pane], "render", "[client]\n");
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    host.to_child
+        .write_all(b"\x1b[<0;17;12M")
+        .expect("menu chip press");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"reload config",
+        Duration::from_secs(10),
+        "the chip opens the command menu",
+    );
+    let (x0, y0) = (19usize, 3usize);
+    host.to_child
+        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
+        .expect("settings click");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"integrations",
+        Duration::from_secs(10),
+        "the dialog is up",
+    );
+    // Five Tabs reach the keys section; 30 downs clamp at its last row.
+    host.to_child.write_all(b"\t\t\t\t\t").expect("tabs");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"management chord",
+        Duration::from_secs(10),
+        "the keys tab is up",
+    );
+    host.to_child.write_all(&[b'j'; 30]).expect("downs");
+    host.to_child.flush().ok();
+    let mut got = wait_for_output(&host, b"respawn dead pane", Duration::from_secs(10));
+    screen_stable(
+        &host,
+        &mut got,
+        Duration::from_millis(500),
+        Duration::from_secs(10),
+    );
+    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
+    let row = screen
+        .lines()
+        .find(|line| line.contains("respawn dead pane"))
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        row.trim_end().trim_end_matches('\u{2502}').trim_end().ends_with(" r"),
+        "the keys tab lists the respawn chord at its binding. stderr: {} row: {row:?} screen: {screen}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}

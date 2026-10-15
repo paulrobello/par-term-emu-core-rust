@@ -717,6 +717,19 @@ impl PaneRenderer {
         crate::mux::attach::chrome_safe(&raw).trim().to_string()
     }
 
+    /// Give `pane` a fresh emulator at its current size — a respawned
+    /// process starts on a clean grid, and the dead one's frozen screen
+    /// must not mix with the replay. A pane the layout does not hold is
+    /// ignored.
+    pub fn reset_pane(&mut self, pane: u32) {
+        let Some(rect) = self.layout.iter().find(|r| r.pane == pane).copied() else {
+            return;
+        };
+        let (cols, rows) = self.emulator_size(&rect);
+        self.emulators.insert(pane, PaneEmulator::new(cols, rows));
+        self.dirty = true;
+    }
+
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout does
     /// not contain is dropped — its output is not on screen.
     pub fn feed_output(&mut self, pane: u32, bytes: &[u8]) {
