@@ -2557,8 +2557,10 @@ macro_rules! impl_terminal_screenshot_methods {
                                                                         faint_text_alpha = 0.5,
                                                                         minimum_contrast = 0.5
                                                                     ))]
-            // Python keyword arguments; a struct would change the Python API.
-            #[allow(clippy::too_many_arguments)]
+            #[allow(
+                clippy::too_many_arguments,
+                reason = "Python keyword arguments, one per screenshot option; a struct would change the Python API"
+            )]
             fn screenshot(
                 &self,
                 format: &str,
@@ -2678,8 +2680,10 @@ macro_rules! impl_terminal_screenshot_methods {
                                                                         faint_text_alpha = 0.5,
                                                                         minimum_contrast = 0.5
                                                                     ))]
-            // Python keyword arguments; a struct would change the Python API.
-            #[allow(clippy::too_many_arguments)]
+            #[allow(
+                clippy::too_many_arguments,
+                reason = "Python keyword arguments, one per screenshot option; a struct would change the Python API"
+            )]
             fn screenshot_to_file(
                 &self,
                 path: &str,

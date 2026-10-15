@@ -34,8 +34,10 @@ impl Clone for PyStreamingConfig {
 impl PyStreamingConfig {
     #[new]
     #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only"))]
-    // Python keyword arguments; a struct would change the Python API.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
+    )]
     fn new(
         max_clients: usize,
         send_initial_screen: bool,
@@ -1297,8 +1299,10 @@ impl PyStreamingServer {
     ///     server.send_trigger_matched(1, 0, 0, 5, "ERROR", captures=["ERROR"])
     ///     ```
     #[pyo3(signature = (trigger_id, row, col, end_col, text, captures=vec![], timestamp=0))]
-    // Python keyword arguments; a struct would change the Python API.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python keyword arguments, one per TriggerMatched message field; a struct would change the Python API"
+    )]
     fn send_trigger_matched(
         &self,
         trigger_id: u64,
