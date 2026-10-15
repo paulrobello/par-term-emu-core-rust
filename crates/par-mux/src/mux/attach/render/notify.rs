@@ -80,14 +80,17 @@ pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec
 /// leaked `TERM=xterm-kitty` (ssh, nested shells) never decides alone.
 /// A misread costs the notification: neither ghostty nor iTerm2 parses
 /// OSC 99, while kitty also accepts the OSC 9 fallback.
-fn host_is_kitty_in(env: impl Fn(&str) -> Option<String>) -> bool {
-    env("KITTY_WINDOW_ID").is_some_and(|id| !id.is_empty())
-        && env("TERM_PROGRAM").is_none_or(|program| program.is_empty() || program == "kitty")
+fn host_is_kitty_in(kitty_window_id: Option<&str>, term_program: Option<&str>) -> bool {
+    kitty_window_id.is_some_and(|id| !id.is_empty())
+        && term_program.is_none_or(|program| program.is_empty() || program == "kitty")
 }
 
 /// [`host_is_kitty_in`] over the process environment.
 fn host_is_kitty() -> bool {
-    host_is_kitty_in(|key| std::env::var(key).ok())
+    host_is_kitty_in(
+        std::env::var("KITTY_WINDOW_ID").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+    )
 }
 
 /// Hand `title` / `body` to the OS notifier, detached: argv only (no
@@ -249,42 +252,24 @@ mod tests {
         assert_eq!(NotifyDelivery::parse("toast"), None);
     }
 
-    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
-        move |key| {
-            pairs
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| v.to_string())
-        }
-    }
-
     #[test]
     fn host_is_kitty_only_when_the_window_id_is_not_leaked() {
         // Real kitty: the window id, no TERM_PROGRAM of its own.
-        assert!(host_is_kitty_in(env_of(&[
-            ("KITTY_WINDOW_ID", "3"),
-            ("TERM", "xterm-kitty"),
-        ])));
+        assert!(host_is_kitty_in(Some("3"), None));
         // A par-term / par-mux pane exports kitty's marks itself.
-        assert!(host_is_kitty_in(env_of(&[
-            ("KITTY_WINDOW_ID", "1"),
-            ("TERM_PROGRAM", "kitty"),
-        ])));
+        assert!(host_is_kitty_in(Some("1"), Some("kitty")));
         // Leaked through a host started under kitty: the host's own
         // TERM_PROGRAM wins (Paul's ghostty/iTerm2/herdr report).
         for program in ["ghostty", "iTerm.app", "herdr", "WezTerm"] {
-            let env = move |key: &str| match key {
-                "KITTY_WINDOW_ID" => Some("7".to_string()),
-                "KITTY_PID" => Some("696".to_string()),
-                "TERM_PROGRAM" => Some(program.to_string()),
-                _ => None,
-            };
-            assert!(!host_is_kitty_in(env), "{program} with a leaked kitty id");
+            assert!(
+                !host_is_kitty_in(Some("7"), Some(program)),
+                "{program} with a leaked kitty id"
+            );
         }
         // TERM=xterm-kitty without the window id (ssh, nested) is not
         // enough, and an empty id is no id.
-        assert!(!host_is_kitty_in(env_of(&[("TERM", "xterm-kitty")])));
-        assert!(!host_is_kitty_in(env_of(&[("KITTY_WINDOW_ID", "")])));
-        assert!(!host_is_kitty_in(env_of(&[])));
+        assert!(!host_is_kitty_in(None, Some("xterm-kitty")));
+        assert!(!host_is_kitty_in(Some(""), Some("ghostty")));
+        assert!(!host_is_kitty_in(None, None));
     }
 }
