@@ -4580,15 +4580,16 @@ fn render_mode_background_agent_state_notifies_the_host() {
     host.killer.kill().ok();
 }
 
-/// Paul's live report (2026-10-15): `notify-delivery = "terminal"` set
-/// from the settings dialog never reached ghostty or iTerm2, while
-/// `inside` and `system` worked in both. The attach ran with kitty's
-/// `KITTY_WINDOW_ID` leaked into its environment (a host started under
-/// kitty, herdr on kitty, or a par-term/par-mux pane — the core's pane
-/// spawn exports it), so the escape went out as kitty's OSC 99, which
-/// neither host parses. Drives the reload path (delivery off at launch,
-/// `terminal` written to the file, the reload chord) and asserts the
-/// background agent's transition reaches the host as OSC 9.
+/// Investigating Paul's report (2026-10-15: `notify-delivery =
+/// "terminal"` never showed in ghostty or iTerm2 while `inside` and
+/// `system` worked) found a latent misdetection: a `KITTY_WINDOW_ID`
+/// leaked into a non-kitty host's environment (a host started from a
+/// kitty shell) switched the escape to kitty's OSC 99, which neither
+/// ghostty nor iTerm2 parses. Paul's own live attach processes carried no
+/// `KITTY_*` variables, so this is a bug class, not proven to be his
+/// cause. Drives the reload path (delivery off at launch, `terminal`
+/// written to the file, the reload chord) under such an environment and
+/// asserts the background agent's transition reaches the host as OSC 9.
 #[cfg(unix)]
 #[test]
 fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env() {
@@ -4829,6 +4830,13 @@ fn render_mode_inside_delivery_paints_a_toast() {
     assert!(
         !String::from_utf8_lossy(&all).contains("\x1b]9;"),
         "inside delivery writes no host notification escape"
+    );
+    // The toast rings the host bell so the host flags the tab unread;
+    // `all` was cleared after the settle, so only the toast's frames are
+    // in it (an idle shell writes nothing).
+    assert!(
+        all.contains(&0x07),
+        "inside delivery rings the host bell alongside the toast"
     );
     host.killer.kill().ok();
 }

@@ -71,10 +71,11 @@ pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec
 ///
 /// `KITTY_WINDOW_ID` alone is not proof: it leaks into every process
 /// started under a kitty window — a ghostty or iTerm2 launched from a
-/// kitty shell, herdr running on kitty, and every par-term/par-mux pane
-/// (the core's pane spawn exports `KITTY_WINDOW_ID=1` with
-/// `TERM_PROGRAM=kitty`). A real host overwrites `TERM_PROGRAM`
-/// (`ghostty`, `iTerm.app`, `herdr`); kitty itself sets none. So the
+/// kitty shell, herdr running on kitty. A real host overwrites
+/// `TERM_PROGRAM` (`ghostty`, `iTerm.app`, `herdr`); kitty itself sets
+/// none. A par-term/par-mux pane exports `KITTY_WINDOW_ID=1` WITH
+/// `TERM_PROGRAM=kitty` (the core's pane spawn), so it still counts as
+/// kitty and gets OSC 99, which the core parses. So the
 /// window id counts only while `TERM_PROGRAM` is unset or `kitty`, and a
 /// leaked `TERM=xterm-kitty` (ssh, nested shells) never decides alone.
 /// A misread costs the notification: neither ghostty nor iTerm2 parses
