@@ -43,6 +43,7 @@ mod notify;
 mod paint;
 mod pane_chrome;
 mod pending_cmd;
+mod pointer;
 mod renderer;
 mod session;
 mod sidebar;
@@ -604,8 +605,13 @@ impl Drop for RenderScreenGuard {
         #[cfg(test)]
         screen_guard_drops::record();
         if self.active {
+            // Restore the pointer before the screen flips back: a
+            // shaped pointer (OSC 22) survives the alternate-screen
+            // exit on terminals that scope it to the window, and the
+            // host shell should not inherit the resize cue.
             let _ = crossterm::execute!(
                 std::io::stdout(),
+                crossterm::style::Print("\x1b]22;text\x1b\\"),
                 crossterm::event::DisableMouseCapture,
                 crossterm::terminal::LeaveAlternateScreen,
                 crossterm::cursor::Show
@@ -684,6 +690,10 @@ struct WindowSession {
     /// detach prefix itself — both live-rebindable by the reload.
     prefix: u8,
     reload_key: u8,
+    /// The prefix chord is armed — sent, awaiting its second key. The
+    /// status row shows the cue while it is up ([`Self::arm_prefix`]
+    /// repaints on every flip).
+    prefix_pending: bool,
     /// The window/pane management chords (split % / split " / kill x /
     /// new-window c): the key bytes matched after the prefix. Live
     /// rebindable by the reload.
@@ -742,6 +752,9 @@ struct WindowSession {
     /// Host-cursor placement bookkeeping: the emit guard, the heartbeat
     /// clock, and the drag-shape option (see [`CursorState`]).
     cursor: CursorState,
+    /// The host POINTER's shape (OSC 22): the divider resize cue
+    /// `drag-cursor-shape` raises on hover/drag (see [`pointer::PointerState`]).
+    pointer: pointer::PointerState,
     /// A mouse path (the command menu's `detach` row) asked to end the
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
@@ -976,6 +989,7 @@ impl WindowSession {
             modal: Modal::None,
             prefix: chords.prefix,
             reload_key: chords.reload,
+            prefix_pending: false,
             management: chords.management,
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),
@@ -994,6 +1008,7 @@ impl WindowSession {
             nav_gen: 0,
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
+            pointer: pointer::PointerState::default(),
             project_poll: std::time::Instant::now(),
             detach_requested: false,
             frame_hold_since: None,
@@ -1026,7 +1041,6 @@ impl WindowSession {
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
         let mut stdin = super::Stdin::new_with_primer(std::mem::take(&mut self.stdin_primer));
-        let mut prefix_pending = false;
         let mut current_size = self.renderer.window_size();
         loop {
             // 0. This tick's frame geometry: every hit-test and paint
@@ -1051,7 +1065,7 @@ impl WindowSession {
             //    n/p/(/) switch windows/sessions), then keys/mouse to the
             //    focused pane.
             self.flush_stdin_backlog(conn);
-            if self.pump_stdin(conn, &mut stdin, &mut prefix_pending) {
+            if self.pump_stdin(conn, &mut stdin) {
                 return Ok(());
             }
 
@@ -1298,8 +1312,11 @@ impl WindowSession {
     }
 
     /// The flash's frame tick at `now` (injected so tests drive the
-    /// clock): arm the deadline the first time a flash is seen, clear the
-    /// flash and repaint the status row once it passes.
+    /// clock): paint the row the tick a fresh flash arms (flash sites
+    /// do not repaint the row themselves — a raised flash used to wait
+    /// for an unrelated repaint and often cleared unseen), arm the
+    /// deadline the first time a flash is seen, and clear the flash
+    /// and repaint the status row once it passes.
     fn tick_flash(&mut self, now: std::time::Instant) {
         if self.chrome.tick(now) {
             self.draw_status_row();
@@ -1457,14 +1474,13 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         stdin: &mut super::Stdin,
-        prefix_pending: &mut bool,
     ) -> bool {
         loop {
             match stdin.read_available() {
                 None => return false,
                 Some(Ok(bytes)) if bytes.is_empty() => return true, // EOF
                 Some(Ok(bytes)) => {
-                    if self.route_stdin_bytes(conn, &bytes, prefix_pending) {
+                    if self.route_stdin_bytes(conn, &bytes) {
                         return true;
                     }
                 }
@@ -1479,24 +1495,23 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         bytes: &[u8],
-        prefix_pending: &mut bool,
     ) -> bool {
         let tokens = self.parser.feed(bytes);
         for token in tokens {
             match token {
                 Token::Bytes(run) => {
-                    if self.route_plain(&run, conn, prefix_pending) {
+                    if self.route_plain(&run, conn) {
                         return true;
                     }
                 }
-                Token::Key(ev) => self.route_key(conn, &ev, prefix_pending),
+                Token::Key(ev) => self.route_key(conn, &ev),
                 Token::Mouse(mouse) => {
                     self.route_mouse(conn, mouse);
                     if std::mem::take(&mut self.detach_requested) {
                         return true;
                     }
                 }
-                Token::Paste(body) => self.route_paste(conn, &body, prefix_pending),
+                Token::Paste(body) => self.route_paste(conn, &body),
             }
         }
         false

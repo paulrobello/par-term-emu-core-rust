@@ -679,8 +679,9 @@ pub struct Chords {
     /// The reserved right-edge gutter column (config
     /// `scrollbar-gutter`). Default off.
     pub scrollbar_gutter: bool,
-    /// The drag cursor shaping (config `drag-cursor-shape`). Default
-    /// off.
+    /// The drag cursor shaping (config `drag-cursor-shape`): the
+    /// resize pointer (OSC 22) over divider hovers/drags plus the
+    /// DECSCUSR steady block during a live drag. Default off.
     pub drag_cursor_shape: bool,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.

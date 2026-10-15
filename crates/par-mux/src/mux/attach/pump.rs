@@ -296,9 +296,16 @@ impl Session {
                 }
             }
 
-            // 2. Drain stdin (prefix routing, chunked forward).
+            // 2. Drain stdin (prefix routing, chunked forward). A flip of
+            //    the prefix-armed state marks the status dirty so the
+            //    row's cue paints immediately, not on the next periodic
+            //    redraw.
+            let prefix_before = self.prefix_pending;
             if self.pump_stdin(&mut stdin) {
                 return PumpOutcome::Detached;
+            }
+            if self.prefix_pending != prefix_before {
+                status_dirty = true;
             }
 
             // 3. Status line redraw when something marked it dirty — or

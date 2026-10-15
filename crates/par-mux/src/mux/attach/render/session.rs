@@ -576,17 +576,25 @@ impl WindowSession {
         } else {
             None
         };
-        // The flash cue and the zoom marker lead the line and the Help
-        // chip RIGHT-ALIGNS at the row's end: all three reserve their
-        // widths up front so the composed state truncates into what
-        // remains, and the paint clips the content at the chip's left
-        // column — the chip can never be pushed off the row (round 6:
-        // the chip used to ride at the end of the composed segments,
-        // and a full line pushed it off).
+        // The flash cue, the prefix-armed cue, and the zoom marker lead
+        // the line and the Help chip RIGHT-ALIGNS at the row's end: all
+        // four reserve their widths up front so the composed state
+        // truncates into what remains, and the paint clips the content
+        // at the chip's left column — the chip can never be pushed off
+        // the row (round 6: the chip used to ride at the end of the
+        // composed segments, and a full line pushed it off).
         let mut head: Vec<Segment> = Vec::new();
         if self.zoomed {
             head.push(Segment {
                 text: " Z |".to_string(),
+                bold: true,
+                dim: false,
+                shaded: false,
+            });
+        }
+        if self.prefix_pending {
+            head.push(Segment {
+                text: " prefix |".to_string(),
                 bold: true,
                 dim: false,
                 shaded: false,
@@ -713,6 +721,8 @@ impl WindowSession {
         if !self.notify.outbox.is_empty() {
             sink.write_raw(&std::mem::take(&mut self.notify.outbox));
         }
+        // The pointer's shape change rides the same raw path (OSC 22).
+        self.pointer.emit(sink);
         let geometry = self.geometry;
         let mut flushed = false;
         if self.renderer.needs_frame() {
@@ -741,7 +751,10 @@ impl WindowSession {
         // divider drag is live the host cursor carries the resize shape
         // (best-effort DECSCUSR steady block — DECSCUSR has no
         // column-resize value; every drag-end path clears `drag`, so the
-        // next frame restores the pane's own shape).
+        // next frame restores the pane's own shape). The POINTER carries
+        // the axis-correct resize shape via OSC 22 (see `update_pointer`)
+        // — this text-cursor swap is the fallback cue for terminals
+        // without OSC 22.
         if self.cursor.drag_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
             cursor = cursor.map(|(x, y, _)| (x, y, CursorStyle::SteadyBlock));
         }

@@ -2734,6 +2734,30 @@ fn passthrough_switch_resolvers_wrap_and_fall_back() {
     );
 }
 
+/// The prefix chord is visible in passthrough too: the status line
+/// says `prefix` while the second key is pending (tmux's status-line
+/// prefix indication) and drops the cue once the chord completes.
+#[test]
+fn passthrough_prefix_arms_the_status_row_cue() {
+    let (_rx, mut session) = management_session("prefix-cue");
+    assert!(!session.route_bytes(&[0x02]));
+    assert!(session.prefix_pending, "the chord is armed");
+    assert!(
+        session.status_line().contains(" prefix |"),
+        "the armed prefix leads the line: {}",
+        session.status_line()
+    );
+    assert!(!session.route_bytes(b"Q"));
+    assert!(
+        !session.prefix_pending,
+        "the unbound key consumed the chord"
+    );
+    assert!(
+        !session.status_line().contains("prefix"),
+        "the completed chord clears the cue"
+    );
+}
+
 /// SEC-208 (d): passthrough tracks bracketed paste over the raw stream —
 /// a paste split across two bursts forwards whole (markers included, the
 /// pane's own framing) and its embedded prefix + `x` never kills a pane.

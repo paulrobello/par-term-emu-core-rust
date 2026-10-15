@@ -35,7 +35,7 @@ impl ChromeRows {
         }
     }
 
-    /// Raise the flash cue; the caller repaints the status row.
+    /// Raise the flash cue; the arming tick paints it (see [`tick`]).
     pub(super) fn flash(&mut self, text: impl Into<String>) {
         self.flash = Some(text.into());
     }
@@ -44,19 +44,23 @@ impl ChromeRows {
         self.flash.as_deref()
     }
 
-    /// Age the flash: true when it cleared (the caller repaints the
-    /// status row).
+    /// Age the flash: true when the status row must repaint — the tick
+    /// that first arms a fresh flash (flash sites do not repaint the
+    /// row themselves, so a raised flash paints the moment the pump
+    /// next ticks, not only when it clears) and the tick that clears
+    /// it.
     pub(super) fn tick(&mut self, now: Instant) -> bool {
         if self.flash.is_none() {
             self.flash_until = None;
             return false;
         }
+        let armed_here = self.flash_until.is_none();
         let until = *self.flash_until.get_or_insert(now + FLASH_LIFETIME);
         if now >= until {
             self.flash = None;
             self.flash_until = None;
             return true;
         }
-        false
+        armed_here
     }
 }

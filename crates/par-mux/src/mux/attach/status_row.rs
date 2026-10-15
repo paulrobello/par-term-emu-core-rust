@@ -72,6 +72,12 @@ impl Session {
                 None => line.push_str(" | (exited ? — C-b r respawns)"),
             }
         }
+        // The prefix cue: while the prefix chord is armed (sent, awaiting
+        // its second key) the row says so — the indication the combo was
+        // seen (tmux's status-line prefix indication).
+        if self.prefix_pending {
+            line = format!(" prefix |{line}");
+        }
         // A reload (or its failure) leads the line: it is the freshest
         // fact and the one the user is waiting to see.
         if let Some(flash) = self.flash.as_deref() {

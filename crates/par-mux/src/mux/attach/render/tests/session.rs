@@ -465,14 +465,9 @@ fn render_resize_chord_sends_for_the_focused_pane() {
         .renderer
         .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
     let mut conn = conn;
-    let mut prefix_pending = false;
 
     assert!(
-        !session.route_plain(
-            &[crate::mux::attach::C_B, b'R'],
-            &mut conn,
-            &mut prefix_pending
-        ),
+        !session.route_plain(&[crate::mux::attach::C_B, b'R'], &mut conn,),
         "the resize chord enters the mode"
     );
     assert!(session.is_resize());
@@ -492,11 +487,7 @@ fn render_resize_chord_sends_for_the_focused_pane() {
     // divider left — the manual-pass report).
     session.renderer.focus(2);
     assert!(
-        !session.route_plain(
-            &[crate::mux::attach::C_B, b'R'],
-            &mut conn,
-            &mut prefix_pending
-        ),
+        !session.route_plain(&[crate::mux::attach::C_B, b'R'], &mut conn,),
         "the resize chord re-enters the mode"
     );
     session.resize_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
@@ -524,13 +515,8 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
     session.frame(&mut sink); // the settled prior frame
 
     let mut conn = conn;
-    let mut prefix_pending = false;
     assert!(
-        !session.route_plain(
-            &[crate::mux::attach::C_B, b'?'],
-            &mut conn,
-            &mut prefix_pending
-        ),
+        !session.route_plain(&[crate::mux::attach::C_B, b'?'], &mut conn,),
         "the help chord opens the panel"
     );
     assert!(session.is_help());
@@ -611,13 +597,8 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     session.status.session_id = Some("$0".to_string());
     session.window = "@0".to_string();
 
-    let mut prefix_pending = false;
     assert!(
-        !session.route_plain(
-            &[crate::mux::attach::C_B, b'w'],
-            &mut conn,
-            &mut prefix_pending
-        ),
+        !session.route_plain(&[crate::mux::attach::C_B, b'w'], &mut conn,),
         "the picker chord opens the modal"
     );
     settle(&mut session, &mut conn);
@@ -652,11 +633,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     assert_eq!(session.window, "@1", "the view re-seeded onto @1");
 
     // Re-open and dismiss with q: no select goes out.
-    assert!(!session.route_plain(
-        &[crate::mux::attach::C_B, b'w'],
-        &mut conn,
-        &mut prefix_pending
-    ));
+    assert!(!session.route_plain(&[crate::mux::attach::C_B, b'w'], &mut conn,));
     settle(&mut session, &mut conn);
     assert!(session.is_picker());
     assert!(!session.picker_byte(&mut conn, b'q'));
@@ -866,6 +843,72 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
         .flatten()
         .expect("placement");
     assert_eq!(last.2, CursorStyle::BlinkingBar, "drag end restores");
+}
+
+/// The `drag-cursor-shape` pointer half: a no-button hover over a
+/// divider wants the axis-correct resize POINTER (OSC 22
+/// `col-resize`), a hover off it or the option off restores `text`,
+/// and a live drag keeps the shape wherever the pointer wanders.
+#[test]
+fn drag_cursor_shape_option_shapes_the_pointer() {
+    let (rx, mut conn) = recording_conn("ptr-shape");
+    let mut session = WindowSession::new(80, 24);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    drained(&rx);
+    session.cursor.drag_shape = true;
+    // A no-button hover ON the divider column (content x=39 → host col
+    // 40; cb 35 = motion with no button).
+    session.route_mouse(&mut conn, sgr(35, 40, 5, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;col-resize"),
+        "the hover shapes the pointer: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    // The same hover off the divider restores the terminal's pointer.
+    session.route_mouse(&mut conn, sgr(35, 10, 5, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;text"),
+        "leaving the divider restores: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    // A live drag keeps its divider's shape (cb 32 = motion with
+    // button 0 held, pointer over the left pane's content).
+    session.drag = Some(DragState::Active {
+        divider: DividerHit {
+            vertical: true,
+            a: 1,
+            b: 2,
+        },
+        x: 39,
+        y: 0,
+        applied: 0,
+        pending: 0,
+        last_sent: None,
+    });
+    session.route_mouse(&mut conn, sgr(32, 10, 5, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;col-resize"),
+        "the drag keeps the shape: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    // Option off: the hover wants nothing (and the trailing restore
+    // lands).
+    session.drag = None;
+    session.cursor.drag_shape = false;
+    session.route_mouse(&mut conn, sgr(35, 40, 5, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    let raw = String::from_utf8_lossy(&sink.raw).to_string();
+    assert!(!raw.contains("]22;col-resize"), "off shapes nothing: {raw}");
+    assert!(raw.contains("]22;text"), "off restores: {raw}");
 }
 
 /// Sidebar paint geometry: with the panel up, the re-divided
@@ -1656,8 +1699,7 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     );
     // Tab three times: the notify section (sidebar, borders, general
     // first), its single row showing the test session's delivery.
-    let mut prefix_pending = false;
-    session.route_stdin_bytes(&mut conn, b"\t\t\t", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\t\t\t");
     let Modal::Settings(state) = &session.modal else {
         panic!("still open");
     };
@@ -1670,7 +1712,7 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     assert!(row.starts_with(" \u{25B8} delivery"), "{row}");
     assert!(row.ends_with("off"), "{row}");
     // Enter: cycles to the next delivery (`inside`), written and reloaded.
-    session.route_stdin_bytes(&mut conn, b"\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.starts_with("# keep me\n"), "{written}");
@@ -1710,7 +1752,7 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     assert!(session.renderer.overlay.is_none());
     // Escape closes too.
     click_menu_row_after_reopen(&mut session, &mut conn);
-    session.route_stdin_bytes(&mut conn, b"q", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"q");
     assert!(matches!(session.modal, Modal::None));
     assert!(session.renderer.overlay.is_none());
 }
@@ -1725,24 +1767,23 @@ fn settings_rows_write_and_apply_live() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path.clone());
-    let mut prefix_pending = false;
     session.enter_settings();
     // The borders tab (one Tab), `pane boxes` (row 1): Enter flips it on.
-    session.route_stdin_bytes(&mut conn, b"\tj\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\tj\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("pane-borders = true"), "{written}");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert!(session.render_opts.pane_borders, "applied live");
     // Enter again flips it back off.
-    session.route_stdin_bytes(&mut conn, b"\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("pane-borders = false"), "{written}");
     assert!(!session.render_opts.pane_borders);
     // The sidebar tab (one back-Tab), `agent lines` (row 2): cycles
     // default → compact and writes the nested token arrays.
-    session.route_stdin_bytes(&mut conn, b"hjj\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"hjj\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -1767,17 +1808,16 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path.clone());
-    let mut prefix_pending = false;
     session.enter_settings();
     // General tab (two Tabs), `resize step` (row 3): Enter opens the
     // prompt seeded with 1.
-    session.route_stdin_bytes(&mut conn, b"\t\tjjj\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\t\tjjj\r");
     let Modal::Prompt(prompt) = &session.modal else {
         panic!("prompt opened: {:?}", session.modal)
     };
     assert_eq!(prompt.text, "1");
     // A bad number flashes and keeps the prompt up (nothing written).
-    session.route_stdin_bytes(&mut conn, b"\x03zzz\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x03zzz\r");
     assert!(
         matches!(session.modal, Modal::Prompt(_)),
         "invalid value keeps the prompt: {:?}",
@@ -1787,7 +1827,7 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
         .unwrap()
         .contains("resize-step"));
     // Clear, type 3, commit: written, reloaded, applied, dialog back.
-    session.route_stdin_bytes(&mut conn, b"\x033\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x033\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("resize-step = 3"), "{written}");
@@ -1799,12 +1839,12 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     );
     // The borders tab (one back-Tab from general), `focus color` (row
     // 4): the empty seed means the built-in; a hex commits and applies.
-    session.route_stdin_bytes(&mut conn, b"hjjjj\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"hjjjj\r");
     let Modal::Prompt(prompt) = &session.modal else {
         panic!("hex prompt opened: {:?}", session.modal)
     };
     assert_eq!(prompt.text, "", "an unset hex seeds empty");
-    session.route_stdin_bytes(&mut conn, b"#ff0000\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"#ff0000\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -1818,20 +1858,20 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     );
     // The keys tab (four more Tabs from borders), `prefix` (row 0): a
     // chord that does not parse is refused; a good one rebinds.
-    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\r");
     let Modal::Prompt(prompt) = &session.modal else {
         panic!("chord prompt opened: {:?}", session.modal)
     };
     assert_eq!(prompt.text, "C-b");
-    session.route_stdin_bytes(&mut conn, b"\x03zz\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x03zz\r");
     assert!(matches!(session.modal, Modal::Prompt(_)), "refused");
-    session.route_stdin_bytes(&mut conn, b"\x03C-a\r", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x03C-a\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("prefix = \"C-a\""), "{written}");
     assert_eq!(session.prefix, 0x01, "rebound live");
     // Escape from a prompt returns to the dialog, not out of it.
-    session.route_stdin_bytes(&mut conn, b"\r\x1b", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\r\x1b");
     assert!(matches!(session.modal, Modal::Settings(_)));
 }
 
@@ -1845,10 +1885,9 @@ fn settings_keys_section_scrolls_to_every_row() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path.clone());
-    let mut prefix_pending = false;
     session.enter_settings();
     // Five Tabs: the keys section (sidebar borders general notify keys).
-    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -1856,7 +1895,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection.
-    session.route_stdin_bytes(&mut conn, &[b'j'; 21][..], &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, &[b'j'; 21][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -1869,7 +1908,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("status bar"), "{last_row}");
     assert!(last_row.trim_end().ends_with("S"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 21][..], &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 21][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2030,10 +2069,9 @@ fn paste_session(
 fn split_mouse_report_across_pump_ticks_routes_once() {
     let (rx, mut conn, mut session) = paste_session("split-mouse");
     session.renderer.focus(2);
-    let mut prefix_pending = false;
-    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[<0;10;", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[<0;10;"));
     settle(&mut session, &mut conn);
-    assert!(!session.route_stdin_bytes(&mut conn, b"5M", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"5M"));
     settle(&mut session, &mut conn);
     assert_eq!(
         session.renderer.focused(),
@@ -2062,13 +2100,12 @@ fn split_mouse_report_across_pump_ticks_routes_once() {
 fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
     let (rx, mut conn, mut session) = paste_session("split-paste");
     session.renderer.feed_output(1, b"\x1b[?2004h");
-    let mut prefix_pending = false;
-    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[200~ab", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x1b[200~ab"));
     settle(&mut session, &mut conn);
-    assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~", &mut prefix_pending));
+    assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~"));
     settle(&mut session, &mut conn);
     assert!(
-        !prefix_pending,
+        !session.prefix_pending,
         "a pasted prefix byte never arms the prefix"
     );
     let lines = drained(&rx);
@@ -2088,12 +2125,7 @@ fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
 #[test]
 fn paste_into_a_plain_pane_forwards_the_body_bare() {
     let (rx, mut conn, mut session) = paste_session("plain-paste");
-    let mut prefix_pending = false;
-    session.route_stdin_bytes(
-        &mut conn,
-        b"\x1b[200~ab\x02xcd\x1b[201~",
-        &mut prefix_pending,
-    );
+    session.route_stdin_bytes(&mut conn, b"\x1b[200~ab\x02xcd\x1b[201~");
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"ab\x02xcd")]);
 }
@@ -2103,13 +2135,12 @@ fn paste_into_a_plain_pane_forwards_the_body_bare() {
 #[test]
 fn paste_cancels_a_pending_prefix() {
     let (rx, mut conn, mut session) = paste_session("paste-prefix");
-    let mut prefix_pending = false;
-    session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B], &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B]);
     settle(&mut session, &mut conn);
-    assert!(prefix_pending);
-    session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~", &mut prefix_pending);
+    assert!(session.prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~");
     settle(&mut session, &mut conn);
-    assert!(!prefix_pending);
+    assert!(!session.prefix_pending);
     let lines = drained(&rx);
     assert_eq!(lines, vec![hex_wire("%1", b"xd")], "{lines:?}");
 }
@@ -2121,12 +2152,7 @@ fn paste_cancels_a_pending_prefix() {
 fn embedded_paste_terminator_is_stripped() {
     let (rx, mut conn, mut session) = paste_session("paste-strip");
     session.renderer.feed_output(1, b"\x1b[?2004h");
-    let mut prefix_pending = false;
-    session.route_paste(
-        &mut conn,
-        b"a\x1b[201~b\x1b[201\x1b[201~~c",
-        &mut prefix_pending,
-    );
+    session.route_paste(&mut conn, b"a\x1b[201~b\x1b[201\x1b[201~~c");
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"\x1b[200~abc\x1b[201~")]);
 }
@@ -2690,12 +2716,7 @@ fn slow_switch_returns_at_once_and_keeps_replies_aligned() {
     let (rx, mut conn, mut session) = two_pane_session("int-switch", script);
 
     let started = std::time::Instant::now();
-    let mut prefix_pending = false;
-    session.route_plain(
-        &[crate::mux::attach::C_B, b')'],
-        &mut conn,
-        &mut prefix_pending,
-    );
+    session.route_plain(&[crate::mux::attach::C_B, b')'], &mut conn);
     let took = started.elapsed();
     assert!(
         took < std::time::Duration::from_millis(200),
@@ -3503,8 +3524,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
     session.route_mouse(&mut conn, sgr(0, 3, 3, false));
     let click = started.elapsed();
     let started = std::time::Instant::now();
-    let mut prefix_pending = false;
-    session.route_stdin_bytes(&mut conn, b"abc", &mut prefix_pending);
+    session.route_stdin_bytes(&mut conn, b"abc");
     let typed = started.elapsed();
     let limit = std::time::Duration::from_millis(200);
     assert!(click < limit, "the click blocked the pump for {click:?}");

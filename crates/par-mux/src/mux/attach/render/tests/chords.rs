@@ -14,12 +14,7 @@ fn switch_session_with_an_empty_roster_is_a_no_op() {
     session.window = "@0".to_string();
     session.status.session_id = Some("$0".to_string());
     drained(&rx);
-    let mut prefix_pending = false;
-    assert!(!session.route_plain(
-        &[crate::mux::attach::C_B, b')'],
-        &mut conn,
-        &mut prefix_pending
-    ));
+    assert!(!session.route_plain(&[crate::mux::attach::C_B, b')'], &mut conn,));
     assert_eq!(session.window, "@0", "the view stays put");
     let lines = drained(&rx);
     assert!(
@@ -998,8 +993,7 @@ fn menu_rows_open_their_prompts_and_q_or_escape_close() {
     session.menu_key(&TermKeyEvent::functional(TermKey::Escape, 0));
     assert!(session.menu().is_none());
     session.open_menu(MenuTarget::Commands);
-    let mut prefix_pending = false;
-    session.route_plain(b"aq", &mut conn, &mut prefix_pending);
+    session.route_plain(b"aq", &mut conn);
     assert!(session.menu().is_none(), "q in a plain run closes the menu");
     assert!(drained(&rx).is_empty(), "nothing leaked into the pane");
 }
@@ -1146,29 +1140,24 @@ fn cycle_chord_walks_the_layout_and_wraps() {
 #[test]
 fn plain_router_forwards_literals_and_consumes_unbound_keys() {
     let (rx, mut conn, mut session) = two_pane_session("plain", FakeScript::default());
-    let mut pending = false;
     assert!(!session.route_plain(
         &[crate::mux::attach::C_B, crate::mux::attach::C_B, b'a'],
         &mut conn,
-        &mut pending
     ));
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["send-keys -t %1 -H 02 61".to_string()]);
-    assert!(!session.route_plain(&[crate::mux::attach::C_B, b'Q'], &mut conn, &mut pending));
+    assert!(!session.route_plain(&[crate::mux::attach::C_B, b'Q'], &mut conn));
     settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "an unbound chord key is consumed");
     // A prefix at the END of one run completes in the next run.
-    assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn, &mut pending));
+    assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn));
     settle(&mut session, &mut conn);
-    assert!(pending);
-    assert!(
-        session.route_plain(b"d", &mut conn, &mut pending),
-        "d detaches"
-    );
+    assert!(session.prefix_pending);
+    assert!(session.route_plain(b"d", &mut conn), "d detaches");
     settle(&mut session, &mut conn);
 
     session.modal = Modal::Resize;
-    assert!(!session.route_plain(b"xyz", &mut conn, &mut pending));
+    assert!(!session.route_plain(b"xyz", &mut conn));
     settle(&mut session, &mut conn);
     assert!(!session.is_resize(), "a typed run leaves resize mode");
     assert!(drained(&rx).is_empty(), "and nothing leaks into the pane");
@@ -1296,11 +1285,10 @@ fn scroll_chord_needs_history_and_owns_typed_bytes() {
     }
     chord(&mut session, &mut conn, b'[');
     assert!(session.is_scroll());
-    let mut pending = false;
-    session.route_plain(b"abc", &mut conn, &mut pending);
+    session.route_plain(b"abc", &mut conn);
     assert!(session.is_scroll());
     assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
-    session.route_plain(b"q", &mut conn, &mut pending);
+    session.route_plain(b"q", &mut conn);
     assert!(!session.is_scroll());
 }
 
@@ -2400,8 +2388,17 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
 fn flash_survives_a_fast_pump_and_clears_after_its_deadline() {
     use std::time::{Duration, Instant};
     let mut session = WindowSession::new(80, 25);
-    session.chrome.flash("config reloaded".to_string());
     let start = Instant::now();
+    session.chrome.flash("config reloaded".to_string());
+    // The arming tick paints the row: flash sites do not repaint it
+    // themselves, and a raised flash used to wait for an unrelated
+    // repaint (often none before the deadline) — the reload chord's
+    // no-indication report.
+    session.tick_flash(start);
+    assert!(
+        status_row_text(&mut session).contains("config reloaded"),
+        "the raised flash paints on its arming tick"
+    );
     for _ in 0..200 {
         session.tick_flash(start);
     }
@@ -2429,4 +2426,54 @@ fn flash_survives_a_fast_pump_and_clears_after_its_deadline() {
         session.chrome.flash_text().is_some(),
         "a new flash survives its first tick"
     );
+}
+
+/// The prefix chord is visible: sending the prefix paints the row's
+/// `prefix` cue while the second key is pending, and completing the
+/// chord clears it (tmux's status-line prefix indication).
+#[test]
+fn prefix_indicator_paints_the_row_and_clears_on_the_next_key() {
+    let (rx, mut conn) = recording_conn("prefix-cue");
+    let mut session = WindowSession::new(80, 25);
+    drained(&rx);
+    assert!(
+        !session.route_plain(&[crate::mux::attach::C_B], &mut conn),
+        "the prefix alone never detaches"
+    );
+    assert!(session.prefix_pending, "the chord is armed");
+    assert!(
+        status_row_text(&mut session).contains("prefix"),
+        "the armed prefix paints the row cue"
+    );
+    assert!(!session.route_plain(b"Q", &mut conn));
+    assert!(
+        !session.prefix_pending,
+        "the unbound key consumed the chord"
+    );
+    assert!(
+        !status_row_text(&mut session).contains("prefix"),
+        "the completed chord clears the cue"
+    );
+}
+
+/// The reload chord's outcome paints on the row the tick it is raised:
+/// `config reloaded` (or the failure) reaches the row through the
+/// arming tick, not an unrelated repaint.
+#[test]
+fn reload_chord_flash_paints_on_the_arming_tick() {
+    let (rx, mut conn) = recording_conn("reload-flash");
+    let mut session = WindowSession::new(80, 25);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path);
+    drained(&rx);
+    let reload = session.reload_key;
+    assert!(!session.route_plain(&[crate::mux::attach::C_B, reload], &mut conn));
+    session.tick_flash(std::time::Instant::now());
+    assert!(
+        status_row_text(&mut session).contains("config reloaded"),
+        "the reload's flash paints on the row"
+    );
+    assert_eq!(drained(&rx), vec!["reload-config".to_string()]);
 }

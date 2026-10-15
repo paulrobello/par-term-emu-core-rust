@@ -125,15 +125,14 @@ impl WindowSession {
         &mut self,
         bytes: &[u8],
         conn: &mut crate::mux::attach::conn::AttachConn,
-        prefix_pending: &mut bool,
     ) -> bool {
         if self.feed_modal_run(bytes, conn) {
             return false;
         }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
         for &byte in bytes {
-            if *prefix_pending {
-                *prefix_pending = false;
+            if self.prefix_pending {
+                self.arm_prefix(false);
                 match self.prefix_chord(byte) {
                     PrefixChord::Reload => self.reload_config(conn),
                     PrefixChord::Management(key) => self.management_chord(key, conn),
@@ -156,7 +155,7 @@ impl WindowSession {
                     PrefixChord::Unbound => {}
                 }
             } else if byte == self.prefix {
-                *prefix_pending = true;
+                self.arm_prefix(true);
             } else if matches!(self.modal, Modal::Scroll) {
                 // Scroll mode's plain keys: q and Enter exit (the
                 // viewport is a modal view — keys do not leak into the
@@ -176,6 +175,17 @@ impl WindowSession {
             self.forward_keys(conn, self.focused_pane(), &to_send);
         }
         false
+    }
+
+    /// Flip the prefix-armed state and repaint the status row on a
+    /// change: the row's `prefix` cue is the indication the chord is
+    /// up (tmux's status-line prefix indication).
+    pub(super) fn arm_prefix(&mut self, on: bool) {
+        if self.prefix_pending == on {
+            return;
+        }
+        self.prefix_pending = on;
+        self.draw_status_row();
     }
 
     /// Forward input bytes to `pane` without waiting for the daemon. Bytes
@@ -223,9 +233,8 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         body: &[u8],
-        prefix_pending: &mut bool,
     ) {
-        *prefix_pending = false;
+        self.arm_prefix(false);
         if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Scroll) {
             return;
         }
@@ -352,10 +361,9 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
-        prefix_pending: &mut bool,
     ) {
-        if *prefix_pending {
-            *prefix_pending = false;
+        if self.prefix_pending {
+            self.arm_prefix(false);
             self.prefix_pane_arrow(conn, ev);
             return;
         }
@@ -497,6 +505,7 @@ impl WindowSession {
             "mouse cb={} col={} row={} release={}",
             mouse.cb, mouse.col, mouse.row, mouse.release
         ));
+        self.update_pointer(&mouse);
         match self.mouse_hit(&mouse) {
             Hit::Consumed => {}
             Hit::MenuRow(row) => self.menu_click(conn, row),
@@ -577,6 +586,44 @@ impl WindowSession {
                 }
             }
         }
+    }
+
+    /// The pointer-shape routing (config `drag-cursor-shape`): a live
+    /// divider drag or a hover report ON a divider wants the resize
+    /// shape — the OSC 22 the next frame writes; everything else
+    /// (option off, a modal up, the pointer elsewhere) restores the
+    /// terminal's own pointer. Runs before the hit dispatch: the shape
+    /// is the pointer's state, not the event's action.
+    fn update_pointer(&mut self, mouse: &SgrMouse) {
+        if !self.cursor.drag_shape || !matches!(self.modal, Modal::None) {
+            self.pointer.want(None);
+            return;
+        }
+        // A live drag keeps its divider's shape wherever the pointer
+        // wanders; a sidebar drag is not a pane divider.
+        let dragged = self.drag.as_ref().map(drag_pointer);
+        let want = match dragged {
+            Some(shape) => Some(shape),
+            None if self.sidebar_drag.is_none()
+                && mouse.is_motion()
+                && !mouse.release
+                && mouse.motion_button().is_none() =>
+            {
+                let x = mouse.col.saturating_sub(1);
+                let y = mouse.row.saturating_sub(1);
+                if y < self.geometry.strip_rows {
+                    None
+                } else {
+                    let (x, y) = self.geometry.host_to_content_clamped(x, y);
+                    self.renderer
+                        .divider_near(x, y, 0)
+                        .filter(|_| !self.renderer.label_cell_at(x, y))
+                        .map(|divider| divider_pointer(&divider))
+                }
+            }
+            None => None,
+        };
+        self.pointer.want(want);
     }
 
     /// What one host mouse report hits, in the router's precedence order:
@@ -944,5 +991,24 @@ impl WindowSession {
             String::from_utf8_lossy(&bytes)
         ));
         self.forward_keys(conn, format!("%{}", rect.pane), &bytes);
+    }
+}
+
+/// The pointer shape for a drag in flight — its divider's axis.
+fn drag_pointer(drag: &DragState) -> &'static str {
+    match drag {
+        DragState::Pending { divider, .. } | DragState::Active { divider, .. } => {
+            divider_pointer(divider)
+        }
+    }
+}
+
+/// A vertical divider column resizes left/right; a horizontal row
+/// up/down.
+fn divider_pointer(divider: &DividerHit) -> &'static str {
+    if divider.vertical {
+        super::pointer::RESIZE_COL
+    } else {
+        super::pointer::RESIZE_ROW
     }
 }

@@ -1770,8 +1770,7 @@ fn chord(
     conn: &mut crate::mux::attach::conn::AttachConn,
     key: u8,
 ) -> bool {
-    let mut prefix_pending = false;
-    let detached = session.route_plain(&[crate::mux::attach::C_B, key], conn, &mut prefix_pending);
+    let detached = session.route_plain(&[crate::mux::attach::C_B, key], conn);
     settle(session, conn);
     detached
 }
@@ -1785,8 +1784,7 @@ fn type_and_commit(
     session.prompt_mut().text.clear();
     let mut bytes = text.as_bytes().to_vec();
     bytes.push(b'\r');
-    let mut prefix_pending = false;
-    session.route_plain(&bytes, conn, &mut prefix_pending);
+    session.route_plain(&bytes, conn);
     settle(session, conn);
 }
 
@@ -1798,6 +1796,21 @@ fn sgr(cb: u8, col: u16, row: u16, release: bool) -> SgrMouse {
         row,
         release,
     }
+}
+
+/// The status row's painted text — the row buffer's diff cells joined
+/// in column order. Consumes the pending diff (the row-cue assertions
+/// never flush afterwards).
+fn status_row_text(session: &mut WindowSession) -> String {
+    let mut cells: Vec<(u16, String)> = session
+        .chrome
+        .status_row
+        .diff()
+        .into_iter()
+        .map(|(x, _, cell)| (x, cell.symbol().to_string()))
+        .collect();
+    cells.sort_by_key(|(x, _)| *x);
+    cells.into_iter().map(|(_, symbol)| symbol).collect()
 }
 
 fn rect(pane: u32, x: u16, y: u16, width: u16, height: u16) -> PaneRect {
