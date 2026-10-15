@@ -170,6 +170,13 @@ pub struct ThemeInfo {
 
 /// CPU statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -193,6 +200,13 @@ pub struct CpuStats {
 
 /// Memory statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -213,6 +227,13 @@ pub struct MemoryStats {
 
 /// Individual disk statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -237,6 +258,13 @@ pub struct DiskStats {
 
 /// Network interface statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -265,6 +293,13 @@ pub struct NetworkInterfaceStats {
 
 /// System load averages
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -728,26 +763,58 @@ pub enum ServerMessage {
             any(feature = "python", feature = "python-test"),
             feature = "streaming"
         ),
-        pydict(
-            to = "crate::streaming::py_convert::system_stats_to_py_dict",
-            from = "crate::streaming::py_convert::system_stats_from"
-        )
+        pydict(from = "crate::streaming::py_convert::system_stats_from")
     )]
     SystemStats {
         /// CPU statistics
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         cpu: Option<CpuStats>,
         /// Memory statistics
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         memory: Option<MemoryStats>,
         /// Disk statistics
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         disks: Vec<DiskStats>,
         /// Network interface statistics
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         networks: Vec<NetworkInterfaceStats>,
         /// System load averages
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         load_average: Option<LoadAverage>,
         /// Hostname
         #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,7 +1,7 @@
 //! Hand-written escape hatches for the `PyDictConvert` derive (ARC-003).
 //!
 //! The derive macro covers the uniform variant -> dict field mapping; the
-//! conversions with structure it cannot express (nested theme/stats dicts,
+//! conversions with structure it cannot express (the nested theme dict,
 //! constructor quirks that predate the derive) live here and are referenced
 //! from `#[pydict(...)]` attributes on the protocol enums.
 //!
@@ -118,94 +118,6 @@ pub fn mouse_event_type_from_py(value: Option<&Bound<'_, pyo3::types::PyAny>>) -
         .unwrap_or(MouseEventType::Press)
 }
 
-/// Whole-variant decode for `ServerMessage::SystemStats` (`#[pydict(to)]`).
-///
-/// Nested cpu/memory/disks/networks/load_average dicts; the corresponding
-/// keys are omitted (not `None`) when absent or empty, as before.
-// The `#[pydict(to)]` derive hook passes one argument per variant field.
-#[allow(clippy::too_many_arguments)]
-pub fn system_stats_to_py_dict<'py>(
-    py: Python<'py>,
-    cpu: &Option<super::protocol::CpuStats>,
-    memory: &Option<super::protocol::MemoryStats>,
-    disks: &Vec<super::protocol::DiskStats>,
-    networks: &Vec<super::protocol::NetworkInterfaceStats>,
-    load_average: &Option<super::protocol::LoadAverage>,
-    hostname: &Option<String>,
-    os_name: &Option<String>,
-    os_version: &Option<String>,
-    kernel_version: &Option<String>,
-    uptime_secs: &Option<u64>,
-    timestamp: &Option<u64>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("type", "system_stats")?;
-    if let Some(cpu) = cpu {
-        let cpu_dict = PyDict::new(py);
-        cpu_dict.set_item("overall_usage_percent", cpu.overall_usage_percent)?;
-        cpu_dict.set_item("physical_core_count", cpu.physical_core_count)?;
-        cpu_dict.set_item("per_core_usage_percent", &cpu.per_core_usage_percent)?;
-        cpu_dict.set_item("brand", &cpu.brand)?;
-        cpu_dict.set_item("frequency_mhz", cpu.frequency_mhz)?;
-        dict.set_item("cpu", cpu_dict)?;
-    }
-    if let Some(memory) = memory {
-        let mem_dict = PyDict::new(py);
-        mem_dict.set_item("total_bytes", memory.total_bytes)?;
-        mem_dict.set_item("used_bytes", memory.used_bytes)?;
-        mem_dict.set_item("available_bytes", memory.available_bytes)?;
-        mem_dict.set_item("swap_total_bytes", memory.swap_total_bytes)?;
-        mem_dict.set_item("swap_used_bytes", memory.swap_used_bytes)?;
-        dict.set_item("memory", mem_dict)?;
-    }
-    if !disks.is_empty() {
-        let disk_list = PyList::empty(py);
-        for d in disks {
-            let dd = PyDict::new(py);
-            dd.set_item("name", &d.name)?;
-            dd.set_item("mount_point", &d.mount_point)?;
-            dd.set_item("total_bytes", d.total_bytes)?;
-            dd.set_item("available_bytes", d.available_bytes)?;
-            dd.set_item("kind", &d.kind)?;
-            dd.set_item("file_system", &d.file_system)?;
-            dd.set_item("is_removable", d.is_removable)?;
-            disk_list.append(dd)?;
-        }
-        dict.set_item("disks", disk_list)?;
-    }
-    if !networks.is_empty() {
-        let net_list = PyList::empty(py);
-        for n in networks {
-            let nd = PyDict::new(py);
-            nd.set_item("name", &n.name)?;
-            nd.set_item("received_bytes", n.received_bytes)?;
-            nd.set_item("transmitted_bytes", n.transmitted_bytes)?;
-            nd.set_item("total_received_bytes", n.total_received_bytes)?;
-            nd.set_item("total_transmitted_bytes", n.total_transmitted_bytes)?;
-            nd.set_item("packets_received", n.packets_received)?;
-            nd.set_item("packets_transmitted", n.packets_transmitted)?;
-            nd.set_item("errors_received", n.errors_received)?;
-            nd.set_item("errors_transmitted", n.errors_transmitted)?;
-            net_list.append(nd)?;
-        }
-        dict.set_item("networks", net_list)?;
-    }
-    if let Some(la) = load_average {
-        let la_dict = PyDict::new(py);
-        la_dict.set_item("one_minute", la.one_minute)?;
-        la_dict.set_item("five_minutes", la.five_minutes)?;
-        la_dict.set_item("fifteen_minutes", la.fifteen_minutes)?;
-        dict.set_item("load_average", la_dict)?;
-    }
-    dict.set_item("hostname", hostname)?;
-    dict.set_item("os_name", os_name)?;
-    dict.set_item("os_version", os_version)?;
-    dict.set_item("kernel_version", kernel_version)?;
-    dict.set_item("uptime_secs", uptime_secs)?;
-    dict.set_item("timestamp", timestamp)?;
-    Ok(dict)
-}
-
 /// Whole-variant encode for `ServerMessage::SystemStats` (`#[pydict(from)]`).
 ///
 /// The Python encode API ignores all kwargs and emits the empty variant
@@ -308,4 +220,100 @@ pub fn agent_state_changed_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult
         agent: Default::default(),
         released: false,
     })
+}
+
+#[cfg(test)]
+mod system_stats_dict {
+    use super::super::protocol::*;
+    use pyo3::prelude::*;
+
+    fn populated() -> ServerMessage {
+        ServerMessage::system_stats(
+            Some(CpuStats {
+                overall_usage_percent: 12.5,
+                physical_core_count: 8,
+                per_core_usage_percent: vec![1.0, 2.0],
+                brand: Some("M".into()),
+                frequency_mhz: Some(3200),
+            }),
+            Some(MemoryStats {
+                total_bytes: 1,
+                used_bytes: 2,
+                available_bytes: 3,
+                swap_total_bytes: 4,
+                swap_used_bytes: 5,
+            }),
+            vec![DiskStats {
+                name: "d".into(),
+                mount_point: "/".into(),
+                total_bytes: 6,
+                available_bytes: 7,
+                kind: "SSD".into(),
+                file_system: "apfs".into(),
+                is_removable: true,
+            }],
+            vec![NetworkInterfaceStats {
+                name: "en0".into(),
+                received_bytes: 1,
+                transmitted_bytes: 2,
+                total_received_bytes: 3,
+                total_transmitted_bytes: 4,
+                packets_received: 5,
+                packets_transmitted: 6,
+                errors_received: 7,
+                errors_transmitted: 8,
+            }],
+            Some(LoadAverage {
+                one_minute: 1.0,
+                five_minutes: 2.0,
+                fifteen_minutes: 3.0,
+            }),
+            Some("h".into()),
+            Some("os".into()),
+            Some("1".into()),
+            Some("k".into()),
+            Some(9),
+            Some(10),
+        )
+    }
+
+    fn partial() -> ServerMessage {
+        ServerMessage::system_stats(
+            None,
+            Some(MemoryStats {
+                total_bytes: 1,
+                used_bytes: 2,
+                available_bytes: 3,
+                swap_total_bytes: 4,
+                swap_used_bytes: 5,
+            }),
+            vec![],
+            vec![],
+            None,
+            Some("h".into()),
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        )
+    }
+
+    /// The derived `#[pydict(nested)]` dict shape, pinned byte-for-byte to
+    /// the hand-rolled converter it replaced (ARC-006): nested dicts in
+    /// struct field order, and `cpu`/`memory`/`disks`/`networks`/
+    /// `load_average` omitted (not `None`) when absent or empty.
+    #[test]
+    fn derived_dict_matches_pinned_shape() {
+        let expected = [
+            "{'type': 'system_stats', 'cpu': {'overall_usage_percent': 12.5, 'physical_core_count': 8, 'per_core_usage_percent': [1.0, 2.0], 'brand': 'M', 'frequency_mhz': 3200}, 'memory': {'total_bytes': 1, 'used_bytes': 2, 'available_bytes': 3, 'swap_total_bytes': 4, 'swap_used_bytes': 5}, 'disks': [{'name': 'd', 'mount_point': '/', 'total_bytes': 6, 'available_bytes': 7, 'kind': 'SSD', 'file_system': 'apfs', 'is_removable': True}], 'networks': [{'name': 'en0', 'received_bytes': 1, 'transmitted_bytes': 2, 'total_received_bytes': 3, 'total_transmitted_bytes': 4, 'packets_received': 5, 'packets_transmitted': 6, 'errors_received': 7, 'errors_transmitted': 8}], 'load_average': {'one_minute': 1.0, 'five_minutes': 2.0, 'fifteen_minutes': 3.0}, 'hostname': 'h', 'os_name': 'os', 'os_version': '1', 'kernel_version': 'k', 'uptime_secs': 9, 'timestamp': 10}",
+            "{'type': 'system_stats', 'memory': {'total_bytes': 1, 'used_bytes': 2, 'available_bytes': 3, 'swap_total_bytes': 4, 'swap_used_bytes': 5}, 'hostname': 'h', 'os_name': None, 'os_version': None, 'kernel_version': None, 'uptime_secs': None, 'timestamp': 10}",
+        ];
+        Python::attach(|py| {
+            for (msg, want) in [populated(), partial()].into_iter().zip(expected) {
+                let got = msg.to_py_dict(py).unwrap().repr().unwrap().to_string();
+                assert_eq!(got, want);
+            }
+        });
+    }
 }
