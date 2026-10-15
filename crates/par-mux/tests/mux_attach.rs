@@ -6047,6 +6047,88 @@ fn render_mode_ctrl_d_on_the_workspaces_last_pane_keeps_the_client() {
     a.killer.kill().ok();
 }
 
+/// Card 01a13d03, the workspace rung of the landing walk: an external
+/// `kill-workspace` of the SHOWN workspace leaves another workspace, so the
+/// render client lands on the daemon's active workspace's window and
+/// repaints it instead of ending (the cached workspace is gone, so the walk
+/// falls through to the daemon's active one).
+#[cfg(unix)]
+#[test]
+fn render_mode_kill_of_the_shown_workspace_lands_on_the_surviving_one() {
+    let fixture = MuxFixture::new("killshownws");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    client.send("new-session -s att").expect("new-session");
+    let shown_pane = session_first_pane(&mut client, "$0");
+    let shown_ws = client
+        .send("list-workspaces")
+        .expect("list-workspaces")
+        .first()
+        .and_then(|l| l.split(':').next())
+        .expect("the first workspace")
+        .to_string();
+    // A second workspace (with its own first session), then select the
+    // first again so the client attaches to it.
+    let other_ws = client
+        .send("new-workspace -n other")
+        .expect("new-workspace")
+        .first()
+        .expect("workspace id")
+        .trim()
+        .to_string();
+    let other_session = client
+        .send(&format!("list-sessions -t {other_ws}"))
+        .expect("list-sessions")
+        .iter()
+        .find_map(|l| {
+            l.rfind('$')
+                .map(|i| l[i..].split(':').next().unwrap_or("").to_string())
+        })
+        .expect("the other workspace's session");
+    let survivor = session_first_pane(&mut client, &other_session);
+    client
+        .send(&format!("select-workspace -t {shown_ws}"))
+        .expect("select-workspace");
+    // settle: the fresh panes' shells start before the client attaches
+    std::thread::sleep(Duration::from_millis(500));
+
+    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", &shown_pane]);
+    expect_output(
+        &a,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client enabled host mouse reporting",
+    );
+    // output settle: collect the trailing redraw burst before draining
+    std::thread::sleep(Duration::from_millis(800));
+    while a.output_rx.try_recv().is_ok() {}
+
+    let killed = client
+        .send_checked(&format!("kill-workspace -t {shown_ws}"))
+        .expect("kill-workspace");
+    assert!(killed.ok, "kill-workspace succeeds: {:?}", killed.body);
+
+    // negative check: nothing positive to wait on, so the window is fixed
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        child_exit(&mut a, Duration::from_millis(200)),
+        None,
+        "the client must land on the surviving workspace, not end. stderr: {}",
+        a_err.lock().unwrap()
+    );
+    echo_marker(&mut client, &survivor, "LANDED-WORKSPACE");
+    let mut all = Vec::new();
+    let shown = screen_until(&a, &mut all, Duration::from_secs(10), |s| {
+        s.contains("LANDED-WORKSPACE")
+    });
+    assert!(
+        shown.contains("LANDED-WORKSPACE"),
+        "the client must repaint the surviving workspace's window:\n{shown}"
+    );
+    a.killer.kill().ok();
+}
+
 /// Card 01a13d03, the all-gone boundary: an explicit `kill-workspace` of
 /// the daemon's only workspace leaves nothing to land on, so the render
 /// client ends cleanly. It must end well inside the daemon's 5 s
