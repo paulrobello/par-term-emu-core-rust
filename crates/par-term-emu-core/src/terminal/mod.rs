@@ -530,7 +530,7 @@ impl Default for HyperlinkState {
     }
 }
 
-/// OSC 52 clipboard core: current content, read-permission flag, per-slot
+/// OSC 52 clipboard core: current content, read/write-permission flags, per-slot
 /// history, and per-slot size cap.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001). Distinct from the
@@ -540,6 +540,8 @@ pub(crate) struct ClipboardState {
     pub(crate) clipboard_content: Option<String>,
     /// Allow clipboard read operations (security flag for OSC 52 queries)
     pub(crate) allow_clipboard_read: bool,
+    /// Allow clipboard write operations (security flag for OSC 52 writes)
+    pub(crate) allow_clipboard_write: bool,
     /// Clipboard history (multiple slots)
     pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     /// Maximum clipboard history entries per slot
@@ -551,6 +553,7 @@ impl Default for ClipboardState {
         Self {
             clipboard_content: None,
             allow_clipboard_read: false,
+            allow_clipboard_write: true,
             clipboard_history: HashMap::new(),
             max_clipboard_history: 10,
         }
@@ -2328,6 +2331,20 @@ impl Terminal {
         self.clipboard_state.allow_clipboard_read = allow;
     }
 
+    /// Check if clipboard write operations are allowed (security flag for OSC 52 writes)
+    pub fn allow_clipboard_write(&self) -> bool {
+        self.clipboard_state.allow_clipboard_write
+    }
+
+    /// Set whether clipboard write operations are allowed (security flag for OSC 52 writes)
+    ///
+    /// When enabled (default), OSC 52 writes (ESC ] 52 ; c ; <base64> ST) store the
+    /// decoded payload as the terminal clipboard content. When disabled, they are
+    /// silently ignored, so untrusted output cannot place text on the clipboard.
+    pub fn set_allow_clipboard_write(&mut self, allow: bool) {
+        self.clipboard_state.allow_clipboard_write = allow;
+    }
+
     /// Get default foreground color (OSC 10)
     /// Get current working directory from shell integration (OSC 7)
     ///
@@ -3151,6 +3168,7 @@ impl Terminal {
 
         // Clipboard policy and caps survive; content and history reset.
         fresh.clipboard_state.allow_clipboard_read = self.clipboard_state.allow_clipboard_read;
+        fresh.clipboard_state.allow_clipboard_write = self.clipboard_state.allow_clipboard_write;
         fresh.clipboard_state.max_clipboard_history = self.clipboard_state.max_clipboard_history;
         fresh.clipboard_sync.max_history = self.clipboard_sync.max_history;
         fresh.clipboard_sync.max_events = self.clipboard_sync.max_events;

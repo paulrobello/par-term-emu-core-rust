@@ -225,6 +225,25 @@ class TestFeatureIntegration:
         responses = term.drain_responses()
         assert len(responses) > 0
 
+    def test_osc52_clipboard_write_gate(self):
+        """OSC 52 writes honor allow_clipboard_write (SEC-003)."""
+        import base64
+
+        term = Terminal(80, 24)
+        assert term.allow_clipboard_write()
+
+        term.set_clipboard("Existing")
+        term.set_allow_clipboard_write(False)
+        assert not term.allow_clipboard_write()
+
+        encoded = base64.b64encode(b"Injected").decode()
+        term.process_str(f"\x1b]52;c;{encoded}\x1b\\")
+        assert term.clipboard() == "Existing"
+
+        term.set_allow_clipboard_write(True)
+        term.process_str(f"\x1b]52;c;{encoded}\x1b\\")
+        assert term.clipboard() == "Injected"
+
     def test_color_queries(self):
         """Test OSC 10/11/12 color queries."""
         term = Terminal(80, 24)

@@ -266,6 +266,8 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 - `get_clipboard_from_slot(slot: str | None = None) -> str | None`: Get clipboard content from specific slot
 - `allow_clipboard_read() -> bool`: Check if clipboard read is allowed
 - `set_allow_clipboard_read(allow: bool)`: Set clipboard read permission (security flag)
+- `allow_clipboard_write() -> bool`: Check if OSC 52 clipboard writes are allowed (default `True`)
+- `set_allow_clipboard_write(allow: bool)`: Set clipboard write permission (security flag); `False` makes OSC 52 writes a no-op so untrusted output cannot set the clipboard. Survives RIS
 - `set_max_clipboard_sync_events(max: int)`: Limit clipboard event history
 - `get_max_clipboard_sync_events() -> int`: Get clipboard event limit
 - `set_max_clipboard_event_bytes(max_bytes: int)`: Truncate large clipboard payloads

@@ -1311,6 +1311,16 @@ class PtyTerminal:
         Returns:
             bool: True if applications may read the clipboard via OSC 52
         """
+    def allow_clipboard_write(self) -> bool:
+        """Whether OSC 52 clipboard writes are allowed
+
+        Returns:
+            bool: True if applications may set the clipboard via OSC 52 (default)
+
+        Example:
+            >>> term.allow_clipboard_write()
+            True
+        """
     def answerback_string(self) -> Any:
         """Get the configured answerback string (ENQ response)
 
@@ -2489,6 +2499,25 @@ class PtyTerminal:
 
         Args:
             allow: True to allow clipboard read, False to block (default)
+        """
+    def set_allow_clipboard_write(self, allow: Any) -> Any:
+        """Set whether clipboard write operations are allowed
+
+        When enabled (default), OSC 52 writes store their decoded payload as the
+        terminal clipboard content. When disabled, OSC 52 writes are silently
+        ignored, so untrusted terminal output cannot place text on the clipboard.
+        Survives RIS (ESC c) like the other embedder security flags.
+
+        Args:
+            allow: True to allow clipboard writes (default), False to block them
+
+        Returns:
+            None
+
+        Example:
+            >>> term.set_allow_clipboard_write(False)
+            >>> term.allow_clipboard_write()
+            False
         """
     def set_allow_file_media(self, mode: Any) -> Any:
         """Control whether Kitty graphics may load image payloads from
@@ -4157,6 +4186,16 @@ class Terminal:
 
         Returns:
             True if OSC 52 queries (ESC ] 52 ; c ; ? ST) are allowed
+        """
+    def allow_clipboard_write(self) -> Any:
+        """Check if clipboard write operations are allowed
+
+        Returns:
+            True if OSC 52 writes (ESC ] 52 ; c ; <base64> ST) are stored (default)
+
+        Example:
+            >>> term.allow_clipboard_write()
+            True
         """
     def answerback_string(self) -> Any:
         """Get the configured answerback string (ENQ response)
@@ -7612,6 +7651,25 @@ class Terminal:
 
         Args:
             allow: True to allow clipboard read, False to block (default)
+        """
+    def set_allow_clipboard_write(self, allow: Any) -> Any:
+        """Set whether clipboard write operations are allowed
+
+        When enabled (default), OSC 52 writes store their decoded payload as the
+        terminal clipboard content. When disabled, OSC 52 writes are silently
+        ignored, so untrusted terminal output cannot place text on the clipboard.
+        Survives RIS (ESC c) like the other embedder security flags.
+
+        Args:
+            allow: True to allow clipboard writes (default), False to block them
+
+        Returns:
+            None
+
+        Example:
+            >>> term.set_allow_clipboard_write(False)
+            >>> term.allow_clipboard_write()
+            False
         """
     def set_allow_file_media(self, mode: Any) -> Any:
         """Control whether Kitty graphics may load image payloads from

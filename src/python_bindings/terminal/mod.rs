@@ -393,6 +393,20 @@ impl PyTerminal {
 
     // set_allow_clipboard_read: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
+    /// Check if clipboard write operations are allowed
+    ///
+    /// Returns:
+    ///     True if OSC 52 writes (ESC ] 52 ; c ; <base64> ST) are stored (default)
+    ///
+    /// Example:
+    ///     >>> term.allow_clipboard_write()
+    ///     True
+    fn allow_clipboard_write(&self) -> PyResult<bool> {
+        Ok(self.inner.allow_clipboard_write())
+    }
+
+    // set_allow_clipboard_write: provided by impl_terminal_state_setters! (SEC-003)
+
     // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // set_default_fg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
