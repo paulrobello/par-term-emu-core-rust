@@ -263,6 +263,7 @@ Also update:
 - When bumping project version make sure CHANGELOG.md is updated
 - Note breaking changes in changelog and README "What's New" sections
 - Always run `make web-build-static` after updating the web terminal frontend
+- **Every TUI-related mux setting ships in the settings dialog**: any `[client]` config.toml setting that affects the attach TUI must be editable in the sidebar menu → settings dialog (`crates/par-mux/src/mux/attach/render/modal_settings.rs`). Adding or changing such a setting without exposing it there is incomplete work.
 
 ### Version and Python Binding Sync (CRITICAL)
 
