@@ -1,6 +1,6 @@
 [package]
 name = "par-term-emu-derive"
-version = "0.47.0"
+version = "0.48.0"
 edition = "2021"
 description = "Proc-macro helpers for par-term-emu-core-rust: Python bindings and streaming protobuf conversions"
 license = "MIT"
