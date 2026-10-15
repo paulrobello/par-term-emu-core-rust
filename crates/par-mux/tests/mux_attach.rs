@@ -6822,10 +6822,16 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         let capture = client
             .send(&format!("capture-pane -t {pane} -e"))
             .expect("capture");
-        // The render client paints per-cell (CUP + SGR + glyph), so the
-        // needle never appears contiguous in the raw stream — search the
-        // CSI-stripped text.
-        if anchor_done(&capture.join("\n")) && anchor_done(&plain_text(&all_host)) {
+        // The render client paints DIFFS (changed cells only), so the
+        // anchor line exists in the raw stream as fragments interleaved
+        // with other rows' repaints — flattening the raw bytes garbles
+        // the needle (a failing run showed 7 of 10 digits before -DONE).
+        // Search the reconstructed SCREEN instead: the final geometry is
+        // 100x30 and the client's refit to it is part of what this loop
+        // waits out; a not-yet-refit screen simply fails the needle and
+        // retries until the deadline.
+        let (host_grid, _) = reconstructed_screen(&all_host, 30, 100);
+        if anchor_done(&capture.join("\n")) && anchor_done(&host_grid.join("\n")) {
             break;
         }
         assert!(
