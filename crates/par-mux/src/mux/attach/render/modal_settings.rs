@@ -714,11 +714,29 @@ impl WindowSession {
         self.refresh_settings();
     }
 
-    /// Apply the selection: a toggle flips, a choice cycles, and a
-    /// number/hex/chord opens the prompt seeded with the value in force
-    /// (the prompt's commit validates and writes). The states section
-    /// toggles its entry; the integrations section applies nothing.
-    pub(super) fn settings_apply(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+    /// Whether the selected row's value changes in place — a toggle or a
+    /// choice — so ←/→ cycle it instead of switching sections.
+    fn settings_selected_is_discrete(&self) -> bool {
+        let Modal::Settings(state) = &self.modal else {
+            return false;
+        };
+        state
+            .section
+            .rows()
+            .get(state.selected)
+            .is_some_and(|spec| matches!(spec.kind, SettingKind::Toggle | SettingKind::Choice(_)))
+    }
+
+    /// Apply the selection as a value change: a toggle flips, a choice
+    /// cycles by `delta` (wrapping), and a number/hex/chord opens the
+    /// prompt seeded with the value in force (the prompt's commit
+    /// validates and writes). The states section toggles its entry; the
+    /// integrations section applies nothing.
+    pub(super) fn settings_apply(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        delta: isize,
+    ) {
         let Modal::Settings(state) = &self.modal else {
             return;
         };
@@ -762,9 +780,12 @@ impl WindowSession {
                         let FieldVal::Text(current) = values.field(spec.key, &file_mode) else {
                             return;
                         };
+                        let len = choices.len() as isize;
                         let next = match choices.iter().position(|choice| *choice == current) {
-                            Some(at) => choices[(at + 1) % choices.len()].to_string(),
-                            None => choices[0].to_string(),
+                            Some(at) => {
+                                choices[(at as isize + delta).rem_euclid(len) as usize].to_string()
+                            }
+                            None => choices[delta.rem_euclid(len) as usize].to_string(),
                         };
                         let value = if spec.key == "agent-rows" {
                             SettingValue::Rows(SettingsValues::preset_rows(&next))
@@ -913,16 +934,29 @@ impl WindowSession {
         true
     }
 
-    /// One key while the dialog is up: the arrows select and switch
-    /// sections, Escape closes; everything else is consumed.
-    pub(super) fn settings_key(&mut self, ev: &TermKeyEvent) {
+    /// One key while the dialog is up: the arrows select, and ←/→ CHANGE
+    /// the selected row's value when it is discrete (a toggle flips, a
+    /// choice cycles — the natural gesture on `delivery`; on the
+    /// prompt-edited rows and the states/integrations sections they keep
+    /// switching sections); Escape closes; everything else is consumed.
+    pub(super) fn settings_key(
+        &mut self,
+        ev: &TermKeyEvent,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) {
         use par_term_emu_core::keyboard::TermKey;
         match ev.key() {
             TermKey::Escape => self.leave_settings(),
             TermKey::Up => self.settings_move_selection(-1),
             TermKey::Down => self.settings_move_selection(1),
-            TermKey::Left => self.settings_move_section(-1),
-            TermKey::Right => self.settings_move_section(1),
+            TermKey::Left | TermKey::Right => {
+                let delta = if ev.key() == TermKey::Left { -1 } else { 1 };
+                if self.settings_selected_is_discrete() {
+                    self.settings_apply(conn, delta);
+                } else {
+                    self.settings_move_section(delta);
+                }
+            }
             _ => {}
         }
     }
@@ -941,7 +975,7 @@ impl WindowSession {
             b'j' => self.settings_move_selection(1),
             b'\t' | b'l' => self.settings_move_section(1),
             b'h' => self.settings_move_section(-1),
-            b'\r' | b'\n' | b' ' => self.settings_apply(conn),
+            b'\r' | b'\n' | b' ' => self.settings_apply(conn, 1),
             _ => {}
         }
         matches!(self.modal, Modal::Settings(_))
@@ -984,7 +1018,7 @@ impl WindowSession {
             if let Modal::Settings(state) = &mut self.modal {
                 state.selected = selected;
             }
-            self.settings_apply(conn);
+            self.settings_apply(conn, 1);
         }
     }
 }

@@ -950,6 +950,81 @@ fn drag_release_restores_the_pointer_shape() {
     );
 }
 
+/// The side panel's own resize handles shape the pointer too (config
+/// `drag-cursor-shape`): the strip's edge column hovers left/right, the
+/// rule row up/down, the chevron cell and the panel's content restore,
+/// and a live sidebar drag keeps its shape while the pointer is over
+/// the panes (the live report: the pointer never changed there).
+#[test]
+fn sidebar_handles_shape_the_pointer() {
+    let (rx, mut conn) = recording_conn("ptr-sidebar");
+    let mut session = WindowSession::new(80, 24);
+    show_sidebar(&mut session);
+    session.renderer.set_sidebar_sections(Some(vec![
+        super::super::super::SidebarSection {
+            title: "workspaces",
+            rows: vec![
+                srow(SidebarRowId::Workspace("+0".into()), "alpha", true),
+                srow(SidebarRowId::Workspace("+1".into()), "beta", false),
+            ],
+        },
+        super::super::super::SidebarSection {
+            title: "agents",
+            rows: vec![srow(SidebarRowId::Pane(7), "kimi (blocked)", false)],
+        },
+    ]));
+    drained(&rx);
+    session.cursor.drag_shape = true;
+    // Emit is change-gated: an assert whose want was already sent reads
+    // an empty frame.
+    let mut last: &'static str = "";
+    fn shaped(session: &mut WindowSession, last: &mut &'static str, want: &'static str) {
+        let mut sink = RecordingSink::default();
+        session.frame(&mut sink);
+        let raw = String::from_utf8_lossy(&sink.raw).to_string();
+        assert!(
+            raw.contains(want) || (raw.is_empty() && *last == want),
+            "expected {want} (last={last}) in {raw:?}"
+        );
+        if !raw.is_empty() {
+            *last = want;
+        }
+    }
+    // The width handle: the strip's edge column (host col 19 = SGR 20).
+    session.route_mouse(&mut conn, sgr(35, 20, 5, false));
+    shaped(&mut session, &mut last, "]22;ew-resize");
+    // The split handle: the rule row wherever the default split composes
+    // it (composed row + strip + SGR origin).
+    let rule = session.renderer.sidebar_rule_y().expect("a rule row");
+    let rule_sgr = rule + 2;
+    session.route_mouse(&mut conn, sgr(35, 3, rule_sgr, false));
+    shaped(&mut session, &mut last, "]22;ns-resize");
+    // Panel content is not a handle.
+    session.route_mouse(&mut conn, sgr(35, 3, 4, false));
+    shaped(&mut session, &mut last, "]22;text");
+    // The panel's last row at the edge column: whatever a press there
+    // would hit (the chevron's span decides), the hover agrees with it.
+    let press = sgr(0, 20, 24, false);
+    let collapse_wins = matches!(session.mouse_hit(&press), Hit::SidebarCollapse);
+    session.route_mouse(&mut conn, sgr(35, 20, 24, false));
+    shaped(
+        &mut session,
+        &mut last,
+        if collapse_wins {
+            "]22;text"
+        } else {
+            "]22;ew-resize"
+        },
+    );
+    // A live split drag keeps its shape with the pointer over the pane
+    // area, and the release restores.
+    session.route_mouse(&mut conn, sgr(0, 3, rule_sgr, false));
+    session.route_mouse(&mut conn, sgr(32, 40, 15, false));
+    shaped(&mut session, &mut last, "]22;ns-resize");
+    session.route_mouse(&mut conn, sgr(0, 40, 15, true));
+    shaped(&mut session, &mut last, "]22;text");
+}
+
 /// Sidebar paint geometry: with the panel up, the re-divided
 /// layout's right pane paints flush against the panel — content and
 /// dividers carry the panel offset exactly once. (The manual-pass
@@ -1833,6 +1908,63 @@ fn settings_rows_write_and_apply_live() {
         session.agent_rows,
         vec![vec!["state_icon".to_string(), "agent".to_string()],],
         "the reload rebuilt the agent section"
+    );
+}
+
+/// ←/→ change a discrete row's value in place (the natural gesture on
+/// the notify tab's `delivery` — the live report read the dialog as
+/// unchangeable): right cycles forward, left back, both write and apply
+/// live; on a prompt-edited row the arrows still switch sections.
+#[test]
+fn settings_choice_rows_cycle_with_the_arrows() {
+    let (_rx, mut conn, mut session) = command_menu_session("setnotify-arrow");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    // The notify tab (three Tabs), `delivery` at the default terminal:
+    // → system, then ← off.
+    session.route_stdin_bytes(&mut conn, b"\t\t\t");
+    // A bare unit session's delivery is the struct default (off); →
+    // cycles to inside, ← wraps back to system.
+    session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("notify-delivery = \"inside\""),
+        "right wrote the next choice: {written}"
+    );
+    session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Left, 0));
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("notify-delivery = \"off\""),
+        "left wrote the previous choice: {written}"
+    );
+    assert_eq!(session.notify.delivery.name(), "off", "applied live");
+    // On the general tab's `resize step` (a Number row) ← keeps
+    // switching sections instead of opening the prompt.
+    session.route_stdin_bytes(&mut conn, b"h");
+    session.route_stdin_bytes(&mut conn, b"jjj");
+    session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
+    settle(&mut session, &mut conn);
+    let Modal::Settings(state) = &session.modal else {
+        panic!("no prompt opened: {:?}", session.modal)
+    };
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("resize-step"),
+        "the arrow switched sections, it did not edit"
+    );
+    assert!(
+        matches!(
+            state.section,
+            super::super::modal_settings::SettingsSection::Notify
+        ),
+        "the section moved: {:?}",
+        state.section
     );
 }
 

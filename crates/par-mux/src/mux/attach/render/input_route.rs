@@ -372,7 +372,7 @@ impl WindowSession {
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
             Modal::Menu(_) => return self.menu_key(ev),
             Modal::Help(_) => return self.help_key(ev),
-            Modal::Settings(_) => return self.settings_key(ev),
+            Modal::Settings(_) => return self.settings_key(ev, conn),
             Modal::Picker(_) => return self.picker_key(conn, ev),
             Modal::Resize => return self.resize_key(conn, ev),
             Modal::None => {}
@@ -604,42 +604,66 @@ impl WindowSession {
     }
 
     /// The pointer-shape routing (config `drag-cursor-shape`): a live
-    /// divider drag or a hover report ON a divider wants the resize
-    /// shape — the OSC 22 the next frame writes; everything else
-    /// (option off, a modal up, the pointer elsewhere) restores the
-    /// terminal's own pointer. Runs after the hit dispatch: the shape
-    /// is the pointer's state, and a drag-ending release must compute
-    /// its want from the cleared drag.
+    /// divider drag, a live sidebar drag, or a hover report ON a resize
+    /// handle wants the resize shape — the OSC 22 the next frame writes;
+    /// everything else (option off, a modal up, the pointer elsewhere)
+    /// restores the terminal's own pointer. Runs after the hit dispatch:
+    /// the shape is the pointer's state, and a drag-ending release must
+    /// compute its want from the cleared drag.
     fn update_pointer(&mut self, mouse: &SgrMouse) {
         if !self.cursor.drag_shape || !matches!(self.modal, Modal::None) {
             self.pointer.want(None);
             return;
         }
-        // A live drag keeps its divider's shape wherever the pointer
-        // wanders; a sidebar drag is not a pane divider.
-        let dragged = self.drag.as_ref().map(drag_pointer);
+        // A live drag keeps its shape wherever the pointer wanders: a
+        // pane divider drag its axis, a sidebar width drag left/right,
+        // a sidebar split drag up/down.
+        let dragged = self
+            .drag
+            .as_ref()
+            .map(drag_pointer)
+            .or_else(|| self.sidebar_drag.as_ref().map(sidebar_drag_pointer));
         let want = match dragged {
             Some(shape) => Some(shape),
-            None if self.sidebar_drag.is_none()
-                && mouse.is_motion()
-                && !mouse.release
-                && mouse.motion_button().is_none() =>
-            {
-                let x = mouse.col.saturating_sub(1);
-                let y = mouse.row.saturating_sub(1);
-                if y < self.geometry.strip_rows {
-                    None
-                } else {
-                    let (x, y) = self.geometry.host_to_content_clamped(x, y);
-                    self.renderer
-                        .divider_near(x, y, 0)
-                        .filter(|_| !self.renderer.label_cell_at(x, y))
-                        .map(|divider| divider_pointer(&divider))
-                }
+            None if mouse.is_motion() && !mouse.release && mouse.motion_button().is_none() => {
+                self.hover_resize(mouse.col.saturating_sub(1), mouse.row.saturating_sub(1))
             }
             None => None,
         };
         self.pointer.want(want);
+    }
+
+    /// The resize handle under a hovering pointer (host 0-based
+    /// coordinates): the side panel's edge column (width, left/right)
+    /// and rule row (split, up/down) — the same predicates the press
+    /// hit-test applies — then the pane dividers below the strip row in
+    /// content coordinates.
+    fn hover_resize(&self, x: u16, y: u16) -> Option<&'static str> {
+        let strip = self.renderer.sidebar_width();
+        if strip > 0 && y > 0 && x < strip {
+            use crate::mux::attach::panels::SidebarRowId;
+            // The chevron (the panel's last row, beside the divider) is
+            // the collapse handle, not a drag handle; the collapsed rail
+            // has no divider column.
+            if !self.sidebar.is_collapsed()
+                && x + 1 == strip
+                && self.renderer.sidebar_row_at(x, y) != Some(SidebarRowId::Collapse)
+            {
+                return Some(super::pointer::RESIZE_COL);
+            }
+            if self.renderer.sidebar_rule_at(x, y) {
+                return Some(super::pointer::RESIZE_ROW);
+            }
+            return None;
+        }
+        if y < self.geometry.strip_rows {
+            return None;
+        }
+        let (x, y) = self.geometry.host_to_content_clamped(x, y);
+        self.renderer
+            .divider_near(x, y, 0)
+            .filter(|_| !self.renderer.label_cell_at(x, y))
+            .map(|divider| divider_pointer(&divider))
     }
 
     /// What one host mouse report hits, in the router's precedence order:
@@ -1016,6 +1040,15 @@ fn drag_pointer(drag: &DragState) -> &'static str {
         DragState::Pending { divider, .. } | DragState::Active { divider, .. } => {
             divider_pointer(divider)
         }
+    }
+}
+
+/// The pointer shape for a sidebar drag in flight: the width edge drags
+/// left/right, the rule row up/down.
+fn sidebar_drag_pointer(drag: &super::sidebar::SidebarDrag) -> &'static str {
+    match drag {
+        super::sidebar::SidebarDrag::Width { .. } => super::pointer::RESIZE_COL,
+        super::sidebar::SidebarDrag::Split { .. } => super::pointer::RESIZE_ROW,
     }
 }
 

@@ -4761,6 +4761,103 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
     host.killer.kill().ok();
 }
 
+/// The notify tab's `delivery` row cycles and the write lands in the
+/// config the client loaded — driven with the MOUSE on the user's real
+/// config shape (the live report: the method seemed unchangeable from
+/// the dialog).
+#[cfg(unix)]
+#[test]
+fn render_mode_settings_notify_delivery_cycles() {
+    let (fixture, _daemon, mut client) = fixture_with_session("setnotify");
+    let pane_a = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &pane_a],
+        "render",
+        "[client]\nborder-lines = \"herdr\"\nnotify-states = [\"working\", \"blocked\", \"idle\"]\nnotify-delivery = \"off\"\nscrollbar-gutter = true\ndrag-cursor-shape = true\npane-gaps = 0\n",
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up (mouse reporting enabled)",
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    host.to_child
+        .write_all(b"\x1b[<0;17;12M")
+        .expect("menu chip press");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"reload config",
+        Duration::from_secs(10),
+        "the chip opens the command menu",
+    );
+    let (x0, y0) = (19usize, 3usize);
+    host.to_child
+        .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
+        .expect("settings click");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"integrations", Duration::from_secs(10));
+    let text = plain_text(&got);
+    assert!(
+        text.contains("side panel"),
+        "the dialog is up on its first section. stderr: {} text: {text:?}",
+        stderr.lock().unwrap()
+    );
+    // The box centers over the 22-row frame: 14 panel rows + ring →
+    // y0 = frame 3; the tab row (panel row 0) paints frame 4 = host 5 =
+    // SGR 6. Inner cols are box x0+1.. : x0 = (80-66)/2 = 7, so inner
+    // col c is host col 8+c = SGR col 9+c. ` notify ` spans inner
+    // 27..35 — click SGR col 38.
+    host.to_child
+        .write_all(b"\x1b[<0;38;6M")
+        .expect("notify tab click");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"how agent state", Duration::from_secs(10));
+    let text = plain_text(&got);
+    assert!(
+        text.contains("delivery"),
+        "the notify tab is up. text: {text:?}"
+    );
+    // The delivery row is the section's only row: body row 0 = panel
+    // row 5 = frame 9 = host 10 = SGR 11. Click it: off cycles to
+    // inside.
+    host.to_child
+        .write_all(b"\x1b[<0;20;11M")
+        .expect("delivery row click");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"inside", Duration::from_secs(10));
+    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
+    assert!(
+        screen.contains("inside"),
+        "the dialog shows the cycled value. stderr: {} screen: {screen}",
+        stderr.lock().unwrap()
+    );
+    let written = std::fs::read_to_string(fixture.client_config_path()).unwrap();
+    assert!(
+        written.contains("notify-delivery = \"inside\""),
+        "the config carries the new value: {written}"
+    );
+    // The arrow gesture: → cycles again (inside → terminal).
+    host.to_child.write_all(b"\x1b[C").expect("right arrow");
+    host.to_child.flush().ok();
+    let _ = wait_for_output(&host, b"terminal", Duration::from_secs(10));
+    let written = std::fs::read_to_string(fixture.client_config_path()).unwrap();
+    assert!(
+        written.contains("notify-delivery = \"terminal\""),
+        "the arrow cycled the value: {written}"
+    );
+    host.killer.kill().ok();
+}
+
 /// The tab context menu must be CLICKABLE with the side panel up: the
 /// modal centers over the HOST width (the pane layout already carries
 /// the strip offset), so its clicks map by the raw host column — the
