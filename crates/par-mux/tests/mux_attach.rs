@@ -91,6 +91,19 @@ fn spawn_attach_with_config(
     mode: &str,
     client_config: &str,
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach_with_env(fixture, extra, mode, client_config, &[])
+}
+
+/// [`spawn_attach_with_config`] with extra environment for the attach
+/// process — the host-identity variables (`TERM_PROGRAM`,
+/// `KITTY_WINDOW_ID`, …) a test pins to model a specific host.
+fn spawn_attach_with_env(
+    fixture: &MuxFixture,
+    extra: &[&str],
+    mode: &str,
+    client_config: &str,
+    env: &[(&str, &str)],
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
     std::fs::write(fixture.client_config_path(), client_config).expect("write client config");
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -111,6 +124,9 @@ fn spawn_attach_with_config(
     cmd.arg(mode);
     cmd.args(extra);
     cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
     let child = pair
         .slave
         .spawn_command(cmd)
@@ -4560,6 +4576,109 @@ fn render_mode_background_agent_state_notifies_the_host() {
     assert!(
         !all_text.contains("fgagent: blocked"),
         "the shown window's agent stays quiet: {all_text:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// Paul's live report (2026-10-15): `notify-delivery = "terminal"` set
+/// from the settings dialog never reached ghostty or iTerm2, while
+/// `inside` and `system` worked in both. The attach ran with kitty's
+/// `KITTY_WINDOW_ID` leaked into its environment (a host started under
+/// kitty, herdr on kitty, or a par-term/par-mux pane — the core's pane
+/// spawn exports it), so the escape went out as kitty's OSC 99, which
+/// neither host parses. Drives the reload path (delivery off at launch,
+/// `terminal` written to the file, the reload chord) and asserts the
+/// background agent's transition reaches the host as OSC 9.
+#[cfg(unix)]
+#[test]
+fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env() {
+    let (fixture, _daemon, mut client) = fixture_with_session("notifyleak");
+    let shown = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let background_window = client
+        .send("new-window -d")
+        .expect("new-window")
+        .join("")
+        .trim()
+        .to_string();
+    let background = client
+        .send(&format!("list-panes -t {background_window}"))
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("the background pane")
+        .to_string();
+    let (mut host, stderr) = spawn_attach_with_env(
+        &fixture,
+        &["-t", &shown],
+        "render",
+        "[client]\nnotify-delivery = \"off\"\n",
+        &[
+            ("TERM_PROGRAM", "ghostty"),
+            ("KITTY_WINDOW_ID", "1"),
+            ("KITTY_PID", "696"),
+        ],
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    let mut all = Vec::new();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+    // The settings dialog's write, then its reload (the C-b C-r chord
+    // runs the same `reload_config`).
+    std::fs::write(
+        fixture.client_config_path(),
+        "[client]\nnotify-delivery = \"terminal\"\n",
+    )
+    .expect("write terminal delivery");
+    host.to_child
+        .write_all(&[0x02, 0x12])
+        .expect("reload chord");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"config reloaded",
+        Duration::from_secs(10),
+        "the reload landed",
+    );
+    let report = hook_report(
+        fixture.socket(),
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{background}","agent":"leakagent","state":"blocked","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(report.contains(r#""result":"ok""#), "{report}");
+    let got = wait_for_output(&host, b"leakagent", Duration::from_secs(10));
+    let mut got_more = got.clone();
+    got_more.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(300),
+    ));
+    let text = String::from_utf8_lossy(&got_more);
+    assert!(
+        text.contains("\x1b]9;par-mux: ") && text.contains("leakagent: blocked\x1b\\"),
+        "the reloaded terminal delivery reaches a ghostty host as OSC 9. stderr: {} bytes: {text:?}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !text.contains("\x1b]99;"),
+        "a leaked KITTY_WINDOW_ID must not switch a ghostty host to OSC 99: {text:?}"
     );
     host.killer.kill().ok();
 }
