@@ -439,8 +439,11 @@ mod tests {
     #[test]
     fn quiet_child_death_advances_the_generation() {
         let mut session = PtySession::new(80, 24, 100);
-        assert!(session.spawn("/usr/bin/true", &[]).is_ok());
+        // Read before spawning: the child can exit and the reader bump
+        // the counter before spawn() returns, and a later read would
+        // already include the bump this test waits for.
         let since = session.update_generation();
+        assert!(session.spawn("/usr/bin/true", &[]).is_ok());
 
         // A generation-poll observer: bounded-window poll for the flip.
         // 30s: under a full parallel suite on the python-test build
