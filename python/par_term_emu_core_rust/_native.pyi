@@ -1344,6 +1344,10 @@ class PtyTerminal:
 
         Returns:
             The total number of bell events received since terminal creation
+
+        Example:
+            >>> PtyTerminal(80, 24).bell_count()
+            0
         """
     def bracketed_paste(self) -> bool:
         """Whether bracketed-paste mode is active
@@ -1380,10 +1384,14 @@ class PtyTerminal:
             may belong to another process.
 
         Example:
-            >>> session = PtySession(80, 24)
-            >>> session.spawn_shell()
-            >>> pid = session.child_pid()
-            >>> print(pid)  # e.g. 12345
+            ```python
+            pty = PtyTerminal(80, 24)
+            assert pty.child_pid() is None  # not spawned yet
+            pty.spawn("/bin/sh", args=["-c", "exit 0"])
+            assert isinstance(pty.child_pid(), int)
+            pty.wait()
+            assert pty.child_pid() is None  # released once the exit is observed
+            ```
         """
     def clear_badge_format(self) -> Any:
         """Clear the badge format
@@ -1417,6 +1425,15 @@ class PtyTerminal:
 
         Returns:
             bool | None: True if running, False if exited, None if not found
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+            assert pty.coprocess_status(coproc_id) is True
+            assert pty.coprocess_status(9999) is None  # unknown id
+            pty.stop_coprocess(coproc_id)
+            ```
         """
     def count_non_whitespace_lines(self) -> Any:
         """Count non-whitespace lines in visible screen
@@ -1452,6 +1469,10 @@ class PtyTerminal:
 
         Returns:
             Tuple of (col, row)
+
+        Example:
+            >>> PtyTerminal(80, 24).cursor_position()
+            (0, 0)
         """
     def cursor_style(self) -> Any:
         """Get the current cursor style
@@ -1470,6 +1491,10 @@ class PtyTerminal:
 
         Returns:
             Dictionary containing terminal state for debugging
+
+        Example:
+            >>> isinstance(PtyTerminal(80, 24).debug_info(), dict)
+            True
         """
     def debug_log_snapshot(self, label: Any) -> Any:
         """Log a debug snapshot with a label
@@ -1672,7 +1697,10 @@ class PtyTerminal:
             flags: Keyboard protocol flags to set (0 = normal mode)
 
         Example:
-            >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
+            >>> pty = PtyTerminal(80, 24)
+            >>> pty.force_set_keyboard_flags(0)  # Reset to normal mode
+            >>> pty.keyboard_flags()
+            0
         """
     def get_active_transfers(self) -> Any:
         """Get all active (in-progress) file transfers
@@ -1755,6 +1783,15 @@ class PtyTerminal:
 
         Returns:
             Macro name if playing, None otherwise
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", Macro("greet"))
+            pty.play_macro("greet", 1.0)
+            assert pty.get_current_macro_name() == "greet"
+            pty.stop_macro()
+            ```
         """
     @staticmethod
     def get_default_shell() -> Any:
@@ -1762,6 +1799,10 @@ class PtyTerminal:
 
         Returns:
             Path to the default shell
+
+        Example:
+            >>> isinstance(PtyTerminal.get_default_shell(), str)
+            True
         """
     def get_dropped_sixel_graphics(self) -> Any:
         """Get count of Sixel graphics dropped due to limits
@@ -1840,18 +1881,43 @@ class PtyTerminal:
 
         Returns:
             Macro object if found, None otherwise
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", Macro("greet"))
+            assert pty.get_macro("greet").name == "greet"
+            assert pty.get_macro("missing") is None
+            ```
         """
     def get_macro_progress(self) -> Any:
         """Get macro playback progress
 
         Returns:
             Tuple of (current_event, total_events) if playing, None otherwise
+
+        Example:
+            ```python
+            macro = Macro("greet")
+            macro.add_key("h")
+            macro.add_key("i")
+            pty = PtyTerminal(80, 24)
+            assert pty.get_macro_progress() is None  # nothing playing
+            pty.load_macro("greet", macro)
+            pty.play_macro("greet", 1.0)
+            assert pty.get_macro_progress() == (0, 2)
+            pty.stop_macro()
+            ```
         """
     def get_macro_screenshot_triggers(self) -> Any:
         """Get and clear screenshot triggers from macro playback
 
         Returns:
             List of screenshot labels
+
+        Example:
+            >>> PtyTerminal(80, 24).get_macro_screenshot_triggers()
+            []
         """
     def get_max_transfer_size(self) -> Any:
         """Get the current maximum allowed file transfer size in bytes
@@ -2004,6 +2070,16 @@ class PtyTerminal:
 
         Returns:
             True if updates have occurred since the given generation
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            gen = pty.update_generation()
+            pty.spawn("/bin/sh", args=["-c", "printf hi"])
+            assert pty.wait_for_update(gen, timeout=5.0) is not None
+            assert pty.has_updates_since(gen)
+            pty.wait()
+            ```
         """
     def insert_mode(self) -> Any:
         """Get insert mode (IRM - Mode 4) state
@@ -2031,12 +2107,20 @@ class PtyTerminal:
 
         Returns:
             True if paused, False otherwise
+
+        Example:
+            >>> PtyTerminal(80, 24).is_macro_paused()
+            False
         """
     def is_macro_playing(self) -> Any:
         """Check if a macro is currently playing
 
         Returns:
             True if a macro is playing, False otherwise
+
+        Example:
+            >>> PtyTerminal(80, 24).is_macro_playing()
+            False
         """
     def is_recording(self) -> Any:
         """Check if currently recording
@@ -2049,6 +2133,15 @@ class PtyTerminal:
 
         Returns:
             True if the process is running
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+            assert pty.is_running()
+            pty.kill()
+            assert not pty.is_running()
+            ```
         """
     def keyboard_flags(self) -> Any:
         """Get current Kitty Keyboard Protocol flags
@@ -2062,6 +2155,14 @@ class PtyTerminal:
 
         A no-op once the exit has been observed (try_wait(), wait() or an
         earlier kill()): the reaped PID may belong to another process.
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+            pty.kill()
+            assert not pty.is_running()
+            ```
         """
     def line_feed_new_line_mode(self) -> Any:
         """Get line feed/new line mode (LNM - Mode 20) state
@@ -2074,12 +2175,20 @@ class PtyTerminal:
 
         Returns:
             list[int]: List of active coprocess IDs
+
+        Example:
+            >>> PtyTerminal(80, 24).list_coprocesses()
+            []
         """
     def list_macros(self) -> Any:
         """List all macro names
 
         Returns:
             List of macro names
+
+        Example:
+            >>> PtyTerminal(80, 24).list_macros()
+            []
         """
     def load_macro(self, name: Any, macro_obj: Any) -> Any:
         """Load a macro into the library
@@ -2087,6 +2196,15 @@ class PtyTerminal:
         Args:
             name: Name to store the macro under
             macro: Macro object to load
+
+        Example:
+            ```python
+            macro = Macro("greet")
+            macro.add_key("h")
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", macro)
+            assert pty.list_macros() == ["greet"]
+            ```
         """
     def max_osc_data_length(self) -> int:
         """Get the maximum total OSC data length in bytes (QA-012/SEC-003)
@@ -2141,15 +2259,48 @@ class PtyTerminal:
 
         Args:
             content: String content to paste
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/cat")
+            pty.paste("hello")
+            assert pty.wait_for_text("hello", timeout=5.0)
+            pty.kill()
+            ```
         """
     def pause_macro(self) -> Any:
-        """Pause macro playback"""
+        """Pause macro playback
+
+        Example:
+            ```python
+            macro = Macro("greet")
+            macro.add_key("h")
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", macro)
+            pty.play_macro("greet", 1.0)
+            pty.pause_macro()
+            assert pty.is_macro_paused()
+            pty.stop_macro()
+            ```
+        """
     def play_macro(self, name: Any, speed: Any = None) -> Any:
         """Start playing a macro
 
         Args:
             name: Name of the macro to play
             speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
+
+        Example:
+            ```python
+            macro = Macro("greet")
+            macro.add_key("h")
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", macro)
+            pty.play_macro("greet", 1.0)
+            assert pty.is_macro_playing()
+            pty.stop_macro()
+            ```
         """
     def pop_keyboard_flags(self, count: Any = 1) -> Any:
         """Pop keyboard flags from stack
@@ -2226,9 +2377,18 @@ class PtyTerminal:
             list[str]: Lines of stderr output from the coprocess
 
         Example:
-            >>> errors = pty.read_coprocess_errors(coproc_id)
-            >>> for line in errors:
-            ...     print(f"ERROR: {line}")
+            ```python
+            import time
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("sh", args=["-c", "echo oops >&2"]))
+            errors = []
+            deadline = time.monotonic() + 5
+            while not errors and time.monotonic() < deadline:
+                errors = pty.read_coprocess_errors(coproc_id)
+                time.sleep(0.01)
+            assert errors == ["oops"]
+            pty.stop_coprocess(coproc_id)
+            ```
         """
     def read_from_coprocess(self, coprocess_id: Any) -> list[str]:
         """Read buffered output from a coprocess (drains the buffer)
@@ -2238,6 +2398,20 @@ class PtyTerminal:
 
         Returns:
             list[str]: Lines of output from the coprocess
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("echo", args=["ready"]))
+            import time
+            lines = []
+            deadline = time.monotonic() + 5
+            while not lines and time.monotonic() < deadline:
+                lines = pty.read_from_coprocess(coproc_id)
+                time.sleep(0.01)
+            assert lines == ["ready"]
+            pty.stop_coprocess(coproc_id)
+            ```
         """
     def record_input(self, data: Any) -> Any:
         """Record input data
@@ -2282,6 +2456,14 @@ class PtyTerminal:
 
         Returns:
             Removed Macro object if found, None otherwise
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", Macro("greet"))
+            assert pty.remove_macro("greet").name == "greet"
+            assert pty.list_macros() == []
+            ```
         """
     def resize(self, cols: Any, rows: Any) -> Any:
         """Resize the PTY and terminal
@@ -2291,6 +2473,12 @@ class PtyTerminal:
         Args:
             cols: New number of columns
             rows: New number of rows
+
+        Example:
+            >>> pty = PtyTerminal(80, 24)
+            >>> pty.resize(100, 30)
+            >>> pty.size()
+            (100, 30)
         """
     def resize_pixels(
         self, cols: Any, rows: Any, pixel_width: Any, pixel_height: Any
@@ -2304,7 +2492,21 @@ class PtyTerminal:
             pixel_height: Text area height in pixels
         """
     def resume_macro(self) -> Any:
-        """Resume macro playback"""
+        """Resume macro playback
+
+        Example:
+            ```python
+            macro = Macro("greet")
+            macro.add_key("h")
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", macro)
+            pty.play_macro("greet", 1.0)
+            pty.pause_macro()
+            pty.resume_macro()
+            assert not pty.is_macro_paused()
+            pty.stop_macro()
+            ```
+        """
     def screenshot(
         self,
         format: Any = "png",
@@ -2475,6 +2677,10 @@ class PtyTerminal:
 
         This re-sends SIGWINCH to the child process with the same dimensions.
         Useful for forcing applications like tmux to recalculate their layout.
+
+        Example:
+            >>> pty = PtyTerminal(80, 24)
+            >>> pty.send_resize_pulse()
         """
     def send_upload_data(self, data: Any) -> Any:
         """Send upload data in response to an UploadRequested event
@@ -2711,6 +2917,10 @@ class PtyTerminal:
 
         Args:
             speed: Speed multiplier (0.1 to 10.0)
+
+        Example:
+            >>> pty = PtyTerminal(80, 24)
+            >>> pty.set_macro_speed(2.0)
         """
     def set_match_color(self, r: Any, g: Any, b: Any) -> Any:
         """Set match/search highlight color
@@ -2854,6 +3064,11 @@ class PtyTerminal:
 
         Returns:
             Tuple of (cols, rows)
+
+        Example:
+            >>> pty = PtyTerminal(80, 24)
+            >>> pty.size()
+            (80, 24)
         """
     def spawn(
         self, command: Any, args: Any = None, env: Any = None, cwd: Any = None
@@ -2865,6 +3080,13 @@ class PtyTerminal:
             args: Optional list of command-line arguments
             env: Optional dictionary of environment variables
             cwd: Optional working directory path
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "exit 3"])
+            assert pty.wait() == 3
+            ```
         """
     def spawn_shell(self, env: Any = None, cwd: Any = None) -> Any:
         """Spawn a shell process (auto-detected from environment)
@@ -2891,8 +3113,12 @@ class PtyTerminal:
             int: Coprocess ID for future reference
 
         Example:
-            >>> config = CoprocessConfig("grep", args=["ERROR"])
-            >>> coproc_id = pty.start_coprocess(config)
+            ```python
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("grep", args=["ERROR"]))
+            assert coproc_id in pty.list_coprocesses()
+            pty.stop_coprocess(coproc_id)
+            ```
         """
     def start_recording(self, title: Any) -> Any:
         """Start recording a terminal session
@@ -2905,9 +3131,27 @@ class PtyTerminal:
 
         Args:
             coprocess_id: ID of the coprocess to stop
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+            pty.stop_coprocess(coproc_id)
+            assert pty.list_coprocesses() == []
+            ```
         """
     def stop_macro(self) -> Any:
-        """Stop macro playback"""
+        """Stop macro playback
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.load_macro("greet", Macro("greet"))
+            pty.play_macro("greet", 1.0)
+            pty.stop_macro()
+            assert not pty.is_macro_playing()
+            ```
+        """
     def stop_recording(self) -> Any:
         """Stop recording and return the session
 
@@ -2983,6 +3227,15 @@ class PtyTerminal:
 
         Returns:
             Exit code if the process has exited, None otherwise
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+            assert pty.try_wait() is None  # still running
+            pty.kill()
+            assert pty.try_wait() is not None
+            ```
         """
     def update_animations(self) -> Any:
         """Update all Kitty graphics animations and trigger refresh if frames changed
@@ -3002,6 +3255,10 @@ class PtyTerminal:
 
         Returns:
             The current generation number
+
+        Example:
+            >>> isinstance(PtyTerminal(80, 24).update_generation(), int)
+            True
         """
     def wait(self) -> Any:
         """Wait for the process to exit and return its exit code
@@ -3010,6 +3267,13 @@ class PtyTerminal:
 
         Returns:
             Exit code of the process
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "exit 3"])
+            assert pty.wait() == 3
+            ```
         """
     def wait_for_text(
         self, needle: Any, timeout: Any = 5.0, scrollback: Any = False
@@ -3030,8 +3294,12 @@ class PtyTerminal:
             ``True`` if the text appeared within the timeout.
 
         Example:
-            term.spawn("/bin/sh", ["-i"])
-            assert term.wait_for_text("$ ", timeout=3.0)
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/sh", args=["-c", "printf ready; sleep 30"])
+            assert pty.wait_for_text("ready", timeout=5.0)
+            pty.kill()
+            ```
         """
     def wait_for_update(self, since: Any, timeout: Any = 5.0) -> Any:
         """Block until the terminal updates past a given generation
@@ -3052,9 +3320,13 @@ class PtyTerminal:
             child has exited with no new output (nothing further can arrive).
 
         Example:
-            gen = term.update_generation()
-            term.write_to_pty(b"ls\\\\r")
-            assert term.wait_for_update(gen, timeout=2.0) is not None
+            ```python
+            pty = PtyTerminal(80, 24)
+            gen = pty.update_generation()
+            pty.spawn("/bin/sh", args=["-c", "printf hi"])
+            assert pty.wait_for_update(gen, timeout=5.0) is not None
+            pty.wait()
+            ```
         """
     def width_config(self) -> WidthConfig:
         """Get the Unicode width configuration
@@ -3084,6 +3356,15 @@ class PtyTerminal:
 
         Args:
             data: Bytes to write
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/cat")
+            pty.write(b"hello\\n")
+            assert pty.wait_for_text("hello", timeout=5.0)
+            pty.kill()
+            ```
         """
     def write_str(self, s: Any) -> Any:
         """Write a string to the PTY (convenience method)
@@ -3093,6 +3374,15 @@ class PtyTerminal:
 
         Args:
             s: String to write
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            pty.spawn("/bin/cat")
+            pty.write_str("hello\\n")
+            assert pty.wait_for_text("hello", timeout=5.0)
+            pty.kill()
+            ```
         """
     def write_to_coprocess(self, coprocess_id: Any, data: Any) -> Any:
         """Write data to a coprocess's stdin
@@ -3100,6 +3390,21 @@ class PtyTerminal:
         Args:
             coprocess_id: ID of the coprocess
             data: Bytes to write
+
+        Example:
+            ```python
+            pty = PtyTerminal(80, 24)
+            coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+            pty.write_to_coprocess(coproc_id, b"ping\\n")
+            import time
+            lines = []
+            deadline = time.monotonic() + 5
+            while not lines and time.monotonic() < deadline:
+                lines = pty.read_from_coprocess(coproc_id)
+                time.sleep(0.01)
+            assert lines == ["ping"]
+            pty.stop_coprocess(coproc_id)
+            ```
         """
 
 class RecordingEvent:
@@ -3587,6 +3892,14 @@ class StreamingConfig:
 
         Returns:
             bool: True if the API key may be passed as a query parameter
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_api_key_in_query
+            False
+            >>> config.allow_api_key_in_query = True
+            >>> config.allow_api_key_in_query
+            True
         """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
@@ -3596,6 +3909,14 @@ class StreamingConfig:
 
         Returns:
             list[str] | None: Allowed origins, or None for local/non-browser only
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allowed_origins is None
+            True
+            >>> config.allowed_origins = ["https://app.example.com"]
+            >>> config.allowed_origins
+            ['https://app.example.com']
         """
     @allowed_origins.setter
     def allowed_origins(self, value: Any) -> None: ...
@@ -3605,6 +3926,14 @@ class StreamingConfig:
 
         Returns:
             str | None: Current API key, or None if authentication is off
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.api_key is None
+            True
+            >>> config.api_key = "secret"
+            >>> config.api_key
+            'secret'
         """
     @api_key.setter
     def api_key(self, value: Any) -> None: ...
@@ -3614,17 +3943,40 @@ class StreamingConfig:
 
         Returns:
             bool: True if clients start in read-only mode by default
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.default_read_only
+            False
+            >>> config.default_read_only = True
+            >>> config.default_read_only
+            True
         """
     @default_read_only.setter
     def default_read_only(self, value: Any) -> None: ...
     def disable_tls(self) -> Any:
-        """Disable TLS (clear TLS configuration)"""
+        """Disable TLS (clear TLS configuration)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.disable_tls()
+            >>> config.tls_enabled
+            False
+        """
     @property
     def enable_http(self) -> Any:
         """Get whether HTTP static file serving is enabled
 
         Returns:
             bool: True if the HTTP server serves the web frontend
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.enable_http
+            False
+            >>> config.enable_http = True
+            >>> config.enable_http
+            True
         """
     @enable_http.setter
     def enable_http(self, value: Any) -> None: ...
@@ -3634,6 +3986,14 @@ class StreamingConfig:
 
         Returns:
             bool: True if CPU/memory stats are streamed to clients
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.enable_system_stats
+            False
+            >>> config.enable_system_stats = True
+            >>> config.enable_system_stats
+            True
         """
     @enable_system_stats.setter
     def enable_system_stats(self, value: Any) -> None: ...
@@ -3643,6 +4003,14 @@ class StreamingConfig:
 
         Returns:
             int: Initial column count, or 0 to adopt the terminal's size
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.initial_cols
+            0
+            >>> config.initial_cols = 120
+            >>> config.initial_cols
+            120
         """
     @initial_cols.setter
     def initial_cols(self, value: Any) -> None: ...
@@ -3652,6 +4020,14 @@ class StreamingConfig:
 
         Returns:
             int: Initial row count, or 0 to adopt the terminal's size
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.initial_rows
+            0
+            >>> config.initial_rows = 40
+            >>> config.initial_rows
+            40
         """
     @initial_rows.setter
     def initial_rows(self, value: Any) -> None: ...
@@ -3661,6 +4037,14 @@ class StreamingConfig:
 
         Returns:
             int: Per-client input limit in bytes/second, or 0 for unlimited
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.input_rate_limit_bytes_per_sec
+            0
+            >>> config.input_rate_limit_bytes_per_sec = 65536
+            >>> config.input_rate_limit_bytes_per_sec
+            65536
         """
     @input_rate_limit_bytes_per_sec.setter
     def input_rate_limit_bytes_per_sec(self, value: Any) -> None: ...
@@ -3670,6 +4054,14 @@ class StreamingConfig:
 
         Returns:
             int: Seconds between WebSocket keepalive pings
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.keepalive_interval
+            30
+            >>> config.keepalive_interval = 60
+            >>> config.keepalive_interval
+            60
         """
     @keepalive_interval.setter
     def keepalive_interval(self, value: Any) -> None: ...
@@ -3679,6 +4071,14 @@ class StreamingConfig:
 
         Returns:
             str: "off", "temp_only", or "all"
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.kitty_file_media
+            'temp_only'
+            >>> config.kitty_file_media = "off"
+            >>> config.kitty_file_media
+            'off'
         """
     @kitty_file_media.setter
     def kitty_file_media(self, value: Any) -> None: ...
@@ -3688,6 +4088,14 @@ class StreamingConfig:
 
         Returns:
             int: Maximum number of simultaneous clients allowed
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.max_clients
+            1000
+            >>> config.max_clients = 4
+            >>> config.max_clients
+            4
         """
     @max_clients.setter
     def max_clients(self, value: Any) -> None: ...
@@ -3697,6 +4105,14 @@ class StreamingConfig:
 
         Returns:
             int: Maximum clients attached to one session, or 0 for unlimited
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.max_clients_per_session
+            0
+            >>> config.max_clients_per_session = 2
+            >>> config.max_clients_per_session
+            2
         """
     @max_clients_per_session.setter
     def max_clients_per_session(self, value: Any) -> None: ...
@@ -3706,6 +4122,14 @@ class StreamingConfig:
 
         Returns:
             int: Maximum number of concurrent terminal sessions
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.max_sessions
+            10
+            >>> config.max_sessions = 5
+            >>> config.max_sessions
+            5
         """
     @max_sessions.setter
     def max_sessions(self, value: Any) -> None: ...
@@ -3715,6 +4139,14 @@ class StreamingConfig:
 
         Returns:
             bool: True if new clients receive the current screen contents
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.send_initial_screen
+            True
+            >>> config.send_initial_screen = False
+            >>> config.send_initial_screen
+            False
         """
     @send_initial_screen.setter
     def send_initial_screen(self, value: Any) -> None: ...
@@ -3724,6 +4156,14 @@ class StreamingConfig:
 
         Returns:
             int: Seconds before an idle session is reaped, or 0 for never
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.session_idle_timeout
+            900
+            >>> config.session_idle_timeout = 60
+            >>> config.session_idle_timeout
+            60
         """
     @session_idle_timeout.setter
     def session_idle_timeout(self, value: Any) -> None: ...
@@ -3736,6 +4176,16 @@ class StreamingConfig:
 
         Raises:
             RuntimeError: If files cannot be read or parsed
+
+        Example:
+            ```python
+            config = StreamingConfig()
+            try:
+                config.set_tls_from_files("/nonexistent/cert.pem", "/nonexistent/key.pem")
+            except RuntimeError:
+                pass  # unreadable files raise; TLS stays off
+            assert not config.tls_enabled
+            ```
         """
     def set_tls_from_pem(self, pem_path: Any) -> Any:
         """Configure TLS from a combined PEM file
@@ -3745,6 +4195,16 @@ class StreamingConfig:
 
         Raises:
             RuntimeError: If file cannot be read or parsed
+
+        Example:
+            ```python
+            config = StreamingConfig()
+            try:
+                config.set_tls_from_pem("/nonexistent/server.pem")
+            except RuntimeError:
+                pass  # an unreadable file raises; TLS stays off
+            assert not config.tls_enabled
+            ```
         """
     @property
     def system_stats_interval_secs(self) -> Any:
@@ -3752,6 +4212,14 @@ class StreamingConfig:
 
         Returns:
             int: Seconds between system stats updates
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.system_stats_interval_secs
+            5
+            >>> config.system_stats_interval_secs = 10
+            >>> config.system_stats_interval_secs
+            10
         """
     @system_stats_interval_secs.setter
     def system_stats_interval_secs(self, value: Any) -> None: ...
@@ -3761,6 +4229,10 @@ class StreamingConfig:
 
         Returns:
             bool: True if TLS is configured, False otherwise
+
+        Example:
+            >>> StreamingConfig().tls_enabled
+            False
         """
     @tls_enabled.setter
     def tls_enabled(self, value: Any) -> None: ...
@@ -3770,6 +4242,14 @@ class StreamingConfig:
 
         Returns:
             str: Directory the HTTP server serves static files from
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.web_root
+            './web_term'
+            >>> config.web_root = "/srv/web_term"
+            >>> config.web_root
+            '/srv/web_term'
         """
     @web_root.setter
     def web_root(self, value: Any) -> None: ...
@@ -3783,6 +4263,12 @@ class StreamingServer:
 
         Returns:
             str: The address the server is bound to
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            assert server.addr == "127.0.0.1:0"
+            ```
         """
     @addr.setter
     def addr(self, value: Any) -> None: ...
@@ -3791,6 +4277,12 @@ class StreamingServer:
 
         Returns:
             int: Number of currently connected clients (0 when stopped)
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            assert server.client_count() == 0
+            ```
         """
     @staticmethod
     def create_theme_info(
@@ -3814,12 +4306,28 @@ class StreamingServer:
 
         Raises:
             RuntimeError: If normal or bright does not contain exactly 8 tuples
+
+        Example:
+            ```python
+            theme = StreamingServer.create_theme_info(
+                "mono", (0, 0, 0), (255, 255, 255), [(0, 0, 0)] * 8, [(128, 128, 128)] * 8
+            )
+            assert theme["name"] == "mono"
+            ```
         """
     def max_clients(self) -> int:
         """Get the maximum number of clients allowed
 
         Returns:
             int: Configured client limit (0 when stopped)
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            assert server.max_clients() == 1000
+            server.shutdown("done")
+            assert server.max_clients() == 0
+            ```
         """
     def poll_resize(self) -> Any:
         """Poll for resize requests from clients (non-blocking)
@@ -3829,6 +4337,12 @@ class StreamingServer:
 
         This should be called periodically from the main event loop.
         When a resize is received, call pty_terminal.resize(cols, rows) to apply it.
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            assert server.poll_resize() is None  # no client asked to resize
+            ```
         """
     def send_action_mark_line(
         self, trigger_id: Any, row: Any, label: Any = None, color: Any = None
@@ -3840,6 +4354,12 @@ class StreamingServer:
             row: Row to mark
             label: Optional label for the mark
             color: Optional RGB color tuple (r, g, b)
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_action_mark_line(1, 3, label="error", color=(255, 0, 0))
+            ```
         """
     def send_action_notify(self, trigger_id: Any, title: Any, message: Any) -> Any:
         """Send a trigger action notify event to all clients
@@ -3848,15 +4368,35 @@ class StreamingServer:
             trigger_id: ID of the trigger that produced this action
             title: Notification title
             message: Notification message
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_action_notify(1, "Build", "finished")
+            ```
         """
     def send_badge_changed(self, badge: Any = None) -> Any:
         """Send a badge changed event to all clients
 
         Args:
             badge: New badge text, or None to clear the badge
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_badge_changed("build")
+            server.send_badge_changed(None)  # clear
+            ```
         """
     def send_bell(self) -> Any:
-        """Send a bell event to all clients"""
+        """Send a bell event to all clients
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_bell()
+            ```
+        """
     def send_cursor_position(self, col: Any, row: Any, visible: Any) -> Any:
         """Send a cursor position event to all clients
 
@@ -3864,6 +4404,12 @@ class StreamingServer:
             col: Cursor column (0-indexed)
             row: Cursor row (0-indexed)
             visible: Whether the cursor is visible
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_cursor_position(0, 0, True)
+            ```
         """
     def send_cwd_changed(
         self,
@@ -3881,12 +4427,24 @@ class StreamingServer:
             hostname: Hostname associated with the CWD (optional)
             username: Username associated with the CWD (optional)
             timestamp: Unix timestamp of the change
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_cwd_changed("/tmp", old_cwd="/")
+            ```
         """
     def send_graphics_added(self, row: Any) -> Any:
         """Send a graphics added event to all clients
 
         Args:
             row: Grid row the new graphic was placed on
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_graphics_added(0)
+            ```
         """
     def send_hyperlink_added(self, url: Any, row: Any, col: Any, id: Any = None) -> Any:
         """Send a hyperlink added event to all clients
@@ -3896,6 +4454,12 @@ class StreamingServer:
             row: Grid row the link starts on (0-indexed)
             col: Grid column the link starts at (0-indexed)
             id: Optional link id for grouping multi-cell links
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_hyperlink_added("https://example.com", 0, 0)
+            ```
         """
     def send_input(self, data: Any) -> Any:
         """Queue bytes for the PTY on the same input path client input takes
@@ -3913,7 +4477,10 @@ class StreamingServer:
             RuntimeError: If the server has been stopped
 
         Example:
-            >>> server.send_input(b"ls -la\\n")
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_input(b"ls -la\\n")
+            ```
         """
     def send_mode_changed(self, mode: Any, enabled: Any) -> Any:
         """Send a mode changed event to all clients
@@ -3921,12 +4488,24 @@ class StreamingServer:
         Args:
             mode: Mode name (e.g. "alt_screen", "cursor_visible")
             enabled: Whether the mode is now enabled
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_mode_changed("alt_screen", True)
+            ```
         """
     def send_output(self, data: Any) -> Any:
         """Send output data to all connected clients
 
         Args:
             data: The output data to send (ANSI escape sequences)
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_output("\\x1b[1mhello\\x1b[0m\\r\\n")
+            ```
         """
     def send_progress_bar_changed(
         self,
@@ -3944,6 +4523,15 @@ class StreamingServer:
             state: Optional ProgressState enum value
             percent: Optional progress percentage (0-100)
             label: Optional label text
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_progress_bar_changed(
+                "set", "build", state=ProgressState.Normal, percent=50, label="compile"
+            )
+            server.send_progress_bar_changed("remove", "build")
+            ```
         """
     def send_resize(self, cols: Any, rows: Any) -> Any:
         """Send a resize event to all clients
@@ -3951,12 +4539,24 @@ class StreamingServer:
         Args:
             cols: Number of columns
             rows: Number of rows
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_resize(120, 40)
+            ```
         """
     def send_title(self, title: Any) -> Any:
         """Send a title change event to all clients
 
         Args:
             title: The new terminal title
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_title("build: running")
+            ```
         """
     def send_trigger_matched(
         self,
@@ -3978,6 +4578,12 @@ class StreamingServer:
             text: The matched text
             captures: List of capture group strings
             timestamp: Unix timestamp of the match
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_trigger_matched(1, 0, 0, 5, "ERROR", captures=["ERROR"])
+            ```
         """
     def send_user_var_changed(
         self, name: Any, value: Any, old_value: Any = None
@@ -3988,12 +4594,25 @@ class StreamingServer:
             name: Variable name
             value: New variable value
             old_value: Previous value, if known
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_user_var_changed("host", "dev", old_value="prod")
+            ```
         """
     def shutdown(self, reason: Any) -> Any:
         """Shutdown the server and disconnect all clients
 
         Args:
             reason: Reason for shutdown
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.shutdown("maintenance")
+            assert server.client_count() == 0
+            ```
         """
     def start(self) -> Any:
         """Start the streaming server (non-blocking)
@@ -9074,9 +9693,8 @@ def decode_client_message(data: Any) -> dict:
 
     Example:
         ```python
-        msg = decode_client_message(data)
-        if msg["type"] == "input":
-            pty.write(msg["data"])
+        msg = decode_client_message(encode_client_message("input", data="ls\\r"))
+        assert msg == {"type": "input", "data": "ls\\r"}
         ```
     """
 
@@ -9094,9 +9712,8 @@ def decode_server_message(data: Any) -> dict:
 
     Example:
         ```python
-        msg = decode_server_message(data)
-        if msg["type"] == "output":
-            print(msg["data"])
+        msg = decode_server_message(encode_server_message("output", data="hi"))
+        assert msg["type"] == "output" and msg["data"] == "hi"
         ```
     """
 
@@ -9119,7 +9736,7 @@ def encode_client_message(message_type: Any, **kwargs: Any) -> bytes:
     Example:
         ```python
         data = encode_client_message("input", data="ls\\r")
-        ws.send(data)
+        assert isinstance(data, bytes)  # send it over the WebSocket
         ```
     """
 

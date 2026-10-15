@@ -66,6 +66,11 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Tuple of (cols, rows)
+    ///
+    /// Example:
+    ///     >>> pty = PtyTerminal(80, 24)
+    ///     >>> pty.size()
+    ///     (80, 24)
     fn size(&self) -> pyo3::PyResult<(usize, usize)> {
         Ok(self.inner.size())
     }
@@ -74,6 +79,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Tuple of (col, row)
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).cursor_position()
+    ///     (0, 0)
     fn cursor_position(&self) -> pyo3::PyResult<(usize, usize)> {
         Ok(self.inner.cursor_position())
     }
@@ -188,6 +197,13 @@ impl PyPtyTerminal {
     ///     args: Optional list of command-line arguments
     ///     env: Optional dictionary of environment variables
     ///     cwd: Optional working directory path
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "exit 3"])
+    ///     assert pty.wait() == 3
+    ///     ```
     #[pyo3(signature = (command, args=None, env=None, cwd=None))]
     fn spawn(
         &mut self,
@@ -225,6 +241,15 @@ impl PyPtyTerminal {
     ///
     /// Args:
     ///     data: Bytes to write
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/cat")
+    ///     pty.write(b"hello\n")
+    ///     assert pty.wait_for_text("hello", timeout=5.0)
+    ///     pty.kill()
+    ///     ```
     fn write(&mut self, py: pyo3::Python<'_>, data: &[u8]) -> PyResult<()> {
         write_pty_detached(py, &mut self.inner, data)
     }
@@ -236,6 +261,15 @@ impl PyPtyTerminal {
     ///
     /// Args:
     ///     s: String to write
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/cat")
+    ///     pty.write_str("hello\n")
+    ///     assert pty.wait_for_text("hello", timeout=5.0)
+    ///     pty.kill()
+    ///     ```
     fn write_str(&mut self, py: pyo3::Python<'_>, s: &str) -> PyResult<()> {
         write_pty_detached(py, &mut self.inner, s.as_bytes())
     }
@@ -247,6 +281,12 @@ impl PyPtyTerminal {
     /// Args:
     ///     cols: New number of columns
     ///     rows: New number of rows
+    ///
+    /// Example:
+    ///     >>> pty = PtyTerminal(80, 24)
+    ///     >>> pty.resize(100, 30)
+    ///     >>> pty.size()
+    ///     (100, 30)
     fn resize(&mut self, cols: usize, rows: usize) -> PyResult<()> {
         crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
         self.inner
@@ -260,6 +300,10 @@ impl PyPtyTerminal {
     ///
     /// This re-sends SIGWINCH to the child process with the same dimensions.
     /// Useful for forcing applications like tmux to recalculate their layout.
+    ///
+    /// Example:
+    ///     >>> pty = PtyTerminal(80, 24)
+    ///     >>> pty.send_resize_pulse()
     fn send_resize_pulse(&mut self) -> PyResult<()> {
         let (cols, rows) = self.inner.size();
         self.inner.resize(cols as u16, rows as u16)?;
@@ -274,10 +318,14 @@ impl PyPtyTerminal {
     ///     may belong to another process.
     ///
     /// Example:
-    ///     >>> session = PtySession(80, 24)
-    ///     >>> session.spawn_shell()
-    ///     >>> pid = session.child_pid()
-    ///     >>> print(pid)  # e.g. 12345
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     assert pty.child_pid() is None  # not spawned yet
+    ///     pty.spawn("/bin/sh", args=["-c", "exit 0"])
+    ///     assert isinstance(pty.child_pid(), int)
+    ///     pty.wait()
+    ///     assert pty.child_pid() is None  # released once the exit is observed
+    ///     ```
     fn child_pid(&self) -> PyResult<Option<u32>> {
         Ok(self.inner.child_pid())
     }
@@ -286,6 +334,15 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     True if the process is running
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+    ///     assert pty.is_running()
+    ///     pty.kill()
+    ///     assert not pty.is_running()
+    ///     ```
     fn is_running(&self) -> PyResult<bool> {
         Ok(self.inner.is_running())
     }
@@ -296,6 +353,13 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Exit code of the process
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "exit 3"])
+    ///     assert pty.wait() == 3
+    ///     ```
     fn wait(&mut self) -> PyResult<i32> {
         let code = self.inner.wait()?;
         Ok(code)
@@ -305,6 +369,15 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Exit code if the process has exited, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+    ///     assert pty.try_wait() is None  # still running
+    ///     pty.kill()
+    ///     assert pty.try_wait() is not None
+    ///     ```
     fn try_wait(&mut self) -> PyResult<Option<i32>> {
         let status = self.inner.try_wait()?;
         Ok(status)
@@ -314,6 +387,14 @@ impl PyPtyTerminal {
     ///
     /// A no-op once the exit has been observed (try_wait(), wait() or an
     /// earlier kill()): the reaped PID may belong to another process.
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "sleep 30"])
+    ///     pty.kill()
+    ///     assert not pty.is_running()
+    ///     ```
     fn kill(&mut self) -> PyResult<()> {
         self.inner.kill()?;
         Ok(())
@@ -351,6 +432,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Path to the default shell
+    ///
+    /// Example:
+    ///     >>> isinstance(PtyTerminal.get_default_shell(), str)
+    ///     True
     #[staticmethod]
     fn get_default_shell() -> PyResult<String> {
         Ok(pty_session::PtySession::get_default_shell())
@@ -363,6 +448,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     The current generation number
+    ///
+    /// Example:
+    ///     >>> isinstance(PtyTerminal(80, 24).update_generation(), int)
+    ///     True
     fn update_generation(&self) -> PyResult<u64> {
         Ok(self.inner.update_generation())
     }
@@ -374,6 +463,16 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     True if updates have occurred since the given generation
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     gen = pty.update_generation()
+    ///     pty.spawn("/bin/sh", args=["-c", "printf hi"])
+    ///     assert pty.wait_for_update(gen, timeout=5.0) is not None
+    ///     assert pty.has_updates_since(gen)
+    ///     pty.wait()
+    ///     ```
     fn has_updates_since(&self, last_generation: u64) -> PyResult<bool> {
         Ok(self.inner.has_updates_since(last_generation))
     }
@@ -396,9 +495,13 @@ impl PyPtyTerminal {
     ///     child has exited with no new output (nothing further can arrive).
     ///
     /// Example:
-    ///     gen = term.update_generation()
-    ///     term.write_to_pty(b"ls\\r")
-    ///     assert term.wait_for_update(gen, timeout=2.0) is not None
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     gen = pty.update_generation()
+    ///     pty.spawn("/bin/sh", args=["-c", "printf hi"])
+    ///     assert pty.wait_for_update(gen, timeout=5.0) is not None
+    ///     pty.wait()
+    ///     ```
     #[pyo3(signature = (since, timeout = 5.0))]
     fn wait_for_update(
         &self,
@@ -430,8 +533,12 @@ impl PyPtyTerminal {
     ///     ``True`` if the text appeared within the timeout.
     ///
     /// Example:
-    ///     term.spawn("/bin/sh", ["-i"])
-    ///     assert term.wait_for_text("$ ", timeout=3.0)
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/sh", args=["-c", "printf ready; sleep 30"])
+    ///     assert pty.wait_for_text("ready", timeout=5.0)
+    ///     pty.kill()
+    ///     ```
     #[pyo3(signature = (needle, timeout = 5.0, scrollback = false))]
     fn wait_for_text(
         &self,
@@ -461,6 +568,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     The total number of bell events received since terminal creation
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).bell_count()
+    ///     0
     fn bell_count(&self) -> PyResult<u64> {
         Ok(self.inner.bell_count())
     }
@@ -479,8 +590,12 @@ impl PyPtyTerminal {
     ///     int: Coprocess ID for future reference
     ///
     /// Example:
-    ///     >>> config = CoprocessConfig("grep", args=["ERROR"])
-    ///     >>> coproc_id = pty.start_coprocess(config)
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("grep", args=["ERROR"]))
+    ///     assert coproc_id in pty.list_coprocesses()
+    ///     pty.stop_coprocess(coproc_id)
+    ///     ```
     fn start_coprocess(&self, config: super::types::PyCoprocessConfig) -> PyResult<u64> {
         let rust_config = crate::coprocess::CoprocessConfig::from(&config);
         self.inner
@@ -492,6 +607,14 @@ impl PyPtyTerminal {
     ///
     /// Args:
     ///     coprocess_id: ID of the coprocess to stop
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+    ///     pty.stop_coprocess(coproc_id)
+    ///     assert pty.list_coprocesses() == []
+    ///     ```
     fn stop_coprocess(&self, coprocess_id: u64) -> PyResult<()> {
         self.inner
             .stop_coprocess(coprocess_id)
@@ -503,6 +626,21 @@ impl PyPtyTerminal {
     /// Args:
     ///     coprocess_id: ID of the coprocess
     ///     data: Bytes to write
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+    ///     pty.write_to_coprocess(coproc_id, b"ping\n")
+    ///     import time
+    ///     lines = []
+    ///     deadline = time.monotonic() + 5
+    ///     while not lines and time.monotonic() < deadline:
+    ///         lines = pty.read_from_coprocess(coproc_id)
+    ///         time.sleep(0.01)
+    ///     assert lines == ["ping"]
+    ///     pty.stop_coprocess(coproc_id)
+    ///     ```
     fn write_to_coprocess(&self, coprocess_id: u64, data: &[u8]) -> PyResult<()> {
         self.inner
             .write_to_coprocess(coprocess_id, data)
@@ -516,6 +654,20 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     list[str]: Lines of output from the coprocess
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("echo", args=["ready"]))
+    ///     import time
+    ///     lines = []
+    ///     deadline = time.monotonic() + 5
+    ///     while not lines and time.monotonic() < deadline:
+    ///         lines = pty.read_from_coprocess(coproc_id)
+    ///         time.sleep(0.01)
+    ///     assert lines == ["ready"]
+    ///     pty.stop_coprocess(coproc_id)
+    ///     ```
     fn read_from_coprocess(&self, coprocess_id: u64) -> PyResult<Vec<String>> {
         self.inner
             .read_from_coprocess(coprocess_id)
@@ -526,6 +678,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     list[int]: List of active coprocess IDs
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).list_coprocesses()
+    ///     []
     fn list_coprocesses(&self) -> PyResult<Vec<u64>> {
         Ok(self.inner.list_coprocesses())
     }
@@ -537,6 +693,15 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     bool | None: True if running, False if exited, None if not found
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("cat"))
+    ///     assert pty.coprocess_status(coproc_id) is True
+    ///     assert pty.coprocess_status(9999) is None  # unknown id
+    ///     pty.stop_coprocess(coproc_id)
+    ///     ```
     fn coprocess_status(&self, coprocess_id: u64) -> PyResult<Option<bool>> {
         Ok(self.inner.coprocess_status(coprocess_id))
     }
@@ -550,9 +715,18 @@ impl PyPtyTerminal {
     ///     list[str]: Lines of stderr output from the coprocess
     ///
     /// Example:
-    ///     >>> errors = pty.read_coprocess_errors(coproc_id)
-    ///     >>> for line in errors:
-    ///     ...     print(f"ERROR: {line}")
+    ///     ```python
+    ///     import time
+    ///     pty = PtyTerminal(80, 24)
+    ///     coproc_id = pty.start_coprocess(CoprocessConfig("sh", args=["-c", "echo oops >&2"]))
+    ///     errors = []
+    ///     deadline = time.monotonic() + 5
+    ///     while not errors and time.monotonic() < deadline:
+    ///         errors = pty.read_coprocess_errors(coproc_id)
+    ///         time.sleep(0.01)
+    ///     assert errors == ["oops"]
+    ///     pty.stop_coprocess(coproc_id)
+    ///     ```
     fn read_coprocess_errors(&self, coprocess_id: u64) -> PyResult<Vec<String>> {
         self.inner
             .read_coprocess_errors(coprocess_id)
@@ -588,7 +762,10 @@ impl PyPtyTerminal {
     ///     flags: Keyboard protocol flags to set (0 = normal mode)
     ///
     /// Example:
-    ///     >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
+    ///     >>> pty = PtyTerminal(80, 24)
+    ///     >>> pty.force_set_keyboard_flags(0)  # Reset to normal mode
+    ///     >>> pty.keyboard_flags()
+    ///     0
     fn force_set_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
         let mut term = self.inner.terminal_write();
         term.set_keyboard_flags(flags);
@@ -675,6 +852,15 @@ impl PyPtyTerminal {
     ///
     /// Args:
     ///     content: String content to paste
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.spawn("/bin/cat")
+    ///     pty.paste("hello")
+    ///     assert pty.wait_for_text("hello", timeout=5.0)
+    ///     pty.kill()
+    ///     ```
     fn paste(&mut self, py: pyo3::Python<'_>, content: &str) -> PyResult<()> {
         // QA-221: PtySession::write takes terminal.write() to record input,
         // so a read guard held across self.write() is a read-to-write
@@ -753,6 +939,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Dictionary containing terminal state for debugging
+    ///
+    /// Example:
+    ///     >>> isinstance(PtyTerminal(80, 24).debug_info(), dict)
+    ///     True
     fn debug_info(&self) -> PyResult<HashMap<String, String>> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -869,6 +1059,15 @@ impl PyPtyTerminal {
     /// Args:
     ///     name: Name to store the macro under
     ///     macro: Macro object to load
+    ///
+    /// Example:
+    ///     ```python
+    ///     macro = Macro("greet")
+    ///     macro.add_key("h")
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", macro)
+    ///     assert pty.list_macros() == ["greet"]
+    ///     ```
     fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
         {
             let mut term = self.inner.terminal_write();
@@ -884,6 +1083,14 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Macro object if found, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", Macro("greet"))
+    ///     assert pty.get_macro("greet").name == "greet"
+    ///     assert pty.get_macro("missing") is None
+    ///     ```
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -899,6 +1106,14 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Removed Macro object if found, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", Macro("greet"))
+    ///     assert pty.remove_macro("greet").name == "greet"
+    ///     assert pty.list_macros() == []
+    ///     ```
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
         let mut term = self.inner.terminal_write();
         Ok(MacroEngine::remove_macro(&mut term, &name).map(super::types::PyMacro::from))
@@ -908,6 +1123,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     List of macro names
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).list_macros()
+    ///     []
     fn list_macros(&self) -> PyResult<Vec<String>> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -919,6 +1138,17 @@ impl PyPtyTerminal {
     /// Args:
     ///     name: Name of the macro to play
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
+    ///
+    /// Example:
+    ///     ```python
+    ///     macro = Macro("greet")
+    ///     macro.add_key("h")
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", macro)
+    ///     pty.play_macro("greet", 1.0)
+    ///     assert pty.is_macro_playing()
+    ///     pty.stop_macro()
+    ///     ```
     #[pyo3(signature = (name, speed=None))]
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
         let mut term = self.inner.terminal_write();
@@ -930,6 +1160,15 @@ impl PyPtyTerminal {
     }
 
     /// Stop macro playback
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", Macro("greet"))
+    ///     pty.play_macro("greet", 1.0)
+    ///     pty.stop_macro()
+    ///     assert not pty.is_macro_playing()
+    ///     ```
     fn stop_macro(&self) -> PyResult<()> {
         {
             let mut term = self.inner.terminal_write();
@@ -939,6 +1178,18 @@ impl PyPtyTerminal {
     }
 
     /// Pause macro playback
+    ///
+    /// Example:
+    ///     ```python
+    ///     macro = Macro("greet")
+    ///     macro.add_key("h")
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", macro)
+    ///     pty.play_macro("greet", 1.0)
+    ///     pty.pause_macro()
+    ///     assert pty.is_macro_paused()
+    ///     pty.stop_macro()
+    ///     ```
     fn pause_macro(&self) -> PyResult<()> {
         {
             let mut term = self.inner.terminal_write();
@@ -948,6 +1199,19 @@ impl PyPtyTerminal {
     }
 
     /// Resume macro playback
+    ///
+    /// Example:
+    ///     ```python
+    ///     macro = Macro("greet")
+    ///     macro.add_key("h")
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", macro)
+    ///     pty.play_macro("greet", 1.0)
+    ///     pty.pause_macro()
+    ///     pty.resume_macro()
+    ///     assert not pty.is_macro_paused()
+    ///     pty.stop_macro()
+    ///     ```
     fn resume_macro(&self) -> PyResult<()> {
         {
             let mut term = self.inner.terminal_write();
@@ -960,6 +1224,10 @@ impl PyPtyTerminal {
     ///
     /// Args:
     ///     speed: Speed multiplier (0.1 to 10.0)
+    ///
+    /// Example:
+    ///     >>> pty = PtyTerminal(80, 24)
+    ///     >>> pty.set_macro_speed(2.0)
     fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
         {
             let mut term = self.inner.terminal_write();
@@ -972,6 +1240,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     True if a macro is playing, False otherwise
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).is_macro_playing()
+    ///     False
     fn is_macro_playing(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -982,6 +1254,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     True if paused, False otherwise
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).is_macro_paused()
+    ///     False
     fn is_macro_paused(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -992,6 +1268,19 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Tuple of (current_event, total_events) if playing, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     macro = Macro("greet")
+    ///     macro.add_key("h")
+    ///     macro.add_key("i")
+    ///     pty = PtyTerminal(80, 24)
+    ///     assert pty.get_macro_progress() is None  # nothing playing
+    ///     pty.load_macro("greet", macro)
+    ///     pty.play_macro("greet", 1.0)
+    ///     assert pty.get_macro_progress() == (0, 2)
+    ///     pty.stop_macro()
+    ///     ```
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -1002,6 +1291,15 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     Macro name if playing, None otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     pty.load_macro("greet", Macro("greet"))
+    ///     pty.play_macro("greet", 1.0)
+    ///     assert pty.get_current_macro_name() == "greet"
+    ///     pty.stop_macro()
+    ///     ```
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
         let term = terminal.read();
@@ -1032,6 +1330,10 @@ impl PyPtyTerminal {
     ///
     /// Returns:
     ///     List of screenshot labels
+    ///
+    /// Example:
+    ///     >>> PtyTerminal(80, 24).get_macro_screenshot_triggers()
+    ///     []
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
         let mut term = self.inner.terminal_write();
         Ok(MacroEngine::get_macro_screenshot_triggers(&mut term))

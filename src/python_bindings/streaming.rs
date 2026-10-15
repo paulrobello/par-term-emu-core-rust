@@ -92,6 +92,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Maximum number of simultaneous clients allowed
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.max_clients
+    ///     1000
+    ///     >>> config.max_clients = 4
+    ///     >>> config.max_clients
+    ///     4
     #[getter]
     fn max_clients(&self) -> usize {
         self.inner.max_clients
@@ -110,6 +118,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if new clients receive the current screen contents
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.send_initial_screen
+    ///     True
+    ///     >>> config.send_initial_screen = False
+    ///     >>> config.send_initial_screen
+    ///     False
     #[getter]
     fn send_initial_screen(&self) -> bool {
         self.inner.send_initial_screen
@@ -128,6 +144,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Seconds between WebSocket keepalive pings
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.keepalive_interval
+    ///     30
+    ///     >>> config.keepalive_interval = 60
+    ///     >>> config.keepalive_interval
+    ///     60
     #[getter]
     fn keepalive_interval(&self) -> u64 {
         self.inner.keepalive_interval
@@ -146,6 +170,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if clients start in read-only mode by default
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.default_read_only
+    ///     False
+    ///     >>> config.default_read_only = True
+    ///     >>> config.default_read_only
+    ///     True
     #[getter]
     fn default_read_only(&self) -> bool {
         self.inner.default_read_only
@@ -164,6 +196,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Initial column count, or 0 to adopt the terminal's size
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.initial_cols
+    ///     0
+    ///     >>> config.initial_cols = 120
+    ///     >>> config.initial_cols
+    ///     120
     #[getter]
     fn initial_cols(&self) -> u16 {
         self.inner.initial_cols
@@ -182,6 +222,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Initial row count, or 0 to adopt the terminal's size
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.initial_rows
+    ///     0
+    ///     >>> config.initial_rows = 40
+    ///     >>> config.initial_rows
+    ///     40
     #[getter]
     fn initial_rows(&self) -> u16 {
         self.inner.initial_rows
@@ -200,6 +248,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if the HTTP server serves the web frontend
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.enable_http
+    ///     False
+    ///     >>> config.enable_http = True
+    ///     >>> config.enable_http
+    ///     True
     #[getter]
     fn enable_http(&self) -> bool {
         self.inner.enable_http
@@ -218,6 +274,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     str: Directory the HTTP server serves static files from
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.web_root
+    ///     './web_term'
+    ///     >>> config.web_root = "/srv/web_term"
+    ///     >>> config.web_root
+    ///     '/srv/web_term'
     #[getter]
     fn web_root(&self) -> String {
         self.inner.web_root.clone()
@@ -236,6 +300,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Maximum number of concurrent terminal sessions
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.max_sessions
+    ///     10
+    ///     >>> config.max_sessions = 5
+    ///     >>> config.max_sessions
+    ///     5
     #[getter]
     fn max_sessions(&self) -> usize {
         self.inner.max_sessions
@@ -254,6 +326,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Seconds before an idle session is reaped, or 0 for never
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.session_idle_timeout
+    ///     900
+    ///     >>> config.session_idle_timeout = 60
+    ///     >>> config.session_idle_timeout
+    ///     60
     #[getter]
     fn session_idle_timeout(&self) -> u64 {
         self.inner.session_idle_timeout
@@ -272,6 +352,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Maximum clients attached to one session, or 0 for unlimited
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.max_clients_per_session
+    ///     0
+    ///     >>> config.max_clients_per_session = 2
+    ///     >>> config.max_clients_per_session
+    ///     2
     #[getter]
     fn max_clients_per_session(&self) -> usize {
         self.inner.max_clients_per_session
@@ -290,6 +378,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Per-client input limit in bytes/second, or 0 for unlimited
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.input_rate_limit_bytes_per_sec
+    ///     0
+    ///     >>> config.input_rate_limit_bytes_per_sec = 65536
+    ///     >>> config.input_rate_limit_bytes_per_sec
+    ///     65536
     #[getter]
     fn input_rate_limit_bytes_per_sec(&self) -> usize {
         self.inner.input_rate_limit_bytes_per_sec
@@ -308,6 +404,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if CPU/memory stats are streamed to clients
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.enable_system_stats
+    ///     False
+    ///     >>> config.enable_system_stats = True
+    ///     >>> config.enable_system_stats
+    ///     True
     #[getter]
     fn enable_system_stats(&self) -> bool {
         self.inner.enable_system_stats
@@ -326,6 +430,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     int: Seconds between system stats updates
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.system_stats_interval_secs
+    ///     5
+    ///     >>> config.system_stats_interval_secs = 10
+    ///     >>> config.system_stats_interval_secs
+    ///     10
     #[getter]
     fn system_stats_interval_secs(&self) -> u64 {
         self.inner.system_stats_interval_secs
@@ -344,6 +456,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     str | None: Current API key, or None if authentication is off
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.api_key is None
+    ///     True
+    ///     >>> config.api_key = "secret"
+    ///     >>> config.api_key
+    ///     'secret'
     #[getter]
     fn api_key(&self) -> Option<String> {
         self.inner.api_key.clone()
@@ -362,6 +482,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if the API key may be passed as a query parameter
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allow_api_key_in_query
+    ///     False
+    ///     >>> config.allow_api_key_in_query = True
+    ///     >>> config.allow_api_key_in_query
+    ///     True
     #[getter]
     fn allow_api_key_in_query(&self) -> bool {
         self.inner.allow_api_key_in_query
@@ -381,6 +509,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     list[str] | None: Allowed origins, or None for local/non-browser only
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allowed_origins is None
+    ///     True
+    ///     >>> config.allowed_origins = ["https://app.example.com"]
+    ///     >>> config.allowed_origins
+    ///     ['https://app.example.com']
     #[getter]
     fn allowed_origins(&self) -> Option<Vec<String>> {
         self.inner.allowed_origins.clone()
@@ -402,6 +538,14 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     str: "off", "temp_only", or "all"
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.kitty_file_media
+    ///     'temp_only'
+    ///     >>> config.kitty_file_media = "off"
+    ///     >>> config.kitty_file_media
+    ///     'off'
     #[getter]
     fn kitty_file_media(&self) -> String {
         self.inner.kitty_file_media.as_str().to_string()
@@ -466,6 +610,16 @@ impl PyStreamingConfig {
     ///
     /// Raises:
     ///     RuntimeError: If files cannot be read or parsed
+    ///
+    /// Example:
+    ///     ```python
+    ///     config = StreamingConfig()
+    ///     try:
+    ///         config.set_tls_from_files("/nonexistent/cert.pem", "/nonexistent/key.pem")
+    ///     except RuntimeError:
+    ///         pass  # unreadable files raise; TLS stays off
+    ///     assert not config.tls_enabled
+    ///     ```
     fn set_tls_from_files(&mut self, cert_path: &str, key_path: &str) -> PyResult<()> {
         let tls_config = TlsConfig::from_files(cert_path, key_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load TLS config: {}", e)))?;
@@ -480,6 +634,16 @@ impl PyStreamingConfig {
     ///
     /// Raises:
     ///     RuntimeError: If file cannot be read or parsed
+    ///
+    /// Example:
+    ///     ```python
+    ///     config = StreamingConfig()
+    ///     try:
+    ///         config.set_tls_from_pem("/nonexistent/server.pem")
+    ///     except RuntimeError:
+    ///         pass  # an unreadable file raises; TLS stays off
+    ///     assert not config.tls_enabled
+    ///     ```
     fn set_tls_from_pem(&mut self, pem_path: &str) -> PyResult<()> {
         let tls_config = TlsConfig::from_pem(pem_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load TLS config: {}", e)))?;
@@ -491,12 +655,22 @@ impl PyStreamingConfig {
     ///
     /// Returns:
     ///     bool: True if TLS is configured, False otherwise
+    ///
+    /// Example:
+    ///     >>> StreamingConfig().tls_enabled
+    ///     False
     #[getter]
     fn tls_enabled(&self) -> bool {
         self.inner.tls.is_some()
     }
 
     /// Disable TLS (clear TLS configuration)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.disable_tls()
+    ///     >>> config.tls_enabled
+    ///     False
     fn disable_tls(&mut self) {
         self.inner.tls = None;
     }
@@ -524,6 +698,13 @@ impl PyStreamingServer {
     ///
     /// Returns:
     ///     StreamingServer: A new server (call start() to begin serving)
+    ///
+    /// Example:
+    ///     ```python
+    ///     pty = PtyTerminal(80, 24)
+    ///     server = StreamingServer(pty, "127.0.0.1:0", StreamingConfig(max_clients=4))
+    ///     assert server.max_clients() == 4
+    ///     ```
     #[new]
     #[pyo3(signature = (pty_terminal, addr, config=None))]
     fn new(
@@ -655,6 +836,12 @@ impl PyStreamingServer {
     ///
     /// Returns:
     ///     int: Number of currently connected clients (0 when stopped)
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     assert server.client_count() == 0
+    ///     ```
     fn client_count(&self) -> PyResult<usize> {
         if let Some(server) = &self.server {
             Ok(server.client_count())
@@ -667,6 +854,14 @@ impl PyStreamingServer {
     ///
     /// Returns:
     ///     int: Configured client limit (0 when stopped)
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     assert server.max_clients() == 1000
+    ///     server.shutdown("done")
+    ///     assert server.max_clients() == 0
+    ///     ```
     fn max_clients(&self) -> PyResult<usize> {
         if let Some(server) = &self.server {
             Ok(server.max_clients())
@@ -693,6 +888,14 @@ impl PyStreamingServer {
     ///
     /// Raises:
     ///     RuntimeError: If normal or bright does not contain exactly 8 tuples
+    ///
+    /// Example:
+    ///     ```python
+    ///     theme = StreamingServer.create_theme_info(
+    ///         "mono", (0, 0, 0), (255, 255, 255), [(0, 0, 0)] * 8, [(128, 128, 128)] * 8
+    ///     )
+    ///     assert theme["name"] == "mono"
+    ///     ```
     #[staticmethod]
     fn create_theme_info(
         name: String,
@@ -729,6 +932,12 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     data: The output data to send (ANSI escape sequences)
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_output("\x1b[1mhello\x1b[0m\r\n")
+    ///     ```
     fn send_output(&self, data: String) -> PyResult<()> {
         if let Some(server) = &self.server {
             server
@@ -754,7 +963,10 @@ impl PyStreamingServer {
     ///     RuntimeError: If the server has been stopped
     ///
     /// Example:
-    ///     >>> server.send_input(b"ls -la\n")
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_input(b"ls -la\n")
+    ///     ```
     fn send_input(&self, data: &[u8]) -> PyResult<()> {
         let Some(server) = &self.server else {
             return Err(PyRuntimeError::new_err("Server has been stopped"));
@@ -773,6 +985,12 @@ impl PyStreamingServer {
     /// Args:
     ///     cols: Number of columns
     ///     rows: Number of rows
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_resize(120, 40)
+    ///     ```
     fn send_resize(&self, cols: u16, rows: u16) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_resize(cols, rows);
@@ -789,6 +1007,12 @@ impl PyStreamingServer {
     ///
     /// This should be called periodically from the main event loop.
     /// When a resize is received, call pty_terminal.resize(cols, rows) to apply it.
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     assert server.poll_resize() is None  # no client asked to resize
+    ///     ```
     fn poll_resize(&self) -> PyResult<Option<(u16, u16)>> {
         if let Some(ref resize_rx) = self.resize_rx {
             let resize_rx = resize_rx.clone();
@@ -807,6 +1031,12 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     title: The new terminal title
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_title("build: running")
+    ///     ```
     fn send_title(&self, title: String) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_title(title);
@@ -817,6 +1047,12 @@ impl PyStreamingServer {
     }
 
     /// Send a bell event to all clients
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_bell()
+    ///     ```
     fn send_bell(&self) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_bell();
@@ -831,6 +1067,12 @@ impl PyStreamingServer {
     /// Args:
     ///     mode: Mode name (e.g. "alt_screen", "cursor_visible")
     ///     enabled: Whether the mode is now enabled
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_mode_changed("alt_screen", True)
+    ///     ```
     fn send_mode_changed(&self, mode: String, enabled: bool) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_mode_changed(mode, enabled);
@@ -844,6 +1086,12 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     row: Grid row the new graphic was placed on
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_graphics_added(0)
+    ///     ```
     fn send_graphics_added(&self, row: u16) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_graphics_added(row);
@@ -860,6 +1108,12 @@ impl PyStreamingServer {
     ///     row: Grid row the link starts on (0-indexed)
     ///     col: Grid column the link starts at (0-indexed)
     ///     id: Optional link id for grouping multi-cell links
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_hyperlink_added("https://example.com", 0, 0)
+    ///     ```
     #[pyo3(signature = (url, row, col, id=None))]
     fn send_hyperlink_added(
         &self,
@@ -882,6 +1136,12 @@ impl PyStreamingServer {
     ///     name: Variable name
     ///     value: New variable value
     ///     old_value: Previous value, if known
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_user_var_changed("host", "dev", old_value="prod")
+    ///     ```
     #[pyo3(signature = (name, value, old_value=None))]
     fn send_user_var_changed(
         &self,
@@ -903,6 +1163,12 @@ impl PyStreamingServer {
     ///     col: Cursor column (0-indexed)
     ///     row: Cursor row (0-indexed)
     ///     visible: Whether the cursor is visible
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_cursor_position(0, 0, True)
+    ///     ```
     fn send_cursor_position(&self, col: u16, row: u16, visible: bool) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_cursor_position(col, row, visible);
@@ -916,6 +1182,13 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     badge: New badge text, or None to clear the badge
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_badge_changed("build")
+    ///     server.send_badge_changed(None)  # clear
+    ///     ```
     #[pyo3(signature = (badge=None))]
     fn send_badge_changed(&self, badge: Option<String>) -> PyResult<()> {
         if let Some(server) = &self.server {
@@ -932,6 +1205,12 @@ impl PyStreamingServer {
     ///     trigger_id: ID of the trigger that produced this action
     ///     title: Notification title
     ///     message: Notification message
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_action_notify(1, "Build", "finished")
+    ///     ```
     fn send_action_notify(&self, trigger_id: u64, title: String, message: String) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_action_notify(trigger_id, title, message);
@@ -948,6 +1227,12 @@ impl PyStreamingServer {
     ///     row: Row to mark
     ///     label: Optional label for the mark
     ///     color: Optional RGB color tuple (r, g, b)
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_action_mark_line(1, 3, label="error", color=(255, 0, 0))
+    ///     ```
     #[pyo3(signature = (trigger_id, row, label=None, color=None))]
     fn send_action_mark_line(
         &self,
@@ -972,6 +1257,12 @@ impl PyStreamingServer {
     ///     hostname: Hostname associated with the CWD (optional)
     ///     username: Username associated with the CWD (optional)
     ///     timestamp: Unix timestamp of the change
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_cwd_changed("/tmp", old_cwd="/")
+    ///     ```
     #[pyo3(signature = (new_cwd, old_cwd=None, hostname=None, username=None, timestamp=0))]
     fn send_cwd_changed(
         &self,
@@ -999,6 +1290,12 @@ impl PyStreamingServer {
     ///     text: The matched text
     ///     captures: List of capture group strings
     ///     timestamp: Unix timestamp of the match
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_trigger_matched(1, 0, 0, 5, "ERROR", captures=["ERROR"])
+    ///     ```
     #[pyo3(signature = (trigger_id, row, col, end_col, text, captures=vec![], timestamp=0))]
     // Python keyword arguments; a struct would change the Python API.
     #[allow(clippy::too_many_arguments)]
@@ -1028,6 +1325,15 @@ impl PyStreamingServer {
     ///     state: Optional ProgressState enum value
     ///     percent: Optional progress percentage (0-100)
     ///     label: Optional label text
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_progress_bar_changed(
+    ///         "set", "build", state=ProgressState.Normal, percent=50, label="compile"
+    ///     )
+    ///     server.send_progress_bar_changed("remove", "build")
+    ///     ```
     #[pyo3(signature = (action, id, state=None, percent=None, label=None))]
     fn send_progress_bar_changed(
         &self,
@@ -1061,6 +1367,13 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     reason: Reason for shutdown
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.shutdown("maintenance")
+    ///     assert server.client_count() == 0
+    ///     ```
     fn shutdown(&mut self, reason: String) -> PyResult<()> {
         if let Some(server) = self.server.take() {
             server.shutdown(reason);
@@ -1074,6 +1387,12 @@ impl PyStreamingServer {
     ///
     /// Returns:
     ///     str: The address the server is bound to
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     assert server.addr == "127.0.0.1:0"
+    ///     ```
     #[getter]
     fn addr(&self) -> String {
         self.addr.clone()
@@ -1270,9 +1589,8 @@ fn decode_message<'py, M: MessageCodec>(
 ///
 /// Example:
 ///     ```python
-///     msg = decode_server_message(data)
-///     if msg["type"] == "output":
-///         print(msg["data"])
+///     msg = decode_server_message(encode_server_message("output", data="hi"))
+///     assert msg["type"] == "output" and msg["data"] == "hi"
 ///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
@@ -1301,7 +1619,7 @@ pub fn decode_server_message<'py>(
 /// Example:
 ///     ```python
 ///     data = encode_client_message("input", data="ls\r")
-///     ws.send(data)
+///     assert isinstance(data, bytes)  # send it over the WebSocket
 ///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
@@ -1327,9 +1645,8 @@ pub fn encode_client_message<'py>(
 ///
 /// Example:
 ///     ```python
-///     msg = decode_client_message(data)
-///     if msg["type"] == "input":
-///         pty.write(msg["data"])
+///     msg = decode_client_message(encode_client_message("input", data="ls\r"))
+///     assert msg == {"type": "input", "data": "ls\r"}
 ///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]

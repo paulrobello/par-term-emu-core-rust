@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""DOC-117 warn-level lint: extract and RUN `Example:` blocks from pyo3 binding docstrings.
+"""DOC-117 gate: extract and RUN `Example:` blocks from pyo3 binding docstrings.
 
 Scans src/python_bindings/**/*.rs for `Example:` sections (fenced ```python blocks
 or doctest-style `>>>` lines), executes every one against the built
 par_term_emu_core_rust module, and reports `#[pymethods]` methods whose docstring
 lacks an Example section.
 
-Warn-level: always exits 0 so it never gates CI; pass --strict to exit 1 on any
-failing example. Failures should be treated as real defects in doc examples —
-every Example must run against the real module (see vault pattern
+Exits 1 when any Example fails, when the module cannot be imported, or when no
+Example ran. On the default whole-tree scan it also exits 1 when the number of
+documented pymethods without an Example exceeds MISSING_EXAMPLE_FLOOR (audit
+DOC-002 ratchet): add Examples, then lower the floor to the new count. The floor
+only goes down. `#[setter]` methods are not counted: PyO3 exposes one `__doc__`
+per property, the getter's, so a setter Example is never shown to Python users.
+Every Example must run against the real module (see vault pattern
 "Verified Docstring Examples as API Probes").
 """
 
@@ -24,10 +28,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 BINDINGS = ROOT / "src" / "python_bindings"
 
-# Deferred DOC-117 wave: pty.rs/streaming.rs examples need live processes and
-# sockets; they fail loudly here until that wave lands. Pass them explicitly as
-# path arguments to run them.
-DEFERRED = {"pty.rs", "streaming.rs"}
+# Ratchet ceiling for documented pymethods lacking an Example on the default
+# scan (audit DOC-002). Lower it whenever the count drops; never raise it.
+MISSING_EXAMPLE_FLOOR = 277
 
 FN_RE = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?fn (\w+)")
 DOC_RE = re.compile(r"^(\s*)///(?: (.*))?$")
@@ -42,6 +45,8 @@ def scan_file(path: Path) -> tuple[list[dict[str, Any]], int, list[str]]:
     last_pymethods = -1
     last_impl_close = -1
     for i, line in enumerate(lines):
+        if line.strip() == "#[setter]":
+            continue
         stripped = line.strip()
         if stripped == "#[pymethods]":
             last_pymethods = i
@@ -57,8 +62,11 @@ def scan_file(path: Path) -> tuple[list[dict[str, Any]], int, list[str]]:
             j = i - 1
             has_doc = False
             has_example = False
+            is_setter = False
             while j >= 0:
                 s = lines[j].lstrip()
+                if s.startswith("#[setter]"):
+                    is_setter = True
                 if s.startswith("///"):
                     has_doc = True
                     if "Example" in s:
@@ -68,7 +76,9 @@ def scan_file(path: Path) -> tuple[list[dict[str, Any]], int, list[str]]:
                     j -= 1
                 else:
                     break
-            if has_doc and has_example:
+            if is_setter:
+                pass
+            elif has_doc and has_example:
                 covered += 1
             elif has_doc:
                 missing.append(f"{path.relative_to(ROOT)}:{i + 1} {name}")
@@ -139,13 +149,16 @@ def nearest_fn(lines: list[str], from_idx: int) -> str:
 
 def run_examples(
     files: list[Path],
-) -> tuple[int, list[tuple[str, str]], list[str]]:
-    """Execute every extracted Example block; return (total, failures, missing)."""
+) -> tuple[int, list[tuple[str, str]], list[str]] | None:
+    """Execute every extracted Example block; return (total, failures, missing).
+
+    Returns None when the module cannot be imported.
+    """
     try:
         import par_term_emu_core_rust as m
     except Exception as e:  # noqa: BLE001 - environment guard, lint must not crash
-        print(f"WARN: cannot import par_term_emu_core_rust ({e}); skipping run phase")
-        return 0, [], []
+        print(f"ERROR: cannot import par_term_emu_core_rust ({e})")
+        return None
 
     failures: list[tuple[str, str]] = []
     total = 0
@@ -196,7 +209,7 @@ def main() -> int:
     ap.add_argument(
         "--strict",
         action="store_true",
-        help="exit 1 on any failing example (default: warn-level, always exit 0)",
+        help="accepted for compatibility; failing examples always exit 1",
     )
     ap.add_argument(
         "paths",
@@ -204,20 +217,18 @@ def main() -> int:
         help="files or directories to scan (default: src/python_bindings)",
     )
     args = ap.parse_args()
-    targets = [Path(p) for p in args.paths] if args.paths else [BINDINGS]
+    targets = [Path(p).resolve() for p in args.paths] if args.paths else [BINDINGS]
     files: list[Path] = []
     for t in targets:
         if t.is_dir():
             files.extend(sorted(t.rglob("*.rs")))
         else:
             files.append(t)
-    if not args.paths:
-        files = [f for f in files if f.name not in DEFERRED]
-        print(
-            "note: pty.rs/streaming.rs excluded (deferred DOC-117 wave; pass paths to include)"
-        )
 
-    total, failures, missing = run_examples(files)
+    result = run_examples(files)
+    if result is None:
+        return 1
+    total, failures, missing = result
     print(f"docstring-examples: ran {total} Example blocks across {len(files)} files")
     for label, err in failures:
         print(f"FAIL {label}: {err}")
@@ -227,9 +238,28 @@ def main() -> int:
         )
         for name in missing:
             print(f"  MISSING {name}")
+    status = 0
     if failures:
-        print("WARN: failing docstring examples present (DOC-117 warn-level lint)")
-    return 1 if (args.strict and failures) else 0
+        print(f"ERROR: {len(failures)} failing docstring example(s)")
+        status = 1
+    if total == 0:
+        print("ERROR: no Example blocks ran")
+        status = 1
+    if not args.paths:
+        if len(missing) > MISSING_EXAMPLE_FLOOR:
+            print(
+                f"ERROR: {len(missing)} documented pymethods lack an Example, above "
+                f"the ratchet floor of {MISSING_EXAMPLE_FLOOR}; add Examples to the "
+                "new methods"
+            )
+            status = 1
+        elif len(missing) < MISSING_EXAMPLE_FLOOR:
+            print(
+                f"note: missing-Example count {len(missing)} is below the floor "
+                f"{MISSING_EXAMPLE_FLOOR}; lower MISSING_EXAMPLE_FLOOR in "
+                f"{Path(__file__).name} to {len(missing)}"
+            )
+    return status
 
 
 if __name__ == "__main__":
