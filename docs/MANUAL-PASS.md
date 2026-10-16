@@ -116,10 +116,10 @@ Per terminal, in passthrough then render mode, check:
 
 | Terminal | Mode | Fidelity | Resize | Mouse | Scroll | Status bar | Zoom | Detach |
 |----------|------|----------|--------|-------|--------|------------|------|--------|
-| Ghostty | passthrough | | | | | n/a | n/a | |
-| Ghostty | render | | | | | | | |
-| iTerm2 | passthrough | | | | | n/a | n/a | |
-| iTerm2 | render | | | | | | | |
+| Ghostty | passthrough | pass | pass | pass | pass | n/a | n/a | pass |
+| Ghostty | render | pass | pass | pass | pass | pass | pass | pass |
+| iTerm2 | passthrough | pass | pass | pass | pass | n/a | n/a | pass |
+| iTerm2 | render | pass | pass | pass | pass | pass | pass | pass |
 | Terminal.app | passthrough | | | | | n/a | n/a | |
 | Terminal.app | render | | | | | | | |
 | SSH (note the host terminal) | render | | | | | | | |
