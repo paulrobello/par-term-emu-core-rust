@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
@@ -80,7 +80,7 @@ help:
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
-	@echo "  checkall-ci     - CI-parity gate: checkall + the CI mux-test job's suites (nextest, serial; heavy — run before pushing)"
+	@echo "  checkall-ci     - CI-parity gate: checkall + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
@@ -615,8 +615,9 @@ checkall: ffi-header-check ffi-surface-check derive-version-check core-version-c
 # CI-parity gate (two-tier convention: checkall stays fast, checkall-ci adds
 # what CI's mux-test job runs that the fast gate skips — the par-mux
 # integration suites incl. the attach client, the D1 sim isolation build,
-# and the mux feature-set runs). Heavy; run before pushing, not per-iteration.
-checkall-ci: checkall test-mux-ci
+# the mux feature-set runs — plus the local-only python-test,streaming combo).
+# Heavy; run before pushing, not per-iteration.
+checkall-ci: checkall test-mux-ci test-python-streaming-ci
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All CI-parity checks passed!"
@@ -635,6 +636,12 @@ test-mux-ci:
 	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
 	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
 	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
+
+# The pinned ARC-006 stats-dict test needs python-test + streaming together;
+# CI runs each feature alone and never the combo, so this leg is local-only
+# by decision (Paul, 2026-10-15: no ci.yml change).
+test-python-streaming-ci:
+	cargo test --locked --lib --no-default-features --features python-test,streaming system_stats_dict
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.
