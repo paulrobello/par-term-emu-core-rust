@@ -108,18 +108,19 @@ pub fn render_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// The spawn-command tail that keeps a failed resume from costing the pane
-/// (unix only): when the invocation exits non-zero — an uninstalled binary,
-/// a session id the CLI rejects — the pane falls through to a live shell
-/// instead of exiting into the reaper, so the restored screen, scrollback,
-/// and agent identity survive until an explicit `kill-pane`.
-pub(crate) const SURVIVING_TAIL: &str = " || { printf 'par-mux: agent resume failed; pane kept on a shell\\n' >&2; exec \"${SHELL:-sh}\"; }";
+/// The spawn-command tail that keeps an exited resume from costing the pane
+/// (unix only): whatever the invocation's exit — non-zero (an uninstalled
+/// binary, a session id the CLI rejects) or clean — the pane falls through
+/// to a live shell instead of exiting into the reaper, so the restored
+/// screen, scrollback, and agent identity survive until an explicit
+/// `kill-pane`. The printed line names which exit happened.
+pub(crate) const SURVIVING_TAIL: &str = "; { if [ $? -ne 0 ]; then printf 'par-mux: agent resume failed; pane kept on a shell\\n' >&2; else printf 'par-mux: agent exited; pane kept on a shell\\n' >&2; fi; exec \"${SHELL:-sh}\"; }";
 
 /// Render a resume invocation for the pane factory's `sh -c` spawn, shaped
-/// so a FAILED resume cannot delete the pane (D6.3's "never a dead or
-/// half-initialized pane"): the invocation runs; only on a non-zero exit
-/// does the pane drop into a live shell carrying the restored screen and
-/// scrollback. On Windows the tail's POSIX syntax would reach cmd.exe
+/// so an exited resume cannot delete the pane (D6.3's "never a dead or
+/// half-initialized pane"): the invocation runs; whatever its exit — failed
+/// or clean — the pane drops into a live shell carrying the restored screen
+/// and scrollback. On Windows the tail's POSIX syntax would reach cmd.exe
 /// verbatim, so the invocation stays bare there — the Windows spawn itself
 /// goes through [`crate::mux::win_resume`]'s structured-argv path, which
 /// never renders through this function.
@@ -342,10 +343,10 @@ mod tests {
         );
     }
 
-    // --- the surviving render: a failed resume must not cost the pane ---
+    // --- the surviving render: an exited resume must not cost the pane ---
 
     #[test]
-    fn render_surviving_appends_a_shell_fallback_tail_on_unix() {
+    fn render_surviving_appends_the_surviving_tail_on_unix() {
         let argv: Vec<String> = ["pi", "--session", "s-1"]
             .iter()
             .map(|part| part.to_string())

@@ -3529,6 +3529,78 @@ mod tests {
         );
     }
 
+    /// The surviving tail covers the CLEAN exit too (card 01a13d03
+    /// criterion 1): a restored agent that exits 0 must also leave a live
+    /// pane — the reaper never sees a dead restored pane; only an explicit
+    /// `kill-pane` removes it. Runs the real spawn path (`sh -c` with
+    /// `true` as the whole invocation), unix only.
+    #[test]
+    #[cfg(unix)]
+    fn a_clean_agent_exit_also_leaves_a_live_pane() {
+        let (tree, pane_id) = tree_with_metadata(&[
+            ("agent", "pi"),
+            ("agent_session_id", "s-1"),
+            ("agent_resume_argv", r#"["true"]"#),
+        ]);
+        // Markers written straight into the terminal (not through the
+        // child): content the restore must still carry after the agent
+        // exits cleanly.
+        {
+            let terminal = tree.pane(pane_id).unwrap().terminal();
+            let mut guard = terminal.write();
+            guard.process(b"PRE-MARK\r\n");
+        }
+        let state = tree.to_persist_state();
+
+        // Restore through the REAL factory: the pane's process is
+        // `sh -c ''true''; { ...; exec shell }`. `true` exits 0 almost
+        // immediately; the tail's clean-exit message decides the pass.
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+                .expect("restore completes");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut text = String::new();
+        loop {
+            assert!(
+                restored.pane_mut(pane_id).unwrap().poll_running(),
+                "the pane must survive its agent's clean exit"
+            );
+            let snapshot = restored
+                .pane(pane_id)
+                .unwrap()
+                .terminal()
+                .read()
+                .capture_snapshot();
+            text.clear();
+            text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c));
+            text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+            if text.contains("par-mux: agent exited") || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        assert!(
+            text.contains("par-mux: agent exited"),
+            "the tail announced the clean exit in the pane"
+        );
+        assert!(
+            text.contains("PRE-MARK"),
+            "restored scrollback survived the clean exit"
+        );
+
+        // The agent identity survives the next persist — only an explicit
+        // kill-pane (or kill-window) removes it.
+        let recaptured = restored.to_persist_state();
+        let session = recaptured.sessions[0].windows[0].panes[0]
+            .agent_session
+            .as_ref()
+            .expect("agent identity survived the clean exit");
+        assert_eq!(session.agent, "pi");
+        assert_eq!(session.resume_argv.as_deref(), Some(r#"["true"]"#));
+    }
+
     /// Card 01a0d9b38c98: a Windows restore hands the resume argv to the
     /// process verbatim, with no cmd.exe string re-parse in between (the
     /// POSIX single-quote rendering made cmd treat `'claude'` as the
