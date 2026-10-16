@@ -550,6 +550,9 @@ impl WindowSession {
         file: &crate::mux::config::ConfigFile,
         ok_text: &str,
     ) -> String {
+        // A config width edit overrides a dragged/persisted width, but
+        // an unrelated reload must preserve that client's local width.
+        let width_changed = file.client.sidebar_width != self.applied_client.sidebar_width;
         self.applied_client = file.client.clone();
         match crate::mux::config::reload_client_chords(
             file,
@@ -575,6 +578,11 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
+                if width_changed && file.client.sidebar_width.is_some() {
+                    self.render_opts.sidebar_width = chords.sidebar_width;
+                    self.chrome_geometry_changed();
+                    self.persist_sidebar();
+                }
                 let known_border = self.apply_chords(&chords, file);
                 let warning = crate::mux::config::display_option_warnings(&chords)
                     .into_iter()

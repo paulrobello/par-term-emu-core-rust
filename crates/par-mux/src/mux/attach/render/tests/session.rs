@@ -1934,7 +1934,7 @@ fn config_changed_reapplies_the_file_without_resending_reload() {
     // Another client writes `terminal` + `pane-borders` and reloads.
     std::fs::write(
         &path,
-        "[client]\nnotify-delivery = \"terminal\"\npane-borders = true\n",
+        "[client]\nnotify-delivery = \"terminal\"\npane-borders = true\nsidebar-width = 34\n",
     )
     .unwrap();
     session.handle_event(TmuxNotification::ConfigChanged);
@@ -1944,6 +1944,7 @@ fn config_changed_reapplies_the_file_without_resending_reload() {
         .expect("apply pending");
     settle(&mut session, &mut conn);
     assert_eq!(session.notify.delivery, NotifyDelivery::Terminal);
+    assert_eq!(session.render_opts.sidebar_width, 34, "width applies live");
     assert!(
         session.render_opts.pane_borders,
         "a chrome key applied live"

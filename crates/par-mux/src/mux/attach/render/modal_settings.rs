@@ -924,18 +924,6 @@ impl WindowSession {
             self.draw_status_row();
             return false;
         }
-        // The width applies to the live panel like a drag release (the
-        // reload path resolves sidebar-width but never applies it, and
-        // the persisted panel state would mask the config at the next
-        // launch — so it is re-persisted with the new width too).
-        if key == "sidebar-width" {
-            if let SettingValue::Int(n) = value {
-                let width = n.clamp(6, 60) as u16;
-                self.render_opts.sidebar_width = width;
-                self.chrome_geometry_changed();
-                self.persist_sidebar();
-            }
-        }
         self.reload_config(conn);
         true
     }

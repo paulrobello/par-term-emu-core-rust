@@ -519,9 +519,9 @@ There are three reload entry points:
   reload — one chord press, one menu row, or one control-client
   `reload-config` — then reaches all of them; there is no file watcher).
   Passthrough clients ignore the cue (they re-read on their own chord).
-  `sidebar-width` is the one dialog row that does not follow on other
-  clients: the reload path resolves it without applying it to the live
-  panel (the dialog applies it to its own client only).
+  A changed `sidebar-width` applies through the same geometry/refit path
+  as the dialog and persists the new width. Unrelated reloads preserve
+  each client's dragged width.
 - **`par-mux --gen-config`** writes the config file with the CURRENT
   EFFECTIVE values (file if present > env > built-in defaults; startup
   CLI flags are not introspectable after parse, so they do not appear —

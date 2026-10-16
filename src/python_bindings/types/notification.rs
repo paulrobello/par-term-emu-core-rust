@@ -522,7 +522,6 @@ mod tests {
                 name: "n-session-renamed".to_string(),
             },
             TmuxNotification::SessionsChanged,
-            TmuxNotification::ConfigChanged,
             TmuxNotification::SessionWindowChanged {
                 session_id: "s-session-window".to_string(),
                 window_id: "w-session-window".to_string(),
