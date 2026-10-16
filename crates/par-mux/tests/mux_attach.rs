@@ -4568,7 +4568,7 @@ fn render_mode_background_agent_state_notifies_the_host() {
     let got = wait_for_output(&host, b"bgagent: blocked", Duration::from_secs(10));
     let text = String::from_utf8_lossy(&got);
     assert!(
-        text.contains("\x1b]9;par-mux: ") && text.contains("bgagent: blocked\x1b\\"),
+        text.contains("\x1b]9;par-mux: ") && text.contains("bgagent: blocked\x07"),
         "the background agent's state reaches the host as OSC 9. stderr: {} bytes: {text:?}",
         stderr.lock().unwrap()
     );
@@ -4673,7 +4673,7 @@ fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env()
     ));
     let text = String::from_utf8_lossy(&got_more);
     assert!(
-        text.contains("\x1b]9;par-mux: ") && text.contains("leakagent: blocked\x1b\\"),
+        text.contains("\x1b]9;par-mux: ") && text.contains("leakagent: blocked\x07"),
         "the reloaded terminal delivery reaches a ghostty host as OSC 9. stderr: {} bytes: {text:?}",
         stderr.lock().unwrap()
     );

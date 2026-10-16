@@ -57,13 +57,17 @@ fn sanitize(text: &str) -> String {
 
 /// The host terminal's notification escape for `title` / `body`: kitty's
 /// structured OSC 99 under kitty (it ignores OSC 9), OSC 9 elsewhere
-/// (iTerm2, Ghostty, WezTerm, Windows Terminal). Terminated by ST.
+/// (iTerm2, Ghostty, WezTerm, Windows Terminal). Kitty's two chunks keep
+/// their ST terminators (the kitty protocol's own form); OSC 9 is
+/// BEL-terminated — the spelling iTerm2's OSC 9 support was built around
+/// (an ST-terminated OSC 9 never presented there in live testing, while
+/// Ghostty accepts both).
 pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec<u8> {
     let (title, body) = (sanitize(title), sanitize(body));
     if kitty {
         format!("\x1b]99;i=1:d=0;{title}\x1b\\\x1b]99;i=1:p=body;{body}\x1b\\").into_bytes()
     } else {
-        format!("\x1b]9;{title}: {body}\x1b\\").into_bytes()
+        format!("\x1b]9;{title}: {body}\x07").into_bytes()
     }
 }
 
@@ -239,7 +243,7 @@ mod tests {
         let osc9 = terminal_notification("par-mux", "main \u{b7} cl\x1baude: blocked\x07", false);
         assert_eq!(
             osc9,
-            "\x1b]9;par-mux: main \u{b7} claude: blocked\x1b\\".as_bytes(),
+            "\x1b]9;par-mux: main \u{b7} claude: blocked\x07".as_bytes(),
             "ESC and BEL inside pane-controlled text cannot end the OSC"
         );
         let kitty = String::from_utf8(terminal_notification("par-mux", "a\nb", true)).unwrap();
