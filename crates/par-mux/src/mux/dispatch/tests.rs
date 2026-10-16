@@ -5,7 +5,7 @@ use crate::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnCo
 use crate::mux::tree::MuxTree;
 use base64::Engine as _;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// `clear-history` wipes scrollback and the visible screen through the
@@ -97,6 +97,7 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
     clients.lock().push((
         u64::MAX,
         sink_tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         crate::mux::ipc::ConnectionAbort::none(),
     ));
@@ -184,6 +185,7 @@ fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
         clients.lock().push((
             id,
             tx.clone(),
+            Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
             crate::mux::ipc::ConnectionAbort::none(),
         ));
@@ -405,6 +407,7 @@ fn a_failed_respawn_keeps_the_live_panes_output_forwarding() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         crate::mux::ipc::ConnectionAbort::none(),
     ));
@@ -756,6 +759,7 @@ impl Harness {
         clients.lock().push((
             u64::MAX,
             sink_tx,
+            Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
             crate::mux::ipc::ConnectionAbort::none(),
         ));

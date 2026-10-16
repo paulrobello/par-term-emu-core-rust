@@ -29,12 +29,51 @@ pub(super) fn push_to_clients_except(clients: &Clients, skip: u64, line: String)
 }
 
 pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, line: String) {
-    clients.lock().retain(|(id, tx, evicted, abort)| {
+    let mut clients = clients.lock();
+    // Aggregate bound (ARC-008): the per-client depth alone lets K stalled
+    // clients pin K x CLIENT_QUEUE_DEPTH lines, so once the summed queue
+    // counters cross [`CLIENT_QUEUE_AGGREGATE_DEPTH`] the client holding
+    // the deepest queue is evicted on this push. Only a queue at a quarter
+    // of the per-client depth can be the victim: the sum crossing the cap
+    // through shallow queues is a healthy crowd, not a stall, and the
+    // per-client bound remains their correct bound. The counters are an
+    // approximation of the channel length (reply lines are uncounted, and
+    // a drain lags its push), which a stall bound can afford: a stalled
+    // client's counter climbs monotonically toward eviction.
+    let aggregate: usize = clients
+        .iter()
+        .map(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
+        .sum();
+    let victim = if aggregate >= CLIENT_QUEUE_AGGREGATE_DEPTH {
+        clients
+            .iter()
+            .filter(|(id, _, queued, _, _)| {
+                skip != Some(*id) && queued.load(Ordering::Relaxed) >= CLIENT_QUEUE_DEPTH / 4
+            })
+            .max_by_key(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
+            .map(|(id, _, _, _, _)| *id)
+    } else {
+        None
+    };
+    clients.retain(|(id, tx, queued, evicted, abort)| {
         if skip == Some(*id) {
             return true;
         }
+        if victim == Some(*id) {
+            log::warn!(
+                "par-mux: evicting client {id}: {aggregate} broadcast lines queued across \
+                 all clients exceeds the {CLIENT_QUEUE_AGGREGATE_DEPTH} aggregate bound \
+                 (deepest queue, stalled)"
+            );
+            evicted.store(true, Ordering::Relaxed);
+            abort.cancel_blocked_io();
+            return false;
+        }
         match tx.try_send(line.clone()) {
-            Ok(()) => true,
+            Ok(()) => {
+                queued.fetch_add(1, Ordering::Relaxed);
+                true
+            }
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!(
                     "par-mux: evicting client {id}: {CLIENT_QUEUE_DEPTH} broadcast lines \

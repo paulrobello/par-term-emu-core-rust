@@ -129,13 +129,14 @@ fn registration_after_a_death_delivers_the_held_exit_once() {
 
     let (tx, rx) = std::sync::mpsc::sync_channel(16);
     let evicted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut registration = Registration {
         done: false,
         announced: false,
         abort: Some(ConnectionAbort::none()),
     };
-    registration.ensure(&tree, &clients, 7, &tx, &evicted);
-    registration.ensure(&tree, &clients, 7, &tx, &evicted);
+    registration.ensure(&tree, &clients, 7, &tx, &queued, &evicted);
+    registration.ensure(&tree, &clients, 7, &tx, &queued, &evicted);
 
     let mut lines = Vec::new();
     while let Ok(line) = rx.try_recv() {
@@ -147,7 +148,7 @@ fn registration_after_a_death_delivers_the_held_exit_once() {
         "lines: {lines:?}"
     );
     assert!(
-        clients.lock().iter().any(|(id, _, _, _)| *id == 7),
+        clients.lock().iter().any(|(id, ..)| *id == 7),
         "the registering client joined the broadcast set"
     );
     let _ = tree.lock().pane_mut(pane).unwrap().kill();
@@ -1198,6 +1199,7 @@ fn mutating_dispatches_broadcast_lifecycle_notifications_to_other_clients() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1309,6 +1311,7 @@ fn session_set_changes_broadcast_sessions_changed() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1361,6 +1364,7 @@ fn a_kill_pane_that_empties_the_session_broadcasts_sessions_changed() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1402,6 +1406,7 @@ fn rename_and_kill_session_broadcast_their_notifications() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1513,6 +1518,7 @@ fn split_window_dispatch_splits_and_broadcasts_a_layout_change() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1661,6 +1667,7 @@ fn resize_pane_absolute_dispatches_and_tracks_the_terminals() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -1717,6 +1724,7 @@ fn refresh_client_size_report_resizes_the_window_and_broadcasts() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -2154,14 +2162,19 @@ fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
     clients.lock().push((
         1,
         stalled_tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::clone(&stalled_flag),
         ConnectionAbort::none(),
     ));
     // The sibling: drains as lines arrive, like a healthy reader thread.
+    // The counter here is the writer's half in production, so the drain
+    // decrements it the way spawn_writer would.
     let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    let sibling_queued = Arc::new(AtomicUsize::new(0));
     clients.lock().push((
         2,
         sibling_tx,
+        Arc::clone(&sibling_queued),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));
@@ -2171,6 +2184,9 @@ fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
         push_to_clients(&clients, format!("line-{n}"));
         while let Ok(line) = sibling_rx.try_recv() {
             received.push(line);
+            if sibling_queued.load(Ordering::Relaxed) > 0 {
+                sibling_queued.fetch_sub(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -2210,9 +2226,13 @@ fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
     let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
     let flag = Arc::new(AtomicBool::new(false));
-    clients
-        .lock()
-        .push((7, tx, Arc::clone(&flag), ConnectionAbort::none()));
+    clients.lock().push((
+        7,
+        tx,
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&flag),
+        ConnectionAbort::none(),
+    ));
 
     // Drains exactly one line per two pushes — continuously, but at
     // half the producer's rate, so the backlog grows ~0.5 lines per
@@ -2243,6 +2263,107 @@ fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
         drained > CLIENT_QUEUE_DEPTH && drained < burst,
         "drained {drained} of {burst} — continuous but half-rate, evicted mid-burst"
     );
+}
+
+/// ARC-008: once the summed queue counters cross the aggregate bound, the
+/// push evicts the client holding the deepest queue — the stalled one —
+/// while its live siblings keep every line, including the evicting push.
+#[test]
+fn the_aggregate_cap_evicts_the_deepest_queue() {
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let mut channels = Vec::new();
+    let counts = [(1u64, 4000usize), (2, 3500), (3, 1000)];
+    let mut flags = Vec::new();
+    let mut counters = Vec::new();
+    for (id, queued) in counts {
+        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        let flag = Arc::new(AtomicBool::new(false));
+        let counter = Arc::new(AtomicUsize::new(queued));
+        clients.lock().push((
+            id,
+            tx,
+            Arc::clone(&counter),
+            Arc::clone(&flag),
+            ConnectionAbort::none(),
+        ));
+        channels.push((id, rx));
+        flags.push((id, flag));
+        counters.push((id, counter));
+    }
+
+    push_to_clients(&clients, "the-evicting-line".to_string());
+
+    assert_eq!(
+        clients.lock().len(),
+        2,
+        "the deepest queue (client 1) was evicted; its siblings remain"
+    );
+    let evicted_flag = flags.iter().find(|(id, _)| *id == 1).unwrap().1.clone();
+    assert!(
+        evicted_flag.load(Ordering::Relaxed),
+        "eviction raised the flag the connection threads tear down on"
+    );
+    for (id, rx) in &channels {
+        let line = rx.try_recv().ok();
+        if *id == 1 {
+            assert!(line.is_none(), "the evicted client got nothing more");
+        } else {
+            assert_eq!(
+                line.as_deref(),
+                Some("the-evicting-line"),
+                "client {id} received the evicting push"
+            );
+        }
+    }
+    for (id, counter) in &counters {
+        if *id == 1 {
+            continue;
+        }
+        let expected = counts.iter().find(|(cid, _)| cid == id).unwrap().1 + 1;
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            expected,
+            "client {id}'s counter tracked the delivered push"
+        );
+    }
+}
+
+/// ARC-008's spill rule: an aggregate above the cap composed of queues
+/// each under a quarter of the per-client depth is a healthy crowd, not
+/// a stall — nobody is evicted and every client keeps its line.
+#[test]
+fn the_aggregate_cap_spares_shallow_queues() {
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let mut receivers = Vec::new();
+    for id in 0..10u64 {
+        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((
+            id,
+            tx,
+            Arc::new(AtomicUsize::new(900)),
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
+        receivers.push(rx);
+    }
+    const {
+        assert!(
+            10 * 900 >= CLIENT_QUEUE_AGGREGATE_DEPTH,
+            "the fixture's aggregate must cross the cap"
+        );
+    }
+
+    push_to_clients(&clients, "kept".to_string());
+
+    assert_eq!(
+        clients.lock().len(),
+        10,
+        "no shallow queue was evicted despite the aggregate crossing the cap"
+    );
+    for rx in &receivers {
+        let line = rx.try_recv().ok();
+        assert_eq!(line.as_deref(), Some("kept"));
+    }
 }
 
 /// ENH-012: eviction must CLOSE the evicted client's connection, not
@@ -2579,6 +2700,7 @@ fn workspace_commands_dispatch_and_broadcast() {
     clients.lock().push((
         u64::MAX,
         tx,
+        Arc::new(AtomicUsize::new(0)),
         Arc::new(AtomicBool::new(false)),
         ConnectionAbort::none(),
     ));

@@ -26,6 +26,7 @@ impl Registration {
         clients: &Clients,
         client_id: u64,
         tx: &SyncSender<String>,
+        queued: &Arc<AtomicUsize>,
         evicted: &Arc<AtomicBool>,
     ) {
         if self.done {
@@ -47,6 +48,7 @@ impl Registration {
             clients.lock().push((
                 client_id,
                 tx.clone(),
+                Arc::clone(queued),
                 Arc::clone(evicted),
                 self.abort.take().expect("abort is registered once"),
             ));
@@ -115,6 +117,12 @@ pub(super) fn handle_client(
     // blocked in a full socket buffer and the queued lines are retained
     // forever (measured live).
     let evicted = Arc::new(AtomicBool::new(false));
+    // The queued-line counter (ARC-008): the fan-out increments it on every
+    // successful push, the writer decrements it as lines drain. The fan-out
+    // sums the counters to enforce the aggregate eviction bound; entries
+    // removed from the registry stop counting, so a client that leaves with
+    // lines still queued cannot leak its share into the sum.
+    let queued = Arc::new(AtomicUsize::new(0));
     // The abort handle moves to the registry on first registration — hook
     // connections never register and drop theirs with the frame.
     let registration = Registration {
@@ -123,7 +131,7 @@ pub(super) fn handle_client(
         abort: Some(abort),
     };
 
-    if spawn_writer(&stream, rx, Arc::clone(&evicted)).is_err() {
+    if spawn_writer(&stream, rx, Arc::clone(&queued), Arc::clone(&evicted)).is_err() {
         return;
     }
 
@@ -137,6 +145,7 @@ pub(super) fn handle_client(
         shutdown,
         config,
         tx,
+        queued: Arc::clone(&queued),
         evicted,
         registration,
         command_number: 0,
@@ -151,6 +160,7 @@ pub(super) fn handle_client(
 fn spawn_writer(
     stream: &LocalStream,
     rx: Receiver<String>,
+    queued: Arc<AtomicUsize>,
     evicted: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     use interprocess::local_socket::traits::Stream as _;
@@ -160,6 +170,12 @@ fn spawn_writer(
     std::thread::spawn(move || loop {
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
+                // Every line that leaves the queue passes here while the
+                // entry is live; a counter left above zero only delays the
+                // aggregate bound, never underflows (guard below).
+                if queued.load(Ordering::Relaxed) > 0 {
+                    queued.fetch_sub(1, Ordering::Relaxed);
+                }
                 if write_line(&mut writer, &line, &evicted).is_err() {
                     break;
                 }
@@ -204,6 +220,7 @@ struct Connection {
     shutdown: Option<Arc<AtomicBool>>,
     config: Option<Arc<Mutex<EffectiveConfig>>>,
     tx: SyncSender<String>,
+    queued: Arc<AtomicUsize>,
     evicted: Arc<AtomicBool>,
     registration: Registration,
     command_number: u32,
@@ -234,6 +251,7 @@ impl Connection {
             &self.clients,
             self.client_id,
             &self.tx,
+            &self.queued,
             &self.evicted,
         );
         self.command_number += 1;
@@ -365,7 +383,7 @@ impl Connection {
             return;
         }
         let client_id = self.client_id;
-        self.clients.lock().retain(|(id, _, _, _)| *id != client_id);
+        self.clients.lock().retain(|(id, ..)| *id != client_id);
         // The disconnect drops the connection's sizing contribution; the
         // windows it constrained may grow to the remaining viewers'
         // minimum, and the grown windows broadcast `%layout-change` to the

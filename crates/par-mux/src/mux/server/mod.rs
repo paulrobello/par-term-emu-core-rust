@@ -34,7 +34,7 @@ use parking_lot::Mutex;
 use std::io::{BufRead, BufReader, Write};
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -82,6 +82,18 @@ const EXIT_EMPTY_GRACE: Duration = Duration::from_millis(300);
 /// policy for a control client that stops draining).
 /// cap: Broadcast lines queued per control-socket client before the daemon evicts it.
 const CLIENT_QUEUE_DEPTH: usize = 4096;
+
+/// Aggregate bound across every connected client's broadcast queue
+/// (ARC-008): the per-client depth alone lets K stalled clients pin
+/// K x ~128 MiB in the worst case. When the summed queue counters cross
+/// this line, the client holding the DEEPEST queue is evicted — the
+/// stalled one — while live clients keep draining. A counter only grows
+/// while pushes outpace a client's writer, so crossing the aggregate
+/// takes a genuine multi-client stall; and a client queued under
+/// `CLIENT_QUEUE_DEPTH / 4` is never the victim, so a healthy crowd of
+/// shallow queues cannot be murdered by the sum of their small shares.
+/// cap: Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue.
+const CLIENT_QUEUE_AGGREGATE_DEPTH: usize = CLIENT_QUEUE_DEPTH * 2;
 
 /// Per-line byte budget for the control-socket read loop (SEC-104). A line
 /// is accumulated until its newline, so without a budget a client streaming
@@ -132,11 +144,20 @@ use reap::*;
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
 /// One registered control client: its identity, its bounded queue sender
-/// (ARC-011), the eviction flag [`push_to_clients`] sets when the
-/// queue overflows — the connection's own threads poll it to tear down
-/// (ENH-012) — and the abort handle that unblocks those threads on
-/// Windows, where no timeout ever wakes them.
-pub(crate) type ClientEntry = (u64, SyncSender<String>, Arc<AtomicBool>, ConnectionAbort);
+/// (ARC-011), its queued-line counter (ARC-008 — incremented by the
+/// fan-out's successful pushes, decremented by the writer as lines drain;
+/// the sum across entries is the aggregate the eviction bound checks), the
+/// eviction flag [`push_to_clients`] sets when the queue overflows — the
+/// connection's own threads poll it to tear down (ENH-012) — and the
+/// abort handle that unblocks those threads on Windows, where no timeout
+/// ever wakes them.
+pub(crate) type ClientEntry = (
+    u64,
+    SyncSender<String>,
+    Arc<AtomicUsize>,
+    Arc<AtomicBool>,
+    ConnectionAbort,
+);
 pub(crate) type Clients = Arc<Mutex<Vec<ClientEntry>>>;
 
 /// Why the accept loop ended — the final save's snapshot semantics hang on

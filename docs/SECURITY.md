@@ -1401,7 +1401,8 @@ sections; the numbers live here.
 | `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:92` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:95` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:104` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |

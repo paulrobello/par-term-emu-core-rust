@@ -579,6 +579,8 @@ Each registered client has a bounded broadcast queue (4096 lines). A client that
 
 Eviction is by **queue depth only** — intended, and deliberately unlike tmux, whose control clients are evicted by output *age* (300 s) while buffering without bound in between. The depth policy bounds daemon memory at ~128 MiB per client; its accepted consequence is that a burst whose backlog passes 4096 lines evicts even a *healthy* client that drains continuously but slower than the producer — the backlog, not the client, is what hit the cap. The client reconnects and re-queries. Pinned by `a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap` (`crates/par-mux/src/mux/server/tests.rs`); an age-based policy would replace that test with a drains-slowly-survives one.
 
+An **aggregate bound** sits above the per-client depth (ARC-008): once the clients' summed queue counters cross 8192 lines, the push evicts the client holding the DEEPEST queue — the stalled one — while the live ones keep draining. Only a queue at a quarter of the per-client depth (1024 lines) can be the victim, so an aggregate that crosses the cap through many shallow queues is read as a healthy crowd, not a stall, and nobody is evicted. The counters are the fan-out's successful pushes minus the client writer's drained lines — an approximation of the channel length a stall bound can afford (reply lines are uncounted; a drain lags its push; a client that leaves stops counting). Crossing the bound takes a genuine multi-client stall. Pinned by `the_aggregate_cap_evicts_the_deepest_queue` and `the_aggregate_cap_spares_shallow_queues`.
+
 
 ## Agent-State Integrations
 
