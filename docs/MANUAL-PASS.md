@@ -120,9 +120,9 @@ Per terminal, in passthrough then render mode, check:
 | Ghostty | render | pass | pass | pass | pass | pass | pass | pass |
 | iTerm2 | passthrough | pass | pass | pass | pass | n/a | n/a | pass |
 | iTerm2 | render | pass | pass | pass | pass | pass | pass | pass |
-| Terminal.app | passthrough | | | | | n/a | n/a | |
-| Terminal.app | render | | | | | | | |
-| SSH (note the host terminal) | render | | | | | | | |
+| Terminal.app | passthrough | pass | pass | pass | pass | n/a | n/a | pass |
+| Terminal.app | render | pass | pass | pass | pass | pass | pass | pass |
+| SSH (note the host terminal) | render | pass | pass | pass | pass | pass | pass | pass |
 
 Mark cells pass / fail. Under the table, note every failure: terminal, mode,
 what broke, and the exact sequence.
