@@ -199,7 +199,10 @@ pub(super) fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
         Err(err) => return Outcome::err(ctx, &format!("reload-config: {err}")),
     };
     let report = reload_report(&mut applied.lock(), file.as_ref());
-    Outcome::ok(ctx, &report)
+    // Every attached client re-applies its `[client]` settings from the
+    // file on this cue, so a settings-dialog change in one client reaches
+    // the others. Errors above broadcast nothing: no file was re-read.
+    Outcome::ok(ctx, &report).notifying(TmuxNotification::ConfigChanged)
 }
 
 /// ENH-037: capability discovery — the sorted command roster with feature

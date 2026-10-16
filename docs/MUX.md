@@ -506,6 +506,22 @@ There are three reload entry points:
   rebinds prefix/reload live, flashes `config reloaded` (or the error) on
   the status row, and sends `reload-config` to the daemon so the
   daemon-side report rides the same keypress.
+- **Propagation to every attached client**: a successful `reload-config`
+  broadcasts `%config-changed`, so the settings dialog's write (which
+  runs the reload chord's path) reaches every OTHER attached render
+  client from the same host: each re-reads the file and re-applies its
+  `[client]` settings — chords, notify delivery and states, border and
+  display options, agent rows — through the same rebind its own reload
+  chord runs, flashing `config re-applied`. The writing client already
+  applied the file, so its own copy of the broadcast is a no-op; a
+  follower never sends `reload-config` back. The scope line: a bare
+  edit of the file reaches no client until SOME client reloads (any
+  reload — one chord press, one menu row, or one control-client
+  `reload-config` — then reaches all of them; there is no file watcher).
+  Passthrough clients ignore the cue (they re-read on their own chord).
+  `sidebar-width` is the one dialog row that does not follow on other
+  clients: the reload path resolves it without applying it to the live
+  panel (the dialog applies it to its own client only).
 - **`par-mux --gen-config`** writes the config file with the CURRENT
   EFFECTIVE values (file if present > env > built-in defaults; startup
   CLI flags are not introspectable after parse, so they do not appear —
@@ -649,7 +665,7 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t <pane>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
-| `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit`/`applied: daemon.exit-empty` when the file flips either), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | — |
+| `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit`/`applied: daemon.exit-empty` when the file flips either), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | `%config-changed` to every client when the file re-read succeeded (an `%error` reply broadcasts nothing) |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:
@@ -723,6 +739,7 @@ Broadcast lines every connected (registered) client receives, emitted in this or
 | `%client-session-changed <workspace> $N <name>` | The displayed session moved: `select-workspace` (or a cross-session `switch-client -t`) landed the shared display on session `$N` (`name` last, spaces included). The first field carries the workspace the display moved to — par-mux has no per-client names. Render clients of the left workspace's sessions follow to the new displayed window |
 | `%client-attached <client>` | A registered control client reported its first size (`refresh-client -C`). A one-shot command client or hook-only connection never reports one, so it is never announced. `client` is the daemon's decimal connection id. Sent to the other registered clients, never to the joining client itself |
 | `%client-left <client> [$N @N]` | An announced client's connection ended — a clean disconnect, a socket EOF, or an eviction teardown alike — with the session and window it was displaying. A client that was never announced leaves silently. Queued after the `%layout-change` of any window its departure re-fit. tmux's own `%client-detached` stays parse-only |
+| `%config-changed` | A `reload-config` re-read the config file (any client's reload chord, settings-dialog change, or command menu row, or a control client's `reload-config`). Argument-less. Render clients re-read the file and re-apply their `[client]` settings through the reload chord's own rebind, flashing `config re-applied`; a client whose applied `[client]` section already matches the file (the client whose reload caused the broadcast) does nothing. A client never answers it with `reload-config` |
 | `%workspaces-changed` | The workspace roster, names, or the daemon's active-workspace pointer changed — `new-workspace`, `kill-workspace`, `rename-workspace`, `select-workspace`, or a session death that removed its emptied workspace. Argument-less, the same convention as `%sessions-changed`: clients re-query `list-workspaces` |
 | `%sessions-changed` | The session set changed — a session was created (`new-session`), destroyed (`kill-session`, or a `kill-window`/`kill-pane`/`join-pane` that emptied it), or its windows were reordered (`move-window`/`swap-window`). Argument-less, tmux's shape: clients re-query `list-sessions` rather than parsing the line. **Client contract:** on receiving it, re-run `list-sessions` (and `list-windows` for the new order after a reorder); if the session a view is showing is gone, move that view (the render client lands on its workspace's landing session, else the daemon's active workspace's) or end it when nothing is left (close the tab / show an empty state) — the daemon does not send anything more specific, and if this emptied the daemon it exits shortly after (see [Shutdown Semantics](#shutdown-semantics)), closing the transport |
 | `%agent-state-changed %N <agent> <state> [source=hook\|scrape] [ws=+N]` | An agent's state changed, with provenance. Trailing tokens are `key=value`: `ws=` (the pane's owning workspace, the same value `list-agents`' `ws=` reports) always follows `source=` when present, and unknown keys must be ignored |

@@ -199,6 +199,7 @@ impl TmuxControlParser {
             "session-renamed" => Self::parse_session_renamed(args),
             "sessions-changed" => Some(TmuxNotification::SessionsChanged),
             "workspaces-changed" => Some(TmuxNotification::WorkspacesChanged),
+            "config-changed" => Some(TmuxNotification::ConfigChanged),
             "session-window-changed" => Self::parse_session_window_changed(args),
             "client-detached" => Self::parse_client_detached(args),
             "client-attached" => Self::parse_client_attached(args),

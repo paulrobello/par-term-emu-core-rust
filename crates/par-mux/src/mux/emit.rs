@@ -86,6 +86,7 @@ pub fn emit(notification: &TmuxNotification) -> String {
         // parsing ids off the line.
         TmuxNotification::SessionsChanged => "%sessions-changed\n".to_string(),
         TmuxNotification::WorkspacesChanged => "%workspaces-changed\n".to_string(),
+        TmuxNotification::ConfigChanged => "%config-changed\n".to_string(),
         TmuxNotification::LayoutChange {
             window_id,
             window_layout,
@@ -581,6 +582,19 @@ mod tests {
         let original = TmuxNotification::SessionsChanged;
         let line = emit(&original);
         assert_eq!(line, "%sessions-changed\n", "the wire shape: no arguments");
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn config_changed_round_trips() {
+        let original = TmuxNotification::ConfigChanged;
+        assert_eq!(
+            emit(&original),
+            "%config-changed\n",
+            "the wire shape: no arguments"
+        );
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");

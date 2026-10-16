@@ -1912,6 +1912,65 @@ fn settings_rows_write_and_apply_live() {
     );
 }
 
+/// `%config-changed` (another client's reload): the pump re-applies the
+/// file's `[client]` settings through the reload chord's rebind, flashes
+/// once, and NEVER sends `reload-config` (that would re-broadcast to
+/// every client). A second cue over the same file is a no-op — the
+/// shape the writing client sees when its own reload's broadcast lands.
+#[test]
+fn config_changed_reapplies_the_file_without_resending_reload() {
+    use super::super::notify::NotifyDelivery;
+    use par_term_emu_core::tmux_control::TmuxNotification;
+    let (rx, mut conn, mut session) = command_menu_session("cfg-changed");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\nnotify-delivery = \"off\"\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.reload_config(&mut conn);
+    assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
+    assert_eq!(session.notify.delivery, NotifyDelivery::Off);
+    session.chrome = ChromeRows::new(80);
+
+    // Another client writes `terminal` + `pane-borders` and reloads.
+    std::fs::write(
+        &path,
+        "[client]\nnotify-delivery = \"terminal\"\npane-borders = true\n",
+    )
+    .unwrap();
+    session.handle_event(TmuxNotification::ConfigChanged);
+    assert!(session.pending.config_changed, "the cue parks for the pump");
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("apply pending");
+    settle(&mut session, &mut conn);
+    assert_eq!(session.notify.delivery, NotifyDelivery::Terminal);
+    assert!(
+        session.render_opts.pane_borders,
+        "a chrome key applied live"
+    );
+    assert_eq!(session.chrome.flash_text(), Some("config re-applied"));
+    assert!(
+        !drained(&rx).iter().any(|l| l == "reload-config"),
+        "the cue never re-sends reload-config"
+    );
+
+    // The same file again (the writer's own broadcast): nothing moves,
+    // nothing flashes, nothing is sent.
+    session.chrome = ChromeRows::new(80);
+    session.handle_event(TmuxNotification::ConfigChanged);
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("apply pending");
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.chrome.flash_text(),
+        None,
+        "an unchanged file is quiet"
+    );
+    let sent = drained(&rx);
+    assert!(sent.is_empty(), "an unchanged file sends nothing: {sent:?}");
+}
+
 /// ←/→ change a discrete row's value in place (the natural gesture on
 /// the notify tab's `delivery` — the live report read the dialog as
 /// unchangeable): right cycles forward, left back, both write and apply

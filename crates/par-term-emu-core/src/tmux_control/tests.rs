@@ -787,6 +787,7 @@ fn parse_only_notifications_decode_their_fields() {
             },
         ),
         ("%workspaces-changed", N::WorkspacesChanged),
+        ("%config-changed", N::ConfigChanged),
     ];
     for (line, expected) in cases {
         assert_eq!(parse_one(line), vec![expected], "`{line}`");

@@ -613,6 +613,30 @@ fn reload_config_without_an_applied_copy_errors() {
     );
 }
 
+/// A successful reload-config broadcasts `%config-changed` to every
+/// client (the cue attached clients re-apply their `[client]` settings
+/// on); a refused one broadcasts nothing.
+#[test]
+fn reload_config_broadcasts_config_changed_only_on_success() {
+    let h = Harness::new();
+    let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig::default()));
+    let ctx = Ctx {
+        client_id: None,
+        tree: &h.tree,
+        clients: &h.clients,
+        command_number: 1,
+        shutdown: None,
+        config: Some(&applied),
+    };
+    let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
+    assert!(!reply.contains("%error"), "{reply}");
+    assert_eq!(h.drain(), vec!["%config-changed\n".to_string()]);
+
+    let reply = h.run("reload-config");
+    assert!(reply.contains("%error"), "no applied config: {reply}");
+    assert!(h.drain().is_empty(), "a refused reload broadcasts nothing");
+}
+
 /// reload-config takes no arguments (the reject_positionals rule the
 /// other no-start-command commands follow).
 #[test]

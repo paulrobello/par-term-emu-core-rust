@@ -4684,6 +4684,187 @@ fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env()
     host.killer.kill().ok();
 }
 
+/// The shown pane and a background window's pane of a fresh session —
+/// the two-window shape the notify-delivery tests drive.
+#[cfg(unix)]
+fn shown_and_background_panes(client: &mut par_mux::mux::MuxClient) -> (String, String) {
+    let first_pane = |client: &mut par_mux::mux::MuxClient, cmd: &str| {
+        client
+            .send(cmd)
+            .expect(cmd)
+            .join("")
+            .split_whitespace()
+            .next()
+            .expect("a pane")
+            .to_string()
+    };
+    let shown = first_pane(client, "list-panes");
+    let background_window = client
+        .send("new-window -d")
+        .expect("new-window")
+        .join("")
+        .trim()
+        .to_string();
+    let background = first_pane(client, &format!("list-panes -t {background_window}"));
+    (shown, background)
+}
+
+/// Card 01a1425582ef7103a61647925496d387: a settings change one render
+/// client makes (file write + its reload) reaches every OTHER attached
+/// client through the daemon's `%config-changed` broadcast. Client B
+/// re-applies the new `notify-delivery = "terminal"` (its next
+/// background agent transition reaches its host as OSC 9) and flashes
+/// `config re-applied` once; the writing client A, whose own reload
+/// already applied the file, never flashes the follower cue.
+#[cfg(unix)]
+#[test]
+fn render_mode_settings_change_reaches_every_other_attached_client() {
+    let (fixture, _daemon, mut client) = fixture_with_session("cfgprop");
+    let (shown, background) = shown_and_background_panes(&mut client);
+    let off = "[client]\nnotify-delivery = \"off\"\n";
+    let ghostty = [("TERM_PROGRAM", "ghostty")];
+    let (mut a, a_stderr) =
+        spawn_attach_with_env(&fixture, &["-t", &shown], "render", off, &ghostty);
+    expect_output(&a, b"\x1b[?1002h", Duration::from_secs(10), "client A up");
+    let (mut b, b_stderr) =
+        spawn_attach_with_env(&fixture, &["-t", &shown], "render", off, &ghostty);
+    expect_output(&b, b"\x1b[?1002h", Duration::from_secs(10), "client B up");
+    let mut settle_a = Vec::new();
+    screen_stable(
+        &a,
+        &mut settle_a,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+    let mut settle_b = Vec::new();
+    screen_stable(
+        &b,
+        &mut settle_b,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+
+    // A's settings dialog: write the key, then the reload chord's path.
+    std::fs::write(
+        fixture.client_config_path(),
+        "[client]\nnotify-delivery = \"terminal\"\n",
+    )
+    .expect("write terminal delivery");
+    a.to_child.write_all(&[0x02, 0x12]).expect("reload chord");
+    a.to_child.flush().ok();
+    let mut a_bytes = expect_output(
+        &a,
+        b"config reloaded",
+        Duration::from_secs(10),
+        "A's own reload landed",
+    );
+    expect_output(
+        &b,
+        b"config re-applied",
+        Duration::from_secs(10),
+        "B re-applied the config A changed",
+    );
+    // B's positive proves the broadcast landed; A had the same cue.
+    a_bytes.extend(wait_for_output(
+        &a,
+        b"\x00-never",
+        Duration::from_millis(500),
+    ));
+    let a_text = plain_text(&a_bytes);
+    assert!(
+        !a_text.contains("-applied"),
+        "the writing client does not re-apply its own change: {a_text:?} stderr: {}",
+        a_stderr.lock().unwrap()
+    );
+
+    // The observable rebind: B's background agent now notifies as OSC 9.
+    let report = hook_report(
+        fixture.socket(),
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{background}","agent":"propagent","state":"blocked","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(report.contains(r#""result":"ok""#), "{report}");
+    let mut got = wait_for_output(&b, b"propagent: blocked\x07", Duration::from_secs(10));
+    got.extend(wait_for_output(
+        &b,
+        b"\x00-never",
+        Duration::from_millis(300),
+    ));
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("\x1b]9;par-mux: ") && text.contains("propagent: blocked\x07"),
+        "B's re-applied terminal delivery reaches its host as OSC 9. stderr: {} bytes: {text:?}",
+        b_stderr.lock().unwrap()
+    );
+    a.killer.kill().ok();
+    b.killer.kill().ok();
+}
+
+/// A client that attaches AFTER a reload (it never saw that
+/// `%config-changed`) still follows the next one: any client's reload —
+/// here a plain control client's `reload-config` after an out-of-band
+/// file edit — reaches it, it re-applies, and it keeps running.
+#[cfg(unix)]
+#[test]
+fn render_mode_config_changed_reaches_a_client_attached_after_a_reload() {
+    let (fixture, _daemon, mut client) = fixture_with_session("cfglate");
+    let (shown, _background) = shown_and_background_panes(&mut client);
+    let (mut a, _a_stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &shown],
+        "render",
+        "[client]\nnotify-delivery = \"off\"\n",
+    );
+    expect_output(&a, b"\x1b[?1002h", Duration::from_secs(10), "client A up");
+    let terminal = "[client]\nnotify-delivery = \"terminal\"\n";
+    std::fs::write(fixture.client_config_path(), terminal).expect("write terminal delivery");
+    a.to_child.write_all(&[0x02, 0x12]).expect("reload chord");
+    a.to_child.flush().ok();
+    expect_output(
+        &a,
+        b"config reloaded",
+        Duration::from_secs(10),
+        "the first reload landed",
+    );
+
+    // C attaches after that broadcast, over the post-reload file.
+    let (mut c, c_stderr) = spawn_attach_with_config(&fixture, &["-t", &shown], "render", terminal);
+    expect_output(&c, b"\x1b[?1002h", Duration::from_secs(10), "client C up");
+    let mut settle_c = Vec::new();
+    screen_stable(
+        &c,
+        &mut settle_c,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    );
+
+    // A further change, reloaded by a control client: C follows it.
+    std::fs::write(
+        fixture.client_config_path(),
+        "[client]\nnotify-delivery = \"inside\"\n",
+    )
+    .expect("write inside delivery");
+    let reply = client.send("reload-config").expect("reload-config");
+    assert!(
+        !reply.join("\n").contains("%error"),
+        "the daemon re-read its config: {reply:?}"
+    );
+    expect_output(
+        &c,
+        b"config re-applied",
+        Duration::from_secs(10),
+        "C re-applied the later change",
+    );
+    assert!(
+        c.child.try_wait().expect("try_wait").is_none(),
+        "C survives the cue. stderr: {}",
+        c_stderr.lock().unwrap()
+    );
+    a.killer.kill().ok();
+    c.killer.kill().ok();
+}
+
 /// Paul's flow (2026-10-14): an agent claimed while its workspace is
 /// shown, then the view switches to another workspace, then the agent
 /// changes state — the now-background agent must notify.

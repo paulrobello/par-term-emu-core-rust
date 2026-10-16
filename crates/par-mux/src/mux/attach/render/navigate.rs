@@ -497,24 +497,62 @@ impl WindowSession {
     /// passthrough session performs, plus a status-row flash, plus the
     /// daemon's `reload-config` — best-effort either way.
     pub(super) fn reload_config(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        // The file drives both the chord rebind and the pane-borders
-        // resolution below, so it loads once, here — the file the
-        // settings dialog writes when the attach knows it (the canonical
-        // path in practice).
-        let loaded = match &self.settings_path {
+        match self.load_client_file() {
+            Ok(file) => {
+                let text = self.apply_client_file(&file, "config reloaded");
+                self.chrome.flash(text);
+            }
+            Err(err) => self.chrome.flash(format!("reload failed: {err}")),
+        }
+        let _ = conn.send_forget("reload-config");
+    }
+
+    /// `%config-changed`: some client's reload made the daemon re-read
+    /// the config, so re-apply this client's `[client]` settings through
+    /// the reload chord's own rebind. Never sends `reload-config` — that
+    /// would re-broadcast to every client. A file whose `[client]`
+    /// section matches the last one applied is a no-op (the client whose
+    /// reload caused the broadcast already applied it).
+    pub(super) fn on_config_changed(&mut self) {
+        // A file that fails to load here was readable when the daemon
+        // re-read it a moment ago: a mid-write race, which the writer's
+        // next reload resolves; stay quiet rather than flash a transient.
+        let Ok(file) = self.load_client_file() else {
+            return;
+        };
+        if file.client == self.applied_client {
+            return;
+        }
+        let text = self.apply_client_file(&file, "config re-applied");
+        self.chrome.flash(text);
+        if matches!(self.modal, Modal::Settings(_)) {
+            self.refresh_settings();
+        }
+    }
+
+    /// The config file the reload paths read — the file the settings
+    /// dialog writes when the attach knows it (the canonical path in
+    /// practice). It drives both the chord rebind and the pane-borders
+    /// resolution, so each reload loads it once.
+    fn load_client_file(&self) -> Result<crate::mux::config::ConfigFile, String> {
+        match &self.settings_path {
             Some(path) => crate::mux::config::load_file(path).map(Option::unwrap_or_default),
             None => crate::mux::config::load_canonical_checked(),
-        };
-        let file = match loaded {
-            Ok(file) => file,
-            Err(err) => {
-                self.chrome.flash(format!("reload failed: {err}"));
-                let _ = conn.send_forget("reload-config");
-                return;
-            }
-        };
+        }
+    }
+
+    /// Re-resolve the `[client]` settings from `file` over the live ones
+    /// and apply them; returns the status-row text (`ok_text`, a display
+    /// warning, or the error). Records the section either way, so the
+    /// broadcast of this client's own reload never repeats its outcome.
+    fn apply_client_file(
+        &mut self,
+        file: &crate::mux::config::ConfigFile,
+        ok_text: &str,
+    ) -> String {
+        self.applied_client = file.client.clone();
         match crate::mux::config::reload_client_chords(
-            &file,
+            file,
             &crate::mux::config::Chords {
                 prefix: self.prefix,
                 reload: self.reload_key,
@@ -537,26 +575,22 @@ impl WindowSession {
             },
         ) {
             Ok(chords) => {
-                let known_border = self.apply_chords(&chords, &file);
+                let known_border = self.apply_chords(&chords, file);
                 let warning = crate::mux::config::display_option_warnings(&chords)
                     .into_iter()
                     .next();
-                let text = match warning {
+                match warning {
                     Some(warning) => warning,
-                    None if known_border => "config reloaded".to_string(),
+                    None if known_border => ok_text.to_string(),
                     None => format!(
                         "border-lines {:?} unknown — using {}",
                         chords.border_lines,
                         self.render_opts.glyphs.name()
                     ),
-                };
-                self.chrome.flash(text);
+                }
             }
-            Err(err) => {
-                self.chrome.flash(format!("reload failed: {err}"));
-            }
+            Err(err) => format!("reload failed: {err}"),
         }
-        let _ = conn.send_forget("reload-config");
     }
 
     /// prefix o: select the next pane in the window's layout-leaf order,

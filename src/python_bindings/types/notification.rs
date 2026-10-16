@@ -215,6 +215,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             ClientSessionChanged { client => client: own, session_id => session_id: own, name => name: own };
             SessionRenamed { session_id => session_id: own, name => name: own };
             WorkspacesChanged;
+            ConfigChanged;
             SessionsChanged;
             SessionWindowChanged { session_id => session_id: own, window_id => window_id: own };
             ClientDetached { client => client: own };
@@ -521,6 +522,7 @@ mod tests {
                 name: "n-session-renamed".to_string(),
             },
             TmuxNotification::SessionsChanged,
+            TmuxNotification::ConfigChanged,
             TmuxNotification::SessionWindowChanged {
                 session_id: "s-session-window".to_string(),
                 window_id: "w-session-window".to_string(),
@@ -658,6 +660,7 @@ mod tests {
                 TmuxNotification::Unknown { .. } => (),
                 TmuxNotification::TerminalOutput { .. } => (),
                 TmuxNotification::WorkspacesChanged => (),
+                TmuxNotification::ConfigChanged => (),
             }
             let _ = PyTmuxNotification::from(&notif);
         }

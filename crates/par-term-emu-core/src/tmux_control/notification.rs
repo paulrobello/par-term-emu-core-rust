@@ -157,6 +157,12 @@ pub enum TmuxNotification {
     /// re-query `list-workspaces` rather than parse a diff.
     WorkspacesChanged,
 
+    /// The daemon re-read its config file on a successful `reload-config`
+    /// (par-mux's own notification). Argument-less: attached clients
+    /// re-read the file and re-apply their `[client]` settings, so a
+    /// settings change made in one client reaches every other one.
+    ConfigChanged,
+
     /// Session's current window changed
     /// Arguments: session_id, window_id
     SessionWindowChanged {
@@ -373,6 +379,7 @@ impl TmuxNotification {
             Self::SessionRenamed { .. } => "session-renamed",
             Self::SessionsChanged => "sessions-changed",
             Self::WorkspacesChanged => "workspaces-changed",
+            Self::ConfigChanged => "config-changed",
             Self::SessionWindowChanged { .. } => "session-window-changed",
             Self::ClientDetached { .. } => "client-detached",
             Self::ClientAttached { .. } => "client-attached",

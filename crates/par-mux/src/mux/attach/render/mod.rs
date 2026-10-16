@@ -535,6 +535,7 @@ fn render_session_inner(
         session.sidebar.set_prefs_path(path);
     }
     session.settings_path = crate::mux::config::config_file_path();
+    session.applied_client = client.file.client.clone();
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
     // the reduced grid and the daemon's first division reserves it.
@@ -716,6 +717,10 @@ struct WindowSession {
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
     settings_path: Option<std::path::PathBuf>,
+    /// The `[client]` section last re-resolved (launch or reload). A
+    /// `%config-changed` whose re-read file states the same section is
+    /// a no-op — the client whose own reload caused the broadcast.
+    applied_client: crate::mux::config::ClientSection,
     /// When the roster was last re-queried for a missing project.
     project_poll: std::time::Instant,
     /// The divider drag in flight, if any.
@@ -967,6 +972,9 @@ struct PendingWork {
     /// Panes a `%pane-respawned` restarted: their emulators still hold
     /// the dead process's screen, so the pump resets and replays them.
     respawned: Vec<u32>,
+    /// A `%config-changed` arrived: re-read the file and re-apply the
+    /// `[client]` settings (a burst collapses into one re-read).
+    config_changed: bool,
 }
 
 impl PendingWork {
@@ -1009,6 +1017,7 @@ impl WindowSession {
             held: std::collections::HashMap::new(),
             sidebar_on_launch: chords.sidebar_on_launch,
             settings_path: None,
+            applied_client: crate::mux::config::ClientSection::default(),
             drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),
@@ -1283,6 +1292,11 @@ impl WindowSession {
             }
             self.replay_panes(conn, &respawned);
         }
+        // Before the refit: a chrome option the re-apply changed parks
+        // `grid_refit`, which the block below then performs this pass.
+        if std::mem::take(&mut self.pending.config_changed) {
+            self.on_config_changed();
+        }
         if std::mem::take(&mut self.pending.grid_refit) {
             // The toggle that parked this moved the status bar or the
             // side panel: re-derive the frame before refitting to it. The
@@ -1470,6 +1484,12 @@ impl WindowSession {
             // telemetry, so a telemetry sample changes nothing this
             // client shows.
             TmuxNotification::AgentTelemetryChanged { .. } => EventOutcome::Continue,
+            // Some client's reload made the daemon re-read the config:
+            // the pump re-applies this client's `[client]` settings.
+            TmuxNotification::ConfigChanged => {
+                self.pending.config_changed = true;
+                EventOutcome::Continue
+            }
             TmuxNotification::WindowRenamed { window_id, name } => {
                 self.on_window_renamed(&window_id, &name);
                 EventOutcome::Continue
