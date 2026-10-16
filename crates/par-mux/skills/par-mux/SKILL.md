@@ -3,6 +3,8 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
+<!-- PAR_MUX_INTEGRATION_VERSION=1 -->
+
 # par-mux
 
 ## What it is
@@ -164,7 +166,11 @@ par-mux installs the hooks and extensions that feed the roster itself:
 (pi, omp), with `--uninstall-agent-hooks`, `--uninstall-agent-extensions` and
 `--agent-hooks-status` counterparts. par-term runs these after installing
 par-mux. The hooks are inert and instant outside a par-mux pane, and silent on
-every failure.
+every failure. `par-mux --integration-status` reports every bundled asset at
+once — hook, extension, and skill lines, each `<kind> <name> installed|absent`
+followed by the asset's version currency (`v2`, `v1 → v2 outdated`, `asset
+missing`) — so an agent (or the TUI) can see an out-of-date install after a
+par-mux upgrade and re-run the install flags to refresh it.
 
 ## Agent hook reports
 

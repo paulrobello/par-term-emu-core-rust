@@ -77,6 +77,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
             "install_agent_hooks",
             "uninstall_agent_hooks",
             "agent_hooks_status",
+            "integration_status",
             "install_agent_extensions",
             "uninstall_agent_extensions",
             "heal_agent_hooks",
@@ -197,6 +198,13 @@ struct Cli {
     /// and exit: the read-only state behind the par-term Settings rows.
     #[arg(long)]
     agent_hooks_status: bool,
+
+    /// Print one line per integration — the agent hooks, the pi/omp
+    /// extensions, and the par-mux skill — naming each one's version and
+    /// whether the installed asset matches the bundled copy
+    /// (`v2`, `v1 → v2 outdated`, `asset missing`, or `absent`), and exit.
+    #[arg(long)]
+    integration_status: bool,
 
     /// Install the pi and omp agent-state extensions (a file drop into
     /// each agent extension directory) and exit. Never contacts a daemon.
@@ -580,15 +588,58 @@ fn run_arms(arms: [(&str, Arm); 3]) -> std::process::ExitCode {
     }
 }
 
-/// `--agent-hooks-status`: one `<agent> installed|absent` line per agent.
+/// One status line's value half: the `installed|absent` token the
+/// par-term Settings rows parse, then the asset's version currency.
+fn integration_status_line(
+    installed: bool,
+    asset: &par_mux::mux::integrations::AssetState,
+) -> String {
+    let base = if installed { "installed" } else { "absent" };
+    match asset.currency {
+        par_mux::mux::integrations::AssetCurrency::Absent if !installed => base.to_string(),
+        _ => format!("{base} {}", asset.display(installed)),
+    }
+}
+
+/// `--agent-hooks-status`: one line per agent hook — `<agent> installed`
+/// or `<agent> absent`, then the asset's version currency when there is
+/// an asset to grade (`v2`, `v1 → v2 outdated`, `asset missing`).
 fn run_agent_hooks_status() -> std::process::ExitCode {
     for status in par_mux::mux::integrations::hook_status() {
-        let state = if status.installed {
-            "installed"
-        } else {
-            "absent"
-        };
-        println!("{} {state}", status.agent);
+        println!(
+            "{} {}",
+            status.agent,
+            integration_status_line(status.installed, &status.asset)
+        );
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+/// `--integration-status`: the same grammar across EVERY bundled
+/// integration asset — the agent hooks, the pi/omp extensions, and the
+/// par-mux skill — so a script (or a human) can see not-installed and
+/// out-of-date in one place.
+fn run_integration_status() -> std::process::ExitCode {
+    for status in par_mux::mux::integrations::hook_status() {
+        println!(
+            "hook {} {}",
+            status.agent,
+            integration_status_line(status.installed, &status.asset)
+        );
+    }
+    for status in par_mux::mux::integrations::extension_status() {
+        println!(
+            "extension {} {}",
+            status.agent,
+            integration_status_line(status.installed, &status.asset)
+        );
+    }
+    match par_mux::mux::skill_installer::skill_status() {
+        Ok(status) => println!(
+            "skill par-mux {}",
+            integration_status_line(status.installed, &status.asset)
+        ),
+        Err(err) => println!("skill par-mux unknown ({err})"),
     }
     std::process::ExitCode::SUCCESS
 }
@@ -791,6 +842,10 @@ fn main() -> std::process::ExitCode {
     }
     if cli.agent_hooks_status {
         return run_agent_hooks_status();
+    }
+
+    if cli.integration_status {
+        return run_integration_status();
     }
     if cli.install_agent_extensions {
         return run_agent_extension_action(true);
@@ -1191,6 +1246,36 @@ mod mode_group_tests {
     }
 
     #[test]
+    fn integration_status_line_keeps_the_installed_absent_token() {
+        use par_mux::mux::integrations::{AssetCurrency, AssetState};
+        let absent = AssetState {
+            currency: AssetCurrency::Absent,
+            installed_version: None,
+            bundled_version: Some("2".to_string()),
+        };
+        assert_eq!(integration_status_line(false, &absent), "absent");
+        assert_eq!(
+            integration_status_line(true, &absent),
+            "installed asset missing (bundled v2)"
+        );
+        let current = AssetState {
+            currency: AssetCurrency::Current,
+            installed_version: Some("2".to_string()),
+            bundled_version: Some("2".to_string()),
+        };
+        assert_eq!(integration_status_line(true, &current), "installed v2");
+        let outdated = AssetState {
+            currency: AssetCurrency::Outdated,
+            installed_version: Some("1".to_string()),
+            bundled_version: Some("2".to_string()),
+        };
+        assert_eq!(
+            integration_status_line(true, &outdated),
+            "installed v1 \u{2192} v2 outdated"
+        );
+    }
+
+    #[test]
     fn mode_flags_are_mutually_exclusive() {
         let flags = [
             "--stop",
@@ -1202,6 +1287,7 @@ mod mode_group_tests {
             "--install-agent-hooks",
             "--uninstall-agent-hooks",
             "--agent-hooks-status",
+            "--integration-status",
             "--install-agent-extensions",
             "--uninstall-agent-extensions",
             "--heal-agent-hooks",

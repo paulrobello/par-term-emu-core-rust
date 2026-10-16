@@ -110,6 +110,18 @@ pub(crate) fn grok_hook_installed() -> bool {
     })
 }
 
+/// The installed hook asset's currency against the bundled copy —
+/// the version-aware half of the status surfaces.
+pub(crate) fn hook_asset_state() -> crate::mux::integrations::AssetState {
+    let path = grok_config_dir()
+        .ok()
+        .map(|dir| dir.join("hooks").join(grok_hook_install_name()));
+    match path {
+        Some(path) => crate::mux::integrations::AssetState::at(&path, grok_hook_asset()),
+        None => crate::mux::integrations::AssetState::absent(grok_hook_asset()),
+    }
+}
+
 /// Uninstall the grok session hook: straight delete of the two files we own.
 pub fn uninstall_grok_hook() -> io::Result<GrokHookUninstall> {
     uninstall_grok_hook_into(&grok_config_dir()?)

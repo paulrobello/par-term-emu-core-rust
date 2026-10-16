@@ -601,7 +601,8 @@ which starts or contacts a daemon:
 ```text
 par-mux --install-agent-hooks            Install the claude/codex/grok session hooks
 par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
-par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent
+par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent, plus the asset's version currency when installed (v2, `v1 → v2 outdated`, `asset missing`)
+par-mux --integration-status              The same grammar for EVERY bundled asset: hook, extension, and skill lines
 par-mux --install-agent-extensions        Drop the pi and omp extension files
 par-mux --uninstall-agent-extensions      Remove them
 par-mux --heal-agent-hooks                Rewrite a registered hook asset that went missing

@@ -5,7 +5,7 @@
 # socket, one reply read, close. Inert outside a par-mux pane (env guards)
 # and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=codex
-# PAR_MUX_INTEGRATION_VERSION=1
+# PAR_MUX_INTEGRATION_VERSION=2
 
 set -eu
 

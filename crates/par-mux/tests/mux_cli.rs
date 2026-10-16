@@ -1416,9 +1416,10 @@ fn install_skill_writes_the_bundled_skill_without_a_daemon() {
     assert!(installed.starts_with("---\nname: par-mux\n"));
 }
 
-/// `--agent-hooks-status` needs no daemon and prints exactly one
-/// `<agent> installed|absent` line per agent — the parseable shape the
-/// par-term Settings rows consume.
+/// `--agent-hooks-status` needs no daemon and prints exactly one line per
+/// agent — the second token is still `installed|absent`, the shape the
+/// par-term Settings rows consume; what follows it names the asset's
+/// version currency (`v2`, `v1 → v2 outdated`, `asset missing`).
 #[test]
 fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     let run = par_mux(&["--agent-hooks-status"]);
@@ -1428,9 +1429,45 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     assert_eq!(lines.len(), 3, "stdout: {:?}", run.stdout);
     for (agent, line) in ["claude", "codex", "grok"].iter().zip(&lines) {
         let rest = line.strip_prefix(agent).expect("agent name leads the line");
+        let Some(state) = rest.strip_prefix(" installed") else {
+            assert!(
+                rest == " absent",
+                "line {line:?} must read <agent> installed|absent [currency]"
+            );
+            continue;
+        };
         assert!(
-            rest == " installed" || rest == " absent",
-            "line {line:?} must read <agent> installed|absent"
+            state.is_empty() || state.starts_with(' '),
+            "line {line:?}: anything after `installed` is the currency suffix"
+        );
+    }
+}
+
+/// `--integration-status` covers every bundled asset in one grammar: the
+/// three hook lines, the two extension lines, and the skill line, each
+/// `<kind> <name> installed|absent [currency]`.
+#[test]
+fn integration_status_covers_hooks_extensions_and_skill() {
+    let run = par_mux(&["--integration-status"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(lines.len(), 6, "one line per asset: {:?}", run.stdout);
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| line.split(' ').next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        kinds,
+        ["hook", "hook", "hook", "extension", "extension", "skill"],
+        "stdout: {:?}",
+        run.stdout
+    );
+    for line in &lines {
+        let body = line.splitn(3, ' ').nth(2).expect("kind and name precede");
+        assert!(
+            body.starts_with("installed") || body.starts_with("absent"),
+            "line {line:?} keeps the installed|absent token"
         );
     }
 }

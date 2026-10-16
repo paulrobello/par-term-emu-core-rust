@@ -43,6 +43,32 @@ pub fn install_skill() -> io::Result<PathBuf> {
     install_skill_into(&claude_skills_dir()?)
 }
 
+/// Read-only install state of the bundled agent skill. Never writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillStatus {
+    /// Whether SKILL.md exists under the skills root.
+    pub installed: bool,
+    /// The installed file's currency against the bundled skill.
+    pub asset: crate::mux::integrations::AssetState,
+}
+
+/// The skill's install state under an explicit skills root (test seam).
+pub fn skill_status_into(skills_root: &Path) -> SkillStatus {
+    let path = skills_root.join("par-mux").join("SKILL.md");
+    let asset = crate::mux::integrations::AssetState::at(&path, PAR_MUX_SKILL_MD);
+    SkillStatus {
+        installed: asset.currency != crate::mux::integrations::AssetCurrency::Absent,
+        asset,
+    }
+}
+
+/// The bundled skill's install state in the Claude Code skills directory,
+/// the data behind `--integration-status` and the settings dialog's
+/// integrations rows. Never writes anything.
+pub fn skill_status() -> io::Result<SkillStatus> {
+    Ok(skill_status_into(&claude_skills_dir()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

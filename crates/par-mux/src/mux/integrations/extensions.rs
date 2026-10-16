@@ -18,6 +18,7 @@
 //! resolve to the same directory — [`install_omp_extension`] refuses rather
 //! than letting one agent's file shadow the other's.
 
+use super::{AssetCurrency, AssetState};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -134,6 +135,52 @@ fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
 
 /// Delete `dir/install_name` only when it carries our marker: a same-named
 /// file without one is a user file we must not touch.
+/// Read-only install state of one pi/omp extension asset. Never writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionStatus {
+    /// The agent name (pi, omp).
+    pub agent: String,
+    /// Whether the extension file exists in the agent's extensions
+    /// directory.
+    pub installed: bool,
+    /// The installed file's currency against the bundled asset.
+    pub asset: AssetState,
+}
+
+/// Read-only version-aware install state of each pi/omp extension, the
+/// data behind `--integration-status` and the settings dialog's
+/// integrations rows. Never writes anything.
+pub fn extension_status() -> Vec<ExtensionStatus> {
+    let pi_dir = pi_extension_dir().ok();
+    let omp_dir = omp_extension_dir().ok();
+    [
+        (
+            "pi",
+            pi_dir.as_deref(),
+            PI_EXTENSION_INSTALL_NAME,
+            PI_EXTENSION_ASSET,
+        ),
+        (
+            "omp",
+            omp_dir.as_deref(),
+            OMP_EXTENSION_INSTALL_NAME,
+            OMP_EXTENSION_ASSET,
+        ),
+    ]
+    .into_iter()
+    .map(|(agent, dir, install_name, bundled)| {
+        let asset = dir
+            .map(|dir| AssetState::at(&dir.join(install_name), bundled))
+            .unwrap_or_else(|| AssetState::absent(bundled));
+        ExtensionStatus {
+            agent: agent.to_string(),
+            installed: asset.currency != AssetCurrency::Absent,
+            asset,
+        }
+    })
+    .collect()
+}
+
 fn uninstall_from(dir: &Path, install_name: &str, marker: &str) -> io::Result<ExtensionRemoval> {
     let path = dir.join(install_name);
     if !path.is_file() {

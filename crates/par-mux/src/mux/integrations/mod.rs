@@ -52,9 +52,9 @@ pub use codex::{
     CODEX_HOOK_MARKER,
 };
 pub use extensions::{
-    install_omp_extension, install_omp_extension_into, install_pi_extension,
+    extension_status, install_omp_extension, install_omp_extension_into, install_pi_extension,
     install_pi_extension_into, omp_extension_dir, pi_extension_dir, uninstall_omp_extension,
-    uninstall_pi_extension, ExtensionRemoval,
+    uninstall_pi_extension, ExtensionRemoval, ExtensionStatus,
 };
 pub use grok::{
     grok_config_dir, install_grok_hook, install_grok_hook_into, uninstall_grok_hook,
@@ -79,21 +79,136 @@ pub struct AgentHookStatus {
     pub agent: String,
     /// Whether the session hook is registered in the agent config.
     pub installed: bool,
+    /// The installed asset file's currency against the bundled copy.
+    pub asset: AssetState,
+}
+
+/// Byte-currency of an installed integration asset against the copy
+/// bundled into this build — the version-aware half of the status
+/// surfaces (`--agent-hooks-status`, `--integration-status`, the settings
+/// dialog's integrations rows), so an installed file this build would
+/// write differently reads as outdated instead of silently current. The
+/// gap that let a stale codex hook keep failing daemon restores after a
+/// par-mux upgrade (live, 2026-10-16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetCurrency {
+    /// Nothing at the install path.
+    Absent,
+    /// Byte-identical to the bundled asset.
+    Current,
+    /// Present but different from the bundled asset — an older build's copy.
+    Outdated,
+}
+
+/// What the status surfaces know about one bundled asset: its currency
+/// and the `PAR_MUX_INTEGRATION_VERSION` markers on both sides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetState {
+    /// How the installed file compares to the bundled one.
+    pub currency: AssetCurrency,
+    /// The installed file's `PAR_MUX_INTEGRATION_VERSION`.
+    pub installed_version: Option<String>,
+    /// The bundled asset's `PAR_MUX_INTEGRATION_VERSION`.
+    pub bundled_version: Option<String>,
+}
+
+impl AssetState {
+    /// Read `path` and grade it against `bundled`. A file that cannot be
+    /// read (missing, unreadable) is Absent; anything readable that
+    /// differs by a byte is Outdated.
+    pub(crate) fn at(path: &std::path::Path, bundled: &str) -> AssetState {
+        let bundled_version = parse_integration_version(bundled);
+        let Ok(content) = fs::read_to_string(path) else {
+            return AssetState::absent(bundled);
+        };
+        let currency = if content == bundled {
+            AssetCurrency::Current
+        } else {
+            AssetCurrency::Outdated
+        };
+        AssetState {
+            currency,
+            installed_version: parse_integration_version(&content),
+            bundled_version,
+        }
+    }
+
+    /// The Absent state for an asset that cannot be read.
+    pub(crate) fn absent(bundled: &str) -> AssetState {
+        AssetState {
+            currency: AssetCurrency::Absent,
+            installed_version: None,
+            bundled_version: parse_integration_version(bundled),
+        }
+    }
+
+    /// The value the status surfaces show for this asset, given whether
+    /// its integration is registered/installed at all: `v2` when current,
+    /// `v1 → v2 outdated` when a stale copy sits at the path, `not
+    /// installed` when there is nothing to grade.
+    pub fn display(&self, installed: bool) -> String {
+        if !installed {
+            return "not installed".to_string();
+        }
+        let bundled = self.bundled_version.as_deref().unwrap_or("?");
+        match self.currency {
+            AssetCurrency::Absent => {
+                format!("asset missing (bundled v{bundled})")
+            }
+            AssetCurrency::Current => {
+                format!("v{}", self.installed_version.as_deref().unwrap_or(bundled))
+            }
+            AssetCurrency::Outdated => format!(
+                "v{} \u{2192} v{bundled} outdated",
+                self.installed_version.as_deref().unwrap_or("?")
+            ),
+        }
+    }
+}
+
+/// The `PAR_MUX_INTEGRATION_VERSION=<n>` marker's value, whatever comment
+/// grammar wraps it (`# `, `// `, `<!-- ... -->`) — one parser for the
+/// hooks, the extensions, and the skill.
+pub fn parse_integration_version(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim_start_matches(['#', '/', ' ', '!', '<', '-']);
+        let Some(rest) = trimmed.strip_prefix("PAR_MUX_INTEGRATION_VERSION=") else {
+            continue;
+        };
+        let token = rest.split_whitespace().next().unwrap_or("");
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    None
 }
 
 /// Read-only install state of each agent session hook, the data behind
-/// the --agent-hooks-status flag and the par-term Settings status rows.
-/// Never writes anything.
+/// the --agent-hooks-status flag, the --integration-status flag, and the
+/// attach settings dialog's integrations rows. Never writes anything.
 pub fn hook_status() -> Vec<AgentHookStatus> {
     [
-        ("claude", claude::claude_hook_installed()),
-        ("codex", codex::codex_hook_installed()),
-        ("grok", grok::grok_hook_installed()),
+        (
+            "claude",
+            claude::claude_hook_installed(),
+            claude::hook_asset_state(),
+        ),
+        (
+            "codex",
+            codex::codex_hook_installed(),
+            codex::hook_asset_state(),
+        ),
+        (
+            "grok",
+            grok::grok_hook_installed(),
+            grok::hook_asset_state(),
+        ),
     ]
     .into_iter()
-    .map(|(agent, installed)| AgentHookStatus {
+    .map(|(agent, installed, asset)| AgentHookStatus {
         agent: agent.to_string(),
         installed,
+        asset,
     })
     .collect()
 }
@@ -846,6 +961,124 @@ mod atomic {
             if let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_integration_version_reads_all_three_comment_grammars() {
+        assert_eq!(
+            parse_integration_version("# PAR_MUX_INTEGRATION_VERSION=3\n"),
+            Some("3".to_string())
+        );
+        assert_eq!(
+            parse_integration_version("// PAR_MUX_INTEGRATION_VERSION=12\n"),
+            Some("12".to_string())
+        );
+        assert_eq!(
+            parse_integration_version("<!-- PAR_MUX_INTEGRATION_VERSION=1 -->\n"),
+            Some("1".to_string())
+        );
+        assert_eq!(parse_integration_version("no marker here\n"), None);
+    }
+
+    #[test]
+    fn asset_state_grades_bytes_against_the_bundled_copy() {
+        let bundled = "# header\n# PAR_MUX_INTEGRATION_VERSION=2\nbody\n";
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("asset");
+
+        assert_eq!(
+            AssetState::at(&path, bundled).currency,
+            AssetCurrency::Absent,
+            "a missing file is absent"
+        );
+
+        std::fs::write(&path, bundled).expect("writes the copy");
+        let state = AssetState::at(&path, bundled);
+        assert_eq!(state.currency, AssetCurrency::Current);
+        assert_eq!(state.installed_version.as_deref(), Some("2"));
+        assert_eq!(state.bundled_version.as_deref(), Some("2"));
+
+        std::fs::write(&path, "# PAR_MUX_INTEGRATION_VERSION=1\nold body\n").expect("rewrites");
+        let state = AssetState::at(&path, bundled);
+        assert_eq!(state.currency, AssetCurrency::Outdated);
+        assert_eq!(state.installed_version.as_deref(), Some("1"));
+        assert_eq!(state.bundled_version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn display_names_the_version_and_the_drift() {
+        let bundled = "# PAR_MUX_INTEGRATION_VERSION=2\n";
+        let absent = AssetState::absent(bundled);
+        assert_eq!(absent.display(false), "not installed");
+        assert_eq!(absent.display(true), "asset missing (bundled v2)");
+
+        let current = AssetState {
+            currency: AssetCurrency::Current,
+            installed_version: Some("2".to_string()),
+            bundled_version: Some("2".to_string()),
+        };
+        assert_eq!(current.display(true), "v2");
+
+        let outdated = AssetState {
+            currency: AssetCurrency::Outdated,
+            installed_version: Some("1".to_string()),
+            bundled_version: Some("2".to_string()),
+        };
+        assert_eq!(outdated.display(true), "v1 \u{2192} v2 outdated");
+    }
+
+    /// Every bundled asset must carry the marker the status surfaces parse
+    /// — a hook, extension, or skill shipping without one would always read
+    /// as versionless, and the byte-compare would silently carry the
+    /// out-of-date detection alone.
+    #[test]
+    fn every_bundled_asset_carries_a_parseable_version() {
+        let assets: [(&str, &str); 9] = [
+            (
+                "claude sh",
+                include_str!("../../../integrations/hooks/par-mux-claude-session-hook.sh"),
+            ),
+            (
+                "claude ps1",
+                include_str!("../../../integrations/hooks/par-mux-claude-session-hook.ps1"),
+            ),
+            (
+                "codex sh",
+                include_str!("../../../integrations/hooks/par-mux-codex-session-hook.sh"),
+            ),
+            (
+                "codex ps1",
+                include_str!("../../../integrations/hooks/par-mux-codex-session-hook.ps1"),
+            ),
+            (
+                "grok sh",
+                include_str!("../../../integrations/hooks/par-mux-grok-session-hook.sh"),
+            ),
+            (
+                "grok ps1",
+                include_str!("../../../integrations/hooks/par-mux-grok-session-hook.ps1"),
+            ),
+            (
+                "pi extension",
+                include_str!("../../../integrations/extensions/par-mux-agent-state.ts"),
+            ),
+            (
+                "omp extension",
+                include_str!("../../../integrations/extensions/par-mux-omp-agent-state.ts"),
+            ),
+            ("skill", include_str!("../../../skills/par-mux/SKILL.md")),
+        ];
+        for (name, text) in assets {
+            assert!(
+                parse_integration_version(text).is_some(),
+                "{name} lost its PAR_MUX_INTEGRATION_VERSION marker"
+            );
         }
     }
 }

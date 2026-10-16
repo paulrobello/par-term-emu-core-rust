@@ -87,6 +87,15 @@ pub fn codex_config_dir() -> io::Result<PathBuf> {
 }
 
 /// Where the hook script asset lives: par-mux's own config directory.
+/// The installed hook asset's currency against the bundled copy —
+/// the version-aware half of the status surfaces.
+pub(crate) fn hook_asset_state() -> crate::mux::integrations::AssetState {
+    match hook_asset_path() {
+        Ok(path) => crate::mux::integrations::AssetState::at(&path, codex_hook_asset()),
+        Err(_) => crate::mux::integrations::AssetState::absent(codex_hook_asset()),
+    }
+}
+
 fn hook_asset_path() -> io::Result<PathBuf> {
     asset_path_for(codex_hook_install_name())
 }

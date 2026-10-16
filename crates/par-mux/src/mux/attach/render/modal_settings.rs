@@ -349,7 +349,7 @@ pub(super) struct SettingsState {
     pub section: SettingsSection,
     pub selected: usize,
     pub top: usize,
-    pub integrations: Vec<(String, bool)>,
+    pub integrations: Vec<(String, String)>,
     pub file_mode: String,
 }
 
@@ -531,11 +531,11 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
         SettingsSection::Integrations => state
             .integrations
             .iter()
-            .map(|(agent, installed)| {
-                let (mark, status) = if *installed {
-                    ("\u{2713}", "installed")
+            .map(|(agent, status)| {
+                let mark = if status == "not installed" {
+                    "-"
                 } else {
-                    ("-", "not installed")
+                    "\u{2713}"
                 };
                 format!(" {mark} {agent:<10} {status}")
             })
@@ -613,10 +613,22 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
 impl WindowSession {
     /// Open the settings dialog on its first section.
     pub(super) fn enter_settings(&mut self) {
-        let integrations = crate::mux::integrations::hook_status()
+        // Every bundled integration, each row's value the version-aware
+        // currency (`v2`, `v1 → v2 outdated`, `asset missing`, `not
+        // installed`) so a stale install is visible without leaving the
+        // dialog.
+        let mut integrations: Vec<(String, String)> = crate::mux::integrations::hook_status()
             .into_iter()
-            .map(|hook| (hook.agent, hook.installed))
+            .map(|hook| (hook.agent, hook.asset.display(hook.installed)))
             .collect();
+        integrations.extend(
+            crate::mux::integrations::extension_status()
+                .into_iter()
+                .map(|ext| (ext.agent, ext.asset.display(ext.installed))),
+        );
+        if let Ok(skill) = crate::mux::skill_installer::skill_status() {
+            integrations.push(("skill".to_string(), skill.asset.display(skill.installed)));
+        }
         // `mode` is chosen at launch: the file is the only record of it.
         let file_mode = match &self.settings_path {
             Some(path) => crate::mux::config::load_file(path)
