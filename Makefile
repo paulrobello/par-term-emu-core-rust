@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -79,6 +79,8 @@ help:
 	@echo "  audit-deps      - cargo deny + bun audit + pip-audit across Rust, web frontend and Python (needs network; not part of checkall)"
 	@echo "  caps-table      - Regenerate the resource-caps table in docs/SECURITY.md from /// cap: annotations"
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
+	@echo "  gen-extensions  - Regenerate the pi/omp agent-state extension assets from scripts/gen_extensions.py (ARC-002)"
+	@echo "  extensions-check - Fail when a committed extension asset differs from the template, or the renderer self-test fails"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
 	@echo "  checkall-ci     - CI-parity gate: checkall + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
@@ -418,6 +420,17 @@ caps-table:
 caps-table-check:
 	python3 scripts/gen_caps_table.py --check
 
+# ARC-002: the pi/omp agent-state extension assets are generated from one
+# template (scripts/gen_extensions.py), so a fix lands once, not per fork.
+# Run gen-extensions after editing the template; commit the regenerated
+# assets; extensions-check gates drift in checkall.
+gen-extensions:
+	python3 scripts/gen_extensions.py
+
+extensions-check:
+	python3 scripts/gen_extensions.py --check
+	python3 scripts/gen_extensions.py --self-test
+
 # ENH-027: generate include/terminal_core.h from src/ffi.rs. Run after any
 # #[repr(C)] type or extern "C" fn change; commit the regenerated header.
 # Requires cbindgen: cargo install cbindgen --locked
@@ -589,7 +602,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

@@ -7,6 +7,7 @@
 // hook endpoint accepts its reports verbatim.
 // @ts-nocheck
 
+
 import net from "node:net";
 import path from "node:path";
 
@@ -17,9 +18,11 @@ const socketEndpoint =
 const paneId = process.env.PAR_MUX_PANE_ID;
 const source = "par-mux:pi";
 
+
 function enabled() {
   return PAR_MUX_ENV === "1" && !!socketPath && !!paneId;
 }
+
 
 function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {
   if (!enabled()) {
@@ -55,8 +58,8 @@ function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolea
 // session_start) can arrive swapped — the higher seq lands first and the
 // state report is then stale-dropped silently, losing the broadcast
 // outright (measured on the e2e wire: agent_start's session report
-// overtook the state report by 23us on a second connection). The omp
-// asset's queue, back-ported.
+// overtook the state report by 23us on a second connection). Now one
+// template, so the queue and its reason live in both dialects.
 let requestQueue = Promise.resolve();
 
 async function sendRequestNow(request: unknown): Promise<void> {
@@ -101,6 +104,7 @@ function sendRequest(request: unknown): Promise<void> {
   return requestQueue;
 }
 
+
 type AgentState = "working" | "blocked" | "idle";
 
 type QueuedState = {
@@ -108,6 +112,7 @@ type QueuedState = {
   message?: string;
   seq: number;
 };
+
 
 let reportSeq = Date.now() * 1000;
 let currentAgentSessionId: string | undefined;
@@ -118,14 +123,17 @@ function nextReportSeq(): number {
   return reportSeq;
 }
 
+function isAbsoluteSessionPath(file: unknown): file is string {
+  return (
+    typeof file === "string" &&
+    (path.posix.isAbsolute(file) || path.win32.isAbsolute(file))
+  );
+}
+
 function updateSessionRef(ctx: any): void {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
-    currentAgentSessionPath =
-      typeof file === "string" &&
-      (path.posix.isAbsolute(file) || path.win32.isAbsolute(file))
-        ? file
-        : undefined;
+    currentAgentSessionPath = isAbsoluteSessionPath(file) ? file : undefined;
   } catch {
     currentAgentSessionPath = undefined;
   }
@@ -169,6 +177,11 @@ function resumeArgv(): string[] | undefined {
   return ["pi", "--session", ref];
 }
 
+
+// reportSession takes the source with NO default: pi's session_start passes
+// event?.reason verbatim (an absent reason stays absent on the wire), while
+// every omp call site passes an explicit value. A silent default here would
+// rewrite what the wire carries.
 function reportSession(sessionStartSource?: string): Promise<void> {
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
@@ -253,6 +266,7 @@ async function drainStateQueue(): Promise<void> {
     }
   }
 }
+
 
 export default function (pi) {
   if (!enabled()) {

@@ -587,6 +587,12 @@ the claude, codex, and grok session hooks (script assets written under the
 par-mux config directory and registered in each agent own config — a merge
 that preserves the user entries, comments, and formatting) and the pi/omp
 agent-state extensions (a file drop into each agent extension directory).
+The two extension assets are generated, not hand-written: both dialects
+render from the single template in `scripts/gen_extensions.py` (the shared
+transport and session-ref plumbing live there once, the dialect wiring as
+knobs), and `make extensions-check` (part of checkall) fails when a
+committed asset is not what the template renders — fix a shared defect in
+the template, never in one fork (`make gen-extensions` re-renders; ARC-002).
 They are embedded in the binary and driven by five one-shot flags, none of
 which starts or contacts a daemon:
 

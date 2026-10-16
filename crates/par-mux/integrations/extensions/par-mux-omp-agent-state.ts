@@ -7,6 +7,7 @@
 // hook endpoint accepts its reports verbatim.
 // @ts-nocheck
 
+
 import net from "node:net";
 import path from "node:path";
 
@@ -16,16 +17,17 @@ const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 const paneId = process.env.PAR_MUX_PANE_ID;
 const source = "par-mux:omp";
+
 // OMP marks every shell it spawns with OMPCODE=1. A nested `omp` launched from
 // a parent session's shell inherits it, so that process is not the pane's root
 // agent and must not report its short-lived session over the parent's.
 const nestedOmpSession = process.env.OMPCODE === "1";
 
+
 function enabled() {
   return PAR_MUX_ENV === "1" && !!socketPath && !!paneId && !nestedOmpSession;
 }
 
-let requestQueue = Promise.resolve();
 
 function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {
   if (!enabled()) {
@@ -54,6 +56,16 @@ function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolea
     timeout.unref?.();
   });
 }
+
+// All sends serialize through one queue: reports carry a per-source
+// monotonic seq the daemon orders by ARRIVAL, so two concurrent sends
+// (agent_start's session report racing the state report queued by
+// session_start) can arrive swapped — the higher seq lands first and the
+// state report is then stale-dropped silently, losing the broadcast
+// outright (measured on the e2e wire: agent_start's session report
+// overtook the state report by 23us on a second connection). Now one
+// template, so the queue and its reason live in both dialects.
+let requestQueue = Promise.resolve();
 
 async function sendRequestNow(request: unknown): Promise<void> {
   const started = Date.now();
@@ -97,6 +109,7 @@ function sendRequest(request: unknown): Promise<void> {
   return requestQueue;
 }
 
+
 type AgentState = "working" | "blocked" | "idle";
 
 type QueuedState = {
@@ -105,10 +118,7 @@ type QueuedState = {
   seq: number;
 };
 
-const idleDebounceMs = parseDurationEnv("PAR_MUX_OMP_IDLE_DEBOUNCE_MS", 250);
-const retryGraceMs = parseDurationEnv("PAR_MUX_OMP_RETRY_GRACE_MS", 2500);
-const retryableErrorPattern =
-  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
+
 let reportSeq = Date.now() * 1000;
 let currentAgentSessionId: string | undefined;
 let currentAgentSessionPath: string | undefined;
@@ -118,7 +128,7 @@ function nextReportSeq(): number {
   return reportSeq;
 }
 
-export function isAbsoluteSessionPath(file: unknown): file is string {
+function isAbsoluteSessionPath(file: unknown): file is string {
   return (
     typeof file === "string" &&
     (path.posix.isAbsolute(file) || path.win32.isAbsolute(file))
@@ -151,18 +161,6 @@ function withSessionRef(params: Record<string, unknown>): Record<string, unknown
   return params;
 }
 
-function parseDurationEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
-  }
-  return parsed;
-}
-
 function currentSessionRef(): Record<string, unknown> | undefined {
   if (currentAgentSessionPath) {
     return { agent_session_path: currentAgentSessionPath };
@@ -185,7 +183,12 @@ function resumeArgv(): string[] | undefined {
   return ["omp", `--resume=${ref}`];
 }
 
-function reportSession(sessionStartSource = "startup"): Promise<void> {
+
+// reportSession takes the source with NO default: pi's session_start passes
+// event?.reason verbatim (an absent reason stays absent on the wire), while
+// every omp call site passes an explicit value. A silent default here would
+// rewrite what the wire carries.
+function reportSession(sessionStartSource?: string): Promise<void> {
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
     return Promise.resolve();
@@ -270,6 +273,24 @@ async function drainStateQueue(): Promise<void> {
   }
 }
 
+
+function parseDurationEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+const idleDebounceMs = parseDurationEnv("PAR_MUX_OMP_IDLE_DEBOUNCE_MS", 250);
+const retryGraceMs = parseDurationEnv("PAR_MUX_OMP_RETRY_GRACE_MS", 2500);
+const retryableErrorPattern =
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
+
 function lastAssistantMessage(messages: unknown[]): any | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i] as any;
@@ -302,6 +323,7 @@ function askBlockedMessage(args: any): string {
   }
   return "waiting for user input";
 }
+
 
 export default function (pi) {
   if (!enabled()) {
@@ -457,7 +479,7 @@ export default function (pi) {
       return;
     }
     updateSessionRef(ctx);
-    void reportSession();
+    void reportSession("startup");
     clearPendingTimers();
     clearFailureState();
     agentActive = true;
