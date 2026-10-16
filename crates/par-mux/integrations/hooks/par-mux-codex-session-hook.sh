@@ -65,6 +65,21 @@ inherited = os.environ.get("CODEX_THREAD_ID")
 if inherited and inherited != session_id:
     raise SystemExit(0)
 
+# codex's payload names the THREAD, and a thread id is not always one
+# `codex resume` resolves — measured 2026-10-16 (codex 0.163): a restored
+# pane ran `codex resume <payload id>` into "no rollout found for thread
+# id" while the transcript's rollout existed under a different id, which
+# `codex exec resume` did resolve. The rollout filename carries the
+# resumable id (rollout-<timestamp>-<uuid>.jsonl), so when the transcript
+# matches that naming and holds a different id, the file wins.
+transcript = hook_input.get("transcript_path")
+if isinstance(transcript, str) and transcript:
+    name = os.path.basename(transcript)
+    if name.startswith("rollout-") and name.endswith(".jsonl"):
+        candidate = "-".join(name[: -len(".jsonl")].split("-")[-5:])
+        if len(candidate) == 36 and candidate != session_id:
+            session_id = candidate
+
 session_start_source = hook_input.get("source")
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = "startup"
@@ -80,7 +95,6 @@ params = {
     "agent_session_id": session_id,
     "session_resume_argv": ["codex", "resume", session_id],
 }
-transcript = hook_input.get("transcript_path")
 if isinstance(transcript, str) and transcript:
     params["agent_session_path"] = transcript
 

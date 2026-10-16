@@ -943,4 +943,141 @@ args = ["mcp", "serve"]
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("CODEX_THREAD_ID"));
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("SessionStart"));
     }
+
+    /// One hook run against a local listener: writes the shipped POSIX asset
+    /// to a temp file, feeds it `payload` on stdin with the pane env and
+    /// `CODEX_THREAD_ID` set, and returns the reported params — `None` when
+    /// nothing arrived within the deadline (the guard refused).
+    #[cfg(unix)]
+    fn run_hook(payload: &str, thread_id: &str) -> Option<JsonValue> {
+        use std::io::Write as _;
+        use std::net::Shutdown;
+        use std::os::unix::net::UnixListener;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let socket = dir.path().join("hook.sock");
+        let listener = UnixListener::bind(&socket).expect("binds the test listener");
+        let script = dir.path().join("hook.sh");
+        fs::write(&script, CODEX_HOOK_ASSET_POSIX).expect("writes the asset");
+        let mut child = Command::new("sh")
+            .arg(&script)
+            .arg("session")
+            .env("PAR_MUX_ENV", "1")
+            .env("PAR_MUX_SOCKET", &socket)
+            .env("PAR_MUX_PANE_ID", "pane-1")
+            .env("CODEX_THREAD_ID", thread_id)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("runs the hook");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(payload.as_bytes())
+            .expect("feeds the payload");
+
+        listener.set_nonblocking(true).expect("nonblocking accept");
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(10);
+        let (stream, _) = loop {
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    // A refusal exits the hook without connecting; once the
+                    // process is gone and a short grace has passed, nothing
+                    // is coming.
+                    if child.try_wait().ok().flatten().is_some()
+                        && started.elapsed() > Duration::from_millis(300)
+                    {
+                        return None;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "the hook never reported against {payload}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept failed: {err}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut buf = Vec::new();
+        let mut reader = std::io::BufReader::new(stream);
+        use std::io::BufRead as _;
+        reader
+            .read_until(b'\n', &mut buf)
+            .expect("reads the report line");
+        let _ = reader.get_ref().shutdown(Shutdown::Both);
+        let line = String::from_utf8(buf).expect("utf-8 report");
+        let request: JsonValue = serde_json::from_str(line.trim()).expect("parses the report");
+        Some(request["params"].clone())
+    }
+
+    /// The rollout-filename correction (card 01a14584371a721490a1859e2c3379c0):
+    /// codex's hook payload names the THREAD, and `codex resume` does not
+    /// resolve every thread id — measured live (codex 0.163) when a restored
+    /// pane resumed into "no rollout found for thread id" while the
+    /// transcript's rollout existed under a different id. The hook must
+    /// report the id the rollout filename carries. Drives the shipped asset
+    /// end to end, unix only.
+    #[test]
+    #[cfg(unix)]
+    fn the_hook_reports_the_rollout_filename_id_over_the_payload_thread_id() {
+        let rollout =
+            "/sessions/rollout-2026-10-16T09-06-31-01a14577-0a9f-7801-a917-39c2d81b6388.jsonl";
+
+        // Mismatched payload: the file's id wins, and the resume argv uses it.
+        let params = run_hook(
+            &format!(
+                r#"{{"hook_event_name":"SessionStart","session_id":"0e581433-aaaa-7111-8111-111111111111","transcript_path":"{rollout}","source":"resume"}}"#
+            ),
+            "0e581433-aaaa-7111-8111-111111111111",
+        )
+        .expect("the mismatched payload reports");
+        assert_eq!(
+            params["agent_session_id"], "01a14577-0a9f-7801-a917-39c2d81b6388",
+            "the rollout filename's id is the resumable one"
+        );
+        assert_eq!(
+            params["session_resume_argv"],
+            serde_json::json!(["codex", "resume", "01a14577-0a9f-7801-a917-39c2d81b6388"]),
+            "the resume argv carries the corrected id"
+        );
+        assert_eq!(params["agent_session_path"], rollout);
+
+        // Matching payload: nothing to correct, the payload id survives.
+        let params = run_hook(
+            r#"{"hook_event_name":"SessionStart","session_id":"01a14577-0a9f-7801-a917-39c2d81b6388","transcript_path":"/sessions/rollout-2026-10-16T09-06-31-01a14577-0a9f-7801-a917-39c2d81b6388.jsonl","source":"startup"}"#,
+            "01a14577-0a9f-7801-a917-39c2d81b6388",
+        )
+        .expect("the matching payload reports");
+        assert_eq!(
+            params["agent_session_id"], "01a14577-0a9f-7801-a917-39c2d81b6388",
+            "a payload id the file agrees with is kept"
+        );
+
+        // No transcript: the payload id is all there is.
+        let params = run_hook(
+            r#"{"hook_event_name":"SessionStart","session_id":"0e581433-bbbb-7222-8222-222222222222","source":"startup"}"#,
+            "0e581433-bbbb-7222-8222-222222222222",
+        )
+        .expect("the transcript-less payload reports");
+        assert_eq!(
+            params["agent_session_id"], "0e581433-bbbb-7222-8222-222222222222",
+            "without a rollout filename the payload id stands"
+        );
+
+        // The fork guard: a different CODEX_THREAD_ID refuses to report.
+        let refused = run_hook(
+            r#"{"hook_event_name":"SessionStart","session_id":"0e581433-cccc-7333-8333-333333333333","transcript_path":"/sessions/rollout-2026-10-16T09-06-31-01a14577-0a9f-7801-a917-39c2d81b6388.jsonl","source":"startup"}"#,
+            "99999999-9999-7999-8999-999999999999",
+        );
+        assert!(refused.is_none(), "the thread-id guard still refuses");
+    }
 }

@@ -63,6 +63,26 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 $inherited = $env:CODEX_THREAD_ID
 if (-not [string]::IsNullOrWhiteSpace($inherited) -and $inherited -ne $sessionId) { exit 0 }
 
+# codex's payload names the THREAD, and a thread id is not always one
+# `codex resume` resolves — measured 2026-10-16 (codex 0.163): a restored
+# pane ran `codex resume <payload id>` into "no rollout found for thread
+# id" while the transcript's rollout existed under a different id, which
+# `codex exec resume` did resolve. The rollout filename carries the
+# resumable id (rollout-<timestamp>-<uuid>.jsonl), so when the transcript
+# matches that naming and holds a different id, the file wins.
+$transcriptPath = $null
+if ($payload.transcript_path -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcript_path)) {
+    $transcriptPath = "$($payload.transcript_path)"
+}
+if ($null -ne $transcriptPath) {
+    $name = [System.IO.Path]::GetFileName("$transcriptPath")
+    if ($name.StartsWith("rollout-") -and $name.EndsWith(".jsonl")) {
+        $groups = $name.Substring(0, $name.Length - 6).Split("-") | Select-Object -Last 5
+        $candidate = $groups -join "-"
+        if ($candidate.Length -eq 36 -and $candidate -cne $sessionId) { $sessionId = $candidate }
+    }
+}
+
 $source = $payload.source
 if ([string]::IsNullOrWhiteSpace($source)) { $source = "startup" }
 
@@ -77,8 +97,8 @@ $params = [ordered]@{
     agent_session_id = "$sessionId"
     session_resume_argv = @("codex", "resume", "$sessionId")
 }
-if ($payload.transcript_path -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcript_path)) {
-    $params["agent_session_path"] = "$($payload.transcript_path)"
+if ($null -ne $transcriptPath) {
+    $params["agent_session_path"] = "$transcriptPath"
 }
 
 $request = [ordered]@{

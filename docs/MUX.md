@@ -610,7 +610,12 @@ par-mux --heal-agent-hooks                Rewrite a registered hook asset that w
 The hooks never slow an agent down: outside a par-mux pane the scripts
 exit on their env guards before doing anything, inside one the single
 socket write carries a 0.5 s timeout, and every failure is swallowed
-silently — a session start never blocks or fails because of them. par-term
+silently — a session start never blocks or fails because of them. codex's
+hook payload names the thread rather than the rollout, so both codex hook
+assets derive the id they report (and resume with) from the transcript's
+`rollout-<timestamp>-<uuid>.jsonl` filename when it parses and differs
+from the payload id; the `CODEX_THREAD_ID` fork guard still rules on the
+payload id. par-term
 invokes these flags for its integrations dialog, CLI, Settings status rows,
 and startup self-heal instead of embedding its own copies, so the
 integrations always match the shipped binary.
