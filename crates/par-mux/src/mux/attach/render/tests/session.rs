@@ -3379,7 +3379,7 @@ fn agent_state_push_notifies_selected_transitions_only() {
     session.frame(&mut sink);
     assert_eq!(
         String::from_utf8(sink.raw.clone()).unwrap(),
-        "\x1b]9;par-mux: main \u{b7} claude: idle\x07"
+        "\x1b]9;par-mux: main ? claude: idle\x07"
     );
     assert!(session.notify.outbox.is_empty(), "the frame drained it");
     // The same state again, then an unselected one: nothing.

@@ -67,7 +67,17 @@ pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec
     if kitty {
         format!("\x1b]99;i=1:d=0;{title}\x1b\\\x1b]99;i=1:p=body;{body}\x1b\\").into_bytes()
     } else {
-        format!("\x1b]9;{title}: {body}\x07").into_bytes()
+        // iTerm2's OSC 9 never presented an escape whose body carried the
+        // multibyte `·` separator (live report: pure-ASCII printf bodies
+        // present fine in the same terminal), so the OSC 9 body is folded
+        // to ASCII — a non-ASCII workspace or agent name becomes `?`.
+        // Kitty's OSC 99 is UTF-8 by spec and keeps its text.
+        let ascii = |s: &str| -> String {
+            s.chars()
+                .map(|c| if c.is_ascii() { c } else { '?' })
+                .collect()
+        };
+        format!("\x1b]9;{}: {}\x07", ascii(&title), ascii(&body)).into_bytes()
     }
 }
 
@@ -243,8 +253,10 @@ mod tests {
         let osc9 = terminal_notification("par-mux", "main \u{b7} cl\x1baude: blocked\x07", false);
         assert_eq!(
             osc9,
-            "\x1b]9;par-mux: main \u{b7} claude: blocked\x07".as_bytes(),
-            "ESC and BEL inside pane-controlled text cannot end the OSC"
+            "\x1b]9;par-mux: main ? claude: blocked\x07".as_bytes(),
+            "ESC, BEL, and non-ASCII inside pane-controlled text cannot reach \
+             the OSC: control ends the string (iTerm2), multibyte broke its \
+             presentation (live report)"
         );
         let kitty = String::from_utf8(terminal_notification("par-mux", "a\nb", true)).unwrap();
         assert!(kitty.contains("]99;i=1:d=0;par-mux\x1b\\"), "{kitty:?}");
