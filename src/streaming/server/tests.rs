@@ -481,4 +481,64 @@ async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
         .contains_key(axum::http::header::WWW_AUTHENTICATE));
 }
 
+// ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────
+
+#[tokio::test]
+async fn clipboard_set_applies_and_broadcasts_by_default() {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.sessions.get("default").unwrap();
+    let mut rx = session.broadcast_tx.subscribe();
+
+    let replies = server.handle_clipboard_request(
+        &session,
+        ConnCtx {
+            transport_label: "test",
+            client_id: uuid::Uuid::new_v4(),
+            read_only: false,
+        },
+        "set".to_string(),
+        Some("hi".to_string()),
+        None,
+    );
+
+    assert!(replies.is_empty());
+    assert_eq!(session.terminal.read().clipboard(), Some("hi"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ServerMessage::ClipboardSync { .. })
+    ));
+}
+
+/// The streaming set path honors the same `allow_clipboard_write` gate as
+/// OSC 52 writes — off means no store and no `clipboard_sync` broadcast.
+#[tokio::test]
+async fn clipboard_set_denied_when_allow_clipboard_write_is_off() {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.sessions.get("default").unwrap();
+    session.terminal.write().set_allow_clipboard_write(false);
+    let mut rx = session.broadcast_tx.subscribe();
+
+    let replies = server.handle_clipboard_request(
+        &session,
+        ConnCtx {
+            transport_label: "t",
+            client_id: uuid::Uuid::new_v4(),
+            read_only: false,
+        },
+        "set".to_string(),
+        Some("hi".to_string()),
+        None,
+    );
+
+    assert!(replies.is_empty());
+    assert_eq!(session.terminal.read().clipboard(), None);
+    assert!(rx.try_recv().is_err());
+}
+
 // ─── InputRateLimiter tests ─────────────────────────────────────────────

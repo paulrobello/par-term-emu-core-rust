@@ -623,8 +623,9 @@ impl StreamingServer {
     }
 
     /// `ClipboardRequest`: "set" stores the text and broadcasts the sync to
-    /// the session; "get" replies with the clipboard contents when reads
-    /// are allowed.
+    /// the session when `allow_clipboard_write` is on (same gate as OSC 52
+    /// writes; denied silently like them); "get" replies with the clipboard
+    /// contents when reads are allowed.
     pub(super) fn handle_clipboard_request(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
@@ -646,11 +647,20 @@ impl StreamingServer {
             "set" => {
                 if let Some(ref text) = content {
                     let mut terminal = session.terminal.write();
-                    terminal.set_clipboard(Some(text.clone()));
-                    self.broadcast_to_session(
-                        &session.id,
-                        ServerMessage::clipboard_sync("set".to_string(), text.clone(), target),
-                    );
+                    if !terminal.allow_clipboard_write() {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Clipboard write denied for {} {}: allow_clipboard_write is off",
+                            transport_label,
+                            client_id
+                        );
+                    } else {
+                        terminal.set_clipboard(Some(text.clone()));
+                        self.broadcast_to_session(
+                            &session.id,
+                            ServerMessage::clipboard_sync("set".to_string(), text.clone(), target),
+                        );
+                    }
                 }
             }
             "get" => {
