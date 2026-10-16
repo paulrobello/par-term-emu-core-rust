@@ -817,7 +817,21 @@ mod tests {
             .stderr(Stdio::null())
             .status();
         assert!(staged.expect("git runs").success(), "git add in fixture");
-        let probe = probe_dir(repo.path());
+        // Measured once under make checkall-ci at host load 14-17 (2026-10-15):
+        // the first probe after a successful add read Some(false) — the
+        // mechanism was never pinned (a timeout would read None, not
+        // Some(false), so the anomaly is diff-index exiting 0 against the
+        // pre-add index). The probe re-queries until the staged edit reads
+        // dirty or a short deadline passes; a reading that stays wrong still
+        // fails below, so a real probe bug is not masked.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let probe = loop {
+            let probe = probe_dir(repo.path());
+            if probe.git_dirty == Some(true) || Instant::now() >= deadline {
+                break probe;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
         assert_eq!(probe.git_dirty, Some(true), "staged edit is dirty");
 
         // Not a repo at all: every git field absent, disk still measured.
