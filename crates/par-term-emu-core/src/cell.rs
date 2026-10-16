@@ -239,7 +239,7 @@ impl CellFlags {
 /// A single cell in the terminal grid
 ///
 /// Cell is 40 bytes (down from 56): colors are packed into `u32` words
-/// ([`PackedColor`]) and combining marks spill to the heap via a
+/// (the crate-private `PackedColor`) and combining marks spill to the heap via a
 /// null-optimized `Option<Arc<[char]>>` instead of an inline
 /// `SmallVec<[char; 4]>`. Only cells that actually carry combining marks
 /// allocate.

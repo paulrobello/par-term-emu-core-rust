@@ -229,10 +229,10 @@ impl ProgressBarCommand {
     /// Parse an OSC 934 parameter list into a ProgressBarCommand
     ///
     /// Expected format after the "934" prefix:
-    /// params[0] = "934" (already consumed by caller)
-    /// params[1] = action ("set", "remove", "remove_all")
-    /// params[2] = id (for "set" and "remove")
-    /// params[3..] = key=value pairs (for "set")
+    /// - `params[0]` = "934" (already consumed by caller)
+    /// - `params[1]` = action ("set", "remove", "remove_all")
+    /// - `params[2]` = id (for "set" and "remove")
+    /// - `params[3..]` = key=value pairs (for "set")
     pub fn parse(params: &[&[u8]]) -> Option<Self> {
         // params[0] is "934", params[1] is the action
         if params.len() < 2 {

@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass. Board card: `[ENH-061]`.
 > Sequencing: land this **after ARC-138 and ARC-140**. ARC-138 adds the local `status_dirty = true` fallback in `patch_agent`'s insert branch. ARC-140 retypes the same `patch_agent` / `set_sidebar_roster` lines (`AUDIT.md:377-378`). This card builds on both and keeps ARC-138's fallback for a `ws`-less line.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees. The `tmux_control.rs` citations were symbolized after the ARC-004 split of that file into the `tmux_control/` module (`notification.rs`, `parser.rs`, `tests.rs`).
 
 **Priority**: low · **Estimate**: M
 
@@ -31,13 +32,13 @@ The round-trip tests are at `emit.rs:632-645` (`agent_state_changed_round_trips`
 
 ### Variant
 
-`crates/par-term-emu-core/src/tmux_control.rs:279-290` defines `TmuxNotification::AgentStateChanged { pane_id, agent, state, source }`. The enum has **no `#[non_exhaustive]`** (grep finds none). Adding a field is a breaking change for any downstream crate that destructures the variant without `..` or builds it with a struct literal.
+`TmuxNotification::AgentStateChanged { pane_id, agent, state, source }` is defined in `crates/par-term-emu-core/src/tmux_control/notification.rs`. The enum has **no `#[non_exhaustive]`** (grep finds none). Adding a field is a breaking change for any downstream crate that destructures the variant without `..` or builds it with a struct literal.
 
 ### Core parser
 
-`tmux_control.rs:996-1020` (`parse_agent_state_changed`) splits on whitespace. It peels a final token only when `parts.len() >= 4` and that token starts with `source=`. Everything from index 2 up to that point is joined into `state`, because multi-word states round-trip.
+`TmuxControlParser::parse_agent_state_changed` (`tmux_control/parser.rs`) splits on whitespace. It peels a final token only when `parts.len() >= 4` and that token starts with `source=`. Everything from index 2 up to that point is joined into `state`, because multi-word states round-trip.
 
-The tests are at `tmux_control.rs:1926-1953`:
+The tests are the `AgentStateChanged` cases at the end of `par_mux_extension_optional_fields_decode` (`tmux_control/tests.rs`):
 - multi-word state with source;
 - no source;
 - the three-token edge case: `%1 claude source=hook` gives state `source=hook` and an empty source.
@@ -121,7 +122,7 @@ These cases show how each parser handles the new daemon line `%agent-state-chang
 
 | Parser | Result |
 |---|---|
-| core ≤0.60.0 (`tmux_control.rs:1001-1019`) | Last token is `ws=+1`, not `source=`. State becomes `working source=hook ws=+1` and source is empty. |
+| core ≤0.60.0 (`parse_agent_state_changed`) | Last token is `ws=+1`, not `source=`. State becomes `working source=hook ws=+1` and source is empty. |
 | par-term on core ≤0.60.0 | `AgentEntry::from_push` calls `AgentSource::parse("")`, which returns `None`. The push is dropped ("dropped unattributed agent push", `mux_drain.rs:94-97`). The roster stays at its last `list-agents` value. This is **fail-closed**: stale, never corrupt. |
 | old `par-mux attach` (≤0.60.0) | Patches state `working source=hook ws=+1` into the panel label until the next refresh. This is cosmetic, and a same-version daemon and client never hit it (`attach/conn.rs:88-97` warns on stamp mismatch). |
 | streamer, any version (`roster.rs:53-72`) | Correct: state `working`, source `hook`, `ws` ignored. |
@@ -131,7 +132,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
 
 ## Implementation
 
-1. **Variant** (`tmux_control.rs:279-290`). Add a field after `source`:
+1. **Variant** (`TmuxNotification::AgentStateChanged`, `tmux_control/notification.rs`). Add a field after `source`:
    ```rust
    /// Owning workspace id (`+N`), the side panel's grouping key. Empty
    /// when the line carried no `ws=` token (a pre-ENH-061 daemon).
@@ -139,7 +140,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
    ```
    Extend the variant doc's `Arguments:` line to `…, source, ws`.
 
-2. **Tolerant parser** (`tmux_control.rs:996-1020`). Replace the single-`source=` peel with a tail loop.
+2. **Tolerant parser** (`parse_agent_state_changed`, `tmux_control/parser.rs`). Replace the single-`source=` peel with a tail loop.
    ```rust
    fn parse_agent_state_changed(args: &str) -> Option<TmuxNotification> {
        let parts: Vec<&str> = args.split_whitespace().collect();
@@ -174,7 +175,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
    ```
    States are drawn from the fixed set `working|blocked|idle` (`hooks/report.rs:32`, the scrape patterns' `state =`), so no legitimate state word contains `=`.
 
-   Extend `par_mux_extension_optional_fields_decode` (`:1863-1953`) with these cases:
+   Extend `par_mux_extension_optional_fields_decode` (`tmux_control/tests.rs`) with these cases:
    - `%1 claude working source=hook ws=+2` gives state `working`, source `hook`, ws `+2`;
    - `%1 claude waiting for input source=scrape ws=+0` gives a multi-word state;
    - `%1 claude working source=hook future=x` gives state `working`, source `hook`, ws empty (an unknown key is ignored);
@@ -205,7 +206,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
    - `hooks/tests.rs:111`, `:725`, `:999`. Derive the expected value from the test tree's workspace, for example `tree.lock().workspace_of_pane(p).unwrap().to_string()`. Do not hardcode it.
    - `scrape.rs:1038`.
    - `emit.rs:633`, `:652`, `:684`.
-   - `tmux_control.rs:1928-1946`.
+   - the `AgentStateChanged` expectations in `par_mux_extension_optional_fields_decode` (`tmux_control/tests.rs`).
    - `render/tests/session.rs:2438`.
    - `src/python_bindings/types/notification.rs:525`.
    - Run `cargo check -p par-mux --all-targets --features mux-bin,attach` and the root crate's checks to surface any site this list misses.
@@ -244,7 +245,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
 
 ## Files to touch
 
-- `crates/par-term-emu-core/src/tmux_control.rs` (variant, parser, tests)
+- `crates/par-term-emu-core/src/tmux_control/notification.rs` (variant), `crates/par-term-emu-core/src/tmux_control/parser.rs` (parser), `crates/par-term-emu-core/src/tmux_control/tests.rs` (tests)
 - `crates/par-mux/src/mux/emit.rs` (emitter, tests)
 - `crates/par-mux/src/mux/tree/mod.rs` (`workspace_of_pane`, test)
 - `crates/par-mux/src/mux/hooks/report.rs`, `crates/par-mux/src/mux/hooks/tests.rs`

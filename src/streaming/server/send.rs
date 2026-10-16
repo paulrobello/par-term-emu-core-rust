@@ -58,9 +58,10 @@ impl StreamingServer {
     }
 
     /// Send a trigger matched event to all clients
-    // Public API mirroring `ServerMessage::trigger_matched`; a parameter
-    // struct would break embedders.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public API, one argument per `TriggerMatched` field mirroring `ServerMessage::trigger_matched`; a parameter struct would break embedders"
+    )]
     pub fn send_trigger_matched(
         &self,
         trigger_id: u64,

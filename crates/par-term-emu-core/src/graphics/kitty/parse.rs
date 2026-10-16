@@ -29,156 +29,7 @@ impl KittyParser {
         for pair in params_str.split(',') {
             if let Some((key, value)) = pair.split_once('=') {
                 self.params.insert(key.to_string(), value.to_string());
-
-                match key {
-                    "a" => {
-                        if let Some(c) = value.chars().next() {
-                            self.action = KittyAction::from_char(c).unwrap_or_default();
-                        }
-                    }
-                    "f" => {
-                        if let Ok(code) = value.parse::<u32>() {
-                            self.format = KittyFormat::from_code(code).unwrap_or_default();
-                        }
-                    }
-                    "t" => {
-                        if let Some(c) = value.chars().next() {
-                            self.medium = KittyMedium::from_char(c).unwrap_or_default();
-                        }
-                    }
-                    "i" => {
-                        self.image_id = value.parse().ok();
-                    }
-                    "p" => {
-                        self.placement_id = value.parse().ok();
-                    }
-                    "s" => {
-                        // Animation control state (for AnimationControl action) takes priority
-                        if self.action == KittyAction::AnimationControl {
-                            self.animation_control = AnimationControl::from_value(value);
-                            debug_log!(
-                                "KITTY",
-                                "Parsed animation control: s={} -> {:?}",
-                                value,
-                                self.animation_control
-                            );
-                        } else {
-                            // Otherwise it's width
-                            self.width = value.parse().ok();
-                        }
-                    }
-                    "v" => {
-                        // v= is overloaded: height for images, num_plays for animation control
-                        if self.action == KittyAction::AnimationControl {
-                            // Number of times to play animation (v= for animation control)
-                            // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
-                            self.num_plays = value.parse().ok();
-                        } else {
-                            // Height for image transmission/display
-                            self.height = value.parse().ok();
-                        }
-                    }
-                    "c" => {
-                        // Frame composition mode (for Frame action) takes priority
-                        if self.action == KittyAction::Frame {
-                            if let Some(first_char) = value.chars().next() {
-                                self.frame_composition = CompositionMode::from_char(first_char);
-                            }
-                        } else {
-                            // Otherwise it's columns
-                            self.columns = value.parse().ok();
-                        }
-                    }
-                    "r" => {
-                        // Frame number (for Frame action) takes priority
-                        if self.action == KittyAction::Frame {
-                            self.frame_number = value.parse().ok();
-                        } else {
-                            // Otherwise it's rows
-                            self.rows = value.parse().ok();
-                        }
-                    }
-                    "x" => {
-                        self.source_x = value.parse().ok();
-                    }
-                    "y" => {
-                        self.source_y = value.parse().ok();
-                    }
-                    "w" => {
-                        self.source_width = value.parse().ok();
-                    }
-                    "h" => {
-                        self.source_height = value.parse().ok();
-                    }
-                    "X" => {
-                        self.x_offset = value.parse().ok();
-                    }
-                    "Y" => {
-                        self.y_offset = value.parse().ok();
-                    }
-                    "m" => {
-                        self.more_chunks = value == "1";
-                    }
-                    "d" => {
-                        // Delete specification — recorded in `params` above
-                        // and resolved after the full key=value list is
-                        // parsed, so `d=` may precede its identifying
-                        // params (see the post-loop resolution below).
-                    }
-                    "U" => {
-                        // Virtual placement
-                        self.is_virtual = value == "1";
-                    }
-                    "P" => {
-                        // Parent image ID for relative positioning
-                        self.parent_image_id = value.parse().ok();
-                    }
-                    "Q" => {
-                        // Parent placement ID for relative positioning
-                        self.parent_placement_id = value.parse().ok();
-                    }
-                    "H" => {
-                        // Relative X offset in pixels
-                        self.relative_x_offset = value.parse().ok();
-                    }
-                    "V" => {
-                        // Relative Y offset in pixels (note: different from v=height).
-                        // Parsed unconditionally to match H=; the offset is only *applied*
-                        // when a parent (P=) is set (see build_graphic), so storing it
-                        // early is harmless and removes the H=/V= asymmetry where V=
-                        // was silently dropped unless P= had already been parsed.
-                        self.relative_y_offset = value.parse().ok();
-                    }
-                    "o" => {
-                        // Compression format
-                        if let Some(c) = value.chars().next() {
-                            if let Some(comp) = KittyCompression::from_char(c) {
-                                self.compression = comp;
-                            }
-                        }
-                    }
-                    "z" => {
-                        // z= is overloaded: frame delay for animations, z-index for placements
-                        if self.action == KittyAction::Frame {
-                            self.frame_delay_ms = value.parse().ok();
-                        } else {
-                            self.z_index = value.parse().ok();
-                        }
-                    }
-                    "q" => {
-                        // Quietness level (0 = reply, 1 = suppress OK, 2 = suppress all)
-                        if let Ok(level) = value.parse::<u8>() {
-                            self.quietness = level;
-                        }
-                    }
-                    "C" => {
-                        // C=1: do not move the cursor after display; C=0 or
-                        // omitted keeps the default (cursor advances below
-                        // the image) — terminal layer applies the move.
-                        self.suppress_cursor_move = value == "1";
-                    }
-                    _ => {}
-                }
+                self.apply_param(key, value);
             }
         }
 
@@ -192,34 +43,190 @@ impl KittyParser {
             self.parse_delete_target(&spec);
         }
 
-        // Decode and accumulate base64 data
         if !data_str.is_empty() {
-            // Try STANDARD first (with padding), then NO_PAD if that fails
-            // This handles both padded and unpadded base64 (Kitty allows both)
-            let decoded =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_str)
-                    .or_else(|_| {
-                        base64::Engine::decode(
-                            &base64::engine::general_purpose::STANDARD_NO_PAD,
-                            data_str,
-                        )
-                    })
-                    .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
-            if self.data_bytes + decoded.len() > MAX_KITTY_PAYLOAD_BYTES {
-                // Over the cap: drop the accumulated transmission entirely
-                // so a later one starts from zero, not from the overflow.
-                self.reset();
-                return Err(GraphicsError::KittyError(format!(
-                    "payload exceeds {} bytes",
-                    MAX_KITTY_PAYLOAD_BYTES
-                )));
-            }
-            self.data_bytes += decoded.len();
-            self.data_chunks.push(decoded);
+            self.accumulate_data(data_str)?;
         }
 
         // Return true if more chunks expected
         Ok(self.more_chunks)
+    }
+
+    /// Apply one `key=value` control parameter. Overloaded keys (`s`, `v`,
+    /// `c`, `r`, `z`) read `self.action`, so an `a=` earlier in the same
+    /// list takes effect for the keys after it.
+    fn apply_param(&mut self, key: &str, value: &str) {
+        match key {
+            "a" => {
+                if let Some(c) = value.chars().next() {
+                    self.action = KittyAction::from_char(c).unwrap_or_default();
+                }
+            }
+            "f" => {
+                if let Ok(code) = value.parse::<u32>() {
+                    self.format = KittyFormat::from_code(code).unwrap_or_default();
+                }
+            }
+            "t" => {
+                if let Some(c) = value.chars().next() {
+                    self.medium = KittyMedium::from_char(c).unwrap_or_default();
+                }
+            }
+            "i" => {
+                self.image_id = value.parse().ok();
+            }
+            "p" => {
+                self.placement_id = value.parse().ok();
+            }
+            "s" => {
+                // Animation control state (for AnimationControl action) takes priority
+                if self.action == KittyAction::AnimationControl {
+                    self.animation_control = AnimationControl::from_value(value);
+                    debug_log!(
+                        "KITTY",
+                        "Parsed animation control: s={} -> {:?}",
+                        value,
+                        self.animation_control
+                    );
+                } else {
+                    // Otherwise it's width
+                    self.width = value.parse().ok();
+                }
+            }
+            "v" => {
+                // v= is overloaded: height for images, num_plays for animation control
+                if self.action == KittyAction::AnimationControl {
+                    // Number of times to play animation (v= for animation control)
+                    // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
+                    self.num_plays = value.parse().ok();
+                } else {
+                    // Height for image transmission/display
+                    self.height = value.parse().ok();
+                }
+            }
+            "c" => {
+                // Frame composition mode (for Frame action) takes priority
+                if self.action == KittyAction::Frame {
+                    if let Some(first_char) = value.chars().next() {
+                        self.frame_composition = CompositionMode::from_char(first_char);
+                    }
+                } else {
+                    // Otherwise it's columns
+                    self.columns = value.parse().ok();
+                }
+            }
+            "r" => {
+                // Frame number (for Frame action) takes priority
+                if self.action == KittyAction::Frame {
+                    self.frame_number = value.parse().ok();
+                } else {
+                    // Otherwise it's rows
+                    self.rows = value.parse().ok();
+                }
+            }
+            "x" => {
+                self.source_x = value.parse().ok();
+            }
+            "y" => {
+                self.source_y = value.parse().ok();
+            }
+            "w" => {
+                self.source_width = value.parse().ok();
+            }
+            "h" => {
+                self.source_height = value.parse().ok();
+            }
+            "X" => {
+                self.x_offset = value.parse().ok();
+            }
+            "Y" => {
+                self.y_offset = value.parse().ok();
+            }
+            "m" => {
+                self.more_chunks = value == "1";
+            }
+            "d" => {
+                // Delete specification — recorded in `params` by the caller
+                // and resolved after the full key=value list is parsed, so
+                // `d=` may precede its identifying params (see parse_chunk).
+            }
+            "U" => {
+                // Virtual placement
+                self.is_virtual = value == "1";
+            }
+            "P" => {
+                // Parent image ID for relative positioning
+                self.parent_image_id = value.parse().ok();
+            }
+            "Q" => {
+                // Parent placement ID for relative positioning
+                self.parent_placement_id = value.parse().ok();
+            }
+            "H" => {
+                // Relative X offset in pixels
+                self.relative_x_offset = value.parse().ok();
+            }
+            "V" => {
+                // Relative Y offset in pixels (note: different from v=height).
+                // Parsed unconditionally to match H=; the offset is only *applied*
+                // when a parent (P=) is set (see build_graphic), so storing it
+                // early is harmless and removes the H=/V= asymmetry where V=
+                // was silently dropped unless P= had already been parsed.
+                self.relative_y_offset = value.parse().ok();
+            }
+            "o" => {
+                // Compression format
+                if let Some(c) = value.chars().next() {
+                    if let Some(comp) = KittyCompression::from_char(c) {
+                        self.compression = comp;
+                    }
+                }
+            }
+            "z" => {
+                // z= is overloaded: frame delay for animations, z-index for placements
+                if self.action == KittyAction::Frame {
+                    self.frame_delay_ms = value.parse().ok();
+                } else {
+                    self.z_index = value.parse().ok();
+                }
+            }
+            "q" => {
+                // Quietness level (0 = reply, 1 = suppress OK, 2 = suppress all)
+                if let Ok(level) = value.parse::<u8>() {
+                    self.quietness = level;
+                }
+            }
+            "C" => {
+                // C=1: do not move the cursor after display; C=0 or
+                // omitted keeps the default (cursor advances below
+                // the image) — terminal layer applies the move.
+                self.suppress_cursor_move = value == "1";
+            }
+            _ => {}
+        }
+    }
+
+    /// Decode one chunk's base64 payload and append it to the transmission,
+    /// enforcing the cumulative [`MAX_KITTY_PAYLOAD_BYTES`] cap.
+    fn accumulate_data(&mut self, data_str: &str) -> Result<(), GraphicsError> {
+        // Try STANDARD first (with padding), then NO_PAD if that fails
+        // This handles both padded and unpadded base64 (Kitty allows both)
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_str)
+            .or_else(|_| {
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, data_str)
+            })
+            .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
+        if self.data_bytes + decoded.len() > MAX_KITTY_PAYLOAD_BYTES {
+            // Over the cap: drop the accumulated transmission entirely
+            // so a later one starts from zero, not from the overflow.
+            self.reset();
+            return Err(GraphicsError::KittyError(format!(
+                "payload exceeds {} bytes",
+                MAX_KITTY_PAYLOAD_BYTES
+            )));
+        }
+        self.data_bytes += decoded.len();
+        self.data_chunks.push(decoded);
+        Ok(())
     }
 
     /// Resolve delete target specification after all parameters are parsed.

@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass. Board card: `[ENH-055]`.
 > Sequencing: land **after DOC-150** (which adds three of the missing rows). This card adds the remaining rows itself, so the gate is green on the tree it lands on.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: M
 
@@ -93,7 +94,7 @@ A new script rather than a sixth check in `check_mux_docs.py`, because the scope
 9. **`--self-test`** (copy the scan roots, the four globs and the three docs into a temp dir, as `check_mux_docs.copy_inputs` does):
    - The baseline copy passes.
    - Each drift is reported naming its variable: delete the `DEBUG_LEVEL` row; insert `let _ = std::env::var("PAR_MUX_FAKE_KNOB");` into `crates/par-mux/src/mux/mod.rs`; insert `parseDurationEnv("PAR_MUX_FAKE_MS", 1);` into the omp `.ts`; add a fake `| \`PAR_MUX_GHOST\` | … |` row; insert `std::env::var(unknown_ident)` into `mux/mod.rs` (`unresolvable`).
-   - **Exclusion holds**: the same `PAR_MUX_FAKE_KNOB` read appended inside `#[cfg(test)]\nmod enh055 { fn f() { let _ = std::env::var("PAR_MUX_FAKE_KNOB"); } }` is **not** reported, and neither is one in a new `crates/par-mux/tests/enh055.rs`.
+   - **Exclusion holds**: the same `PAR_MUX_FAKE_KNOB` read appended inside `#[cfg(test)]\nmod enh055 { fn f() { let _ = std::env::var("PAR_MUX_FAKE_KNOB"); } }` is **not** reported, and neither is one in a new `crates/par-mux/tests/enh055.rs`. <!-- doc-path: example -->
    - **Fail closed**: an empty CONFIG table raises `SystemExit` containing `parsed nothing`.
 10. **Docs rows.** Add rows to the `CONFIG_REFERENCE.md` table (skipping any DOC-150 already added), grounded in the cited code:
     - `PAR_MUX_CURSOR_TRACE`: attach render client, unset, non-empty and not `0` logs cursor placement (`render/mod.rs:392-398`; see TROUBLESHOOTING.md:234).

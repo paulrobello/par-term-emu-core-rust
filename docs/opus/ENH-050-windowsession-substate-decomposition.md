@@ -11,6 +11,7 @@
 > - QA-244 (comment fixes)
 >
 > Then land it **before ENH-051, ENH-052 and ENH-049**. Those three assume the explicit-import layout this card creates. Within this card, run the phases in order and commit each separately.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: medium · **Estimate**: L
 

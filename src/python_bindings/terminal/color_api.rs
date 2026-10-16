@@ -295,8 +295,10 @@ impl PyTerminal {
     ///     len(term.get_rendering_hints())
     ///     1
     ///     ```
-    // Python positional arguments; a struct would change the Python API.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python positional arguments, one per rendering-hint field; a struct would change the Python API"
+    )]
     fn add_rendering_hint(
         &mut self,
         left: usize,

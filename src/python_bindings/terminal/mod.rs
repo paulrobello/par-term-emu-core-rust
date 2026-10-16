@@ -91,6 +91,30 @@ crate::python_bindings::common::impl_terminal_debug_snapshots!(PyTerminal);
 crate::python_bindings::common::impl_terminal_file_transfer!(PyTerminal);
 crate::python_bindings::common::impl_terminal_exports!(PyTerminal);
 crate::python_bindings::common::impl_terminal_screenshot_methods!(PyTerminal);
+crate::python_bindings::common::impl_terminal_resize_pixels!(
+    PyTerminal,
+    /// Resize and set pixel dimensions for XTWINOPS reporting
+    ///
+    /// Args:
+    ///     cols: New columns
+    ///     rows: New rows
+    ///     pixel_width: Text area width in pixels
+    ///     pixel_height: Text area height in pixels
+);
+
+impl crate::python_bindings::common::PixelResize for PyTerminal {
+    fn apply_pixel_resize(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: usize,
+        pixel_height: usize,
+    ) -> PyResult<()> {
+        self.inner.resize(cols, rows);
+        self.inner.set_pixel_size(pixel_width, pixel_height);
+        Ok(())
+    }
+}
 
 #[pymethods]
 impl PyTerminal {
@@ -152,26 +176,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Resize and set pixel dimensions for XTWINOPS reporting
-    ///
-    /// Args:
-    ///     cols: New columns
-    ///     rows: New rows
-    ///     pixel_width: Text area width in pixels
-    ///     pixel_height: Text area height in pixels
-    #[pyo3(signature = (cols, rows, pixel_width, pixel_height))]
-    fn resize_pixels(
-        &mut self,
-        cols: usize,
-        rows: usize,
-        pixel_width: usize,
-        pixel_height: usize,
-    ) -> PyResult<()> {
-        crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
-        self.inner.resize(cols, rows);
-        self.inner.set_pixel_size(pixel_width, pixel_height);
-        Ok(())
-    }
+    // resize_pixels: provided by impl_terminal_resize_pixels! (ARC-006)
 
     /// Reset the terminal to default state (RIS).
     ///
@@ -392,6 +397,20 @@ impl PyTerminal {
     }
 
     // set_allow_clipboard_read: provided by impl_terminal_state_setters! (ARC-003/QA-001)
+
+    /// Check if clipboard write operations are allowed
+    ///
+    /// Returns:
+    ///     True if OSC 52 writes (ESC ] 52 ; c ; <base64> ST) are stored (default)
+    ///
+    /// Example:
+    ///     >>> term.allow_clipboard_write()
+    ///     True
+    fn allow_clipboard_write(&self) -> PyResult<bool> {
+        Ok(self.inner.allow_clipboard_write())
+    }
+
+    // set_allow_clipboard_write: provided by impl_terminal_state_setters! (SEC-003)
 
     // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
@@ -755,16 +774,7 @@ impl PyTerminal {
             .inner
             .named_progress_bars()
             .iter()
-            .map(|(id, bar)| {
-                let mut map = HashMap::new();
-                map.insert("id".to_string(), bar.id.clone());
-                map.insert("state".to_string(), bar.state.description().to_string());
-                map.insert("percent".to_string(), bar.percent.to_string());
-                if let Some(label) = &bar.label {
-                    map.insert("label".to_string(), label.clone());
-                }
-                (id.clone(), map)
-            })
+            .map(|(id, bar)| (id.clone(), named_progress_bar_dict(bar)))
             .collect())
     }
 
@@ -776,16 +786,10 @@ impl PyTerminal {
     /// Returns:
     ///     Dict with keys: id, state, percent, label (optional), or None if not found
     fn get_named_progress_bar(&self, id: &str) -> PyResult<Option<HashMap<String, String>>> {
-        Ok(self.inner.get_named_progress_bar(id).map(|bar| {
-            let mut map = HashMap::new();
-            map.insert("id".to_string(), bar.id.clone());
-            map.insert("state".to_string(), bar.state.description().to_string());
-            map.insert("percent".to_string(), bar.percent.to_string());
-            if let Some(label) = &bar.label {
-                map.insert("label".to_string(), label.clone());
-            }
-            map
-        }))
+        Ok(self
+            .inner
+            .get_named_progress_bar(id)
+            .map(named_progress_bar_dict))
     }
 
     /// Manually set or update a named progress bar
@@ -1594,6 +1598,19 @@ pub(super) fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::Clip
         }
         _ => Err(PyValueError::new_err("Invalid clipboard slot")),
     }
+}
+
+/// The `{id, state, percent, label?}` dict shape both named-progress-bar
+/// getters return; `label` is present only when the bar has one.
+fn named_progress_bar_dict(bar: &crate::terminal::NamedProgressBar) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert("id".to_string(), bar.id.clone());
+    map.insert("state".to_string(), bar.state.description().to_string());
+    map.insert("percent".to_string(), bar.percent.to_string());
+    if let Some(label) = &bar.label {
+        map.insert("label".to_string(), label.clone());
+    }
+    map
 }
 
 /// Convert a `FileTransfer` to a Python dictionary

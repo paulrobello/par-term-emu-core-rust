@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (Security posture, "Hardening ideas"). Board card: `[ENH-058]`.
 > Sequencing: independent of the open ARC/DOC remediation work. It touches only `crates/par-mux/src/mux/client.rs` and `server/protocol.rs` / `server/mod.rs` visibility, so it does not conflict with ARC-136/138/140 (attach `status.rs` / `render/`).
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

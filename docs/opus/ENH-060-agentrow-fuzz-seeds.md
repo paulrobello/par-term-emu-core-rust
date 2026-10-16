@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (Security posture hardening ideas, AUDIT.md `:239`). Board card: `[ENH-060]`.
 > Sequencing: independent of the ARC-136/138/140 render fixes. ARC-140 retypes `AgentRow` consumers in `attach/status.rs` and `render/sidebar.rs` but not `ipc/rows.rs` itself, so this card can land before or after it. If ENH-061 (`ws=` on `%agent-state-changed`) lands first, nothing here changes, because that notification is parsed by `tmux_control.rs` (already fuzzed by `tmux_control`), not by `AgentRow::parse`.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 
@@ -166,7 +167,7 @@ Commands (run from the repo root):
 
 ## Rollback
 
-All additions. The invariant fn and `fuzz_support` are `cfg(any(test, fuzzing))` / `cfg(fuzzing)`, so release builds and the public API are unchanged. `#[doc(hidden)]` keeps the module out of rustdoc, so `mux-rustdoc-check` is unaffected. Revert by deleting the target, the seeds and the `[[bin]]`, and by reverting the count edits. If the 60 s run finds a real round-trip break, keep the target and seeds, mark the failing seed's assertion as the regression test per CONTRIBUTING.md:94, and file the parser defect separately. Do not loosen `assert_round_trip`.
+All additions. The invariant fn and `fuzz_support` are `cfg(any(test, fuzzing))` / `cfg(fuzzing)`, so release builds and the public API are unchanged. `#[doc(hidden)]` keeps the module out of rustdoc, so `rustdoc-check` (formerly `mux-rustdoc-check`) is unaffected. Revert by deleting the target, the seeds and the `[[bin]]`, and by reverting the count edits. If the 60 s run finds a real round-trip break, keep the target and seeds, mark the failing seed's assertion as the regression test per CONTRIBUTING.md:94, and file the parser defect separately. Do not loosen `assert_round_trip`.
 
 ## Dependencies / sequencing
 

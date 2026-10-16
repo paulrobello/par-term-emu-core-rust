@@ -1,7 +1,7 @@
 //! Diagnostics for par-term-emu: the `log` facade first; the file logger
 //! is an optional sink enabled by `DEBUG_LEVEL`.
 //!
-//! Every record goes to the [`log`] crate under the target
+//! Every record goes to the [`log`](mod@log) crate under the target
 //! [`LOG_TARGET`], formatted `[CATEGORY] message`, so an embedder's own
 //! logger (par-mux's stderr sink, the streamer's `tracing` subscriber, a
 //! `pyo3-log` bridge) receives core diagnostics at the level it enables.

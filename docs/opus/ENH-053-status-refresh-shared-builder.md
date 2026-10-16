@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (AUDIT.md "Detailed Findings → Code Quality": "`status.rs` `refresh_legacy` vs `apply_snapshot` 0.966 similar"). Board card: `[ENH-053]`.
 > Sequencing: land this **after ARC-140** (typed `RosterEntry`, one `AgentRow::workspace()` accessor), and therefore after ARC-138 (`patch_agent` insert branch). Both of those edit `status.rs`, and ARC-140 already collapses the duplicated `ws` extraction closure that is part of this duplication. Run step 0 before writing anything.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

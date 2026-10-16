@@ -202,5 +202,5 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
 - Full command reference (list-commands feature tokens, client-snapshot,
   attach chords, notifications, persistence semantics): `MUX.md` in the
   par-term-emu-core-rust repository (github.com/paulrobello/par-term-emu-core-rust).
-  par-term's `docs/features/MUX.md` is a different document: its user-facing
+  par-term's `docs/features/MUX.md` is a different document: its user-facing <!-- doc-path: example -->
   integration guide (attaching par-term windows to sessions), not a copy.

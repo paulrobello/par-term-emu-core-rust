@@ -342,8 +342,11 @@ par-term-streamer --enable-http --web-root ./web_term
 
 Before extracting, the archive's SHA-256 is checked against the release's
 `par-term-web-frontend-v<version>.tar.gz.sha256` asset; a mismatch or an
-unreadable checksum file aborts without touching the web root. Releases
-published before the checksum asset existed download with a warning.
+unreadable checksum file aborts without touching the web root. A release from
+v0.58.1 on that lacks the checksum asset is refused. Only releases published
+before v0.58.1, which predate the checksum asset, download with a warning
+(TLS-only integrity). Building the frontend into the web root with
+`make web-build-static` avoids the download entirely.
 
 **Available Themes:**
 - `iterm2-dark` (default) - iTerm2 Dark color scheme

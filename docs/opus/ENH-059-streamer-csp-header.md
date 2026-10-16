@@ -2,6 +2,7 @@
 
 > Filed from the 2026-10-12 /opus-audit enhancement pass (Security posture, "Hardening ideas"). Board card: `[ENH-059]`.
 > Sequencing: independent. Touches only `src/streaming/server/http.rs`, `origin_tests.rs` and docs. No frontend rebuild is needed.
+> Line-number citations below are pinned to commit `f4161f6` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 
@@ -16,11 +17,11 @@ The streamer's HTTP app (`--enable-http`) serves a live shell UI. Today the only
 - **Header site.** `src/streaming/server/http.rs:260-283` defines `add_security_headers`. It inserts `x-frame-options: DENY` and `content-security-policy: frame-ancestors 'none'` with `HeaderValue::from_static` (`:277-280`).
 - **Wiring.** `src/streaming/server/listen.rs:15-46` defines `build_http_app()`. It builds `ServeDir::new(&self.config.web_root)` as the fallback (`:42`), then `.layer(build_cors_layer(..))` and `.layer(axum::middleware::from_fn(add_security_headers))` (`:44-45`) at the outermost layer, so static files and API routes both get the header. Both `start_with_http` (`:56`) and `start_with_https` (`:90`) call `build_http_app()`. The WebSocket-only listeners serve no HTML and are out of scope.
 - **Existing test.** `src/streaming/server/origin_tests.rs:227-293` (`http_app_responses_carry_anti_framing_headers`) asserts the CSP **equals** `"frame-ancestors 'none'"` twice (`:268-273`, `:287-292`), once for the ServeDir `/` and once for `/sessions`. Its helper `origin_request()` is at `:60-70`. The module is `#[cfg(test)] mod origin_tests;` (`server/mod.rs:650-651`). The file is compiled with the `streaming` feature.
-- **What the shipped export loads.** Measured against `web_term/` (32 tracked files, built by `make web-build-static`, `Makefile:912-922`, from `web-terminal-frontend/`, `next.config.js` `output: 'export'`):
+- **What the shipped export loads.** Measured against `web_term/` (32 tracked files, built by `make web-build-static`, `Makefile:912-922`, from `web-terminal-frontend/`, `next.config.js` `output: 'export'`). Chunk filenames under `web_term/_next/static/chunks/` are content-hashed and change on every frontend build, so the `.js` chunk names below identify the measured build only; locate the same code in a fresh build by content, not by name:
   1. **Inline scripts.** `index.html`, `404.html` and `_not-found.html` each have 3 inline `<script>` blocks: the Turbopack bootstrap `id="_R_"`, `(self.__next_f=self.__next_f||[]).push([0])`, and the RSC payload `self.__next_f.push([1,…])`. They have no `on*=` handlers. Their sha256 values are `GLh7i/Wh…3to=` and `OBTN3RiyCV4B…Keo=`, which are shared, and the payload hash differs per page (`3ReRXuLr…cI=` for index, `zzRbTgS+…biE=` for 404). The payload changes on every frontend content change.
   2. **External styles and fonts.**
      - `app/layout.tsx:40,66,71` and `app/globals.css:2` load `https://fonts.googleapis.com/css2?…` (stylesheet), whose font files come from `https://fonts.gstatic.com`.
-     - `app/globals.css:6` loads `https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.3.0/…/SymbolsNerdFont-Regular.ttf`. It is present in the built `_next/static/chunks/3m9s--a71bpty.css`.
+     - `app/globals.css:6` loads `https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.3.0/…/SymbolsNerdFont-Regular.ttf`. It is present in the built stylesheet chunk under `web_term/_next/static/chunks/` (a `*.css` file whose name is content-hashed per build).
   3. **Inline styles.**
      - Server-rendered `style="…"` attributes: 5 in `index.html`, 4 in each 404 page. They come from `app/page.tsx:202,249,269,343` and `components/OnscreenKeyboard.tsx`.
      - A `<style>` tag in `404.html` and `_not-found.html`.

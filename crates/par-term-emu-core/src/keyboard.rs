@@ -355,48 +355,7 @@ fn encode_legacy(
     }
 
     match ev.key() {
-        TermKey::Char => {
-            let c = char::from_u32(ev.codepoint).unwrap_or('\0');
-            if ev.text_like() {
-                push_utf8(c, out);
-            } else if ev.ctrl() {
-                // Ctrl+letter/@.._ → control bytes; Ctrl+Space → NUL.
-                let byte = match c.to_ascii_lowercase() {
-                    'a'..='z' => (c.to_ascii_lowercase() as u8) - b'a' + 1,
-                    '@'..='_' => c as u8 & 0x1f,
-                    ' ' => 0,
-                    _ => {
-                        // Ctrl over a non-control character has no legacy
-                        // form; par-term falls back to the plain character,
-                        // with the option mode applied when Alt is held.
-                        if ev.alt() {
-                            push_alt_text(ev, c, opts, out);
-                        } else {
-                            push_utf8(c, out);
-                        }
-                        return;
-                    }
-                };
-                // Alt on top of Ctrl: preserve it per the option mode —
-                // Meta ORs the high bit onto the control byte, Normal and
-                // Esc ESC-prefix it (there is no composed glyph to pass
-                // through while Ctrl is held).
-                if ev.alt() && active_option_mode(ev, opts) == option_modes::META {
-                    out.push(byte | 0x80);
-                } else if ev.alt() {
-                    out.push(0x1b);
-                    out.push(byte);
-                } else {
-                    out.push(byte);
-                }
-            } else if ev.alt() {
-                // Alt (+Shift) text per the option modes.
-                push_alt_text(ev, c, opts, out);
-            } else {
-                // Super-class modifiers alone do not disturb text keys.
-                push_utf8(c, out);
-            }
-        }
+        TermKey::Char => encode_legacy_char(ev, opts, out),
         TermKey::Escape => out.push(0x1b),
         TermKey::Enter => {
             // Shift+Enter is a soft line break (LF) for apps that accept
@@ -422,12 +381,7 @@ fn encode_legacy(
                 TermKey::PageUp => 5,
                 _ => 6,
             };
-            let m = ev.legacy_mod();
-            if m == 1 {
-                out.extend_from_slice(format!("\x1b[{}~", n).as_bytes());
-            } else {
-                out.extend_from_slice(format!("\x1b[{};{}~", n, m).as_bytes());
-            }
+            push_tilde_key(n, ev.legacy_mod(), out);
         }
         TermKey::F1 | TermKey::F2 | TermKey::F3 | TermKey::F4 => {
             let final_byte = match ev.key() {
@@ -463,15 +417,65 @@ fn encode_legacy(
                     out.extend_from_slice(format!("\x1b[1;{}{}", m, final_byte as char).as_bytes());
                 }
             } else if let Some((_, n)) = F_TILDE.iter().find(|(k, _)| *k == key) {
-                let m = ev.legacy_mod();
-                if m == 1 {
-                    out.extend_from_slice(format!("\x1b[{}~", n).as_bytes());
-                } else {
-                    out.extend_from_slice(format!("\x1b[{};{}~", n, m).as_bytes());
-                }
+                push_tilde_key(*n, ev.legacy_mod(), out);
             }
             // Unknown keys encode to nothing.
         }
+    }
+}
+
+/// Legacy encoding of a text key (`TermKey::Char`) outside the
+/// modifyOtherKeys form: plain text, Ctrl control bytes, and Alt per the
+/// option modes.
+fn encode_legacy_char(ev: &TermKeyEvent, opts: &KeyEncodeOptions, out: &mut Vec<u8>) {
+    let c = char::from_u32(ev.codepoint).unwrap_or('\0');
+    if ev.text_like() {
+        push_utf8(c, out);
+    } else if ev.ctrl() {
+        // Ctrl+letter/@.._ → control bytes; Ctrl+Space → NUL.
+        let byte = match c.to_ascii_lowercase() {
+            'a'..='z' => (c.to_ascii_lowercase() as u8) - b'a' + 1,
+            '@'..='_' => c as u8 & 0x1f,
+            ' ' => 0,
+            _ => {
+                // Ctrl over a non-control character has no legacy
+                // form; par-term falls back to the plain character,
+                // with the option mode applied when Alt is held.
+                if ev.alt() {
+                    push_alt_text(ev, c, opts, out);
+                } else {
+                    push_utf8(c, out);
+                }
+                return;
+            }
+        };
+        // Alt on top of Ctrl: preserve it per the option mode —
+        // Meta ORs the high bit onto the control byte, Normal and
+        // Esc ESC-prefix it (there is no composed glyph to pass
+        // through while Ctrl is held).
+        if ev.alt() && active_option_mode(ev, opts) == option_modes::META {
+            out.push(byte | 0x80);
+        } else if ev.alt() {
+            out.push(0x1b);
+            out.push(byte);
+        } else {
+            out.push(byte);
+        }
+    } else if ev.alt() {
+        // Alt (+Shift) text per the option modes.
+        push_alt_text(ev, c, opts, out);
+    } else {
+        // Super-class modifiers alone do not disturb text keys.
+        push_utf8(c, out);
+    }
+}
+
+/// `CSI n ~`, or `CSI n ; m ~` when the xterm modifier parameter `m` is not 1.
+fn push_tilde_key(n: u8, m: u8, out: &mut Vec<u8>) {
+    if m == 1 {
+        out.extend_from_slice(format!("\x1b[{}~", n).as_bytes());
+    } else {
+        out.extend_from_slice(format!("\x1b[{};{}~", n, m).as_bytes());
     }
 }
 

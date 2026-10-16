@@ -83,6 +83,45 @@ fn parse_sha256_sidecar(body: &[u8]) -> Result<String> {
     Ok(digest.to_ascii_lowercase())
 }
 
+/// First release whose frontend archive ships a `.sha256` sidecar (v0.58.1;
+/// v0.58.0 and earlier have none). From this version on, a missing sidecar is
+/// a stripped or tampered release, not an old one (SEC-004).
+const SIDECAR_REQUIRED_SINCE: (u64, u64, u64) = (0, 58, 1);
+
+/// Parse a release tag (`v1.2.3` or `1.2.3`) into its numeric triple. Any
+/// pre-release/build suffix or non-numeric part yields `None`.
+fn parse_release_version(tag: &str) -> Option<(u64, u64, u64)> {
+    let tag = tag.strip_prefix('v').unwrap_or(tag);
+    let mut parts = tag.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+/// Decide what a release without a checksum sidecar means (SEC-004). Releases
+/// older than [`SIDECAR_REQUIRED_SINCE`] predate the sidecar and fall back to
+/// TLS-only integrity with a returned warning; every other release, including
+/// an unparseable or pre-release tag, fails closed.
+fn missing_sidecar_outcome(tag: &str, sidecar_name: &str) -> Result<String> {
+    match parse_release_version(tag) {
+        Some(version) if version < SIDECAR_REQUIRED_SINCE => Ok(format!(
+            "Warning: release {tag} predates checksum sidecars and has no {sidecar_name}; \
+             the archive integrity is protected by TLS only."
+        )),
+        _ => anyhow::bail!(
+            "Release {tag} has no {sidecar_name} checksum asset, which every release since \
+             v{}.{}.{} publishes. Refusing to extract an unverified frontend archive.",
+            SIDECAR_REQUIRED_SINCE.0,
+            SIDECAR_REQUIRED_SINCE.1,
+            SIDECAR_REQUIRED_SINCE.2
+        ),
+    }
+}
+
 /// Fail unless `bytes` hashes to `expected_hex` (lowercase SHA-256 hex).
 fn verify_archive_sha256(bytes: &[u8], expected_hex: &str) -> Result<()> {
     use sha2::Digest;
@@ -230,9 +269,10 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
 
     println!("Downloaded {} bytes", archive_bytes.len());
 
-    // SEC-203: verify against the release's `<archive>.sha256` sidecar before
-    // touching the web root. Releases predating the sidecar fall back to the
-    // TLS-only behavior with a warning; a listed-but-unusable sidecar is fatal.
+    // SEC-203 / SEC-004: verify against the release's `<archive>.sha256`
+    // sidecar before touching the web root. A listed-but-unusable sidecar is
+    // fatal, and so is a missing one on any release since the sidecar shipped;
+    // only releases predating it fall back to TLS-only with a warning.
     let sidecar_name = format!("{}.sha256", archive_asset.name);
     match release.assets.iter().find(|a| a.name == sidecar_name) {
         Some(sidecar) => {
@@ -242,9 +282,8 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
         }
         None => {
             eprintln!(
-                "Warning: release {} has no {} checksum asset; the archive integrity \
-                 is protected by TLS only.",
-                release.tag_name, sidecar_name
+                "{}",
+                missing_sidecar_outcome(&release.tag_name, &sidecar_name)?
             );
         }
     }
@@ -422,6 +461,34 @@ mod tests {
 
         let url = spawn_stub_server(vec![b'a'; MAX_SIDECAR_BYTES + 1]);
         assert!(fetch_expected_sha256(&client, &url).await.is_err());
+    }
+
+    #[test]
+    fn missing_sidecar_warns_only_for_releases_before_the_cutoff() {
+        let sidecar = "par-term-web-frontend-vX.tar.gz.sha256";
+        for old in ["v0.58.0", "0.57.9", "v0.14.0"] {
+            let warning = missing_sidecar_outcome(old, sidecar)
+                .unwrap_or_else(|e| panic!("{old} predates sidecars, got error: {e:#}"));
+            assert!(warning.contains("TLS only"), "{old}: {warning}");
+        }
+        for tag in [
+            "v0.58.1",
+            "v0.60.0",
+            "v1.0.0",
+            "v0.60.0-rc.1",
+            "v0.60.0+build",
+            "v0.60",
+            "v0.60.0.1",
+            "latest",
+            "",
+        ] {
+            let err = missing_sidecar_outcome(tag, sidecar)
+                .expect_err(&format!("{tag:?} without a sidecar must fail closed"));
+            assert!(
+                format!("{err:#}").contains("Refusing to extract"),
+                "{tag:?}: {err:#}"
+            );
+        }
     }
 
     #[test]

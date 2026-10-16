@@ -4,6 +4,8 @@
 > Sequencing: land this **after DOC-138, and preferably after DOC-139 (the 0.58.1 release fold)**. The rules **hard-fail**, with no warn mode. This is safe because `release-check` is not part of `checkall` (Makefile `:493-497`, `:516`), so a red result on a mid-cycle HEAD blocks nothing except tagging, and blocking a tag is the point. On HEAD the release check already exits 2 (`tag v0.58.1 not found`) before any rule can run, so a warn mode would never print anything until DOC-139 lands. It would only defer the same failure. Two more items must be fixed before a green run:
 > - **DOC-138** must collapse two blank-line breaks inside subsections (`:29-30` and `:91-92`) as well as the duplicate headings. Its remediation steps do not say so, and the rule in step 3 reports both breaks.
 > - **DOC-139's fold** must rewrite the 0.58.1 body's paths. 23 of its 25 repo paths are pre-split `src/…` paths that do not exist at HEAD.
+>
+> Line-number citations below are pinned to commit `0c6e8f7` (the commit that added this plan); re-locate them by symbol on later trees.
 
 **Priority**: low · **Estimate**: S
 

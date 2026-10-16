@@ -1,8 +1,8 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
-        mux-manual-seed mux-package-check mux-rustdoc-check \
+        caps-table caps-table-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -67,10 +67,12 @@ help:
 	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
 	@echo "  env-docs-check  - Fail when an env var production code reads is missing from CONFIG_REFERENCE (or vice versa)"
 	@echo "  pinned-tests-check - Fail when a 'pinned by <test>' doc citation names no test in the tree"
-	@echo "  mux-rustdoc-check - Fail when par-mux rustdoc has broken or private intra-doc links (RUSTDOCFLAGS=-D warnings cargo doc -p par-mux)"
+	@echo "  rustdoc-check    - Fail when rustdoc has broken or private intra-doc links in par-mux, par-term-emu-core, or the root crate (RUSTDOCFLAGS=-D warnings)"
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
+	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
+	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; also lints that section's structure (duplicate subsections, detached bullets, <this>, stale paths, [Unreleased] link base); then runs the script's --self-test (release-time only, not part of checkall)"
@@ -487,6 +489,19 @@ core-version-check:
 	python3 scripts/check_core_version.py
 	python3 scripts/check_core_version.py --self-test
 
+# ARC-005: the member's #[doc(hidden)] pub promotions are public API to any
+# embedder of the published crate; the set is frozen by the DESIGN.md
+# baseline (promote methods, never fields).
+doc-hidden-check:
+	python3 scripts/check_doc_hidden.py
+	python3 scripts/check_doc_hidden.py --self-test
+
+# ARC-001: Terminal/PtyTerminal flat-method ratchet over the committed
+# _native.pyi (no build needed). New API areas ship as separate pyclasses.
+api-surface-check:
+	python3 scripts/check_api_surface.py
+	python3 scripts/check_api_surface.py --self-test
+
 # DOC-004: docstring coverage of the generated Python stub. Pure python3
 # over the committed _native.pyi, so no build or venv is needed.
 stub-docs-check:
@@ -501,9 +516,14 @@ mux-package-check:
 
 # Card 01a11f5dd65177beb5fd8e5f85ddfa02 follow-up: 22 broken/private
 # intra-doc links sat undetected because nothing ran rustdoc with -D
-# warnings. ~1s warm; the full graph docs only on change.
-mux-rustdoc-check:
+# warnings. Audit DOC-001: the gate covered only par-mux, so 17 more
+# accumulated in the two other crates.io-published crates; all three are
+# gated now. The root runs python-test (not the extension-module default)
+# so it links. ~1s each warm; the full graph docs only on change.
+rustdoc-check:
 	RUSTDOCFLAGS="-D warnings" cargo doc -p par-mux --features mux-bin --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc -p par-term-emu-core --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features --features python-test --no-deps
 
 # Seed the docs/MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
@@ -569,7 +589,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check mux-rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

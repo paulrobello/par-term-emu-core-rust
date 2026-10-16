@@ -20,141 +20,159 @@ pub(crate) fn handle_csi_style(
     params: &Params,
     intermediates: &[u8],
 ) {
-    if action == 'm' {
-        // Check for modifyOtherKeys mode setting: CSI > 4 ; mode m
-        if intermediates.contains(&b'>') {
-            let mut param_iter = params.iter();
-            let first_param = param_iter
-                .next()
-                .and_then(|p| p.first())
-                .copied()
-                .unwrap_or(0);
-
-            if first_param == 4 {
-                let mode = param_iter
-                    .next()
-                    .and_then(|p| p.first())
-                    .copied()
-                    .unwrap_or(0) as u8;
-                keyboard.modify_other_keys_mode = mode.min(2);
-                // Per-sequence diagnostic: trace, not info — a chatty
-                // TUI sets this constantly and would flood any stderr
-                // sink (the attach client's is the rendered screen).
-                crate::debug_trace!(
-                    "CSI",
-                    "modifyOtherKeys mode set to {}",
-                    keyboard.modify_other_keys_mode
-                );
-            }
-            return;
+    if action != 'm' {
+        return;
+    }
+    if intermediates.contains(&b'>') {
+        set_modify_other_keys(keyboard, params);
+    } else if intermediates.contains(&b'?') {
+        query_modify_other_keys(keyboard, params, response);
+    } else if params.is_empty() {
+        reset_sgr(attrs, theme);
+    } else {
+        let mut iter = params.iter();
+        while let Some(param_slice) = iter.next() {
+            apply_sgr_param(attrs, theme, param_slice, &mut iter);
         }
+    }
+}
 
-        // Check for modifyOtherKeys query: CSI ? 4 m
-        if intermediates.contains(&b'?') {
-            let param = params
-                .iter()
-                .next()
-                .and_then(|p| p.first())
-                .copied()
-                .unwrap_or(0);
-            if param == 4 {
-                let reply = format!("\x1b[>4;{}m", keyboard.modify_other_keys_mode);
-                response.extend_from_slice(reply.as_bytes());
-            }
-            return;
+/// modifyOtherKeys mode setting: `CSI > 4 ; mode m`.
+fn set_modify_other_keys(keyboard: &mut KeyboardState, params: &Params) {
+    let mut param_iter = params.iter();
+    let first_param = param_iter
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(0);
+
+    if first_param == 4 {
+        let mode = param_iter
+            .next()
+            .and_then(|p| p.first())
+            .copied()
+            .unwrap_or(0) as u8;
+        keyboard.modify_other_keys_mode = mode.min(2);
+        // Per-sequence diagnostic: trace, not info — a chatty
+        // TUI sets this constantly and would flood any stderr
+        // sink (the attach client's is the rendered screen).
+        crate::debug_trace!(
+            "CSI",
+            "modifyOtherKeys mode set to {}",
+            keyboard.modify_other_keys_mode
+        );
+    }
+}
+
+/// modifyOtherKeys query: `CSI ? 4 m`.
+fn query_modify_other_keys(keyboard: &KeyboardState, params: &Params, response: &mut Vec<u8>) {
+    let param = params
+        .iter()
+        .next()
+        .and_then(|p| p.first())
+        .copied()
+        .unwrap_or(0);
+    if param == 4 {
+        let reply = format!("\x1b[>4;{}m", keyboard.modify_other_keys_mode);
+        response.extend_from_slice(reply.as_bytes());
+    }
+}
+
+/// SGR 0 (and the parameterless form): every attribute back to the theme default.
+fn reset_sgr(attrs: &mut TextAttributes, theme: &ColorThemeState) {
+    attrs.flags = CellFlags::default();
+    attrs.fg = theme.default_fg;
+    attrs.bg = theme.default_bg;
+    attrs.underline_color = None;
+}
+
+/// Apply one SGR parameter. The `38`/`48` semicolon forms consume their
+/// mode and value parameters from `iter`.
+fn apply_sgr_param(
+    attrs: &mut TextAttributes,
+    theme: &ColorThemeState,
+    param_slice: &[u16],
+    iter: &mut ParamsIter,
+) {
+    let param = param_slice.first().copied().unwrap_or(0);
+    match param {
+        0 => reset_sgr(attrs, theme),
+        1 => attrs.flags.set_bold(true),
+        2 => attrs.flags.set_dim(true),
+        3 => attrs.flags.set_italic(true),
+        4 => apply_sgr_underline(attrs, param_slice),
+        5 => attrs.flags.set_blink(true),
+        7 => attrs.flags.set_reverse(true),
+        8 => attrs.flags.set_hidden(true),
+        9 => attrs.flags.set_strikethrough(true),
+        22 => {
+            attrs.flags.set_bold(false);
+            attrs.flags.set_dim(false);
         }
-
-        if params.is_empty() {
-            attrs.flags = CellFlags::default();
-            attrs.fg = theme.default_fg;
-            attrs.bg = theme.default_bg;
-            attrs.underline_color = None;
-        } else {
-            let mut iter = params.iter();
-            while let Some(param_slice) = iter.next() {
-                let param = param_slice.first().copied().unwrap_or(0);
-                match param {
-                    0 => {
-                        attrs.flags = CellFlags::default();
-                        attrs.fg = theme.default_fg;
-                        attrs.bg = theme.default_bg;
-                        attrs.underline_color = None;
-                    }
-                    1 => attrs.flags.set_bold(true),
-                    2 => attrs.flags.set_dim(true),
-                    3 => attrs.flags.set_italic(true),
-                    4 => {
-                        if let Some(&style_code) = param_slice.get(1) {
-                            use crate::cell::UnderlineStyle;
-                            attrs.flags.set_underline(true);
-                            attrs.flags.underline_style = match style_code {
-                                0 => UnderlineStyle::None,
-                                1 => UnderlineStyle::Straight,
-                                2 => UnderlineStyle::Double,
-                                3 => UnderlineStyle::Curly,
-                                4 => UnderlineStyle::Dotted,
-                                5 => UnderlineStyle::Dashed,
-                                _ => UnderlineStyle::Straight,
-                            };
-                            if attrs.flags.underline_style == UnderlineStyle::None {
-                                attrs.flags.set_underline(false);
-                            }
-                        } else {
-                            attrs.flags.set_underline(true);
-                            attrs.flags.underline_style = crate::cell::UnderlineStyle::Straight;
-                        }
-                    }
-                    5 => attrs.flags.set_blink(true),
-                    7 => attrs.flags.set_reverse(true),
-                    8 => attrs.flags.set_hidden(true),
-                    9 => attrs.flags.set_strikethrough(true),
-                    22 => {
-                        attrs.flags.set_bold(false);
-                        attrs.flags.set_dim(false);
-                    }
-                    23 => attrs.flags.set_italic(false),
-                    24 => {
-                        attrs.flags.set_underline(false);
-                        attrs.flags.underline_style = crate::cell::UnderlineStyle::None;
-                    }
-                    25 => attrs.flags.set_blink(false),
-                    27 => attrs.flags.set_reverse(false),
-                    28 => attrs.flags.set_hidden(false),
-                    29 => attrs.flags.set_strikethrough(false),
-                    53 => attrs.flags.set_overline(true),
-                    55 => attrs.flags.set_overline(false),
-                    1004 => {
-                        // Focus tracking (standard xterm extension in SGR? No, usually DECSET 1004)
-                        // But some tests might use it in SGR. Let's add it to be safe if needed.
-                        // Actually, standard xterm is DECSET 1004.
-                    }
-                    30..=37 => attrs.fg = Color::Named(NamedColor::from_u8((param - 30) as u8)),
-                    38 => {
-                        if let Some(color) = parse_extended_color(param_slice, &mut iter) {
-                            attrs.fg = color;
-                        }
-                    }
-                    39 => attrs.fg = theme.default_fg,
-                    40..=47 => attrs.bg = Color::Named(NamedColor::from_u8((param - 40) as u8)),
-                    48 => {
-                        if let Some(color) = parse_extended_color(param_slice, &mut iter) {
-                            attrs.bg = color;
-                        }
-                    }
-                    49 => attrs.bg = theme.default_bg,
-                    58 => {
-                        // Set underline color (colon sub-parameter form only)
-                        if let Some(color) = parse_extended_color_subparams(param_slice) {
-                            attrs.underline_color = Some(color);
-                        }
-                    }
-                    59 => attrs.underline_color = None,
-                    90..=97 => attrs.fg = Color::from_ansi_code((param - 90 + 8) as u8),
-                    100..=107 => attrs.bg = Color::from_ansi_code((param - 100 + 8) as u8),
-                    _ => {}
-                }
+        23 => attrs.flags.set_italic(false),
+        24 => {
+            attrs.flags.set_underline(false);
+            attrs.flags.underline_style = crate::cell::UnderlineStyle::None;
+        }
+        25 => attrs.flags.set_blink(false),
+        27 => attrs.flags.set_reverse(false),
+        28 => attrs.flags.set_hidden(false),
+        29 => attrs.flags.set_strikethrough(false),
+        53 => attrs.flags.set_overline(true),
+        55 => attrs.flags.set_overline(false),
+        1004 => {
+            // Focus tracking (standard xterm extension in SGR? No, usually DECSET 1004)
+            // But some tests might use it in SGR. Let's add it to be safe if needed.
+            // Actually, standard xterm is DECSET 1004.
+        }
+        30..=37 => attrs.fg = Color::Named(NamedColor::from_u8((param - 30) as u8)),
+        38 => {
+            if let Some(color) = parse_extended_color(param_slice, iter) {
+                attrs.fg = color;
             }
         }
+        39 => attrs.fg = theme.default_fg,
+        40..=47 => attrs.bg = Color::Named(NamedColor::from_u8((param - 40) as u8)),
+        48 => {
+            if let Some(color) = parse_extended_color(param_slice, iter) {
+                attrs.bg = color;
+            }
+        }
+        49 => attrs.bg = theme.default_bg,
+        58 => {
+            // Set underline color (colon sub-parameter form only)
+            if let Some(color) = parse_extended_color_subparams(param_slice) {
+                attrs.underline_color = Some(color);
+            }
+        }
+        59 => attrs.underline_color = None,
+        90..=97 => attrs.fg = Color::from_ansi_code((param - 90 + 8) as u8),
+        100..=107 => attrs.bg = Color::from_ansi_code((param - 100 + 8) as u8),
+        _ => {}
+    }
+}
+
+/// SGR 4 with the optional colon sub-parameter style (`4:0`..`4:5`);
+/// `4:0` turns underline off.
+fn apply_sgr_underline(attrs: &mut TextAttributes, param_slice: &[u16]) {
+    use crate::cell::UnderlineStyle;
+    if let Some(&style_code) = param_slice.get(1) {
+        attrs.flags.set_underline(true);
+        attrs.flags.underline_style = match style_code {
+            0 => UnderlineStyle::None,
+            1 => UnderlineStyle::Straight,
+            2 => UnderlineStyle::Double,
+            3 => UnderlineStyle::Curly,
+            4 => UnderlineStyle::Dotted,
+            5 => UnderlineStyle::Dashed,
+            _ => UnderlineStyle::Straight,
+        };
+        if attrs.flags.underline_style == UnderlineStyle::None {
+            attrs.flags.set_underline(false);
+        }
+    } else {
+        attrs.flags.set_underline(true);
+        attrs.flags.underline_style = UnderlineStyle::Straight;
     }
 }
 

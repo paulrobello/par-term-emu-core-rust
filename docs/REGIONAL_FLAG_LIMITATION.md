@@ -102,7 +102,7 @@ The xterm.js team developed a solution: `@xterm/addon-unicode-graphemes`
 
 **Current Status (verified 2026-10):**
 - Published to npm on 2025-12-22: `0.4.0` is the `latest` tag; an active `0.5.0-beta` line is in progress
-- Available on CDN (jsDelivr, unpkg) at `lib/addon-unicode-graphemes.js`
+- Available on CDN (jsDelivr, unpkg) at `lib/addon-unicode-graphemes.js` <!-- doc-path: example -->
 - **Still flagged experimental upstream**: the package is published with the warning "This addon is currently experimental and may introduce unexpected and non-standard behavior"
 - Not yet integrated into this project's web clients (both still use `@xterm/addon-unicode11`, which handles widths but not grapheme clustering)
 

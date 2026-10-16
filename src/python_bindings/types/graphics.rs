@@ -308,7 +308,10 @@ impl PyInlineImage {
     ///     display_rows: Display height in terminal rows
     ///     id: Image identifier (iTerm2 name / Kitty id), or None
     #[new]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python constructor, one argument per InlineImage field; a struct would change the Python API"
+    )]
     #[pyo3(signature = (protocol, format, data, width, height, position, display_cols, display_rows, id=None))]
     fn new(
         protocol: String,

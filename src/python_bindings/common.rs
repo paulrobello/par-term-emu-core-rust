@@ -5,7 +5,7 @@
 //! a shared read lock, mutators take a write lock). Historically every shared
 //! method was hand-duplicated between the two — ~155 copies that drift on every PR.
 //!
-//! [`TerminalAccess`] abstracts the "give me the terminal" step (returning a
+//! The crate-private `TerminalAccess` trait abstracts the "give me the terminal" step (returning a
 //! `Deref<Target=Terminal>` guard for each type's native form), and the macros
 //! below emit the shared `#[pymethods]` definitions ONCE, invoked per type.
 //! Behavior is preserved (the macros use the clean `Terminal`-method form;
@@ -82,6 +82,19 @@ macro_rules! impl_terminal_simple_getters {
             fn allow_clipboard_read(&self) -> pyo3::PyResult<bool> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.allow_clipboard_read())
+            }
+
+            /// Whether OSC 52 clipboard writes are allowed
+            ///
+            /// Returns:
+            ///     bool: True if applications may set the clipboard via OSC 52 (default)
+            ///
+            /// Example:
+            ///     >>> term.allow_clipboard_write()
+            ///     True
+            fn allow_clipboard_write(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.allow_clipboard_write())
             }
 
             /// Whether OSC 7 directory-tracking sequences are accepted
@@ -467,6 +480,29 @@ macro_rules! impl_terminal_state_setters {
             fn set_allow_clipboard_read(&mut self, allow: bool) -> pyo3::PyResult<()> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 t.set_allow_clipboard_read(allow);
+                Ok(())
+            }
+
+            /// Set whether clipboard write operations are allowed
+            ///
+            /// When enabled (default), OSC 52 writes store their decoded payload as the
+            /// terminal clipboard content. When disabled, OSC 52 writes are silently
+            /// ignored, so untrusted terminal output cannot place text on the clipboard.
+            /// Survives RIS (ESC c) like the other embedder security flags.
+            ///
+            /// Args:
+            ///     allow: True to allow clipboard writes (default), False to block them
+            ///
+            /// Returns:
+            ///     None
+            ///
+            /// Example:
+            ///     >>> term.set_allow_clipboard_write(False)
+            ///     >>> term.allow_clipboard_write()
+            ///     False
+            fn set_allow_clipboard_write(&mut self, allow: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_allow_clipboard_write(allow);
                 Ok(())
             }
 
@@ -2521,8 +2557,10 @@ macro_rules! impl_terminal_screenshot_methods {
                                                                         faint_text_alpha = 0.5,
                                                                         minimum_contrast = 0.5
                                                                     ))]
-            // Python keyword arguments; a struct would change the Python API.
-            #[allow(clippy::too_many_arguments)]
+            #[allow(
+                clippy::too_many_arguments,
+                reason = "Python keyword arguments, one per screenshot option; a struct would change the Python API"
+            )]
             fn screenshot(
                 &self,
                 format: &str,
@@ -2642,8 +2680,10 @@ macro_rules! impl_terminal_screenshot_methods {
                                                                         faint_text_alpha = 0.5,
                                                                         minimum_contrast = 0.5
                                                                     ))]
-            // Python keyword arguments; a struct would change the Python API.
-            #[allow(clippy::too_many_arguments)]
+            #[allow(
+                clippy::too_many_arguments,
+                reason = "Python keyword arguments, one per screenshot option; a struct would change the Python API"
+            )]
             fn screenshot_to_file(
                 &self,
                 path: &str,
@@ -2739,6 +2779,50 @@ macro_rules! impl_terminal_screenshot_methods {
     };
 }
 
+/// The type-specific half of `resize_pixels` (ARC-006): `PyTerminal` resizes
+/// the grid and records the pixel size; `PyPtyTerminal` also narrows to the
+/// PTY's `u16` winsize fields and signals the child.
+pub(crate) trait PixelResize {
+    /// Resize to `cols`×`rows` with a `pixel_width`×`pixel_height` text area.
+    /// Called after the shared non-zero dimension check.
+    fn apply_pixel_resize(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: usize,
+        pixel_height: usize,
+    ) -> pyo3::PyResult<()>;
+}
+
+/// Emit the `resize_pixels` pymethod for `$ty` once: the Python signature and
+/// the shared dimension check, delegating to [`PixelResize`]. The docstring
+/// is passed per type so each class keeps its own wording.
+macro_rules! impl_terminal_resize_pixels {
+    ($ty:ty, $(#[$doc:meta])*) => {
+        #[pymethods]
+        impl $ty {
+            $(#[$doc])*
+            #[pyo3(signature = (cols, rows, pixel_width, pixel_height))]
+            fn resize_pixels(
+                &mut self,
+                cols: usize,
+                rows: usize,
+                pixel_width: usize,
+                pixel_height: usize,
+            ) -> pyo3::PyResult<()> {
+                $crate::python_bindings::conversions::check_positive_dims(cols, rows)?;
+                $crate::python_bindings::common::PixelResize::apply_pixel_resize(
+                    self,
+                    cols,
+                    rows,
+                    pixel_width,
+                    pixel_height,
+                )
+            }
+        }
+    };
+}
+
 // ARC-117: crate-private re-exports instead of #[macro_export], which put
 // these macros in the public crate-root API although they expand to
 // pub(crate) items (`TerminalAccess`). Invoke them as
@@ -2748,6 +2832,7 @@ pub(crate) use {
     impl_terminal_content_misc, impl_terminal_debug_snapshots, impl_terminal_exports,
     impl_terminal_file_transfer, impl_terminal_kitty_file_media,
     impl_terminal_progress_notifications, impl_terminal_query_getters, impl_terminal_recording,
-    impl_terminal_screenshot_methods, impl_terminal_search_select, impl_terminal_simple_getters,
-    impl_terminal_sixel_graphics, impl_terminal_state_setters, impl_terminal_static_helpers,
+    impl_terminal_resize_pixels, impl_terminal_screenshot_methods, impl_terminal_search_select,
+    impl_terminal_simple_getters, impl_terminal_sixel_graphics, impl_terminal_state_setters,
+    impl_terminal_static_helpers,
 };
