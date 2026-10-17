@@ -29,13 +29,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-/// The bundled pattern sets, one per scrape-supported agent. Ownership of
-/// the claude/codex/grok scope is the card's settled ruling; pi and omp
-/// need none (they report state through hooks).
+/// The bundled pattern sets, one per scrape-supported agent. pi and omp
+/// need none (they report state through hooks); muse joins with herdr's
+/// proven captures — its hooks run with a cleared environment, so identity
+/// arrives by hook and state by scrape, the claude shape.
 const BUNDLED_PATTERNS: &[(&str, &str)] = &[
     ("claude", include_str!("patterns/claude.toml")),
     ("codex", include_str!("patterns/codex.toml")),
     ("grok", include_str!("patterns/grok.toml")),
+    ("muse", include_str!("patterns/muse.toml")),
 ];
 
 /// The states a rule may assert. `unknown` is not among them: it is the
@@ -668,11 +670,12 @@ contains = ["Override Idle"]
     #[test]
     fn bundled_sets_compile_with_aliases() {
         let engine = ScrapeEngine::load(None);
-        for agent in ["claude", "codex", "grok"] {
+        for agent in ["claude", "codex", "grok", "muse"] {
             assert!(engine.set_for(agent).is_some(), "{agent} bundled");
         }
         assert!(engine.set_for("claude-code").is_some(), "claude alias");
         assert!(engine.set_for("grok-build").is_some(), "grok alias");
+        assert!(engine.set_for("muse-code").is_some(), "muse alias");
         assert!(engine.set_for("pi").is_none(), "pi reports by hook");
         assert!(engine.set_for("omp").is_none(), "omp reports by hook");
     }
@@ -1465,5 +1468,76 @@ contains = ["Override Idle"]
         use crate::mux::layout::SplitDirection;
         tree.split_pane(root, SplitDirection::Vertical, 0.5, Some(command))
             .expect("split spawns")
+    }
+
+    #[test]
+    fn muse_rules_read_trust_approval_working_and_idle() {
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("muse").expect("muse bundled");
+
+        // The trust screen is a real blocker (herdr's capture shape).
+        let trust = PaneSnapshot {
+            title: String::new(),
+            screen: concat!(
+                "Do you trust this workspace?\n",
+                "Workspace: /tmp/proj\n",
+                "⟩ 1  Trust and continue\n",
+                "  2  Quit\n",
+            )
+            .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&trust)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("blocked".to_string(), "workspace_trust_blocked".to_string()))
+        );
+
+        // The paired picker controls distinguish a real question from
+        // transcript text that happens to mention the phrases.
+        let picker = PaneSnapshot {
+            title: String::new(),
+            screen: "Which tool?\nEnter to select · ↑/↓ to move · Tab for an optional note\n"
+                .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&picker).map(|(s, _)| s.to_string()),
+            Some("blocked".to_string())
+        );
+
+        // A working turn names its interrupt hint.
+        let working = PaneSnapshot {
+            title: String::new(),
+            screen: "◆ Working (designing · esc to interrupt)\n".to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&working).map(|(s, _)| s.to_string()),
+            Some("working".to_string())
+        );
+
+        // The idle prompt is the `⟩` line; a bare shell prompt behind an
+        // exited agent must NOT read idle for muse.
+        let idle = PaneSnapshot {
+            title: String::new(),
+            screen: "probello@MacDaddy:~\n❯ \n⟩ \n".to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&idle).map(|(s, _)| s.to_string()),
+            Some("idle".to_string())
+        );
+        let not_muse = PaneSnapshot {
+            title: String::new(),
+            screen: "probello@MacDaddy:~\n❯ \n".to_string(),
+        };
+        assert_eq!(set.evaluate(&not_muse), None, "no muse signal, no state");
+
+        // The model · effort · cwd footer is the idle fallback.
+        let footer = PaneSnapshot {
+            title: String::new(),
+            screen: "muse-spark-1.2 · medium · ~/proj\n".to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&footer).map(|(s, _)| s.to_string()),
+            Some("idle".to_string())
+        );
     }
 }

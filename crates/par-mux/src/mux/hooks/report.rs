@@ -1,5 +1,6 @@
 //! `pane.report_agent` and `pane.report_agent_session`: agent state and
-//! session identity.
+//! session identity. `pane.report_agent_session_cwd` is the muse arm's
+//! variant for agents whose hooks run with a cleared environment.
 
 use super::{check_value_len, error_reply, is_stale, ok_reply, parse_header, record_seq};
 use crate::mux::tree::MuxTree;
@@ -314,4 +315,159 @@ fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<Vec<String>>, 
         serde_json::to_string(&argv).map_err(|err| format!("session_resume_argv: {err}"))?;
     check_value_len("session_resume_argv", &encoded)?;
     Ok(Some(argv))
+}
+
+/// `pane.report_agent_session_cwd` — the muse arm's session report. Muse
+/// clears its hook environment (only MUSE_SESSION_ID/MUSE_THREAD_ID
+/// survive, verified live against muse 1.4.9), so a hook inside a par-mux
+/// pane cannot carry `PAR_MUX_PANE_ID` the way the claude/codex/grok
+/// reporters do. The reporter sends the session's working directory
+/// instead; the daemon resolves the pane, then applies the report through
+/// the pane-addressed path unchanged — same validation, staleness, claim,
+/// and broadcast semantics by construction.
+///
+/// Resolution is deliberately conservative (a wrong pane must never
+/// receive a claim): local panes only (a remote OSC 7 cwd never matches),
+/// and three tiers in order —
+/// 1. a pane already claimed by this agent (re-report/refresh),
+/// 2. an unclaimed pane whose spawn command names the agent as a word
+///    (`muse`, `muse-code`, but not `mymuse`),
+/// 3. an unclaimed pane in that directory — the "typed `muse` inside a
+///    shell pane" host; even a mis-pick is harmless because `muse resume`
+///    is workspace-scoped.
+///
+/// Ties resolve to the lowest pane id. No match is an error reply, which
+/// is what daemons without a match return and the reporter ignores.
+pub(super) fn handle_session_report_cwd(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+    tree: &Arc<Mutex<MuxTree>>,
+) -> (String, Option<TmuxNotification>) {
+    let Some(cwd) = params
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    else {
+        return (error_reply(id, "missing cwd"), None);
+    };
+    if let Err(message) = check_value_len("cwd", cwd) {
+        return (error_reply(id, &message), None);
+    }
+    let Some(agent) = params
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+    else {
+        return (error_reply(id, "missing agent"), None);
+    };
+    if let Err(message) = check_value_len("agent label", agent) {
+        return (error_reply(id, &message), None);
+    }
+
+    let resolved = {
+        let guard = tree.lock();
+        resolve_pane_for_cwd(&guard, agent, cwd)
+    };
+    let Some(pane_id) = resolved else {
+        return (error_reply(id, &format!("no pane running in {cwd}")), None);
+    };
+
+    // The pane-addressed path re-locks and re-validates; injecting the
+    // resolved pane_id keeps every downstream rule identical by construction.
+    let mut injected = params.clone();
+    injected["pane_id"] = serde_json::json!(pane_id.to_string());
+    handle_session_report(id, &injected, tree)
+}
+
+/// The pane a cwd-keyed report belongs to, or `None`. Three tiers in
+/// order — claimed by this agent, then an unclaimed pane whose spawn
+/// command names the agent, then any unclaimed pane in the directory —
+/// each resolved to the lowest pane id so the pick is deterministic.
+fn resolve_pane_for_cwd(tree: &MuxTree, agent: &str, cwd: &str) -> Option<crate::mux::ids::PaneId> {
+    let payload = std::path::PathBuf::from(cwd);
+    // Tree-wide pane walk: every session's every window, mirroring
+    // roster_rows' iteration shape.
+    let pane_ids: Vec<_> = tree
+        .sessions()
+        .iter()
+        .filter_map(|sid| tree.session(*sid))
+        .flat_map(|session| {
+            session
+                .windows
+                .iter()
+                .filter_map(|w| tree.window(*w))
+                .flat_map(|window| window.panes())
+        })
+        .collect();
+    let mut claimed: Option<crate::mux::ids::PaneId> = None;
+    let mut agent_named: Option<crate::mux::ids::PaneId> = None;
+    let mut unclaimed: Option<crate::mux::ids::PaneId> = None;
+    for id in pane_ids {
+        let Some(pane) = tree.pane(id) else {
+            continue;
+        };
+        // respawn_cwd resolves local panes only — an OSC 7 report naming a
+        // remote host (SEC-128) never yields a path, so it never matches.
+        let Some(pane_cwd) = pane.respawn_cwd() else {
+            continue;
+        };
+        if !cwd_matches(&pane_cwd, &payload) {
+            continue;
+        }
+        match pane.agent_claim() {
+            Some(claim) if claim.agent == agent => take_lowest(&mut claimed, id),
+            None => {
+                if pane
+                    .spawn_command()
+                    .is_some_and(|command| names_agent(command, agent))
+                {
+                    take_lowest(&mut agent_named, id);
+                }
+                take_lowest(&mut unclaimed, id);
+            }
+            // A pane claimed by a different agent is never a candidate: no
+            // claim stealing, in any tier.
+            Some(_) => {}
+        }
+    }
+    claimed.or(agent_named).or(unclaimed)
+}
+
+/// Lowest-id tracking for the resolution tiers: iteration order must not
+/// decide between same-tier candidates.
+fn take_lowest(slot: &mut Option<crate::mux::ids::PaneId>, id: crate::mux::ids::PaneId) {
+    if slot.is_none_or(|best| id < best) {
+        *slot = Some(id);
+    }
+}
+
+/// Compare the report's cwd against a pane's cwd: direct spelling first,
+/// then resolved paths — macOS spellings like /tmp vs /private/tmp of one
+/// directory must match. A pane whose directory no longer resolves can
+/// still match by exact spelling.
+fn cwd_matches(pane_cwd: &std::path::Path, payload: &std::path::Path) -> bool {
+    if pane_cwd == payload {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(pane_cwd),
+        std::fs::canonicalize(payload),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Whether a spawn command names the agent as a word: "muse" and
+/// "muse-code" match, "mymuse" does not — bounded by non-alphanumeric on
+/// both sides.
+pub(super) fn names_agent(command: &str, agent: &str) -> bool {
+    command.match_indices(agent).any(|(index, _)| {
+        let before = command[..index].chars().next_back();
+        let after = command[index + agent.len()..].chars().next();
+        before.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+            && after.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    })
 }

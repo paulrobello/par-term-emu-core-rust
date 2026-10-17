@@ -1,0 +1,99 @@
+# par-mux agent scrape patterns — muse (Meta's Muse Code CLI).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest version 2026.08.26.1
+# (updated_at 2026-08-26), ported 2026-10-16.
+#
+# Upstream evidence (herdr, kept verbatim): live bottom-buffer captures from
+# Muse Code 0.2.1 using a local deterministic provider. Idle has a `⟩` prompt
+# and `model · effort · cwd` footer. Active turns show `◆ Working (…
+# · esc to interrupt)`. Structured questions show two co-occurring footer
+# controls (`Enter to select · ↑/↓ to move · Tab for an optional note` /
+# `Enter to toggle`); the paired controls distinguish a real picker from
+# transcript text. Untrusted workspaces show `Do you trust this workspace?`
+# with `Trust and continue` — a real blocker. Command approval shows
+# `Allow this stage once` / `Always allow in this workspace` (0.2.1); 0.1
+# used `Allow once` / `Allow for this session`. Each approval rule requires
+# a pair because Muse can emit any one of these phrases as ordinary text.
+#
+# Omissions vs upstream, with reasons:
+#   - menu_overlay: an unknown/skip_state_update suppression rule; par-mux
+#     v1 has no suppression tier (the same omission claude's port records).
+#   - visible_blocker/visible_working/visible_idle: herdr-only render
+#     markers with no par-mux engine meaning.
+#
+# Licensed under the Apache License, Version 2.0 as pattern data derived
+# from herdr; see herdr's LICENSE file for the license text.
+id = "muse"
+version = "2026.08.26.1-parmux1"
+updated_at = "2026-08-26T00:00:00Z"
+aliases = ["muse-code", "muse-cli"]
+
+[[rules]]
+id = "workspace_trust_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+contains = ["Do you trust this workspace?"]
+any = [
+  { contains = ["Trust and continue"] },
+  { contains = ["Use Up/Down"] },
+]
+
+[[rules]]
+id = "pick_request_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(8)"
+any = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[rules]]
+id = "working_esc_interrupt"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+contains = ["esc to interrupt"]
+not = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[rules]]
+id = "blocked_approval"
+state = "blocked"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+any = [
+  { contains = ["Allow this stage once", "Always allow in this workspace"] },
+  { contains = ["Allow once", "Allow for this session"] },
+  { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
+]
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(5)"
+any = [
+  { line_regex = ['^\s*⟩\s*$'] },
+  { line_regex = ['^\s*⟩\s+\S'] },
+]
+not = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+  { contains = ["enter confirm", "esc go back"] },
+  { contains = ["enter save", "esc go back"] },
+  { contains = ["space toggle", "esc close", "type filter"] },
+]
+
+[[rules]]
+id = "idle_status_fallback"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra) · ']
+not = [{ contains = ["esc to interrupt"] }]

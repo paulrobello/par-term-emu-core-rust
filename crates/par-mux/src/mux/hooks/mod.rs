@@ -31,7 +31,7 @@ mod tests;
 pub(crate) use telemetry::{fresh_telemetry_b64, StoredTelemetry, TELEMETRY_FRESHNESS_MS};
 
 use release::handle_release_report;
-use report::{handle_session_report, handle_state_report};
+use report::{handle_session_report, handle_session_report_cwd, handle_state_report};
 use telemetry::handle_telemetry_report;
 
 use crate::mux::ids::PaneId;
@@ -68,6 +68,7 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
     match method {
         "pane.report_agent" => handle_state_report(id, params, tree),
         "pane.report_agent_session" => handle_session_report(id, params, tree),
+        "pane.report_agent_session_cwd" => handle_session_report_cwd(id, params, tree),
         "pane.report_agent_telemetry" => handle_telemetry_report(id, params, tree),
         "pane.release_agent" => handle_release_report(id, params, tree),
         other => (error_reply(id, &format!("unknown method: {other}")), None),

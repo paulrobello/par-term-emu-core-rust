@@ -106,6 +106,7 @@ FOREIGN_FLAGS: dict[str, str] = {
     "test-threads": "libtest -- --test-threads",
     "mux-socket": "par-term-streamer --mux-socket (MUX.md Streaming Panes)",
     "resume": "claude/grok --resume <id> (agent resume argv)",
+    "last": "muse resume --last (muse CLI, agent resume argv)",
     "session": "pi --session <file> (agent resume argv)",
     "others": "git ls-files --others (host telemetry probe)",
 }

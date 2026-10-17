@@ -40,6 +40,7 @@ mod claude;
 mod codex;
 pub mod extensions;
 mod grok;
+mod muse;
 
 pub use claude::{
     claude_settings_path, heal_claude_hook_asset, install_claude_hook, install_claude_hook_into,
@@ -60,6 +61,11 @@ pub use grok::{
     grok_config_dir, install_grok_hook, install_grok_hook_into, uninstall_grok_hook,
     uninstall_grok_hook_into, GrokHookInstall, GrokHookUninstall, GROK_HOOK_MARKER,
 };
+pub use muse::{
+    heal_muse_hook_asset, install_muse_hook, install_muse_hook_into, muse_settings_path,
+    uninstall_muse_hook, uninstall_muse_hook_into, MuseHookInstall, MuseHookUninstall,
+    MUSE_HOOK_MARKER,
+};
 
 /// Startup self-heal for the agent-hook script assets under par-mux's own
 /// config directory: rewrite a script whose registration in the agent's
@@ -70,6 +76,7 @@ pub use grok::{
 pub fn heal_hook_assets() {
     claude::heal_claude_hook_asset();
     codex::heal_codex_hook_asset();
+    muse::heal_muse_hook_asset();
 }
 
 /// Read-only install state of one agent session hook. Never writes anything.
@@ -202,6 +209,11 @@ pub fn hook_status() -> Vec<AgentHookStatus> {
             "grok",
             grok::grok_hook_installed(),
             grok::hook_asset_state(),
+        ),
+        (
+            "muse",
+            muse::muse_hook_installed(),
+            muse::hook_asset_state(),
         ),
     ]
     .into_iter()
@@ -1039,7 +1051,7 @@ mod tests {
     /// out-of-date detection alone.
     #[test]
     fn every_bundled_asset_carries_a_parseable_version() {
-        let assets: [(&str, &str); 9] = [
+        let assets: [(&str, &str); 11] = [
             (
                 "claude sh",
                 include_str!("../../../integrations/hooks/par-mux-claude-session-hook.sh"),
@@ -1063,6 +1075,14 @@ mod tests {
             (
                 "grok ps1",
                 include_str!("../../../integrations/hooks/par-mux-grok-session-hook.ps1"),
+            ),
+            (
+                "muse sh",
+                include_str!("../../../integrations/hooks/par-mux-muse-session-hook.sh"),
+            ),
+            (
+                "muse ps1",
+                include_str!("../../../integrations/hooks/par-mux-muse-session-hook.ps1"),
             ),
             (
                 "pi extension",

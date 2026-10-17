@@ -24,8 +24,15 @@
 //! | claude | `claude --resume <id>` | id |
 //! | codex | `codex resume <id>` — a subcommand, not a flag | id |
 //! | grok | `grok --resume <id>` | id |
+//! | muse | `muse resume <id>`, or `muse resume --last` with no id | id (or none) |
 //! | pi | `pi --session <value>` | id or path |
 //! | omp | `omp --resume=<value>` — `=`-joined; omp has no `--session` | id or path |
+//!
+//! muse is the one deliberate no-ref entry: `muse resume --last` re-lands
+//! the most recent session in the pane's workspace (a flag of the CLI
+//! subcommand itself, verified against muse 1.4.9), so a pane whose session
+//! id was never reported still resumes instead of spawning a fresh agent.
+//! muse takes no transcript paths, so a path-only ref also resumes `--last`.
 //!
 //! Deliberate divergences from herdr, recorded per the design's cross-check
 //! criterion:
@@ -76,6 +83,13 @@ pub fn resume_argv(agent: &str, session: &PersistAgentSession) -> Option<Vec<Str
         "claude" => Some(vec!["claude".into(), "--resume".into(), id_ref(session)?]),
         "codex" => Some(vec!["codex".into(), "resume".into(), id_ref(session)?]),
         "grok" => Some(vec!["grok".into(), "--resume".into(), id_ref(session)?]),
+        // muse's subcommand takes an exact UUID or session name; without a
+        // reported id the workspace-scoped --last flag still re-lands the
+        // session that was running here.
+        "muse" => Some(match id_ref(session) {
+            Some(id) => vec!["muse".into(), "resume".into(), id],
+            None => vec!["muse".into(), "resume".into(), "--last".into()],
+        }),
         "pi" => Some(vec![
             "pi".into(),
             "--session".into(),
@@ -193,6 +207,28 @@ mod tests {
         assert_eq!(
             resume_argv("grok", &session("grok", Some("abc-123"), None)),
             argv(&["grok", "--resume", "abc-123"])
+        );
+    }
+
+    #[test]
+    fn muse_resumes_the_reported_id_through_its_resume_subcommand() {
+        assert_eq!(
+            resume_argv("muse", &session("muse", Some("0c9f..."), None)),
+            argv(&["muse", "resume", "0c9f..."])
+        );
+    }
+
+    #[test]
+    fn muse_without_an_id_resumes_last_in_the_workspace() {
+        assert_eq!(
+            resume_argv("muse", &session("muse", None, None)),
+            argv(&["muse", "resume", "--last"])
+        );
+        // muse takes no transcript paths: a path-only ref is no better than
+        // no ref at all.
+        assert_eq!(
+            resume_argv("muse", &session("muse", None, Some("/tmp/s.jsonl"))),
+            argv(&["muse", "resume", "--last"])
         );
     }
 

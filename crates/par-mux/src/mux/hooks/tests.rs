@@ -1347,3 +1347,218 @@ fn a_session_report_that_relabels_the_pane_clears_the_previous_agents_state() {
         );
     }
 }
+
+// --- pane.report_agent_session_cwd: the muse arm's cwd-resolved reports ---
+
+use crate::mux::layout::SplitDirection;
+
+/// A live pane whose OSC 7 report names `dir` locally — the cwd a muse
+/// hook would carry. The report must name an existing directory for the
+/// daemon's resolution to see it.
+#[cfg(unix)]
+fn tree_with_pane_in_cwd(dir: &std::path::Path) -> (Arc<Mutex<MuxTree>>, PaneId) {
+    let (tree, pane_id) = tree_with_pane();
+    tree.lock()
+        .pane(pane_id)
+        .expect("pane exists")
+        .terminal()
+        .write()
+        .process(format!("\x1b]7;file://{}\x1b\\", dir.display()).as_bytes());
+    (tree, pane_id)
+}
+
+/// The muse reporter's wire form: no pane_id anywhere — the daemon
+/// resolves the pane from `cwd`.
+#[cfg(unix)]
+fn cwd_report(cwd: &std::path::Path, agent: &str, session: &str, seq: u64) -> String {
+    format!(
+        r#"{{"id":"t-{seq}","method":"pane.report_agent_session_cwd","params":{{"agent":"{agent}","agent_session_id":"{session}","cwd":"{}","source":"par-mux:muse","seq":{seq}}}}}"#,
+        cwd.display()
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cwd_keyed_report_claims_the_pane_running_in_that_directory() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (tree, pane_id) = tree_with_pane_in_cwd(dir.path());
+
+    let (reply, notification) = handle_report(&cwd_report(dir.path(), "muse", "m-1", 1_000), &tree);
+
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    let guard = tree.lock();
+    let pane = guard.pane(pane_id).expect("pane exists");
+    assert_eq!(
+        pane.metadata().get("agent").map(String::as_str),
+        Some("muse")
+    );
+    assert_eq!(
+        pane.metadata().get("agent_session_id").map(String::as_str),
+        Some("m-1")
+    );
+    // Session reports carry no state, so a pane without a prior state
+    // report broadcasts nothing (the rebroadcast reads claim.state).
+    assert!(notification.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cwd_keyed_report_without_a_matching_pane_is_an_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    // No OSC 7: the pane's cwd is the test process's cwd, not the report's.
+    let (tree, _pane_id) = tree_with_pane();
+
+    let (reply, notification) = handle_report(&cwd_report(dir.path(), "muse", "m-1", 1_000), &tree);
+
+    assert!(reply.contains(r#""error""#), "no pane, no claim: {reply}");
+    assert!(reply.contains("no pane running in"), "{reply}");
+    assert!(notification.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cwd_keyed_report_never_steals_a_different_agents_claim() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (tree, pane_id) = tree_with_pane_in_cwd(dir.path());
+    // The pane is kimi's: a muse report on the same directory must not
+    // touch it, through any tier.
+    handle_report(
+        &format!(
+            r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"kimi","agent_session_id":"k-1","seq":100,"source":"par-mux:test"}}}}"#
+        ),
+        &tree,
+    );
+
+    let (reply, _) = handle_report(&cwd_report(dir.path(), "muse", "m-1", 1_000), &tree);
+
+    assert!(
+        reply.contains(r#""error""#),
+        "claimed panes are not candidates: {reply}"
+    );
+    let guard = tree.lock();
+    let pane = guard.pane(pane_id).expect("pane exists");
+    assert_eq!(
+        pane.metadata().get("agent").map(String::as_str),
+        Some("kimi")
+    );
+    assert_eq!(
+        pane.metadata().get("agent_session_id").map(String::as_str),
+        Some("k-1")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cwd_keyed_report_prefers_the_pane_already_claimed_by_the_agent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (tree, first) = tree_with_pane_in_cwd(dir.path());
+    let second = {
+        let mut guard = tree.lock();
+        guard
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("echo muse"))
+            .expect("split spawns")
+    };
+    // Feed the second pane's OSC 7 too, so both live in the report's
+    // directory.
+    tree.lock()
+        .pane(second)
+        .expect("pane exists")
+        .terminal()
+        .write()
+        .process(format!("\x1b]7;file://{}\x1b\\", dir.path().display()).as_bytes());
+    handle_report(
+        &format!(
+            r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{first}","agent":"muse","agent_session_id":"m-old","seq":100,"source":"par-mux:test"}}}}"#
+        ),
+        &tree,
+    );
+
+    // A fresh session id resolves to the pane muse already owns, not the
+    // unclaimed muse-named sibling.
+    let (reply, _) = handle_report(&cwd_report(dir.path(), "muse", "m-new", 1_000), &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+
+    let guard = tree.lock();
+    assert_eq!(
+        guard
+            .pane(first)
+            .expect("first")
+            .metadata()
+            .get("agent_session_id")
+            .map(String::as_str),
+        Some("m-new")
+    );
+    assert!(
+        guard
+            .pane(second)
+            .expect("second")
+            .metadata()
+            .get("agent")
+            .is_none(),
+        "the unclaimed sibling stays unclaimed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agent_named_spawn_wins_over_an_unclaimed_shell_pane_in_the_same_cwd() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (tree, shell) = tree_with_pane_in_cwd(dir.path());
+    let muse_pane = {
+        let mut guard = tree.lock();
+        guard
+            .split_pane(shell, SplitDirection::Vertical, 0.5, Some("echo muse"))
+            .expect("split spawns")
+    };
+    tree.lock()
+        .pane(muse_pane)
+        .expect("pane exists")
+        .terminal()
+        .write()
+        .process(format!("\x1b]7;file://{}\x1b\\", dir.path().display()).as_bytes());
+
+    let (reply, _) = handle_report(&cwd_report(dir.path(), "muse", "m-1", 1_000), &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+
+    let guard = tree.lock();
+    assert_eq!(
+        guard
+            .pane(muse_pane)
+            .expect("muse pane")
+            .metadata()
+            .get("agent")
+            .map(String::as_str),
+        Some("muse"),
+        "the spawn command naming the agent wins tier 2"
+    );
+    assert!(
+        guard
+            .pane(shell)
+            .expect("shell pane")
+            .metadata()
+            .get("agent")
+            .is_none(),
+        "the bare shell pane stays unclaimed"
+    );
+}
+
+#[test]
+fn the_spawn_command_names_the_agent_as_a_word() {
+    for command in [
+        "muse",
+        "/usr/local/bin/muse",
+        "env RUST_BACKTRACE=1 muse",
+        "muse-code",
+    ] {
+        assert!(
+            super::report::names_agent(command, "muse"),
+            "`{command}` names muse"
+        );
+    }
+    for command in ["mymuse", "museum ticket", "amuse"] {
+        assert!(
+            !super::report::names_agent(command, "muse"),
+            "`{command}` does not name muse"
+        );
+    }
+}
