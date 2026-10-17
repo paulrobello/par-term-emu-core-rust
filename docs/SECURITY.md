@@ -1394,7 +1394,7 @@ sections; the numbers live here.
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:596` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:598` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:92` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:93` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:172` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:283` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
@@ -1435,7 +1435,7 @@ sections; the numbers live here.
 | `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:79` | Terminal notifications queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:81` | Clipboard sync events queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:83` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:893` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:905` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 1 MiB | `src/streaming/proto.rs:47` | Decompressed bytes accepted from one zlib-compressed streaming frame. |

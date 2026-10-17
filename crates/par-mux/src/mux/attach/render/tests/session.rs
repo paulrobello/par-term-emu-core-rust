@@ -1116,6 +1116,24 @@ fn sidebar_clicks_land_on_the_painted_row() {
                 srow(SidebarRowId::Workspace("+1".into()), "beta", false),
             ],
         }]));
+    session.draw_tab_strip();
+    let strip = session.chrome.tab_strip.diff();
+    assert!(
+        strip
+            .iter()
+            .filter(|(x, _, _)| *x < 20)
+            .all(|(_, _, cell)| cell.symbol().trim().is_empty()),
+        "the tab strip must not duplicate the sidebar's workspaces heading"
+    );
+    session.renderer.paint_sidebar();
+    let heading: String = (0..19)
+        .map(|x| session.renderer.buffer[(x, 0)].symbol())
+        .collect();
+    assert_eq!(heading.trim(), "workspaces");
+    let workspace: String = (0..19)
+        .map(|x| session.renderer.buffer[(x, 1)].symbol())
+        .collect();
+    assert!(workspace.contains("alpha"));
     // Host row 0 (the tab strip row): nothing.
     assert_eq!(session.renderer.sidebar_row_at(2, 0), None);
     // Host row 1: the area's header row — filler, never clickable.

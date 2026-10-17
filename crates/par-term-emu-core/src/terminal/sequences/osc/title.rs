@@ -5,7 +5,7 @@
 
 use crate::terminal::{EventBroker, TerminalEvent, TitleState};
 
-/// OSC 0/2 (set title), OSC 21 (push title), OSC 22/23 (pop title).
+/// OSC 0/2 (set title), OSC 21 (push title), OSC 23 (pop title).
 pub(crate) fn handle_osc_title(
     title_state: &mut TitleState,
     events: &mut EventBroker,

@@ -743,8 +743,8 @@ where `ST` is either `ESC \` or `BEL` (`\x07`)
 | `OSC 0 ; title ST` | Set icon + window title | Sets both simultaneously |
 | `OSC 2 ; title ST` | Set window title | Window title only |
 | `OSC 21 ; title ST` | Push title to stack | Pushes title or current if empty |
-| `OSC 22 ST` | Pop window title from stack | Restores previously pushed title |
-| `OSC 23 ST` | Pop icon title from stack | Same as OSC 22 (no distinction) |
+| `OSC 22 ST` | Reset pointer shape | Does not change the title stack |
+| `OSC 23 ST` | Pop window/icon title from stack | Restores previously pushed title |
 
 **Note:** Title stack operations are also available via XTWINOPS (CSI 22 t / CSI 23 t).
 

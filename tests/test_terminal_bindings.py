@@ -362,7 +362,7 @@ class TestTitleOperations:
         assert term.title() == "New"
 
         # Pop title
-        term.process_str("\x1b]22\x07")
+        term.process_str("\x1b]23\x07")
         assert term.title() == "Original"
 
 
