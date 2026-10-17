@@ -552,8 +552,8 @@ mux-manual-seed:
 	STATE_DIR="$$HOME/.local/state/par-mux"; \
 	[ -d "$$HOME/Library/Application Support/par-mux" ] && STATE_DIR="$$HOME/Library/Application Support/par-mux"; \
 	rm -f "$$STATE_DIR"/manual-mux.state.json*; \
-	($$P --socket /tmp/manual-mux >/tmp/manual-mux.log 2>&1 &); \
-	sleep 0.5; \
+	($$P --socket /tmp/manual-mux --no-attach &); \
+	sleep 1; \
 	$$P --socket /tmp/manual-mux --cmd "new-session -s demo" && \
 	PANE=$$($$P --socket /tmp/manual-mux --cmd list-panes | head -1) && \
 	$$P --socket /tmp/manual-mux --cmd "split-window -t $$PANE -h" && \

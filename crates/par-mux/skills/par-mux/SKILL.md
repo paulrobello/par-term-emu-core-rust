@@ -3,7 +3,7 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
-<!-- PAR_MUX_INTEGRATION_VERSION=1 -->
+<!-- PAR_MUX_INTEGRATION_VERSION=2 -->
 
 # par-mux
 
@@ -32,7 +32,10 @@ names the exact path it tried — that is your first debug signal.
 ## Daemon lifecycle
 
 ```sh
-par-mux default                 # start (named; "default" may be omitted)
+par-mux default                 # start detached AND attach this terminal
+                                #   (named; "default" may be omitted);
+                                #   add --no-attach for daemon-only, or
+                                #   --foreground to serve in-process
 par-mux --restart               # stop + start detached on the same socket — the
                                 #   routine fix after rebuilding par-mux (an old
                                 #   daemon keeps serving old code until restarted)
