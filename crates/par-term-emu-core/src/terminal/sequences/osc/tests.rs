@@ -68,9 +68,27 @@ fn test_title_stack() {
     term.process(b"\x1b]0;New Title\x1b\\");
     assert_eq!(term.title(), "New Title");
 
-    // OSC 22 - Pop title
-    term.process(b"\x1b]22\x1b\\");
+    // OSC 23 - Pop title. OSC 22 moved to the pointer shape
+    // (kitty/ghostty/iTerm2 meaning); the pop stays on 23 only.
+    term.process(b"\x1b]23\x1b\\");
     assert_eq!(term.title(), "Original Title");
+}
+
+#[test]
+fn test_osc22_pointer_shape() {
+    let mut term = Terminal::new(80, 24);
+
+    // OSC 22 ; shape - adopt the named pointer shape.
+    term.process(b"\x1b]22;ew-resize\x1b\\");
+    assert_eq!(term.pointer_shape(), Some("ew-resize"));
+
+    // Re-setting the same shape is idempotent state-wise.
+    term.process(b"\x1b]22;ew-resize\x1b\\");
+    assert_eq!(term.pointer_shape(), Some("ew-resize"));
+
+    // The empty shape resets to the terminal's own pointer.
+    term.process(b"\x1b]22;\x1b\\");
+    assert_eq!(term.pointer_shape(), None);
 }
 
 #[test]

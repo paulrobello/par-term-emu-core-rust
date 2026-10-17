@@ -9,6 +9,14 @@ impl Terminal {
         &self.title_state.title
     }
 
+    /// The pointer shape the most recent OSC 22 requested (`ew-resize`,
+    /// `text`, …), or `None` when the terminal's own pointer applies —
+    /// the empty-shape form resets. Hosts apply it to their pointer
+    /// (kitty/ghostty/iTerm2 meaning; NOT xterm's icon-label pop).
+    pub fn pointer_shape(&self) -> Option<&str> {
+        self.pointer_state.shape.as_deref()
+    }
+
     /// Set the title
     pub fn set_title(&mut self, title: String) {
         // Also update session variables for badge evaluation

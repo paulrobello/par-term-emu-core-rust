@@ -4,6 +4,7 @@ mod clipboard;
 mod color;
 mod iterm;
 mod notify;
+mod pointer;
 mod shell;
 mod title;
 
@@ -62,12 +63,17 @@ impl Terminal {
             }
 
             match command {
-                "0" | "2" | "21" | "22" | "23" => title::handle_osc_title(
+                "0" | "2" | "21" | "23" => title::handle_osc_title(
                     &mut self.title_state,
                     &mut self.events,
                     command,
                     params,
                 ),
+                // OSC 22 is the pointer shape in its kitty/ghostty/iTerm2
+                // meaning; xterm's icon-label pop stays on OSC 23.
+                "22" => {
+                    pointer::handle_osc_pointer(&mut self.pointer_state, &mut self.events, params)
+                }
                 "7" | "133" => self.handle_osc_shell(command, params),
                 "8" => handle_osc_hyperlink(
                     &mut self.hyperlink_state,

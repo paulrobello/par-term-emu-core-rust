@@ -314,6 +314,18 @@ pub(crate) struct TitleState {
     pub(crate) answerback_string: Option<String>,
 }
 
+/// The pointer shape the host terminal was asked to adopt (OSC 22 in its
+/// kitty/ghostty/iTerm2 pointer-shape meaning — NOT xterm's icon-label
+/// stack pop, which stays on OSC 23).
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
+pub(crate) struct PointerShapeState {
+    /// The requested shape name (`ew-resize`, `text`, …); `None` = the
+    /// terminal's own pointer (the empty-shape reset).
+    pub(crate) shape: Option<String>,
+}
+
 /// Shell-integration core: integration state, host/user tracking, nesting depth,
 /// and command-output flag.
 ///

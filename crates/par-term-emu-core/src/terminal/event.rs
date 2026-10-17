@@ -41,6 +41,10 @@ pub enum TerminalEvent {
     BellRang(BellEvent),
     /// Terminal title changed
     TitleChanged(String),
+    /// The pointer shape changed (OSC 22, the kitty/ghostty/iTerm2
+    /// pointer-shape meaning): `None` = the terminal's own pointer.
+    /// NOT xterm's icon-label stack pop (which stays on OSC 23).
+    PointerShapeChanged(Option<String>),
     /// Terminal was resized
     SizeChanged(usize, usize),
     /// A terminal mode changed
@@ -230,6 +234,7 @@ impl TerminalEvent {
         match self {
             TerminalEvent::BellRang(_) => TerminalEventKind::BellRang,
             TerminalEvent::TitleChanged(_) => TerminalEventKind::TitleChanged,
+            TerminalEvent::PointerShapeChanged(_) => TerminalEventKind::PointerShapeChanged,
             TerminalEvent::SizeChanged(_, _) => TerminalEventKind::SizeChanged,
             TerminalEvent::ModeChanged(_, _) => TerminalEventKind::ModeChanged,
             TerminalEvent::GraphicsAdded(_) => TerminalEventKind::GraphicsAdded,
@@ -265,6 +270,8 @@ pub enum TerminalEventKind {
     BellRang,
     /// Matches [`TerminalEvent::TitleChanged`].
     TitleChanged,
+    /// The OSC 22 pointer shape changed (None = reset).
+    PointerShapeChanged,
     /// Matches [`TerminalEvent::SizeChanged`].
     SizeChanged,
     /// Matches [`TerminalEvent::ModeChanged`].
@@ -353,6 +360,7 @@ impl TerminalEventKind {
         match self {
             Self::BellRang => "bell",
             Self::TitleChanged => "title_changed",
+            Self::PointerShapeChanged => "pointer_shape_changed",
             Self::SizeChanged => "size_changed",
             Self::ModeChanged => "mode_changed",
             Self::GraphicsAdded => "graphics_added",

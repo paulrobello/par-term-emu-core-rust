@@ -947,7 +947,7 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 - `poll_screen_cleared_events() -> list[bool]`: Drain pending `ScreenCleared` events. Each `bool` is `True` if the scrollback was also cleared (ED 3J), `False` for screen-only clears (ED 2J). Use this to invalidate scrollback zone/mark metadata on the frontend.
 
 **Event types returned by `poll_events()` / `poll_subscribed_events()`:**
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `pointer_shape_changed`
 
 The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`None` when the variable is first set).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
@@ -1049,7 +1049,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 **Supported event types:**
 
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `pointer_shape_changed`
 
 #### Examples
 

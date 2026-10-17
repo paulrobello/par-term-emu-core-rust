@@ -2617,3 +2617,22 @@ def test_export_asciicast_v3_round_trip():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_osc22_pointer_shape_event():
+    """OSC 22 (kitty/ghostty/iTerm2 pointer-shape meaning) surfaces as a
+    pointer_shape_changed event; the empty shape resets to None."""
+    term = Terminal(80, 24)
+
+    term.process(b"\x1b]22;ew-resize\x1b\\")
+    events = term.poll_events()
+    changed = [e for e in events if e.get("type") == "pointer_shape_changed"]
+    assert changed, f"pointer_shape_changed event expected: {events}"
+    assert changed[-1]["shape"] == "ew-resize"
+
+    # The empty shape resets to the terminal's own pointer.
+    term.process(b"\x1b]22;\x1b\\")
+    events = term.poll_events()
+    changed = [e for e in events if e.get("type") == "pointer_shape_changed"]
+    assert changed, "reset event expected"
+    assert changed[-1]["shape"] is None

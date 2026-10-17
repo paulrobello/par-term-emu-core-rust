@@ -345,7 +345,8 @@ Operating System Command sequences for advanced features (format: `OSC Ps ; Pt S
 - `OSC 0;title ST` - Set window and icon title
 - `OSC 2;title ST` - Set window title only
 - `OSC 21;title ST` - Push title to stack (or `OSC 21 ST` to push current title)
-- `OSC 22 ST` / `OSC 23 ST` - Pop window/icon title from stack
+- `OSC 23 ST` - Pop window/icon title from stack
+- `OSC 22;shape ST` - Pointer shape (kitty/ghostty/iTerm2 meaning — NOT xterm's stack pop): adopt `shape` (`ew-resize`, `text`, …); `OSC 22 ST` or an empty shape resets to the terminal's own pointer; surfaces as the `pointer_shape_changed` event
 - `OSC 7;file://[user@]host[:port]/path ST` - Set current working directory (percent-decoded; strips query/fragment; `localhost` is treated as None)
 
 ### Hyperlinks and Clipboard

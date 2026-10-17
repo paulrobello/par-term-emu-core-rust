@@ -7,6 +7,14 @@
 //! `col-resize`/`row-resize`: ghostty's macOS apprt maps only the
 //! former pair to a pointer and silently drops the latter (its
 //! `setCursorShape` `default:` arm), while kitty accepts both.
+//! Each resize shape is followed by its X11 cursor-font synonym:
+//! iTerm2's OSC 22 map knows only X11 names and RESETS its pointer on
+//! any name it does not know, so the CSS names alone left iTerm2's
+//! pointer unchanged (live report, 2026-10-16). The order is safe in
+//! every direction: a terminal applies the name it knows and ignores
+//! the other (ghostty drops the X11 name; iTerm2 resets on the CSS
+//! name first, then applies the X11 one), and a terminal that knows
+//! both lands on the same visual cursor.
 
 use super::FlushSink;
 
@@ -16,6 +24,16 @@ pub(super) const RESIZE_COL: &str = "ew-resize";
 pub(super) const RESIZE_ROW: &str = "ns-resize";
 /// The restore shape: the terminal's own hover-over-text pointer.
 const RESTORE: &str = "text";
+
+/// The X11 cursor-font synonym written right after `name`'s own OSC 22
+/// — see the module docs for why both vocabularies go out.
+fn x11_synonym(name: &str) -> Option<&'static str> {
+    match name {
+        RESIZE_COL => Some("sb_h_double_arrow"),
+        RESIZE_ROW => Some("sb_v_double_arrow"),
+        _ => None,
+    }
+}
 
 #[derive(Default)]
 pub(super) struct PointerState {
@@ -42,10 +60,15 @@ impl PointerState {
             return;
         }
         let name = self.want.unwrap_or(RESTORE);
-        let mut bytes = Vec::with_capacity(name.len() + 8);
+        let mut bytes = Vec::with_capacity(name.len() + 24);
         bytes.extend_from_slice(b"\x1b]22;");
         bytes.extend_from_slice(name.as_bytes());
         bytes.extend_from_slice(b"\x1b\\");
+        if let Some(x11) = x11_synonym(name) {
+            bytes.extend_from_slice(b"\x1b]22;");
+            bytes.extend_from_slice(x11.as_bytes());
+            bytes.extend_from_slice(b"\x1b\\");
+        }
         sink.write_raw(&bytes);
         self.sent = self.want;
     }
@@ -83,7 +106,18 @@ mod tests {
         pointer.want(Some(RESIZE_COL));
         pointer.emit(&mut sink);
         pointer.emit(&mut sink);
-        assert_eq!(sink.raw, b"\x1b]22;ew-resize\x1b\\");
+        assert_eq!(
+            sink.raw,
+            b"\x1b]22;ew-resize\x1b\\\x1b]22;sb_h_double_arrow\x1b\\"
+        );
+
+        sink.raw.clear();
+        pointer.want(Some(RESIZE_ROW));
+        pointer.emit(&mut sink);
+        assert_eq!(
+            sink.raw,
+            b"\x1b]22;ns-resize\x1b\\\x1b]22;sb_v_double_arrow\x1b\\"
+        );
 
         sink.raw.clear();
         pointer.want(None);

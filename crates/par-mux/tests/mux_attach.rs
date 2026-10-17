@@ -4451,11 +4451,22 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
         .write_all(b"\x1b[<35;40;6M")
         .expect("hover divider");
     host.to_child.flush().ok();
-    expect_output(
+    // The X11 synonym rides the SAME write (iTerm2's OSC 22 map knows
+    // only X11 cursor-font names and resets on unknown ones), so it is
+    // asserted on the matched buffer — a fresh expect_output starts a
+    // new collector and would never see bytes that arrived earlier.
+    let hover_out = expect_output(
         &host,
         b"]22;ew-resize",
         Duration::from_secs(5),
         "hover on the divider writes the resize pointer",
+    );
+    assert!(
+        hover_out
+            .windows(b"]22;sb_h_double_arrow".len())
+            .any(|w| w == b"]22;sb_h_double_arrow"),
+        "the X11 synonym rides the hover write: {:?}",
+        String::from_utf8_lossy(&hover_out)
     );
     // 2) The same hover off the divider restores the terminal's own.
     host.to_child

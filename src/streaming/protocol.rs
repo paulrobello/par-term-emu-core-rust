@@ -70,6 +70,10 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
             timestamp,
             cursor_line.map(|l| l as u64),
         ),
+        // No streaming representation yet: the pointer shape is a local
+        // rendering concern (a card can add the message type when a
+        // web client needs it).
+        TerminalEvent::PointerShapeChanged(_) => return None,
         TerminalEvent::DirtyRegion(_, _) => return None,
         TerminalEvent::ZoneOpened {
             zone_id,

@@ -385,6 +385,7 @@ term_event_kinds! {
     UploadRequested = 24 => "TERM_EVENT_UPLOAD_REQUESTED",
     ScreenCleared = 25 => "TERM_EVENT_SCREEN_CLEARED",
     InlineImageDropped = 26 => "TERM_EVENT_INLINE_IMAGE_DROPPED",
+    PointerShapeChanged = 27 => "TERM_EVENT_POINTER_SHAPE_CHANGED",
 }
 
 /// The `on_event_v2` JSON payload for an event: an object of the event's

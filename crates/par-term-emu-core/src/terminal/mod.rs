@@ -118,9 +118,9 @@ pub(crate) use state::{
     BadgeState, BookmarksState, CharsetState, ClipboardState, ClipboardSyncState,
     ColorPaletteSnapshot, ColorThemeState, CommandHistoryState, DcsState, HostConfig,
     HyperlinkState, InlineImageState, KeyboardState, MarginState, MouseHistoryState,
-    NotificationState, ProfilingState, ProgressBellState, RecordingState, RenderingState,
-    SavedCursorState, SearchState, SecurityFlagsState, ShellState, SyncState, TerminalModes,
-    TextAttributes, TitleState, TmuxState, UnicodeConfigState,
+    NotificationState, PointerShapeState, ProfilingState, ProgressBellState, RecordingState,
+    RenderingState, SavedCursorState, SearchState, SecurityFlagsState, ShellState, SyncState,
+    TerminalModes, TextAttributes, TitleState, TmuxState, UnicodeConfigState,
 };
 // Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
 // the public `crate::terminal::*` paths keep resolving.
@@ -214,6 +214,7 @@ pub struct Terminal {
     pub(crate) saved_state: SavedCursorState,
     /// Window title, title stack, answerback string (ARC-001 sub-struct)
     pub(crate) title_state: TitleState,
+    pub(crate) pointer_state: PointerShapeState,
     /// Synchronized update mode, buffer, disable-during-flush flag (ARC-001 sub-struct)
     pub(crate) sync_state: SyncState,
     /// Shell integration state, host/user, depth, command-output flag (ARC-001 sub-struct)
@@ -376,6 +377,7 @@ impl Terminal {
             attrs: TextAttributes::default(),
             saved_state: SavedCursorState::default(),
             title_state: TitleState::default(),
+            pointer_state: PointerShapeState::default(),
             sync_state: SyncState::default(),
             shell_state: ShellState::default(),
             margins: MarginState::new(cols, rows),
