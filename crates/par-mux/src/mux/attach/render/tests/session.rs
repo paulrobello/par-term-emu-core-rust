@@ -1098,11 +1098,11 @@ fn hidden_status_bar_flushes_nothing() {
 }
 
 /// Side-panel click geometry under the separated layout: the lookup
-/// takes the HOST row (row 0 is the tab strip's — nothing there),
-/// shifted one row so a click lands on the row as painted — the area
-/// header at host row 1 (filler: no click), the FIRST workspace row at
-/// host row 2, the footer chips at the panel's last row, each chip
-/// only its own cell.
+/// takes the HOST row (row 0 is the tab strip's — its lead segment
+/// carries the panel title), shifted one row so a click lands on the
+/// row as painted — the FIRST workspace row at host row 1 (the panel
+/// opens with its rows; no in-panel header), the footer chips at the
+/// panel's last row, each chip only its own cell.
 #[test]
 fn sidebar_clicks_land_on_the_painted_row() {
     let mut session = WindowSession::new(80, 24);
@@ -1118,35 +1118,43 @@ fn sidebar_clicks_land_on_the_painted_row() {
         }]));
     session.draw_tab_strip();
     let strip = session.chrome.tab_strip.diff();
-    assert!(
-        strip
-            .iter()
-            .filter(|(x, _, _)| *x < 20)
-            .all(|(_, _, cell)| cell.symbol().trim().is_empty()),
-        "the tab strip must not duplicate the sidebar's workspaces heading"
+    let lead: String = strip
+        .iter()
+        .filter(|(x, _, _)| *x < 20)
+        .map(|(_, _, cell)| cell.symbol())
+        .collect();
+    assert_eq!(
+        lead.trim(),
+        "workspaces",
+        "the tab strip's lead segment carries the panel title"
     );
     session.renderer.paint_sidebar();
-    let heading: String = (0..19)
+    let first: String = (0..19)
         .map(|x| session.renderer.buffer[(x, 0)].symbol())
         .collect();
-    assert_eq!(heading.trim(), "workspaces");
-    let workspace: String = (0..19)
-        .map(|x| session.renderer.buffer[(x, 1)].symbol())
+    assert!(
+        first.contains("alpha"),
+        "the panel opens with the first workspace row"
+    );
+    let panel_text: String = (0..22)
+        .flat_map(|y| (0..19).map(move |x| (x, y)))
+        .map(|(x, y)| session.renderer.buffer[(x, y)].symbol())
         .collect();
-    assert!(workspace.contains("alpha"));
+    assert!(
+        !panel_text.contains("workspaces"),
+        "the panel itself paints no workspaces heading"
+    );
     // Host row 0 (the tab strip row): nothing.
     assert_eq!(session.renderer.sidebar_row_at(2, 0), None);
-    // Host row 1: the area's header row — filler, never clickable.
-    assert_eq!(session.renderer.sidebar_row_at(2, 1), None);
-    // Host row 2: the first workspace row, as painted.
+    // Host row 1: the first workspace row, as painted.
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 2),
+        session.renderer.sidebar_row_at(2, 1),
         Some(SidebarRowId::Workspace("+0".into())),
         "the click lands on the row as painted"
     );
-    // Host row 3: the second workspace row.
+    // Host row 2: the second workspace row.
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 3),
+        session.renderer.sidebar_row_at(2, 2),
         Some(SidebarRowId::Workspace("+1".into()))
     );
     // The workspace area's last row (the 22-row frame splits 11/11:
@@ -1178,11 +1186,11 @@ fn sidebar_clicks_land_on_the_painted_row() {
     // A body row answers across its full content width (the active
     // row's inverted block is clickable anywhere on it).
     assert_eq!(
-        session.renderer.sidebar_row_at(17, 2),
+        session.renderer.sidebar_row_at(17, 1),
         Some(SidebarRowId::Workspace("+0".into()))
     );
     // Past the strip's width: nothing.
-    assert_eq!(session.renderer.sidebar_row_at(20, 3), None);
+    assert_eq!(session.renderer.sidebar_row_at(20, 2), None);
 }
 
 /// The probe FAILED (`bg: None`): the frame fill paints NO color -
@@ -3780,7 +3788,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
         }]));
 
     let started = std::time::Instant::now();
-    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 2, false));
     let click = started.elapsed();
     let started = std::time::Instant::now();
     session.route_stdin_bytes(&mut conn, b"abc");

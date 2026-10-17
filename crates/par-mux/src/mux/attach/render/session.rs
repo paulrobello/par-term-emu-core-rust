@@ -791,15 +791,21 @@ impl WindowSession {
     /// Paint the tab strip from the queried window state (the same
     /// state the status row composes from): the shown session's windows
     /// in order, the active one accented. With the side panel up the
-    /// strip reserves its width (the lead segment the hit-test offsets
-    /// through); the panel paints its own section heading.
+    /// strip leads with the panel's title (the lead segment the hit-test
+    /// offsets through) — the panel itself opens directly with its rows.
     pub(super) fn draw_tab_strip(&mut self) {
         let cols = self.geometry.host_cols;
         if self.chrome.tab_strip.cols() != cols {
             self.chrome.tab_strip = TabStrip::new(cols);
         }
+        // The rail is too narrow for the title; its columns stay blank.
         let strip = self.renderer.sidebar_width();
-        let lead = (strip > 0).then_some(("", strip));
+        let title = if self.sidebar.is_collapsed() {
+            ""
+        } else {
+            "workspaces"
+        };
+        let lead = (strip > 0).then_some((title, strip));
         self.chrome.tab_strip.paint(
             self.status.windows(),
             self.status.active_window.as_deref(),

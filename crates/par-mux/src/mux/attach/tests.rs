@@ -1647,25 +1647,24 @@ fn compose_sidebar_drops_spoofing_chars() {
         )],
     }];
     let lines = super::compose_sidebar(&sections, 20, 10, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(lines[0].text, " workspaces");
-    assert_eq!(lines[1].text, "   evil");
+    assert_eq!(lines[0].text, "   evil");
 }
 
 /// herdr's panel shape at the default split: the workspace area takes
-/// half the rows — header, rows, and the ` new ` / ` menu ` chips on its
-/// LAST row — then the rule, the agents header and rows, and the
-/// collapse chevron on the panel's last row.
+/// half the rows — its rows open the panel directly (the tab strip's
+/// lead segment carries the title, so no in-panel header) and the
+/// ` new ` / ` menu ` chips sit on its LAST row — then the rule, the
+/// agents header and rows, and the collapse chevron on the panel's
+/// last row.
 #[test]
 fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
     use super::{SidebarLineKind, SidebarRowId};
     let lines = super::compose_sidebar(&two_area_sections(), 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
     let at = |y: u16| -> Vec<&super::SidebarLine> { lines.iter().filter(|l| l.y == y).collect() };
-    assert_eq!(at(0)[0].text, " workspaces");
-    assert_eq!(at(0)[0].kind, SidebarLineKind::Header);
-    assert_eq!(at(0)[0].id, None, "the header is filler, never clickable");
-    assert_eq!(at(1)[0].text, " ▸ main");
-    assert!(at(1)[0].active, "the active row is flagged");
-    assert_eq!(at(3)[0].text, "   ops");
+    assert_eq!(at(0)[0].text, " ▸ main");
+    assert!(at(0)[0].active, "the active row is flagged");
+    assert_eq!(at(1)[0].text, "   dev");
+    assert_eq!(at(2)[0].text, "   ops");
     // The chips sit on the workspace area's last row (10 of 20 -> row 9).
     let new_chip = line_with(&lines, &SidebarRowId::New);
     assert_eq!((new_chip.y, new_chip.x, new_chip.x_end), (9, 0, 5));
@@ -1696,7 +1695,7 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
         )],
     }];
     let clipped = super::compose_sidebar(&long, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(clipped[1].text, "   a very long work");
+    assert_eq!(clipped[0].text, "   a very long work");
     // With no agents section the agents area still opens with its rule
     // and header (the panel shape holds).
     assert!(clipped
@@ -1722,13 +1721,19 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
     let low = super::compose_sidebar(&sections, 20, 20, 0.3);
     assert_eq!(rule_y(&low), Some(6));
     assert_eq!(line_with(&low, &SidebarRowId::New).y, 5);
-    // A 4-row area holds the header, two rows, and the chips: ops clips.
+    // A 4-row area holds all three rows and the chips (no header to
+    // spend a row on).
     let tight = super::compose_sidebar(&sections, 20, 20, 0.2);
     assert_eq!(rule_y(&tight), Some(4));
-    assert!(tight.iter().any(|l| l.text == "   dev"));
+    assert!(tight.iter().any(|l| l.text == "   ops"));
+    // The clamp floor: a 3-row area holds two rows and the chips — ops
+    // clips past the footer row.
+    let floor = super::compose_sidebar(&sections, 20, 20, 0.15);
+    assert_eq!(rule_y(&floor), Some(3));
+    assert!(floor.iter().any(|l| l.text == "   dev"));
     assert!(
-        !tight.iter().any(|l| l.text == "   ops"),
-        "rows past the footer clip: {tight:?}"
+        !floor.iter().any(|l| l.text == "   ops"),
+        "rows past the footer clip: {floor:?}"
     );
     // The extremes clamp to keep each area 3 rows.
     assert_eq!(

@@ -573,7 +573,9 @@ pub(crate) fn compose_picker_panel(
 /// segment (round 6), so the section carries only its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarSection {
-    /// The area's dim header label ("workspaces" / "agents") — herdr's
+    /// The area's identity: `workspaces` selects the workspace area
+    /// (whose title the tab strip's lead segment paints), `agents` the
+    /// agent area (whose header row the panel paints) — herdr's
     /// ` spaces` lead row.
     pub title: &'static str,
     pub rows: Vec<SidebarRow>,
@@ -749,7 +751,8 @@ pub(crate) enum SidebarLineKind {
     /// A multi-line entry's later line: it clicks and highlights with
     /// its entry but stays dim, like herdr's secondary lines.
     Continuation,
-    /// An area header: ` workspaces` / ` agents`.
+    /// An area header: ` agents` (the workspace area carries no
+    /// header — the tab strip's lead segment labels it).
     Header,
     /// The full-width rule dividing the areas — the split-drag handle.
     Rule,
@@ -757,15 +760,15 @@ pub(crate) enum SidebarLineKind {
 
 /// Compose the side panel's lines from its sections, herdr's separated
 /// panel shape split by `split` (the workspace area's share of the rows,
-/// [`sidebar_workspace_rows`]): the workspace area opens with its dim
-/// header row (` workspaces`), lists its rows, and ends with the footer
-/// chips on its LAST row — ` new ` bottom-left, ` menu ` bottom-right,
-/// each its own clickable span. A full-width rule (herdr's
-/// `─`.repeat(width) section divider) opens the agents area, then its
-/// header (` agents`) and rows; the panel's last row carries the
-/// collapse chevron `«` at the right edge. Every text is clipped to
-/// `width - 1` columns (the divider column owns the strip's right edge).
-/// Pure — the unit-test surface.
+/// [`sidebar_workspace_rows`]): the workspace area opens directly with
+/// its rows (the tab strip's lead segment carries the panel title — no
+/// in-panel header) and ends with the footer chips on its LAST row —
+/// ` new ` bottom-left, ` menu ` bottom-right, each its own clickable
+/// span. A full-width rule (herdr's `─`.repeat(width) section divider)
+/// opens the agents area, then its header (` agents`) and rows; the
+/// panel's last row carries the collapse chevron `«` at the right edge.
+/// Every text is clipped to `width - 1` columns (the divider column
+/// owns the strip's right edge). Pure — the unit-test surface.
 pub(crate) fn compose_sidebar(
     sections: &[SidebarSection],
     width: u16,
@@ -829,16 +832,11 @@ pub(crate) fn compose_sidebar(
     let workspaces = sections.iter().find(|s| s.title == "workspaces");
     let agents = sections.iter().find(|s| s.title == "agents");
 
-    // The workspace area: header, rows, footer chips on its last row.
+    // The workspace area: rows from the top (the tab strip's lead
+    // segment names the panel), footer chips on its last row.
     let footer_y = ws_rows.saturating_sub(1);
-    filler(
-        &mut lines,
-        0,
-        clip(" workspaces".to_string()),
-        SidebarLineKind::Header,
-    );
     if let Some(section) = workspaces {
-        entries(&mut lines, &section.rows, 1, footer_y.max(1));
+        entries(&mut lines, &section.rows, 0, footer_y);
     }
     let new_chip = " new ";
     let menu_chip = " menu ";

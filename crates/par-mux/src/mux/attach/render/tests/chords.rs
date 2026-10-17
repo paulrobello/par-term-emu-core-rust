@@ -388,9 +388,9 @@ fn toggle_chords_flip_their_state_and_park_refits() {
     assert_eq!(session.renderer.sidebar_width(), 20);
     assert_eq!(drained(&rx), vec!["list-workspaces".to_string()]);
     assert_eq!(
-        session.renderer.sidebar_row_at(2, 3),
+        session.renderer.sidebar_row_at(2, 2),
         Some(SidebarRowId::Workspace("+1".into())),
-        "the queried roster fills the panel below its header"
+        "the queried roster fills the panel from the top"
     );
     chord(&mut session, &mut conn, b's');
     assert!(!session.sidebar.is_on());
@@ -1614,9 +1614,9 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
                 srow(SidebarRowId::Workspace("+1".into()), "beta", false),
             ],
         }]));
-    // Host row 3 (1-based 4) is the second workspace row (the area
-    // header owns host row 1).
-    session.route_mouse(&mut conn, sgr(2, 3, 4, false));
+    // Host row 2 (1-based 3) is the second workspace row (the panel
+    // opens with its rows — the title lives on the tab strip).
+    session.route_mouse(&mut conn, sgr(2, 3, 3, false));
     settle(&mut session, &mut conn);
     assert_eq!(
         session.menu().map(|m| m.target.clone()),
@@ -1624,10 +1624,10 @@ fn sidebar_pointer_lands_opens_menus_and_prompts() {
     );
     assert!(drained(&rx).is_empty(), "opening the menu sends nothing");
     session.leave_menu();
-    session.route_mouse(&mut conn, sgr(0, 3, 4, true));
+    session.route_mouse(&mut conn, sgr(0, 3, 3, true));
     settle(&mut session, &mut conn);
     assert!(drained(&rx).is_empty(), "a release does nothing");
-    session.route_mouse(&mut conn, sgr(0, 3, 4, false));
+    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
     settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx)[..2].to_vec(),
@@ -1899,18 +1899,17 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
             title: "workspaces",
             rows: vec![srow(SidebarRowId::Workspace("+1".into()), "beta", false)],
         }]));
-    // Host row 1 (SGR row 2) is the area header — filler, consumed.
-    assert_eq!(session.mouse_hit(&sgr(0, 3, 2, false)), Hit::Consumed);
-    // Host row 2 (SGR row 3) is the first workspace row.
+    // Host row 1 (SGR row 2) is the first workspace row — the panel
+    // opens with its rows (the title lives on the tab strip).
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 3, false)),
+        session.mouse_hit(&sgr(0, 3, 2, false)),
         Hit::SidebarWorkspace {
             id: "+1".to_string(),
             menu: false
         }
     );
     assert_eq!(
-        session.mouse_hit(&sgr(2, 3, 3, false)),
+        session.mouse_hit(&sgr(2, 3, 2, false)),
         Hit::SidebarWorkspace {
             id: "+1".to_string(),
             menu: true
@@ -1918,10 +1917,12 @@ fn mouse_hit_maps_zero_coordinates_menu_and_sidebar() {
         "a right press opens the workspace menu"
     );
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 3, true)),
+        session.mouse_hit(&sgr(0, 3, 2, true)),
         Hit::Consumed,
         "a release in the strip is consumed"
     );
+    // Host row 2 (SGR row 3), past the single row: empty filler.
+    assert_eq!(session.mouse_hit(&sgr(0, 3, 3, false)), Hit::Consumed);
     // The footer chips on the workspace area's last row (SGR row 13).
     assert_eq!(
         session.mouse_hit(&sgr(0, 3, 13, false)),
@@ -1967,9 +1968,10 @@ fn sidebar_edges_resize_the_panel_and_the_areas() {
         session.mouse_hit(&sgr(0, 3, 14, false)),
         Hit::SidebarSplitDrag
     );
-    // Rows still classify around the handles (beta at host row 3).
+    // Rows still classify around the handles (beta at host row 2 =
+    // SGR row 3).
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 4, false)),
+        session.mouse_hit(&sgr(0, 3, 3, false)),
         Hit::SidebarWorkspace {
             id: "+1".to_string(),
             menu: false
@@ -2037,17 +2039,17 @@ fn sidebar_active_entry_paints_a_subtle_band() {
     session.renderer.paint_sidebar();
     let band = RtColor::Rgb(28, 28, 41);
     let buf = &session.renderer.buffer;
-    // The active workspace (composed row 1): band across the content
-    // width, bold, never reversed.
+    // The active workspace (composed row 0 — the panel opens with its
+    // rows): band across the content width, bold, never reversed.
     for x in 0..19 {
-        assert_eq!(buf[(x, 1)].bg, band, "col {x} of the active workspace");
-        assert!(!buf[(x, 1)].modifier.contains(RtModifier::REVERSED));
+        assert_eq!(buf[(x, 0)].bg, band, "col {x} of the active workspace");
+        assert!(!buf[(x, 0)].modifier.contains(RtModifier::REVERSED));
     }
-    assert!(buf[(3, 1)].modifier.contains(RtModifier::BOLD));
-    assert!(!buf[(3, 1)].modifier.contains(RtModifier::DIM));
+    assert!(buf[(3, 0)].modifier.contains(RtModifier::BOLD));
+    assert!(!buf[(3, 0)].modifier.contains(RtModifier::DIM));
     // An inactive row: the host bg, dim.
-    assert_eq!(buf[(3, 2)].bg, RtColor::Rgb(0, 0, 0));
-    assert!(buf[(3, 2)].modifier.contains(RtModifier::DIM));
+    assert_eq!(buf[(3, 1)].bg, RtColor::Rgb(0, 0, 0));
+    assert!(buf[(3, 1)].modifier.contains(RtModifier::DIM));
     // The active agent entry (rows 14 and 15 of the 23-row frame: the
     // rule at 12, the header at 13): the band on both lines, the glyph
     // yellow on it, the second line dim.
@@ -2173,10 +2175,10 @@ fn sidebar_agent_row_click_focuses_the_pane() {
                 false,
             )],
         }]));
-    // The agent row paints under its area's header: composed row 2 =
-    // SGR row 3 (the same mapping the workspace rows follow).
+    // The agent row opens the panel (no header above it): composed
+    // row 0 = SGR row 2 (the same mapping the workspace rows follow).
     assert_eq!(
-        session.mouse_hit(&sgr(0, 3, 3, false)),
+        session.mouse_hit(&sgr(0, 3, 2, false)),
         Hit::SidebarPane { pane: 7 },
         "a left press on the agent row resolves its pane"
     );
