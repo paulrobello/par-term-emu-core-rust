@@ -256,11 +256,15 @@ fn write_fixture_config(fixture: &MuxFixture, remain_on_exit: bool) {
 fn spawn_daemon_on(socket: &Path, config: Option<&Path>, state_dir: PathBuf) -> DaemonGuard {
     use std::process::Stdio;
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"));
+    // --foreground: the guard kills the process it spawned, so the spawned
+    // process must BE the daemon — the default daemonize-to-background
+    // would orphan a detached grandchild the guard can never name.
     command
         .arg("--socket")
         .arg(socket)
         .arg("--state-dir")
-        .arg(state_dir);
+        .arg(state_dir)
+        .arg("--foreground");
     if let Some(config) = config {
         command.env("PAR_MUX_CONFIG", config);
     } else {

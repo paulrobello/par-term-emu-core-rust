@@ -143,6 +143,8 @@ fn stage_with(tag: &str, daemon_args: &[&str]) -> Stage {
         .arg(&path)
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        // The stage's drop kills this child: it must BE the daemon.
+        .arg("--foreground")
         .args(daemon_args)
         // Test daemons are deliberate, not nested: strip the pane marker so
         // the nesting guard does not refuse them when the suite itself runs

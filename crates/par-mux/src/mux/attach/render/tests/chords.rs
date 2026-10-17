@@ -2552,7 +2552,10 @@ fn reload_chord_flash_paints_on_the_arming_tick() {
         status_row_text(&mut session).contains("config reloaded"),
         "the reload's flash paints on the row"
     );
-    assert_eq!(drained(&rx), vec!["reload-config".to_string()]);
+    // Bounded wait, not drained(): the recording conn's reader thread
+    // forwards asynchronously, so an immediate drain races the line's
+    // arrival (exposed by a heavier parallel test set shifting scheduling).
+    assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
 }
 
 /// The exit cue and the respawn chord (render mode): a `%pane-exited`

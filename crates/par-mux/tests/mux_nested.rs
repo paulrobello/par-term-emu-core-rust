@@ -99,6 +99,8 @@ fn daemon_with_env(fixture: &MuxFixture, envs: &[(&str, &str)]) -> OwnedDaemon {
         .arg(fixture.socket())
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        // OwnedDaemon kills this child: it must BE the daemon.
+        .arg("--foreground")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (key, value) in envs {

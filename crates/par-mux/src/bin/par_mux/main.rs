@@ -112,6 +112,32 @@ struct Cli {
     #[arg(long)]
     restart: bool,
 
+    /// Serve the daemon in the foreground of this process instead of the
+    /// default daemonize-to-background: the debugging and supervision
+    /// escape, and the shape programmatic spawners use (they own and kill
+    /// the child they spawned). Not a daemon_mode member on purpose: it
+    /// composes with --restart (stop, then serve here).
+    #[arg(long, conflicts_with_all = [
+        "no_attach", "stop", "command", "list_servers", "gen_config",
+        "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
+        "agent_hooks_status", "integration_status",
+        "install_agent_extensions", "uninstall_agent_extensions",
+        "heal_agent_hooks",
+    ])]
+    foreground: bool,
+
+    /// Daemon-only: daemonize to background as usual but skip the
+    /// auto-attach of the invoking terminal (and the isatty fallback that
+    /// skips attaching for scripted starts).
+    #[arg(long, conflicts_with_all = [
+        "foreground", "stop", "command", "list_servers", "gen_config",
+        "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
+        "agent_hooks_status", "integration_status",
+        "install_agent_extensions", "uninstall_agent_extensions",
+        "heal_agent_hooks",
+    ])]
+    no_attach: bool,
+
     /// Client mode: send one control command to the daemon on this socket,
     /// print its reply body to stdout (one line per reply line), and exit.
     /// A `%error` reply prints to stderr and exits non-zero. Never starts a
@@ -182,7 +208,7 @@ struct Cli {
     /// Claude Code default (tests, other agent harnesses).
     #[arg(long, value_name = "DIR", requires = "install_skill")]
     skills_dir: Option<std::path::PathBuf>,
-    /// Install the agent-state session hooks for claude, codex, and grok
+    /// Install the agent-state session hooks for claude, codex, grok, and muse
     /// (script assets plus the config entries that run them) and exit.
     /// Never starts or contacts a daemon; par-term invokes it instead of
     /// embedding its own copies of the integrations.
@@ -510,7 +536,7 @@ enum AgentHookAction {
 /// by the first error.
 fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
     use par_mux::mux::integrations as integ;
-    let arms: [(&str, Arm); 3] = match action {
+    let arms: [(&str, Arm); 4] = match action {
         AgentHookAction::Install => [
             ("claude", || {
                 let r = integ::install_claude_hook()?;
@@ -540,6 +566,18 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
                     r.config_path.display()
                 ))
             }),
+            ("muse", || {
+                let r = integ::install_muse_hook()?;
+                Ok(format!(
+                    "{} (settings {})",
+                    r.hook_path.display(),
+                    if r.settings_changed {
+                        "updated"
+                    } else {
+                        "already present"
+                    }
+                ))
+            }),
         ],
         AgentHookAction::Uninstall => [
             ("claude", || {
@@ -553,6 +591,10 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
             ("grok", || {
                 let r = integ::uninstall_grok_hook()?;
                 Ok(arm_summary(r.hook_removed || r.config_removed))
+            }),
+            ("muse", || {
+                let r = integ::uninstall_muse_hook()?;
+                Ok(arm_summary(r.settings_changed || r.hook_removed))
             }),
         ],
     };
@@ -570,7 +612,7 @@ fn arm_summary(removed_any: bool) -> String {
 
 /// Print one `par-mux: <arm> …` line per (name, action) pair, stdout for
 /// successes and stderr for failures; FAILURE when any arm failed.
-fn run_arms(arms: [(&str, Arm); 3]) -> std::process::ExitCode {
+fn run_arms(arms: [(&str, Arm); 4]) -> std::process::ExitCode {
     let mut failed = false;
     for (name, action) in arms {
         match action() {
@@ -832,7 +874,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // The agent-state integration flags: install/uninstall/status for the
-    // claude/codex/grok session hooks and the pi/omp extensions this
+    // claude/codex/grok/muse session hooks and the pi/omp extensions this
     // binary owns. No socket, no daemon, so they run anywhere.
     if cli.install_agent_hooks {
         return run_agent_hook_action(AgentHookAction::Install);
@@ -885,7 +927,7 @@ fn main() -> std::process::ExitCode {
     }
 
     match run_daemon(cli, path) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) => {
             eprintln!("Error: {err}");
             std::process::ExitCode::FAILURE
@@ -893,8 +935,10 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// The daemon modes: --stop, --restart, and serving the socket.
-fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
+/// The daemon modes: --stop, --restart, and serving the socket — detached
+/// with an auto-attach by default (unix), or in the foreground with
+/// --foreground.
+fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::process::ExitCode> {
     // Resolved before the stop phase so --restart can report, before the
     // fork, what the fresh daemon will restore — and so the serving half
     // and the peek see the same resolved config. `effective` is pure:
@@ -911,10 +955,10 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
             eprintln!("par-mux: no daemon running on {}", path.display());
         }
         if cli.stop {
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         // Pre-fork, on the still-open terminal: what the detached fresh
-        // daemon will restore. After daemonize its stderr leaves the
+        // daemon will restore. After the fork its stderr leaves the
         // terminal, so this is the caller's only window on the handoff.
         // Mirrors load_or_quarantine's conclusions (last-good fallback
         // included) without mutating anything.
@@ -937,16 +981,43 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
                 daemon_log_path(&state_path).display()
             ),
         }
-        // --restart falls through and serves the socket from a detached
-        // process — the state save the stop just completed is what it
-        // restores, and the daemon must outlive the terminal --restart was
-        // typed into (fork + setsid, tmux's daemon(1,0) shape), so the
-        // invocation returns immediately and no `&` is needed. stderr is
-        // routed to the daemon log beside the state file rather than
-        // /dev/null, so post-fork startup failures (bind, restore,
-        // exit-when-empty) leave evidence instead of vanishing.
-        #[cfg(unix)]
-        daemonize(Some(&daemon_log_path(&state_path)))?;
+        // --restart falls through to the detach below — the state save the
+        // stop just completed is what the fresh daemon restores, and the
+        // daemon must outlive the terminal --restart was typed into.
+    }
+
+    // Detach policy (unix): fork-to-background is the DEFAULT for both a
+    // fresh start and --restart — herdr's launch shape. The forked child
+    // serves with no controlling tty and stderr on the daemon log beside
+    // the state file, so post-fork startup failures (bind, restore,
+    // exit-when-empty) leave evidence instead of vanishing; the parent
+    // waits for the socket, then auto-attaches this terminal unless
+    // --no-attach was given or stdin is not one (scripted starts stay
+    // daemon-only). --foreground keeps this exact process serving — the
+    // old default, and the shape every programmatic spawner uses, because
+    // a spawner that kills the child it spawned would orphan a detached
+    // grandchild it can never name.
+    #[cfg(unix)]
+    let detached = !cli.foreground;
+    #[cfg(not(unix))]
+    let detached = false;
+    #[cfg(unix)]
+    if detached {
+        // The nested-daemon refusal, delivered on the terminal rather than
+        // buried in the daemon log (--restart stays exempt: it may be
+        // typed inside a pane deliberately; the guard below still runs in
+        // the serving child for the non-exempt paths).
+        if !cli.restart {
+            if let Some(reason) = par_mux::mux::nested_daemon_refusal() {
+                return Err(std::io::Error::other(reason));
+            }
+        }
+        match fork_daemon(Some(&daemon_log_path(&state_path)))? {
+            ForkOutcome::Child => {} // this process serves, detached
+            ForkOutcome::Parent => {
+                return run_detached_parent(&cli, &path, &state_path);
+            }
+        }
     }
 
     // Nested-daemon guard, on the path that actually serves: a daemon
@@ -1060,13 +1131,23 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     if let Err(err) = par_mux::mux::discovery::unregister(&registry_base, &path) {
         log::warn!("par-mux: could not remove the registry entry: {err}");
     }
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
-/// Detach the serving `--restart` process from the terminal it was typed
-/// into: fork, the parent reports success and exits, the child calls
-/// `setsid` and serves with stdin/stdout on `/dev/null` and stderr on
-/// `stderr_log` (tmux's `daemon(1,0)` shape, with stderr kept). Unfixed,
+/// The outcome of [`fork_daemon`] for the caller.
+#[cfg(unix)]
+enum ForkOutcome {
+    /// This is the original process; the detached child serves on its own.
+    Parent,
+    /// This is the detached child; it serves.
+    Child,
+}
+
+/// Fork the serving daemon off the terminal it was typed into: the child
+/// calls `setsid` and serves with stdin/stdout on `/dev/null` and stderr
+/// on `stderr_log` (tmux's `daemon(1,0)` shape, with stderr kept); the
+/// PARENT RETURNS — it waits for the socket and auto-attaches (the
+/// herdr launch shape), or exits daemon-only under --no-attach. Unfixed,
 /// `par-mux --restart NAME &` stayed in the shell's job, so closing that
 /// terminal SIGHUP-killed the daemon and every pane with no save.
 ///
@@ -1081,7 +1162,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
 /// any moment, so a terminal-attached stderr would risk EIO on every log
 /// line once it does. A log that cannot be opened falls back to /dev/null.
 #[cfg(unix)]
-fn daemonize(stderr_log: Option<&std::path::Path>) -> std::io::Result<()> {
+fn fork_daemon(stderr_log: Option<&std::path::Path>) -> std::io::Result<ForkOutcome> {
     use nix::unistd::{fork, setsid, ForkResult};
     use std::io::Write as _;
     use std::os::fd::AsRawFd as _;
@@ -1092,7 +1173,7 @@ fn daemonize(stderr_log: Option<&std::path::Path>) -> std::io::Result<()> {
     // the doc comment), so the child inherits a single-threaded process and
     // may call non-async-signal-safe functions.
     match unsafe { fork() }.map_err(std::io::Error::from)? {
-        ForkResult::Parent { .. } => std::process::exit(0),
+        ForkResult::Parent { .. } => Ok(ForkOutcome::Parent),
         ForkResult::Child => {
             // The daemon now leads its own session, no controlling tty.
             // stdin/stdout land on /dev/null; stderr goes to the daemon log
@@ -1144,8 +1225,78 @@ fn daemonize(stderr_log: Option<&std::path::Path>) -> std::io::Result<()> {
                     }
                 }
             }
-            Ok(())
+            Ok(ForkOutcome::Child)
         }
+    }
+}
+
+/// The parent half of a detached start: wait (bounded) for the child's
+/// socket to accept, then either exit daemon-only (--no-attach, or stdin
+/// is not a terminal — scripted starts never attach) or exec the attach
+/// client in this process, herdr's launch-or-attach. A socket that never
+/// accepts is an error naming the daemon log, because after the fork the
+/// child's failures are only visible there.
+#[cfg(unix)]
+fn run_detached_parent(
+    cli: &Cli,
+    path: &std::path::Path,
+    state_path: &std::path::Path,
+) -> std::io::Result<std::process::ExitCode> {
+    const READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + READY_DEADLINE;
+    let mut ready = false;
+    while std::time::Instant::now() < deadline {
+        if par_mux::mux::connect_local_stream(path).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !ready {
+        // --restart keeps its fire-and-forget contract: a serve failure
+        // after the fork is the daemon log's news (the contract
+        // cli_restart_surfaces_a_fresh_daemon_startup_failure pins), and a
+        // healthy restart still lands in the attach below. A plain start
+        // is the caller's primary intent, so it fails loudly instead.
+        let note = format!(
+            "the daemon did not become ready on {} within 10s; see {}",
+            path.display(),
+            daemon_log_path(state_path).display()
+        );
+        if cli.restart {
+            eprintln!("par-mux: {note}");
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
+        return Err(std::io::Error::other(note));
+    }
+    eprintln!("par-mux: daemon running on {}", path.display());
+    if cli.no_attach {
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+    // SAFETY: isatty takes no arguments and cannot fail.
+    if unsafe { libc::isatty(0) } != 1 {
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+    #[cfg(feature = "attach")]
+    {
+        use std::os::unix::process::CommandExt as _;
+        let exe = std::env::current_exe()?;
+        // exec(2) replaces this process on success; the returned error is
+        // only the exec failure itself.
+        let err = std::process::Command::new(exe)
+            .arg("attach")
+            .arg("--socket")
+            .arg(path)
+            .exec();
+        Err(err)
+    }
+    #[cfg(not(feature = "attach"))]
+    {
+        eprintln!(
+            "par-mux: daemon running on {} (attach client not built)",
+            path.display()
+        );
+        Ok(std::process::ExitCode::SUCCESS)
     }
 }
 
@@ -1273,6 +1424,33 @@ mod mode_group_tests {
             integration_status_line(true, &outdated),
             "installed v1 \u{2192} v2 outdated"
         );
+    }
+
+    #[test]
+    fn foreground_and_no_attach_conflict_with_the_one_shots_but_compose_with_restart() {
+        // The daemon_mode group stays exclusive among itself; --foreground
+        // and --no-attach are modifiers of the serve path, so each may pair
+        // with --restart but with nothing one-shot.
+        for one_shot in [
+            "--stop",
+            "--cmd=list-sessions",
+            "--list-servers",
+            "--install-agent-hooks",
+            "--agent-hooks-status",
+        ] {
+            for modifier in ["--foreground", "--no-attach"] {
+                let err = Cli::try_parse_from(["par-mux", modifier, one_shot])
+                    .expect_err(&format!("{modifier} {one_shot} must conflict"));
+                assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+            }
+        }
+        assert!(Cli::try_parse_from(["par-mux", "--foreground"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--no-attach"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--foreground", "--restart"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--no-attach", "--restart"]).is_ok());
+        let err = Cli::try_parse_from(["par-mux", "--foreground", "--no-attach"])
+            .expect_err("foreground and no_attach are opposites");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

@@ -1665,6 +1665,9 @@ fn accept_emfile_keeps_the_daemon_serving() {
         .arg(fixture.socket())
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        // The guard (and the exhaustion assert) reads this child: it must
+        // BE the daemon, not the launching half of a detached start.
+        .arg("--foreground")
         .env_remove("PAR_MUX_ENV")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

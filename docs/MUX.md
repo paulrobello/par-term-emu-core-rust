@@ -100,12 +100,14 @@ At startup the daemon raises its `RLIMIT_NOFILE` soft limit toward the hard limi
 The daemon parses its arguments with `clap` (`--help` and `--version` both work):
 
 ```text
-par-mux <name>              Bind the default socket path for <name>
-par-mux --socket <path>     Bind an explicit socket path
+par-mux <name>              Start (or restart into) the default-socket daemon for <name> and attach
+par-mux --socket <path>     The same, on an explicit socket path
 par-mux                     Same as par-mux default
 par-mux --state-dir <dir>   Override the platform state directory the tree is persisted under
+par-mux [<name>] --foreground        Serve in the foreground of this process — no daemonize, no attach
+par-mux [<name>] --no-attach         Daemonize as usual but exit daemon-only, without attaching
 par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
-par-mux [<name>] --restart  Stop, then serve the same socket from a detached process
+par-mux [<name>] --restart  Stop, then start a fresh daemon on the same socket (detached, attach)
 par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
 par-mux --pane-endpoints          Give each pane its own hook-only socket (see Agent Hook Reports)
 par-mux --expose-control-socket   With --pane-endpoints: also export PAR_MUX_CONTROL_SOCKET in panes
@@ -122,10 +124,10 @@ defaults for the socket, state dir, and the two endpoint switches — see
 `--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`.
 `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error.
 The daemon unlinks the socket only AFTER its final state save is on disk, so the wait's return is also the guarantee that the save has landed — a restart racing its predecessor's save read a missing or stale state file before this ordering held.
-`--restart` does the same stop, then serves the same socket from a detached process — the state save the stop just completed is what it restores.
+`--restart` does the same stop, then brings the same socket back as a fresh daemon — the state save the stop just completed is what it restores.
 Before the fork, the invocation reports on the terminal what the fresh daemon will restore: nothing (with the reason — no saved state, or the previous daemon saved an empty tree) when the restore will be empty, and where the details live.
 The fresh daemon's stderr is routed to `<state file>.log` beside the state file (created `0600`, appended across restarts) instead of discarded, so a startup failure — a bind error, a restore failure, an exit-when-empty — leaves evidence there after the terminal is gone.
-The invocation returns as soon as the daemon detaches (fork + `setsid`; stdin/stdout to `/dev/null`), so no `&` is needed and closing the terminal it was typed into leaves the daemon and its panes running.
+The daemon detaches by default (fork + `setsid`; stdin/stdout to `/dev/null`), so no `&` is needed and closing the terminal it was typed into leaves the daemon and its panes running — herdr's launch shape: `par-mux <name>` starts the daemon and ATTACHES the invoking terminal to it, and `--restart` lands in the fresh daemon the same way. The launch process waits (10 s bound) for the socket to accept, then either execs the attach client in place (`par-mux attach --socket …`) or exits: `--no-attach` skips the attach on request, and a start whose stdin is not a terminal (a script, a boot job) stays daemon-only by itself. A socket that never accepts is an error naming the daemon log, because after the fork the child's failures are only visible there. `--foreground` is the escape: this exact process serves, no fork and no attach — the debugging and supervision shape, and the one every programmatic spawner uses (`MuxClient`'s auto-spawn and the test harness pass it, because they kill the child they spawned and a detached grandchild could never be named). On Windows the daemon always serves in the foreground of the invoking process (the fork shape is unix); `--foreground` and `--no-attach` parse there but have no one to attach. `--restart` composes with both modifiers.
 This is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
 
 `--pane-endpoints` (opt-in, default off) gives every pane its own socket endpoint that accepts only hook reports — see [Agent Hook Reports](#agent-hook-reports). `--expose-control-socket` accompanies it: panes then also get `PAR_MUX_CONTROL_SOCKET` naming the full control socket, and a session env of `PAR_MUX_CONTROL=1` grants the same per session.
@@ -143,7 +145,7 @@ so what an agent reads always matches the binary it drives.
 
 ### Nested daemons
 
-Serve mode refuses to start inside a par-mux pane: when `PAR_MUX_ENV` is set (the pane env contract marks every pane), `par-mux <name>` / `par-mux --socket <path>` exits non-zero with `refusing to start a nested daemon: PAR_MUX_ENV is set … set PAR_MUX_ALLOW_NESTED=1 to override` and binds no socket — a nested daemon would shadow the outer server's identity for every PTY under it. `MuxClient::connect_or_spawn` applies the same rule: from inside a pane it attaches to a daemon that is already running but refuses to auto-spawn one, failing fast instead of retrying a socket the guard keeps unbound.
+Serve mode refuses to start inside a par-mux pane: when `PAR_MUX_ENV` is set (the pane env contract marks every pane), `par-mux <name>` / `par-mux --socket <path>` exits non-zero with `refusing to start a nested daemon: PAR_MUX_ENV is set … set PAR_MUX_ALLOW_NESTED=1 to override` and binds no socket — checked in the launching process, before the default fork, so the refusal lands on the terminal rather than in the daemon log — a nested daemon would shadow the outer server's identity for every PTY under it. `MuxClient::connect_or_spawn` applies the same rule: from inside a pane it attaches to a daemon that is already running but refuses to auto-spawn one, failing fast instead of retrying a socket the guard keeps unbound.
 
 Exempt from the guard, because a pane must keep operating on its own daemon: `--cmd` (client mode never starts a daemon), `--stop`, and `--restart` — tmux likewise allows `kill-server` from inside a session. `PAR_MUX_ALLOW_NESTED=1` (or unsetting `PAR_MUX_ENV`) starts a nested daemon anyway.
 
@@ -585,8 +587,8 @@ An **aggregate bound** sits above the per-client depth (ARC-008): once the clien
 ## Agent-State Integrations
 
 par-mux owns the integrations that report agent state into the daemon:
-the claude, codex, and grok session hooks (script assets written under the
-par-mux config directory and registered in each agent own config — a merge
+the claude, codex, grok, and muse session hooks (script assets written under
+the par-mux config directory and registered in each agent own config — a merge
 that preserves the user entries, comments, and formatting) and the pi/omp
 agent-state extensions (a file drop into each agent extension directory).
 The two extension assets are generated, not hand-written: both dialects
@@ -599,7 +601,7 @@ They are embedded in the binary and driven by five one-shot flags, none of
 which starts or contacts a daemon:
 
 ```text
-par-mux --install-agent-hooks            Install the claude/codex/grok session hooks
+par-mux --install-agent-hooks            Install the claude/codex/grok/muse session hooks
 par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
 par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent, plus the asset's version currency when installed (v2, `v1 → v2 outdated`, `asset missing`)
 par-mux --integration-status              The same grammar for EVERY bundled asset: hook, extension, and skill lines
@@ -616,7 +618,19 @@ hook payload names the thread rather than the rollout, so both codex hook
 assets derive the id they report (and resume with) from the transcript's
 `rollout-<timestamp>-<uuid>.jsonl` filename when it parses and differs
 from the payload id; the `CODEX_THREAD_ID` fork guard still rules on the
-payload id. par-term
+payload id. The muse arm is the one that cannot carry `PAR_MUX_PANE_ID` at
+all: muse clears its hook environment down to `MUSE_SESSION_ID`/
+`MUSE_THREAD_ID` (verified live against 1.4.9/1.4.10), so its reporter
+discovers the daemon sockets at the `default_socket_path` tiers and sends
+`pane.report_agent_session_cwd` — the payload's cwd instead of a pane id.
+The daemon resolves the pane itself, conservatively: local panes only, then
+a pane already claimed by the agent, else an unclaimed pane whose spawn
+command names the agent as a word, else any unclaimed pane in that
+directory (the "typed `muse` inside a shell pane" host), ties to the lowest
+pane id; a report with no match is an error reply the reporter ignores, so
+fanning one report to every discovered socket — including daemons that own
+no matching pane — is harmless. `muse resume` is workspace-scoped, which is
+what makes even a wrong-pane tier-3 pick safe to restore. par-term
 invokes these flags for its integrations dialog, CLI, Settings status rows,
 and startup self-heal instead of embedding its own copies, so the
 integrations always match the shipped binary.
@@ -853,7 +867,7 @@ A dedicated thread sweeps every 30 s (`crates/par-mux/src/mux/host_probe.rs`), w
 
 ## Agent Scrape Tier
 
-Panes whose agent reports no state hook (claude, codex, grok) get state read from rendered content — OSC title and screen text matched against per-agent pattern rules bundled from herdr (Apache-2.0, credited per file). The scrape runs on the accept loop's idle poll once per second; there is no dedicated thread.
+Panes whose agent reports no state hook (claude, codex, grok, muse) get state read from rendered content — OSC title and screen text matched against per-agent pattern rules bundled from herdr (Apache-2.0, credited per file). The scrape runs on the accept loop's idle poll once per second; there is no dedicated thread.
 
 Structural rules (`crates/par-mux/src/mux/scrape.rs`):
 
@@ -863,7 +877,7 @@ Structural rules (`crates/par-mux/src/mux/scrape.rs`):
 - **`contains` matches case-insensitively** (herdr parity): needles lowercase at compile and the region text at match, so real-cased agent chrome ("Do you want to proceed?") hits rules authored in lowercase. `regex`/`line_regex` stay case-sensitive as written — make them `(?i)` explicitly when they must fold.
 - **Every pattern list is ALL-of** (herdr parity): a `contains`, `regex`, or `line_regex` list holds when every entry matches (`line_regex` per pattern needs at least one matching line, not one line matching all). A rule carrying two patterns where only one is present does not fire.
 
-Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok}.toml`). A local override file shadows the bundled set for its agent:
+Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok,muse}.toml`). A local override file shadows the bundled set for its agent:
 
 ```text
 <state_dir>/par-mux/agent-patterns/<agent>.toml
@@ -899,7 +913,7 @@ State saving is crash-safe by construction (`crates/par-mux/src/mux/persist.rs`)
   This matters for a pane saved mid full-screen-app (htop, top): the pane returns to the shell's screen with its history intact, instead of resuming on a frozen, history-less alternate screen under a shell that never asked for it.
   Each pane's process respawns in its persisted cwd — captured at save from the shell's OSC 7 report, else the child's live process cwd — so a resumed pane (and a resumed agent, whose transcript lookup is cwd-sensitive) re-lands where it left off rather than in the daemon's start directory.
   A persisted cwd that no longer exists never fails the restore: the pane spawns in `$HOME` and a `par-mux: <dir> is gone` line is written into the restored pane.
-  Agent panes respawn through their resume invocation when one can be built: the hook-reported `session_resume_argv` verbatim, else a per-agent table shipped in the binary (claude/codex/grok/pi/omp, each in its own CLI's argument shape — `claude --resume <id>`, `codex resume <id>`, `grok --resume <id>`, `pi --session <id-or-path>`, `omp --resume=<id-or-path>`).
+  Agent panes respawn through their resume invocation when one can be built: the hook-reported `session_resume_argv` verbatim, else a per-agent table shipped in the binary (claude/codex/grok/muse/pi/omp, each in its own CLI's argument shape — `claude --resume <id>`, `codex resume <id>`, `grok --resume <id>`, `muse resume <id>` falling back to the workspace-scoped `muse resume --last` when no id was ever reported, `pi --session <id-or-path>`, `omp --resume=<id-or-path>`).
   The resume invocation is never persisted — a stored argv would freeze a vendor CLI shape into a state file newer code later restores.
   Failure splits by where it happens. A chain that cannot *build* an invocation (missing table entry, a session ref the table cannot use) falls back structurally to the pane's original spawn command — the pane spawns as it was.
   A chain that builds but *runs* into failure (uninstalled binary, a session id the CLI rejects) — or that runs to a clean exit — does not delete the pane: on Unix the invocation spawns with a surviving tail (`; { …; exec "$SHELL" }`), so ANY exit drops the pane onto a live shell carrying the restored screen, scrollback, and agent identity — an explanatory line names which exit happened (`agent resume failed` / `agent exited`), the reaper never sees a dead pane, and the identity survives for a retry or an explicit `kill-pane` (a clean exit keeps the pane: pinned by `a_clean_agent_exit_also_leaves_a_live_pane`).
@@ -1032,5 +1046,5 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `crates/par-mux/src/mux/agent_resume.rs` | The per-agent resume invocation table |
 | `crates/par-mux/src/mux/win_resume.rs` | Windows resume transport: PE resolution and the cmd bridge batch |
 | `crates/par-mux/src/mux/client.rs` | `MuxClient`: connect/attach, `send`, notifications, spawn/kill daemon |
-| `crates/par-mux/src/mux/patterns/` | Bundled scrape patterns: `claude.toml`, `codex.toml`, `grok.toml` |
+| `crates/par-mux/src/mux/patterns/` | Bundled scrape patterns: `claude.toml`, `codex.toml`, `grok.toml`, `muse.toml` |
 | `crates/par-mux/src/bin/par_mux/main.rs` | The daemon binary: CLI, state load/quarantine, signal handlers, `--restart` detach |

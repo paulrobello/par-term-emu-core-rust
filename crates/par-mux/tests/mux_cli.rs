@@ -283,6 +283,7 @@ fn the_named_form_reaches_the_daemon_on_the_named_default_socket() {
         .arg(&name)
         .arg("--state-dir")
         .arg(&state_dir)
+        .arg("--foreground")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -618,6 +619,7 @@ fn explicit_socket_and_name_beat_the_env_default() {
         .arg(&name)
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        .arg("--foreground")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -686,6 +688,7 @@ fn spawn_daemon_with_args(fixture: &MuxFixture, extra: &[&str]) -> DaemonGuard {
         .arg(fixture.socket())
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        .arg("--foreground")
         .args(extra)
         .env_remove("PAR_MUX_ENV")
         .stdout(Stdio::null())
@@ -967,6 +970,7 @@ fn list_servers_shows_both_running_daemons_with_session_counts() {
             .arg(fixture.socket())
             .arg("--state-dir")
             .arg(registry_base.clone())
+            .arg("--foreground")
             .env_remove("PAR_MUX_ENV")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1163,6 +1167,7 @@ fn attach_with_multiple_live_servers_refuses_with_a_list() {
             .arg(fixture.socket())
             .arg("--state-dir")
             .arg(registry_base.clone())
+            .arg("--foreground")
             .env_remove("PAR_MUX_ENV")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1256,6 +1261,7 @@ fn reload_config_command_reaches_a_live_daemon() {
             .arg(socket2)
             .arg("--state-dir")
             .arg(fixture2.state_dir())
+            .arg("--foreground")
             .env("PAR_MUX_CONFIG", &config)
             .env_remove("PAR_MUX_ENV")
             .stdout(Stdio::null())
@@ -1426,8 +1432,8 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 3, "stdout: {:?}", run.stdout);
-    for (agent, line) in ["claude", "codex", "grok"].iter().zip(&lines) {
+    assert_eq!(lines.len(), 4, "stdout: {:?}", run.stdout);
+    for (agent, line) in ["claude", "codex", "grok", "muse"].iter().zip(&lines) {
         let rest = line.strip_prefix(agent).expect("agent name leads the line");
         let Some(state) = rest.strip_prefix(" installed") else {
             assert!(
@@ -1444,7 +1450,7 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
 }
 
 /// `--integration-status` covers every bundled asset in one grammar: the
-/// three hook lines, the two extension lines, and the skill line, each
+/// four hook lines, the two extension lines, and the skill line, each
 /// `<kind> <name> installed|absent [currency]`.
 #[test]
 fn integration_status_covers_hooks_extensions_and_skill() {
@@ -1452,14 +1458,22 @@ fn integration_status_covers_hooks_extensions_and_skill() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 6, "one line per asset: {:?}", run.stdout);
+    assert_eq!(lines.len(), 7, "one line per asset: {:?}", run.stdout);
     let kinds: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap_or(""))
         .collect();
     assert_eq!(
         kinds,
-        ["hook", "hook", "hook", "extension", "extension", "skill"],
+        [
+            "hook",
+            "hook",
+            "hook",
+            "hook",
+            "extension",
+            "extension",
+            "skill"
+        ],
         "stdout: {:?}",
         run.stdout
     );
@@ -1470,4 +1484,65 @@ fn integration_status_covers_hooks_extensions_and_skill() {
             "line {line:?} keeps the installed|absent token"
         );
     }
+}
+
+/// The default start daemonizes: the launched process forks a detached
+/// daemon and — without a TTY, as every harness invocation is — exits 0
+/// daemon-only once the socket accepts. The daemon outlives its parent,
+/// serves the tree it restored, and is stopped by socket; the dead child
+/// handle could never have killed it.
+#[test]
+fn the_default_start_daemonizes_and_exits_leaving_a_live_daemon() {
+    let fixture = MuxFixture::new("clifork");
+    let socket = fixture.socket().to_path_buf();
+    // Seed a restorable tree through the foreground spawner, then stop it
+    // cleanly so the state file exists: a fresh daemon with nothing to
+    // restore exits (exit-when-empty) before any of this could hold it.
+    {
+        let _daemon = daemon_with_session(&fixture, "keeper");
+        let stop = par_mux(&["--socket", socket.to_str().unwrap(), "--stop"]);
+        assert_eq!(stop.code, Some(0), "seed stop: {:?}", stop.stderr);
+    }
+    let mut parent = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(&socket)
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .env_remove("PAR_MUX_ENV")
+        .env_remove("PAR_MUX_CONFIG")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the launching process spawns");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let code = loop {
+        match parent
+            .try_wait()
+            .expect("the launching process is waitable")
+        {
+            Some(code) => break code,
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            None => panic!("the launching process never exited"),
+        }
+    };
+    assert!(code.success(), "daemon-only exit: {code:?}");
+
+    // The detached daemon serves the tree it restored, past its parent.
+    let run = par_mux(&[
+        "--socket",
+        socket.to_str().unwrap(),
+        "--cmd",
+        "list-sessions",
+    ]);
+    assert_eq!(run.code, Some(0), "daemon serves: {:?}", run.stderr);
+    assert!(
+        run.stdout.contains("keeper"),
+        "the restored tree is served: {:?}",
+        run.stdout
+    );
+    let stop = par_mux(&["--socket", socket.to_str().unwrap(), "--stop"]);
+    assert_eq!(stop.code, Some(0), "stop: {:?}", stop.stderr);
 }

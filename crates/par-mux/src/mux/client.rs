@@ -586,9 +586,14 @@ fn path_daemon_candidates(path_var: &std::ffi::OsStr, file_name: &str) -> Vec<Pa
 /// per spawn.
 fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
     let mut command = std::process::Command::new(bin);
+    // --foreground: this spawner owns the child's lifecycle (it is killed
+    // through the held Child), so the spawned process must BE the daemon —
+    // the default daemonize-to-background would orphan a grandchild this
+    // handle can never name.
     command
         .arg("--socket")
         .arg(socket)
+        .arg("--foreground")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
