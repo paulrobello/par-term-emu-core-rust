@@ -203,6 +203,7 @@ impl MuxTree {
             name: strip_controls(name).into_owned(),
             window_name: None,
             env: env.clone(),
+            cwd: None,
             workspace_id,
         }
     }
@@ -224,6 +225,9 @@ impl MuxTree {
             name,
             window_name,
             env,
+            // Consumed at spawn time (`context()`); the insert has no
+            // use for it.
+            cwd: _,
             workspace_id,
         } = plan;
         let window_name = window_name.unwrap_or_else(|| name.clone());

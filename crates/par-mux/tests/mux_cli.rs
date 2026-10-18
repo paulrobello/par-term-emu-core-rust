@@ -740,13 +740,33 @@ fn pane_env_names(socket: &Path, pane: &str) -> Vec<String> {
     names
 }
 
-/// Assert the pane exports exactly `expected` — set equality, so an added
-/// or removed variable fails loudly.
+/// Assert the pane exports exactly `expected` — set equality over the
+/// CONTRACT universe, so an added or removed variable fails loudly. The
+/// pane's shell rc may export other `PAR_MUX_*` names (a user-level
+/// `PAR_MUX_CONTROL=1` in ~/.bashrc broke strict equality machine-wide,
+/// 2026-10-17), and `PAR_MUX_CONTROL` is an input grant the daemon reads,
+/// never an export — so only contract-managed names count.
 #[cfg(unix)]
 fn assert_env_set(names: &[String], expected: &[&str]) {
+    const UNIVERSE: [&str; 8] = [
+        "PAR_MUX_BIN",
+        "PAR_MUX_CONTROL_SOCKET",
+        "PAR_MUX_ENV",
+        "PAR_MUX_PANE_ID",
+        "PAR_MUX_SESSION",
+        "PAR_MUX_SESSION_ID",
+        "PAR_MUX_SOCKET",
+        "PAR_MUX_WINDOW_ID",
+    ];
+    let mut got: Vec<String> = names
+        .iter()
+        .filter(|n| UNIVERSE.contains(&n.as_str()))
+        .cloned()
+        .collect();
+    got.sort();
     let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
     want.sort();
-    assert_eq!(names, &want, "the pane's PAR_MUX_* env set");
+    assert_eq!(got, want, "the pane's PAR_MUX_* env set");
 }
 
 /// `{marker}=MATCH` iff the pane's `var` matches `pattern`: type a `case`
@@ -1115,8 +1135,8 @@ fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
         lines[0]
     );
     assert!(
-        run.stderr.contains("dead-socket"),
-        "the pruning is reported: stderr={:?}",
+        !run.stderr.contains("dead-socket"),
+        "the pruning is SILENT (Paul, 2026-10-17): stderr={:?}",
         run.stderr
     );
     assert!(!dead_file.exists(), "the dead entry file was removed");
@@ -1545,4 +1565,209 @@ fn the_default_start_daemonizes_and_exits_leaving_a_live_daemon() {
     );
     let stop = par_mux(&["--socket", socket.to_str().unwrap(), "--stop"]);
     assert_eq!(stop.code, Some(0), "stop: {:?}", stop.stderr);
+}
+
+/// `par-mux status`: the one-shot orientation block — stamp,
+/// workspaces, sessions, displayed session, pane count.
+#[test]
+fn status_subcommand_prints_the_orientation_block() {
+    let fixture = MuxFixture::new("clistatus");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket().to_str().unwrap();
+    let run = par_mux(&["status", "--socket", socket]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    for expected in [
+        "workspaces:",
+        "sessions:",
+        "$0: work",
+        "displayed: $0",
+        "panes: 1",
+    ] {
+        assert!(
+            run.stdout.contains(expected),
+            "status must carry {expected:?}:\n{}",
+            run.stdout
+        );
+    }
+}
+
+/// `par-mux ls`: the tmux-habit session listing, subcommand spelling.
+#[test]
+fn ls_subcommand_lists_sessions() {
+    let fixture = MuxFixture::new("clils");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket().to_str().unwrap();
+    let run = par_mux(&["ls", "--socket", socket]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stdout.contains("$0: work"),
+        "ls prints the session roster: {}",
+        run.stdout
+    );
+}
+
+/// `status` against nothing running: the actionable hint, exit 1.
+#[test]
+fn status_without_a_daemon_hints_and_exits_one() {
+    let fixture = MuxFixture::new("clistatusnone");
+    let socket = fixture.socket().to_str().unwrap();
+    let run = par_mux(&["status", "--socket", socket]);
+    assert_eq!(run.code, Some(1));
+    assert!(
+        run.stderr.contains("no daemon running") && run.stderr.contains("start one with"),
+        "the hint must name the fix: {}",
+        run.stderr
+    );
+}
+
+/// The collision guard: a bare NAME that spells a command word is
+/// refused instead of silently starting a stray daemon.
+#[test]
+fn bare_name_matching_a_command_word_is_refused() {
+    // No --socket: the guard's escape hatch is an explicit socket, so the
+    // refusal path is the bare NAME form alone. The guard fires before
+    // anything binds.
+    let run = par_mux(&["list-sessions"]);
+    assert_eq!(
+        run.code,
+        Some(2),
+        "the guard refuses; stderr: {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("command word"),
+        "the refusal explains itself: {}",
+        run.stderr
+    );
+}
+
+/// `--cmd`'s no-daemon error carries the same start hint (R9).
+#[test]
+fn cmd_without_a_daemon_hints_the_start_command() {
+    let fixture = MuxFixture::new("clihint");
+    let socket = fixture.socket().to_str().unwrap();
+    let run = par_mux(&["--socket", socket, "--cmd", "list-sessions"]);
+    assert_eq!(run.code, Some(1));
+    assert!(
+        run.stderr.contains("start one with"),
+        "the error names the fix: {}",
+        run.stderr
+    );
+}
+
+/// `send-keys … --enter`: the one-shot type-and-run form.
+#[test]
+fn send_keys_enter_flag_runs_the_line() {
+    let fixture = MuxFixture::new("clienter");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    cmd_ok(
+        socket,
+        &format!("send-keys -t {pane} -l 'echo ENTER-MARK' --enter"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        if screen.lines().any(|l| l.contains("ENTER-MARK")) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the --enter flag must submit the line; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The trailing start command runs in the created session's first pane
+/// (R4): no shell prompt, the command's output is the pane's content.
+#[test]
+fn new_session_start_command_runs_in_the_pane() {
+    let fixture = MuxFixture::new("clistartcmd");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let socket = fixture.socket();
+    cmd_ok(
+        socket,
+        "new-session -s logs -- sh -c 'echo START-CMD-MARK; sleep 30'",
+    );
+    let pane = pane_ids(&cmd_ok(socket, "list-panes -t $0"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        if screen.contains("START-CMD-MARK") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the start command must run in the pane; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// `has-session` exit codes: 0 for a live session, 1 for an absent one.
+#[test]
+fn has_session_exit_codes_probe_existence() {
+    let fixture = MuxFixture::new("clihas");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket();
+    let present = cmd(socket, "has-session -t work");
+    assert_eq!(present.code, Some(0), "stderr: {}", present.stderr);
+    let absent = cmd(socket, "has-session -t nope");
+    assert_eq!(absent.code, Some(1));
+}
+
+/// `set-option`/`show-options` through the CLI: the live booleans.
+#[test]
+fn set_option_and_show_options_round_trip_via_cli() {
+    let fixture = MuxFixture::new("cliopts");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket();
+    let before = cmd_ok(socket, "show-options");
+    assert!(
+        before.contains("exit-empty=on"),
+        "the daemon default prints on: {before}"
+    );
+    cmd_ok(socket, "set-option exit-empty off");
+    let after = cmd_ok(socket, "show-options");
+    assert!(
+        after.contains("exit-empty=off") && !after.contains("exit-empty=on\n"),
+        "the set landed: {after}"
+    );
+}
+
+/// `-F` through the CLI: stable field output without roster parsing.
+#[test]
+fn list_sessions_format_flag_prints_fields() {
+    let fixture = MuxFixture::new("clifmt");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket();
+    let run = cmd_ok(socket, "list-sessions -F '#{session_id}=#{session_name}'");
+    assert!(
+        run.trim() == "$0=work",
+        "the formatted roster is one stable line: {run:?}"
+    );
+}
+
+/// `list-panes -t $N`: the session target lists its active window.
+#[test]
+fn list_panes_session_target_via_cli() {
+    let fixture = MuxFixture::new("clilpses");
+    let _daemon = daemon_with_session(&fixture, "work");
+    let socket = fixture.socket();
+    cmd_ok(socket, "split-window -h -t %0");
+    let run = cmd_ok(socket, "list-panes -t $0");
+    assert_eq!(
+        run.lines().count(),
+        2,
+        "both panes of the session's window: {run}"
+    );
 }

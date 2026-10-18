@@ -2,18 +2,22 @@
 
 use super::*;
 
-/// tmux's value-taking `new-window` flags (QA-219).
-pub(super) const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e", "-F"];
+/// tmux's value-taking `new-window` flags (QA-219). `-F` is not here: the
+/// parser rejects it loudly rather than dropping the format request.
+pub(super) const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e"];
 
 pub(super) fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     let target = a.any_target_opt("-t", "session")?;
     let name = a.quoted_flag("-n")?;
     let start_dir = a.quoted_flag("-c")?;
-    reject_positionals(a, NEW_WINDOW_VALUE_FLAGS)?;
+    // The trailing start command (R4): tmux's positional form, the raw
+    // text after the flags.
+    let command = a.start_command(NEW_WINDOW_VALUE_FLAGS, &["-F"])?;
     Ok(MuxCommand::NewWindow {
         target,
         name,
         start_dir,
+        command,
     })
 }
 
@@ -47,11 +51,16 @@ pub(super) fn parse_list_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
         return Err("list-windows: -a and -t are mutually exclusive".to_string());
     }
     reject_positionals(a, LIST_WINDOWS_VALUE_FLAGS)?;
-    Ok(MuxCommand::ListWindows { session, all })
+    Ok(MuxCommand::ListWindows {
+        session,
+        all,
+        format: a.quoted_flag("-F")?,
+    })
 }
 
-/// tmux's value-taking `list-windows` flags (QA-219's rule), same shape as
-/// `LIST_PANES_VALUE_FLAGS`.
+/// tmux's value-taking `list-windows` flags (QA-219's rule). `-F` rides
+/// here too — reject_positionals must skip its value while the parser
+/// above reads the format out of it.
 pub(super) const LIST_WINDOWS_VALUE_FLAGS: &[&str] = &["-t", "-F", "-f"];
 
 pub(super) fn parse_move_window(a: &Args<'_>) -> Result<MuxCommand, String> {

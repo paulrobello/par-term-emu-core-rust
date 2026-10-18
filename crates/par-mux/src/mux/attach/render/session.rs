@@ -5,7 +5,7 @@
 use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, WindowSession};
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
-use crate::mux::attach::targets::{active_window_row, displayed_session, parse_session_line};
+use crate::mux::attach::targets::{active_window_row, initial_attach_session};
 use crate::mux::attach::{layout, status};
 use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::tmux_control::TmuxNotification;
@@ -14,38 +14,16 @@ use ratatui::style::Color as RtColor;
 
 /// Resolve a render target to `(window, one-of-its-panes)`. Pane targets
 /// go through pane-info (its second field is the window); window/session
-/// targets through the targeted list queries; none = the displayed
-/// session's active window's active pane — the session every other
-/// client and the follow broadcasts agree on (card 01a11bd1: the former
-/// newest-id stand-in landed on whichever session was created last, a
-/// single-pane view while the display showed another). A daemon without
-/// the `switch-client` query keeps the newest-id rule.
+/// targets through the targeted list queries; none = the target-less
+/// attach rule ([`initial_attach_session`]: create-or-single-session,
+/// refuse-on-many) resolved to its active window's marked pane.
 pub(super) fn resolve_window_and_pane(
     conn: &mut crate::mux::attach::conn::AttachConn,
     target: Option<&str>,
 ) -> Result<(String, String), String> {
     match target {
         None => {
-            let sessions = conn
-                .send_checked("list-sessions")
-                .map_err(|err| format!("list-sessions failed: {err}"))?;
-            // The wire shape is `$N: name`; the id ends at the colon — a
-            // whitespace split keeps it (`$0:`), which the daemon's id
-            // parser rejects. Newest = highest id (ids are monotonic).
-            let newest = sessions
-                .body
-                .iter()
-                .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
-                .filter(|id| id.starts_with('$'))
-                .filter_map(|id| {
-                    let n: u64 = id[1..].parse().ok()?;
-                    Some((n, id))
-                })
-                .max_by_key(|(n, _)| *n)
-                .map(|(_, id)| id);
-            let session = displayed_session(conn)
-                .or(newest)
-                .ok_or("no sessions exist — create one first")?;
+            let session = initial_attach_session(conn)?;
             let windows = conn
                 .send_checked(&format!("list-windows -t {session}"))
                 .map_err(|err| format!("list-windows failed: {err}"))?;
@@ -66,20 +44,22 @@ pub(super) fn resolve_window_and_pane(
                     }
                 }
             }
-            // A window: its marked pane.
-            if let Ok(reply) = conn.send_checked(&format!("list-panes -t {target}")) {
-                if reply.ok {
-                    let pane = marked_pane_of(conn, target)?;
-                    return Ok((target.to_string(), pane));
-                }
-            }
-            // A session: its active window.
+            // A session: its active window. Probed BEFORE the window
+            // branch — `list-panes -t` accepts session targets too (the
+            // one-rule grammar), so it can no longer prove windowness.
             if let Ok(reply) = conn.send_checked(&format!("list-windows -t {target}")) {
                 if reply.ok {
                     let window =
                         active_window_row(&reply.body).ok_or("the session has no windows")?;
                     let pane = marked_pane_of(conn, &window)?;
                     return Ok((window, pane));
+                }
+            }
+            // A window: its marked pane.
+            if let Ok(reply) = conn.send_checked(&format!("list-panes -t {target}")) {
+                if reply.ok {
+                    let pane = marked_pane_of(conn, target)?;
+                    return Ok((target.to_string(), pane));
                 }
             }
             Err(format!("no such target: {target}"))

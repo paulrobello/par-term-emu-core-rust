@@ -3,9 +3,14 @@
 use super::*;
 
 /// tmux's value-taking `new-session` flags, so a tmux-shaped sender's
-/// `-x 80` is not misread as a start command (QA-219).
-pub(super) const NEW_SESSION_VALUE_FLAGS: &[&str] =
-    &["-s", "-e", "-c", "-n", "-t", "-x", "-y", "-F", "-f"];
+/// `-x 80` is not misread as a start command (QA-219). `-F`/`-f` are NOT
+/// here: this parser rejects them loudly (nothing is silently dropped).
+pub(super) const NEW_SESSION_VALUE_FLAGS: &[&str] = &["-s", "-e", "-c", "-n", "-t", "-x", "-y"];
+
+/// The flags `new-session` refuses rather than ignores (R3): `-F`
+/// (format) and `-f` have no meaning on a create command, and a silent
+/// drop once ran the user's session without what they asked for.
+pub(super) const NEW_SESSION_REJECT_FLAGS: &[&str] = &["-F", "-f"];
 
 /// Reject the first positional word of a command that takes none (QA-219):
 /// `new-window sleep 5` used to succeed and silently drop `sleep 5`.
@@ -52,11 +57,60 @@ pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
         .collect::<Result<Vec<_>, String>>()?;
     let name = a.quoted_flag("-s")?;
     let workspace = a.workspace_opt("-t")?;
-    reject_positionals(a, NEW_SESSION_VALUE_FLAGS)?;
+    // `-n`/`-c`/`-x`/`-y` gain their tmux meanings here (R3/R4): the
+    // first window's name, the first pane's start directory, and the
+    // initial grid extents — parity with `new-window`'s flag set.
+    let window_name = a.quoted_flag("-n")?;
+    let start_dir = a.quoted_flag("-c")?;
+    let cols = a.size("-x")?;
+    let rows = a.size("-y")?;
+    let command = a.start_command(NEW_SESSION_VALUE_FLAGS, NEW_SESSION_REJECT_FLAGS)?;
     Ok(MuxCommand::NewSession {
         name,
         env,
         workspace,
+        window_name,
+        start_dir,
+        cols,
+        rows,
+        command,
+    })
+}
+
+/// `has-session -t <session>`: the bare existence probe.
+pub(super) fn parse_has_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a
+        .session("-t")?
+        .ok_or_else(|| format!("{} requires -t", a.name))?;
+    reject_positionals(a, &["-t"])?;
+    Ok(MuxCommand::HasSession { session })
+}
+
+/// `show-options`: dump the applied daemon settings. No flags.
+pub(super) fn parse_show_options(a: &Args<'_>) -> Result<MuxCommand, String> {
+    reject_positionals(a, &[])?;
+    Ok(MuxCommand::ShowOptions)
+}
+
+/// `set-option <key> <value>`: exactly two positional words.
+pub(super) fn parse_set_option(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let words = shell_split(a.line);
+    let mut positional = Vec::new();
+    let mut iter = words.iter().skip(1);
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "-t" => {
+                iter.next();
+            }
+            _ => positional.push(word.clone()),
+        }
+    }
+    let [key, value] = positional.as_slice() else {
+        return Err(format!("{} requires <key> <value>", a.name));
+    };
+    Ok(MuxCommand::SetOption {
+        key: key.clone(),
+        value: value.clone(),
     })
 }
 
@@ -111,6 +165,7 @@ pub(super) fn parse_set_environment(a: &Args<'_>) -> Result<MuxCommand, String> 
 pub(super) fn parse_list_sessions(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListSessions {
         workspace: a.workspace_opt("-t")?,
+        format: a.quoted_flag("-F")?,
     })
 }
 

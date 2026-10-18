@@ -1467,3 +1467,97 @@ fn client_snapshot_agent_rows_mirror_list_agents() {
     assert_eq!(agents, roster);
     assert_eq!(body.last(), Some(&format!("agent {}", roster[0])));
 }
+
+/// `has-session`: ok on a live session, `%error` naming an absent one —
+/// the exit-code probe agents script against.
+#[test]
+fn has_session_answers_ok_and_error_by_existence() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    let ok = h.run("has-session -t work");
+    assert!(!ok.contains("%error"), "a live session probes ok: {ok}");
+    let missing = h.run("has-session -t nope");
+    assert!(
+        missing.contains("%error") && missing.contains("nope"),
+        "an absent session errors by name: {missing}"
+    );
+}
+
+/// `set-option`/`show-options`: the two live daemon booleans round-trip;
+/// anything else is refused as restart-required; a bad value is refused.
+#[test]
+fn set_option_and_show_options_round_trip_the_live_booleans() {
+    let h = Harness::new();
+    let config = Mutex::new(crate::mux::config::EffectiveConfig::default());
+    let run = |line: &str| {
+        let ctx = Ctx {
+            tree: &h.tree,
+            clients: &h.clients,
+            command_number: 7,
+            shutdown: None,
+            config: Some(&config),
+            client_id: None,
+        };
+        dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+    };
+    let shown = assert_ok(&run("show-options"));
+    assert!(
+        shown.iter().any(|l| l == "exit-empty=on"),
+        "the default prints on: {shown:?}"
+    );
+    assert_ok(&run("set-option exit-empty off"));
+    let shown = assert_ok(&run("show-options"));
+    assert!(
+        shown.iter().any(|l| l == "exit-empty=off"),
+        "the set landed: {shown:?}"
+    );
+    assert_ok(&run("set-option remain-on-exit true"));
+    let shown = assert_ok(&run("show-options"));
+    assert!(
+        shown.iter().any(|l| l == "remain-on-exit=on"),
+        "true parses to on: {shown:?}"
+    );
+    assert_error(
+        &run("set-option prefix C-a"),
+        "set-option: \"prefix\" is restart-required — set it in the config file and \
+         reload-config; the live keys are exit-empty and remain-on-exit",
+    );
+    let bad = run("set-option exit-empty maybe");
+    assert!(bad.contains("%error"), "a bad value is refused: {bad}");
+}
+
+/// R7: `list-panes -t` accepts a session (its active window's panes) and
+/// a pane (its owning window's panes), not just a window — the one-rule
+/// target grammar.
+#[test]
+fn list_panes_session_and_pane_targets_list_the_owning_window() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    assert_ok(&h.run("split-window -t %0"));
+    let by_window = assert_ok(&h.run("list-panes -t @0"));
+    assert_eq!(by_window.len(), 2, "{by_window:?}");
+    let by_session = assert_ok(&h.run("list-panes -t work"));
+    assert_eq!(
+        by_session, by_window,
+        "a session target lists its active window's panes"
+    );
+    let by_pane = assert_ok(&h.run("list-panes -t %0"));
+    assert_eq!(
+        by_pane, by_window,
+        "a pane target lists its owning window's panes"
+    );
+}
+
+/// `-F` on the three list commands: variables expand, unknown names
+/// vanish, literal text rides verbatim.
+#[test]
+fn list_format_flags_expand_variables() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    let sessions = assert_ok(&h.run("list-sessions -F '#{session_id}=#{session_name}'"));
+    assert_eq!(sessions, vec!["$0=work".to_string()], "{sessions:?}");
+    let windows = assert_ok(&h.run("list-windows -t work -F '#{window_id} #{window_active}'"));
+    assert_eq!(windows, vec!["@0 1".to_string()], "{windows:?}");
+    let panes = assert_ok(&h.run("list-panes -t work -F '#{pane_id} #{unknown}'"));
+    assert_eq!(panes, vec!["%0 ".to_string()], "{panes:?}");
+}

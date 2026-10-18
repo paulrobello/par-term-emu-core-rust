@@ -43,10 +43,16 @@ par-mux --stop                  # stop cleanly and wait
 par-mux --list-servers          # every live server this user can reach
 par-mux <name> --cmd version    # build stamp — compare against the client build
                                 #   to detect a stale daemon
+# Verb forms exist alongside the flags (same handlers):
+#   par-mux start|stop|restart [name|--socket P], par-mux status,
+#   par-mux ls (list-sessions), par-mux config [--force]
 ```
 
 `--restart` works when nothing is running (prints a notice, still exits 0).
-The daemon detaches itself; no `&` needed. It ignores terminal hangup, exits
+The daemon detaches itself; no `&` needed. A fresh launch lands in a working
+tree: when the daemon it started has no sessions, the auto-attach creates
+the default one (workspace and session `default`, window `1`, one pane)
+instead of failing. It ignores terminal hangup, exits
 once its tree has been empty for 5 s — zero sessions, or only dead panes;
 attached clients do NOT keep it alive (tmux's `exit-empty`; set
 `[daemon] exit-empty = false` to keep it running) — and persists the
@@ -63,12 +69,19 @@ hot-reloaded by `reload-config`.
 bare `cargo install par-mux` builds no binary at all) opens the interactive
 terminal client — render mode (panes, status bar, mouse, chords; the
 default) or `--mode passthrough`; `-t` targets a session/window/pane and the
-prefix chord defaults to `C-b`. That one is for humans; agents stay on
-`--cmd`.
+prefix chord defaults to `C-b`. Target-less attach follows a fixed rule: a
+daemon with no sessions gets a default tree created (workspace and session
+`default`, a window named `1`, one unnamed pane) and attaches to it;
+exactly one existing session attaches as-is; several sessions are a refusal
+that lists them with the `-t` hint — pass `-t <session>` to pick one. That
+one is for humans; agents stay on `--cmd`.
 
 ## Orient → act → confirm
 
 ```sh
+par-mux status                  # the whole orientation in ONE call: stamp,
+                                #   workspaces, sessions, displayed session,
+                                #   pane count (exit 1 + start hint if no daemon)
 par-mux --cmd list-workspaces   # "+N: name" lines; " active" marks the daemon one
 par-mux --cmd list-sessions     # "+W: wname: $N: name" lines, every workspace when bare
 par-mux --cmd list-windows      # "@N: name" lines
@@ -83,7 +96,10 @@ par-mux --cmd list-commands     # every dispatchable command with feature tokens
 ```
 
 Then act on ids captured from those listings, and confirm the effect by
-capturing the pane (below).
+capturing the pane (below). For stable field output use `-F`:
+`list-sessions -F '#{session_id}=#{session_name}'` (also `list-windows`,
+`list-panes`; unknown `#{names}` expand to nothing). For a pure existence
+check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 
 ## Command map
 
@@ -91,12 +107,12 @@ capturing the pane (below).
 | --- | --- |
 | New workspace | `new-workspace [-n name]` → replies `+N`, becomes active, lands with its first session |
 | Switch workspace | `select-workspace -t +N` — resumes its active session |
-| New session | `new-session [-s name] [-e KEY=VALUE]…` → replies `$N` (lands in the active workspace) |
-| New window | `new-window -t $N [-n name] [-c dir]` → replies `@N` |
-| Split a pane | `split-window -t %N [-h\|-v] [-p 1-99] [-c dir]` → replies `%N` |
-| Run a program | `respawn-pane -t %N [-k] [-c dir] -- <command>` — `new-session`/`new-window` take NO start command |
+| New session | `new-session [-s name] [-e KEY=VALUE]… [-n window] [-c dir] [-x W -y H] [--] [command]` → replies `$N` (lands in the active workspace) |
+| New window | `new-window -t $N [-n name] [-c dir] [--] [command]` → replies `@N` |
+| Split a pane | `split-window -t %N [-h\|-v] [-p 1-99] [-c dir] [--] [command]` → replies `%N` |
+| Run a program | every create takes a trailing start command, tmux form: `new-session -s logs -- tail -f x`; `respawn-pane -t %N [-k] [-c dir] -- <command>` replaces a live pane's |
 | Send keys | `send-keys -t %N <keys…>` — key names (`Enter`, `C-c`, `BSpace`, arrows), `-l` literal, `-H` hex bytes |
-| Type a command | `send-keys -t %N "make test" Enter` |
+| Type a command | `send-keys -t %N -l "make test" --enter` — the `--enter` flag appends Enter (one call); the two-step `… "make test" Enter` also works |
 | Capture screen | `capture-pane -t %N` — visible screen; `-S -200` adds 200 history lines |
 | Capture styled | `capture-pane -t %N -e` — one line per grid row with SGR escapes inline |
 | Read a title | `pane-title -t %N` (empty reply = none set) |
@@ -106,6 +122,7 @@ capturing the pane (below).
 | Kill | `kill-pane -t %N` (the last pane of a window closes the window too), `kill-window -t @N`, `kill-session -t $N`, `kill-workspace -t +N` |
 | Paste buffer | `set-buffer <text>` / `show-buffer` / `paste-buffer -t %N` |
 | Session env | `set-environment -t $N KEY VALUE` (applies to panes spawned *after*) |
+| Live settings | `show-options` (applied `key=value` lines) / `set-option exit-empty off` (live keys: `exit-empty`, `remain-on-exit`; everything else is restart-required) |
 | Stop everything | `par-mux --stop` (or `kill-server`) — clean save, then exit |
 
 `-h` places the new pane beside the target, `-v` (default) below; `-p` is the

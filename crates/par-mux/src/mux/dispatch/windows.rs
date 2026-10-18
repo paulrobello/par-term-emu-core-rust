@@ -10,11 +10,16 @@ pub(super) fn route_window_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
             target,
             name,
             start_dir,
-        } => cmd_new_window(ctx, target, name, start_dir.as_deref()),
+            command,
+        } => cmd_new_window(ctx, target, name, start_dir.as_deref(), command.as_deref()),
         MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
         MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
-        MuxCommand::ListWindows { session, all } => cmd_list_windows(ctx, session, all),
+        MuxCommand::ListWindows {
+            session,
+            all,
+            format,
+        } => cmd_list_windows(ctx, session, all, format),
         MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
         MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
         other => unreachable!("route_command sent a non-window command: {other:?}"),
@@ -63,6 +68,7 @@ pub(super) fn cmd_new_window(
     target: Option<AnyTarget>,
     name: Option<String>,
     start_dir: Option<&str>,
+    command: Option<&str>,
 ) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let (cwd, note) = resolve_start_dir(start_dir);
@@ -96,7 +102,7 @@ pub(super) fn cmd_new_window(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    match spawn_and_wire(ctx, &*factory, plan, None, note.as_deref()) {
+    match spawn_and_wire(ctx, &*factory, plan, command, note.as_deref()) {
         Ok(window_id) => Outcome::ok(ctx, &window_id.to_string())
             .notifying(window_add_notification(ctx.tree, window_id)),
         Err(err) => Outcome::err(ctx, &err.to_string()),
@@ -201,6 +207,7 @@ pub(super) fn cmd_list_windows(
     ctx: &Ctx<'_>,
     session: Option<Target<SessionId>>,
     all: bool,
+    format: Option<String>,
 ) -> Outcome {
     // Wire contract: the bare form replies one line per window, globally,
     // as `@N: name` — the shape every existing client parses.
@@ -211,12 +218,16 @@ pub(super) fn cmd_list_windows(
     // positional shape (T4.E): `@N <marker> <name>` — marker `*` for the
     // session's active window, `-` otherwise; the name is the line
     // remainder so a spaced name survives (same rule as the roster's
-    // entry and `@N: name`'s own split-on-first-colon). No -F.
+    // entry and `@N: name`'s own split-on-first-colon).
     //
     // `list-windows -a` (ARC-125): every session's windows in session-id then
     // window order, each `-t` row prefixed with its session id —
     // `$S @N <marker> <name>` — so a client finds a window's owning
     // session in one round trip.
+    //
+    // `-F <format>` replaces the row shape in every form: one expansion
+    // per window (`#{session_id}`, `#{session_name}`, `#{window_id}`,
+    // `#{window_name}`, `#{window_active}`).
     let guard = ctx.tree.lock();
     if all {
         let mut sessions = guard.sessions();
@@ -225,24 +236,55 @@ pub(super) fn cmd_list_windows(
             .iter()
             .filter_map(|s| guard.session(*s))
             .flat_map(|session| {
-                session_window_rows(&guard, session)
-                    .into_iter()
+                let rows = session_window_lines(&guard, session, format.as_deref());
+                if format.is_some() {
+                    // A formatted row carries its own session fields —
+                    // the `-a` id prefix is the legacy shape's substitute.
+                    return rows;
+                }
+                rows.into_iter()
                     .map(move |row| format!("{} {row}", session.id))
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>()
             .join("\n");
         return Outcome::ok(ctx, &body);
     }
     let Some(session_id) = session.map(|target| guard.resolve_session_target(target)) else {
-        let body = guard
-            .sessions()
-            .iter()
-            .filter_map(|s| guard.session(*s))
-            .flat_map(|s| s.windows.clone())
-            .filter_map(|w| guard.window(w))
-            .map(|w| format!("{}: {}", w.id, w.name))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // The bare global form: `-F` still expands per window with its
+        // owning session's fields (a client asked for them); the legacy
+        // shape stays the bare `@N: name`.
+        let mut lines: Vec<String> = Vec::new();
+        for s in guard.sessions().iter().filter_map(|s| guard.session(*s)) {
+            for w in s
+                .windows
+                .clone()
+                .into_iter()
+                .filter_map(|w| guard.window(w))
+            {
+                match &format {
+                    Some(format) => lines.push(super::format_expansion(
+                        format,
+                        &[
+                            ("session_id", s.id.to_string().as_str()),
+                            ("session_name", s.name.as_str()),
+                            ("window_id", w.id.to_string().as_str()),
+                            ("window_name", w.name.as_str()),
+                            (
+                                "window_active",
+                                if s.windows.get(s.active) == Some(&w.id) {
+                                    "1"
+                                } else {
+                                    "0"
+                                },
+                            ),
+                        ],
+                    )),
+                    None => lines.push(format!("{}: {}", w.id, w.name)),
+                }
+            }
+        }
+        let body = lines.join("\n");
         return Outcome::ok(ctx, &body);
     };
     let session_id = match session_id {
@@ -252,30 +294,56 @@ pub(super) fn cmd_list_windows(
     let Some(session) = guard.session(session_id) else {
         return Outcome::err(ctx, &MuxError::NoSuchSession(session_id).to_string());
     };
-    let body = session_window_rows(&guard, session).join("\n");
+    let body = session_window_lines(&guard, session, format.as_deref()).join("\n");
     Outcome::ok(ctx, &body)
 }
 
 /// One session's `list-windows -t` rows, `@N <marker> <name>`, in the
-/// session's window order.
+/// session's window order (the legacy shape other dispatch sites reuse).
 pub(super) fn session_window_rows(
     guard: &MuxTree,
     session: &crate::mux::tree::MuxSession,
+) -> Vec<String> {
+    session_window_lines(guard, session, None)
+}
+
+/// One session's `list-windows -t` rows: the fixed `@N <marker> <name>`
+/// shape, or one `-F` expansion per window when a format rode the
+/// command.
+fn session_window_lines(
+    guard: &MuxTree,
+    session: &crate::mux::tree::MuxSession,
+    format: Option<&str>,
 ) -> Vec<String> {
     session
         .windows
         .iter()
         .enumerate()
         .map(|(index, window_id)| {
-            crate::mux::ipc::WindowRow {
-                id: window_id.to_string(),
-                active: index == session.active,
-                name: guard
-                    .window(*window_id)
-                    .map(|w| w.name.clone())
-                    .unwrap_or_default(),
+            let Some(window) = guard.window(*window_id) else {
+                return String::new();
+            };
+            match format {
+                Some(format) => super::format_expansion(
+                    format,
+                    &[
+                        ("session_id", session.id.to_string().as_str()),
+                        ("session_name", session.name.as_str()),
+                        ("window_id", window.id.to_string().as_str()),
+                        ("window_name", window.name.as_str()),
+                        (
+                            "window_active",
+                            if index == session.active { "1" } else { "0" },
+                        ),
+                    ],
+                ),
+                None => crate::mux::ipc::WindowRow {
+                    id: window.id.to_string(),
+                    active: index == session.active,
+                    name: window.name.clone(),
+                }
+                .to_string(),
             }
-            .to_string()
         })
         .collect()
 }

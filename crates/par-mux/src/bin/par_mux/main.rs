@@ -175,14 +175,14 @@ struct Cli {
     #[arg(long)]
     expose_control_socket: bool,
 
-    /// Attach a client TUI to the daemon on the resolved socket (the
-    /// `attach` cargo feature builds it in). Subcommand, not flag: its
-    /// own positional/flag grammar. NOTE: the subcommand shadows the
-    /// NAME form only when STARTING a daemon literally named "attach"
-    /// (that needs --socket); attaching to one by NAME still resolves.
-    #[cfg(feature = "attach")]
+    /// The subcommand surface (R1): the verb forms — `par-mux start`,
+    /// `stop`, `restart`, `status`, `ls`, `attach`, `config`. Each keeps
+    /// the long-standing flag spelling working (par-term's invocations
+    /// and muscle memory both stay valid); the subcommands are the
+    /// discoverable front door. A subcommand shadows the same-named
+    /// NAME-form daemon start (that path needs --socket).
     #[command(subcommand)]
-    attach: Option<AttachCommand>,
+    sub: Option<Sub>,
 
     /// Write the config file with the CURRENT EFFECTIVE settings (file if
     /// present > env > built-in defaults; startup CLI flags are not
@@ -345,6 +345,84 @@ fn parse_mode(value: &str) -> Result<par_mux::mux::attach::AttachMode, String> {
     }
 }
 
+/// The verb surface (R1): one enum, one variant per subcommand. `Attach`
+/// reuses [`AttachArgs`] verbatim; the daemon verbs carry the same
+/// targeting trio (`[NAME]`, `--socket`, `--state-dir`) the flag forms
+/// read.
+#[derive(clap::Subcommand, Debug)]
+enum Sub {
+    /// Start the daemon (the default action): detached, auto-attaching
+    /// this terminal unless --no-attach. Same as bare `par-mux [NAME]`.
+    Start(StartArgs),
+    /// Stop the daemon serving the resolved socket cleanly. Same as
+    /// `--stop`.
+    Stop(TargetArgs),
+    /// Stop, then start a fresh daemon that restores the saved tree.
+    /// Same as `--restart`.
+    Restart(TargetArgs),
+    /// One-shot orientation: the daemon's build stamp, its workspaces
+    /// and sessions, the displayed session, and the pane count — the
+    /// orient step in one invocation (R2).
+    Status(TargetArgs),
+    /// List the resolved daemon's sessions (`list-sessions`, tmux's
+    /// `ls`).
+    Ls(TargetArgs),
+    /// Attach a client to a running daemon; never starts one. The
+    /// feature-gated interactive client.
+    #[cfg(feature = "attach")]
+    Attach(AttachArgs),
+    /// Write the config file with the current effective settings. Same
+    /// as `--gen-config` (add `--force` to overwrite).
+    Config(ConfigArgs),
+}
+
+/// `par-mux start` — the daemon-start flags, subcommand spelling.
+#[derive(clap::Args, Debug)]
+struct StartArgs {
+    /// Named default socket path.
+    name: Option<String>,
+    /// Bind an explicit socket path instead of the named default.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<std::path::PathBuf>,
+    /// Override the platform state directory.
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<std::path::PathBuf>,
+    /// Serve in this process instead of detaching.
+    #[arg(long)]
+    foreground: bool,
+    /// Skip the auto-attach of the invoking terminal.
+    #[arg(long)]
+    no_attach: bool,
+    /// Give each pane its own hook-only socket endpoint.
+    #[arg(long)]
+    pane_endpoints: bool,
+    /// With --pane-endpoints: also export the full control socket.
+    #[arg(long)]
+    expose_control_socket: bool,
+}
+
+/// The targeting trio every client-side verb reads.
+#[derive(clap::Args, Debug)]
+struct TargetArgs {
+    /// Named default socket path.
+    name: Option<String>,
+    /// Connect to an explicit socket path instead of the named default.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<std::path::PathBuf>,
+    /// Override the platform state directory (the registry base for
+    /// discovery-flavored reads).
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<std::path::PathBuf>,
+}
+
+/// `par-mux config` — the gen-config spelling.
+#[derive(clap::Args, Debug)]
+struct ConfigArgs {
+    /// Overwrite an existing config file.
+    #[arg(long)]
+    force: bool,
+}
+
 /// Run one control command against the daemon on `path` (client mode).
 ///
 /// Returns the process exit code: 0 on `%end`, 1 on `%error` or when no
@@ -355,7 +433,12 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
     let mut client = match par_mux::mux::MuxClient::connect(path) {
         Ok(client) => client,
         Err(err) => {
-            eprintln!("par-mux: no daemon running on {} ({err})", path.display());
+            eprintln!(
+                "par-mux: no daemon running on {} ({err}) — start one with `par-mux` (or \
+                 `par-mux --socket {}` for this socket)",
+                path.display(),
+                path.display()
+            );
             return ExitCode::from(1);
         }
     };
@@ -397,9 +480,11 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
 }
 
 /// `par-mux --list-servers`: enumerate and probe every known server under
-/// the resolved state base, print one line per LIVE server, and report the
-/// dead ones. Registry entries whose probe failed are pruned as a side
-/// effect (the enumeration owns cleanup); a `--socket`/NAME argument does
+/// the resolved state base, print one line per LIVE server, and prune the
+/// dead ones SILENTLY — the enumeration owns cleanup, and the per-entry
+/// "pruned a dead entry" notes were noise in every caller's output (Paul,
+/// 2026-10-17). Registry entries whose probe failed are pruned as a side
+/// effect. A `--socket`/NAME argument does
 /// not narrow the list — discovery is user-wide, the flag pair is accepted
 /// only so `par-mux --list-servers` reads uniformly with the other
 /// client-mode flags.
@@ -419,13 +504,9 @@ fn run_list_servers(cli: &Cli) -> std::process::ExitCode {
             break;
         }
     }
-    let mut err = std::io::stderr().lock();
-    for socket in &found.dead {
-        let _ = writeln!(err, "par-mux: pruned a dead entry for {}", socket.display());
-    }
     let _ = out.flush();
     if found.live.is_empty() {
-        let _ = writeln!(err, "par-mux: no running par-mux servers");
+        eprintln!("par-mux: no running par-mux servers");
     }
     std::process::ExitCode::SUCCESS
 }
@@ -727,7 +808,92 @@ fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
 }
 
 fn main() -> std::process::ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    // The verb surface (R1): translate a subcommand into the flag fields
+    // the existing paths read (or a direct return for the client-side
+    // verbs), so every handler has exactly one implementation. The merge
+    // keeps a top-level flag's value when the subcommand did not speak
+    // for it (`par-mux --state-dir X stop` and `par-mux stop --state-dir
+    // X` both work — flags may sit before the verb, its own args after).
+    #[cfg(feature = "attach")]
+    let mut attach_cmd: Option<AttachCommand> = None;
+    // Whether a subcommand verb drove this invocation: the collision
+    // guard below only fires on the bare NAME form, where intent is
+    // ambiguous (`par-mux ls`), never on an explicit `par-mux start ls`.
+    let mut verb_drove = false;
+    if let Some(sub) = cli.sub.take() {
+        let mut merge = |name: Option<String>,
+                         socket: Option<std::path::PathBuf>,
+                         state_dir: Option<std::path::PathBuf>| {
+            cli.name = name.or(cli.name.take());
+            cli.socket = socket.or(cli.socket.take());
+            cli.state_dir = state_dir.or(cli.state_dir.take());
+        };
+        match sub {
+            Sub::Start(args) => {
+                verb_drove = true;
+                let StartArgs {
+                    name,
+                    socket,
+                    state_dir,
+                    foreground,
+                    no_attach,
+                    pane_endpoints,
+                    expose_control_socket,
+                } = args;
+                merge(name, socket, state_dir);
+                cli.foreground |= foreground;
+                cli.no_attach |= no_attach;
+                cli.pane_endpoints |= pane_endpoints;
+                cli.expose_control_socket |= expose_control_socket;
+            }
+            Sub::Stop(args) => {
+                let TargetArgs {
+                    name,
+                    socket,
+                    state_dir,
+                } = args;
+                merge(name, socket, state_dir);
+                cli.stop = true;
+            }
+            Sub::Restart(args) => {
+                let TargetArgs {
+                    name,
+                    socket,
+                    state_dir,
+                } = args;
+                merge(name, socket, state_dir);
+                cli.restart = true;
+            }
+            Sub::Status(args) => {
+                let TargetArgs {
+                    name,
+                    socket,
+                    state_dir,
+                } = args;
+                merge(name, socket, state_dir);
+                let path = resolve_cli_socket(&cli);
+                return run_status(&path);
+            }
+            Sub::Ls(args) => {
+                let TargetArgs {
+                    name,
+                    socket,
+                    state_dir,
+                } = args;
+                merge(name, socket, state_dir);
+                let path = resolve_cli_socket(&cli);
+                return run_command(&path, "list-sessions");
+            }
+            #[cfg(feature = "attach")]
+            Sub::Attach(args) => attach_cmd = Some(AttachCommand::Attach(args)),
+            Sub::Config(args) => {
+                cli.gen_config = true;
+                cli.force |= args.force;
+            }
+        }
+    }
 
     // The mux library logs through `log` (ARC-010); without a logger
     // installed those records vanish, so wire the minimal stderr sink up
@@ -742,7 +908,7 @@ fn main() -> std::process::ExitCode {
     // resolved config; socket resolution lives in
     // AttachOptions::socket_path (same precedence as the daemon/--cmd).
     #[cfg(feature = "attach")]
-    if let Some(attach) = cli.attach.as_ref() {
+    if let Some(attach) = attach_cmd.as_ref() {
         // The client caps the facade at Error: its stderr IS the rendered
         // screen, and the emulator's per-sequence diagnostics (a chatty
         // TUI emits hundreds) would otherwise flood the display.
@@ -910,13 +1076,7 @@ fn main() -> std::process::ExitCode {
     // then $PAR_MUX_CONTROL_SOCKET (the full socket, hidden from panes by
     // --pane-endpoints), then $PAR_MUX_SOCKET, then the unnamed default
     // (ENH-039). An empty value counts as unset.
-    let path = if cli.socket.is_some() || cli.name.is_some() {
-        par_mux::mux::resolve_socket_path(cli.socket.as_deref(), cli.name.as_deref(), None)
-    } else {
-        let socket_env = std::env::var_os("PAR_MUX_SOCKET").filter(|v| !v.is_empty());
-        let control_env = std::env::var_os("PAR_MUX_CONTROL_SOCKET").filter(|v| !v.is_empty());
-        par_mux::mux::resolve_socket_path(None, None, control_env.or(socket_env).as_deref())
-    };
+    let path = resolve_cli_socket(&cli);
 
     if let Some(command) = cli.command.as_deref() {
         return run_command(&path, command);
@@ -926,6 +1086,29 @@ fn main() -> std::process::ExitCode {
         return run_list_servers(&cli);
     }
 
+    // The bare-NAME collision guard (R1): starting a daemon whose NAME
+    // spells a command word or a subcommand verb is almost certainly a
+    // typo'd invocation that would otherwise silently start a stray
+    // daemon (`par-mux ls` used to boot one named "ls"). An explicit
+    // --socket alongside the name reads as deliberate and is allowed.
+    if !cli.stop && !cli.restart && !verb_drove && cli.socket.is_none() {
+        if let Some(name) = cli.name.as_deref() {
+            if par_mux::mux::command::is_command_name(name)
+                || matches!(
+                    name,
+                    "start" | "stop" | "restart" | "status" | "ls" | "attach" | "config"
+                )
+            {
+                eprintln!(
+                    "par-mux: {name:?} is a command word, not a daemon name — did you mean \
+                     `par-mux --cmd {name} …` or a subcommand? To start a daemon literally \
+                     named {name:?}, pass --socket"
+                );
+                return std::process::ExitCode::from(2);
+            }
+        }
+    }
+
     match run_daemon(cli, path) {
         Ok(code) => code,
         Err(err) => {
@@ -933,6 +1116,71 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// The socket-path resolution every client-side verb and the daemon
+/// start share (the block main() used to inline): `--socket`, then NAME,
+/// then `$PAR_MUX_CONTROL_SOCKET`/`$PAR_MUX_SOCKET`, then the unnamed
+/// default.
+fn resolve_cli_socket(cli: &Cli) -> std::path::PathBuf {
+    if cli.socket.is_some() || cli.name.is_some() {
+        par_mux::mux::resolve_socket_path(cli.socket.as_deref(), cli.name.as_deref(), None)
+    } else {
+        let socket_env = std::env::var_os("PAR_MUX_SOCKET").filter(|v| !v.is_empty());
+        let control_env = std::env::var_os("PAR_MUX_CONTROL_SOCKET").filter(|v| !v.is_empty());
+        par_mux::mux::resolve_socket_path(None, None, control_env.or(socket_env).as_deref())
+    }
+}
+
+/// `par-mux status` (R2): the one-shot orientation — build stamp,
+/// workspaces, sessions, the displayed session, and the pane count, one
+/// plain line each. Client-side composition over the existing queries:
+/// no new wire surface, and a daemon too old to answer one of them
+/// degrades that section to `?` instead of failing the whole reply.
+fn run_status(path: &std::path::Path) -> std::process::ExitCode {
+    let mut client = match par_mux::mux::MuxClient::connect(path) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!(
+                "par-mux: no daemon running on {} ({err}) — start one with `par-mux` (or \
+                 `par-mux --socket {}` for this socket)",
+                path.display(),
+                path.display()
+            );
+            return std::process::ExitCode::from(1);
+        }
+    };
+    // Best-effort sections: each query's failure degrades to `?` so one
+    // missing section never hides the rest.
+    let section = |client: &mut par_mux::mux::MuxClient, command: &str| -> Vec<String> {
+        client
+            .send(command)
+            .unwrap_or_else(|_| vec!["?".to_string()])
+    };
+    let stamp = section(&mut client, "version")
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "?".to_string());
+    println!("par-mux {}  {}", path.display(), stamp);
+    println!("workspaces:");
+    for line in section(&mut client, "list-workspaces") {
+        println!("  {line}");
+    }
+    println!("sessions:");
+    for line in section(&mut client, "list-sessions") {
+        println!("  {line}");
+    }
+    let displayed = section(&mut client, "switch-client")
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "?".to_string());
+    println!("displayed: {displayed}");
+    let panes = section(&mut client, "list-panes")
+        .into_iter()
+        .filter(|l| l.starts_with('%'))
+        .count();
+    println!("panes: {panes}");
+    std::process::ExitCode::SUCCESS
 }
 
 /// The daemon modes: --stop, --restart, and serving the socket — detached
@@ -1503,8 +1751,9 @@ mod attach_cli_tests {
     #[test]
     fn attach_parses_name_form() {
         let cli = Cli::try_parse_from(["par-mux", "attach", "work"]).expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.name.as_deref(), Some("work"));
         assert!(attach.socket.is_none());
         assert!(attach.target.is_none());
@@ -1514,8 +1763,9 @@ mod attach_cli_tests {
     #[test]
     fn attach_target_flag_is_short_t_only() {
         let cli = Cli::try_parse_from(["par-mux", "attach", "-t", "%0"]).expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.target.as_deref(), Some("%0"));
         assert!(attach.prefix.is_none());
     }
@@ -1527,21 +1777,27 @@ mod attach_cli_tests {
     fn attach_mode_flag_parses_and_validates() {
         use par_mux::mux::attach::AttachMode;
         let cli = Cli::try_parse_from(["par-mux", "attach"]).expect("parse");
-        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert!(
             attach.mode.is_none(),
             "no --mode flag: the config tier decides (render by default)"
         );
 
         let cli = Cli::try_parse_from(["par-mux", "attach", "--mode", "render"]).expect("parse");
-        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(
             parse_mode(attach.mode.as_deref().unwrap_or("")),
             Ok(AttachMode::Render)
         );
         let cli =
             Cli::try_parse_from(["par-mux", "attach", "--mode", "passthrough"]).expect("parse");
-        let AttachCommand::Attach(attach) = cli.attach.expect("subcommand present");
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(
             parse_mode(attach.mode.as_deref().unwrap_or("")),
             Ok(AttachMode::Passthrough)
@@ -1565,8 +1821,9 @@ mod attach_cli_tests {
             "/tmp/x.sock",
         ])
         .expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.prefix.as_deref(), Some("C-b"));
         assert_eq!(attach.socket, Some(std::path::PathBuf::from("/tmp/x.sock")));
         assert!(attach.target.is_none());
@@ -1576,8 +1833,9 @@ mod attach_cli_tests {
     fn attach_target_and_prefix_together() {
         let cli = Cli::try_parse_from(["par-mux", "attach", "work", "-t", "$0", "--prefix", "C-b"])
             .expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.name.as_deref(), Some("work"));
         assert_eq!(attach.target.as_deref(), Some("$0"));
         assert_eq!(attach.prefix.as_deref(), Some("C-b"));
@@ -1586,8 +1844,9 @@ mod attach_cli_tests {
     #[test]
     fn attach_long_prefix_flag() {
         let cli = Cli::try_parse_from(["par-mux", "attach", "--prefix", "C-a"]).expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.prefix.as_deref(), Some("C-a"));
         assert!(attach.target.is_none());
     }
@@ -1596,8 +1855,9 @@ mod attach_cli_tests {
     fn attach_socket_wins_over_name() {
         let cli = Cli::try_parse_from(["par-mux", "attach", "work", "--socket", "/tmp/y.sock"])
             .expect("parse");
-        let attach = cli.attach.expect("subcommand present");
-        let AttachCommand::Attach(attach) = attach;
+        let Sub::Attach(attach) = cli.sub.expect("subcommand present") else {
+            unreachable!("only the attach verb reaches the attach tests")
+        };
         assert_eq!(attach.socket, Some(std::path::PathBuf::from("/tmp/y.sock")));
         assert_eq!(attach.name.as_deref(), Some("work"));
     }
@@ -1606,7 +1866,7 @@ mod attach_cli_tests {
     fn daemon_mode_still_parses_without_subcommand() {
         // The flag-based daemon form must keep parsing unchanged.
         let cli = Cli::try_parse_from(["par-mux", "--socket", "/tmp/d.sock"]).expect("parse");
-        assert!(cli.attach.is_none());
+        assert!(cli.sub.is_none());
         assert_eq!(cli.socket, Some(std::path::PathBuf::from("/tmp/d.sock")));
     }
 }

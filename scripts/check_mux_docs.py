@@ -109,6 +109,7 @@ FOREIGN_FLAGS: dict[str, str] = {
     "last": "muse resume --last (muse CLI, agent resume argv)",
     "session": "pi --session <file> (agent resume argv)",
     "others": "git ls-files --others (host telemetry probe)",
+    "enter": "send-keys --enter (wire command flag: append the Enter byte)",
 }
 
 

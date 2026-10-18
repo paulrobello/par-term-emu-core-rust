@@ -87,11 +87,39 @@ pub(super) fn hex_byte_token(token: &str) -> Option<u8> {
 ///   on tmux 3.7c, `send-keys -l echo LEFT` types `echoLEFT`, so a space
 ///   must live inside a quoted run here too.
 /// - `-H`: tokens are hex byte pairs, `0x` prefix optional.
+/// - `--enter` (the exact leading or trailing word): append the Enter
+///   byte (`\r`) after the payload — the one-shot "type a line and run
+///   it" form (`send-keys -t %0 -l 'make check' --enter`). A `--enter`
+///   anywhere else is payload text, not the flag.
 ///
-/// No terminator is appended in any mode.
+/// No terminator is appended in any mode (beyond an explicit `--enter`).
 pub(super) fn parse_send_keys_payload(raw: &str) -> Result<SendKeysPayload, String> {
     let raw = raw.trim();
     if raw.is_empty() {
+        return Err("send-keys requires a payload".to_string());
+    }
+    // Strip the `--enter` flag from either end before the mode split so
+    // it never becomes payload text; a strip that fired sets `enter`,
+    // which drives the append below.
+    let mut enter = raw == "--enter";
+    let raw = if enter {
+        ""
+    } else {
+        match raw
+            .strip_prefix("--enter ")
+            .or_else(|| raw.strip_suffix(" --enter"))
+        {
+            Some(stripped) => {
+                enter = true;
+                stripped
+            }
+            None => raw,
+        }
+    };
+    if raw.is_empty() {
+        if enter {
+            return Err("send-keys requires a payload alongside --enter".to_string());
+        }
         return Err("send-keys requires a payload".to_string());
     }
     let (literal, hex, body) = match raw {
@@ -126,6 +154,9 @@ pub(super) fn parse_send_keys_payload(raw: &str) -> Result<SendKeysPayload, Stri
                 out.push_bytes(token.as_bytes());
             }
         }
+    }
+    if enter {
+        out.push_bytes(b"\r");
     }
     Ok(out)
 }

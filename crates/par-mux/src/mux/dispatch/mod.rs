@@ -205,6 +205,9 @@ fn route_command(
         | MuxCommand::RenameSession { .. }
         | MuxCommand::KillSession { .. }
         | MuxCommand::ListSessions { .. }
+        | MuxCommand::HasSession { .. }
+        | MuxCommand::ShowOptions
+        | MuxCommand::SetOption { .. }
         | MuxCommand::NewWorkspace { .. }
         | MuxCommand::ListWorkspaces
         | MuxCommand::SelectWorkspace { .. }
@@ -265,6 +268,45 @@ fn emit_outcome(outcome: &Outcome, ctx: &Ctx<'_>, issuer: Option<&SyncSender<Str
             let _ = tx.send(emit(notification));
         }
     }
+}
+
+/// Expand a `-F` format string against `vars`: every `#{name}` occurrence
+/// substitutes its value, an unknown name expands to nothing, and text
+/// outside the braces rides verbatim (tmux's contract, minus the
+/// conditionals — a caller who needs logic composes it client-side). An
+/// unterminated `#{` ends the expansion with the literal remainder.
+pub(super) fn format_expansion(format: &str, vars: &[(&str, &str)]) -> String {
+    let Some(first) = format.find("#{") else {
+        return format.to_string();
+    };
+    let mut out = format[..first].to_string();
+    let mut rest = &format[first + 2..];
+    while let Some(close) = rest.find('}') {
+        let name = &rest[..close];
+        out.push_str(
+            vars.iter()
+                .find(|(known, _)| *known == name)
+                .map(|(_, value)| *value)
+                .unwrap_or(""),
+        );
+        rest = &rest[close + 1..];
+        match rest.find("#{") {
+            Some(next) => {
+                out.push_str(&rest[..next]);
+                rest = &rest[next + 2..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+    // Unterminated `#{`: keep the literal rather than dropping it.
+    if !rest.is_empty() {
+        out.push_str("#{");
+        out.push_str(rest);
+    }
+    out
 }
 
 /// Hand the post-command state to the persist worker, when there is one.

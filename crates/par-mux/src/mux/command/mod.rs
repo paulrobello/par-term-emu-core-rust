@@ -120,16 +120,38 @@ pub enum MuxCommand {
         /// targets the daemon's active workspace, creating the default
         /// `main` workspace when none exists.
         workspace: Option<Target<WorkspaceId>>,
+        /// `-n`: the first window's name (falls back to the session's own
+        /// name), matching `new-window -n`.
+        window_name: Option<String>,
+        /// `-c`: the first pane's start directory, with the same
+        /// degrade-to-home rule as `new-window -c`.
+        start_dir: Option<String>,
+        /// `-x`: the initial grid width. Absent keeps the construction
+        /// default; the first client size report re-sizes the window
+        /// anyway.
+        cols: Option<u16>,
+        /// `-y`: the initial grid height, same rule as `cols`.
+        rows: Option<u16>,
+        /// The trailing start command, tmux's positional form: the raw
+        /// text after the flags runs in the first pane instead of the
+        /// default shell (same shell handling as `respawn-pane`'s
+        /// command).
+        command: Option<String>,
     },
-    /// List live panes: globally when `session` is `None`, or the panes of
-    /// one window when a window target rides `-t` (see
-    /// [`MuxCommand::ListWindows`]'s shape note on the one-enum-two-forms
-    /// rule).
+    /// List live panes: globally when `target` is `None`, or the panes of
+    /// one window when a target rides `-t` — a window (`@N`/name)
+    /// directly, a session (`$N`/name) through its active window, a pane
+    /// (`%N`) through its owning window (the one-rule target grammar R7:
+    /// every scope a client can name is accepted).
     ListPanes {
-        /// `-t <window>`: list that window's panes. `None` lists every pane
-        /// across every session (the global wire shape clients already
-        /// parse).
-        window: Option<Target<WindowId>>,
+        /// `-t <window|session|pane>`: list that window's panes. `None`
+        /// lists every pane across every session (the global wire shape
+        /// clients already parse).
+        target: Option<AnyTarget>,
+        /// `-F <format>`: one formatted line per pane (`#{pane_id}`,
+        /// `#{window_id}`, … — the dispatcher's format expansion); absent
+        /// keeps the fixed positional shape.
+        format: Option<String>,
     },
     /// List every pane a hook has claimed — the agent roster.
     ListAgents,
@@ -207,6 +229,10 @@ pub enum MuxCommand {
         /// factory-wide default; a directory that does not exist degrades
         /// to home at dispatch rather than failing the command.
         start_dir: Option<String>,
+        /// The trailing start command, tmux's positional form: the raw
+        /// text after the flags runs in the new pane instead of the
+        /// default shell.
+        command: Option<String>,
     },
     /// Set a session's active window.
     SelectWindow {
@@ -240,6 +266,9 @@ pub enum MuxCommand {
         /// session id (`$S @N <marker> <name>`), so a client finds a
         /// window's owner in one round trip. Not combinable with `-t`.
         all: bool,
+        /// `-F <format>`: one formatted line per window; absent keeps the
+        /// fixed positional shape.
+        format: Option<String>,
     },
     /// List sessions — every workspace's when bare, one workspace's when
     /// `-t` names one. The reply line shape carries the workspace prefix;
@@ -247,6 +276,16 @@ pub enum MuxCommand {
     ListSessions {
         /// `-t`: restrict the listing to this workspace (id or name).
         workspace: Option<Target<WorkspaceId>>,
+        /// `-F <format>`: one formatted line per session; absent keeps the
+        /// fixed positional shape.
+        format: Option<String>,
+    },
+    /// `has-session -t <session>`: an existence probe — ok when the
+    /// session resolves, `%error` otherwise. The exit-code shape agents
+    /// script against (no roster parsing to confirm one session).
+    HasSession {
+        /// `-t`: the session to probe (id or name).
+        session: Target<SessionId>,
     },
     /// Shut the daemon down cleanly: the accept loop stops, the final state
     /// save runs, and clients receive `%exit` — the same path SIGTERM takes.
@@ -269,6 +308,10 @@ pub enum MuxCommand {
         /// `-c`: the new pane's start directory, with the same
         /// degrade-to-home rule as `new-window -c`.
         start_dir: Option<String>,
+        /// The trailing start command, tmux's positional form: the raw
+        /// text after the flags runs in the new pane instead of the
+        /// default shell.
+        command: Option<String>,
     },
     /// Make a pane its window's active pane.
     SelectPane {
@@ -502,6 +545,21 @@ pub enum MuxCommand {
     /// Mutates daemon state (the applied copies) without touching the
     /// tree, so it never triggers a state save.
     ReloadConfig,
+    /// `show-options`: dump the daemon's applied settings, one
+    /// `key=value` line per field (booleans as `on`/`off`) — the
+    /// runtime-inspection half of the options pair.
+    ShowOptions,
+    /// `set-option <key> <value>`: change one LIVE daemon setting.
+    /// Supported keys are the live-appliable daemon booleans
+    /// (`exit-empty`, `remain-on-exit`); everything else is
+    /// restart-required and refused with that reason. The change is not
+    /// persisted — `reload-config` re-reads the file and overwrites it.
+    SetOption {
+        /// The setting name (dash spelling, as `show-options` prints it).
+        key: String,
+        /// The new value: `on`/`off` (also `true`/`false`) for booleans.
+        value: String,
+    },
 }
 
 impl MuxCommand {
@@ -566,6 +624,10 @@ impl MuxCommand {
             // `set-client-colors` (which mutates pane terminals yet never
             // saves): no state save, ever.
             | MuxCommand::ReloadConfig
+            // set-option is the same class: live settings only.
+            | MuxCommand::SetOption { .. }
+            | MuxCommand::ShowOptions
+            | MuxCommand::HasSession { .. }
             | MuxCommand::Version => false,
         }
     }
@@ -786,6 +848,52 @@ impl Args<'_> {
             .copied()
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The trailing start command a create command carries (tmux's
+    /// positional form): the RAW remainder of the line from the first
+    /// word that is neither a flag nor a flag's value, quoting and
+    /// whitespace intact — the same contract `respawn-pane`'s tail has.
+    /// Words in `value_flags` consume their following word; words in
+    /// `reject_flags` fail loudly (a flag this daemon ignores must not be
+    /// silently dropped). Everything after a bare `--` is the command
+    /// (the `--` itself is not part of it).
+    fn start_command(
+        &self,
+        value_flags: &[&str],
+        reject_flags: &[&str],
+    ) -> Result<Option<String>, String> {
+        let rest = self
+            .line
+            .trim_start()
+            .strip_prefix(self.name)
+            .unwrap_or_default();
+        let mut pos = self.line.len() - rest.len();
+        let mut after_dashes = false;
+        while let Some((start, end, word)) = next_shell_word(self.line, pos) {
+            if !after_dashes && word == "--" {
+                after_dashes = true;
+                pos = end;
+                continue;
+            }
+            if after_dashes || !(word.len() > 1 && word.starts_with('-')) {
+                let tail = self.line[start..].trim_end();
+                return Ok((!tail.is_empty()).then(|| tail.to_string()));
+            }
+            if let Some(rejected) = reject_flags.iter().find(|flag| **flag == word) {
+                return Err(format!(
+                    "{}: the {rejected} flag is not supported here",
+                    self.name
+                ));
+            }
+            pos = end;
+            if value_flags.contains(&word.as_str()) {
+                if let Some((_, value_end, _)) = next_shell_word(self.line, pos) {
+                    pos = value_end;
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// A positive single-dimension size flag (`-x 120`, `-y 40`) —
@@ -1107,7 +1215,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("rename-workspace", parse_rename_workspace, &[]),
     ("kill-workspace", parse_kill_workspace, &[]),
     ("set-workspace-respawn", parse_set_workspace_respawn, &[]),
-    ("list-panes", parse_list_panes, &["targeted"]),
+    ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &[]),
     ("client-snapshot", parse_client_snapshot, &["v1"]),
@@ -1122,8 +1230,19 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-window", parse_select_window, &[]),
     ("kill-window", parse_kill_window, &[]),
     ("rename-window", parse_rename_window, &[]),
-    ("list-windows", parse_list_windows, &["targeted", "all"]),
-    ("list-sessions", parse_list_sessions, &["workspace"]),
+    (
+        "list-windows",
+        parse_list_windows,
+        &["targeted", "all", "format"],
+    ),
+    (
+        "list-sessions",
+        parse_list_sessions,
+        &["workspace", "format"],
+    ),
+    ("has-session", parse_has_session, &[]),
+    ("show-options", parse_show_options, &[]),
+    ("set-option", parse_set_option, &[]),
     ("kill-server", parse_kill_server, &[]),
     ("rename-session", parse_rename_session, &[]),
     ("kill-session", parse_kill_session, &[]),
@@ -1149,6 +1268,13 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("version", parse_version, &[]),
     ("reload-config", parse_reload_config, &[]),
 ];
+
+/// Whether `name` spells a control command this daemon parses — the
+/// wire half of the CLI's bare-NAME collision guard (a daemon literally
+/// named `list-sessions` is almost certainly a typo'd invocation).
+pub fn is_command_name(name: &str) -> bool {
+    COMMANDS.iter().any(|(known, _, _)| *known == name)
+}
 
 /// The `list-commands` reply body (ENH-037): one `name [feature …]` line
 /// per [`COMMANDS`] row, sorted by name, plus one daemon-level trailing

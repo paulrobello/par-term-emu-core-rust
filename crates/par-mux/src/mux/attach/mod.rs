@@ -201,8 +201,11 @@ pub struct AttachOptions {
     /// Positional daemon name (the default-path shorthand).
     pub name: Option<String>,
     /// `-t TARGET`: the initial pane/window/session target, tmux-style —
-    /// resolved against the daemon's tree (id or name). `None` attaches to
-    /// the newest session's newest pane (the global `list-panes` order).
+    /// resolved against the daemon's tree (id or name). `None` follows
+    /// the target-less rule ([`initial_attach_session`]): a session-less
+    /// daemon gets the default tree created and that session attaches,
+    /// the only existing session attaches, several are a refusal listing
+    /// them with the `-t` hint.
     pub target: Option<String>,
     /// `--prefix KEY`: the detach key chord, e.g. `C-b` (tmux spelling),
     /// parsed by the crate-private `parse_prefix`.

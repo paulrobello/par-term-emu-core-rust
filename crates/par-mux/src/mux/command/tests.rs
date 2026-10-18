@@ -92,6 +92,7 @@ fn window_and_session_targets_parse_as_names() {
             target: Some(AnyTarget::Name("alpha".to_string())),
             name: Some("logs".into()),
             start_dir: None,
+            command: None,
         }
     );
 }
@@ -123,6 +124,11 @@ fn parses_new_session_with_a_name() {
             name: Some("work".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -141,6 +147,11 @@ fn parses_new_session_env_assignments_in_order_with_quoting() {
                 ("D".into(), String::new()),
             ],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -214,6 +225,11 @@ fn parses_new_session_without_a_name() {
             name: None,
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -233,6 +249,11 @@ fn new_session_keeps_a_quoted_name_whole() {
                 name: Some("Par Mux Test".into()),
                 env: vec![],
                 workspace: None,
+                window_name: None,
+                start_dir: None,
+                cols: None,
+                rows: None,
+                command: None,
             },
             "line: {line}"
         );
@@ -250,6 +271,11 @@ fn new_session_resolves_the_embedded_quote_idiom() {
             name: Some("Paul's box".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -265,6 +291,11 @@ fn new_session_flat_names_are_unchanged() {
             name: Some("work".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -273,6 +304,11 @@ fn new_session_flat_names_are_unchanged() {
             name: Some("work".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -281,6 +317,11 @@ fn new_session_flat_names_are_unchanged() {
             name: None,
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
     // An unquoted value keeps the flat scan's verbatim bytes: a bare
@@ -291,6 +332,11 @@ fn new_session_flat_names_are_unchanged() {
             name: Some(r"a\b".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -305,6 +351,11 @@ fn quoted_names_may_look_like_flags() {
             name: Some("-n".into()),
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -313,6 +364,7 @@ fn quoted_names_may_look_like_flags() {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: Some("-s".into()),
             start_dir: None,
+            command: None,
         }
     );
     // The name flag need not come first.
@@ -322,6 +374,7 @@ fn quoted_names_may_look_like_flags() {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: Some("two words".into()),
             start_dir: None,
+            command: None,
         }
     );
 }
@@ -345,6 +398,7 @@ fn new_window_keeps_a_quoted_name_whole() {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: Some("build and test".into()),
             start_dir: None,
+            command: None,
         }
     );
     assert!(parse_command("new-window -t $0 -n ''").is_err());
@@ -557,7 +611,10 @@ fn send_keys_requires_a_payload() {
 fn parses_list_panes_and_kill_pane() {
     assert_eq!(
         parse_command("list-panes").unwrap(),
-        MuxCommand::ListPanes { window: None }
+        MuxCommand::ListPanes {
+            target: None,
+            format: None,
+        }
     );
     assert_eq!(
         parse_command("kill-pane -t %7").unwrap(),
@@ -572,25 +629,32 @@ fn rejects_an_unknown_command() {
     assert!(parse_command("frobnicate").is_err());
 }
 
-/// QA-219: a trailing command was silently dropped; it is now an error
-/// pointing at respawn-pane.
+/// QA-219's original sin was the SILENT drop; R4 gives the trailing
+/// command its tmux meaning instead, so these all parse into `command`.
 #[test]
-fn new_window_rejects_a_trailing_command() {
-    for line in [
-        "new-window sleep 5",
-        "new-window -n w sleep 5",
-        "new-window -t $0 -- top",
+fn new_window_accepts_a_trailing_command() {
+    for (line, command) in [
+        ("new-window sleep 5", "sleep 5"),
+        ("new-window -n w sleep 5", "sleep 5"),
+        ("new-window -t $0 -- top", "top"),
     ] {
-        let err = parse_command(line).expect_err(line);
-        assert!(err.contains("unexpected argument"), "{line}: {err}");
-        assert!(err.contains("respawn-pane"), "{line}: {err}");
+        match parse_command(line).expect(line) {
+            MuxCommand::NewWindow { command: got, .. } => {
+                assert_eq!(got.as_deref(), Some(command), "{line}");
+            }
+            other => panic!("{line}: not a new-window: {other:?}"),
+        }
     }
 }
 
 #[test]
-fn new_session_rejects_a_trailing_command() {
-    let err = parse_command("new-session -s a top").expect_err("positional");
-    assert!(err.contains("unexpected argument \"top\""), "{err}");
+fn new_session_accepts_a_trailing_command() {
+    match parse_command("new-session -s a top").expect("positional") {
+        MuxCommand::NewSession { command, .. } => {
+            assert_eq!(command.as_deref(), Some("top"));
+        }
+        other => panic!("not a new-session: {other:?}"),
+    }
 }
 
 /// QA-219: tmux's value flags consume their value, so a tmux-shaped
@@ -689,6 +753,7 @@ fn parses_new_window_with_and_without_a_name() {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: Some("build".into()),
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -697,6 +762,7 @@ fn parses_new_window_with_and_without_a_name() {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: None,
             start_dir: None,
+            command: None,
         }
     );
     // Bare new-window — the form tmux clients issue — targets the
@@ -707,6 +773,7 @@ fn parses_new_window_with_and_without_a_name() {
             target: None,
             name: None,
             start_dir: None,
+            command: None,
         }
     );
 }
@@ -808,12 +875,16 @@ fn parses_list_windows_and_list_sessions() {
         parse_command("list-windows").unwrap(),
         MuxCommand::ListWindows {
             session: None,
-            all: false
+            all: false,
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-sessions").unwrap(),
-        MuxCommand::ListSessions { workspace: None }
+        MuxCommand::ListSessions {
+            workspace: None,
+            format: None,
+        }
     );
 }
 
@@ -823,35 +894,39 @@ fn parses_targeted_list_windows_and_list_panes() {
         parse_command("list-windows -t $2").unwrap(),
         MuxCommand::ListWindows {
             session: Some(Target::Id(SessionId(2))),
-            all: false
+            all: false,
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-windows -t work").unwrap(),
         MuxCommand::ListWindows {
             session: Some(Target::Name("work".to_string())),
-            all: false
+            all: false,
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-panes -t @7").unwrap(),
         MuxCommand::ListPanes {
-            window: Some(Target::Id(WindowId(7)))
+            target: Some(AnyTarget::Window(WindowId(7))),
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-panes -t editor").unwrap(),
         MuxCommand::ListPanes {
-            window: Some(Target::Name("editor".to_string()))
+            target: Some(AnyTarget::Name("editor".to_string())),
+            format: None,
         }
     );
-    // A tmux-shaped -F rides along and is ignored, not misread as a
-    // positional pane name (QA-219's rule).
+    // A `-F` is the format (R6), not a positional pane name.
     assert_eq!(
         parse_command("list-windows -t work -F '#{window_name}'").unwrap(),
         MuxCommand::ListWindows {
             session: Some(Target::Name("work".to_string())),
-            all: false
+            all: false,
+            format: Some("#{window_name}".to_string()),
         }
     );
     // A stray positional is rejected.
@@ -859,22 +934,24 @@ fn parses_targeted_list_windows_and_list_panes() {
     assert!(parse_command("list-panes stray").is_err());
 }
 
-/// `list-windows -a` (ARC-125): the all-sessions form; a tmux-shaped
-/// `-F` still rides along ignored, and `-a` with `-t` is rejected.
+/// `list-windows -a` (ARC-125): the all-sessions form; a `-F` is the
+/// format (R6), and `-a` with `-t` is rejected.
 #[test]
 fn parses_list_windows_all() {
     assert_eq!(
         parse_command("list-windows -a").unwrap(),
         MuxCommand::ListWindows {
             session: None,
-            all: true
+            all: true,
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-windows -a -F '#{window_name}'").unwrap(),
         MuxCommand::ListWindows {
             session: None,
-            all: true
+            all: true,
+            format: Some("#{window_name}".to_string()),
         }
     );
     assert!(parse_command("list-windows -a -t $0").is_err());
@@ -964,6 +1041,7 @@ fn parses_split_window_with_flags_and_defaults() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -974,6 +1052,7 @@ fn parses_split_window_with_flags_and_defaults() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     // -h: side by side; -p: the NEW pane's share.
@@ -985,6 +1064,7 @@ fn parses_split_window_with_flags_and_defaults() {
             percent: 25,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     // -b: the new pane goes BEFORE the target (left/above).
@@ -996,6 +1076,7 @@ fn parses_split_window_with_flags_and_defaults() {
             percent: 30,
             before: true,
             start_dir: None,
+            command: None,
         }
     );
 }
@@ -1020,6 +1101,7 @@ fn split_and_new_window_targets_classify_every_sigil() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -1030,6 +1112,7 @@ fn split_and_new_window_targets_classify_every_sigil() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -1040,6 +1123,7 @@ fn split_and_new_window_targets_classify_every_sigil() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -1048,6 +1132,7 @@ fn split_and_new_window_targets_classify_every_sigil() {
             target: Some(AnyTarget::Window(WindowId(2))),
             name: None,
             start_dir: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -1056,6 +1141,7 @@ fn split_and_new_window_targets_classify_every_sigil() {
             target: Some(AnyTarget::Pane(PaneId(1))),
             name: Some("logs".into()),
             start_dir: None,
+            command: None,
         }
     );
     // A malformed sigil value keeps the invalid-target error, the
@@ -1075,7 +1161,8 @@ fn split_window_and_new_window_parse_a_start_directory() {
             direction: SplitDirection::Horizontal,
             percent: 50,
             before: false,
-            start_dir: Some("/tmp".into())
+            start_dir: Some("/tmp".into()),
+            command: None,
         }
     );
     assert_eq!(
@@ -1083,7 +1170,8 @@ fn split_window_and_new_window_parse_a_start_directory() {
         MuxCommand::NewWindow {
             target: Some(AnyTarget::Session(SessionId(0))),
             name: Some("logs".into()),
-            start_dir: Some("/tmp/my dir".into())
+            start_dir: Some("/tmp/my dir".into()),
+            command: None,
         }
     );
     // An explicitly empty -c is a client bug, same rule as an empty
@@ -1720,6 +1808,11 @@ fn mutates_marks_exactly_the_structural_commands() {
             name: None,
             env: vec![],
             workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         },
         MuxCommand::KillPane {
             pane: Target::Id(PaneId(0)),
@@ -1737,6 +1830,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             target: None,
             name: None,
             start_dir: None,
+            command: None,
         },
         MuxCommand::SelectWindow {
             window: Target::Id(WindowId(0)),
@@ -1754,6 +1848,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             percent: 50,
             before: false,
             start_dir: None,
+            command: None,
         },
         MuxCommand::SelectPane {
             pane: Target::Id(PaneId(0)),
@@ -1781,7 +1876,10 @@ fn mutates_marks_exactly_the_structural_commands() {
         );
     }
     let non_mutating = [
-        MuxCommand::ListPanes { window: None },
+        MuxCommand::ListPanes {
+            target: None,
+            format: None,
+        },
         MuxCommand::ListAgents,
         MuxCommand::SendKeys {
             pane: Target::Id(PaneId(0)),
@@ -1796,8 +1894,12 @@ fn mutates_marks_exactly_the_structural_commands() {
         MuxCommand::ListWindows {
             session: None,
             all: false,
+            format: None,
         },
-        MuxCommand::ListSessions { workspace: None },
+        MuxCommand::ListSessions {
+            workspace: None,
+            format: None,
+        },
         MuxCommand::ListWorkspaces,
         MuxCommand::CapturePane {
             pane: Target::Id(PaneId(0)),
@@ -1826,7 +1928,10 @@ fn parse_line_routes_hook_reports_and_control_commands() {
     );
     assert_eq!(
         parse_line("list-panes").unwrap(),
-        Line::Control(MuxCommand::ListPanes { window: None })
+        Line::Control(MuxCommand::ListPanes {
+            target: None,
+            format: None,
+        })
     );
     let Err(err) = parse_line("frobnicate") else {
         panic!("an unknown command is a parse error");
@@ -1921,18 +2026,23 @@ fn parses_set_workspace_respawn_values_and_query() {
 fn parses_list_sessions_with_and_without_a_workspace_filter() {
     assert_eq!(
         parse_command("list-sessions").unwrap(),
-        MuxCommand::ListSessions { workspace: None }
+        MuxCommand::ListSessions {
+            workspace: None,
+            format: None,
+        }
     );
     assert_eq!(
         parse_command("list-sessions -t +0").unwrap(),
         MuxCommand::ListSessions {
-            workspace: Some(Target::Id(WorkspaceId(0)))
+            workspace: Some(Target::Id(WorkspaceId(0))),
+            format: None,
         }
     );
     assert_eq!(
         parse_command("list-sessions -t work").unwrap(),
         MuxCommand::ListSessions {
-            workspace: Some(Target::Name("work".to_string()))
+            workspace: Some(Target::Name("work".to_string())),
+            format: None,
         }
     );
 }
@@ -1944,7 +2054,12 @@ fn parses_new_session_with_a_workspace_target() {
         MuxCommand::NewSession {
             name: Some("build".to_string()),
             env: vec![],
-            workspace: Some(Target::Name("dev".to_string()))
+            workspace: Some(Target::Name("dev".to_string())),
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
     assert_eq!(
@@ -1952,7 +2067,12 @@ fn parses_new_session_with_a_workspace_target() {
         MuxCommand::NewSession {
             name: None,
             env: vec![],
-            workspace: None
+            workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: None,
         }
     );
 }
@@ -1979,4 +2099,197 @@ fn every_workspace_command_row_appears_in_list_commands() {
     assert!(body
         .lines()
         .any(|line| line.starts_with("list-sessions workspace")));
+}
+
+#[test]
+fn parses_new_session_window_name_start_dir_and_size() {
+    let cmd = parse_command("new-session -s work -n main -c /tmp -x 120 -y 40 -t default")
+        .expect("parses");
+    assert_eq!(
+        cmd,
+        MuxCommand::NewSession {
+            name: Some("work".into()),
+            env: vec![],
+            workspace: Some(Target::Name("default".into())),
+            window_name: Some("main".into()),
+            start_dir: Some("/tmp".into()),
+            cols: Some(120),
+            rows: Some(40),
+            command: None,
+        }
+    );
+}
+
+#[test]
+fn parses_new_session_trailing_start_command() {
+    let cmd = parse_command("new-session -s logs -- tail -f /var/log/system.log").expect("parses");
+    match cmd {
+        MuxCommand::NewSession { command, .. } => {
+            assert_eq!(command.as_deref(), Some("tail -f /var/log/system.log"));
+        }
+        other => panic!("not a new-session: {other:?}"),
+    }
+    // Without --: the first non-flag word starts the command, tmux form.
+    let cmd = parse_command("new-session -s logs tail -f /var/log/x").expect("parses");
+    match cmd {
+        MuxCommand::NewSession { command, .. } => {
+            assert_eq!(command.as_deref(), Some("tail -f /var/log/x"));
+        }
+        other => panic!("not a new-session: {other:?}"),
+    }
+}
+
+#[test]
+fn new_session_rejects_unsupported_flags_loudly() {
+    assert!(
+        parse_command("new-session -s x -F '#{session_id}'").is_err(),
+        "-F is not silently dropped"
+    );
+    assert!(
+        parse_command("new-session -s x -f").is_err(),
+        "-f is not silently dropped"
+    );
+}
+
+#[test]
+fn parses_new_window_and_split_window_start_commands() {
+    match parse_command("new-window -n logs -- tail -f x").expect("parses") {
+        MuxCommand::NewWindow { command, .. } => {
+            assert_eq!(command.as_deref(), Some("tail -f x"));
+        }
+        other => panic!("not a new-window: {other:?}"),
+    }
+    match parse_command("split-window -t %0 -h -- watch ps").expect("parses") {
+        MuxCommand::SplitWindow { command, .. } => {
+            assert_eq!(command.as_deref(), Some("watch ps"));
+        }
+        other => panic!("not a split-window: {other:?}"),
+    }
+    // The legacy rejection is gone: a start command is now meaningful.
+    match parse_command("split-window -t %0 sleep 5").expect("parses") {
+        MuxCommand::SplitWindow { command, .. } => {
+            assert_eq!(command.as_deref(), Some("sleep 5"));
+        }
+        other => panic!("not a split-window: {other:?}"),
+    }
+}
+
+#[test]
+fn send_keys_enter_flag_appends_the_enter_byte() {
+    assert_eq!(
+        encoded("send-keys -t %3 -l 'make check' --enter"),
+        b"make check\r".to_vec()
+    );
+    assert_eq!(
+        encoded("send-keys -t %3 --enter -l 'make check'"),
+        b"make check\r".to_vec()
+    );
+    // A mid-text --enter stays literal.
+    assert_eq!(
+        encoded("send-keys -t %3 -l 'run --enter now'"),
+        b"run --enter now".to_vec()
+    );
+    // Without the flag, no terminator (the standing contract).
+    assert_eq!(
+        encoded("send-keys -t %3 -l 'make check'"),
+        b"make check".to_vec()
+    );
+    // The flag alone is not a payload.
+    assert!(parse_command("send-keys -t %3 --enter").is_err());
+}
+
+#[test]
+fn list_panes_accepts_every_target_kind() {
+    match parse_command("list-panes -t $0").expect("parses") {
+        MuxCommand::ListPanes {
+            target: Some(AnyTarget::Session(_)),
+            format: None,
+        } => {}
+        other => panic!("session target: {other:?}"),
+    }
+    match parse_command("list-panes -t @1").expect("parses") {
+        MuxCommand::ListPanes {
+            target: Some(AnyTarget::Window(_)),
+            ..
+        } => {}
+        other => panic!("window target: {other:?}"),
+    }
+    match parse_command("list-panes -t %2").expect("parses") {
+        MuxCommand::ListPanes {
+            target: Some(AnyTarget::Pane(_)),
+            ..
+        } => {}
+        other => panic!("pane target: {other:?}"),
+    }
+}
+
+#[test]
+fn list_commands_parse_the_format_flag() {
+    for (command, var) in [
+        (
+            "list-sessions -F '#{session_id} #{session_name}'",
+            "session_id",
+        ),
+        ("list-windows -F '#{window_id}'", "window_id"),
+        ("list-panes -F '#{pane_id}'", "pane_id"),
+    ] {
+        match parse_command(command).expect("parses") {
+            MuxCommand::ListSessions {
+                format: Some(f), ..
+            }
+            | MuxCommand::ListWindows {
+                format: Some(f), ..
+            }
+            | MuxCommand::ListPanes {
+                format: Some(f), ..
+            } => {
+                assert!(f.contains(var), "{command}: {f}");
+            }
+            other => panic!("{command} did not carry a format: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn parses_has_session() {
+    match parse_command("has-session -t work").expect("parses") {
+        MuxCommand::HasSession { session } => {
+            assert_eq!(session, Target::Name("work".into()));
+        }
+        other => panic!("not a has-session: {other:?}"),
+    }
+    assert!(parse_command("has-session").is_err(), "-t is required");
+}
+
+#[test]
+fn parses_show_options_and_set_option() {
+    assert_eq!(
+        parse_command("show-options").expect("parses"),
+        MuxCommand::ShowOptions
+    );
+    match parse_command("set-option exit-empty off").expect("parses") {
+        MuxCommand::SetOption { key, value } => {
+            assert_eq!((key.as_str(), value.as_str()), ("exit-empty", "off"));
+        }
+        other => panic!("not a set-option: {other:?}"),
+    }
+    assert!(
+        parse_command("set-option exit-empty").is_err(),
+        "two words required"
+    );
+    assert!(
+        parse_command("set-option exit-empty off extra").is_err(),
+        "exactly two words"
+    );
+}
+
+#[test]
+fn new_verbs_appear_in_list_commands() {
+    let body = list_commands_body();
+    for name in ["has-session", "show-options", "set-option"] {
+        assert!(
+            body.lines().any(|line| line.starts_with(name)),
+            "{name} must be discoverable via list-commands"
+        );
+    }
 }

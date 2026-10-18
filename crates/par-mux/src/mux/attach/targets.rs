@@ -134,15 +134,9 @@ pub(crate) fn next_workspace(body: &[String], forward: bool) -> Option<String> {
 }
 
 /// The daemon's displayed session (the active workspace's active session)
-/// via the bare `switch-client` query; `None` when the daemon predates it
-/// or nothing is displayed. The attach seed's path (unbounded wait);
-/// interactive callers use [`try_displayed_session`].
-pub(crate) fn displayed_session(conn: &mut conn::AttachConn) -> Option<String> {
-    let reply = conn.send_checked("switch-client").ok().filter(|r| r.ok)?;
-    displayed_session_of(&reply)
-}
-
-/// [`displayed_session`] at the interactive bound, surfacing a timeout.
+/// via the bare `switch-client` query, at the interactive bound so a
+/// timeout surfaces; `Ok(None)` when the daemon predates the query,
+/// nothing is displayed, or the reply outlived the bound.
 pub(crate) fn try_displayed_session(
     conn: &mut conn::AttachConn,
 ) -> std::io::Result<Option<String>> {
@@ -153,6 +147,50 @@ pub(crate) fn try_displayed_session(
 pub(crate) fn displayed_session_of(reply: &crate::mux::client::Reply) -> Option<String> {
     let id = reply.body.first()?.trim();
     (id.starts_with('$') && id.len() > 1).then(|| id.to_string())
+}
+
+/// The target-less attach rule: a daemon with no sessions gets a default
+/// tree created and that session attached; exactly one existing session
+/// is attached as-is; several are a refusal that lists them with the
+/// `-t` hint. The one rule both attach modes' target-less seed follows.
+pub(crate) fn initial_attach_session(conn: &mut conn::AttachConn) -> Result<String, String> {
+    let mut sessions = session_ids(conn)?;
+    if sessions.is_empty() {
+        // `new-workspace -n default` is the one command that builds the
+        // whole default tree at once: workspace + session `default`, a
+        // window named `1`, one unnamed pane.
+        conn.send_checked("new-workspace -n default")
+            .map_err(|err| format!("new-workspace failed: {err}"))?;
+        sessions = session_ids(conn)?;
+    }
+    match sessions.as_slice() {
+        [one] => Ok(one.0.clone()),
+        [] => Err("no sessions exist even after the default-tree create".to_string()),
+        many => Err(multi_session_error(many)),
+    }
+}
+
+/// The `(id, name)` pairs of every session, in `list-sessions` order.
+fn session_ids(conn: &mut conn::AttachConn) -> Result<Vec<(String, String)>, String> {
+    let sessions = conn
+        .send_checked("list-sessions")
+        .map_err(|err| format!("list-sessions failed: {err}"))?;
+    Ok(sessions
+        .body
+        .iter()
+        .filter_map(|l| parse_session_line(l))
+        .collect())
+}
+
+/// The refusal for a target-less attach against several sessions: the
+/// roster, then the `-t` hint. One spelling, both attach modes.
+pub(crate) fn multi_session_error(sessions: &[(String, String)]) -> String {
+    let mut message = String::from("multiple sessions exist — choose one:\n");
+    for (id, name) in sessions {
+        message.push_str(&format!("  {id}: {name}\n"));
+    }
+    message.push_str("attach to one with `par-mux attach -t <session>`");
+    message
 }
 
 /// Where a switch lands: a window, plus its owning session when the
@@ -337,37 +375,28 @@ pub(crate) fn workspace_switch_target(
 /// title name) goes straight to the daemon's matcher via `pane-info`; a
 /// window (`@N`/name) or session (`$N`/name) target narrows through the
 /// targeted `list-windows`/`list-panes` queries to the marked pane. With
-/// no `-t`, the newest session's newest pane — the highest pane id in the
-/// global roster (ids are monotonic, so the max is newest).
+/// no `-t`, [`initial_attach_session`] picks (or creates) the session and
+/// its active window's marked pane is the target.
 pub(super) fn resolve_target(
     conn: &mut conn::AttachConn,
     target: Option<&str>,
 ) -> Result<String, String> {
     match target {
         None => {
+            let session = initial_attach_session(conn)?;
+            let windows = conn
+                .send_checked(&format!("list-windows -t {session}"))
+                .map_err(|err| format!("list-windows failed: {err}"))?;
+            let window = marked_line(&windows.body, "@", &session)?;
             let panes = conn
-                .send_checked("list-panes")
+                .send_checked(&format!("list-panes -t {window}"))
                 .map_err(|err| format!("list-panes failed: {err}"))?;
-            // Newest = highest id (ids are monotonic). The bare global
-            // roster has no deterministic order, so max by numeric id is
-            // the honest spelling of the newest-stand-in rule.
-            panes
-                .body
-                .iter()
-                .filter(|l| l.starts_with('%'))
-                .filter_map(|l| l.split_whitespace().next())
-                .filter_map(|id| {
-                    let n: u64 = id[1..].parse().ok()?;
-                    Some((n, id))
-                })
-                .max_by_key(|(n, _)| *n)
-                .map(|(_, id)| id.to_string())
-                .ok_or_else(|| "no panes exist — create a session first".to_string())
+            marked_pane(&panes.body, &window)
         }
         Some(target) => {
             // Try the daemon-side pane matcher first: ids and pane titles
-            // both resolve here, and the failure tells us to try window or
-            // session scopes. The reply's first line names the resolved
+            // both resolve here, and the failure tells us to try session or
+            // window scopes. The reply's first line names the resolved
             // pane (`%N @W ...`), so an ok-but-empty reply does not count.
             if conn
                 .send_checked(&format!("pane-info -t {target}"))
@@ -382,21 +411,26 @@ pub(super) fn resolve_target(
             {
                 return Ok(target.to_string());
             }
+            // A session: its active window's marked pane. Probed BEFORE
+            // the window branch — `list-panes -t` accepts session
+            // targets too (the one-rule grammar), so it can no longer
+            // prove windowness.
+            if let Ok(reply) = conn.send_checked(&format!("list-windows -t {target}")) {
+                if reply.ok {
+                    if let Some(window) = active_window_row(&reply.body) {
+                        if let Ok(panes) = conn.send_checked(&format!("list-panes -t {window}")) {
+                            if panes.ok {
+                                return marked_pane(&panes.body, target);
+                            }
+                        }
+                    }
+                    return Err(format!("the session {target} has no windows"));
+                }
+            }
             // A window: its marked pane via the targeted list-panes.
             if let Ok(reply) = conn.send_checked(&format!("list-panes -t {target}")) {
                 if reply.ok {
                     return marked_pane(&reply.body, target);
-                }
-            }
-            // A session: its active window's marked pane.
-            if let Ok(reply) = conn.send_checked(&format!("list-windows -t {target}")) {
-                if reply.ok {
-                    let window = marked_line(&reply.body, "@", target)?;
-                    if let Ok(panes) = conn.send_checked(&format!("list-panes -t {window}")) {
-                        if panes.ok {
-                            return marked_pane(&panes.body, target);
-                        }
-                    }
                 }
             }
             Err(format!("no such target: {target}"))
@@ -426,4 +460,23 @@ pub(crate) fn marked_pane(body: &[String], target: &str) -> Result<String, Strin
     active
         .map(str::to_string)
         .ok_or_else(|| format!("no panes under target {target}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::multi_session_error;
+
+    /// The refusal names every session and the `-t` hint, so the user can
+    /// act on it directly.
+    #[test]
+    fn multi_session_error_lists_every_session_and_the_hint() {
+        let message = multi_session_error(&[
+            ("$0".to_string(), "att".to_string()),
+            ("$1".to_string(), "second".to_string()),
+        ]);
+        assert!(message.contains("multiple sessions exist"));
+        assert!(message.contains("$0: att"));
+        assert!(message.contains("$1: second"));
+        assert!(message.contains("par-mux attach -t <session>"));
+    }
 }

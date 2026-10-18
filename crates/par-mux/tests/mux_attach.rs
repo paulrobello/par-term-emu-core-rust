@@ -3149,9 +3149,12 @@ fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
 /// session has no windows". One session, one pane: the client must come
 /// up (alt-screen enter + the pane's marker in the rendered frame) and
 /// keys must still reach the pane — not exit.
+/// The target-less render client attaches THE ONLY session: alt-screen
+/// up (alt-screen enter + the pane's marker in the rendered frame) and
+/// keys must still reach the pane — not exit.
 #[cfg(unix)]
 #[test]
-fn render_mode_without_target_attaches_the_newest_session() {
+fn render_mode_without_target_attaches_the_only_session() {
     let (fixture, _daemon, mut client) = fixture_with_session("rendernotarget");
     let pane = client
         .send("list-panes")
@@ -3218,58 +3221,132 @@ fn render_mode_without_target_attaches_the_newest_session() {
     host.killer.kill().ok();
 }
 
-/// The target-less render client picks the NEWEST session when several
-/// exist: ids are monotonic, so a second session's pane is the target —
-/// its marker renders, the first session's does not.
+/// The target-less render client REFUSES when several sessions exist: it
+/// exits non-zero without attaching, and its stderr names every session
+/// plus the `-t` hint (Paul, 2026-10-17: the user picks, not the client).
 #[cfg(unix)]
 #[test]
-fn render_mode_without_target_picks_the_newest_session() {
+fn render_mode_without_target_refuses_when_several_sessions_exist() {
     let (fixture, _daemon, mut client) = fixture_with_session("renderoldest");
     client
         .send("new-session -s second")
         .expect("second session");
-    // The bare global roster's order is unspecified; find each session's
-    // pane through its window (`list-panes -t` takes a window, not a
-    // session — a `$N` target answers `no such window`).
-    let first_pane = session_first_pane(&mut client, "$0");
-    let second_pane = session_first_pane(&mut client, "$1");
-    client
-        .send(&format!(
-            "send-keys -t {first_pane} -l 'echo OLDEST-MARKER'"
-        ))
-        .expect("seed oldest");
-    client
-        .send(&format!("send-keys -t {first_pane} Enter"))
-        .expect("enter oldest");
-    client
-        .send(&format!(
-            "send-keys -t {second_pane} -l 'echo NEWEST-MARKER'"
-        ))
-        .expect("seed newest");
-    client
-        .send(&format!("send-keys -t {second_pane} Enter"))
-        .expect("enter newest");
-    common::wait_daemon(
-        fixture.socket(),
-        &format!("capture-pane -t {second_pane}"),
-        echoed("NEWEST-MARKER"),
-        Duration::from_secs(10),
-        "NEWEST-MARKER executed on the pane screen",
-    );
+    // settle: the fresh panes' shells start before the client attaches
+    std::thread::sleep(Duration::from_millis(500));
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
-    let got = wait_for_output(&host, b"NEWEST-MARKER", Duration::from_secs(15));
-    assert!(
-        !got.is_empty(),
-        "the no-target client must attach the newest session ($1) and \
-         render its pane. stderr: {}\nbytes: {:?}",
-        stderr.lock().unwrap(),
+    // The PTY harness wires the client's stderr into the slave, so the
+    // refusal text rides the OUTPUT stream (the `stderr` buffer is a
+    // placeholder the harness never fills).
+    let got = wait_for_output(&host, b"multiple sessions exist", Duration::from_secs(10));
+    assert_eq!(
+        child_exit(&mut host, Duration::from_secs(10)),
+        Some(1),
+        "the no-target client must refuse several sessions and exit 1. output: {}",
         String::from_utf8_lossy(&got)
     );
+    let text = String::from_utf8_lossy(&got).to_string();
     assert!(
-        !got.windows(13).any(|w| w == b"OLDEST-MARKER"),
-        "the first session's content must not be the rendered view: {:?}",
-        String::from_utf8_lossy(&got)
+        text.contains("multiple sessions exist")
+            && text.contains("att")
+            && text.contains("second")
+            && text.contains("par-mux attach -t"),
+        "the refusal must list the sessions and the hint: {text}"
+    );
+    let _ = stderr;
+}
+
+/// The target-less render client on a daemon with NO sessions creates the
+/// default tree and attaches to it: `new-workspace -n default` builds
+/// workspace + session `default`, a window named `1`, one unnamed pane.
+/// The tree survives the client's detach (a session, not a client-scoped
+/// view), so the daemon stays serving.
+#[cfg(unix)]
+#[test]
+fn render_mode_without_target_creates_the_default_session() {
+    let fixture = MuxFixture::new("renderdefault");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up — the create path attached",
+    );
+    // The create lands during the seed, after the mouse-capture byte the
+    // expect above waited on: poll rather than assume.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let sessions = loop {
+        let sessions = client.send("list-sessions").expect("list-sessions");
+        if sessions.iter().any(|l| l.contains("$0: default")) {
+            break sessions;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the default tree must be created by the attach. stderr: {}",
+            stderr.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        sessions.iter().any(|l| l.contains("default: $0")),
+        "the default tree's session must exist in the default workspace: {sessions:?}"
+    );
+    let windows = client.send("list-windows -t $0").expect("list-windows");
+    assert!(
+        windows
+            .iter()
+            .any(|l| l.split_whitespace().next() == Some("@0") && l.contains(" 1")),
+        "the default window must be named \"1\": {windows:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// The passthrough half of the default-tree create: same daemon shape,
+/// same rule, passthrough's byte-pump seed.
+#[cfg(unix)]
+#[test]
+fn passthrough_without_target_creates_the_default_session() {
+    let fixture = MuxFixture::new("passdefault");
+    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+
+    let (mut host, stderr) = spawn_attach(&fixture, &[]);
+    expect_output(
+        &host,
+        b"\x1b[1;23r",
+        Duration::from_secs(10),
+        "passthrough client up — the create path attached",
+    );
+    // The create lands during the seed, after the status-row byte the
+    // expect above waited on: poll rather than assume.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let sessions = loop {
+        let sessions = client.send("list-sessions").expect("list-sessions");
+        if sessions.iter().any(|l| l.contains("$0: default")) {
+            break sessions;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the default tree must be created by the attach. stderr: {}",
+            stderr.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        sessions.iter().any(|l| l.contains("default: $0")),
+        "the default tree's session must exist in the default workspace: {sessions:?}"
+    );
+    let windows = client.send("list-windows -t $0").expect("list-windows");
+    assert!(
+        windows
+            .iter()
+            .any(|l| l.split_whitespace().next() == Some("@0") && l.contains(" 1")),
+        "the default window must be named \"1\": {windows:?}"
     );
     host.killer.kill().ok();
 }
@@ -3515,7 +3592,9 @@ fn passthrough_status_line_carries_the_workspaces_segment() {
     // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(300));
 
-    let (mut host, stderr) = spawn_attach(&fixture, &[]);
+    // A pinned target: the target-less rule refuses when several sessions
+    // exist, and this test's subject is the status line, not the pick.
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", "$0"]);
     let got = wait_for_output(&host, b"[lab]", Duration::from_secs(15));
     assert!(
         got.windows(b"[lab]".len()).any(|w| w == b"[lab]"),
@@ -3544,7 +3623,9 @@ fn passthrough_workspace_chord_selects_and_lands() {
     // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(300));
 
-    let (mut host, stderr) = spawn_attach(&fixture, &[]);
+    // A pinned target: the target-less rule refuses when several sessions
+    // exist, and this test's subject is the workspace chord, not the pick.
+    let (mut host, stderr) = spawn_attach(&fixture, &["-t", "$0"]);
     expect_output(
         &host,
         b"\x1b[1;23r",
@@ -5804,14 +5885,12 @@ fn shows_multi(screen: &str) -> bool {
     (0..3).all(|i| screen.contains(&format!("MULTI-{i}")))
 }
 
-/// Card 01a11bd1 symptom 1: a no-target attach lands on the DISPLAYED
-/// session (the active workspace's active session), not the globally
-/// newest session id. Here the newest session lives in a background
-/// workspace — the newest-id rule showed its single pane instead of the
-/// active workspace's multi-pane window.
+/// An explicit session target lands on that session's multi-pane window:
+/// the seeded markers render, and the background workspace's session does
+/// not leak into the frame.
 #[cfg(unix)]
 #[test]
-fn render_mode_no_target_attach_lands_on_the_displayed_session() {
+fn render_mode_explicit_target_lands_on_its_sessions_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("dispseed");
     seed_multi_pane(&mut client, "$0");
     client
@@ -5825,12 +5904,14 @@ fn render_mode_no_target_attach_lands_on_the_displayed_session() {
     // settle: the fresh panes' shells start before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
-    let (mut host, stderr) = spawn_attach_render(&fixture, &[]);
+    // A pinned target: the target-less rule refuses when several sessions
+    // exist, and this test's subject is the landing, not the pick.
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", "$0"]);
     let mut all = Vec::new();
     let shown = screen_until(&host, &mut all, Duration::from_secs(10), shows_multi);
     assert!(
         shows_multi(&shown) && !shown.contains("OTHER-MARK"),
-        "a no-target attach must land on the displayed session's multi-pane \
+        "a `-t $0` attach must land on that session's multi-pane \
          window. screen:\n{shown}\nstderr: {}",
         stderr.lock().unwrap()
     );
@@ -5869,12 +5950,15 @@ fn fixture_two_session_workspace(
 #[test]
 fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() {
     let (fixture, _daemon, mut client) = fixture_two_session_workspace("dispfollow");
-    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    // Both clients pin the solo session: the target-less rule refuses
+    // when several sessions exist; the chord landing below moves the
+    // display and B follows through the broadcast.
+    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", "$2"]);
     let mut a_all = Vec::new();
     let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
         s.contains("SOLO-MARK")
     });
-    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let (mut b, b_err) = spawn_attach_render(&fixture, &["-t", "$2"]);
     let mut b_all = Vec::new();
     let shown = screen_until(&b, &mut b_all, Duration::from_secs(10), |s| {
         s.contains("SOLO-MARK")
@@ -5915,15 +5999,18 @@ fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() 
     b.killer.kill().ok();
 }
 
-/// Card 01a11bd1, the restore half: the landing is persisted, so after a
-/// daemon restart a fresh no-target attach shows the session the user
-/// was last on — the multi-pane one — not the stale single-pane pointer.
+/// The landing is persisted across a daemon restart: the restored
+/// daemon's displayed session is the one the client last landed on
+/// (`switch-client` names it), and an attach pinned to it lands on the
+/// multi-pane window. (The target-less attach now refuses on several
+/// sessions — the persistence the pointer carries is queried, not
+/// silently attached to.)
 #[cfg(unix)]
 #[test]
 fn render_mode_landing_survives_a_restart_for_the_next_attach() {
     let (fixture, mut daemon, client) = fixture_two_session_workspace("disprestart");
     drop(client);
-    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", "$2"]);
     let mut a_all = Vec::new();
     let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
         s.contains("SOLO-MARK")
@@ -5943,13 +6030,13 @@ fn render_mode_landing_survives_a_restart_for_the_next_attach() {
     let _restarted = common::spawn_daemon(&fixture);
     wait_listening(fixture.socket());
 
-    let (mut c, c_err) = spawn_attach_render(&fixture, &[]);
+    let (mut c, c_err) = spawn_attach_render(&fixture, &["-t", "$1"]);
     let mut c_all = Vec::new();
     let shown = screen_until(&c, &mut c_all, Duration::from_secs(10), shows_multi);
     assert!(
         shows_multi(&shown) && !shown.contains("SOLO-MARK"),
-        "the first attach after a restore must show the multi-pane session \
-         the user last landed on. screen:\n{shown}\nstderr: {}",
+        "an attach pinned to the persisted landing session shows its \
+         multi-pane window. screen:\n{shown}\nstderr: {}",
         c_err.lock().unwrap()
     );
     c.killer.kill().ok();
@@ -5958,15 +6045,16 @@ fn render_mode_landing_survives_a_restart_for_the_next_attach() {
 /// ARC-124: the passthrough half of card 01a11bd1. A passthrough session
 /// switch (prefix `(`) must land through `switch-client`, so the
 /// daemon's persisted displayed-session pointer follows; after a restart
-/// the next no-target attach shows the session passthrough landed on.
-/// (A bare `select-window` on a background session never moved the
-/// pointer, so the restored daemon still named the old session.)
+/// the pointer still names the session passthrough landed on, and an
+/// attach pinned to it lands there. (A bare `select-window` on a
+/// background session never moved the pointer, so the restored daemon
+/// still named the old session.)
 #[cfg(unix)]
 #[test]
 fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
     let (fixture, mut daemon, client) = fixture_two_session_workspace("passrestart");
     drop(client);
-    let (mut a, a_err) = spawn_attach(&fixture, &[]);
+    let (mut a, a_err) = spawn_attach(&fixture, &["-t", "$2"]);
     expect_output(
         &a,
         b"SOLO-MARK",
@@ -5998,13 +6086,13 @@ fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
         "$1",
         "the restored daemon's displayed session is the passthrough landing"
     );
-    let (mut c, c_err) = spawn_attach_render(&fixture, &[]);
+    let (mut c, c_err) = spawn_attach_render(&fixture, &["-t", "$1"]);
     let mut c_all = Vec::new();
     let shown = screen_until(&c, &mut c_all, Duration::from_secs(10), shows_multi);
     assert!(
         shows_multi(&shown) && !shown.contains("SOLO-MARK"),
-        "the first attach after a restore must show the session passthrough \
-         last landed on. screen:\n{shown}\nstderr: {}",
+        "an attach pinned to the persisted landing session shows its \
+         window. screen:\n{shown}\nstderr: {}",
         c_err.lock().unwrap()
     );
     c.killer.kill().ok();
@@ -6017,12 +6105,15 @@ fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
 #[test]
 fn render_mode_new_window_in_another_client_reaches_this_client() {
     let (fixture, _daemon, _client) = fixture_two_session_workspace("newwinfollow");
-    let (mut a, a_err) = spawn_attach_render(&fixture, &[]);
+    // Both clients pin the solo session: the target-less rule refuses
+    // when several sessions exist; the landing chord below drives the
+    // display moves the follow machinery tests.
+    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", "$2"]);
     let mut a_all = Vec::new();
     let _ = screen_until(&a, &mut a_all, Duration::from_secs(10), |s| {
         s.contains("SOLO-MARK")
     });
-    let (mut b, b_err) = spawn_attach_render(&fixture, &[]);
+    let (mut b, b_err) = spawn_attach_render(&fixture, &["-t", "$2"]);
     let mut b_all = Vec::new();
     let _ = screen_until(&b, &mut b_all, Duration::from_secs(10), |s| {
         s.contains("SOLO-MARK")

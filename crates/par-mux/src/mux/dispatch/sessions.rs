@@ -11,10 +11,28 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
             name,
             env,
             workspace,
-        } => cmd_new_session(ctx, name, env, workspace),
+            window_name,
+            start_dir,
+            cols,
+            rows,
+            command,
+        } => cmd_new_session(
+            ctx,
+            name,
+            env,
+            workspace,
+            window_name,
+            start_dir,
+            cols,
+            rows,
+            command,
+        ),
         MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
         MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
-        MuxCommand::ListSessions { workspace } => cmd_list_sessions(ctx, workspace),
+        MuxCommand::ListSessions { workspace, format } => cmd_list_sessions(ctx, workspace, format),
+        MuxCommand::HasSession { session } => cmd_has_session(ctx, session),
+        MuxCommand::ShowOptions => cmd_show_options(ctx),
+        MuxCommand::SetOption { key, value } => cmd_set_option(ctx, &key, &value),
         MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
         MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
         MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
@@ -31,14 +49,21 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_new_session(
     ctx: &Ctx<'_>,
     name: Option<String>,
     env: Vec<(String, String)>,
     workspace: Option<Target<WorkspaceId>>,
+    window_name: Option<String>,
+    start_dir: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    command: Option<String>,
 ) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
+    let (cwd, note) = resolve_start_dir(start_dir.as_deref());
     // Two-phase spawn (ARC-022): reserve ids under the lock, run the
     // fork/exec OFF it — a slow spawn must not stall every other client —
     // then re-lock to insert and wire. The in-flight session is invisible
@@ -51,13 +76,18 @@ pub(super) fn cmd_new_session(
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        (
-            guard.begin_session_at(workspace_id, &name, DEFAULT_COLS, DEFAULT_ROWS, &env),
-            guard.factory(),
-        )
+        // `-x`/`-y` set the initial grid; absent keeps the construction
+        // default (the first client size report re-sizes anyway).
+        let cols = cols.unwrap_or(DEFAULT_COLS);
+        let rows = rows.unwrap_or(DEFAULT_ROWS);
+        let mut plan = guard.begin_session_at(workspace_id, &name, cols, rows, &env);
+        if let Some(window_name) = window_name.as_deref() {
+            plan = plan.with_window_name(window_name);
+        }
+        (plan.with_cwd(cwd), guard.factory())
     };
     let window_id = plan.window_id;
-    let outcome = spawn_and_wire(ctx, &*factory, plan, None, None)
+    let outcome = spawn_and_wire(ctx, &*factory, plan, command.as_deref(), note.as_deref())
         .map(|session_id| (session_id, vec![window_id]));
     match outcome {
         Ok((session_id, window_ids)) => {
@@ -75,6 +105,77 @@ pub(super) fn cmd_new_session(
             })
         }
         Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+/// `has-session -t <session>`: the existence probe — ok when the target
+/// resolves, `%error` naming it when it does not.
+pub(super) fn cmd_has_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Outcome {
+    let guard = ctx.tree.lock();
+    match guard.resolve_session_target(session) {
+        Ok(_) => Outcome::ok(ctx, ""),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+/// `show-options`: the applied settings, one `key=value` line per field.
+/// Booleans print as `on`/`off` (tmux's spelling).
+pub(super) fn cmd_show_options(ctx: &Ctx<'_>) -> Outcome {
+    let Some(config) = ctx.config else {
+        return Outcome::err(ctx, "show-options: no applied config on this server");
+    };
+    let guard = config.lock();
+    let on = |b: bool| if b { "on" } else { "off" };
+    let body = [
+        format!("exit-empty={}", on(guard.exit_empty)),
+        format!("remain-on-exit={}", on(guard.remain_on_exit)),
+        format!("mode={}", guard.mode),
+        format!("prefix={}", guard.prefix),
+        format!("reload={}", guard.reload),
+        format!("socket={}", guard.socket),
+        format!("state-dir={}", guard.state_dir),
+        format!("pane-endpoints={}", on(guard.pane_endpoints)),
+        format!("expose-control-socket={}", on(guard.expose_control_socket)),
+    ]
+    .join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+/// `set-option <key> <value>`: the two live daemon booleans. Everything
+/// else is restart-required; the file (or `reload-config`) is the durable
+/// record, so a set here is deliberately volatile.
+pub(super) fn cmd_set_option(ctx: &Ctx<'_>, key: &str, value: &str) -> Outcome {
+    let parse_bool = |value: &str| match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" => Some(true),
+        "off" | "false" | "0" => Some(false),
+        _ => None,
+    };
+    let Some(config) = ctx.config else {
+        return Outcome::err(ctx, "set-option: no applied config on this server");
+    };
+    let mut guard = config.lock();
+    match key {
+        "exit-empty" => match parse_bool(value) {
+            Some(on) => {
+                guard.exit_empty = on;
+                Outcome::ok(ctx, "")
+            }
+            None => Outcome::err(ctx, "set-option: exit-empty expects on or off"),
+        },
+        "remain-on-exit" => match parse_bool(value) {
+            Some(on) => {
+                guard.remain_on_exit = on;
+                Outcome::ok(ctx, "")
+            }
+            None => Outcome::err(ctx, "set-option: remain-on-exit expects on or off"),
+        },
+        other => Outcome::err(
+            ctx,
+            &format!(
+                "set-option: {other:?} is restart-required — set it in the config file and \
+                 reload-config; the live keys are exit-empty and remain-on-exit"
+            ),
+        ),
     }
 }
 
@@ -131,7 +232,11 @@ pub(super) fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Out
     )
 }
 
-pub(super) fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<WorkspaceId>>) -> Outcome {
+pub(super) fn cmd_list_sessions(
+    ctx: &Ctx<'_>,
+    workspace: Option<Target<WorkspaceId>>,
+    format: Option<String>,
+) -> Outcome {
     // Wire contract: bare `list-sessions` lists EVERY workspace's sessions,
     // one line each, extended from the old `$N: name` shape with a
     // workspace prefix: `+W: wname: $N: name`. A consumer finds the
@@ -139,6 +244,9 @@ pub(super) fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<Workspac
     // precede it. `list-sessions -t <workspace>` (id or name) restricts
     // the listing to that one workspace, same line shape. Sessions are
     // listed in workspace order, sessions in workspace-list order.
+    // `list-sessions -F <format>` replaces the row shape: one expansion
+    // per session (`#{workspace_id}`, `#{workspace_name}`,
+    // `#{session_id}`, `#{session_name}`).
     let guard = ctx.tree.lock();
     let workspace_id = match workspace {
         Some(target) => match guard.resolve_workspace_target(target) {
@@ -164,14 +272,25 @@ pub(super) fn cmd_list_sessions(ctx: &Ctx<'_>, workspace: Option<Target<Workspac
             let Some(session) = guard.session(*session_id) else {
                 continue;
             };
-            lines.push(
-                crate::mux::ipc::SessionRow {
-                    workspace: Some((ws.id.to_string(), ws.name.clone())),
-                    id: session.id.to_string(),
-                    name: session.name.clone(),
-                }
-                .to_string(),
-            );
+            match &format {
+                Some(format) => lines.push(super::format_expansion(
+                    format,
+                    &[
+                        ("workspace_id", ws.id.to_string().as_str()),
+                        ("workspace_name", ws.name.as_str()),
+                        ("session_id", session.id.to_string().as_str()),
+                        ("session_name", session.name.as_str()),
+                    ],
+                )),
+                None => lines.push(
+                    crate::mux::ipc::SessionRow {
+                        workspace: Some((ws.id.to_string(), ws.name.clone())),
+                        id: session.id.to_string(),
+                        name: session.name.clone(),
+                    }
+                    .to_string(),
+                ),
+            }
         }
     }
     Outcome::ok(ctx, &lines.join("\n"))

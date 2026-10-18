@@ -12,7 +12,7 @@ pub(super) fn route_pane_command(
     issuer: Option<&SyncSender<String>>,
 ) -> Outcome {
     match command {
-        MuxCommand::ListPanes { window } => cmd_list_panes(ctx, window),
+        MuxCommand::ListPanes { target, format } => cmd_list_panes(ctx, target, format),
         MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
         MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
         MuxCommand::SplitWindow {
@@ -21,6 +21,7 @@ pub(super) fn route_pane_command(
             percent,
             before,
             start_dir,
+            command,
         } => cmd_split_window(
             ctx,
             target,
@@ -28,6 +29,7 @@ pub(super) fn route_pane_command(
             percent,
             before,
             start_dir.as_deref(),
+            command.as_deref(),
         ),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
@@ -53,48 +55,102 @@ pub(super) fn route_pane_command(
     }
 }
 
-pub(super) fn cmd_list_panes(ctx: &Ctx<'_>, window: Option<Target<WindowId>>) -> Outcome {
+pub(super) fn cmd_list_panes(
+    ctx: &Ctx<'_>,
+    target: Option<AnyTarget>,
+    format: Option<String>,
+) -> Outcome {
     // Wire contract: the bare form replies one line per pane, globally,
     // each just the pane id (`%N`) — the shape every existing client
-    // parses. Geometry arrives via %layout-change pushes; there is no -F
-    // (Phase 4 T4.E decision — push covers what the -F polling fallback
-    // existed for).
+    // parses. Geometry arrives via %layout-change pushes.
     //
-    // `list-panes -t <window>` (the attach card's criterion 2): one line
-    // per pane of THAT window, in layout leaf order — the same
-    // left-to-right/top-to-bottom order `LayoutTree::render` emits leaves
-    // in, so `leaf` is the index a client maps tmux layout-string leaves
-    // to pane ids by. Fixed positional shape (T4.E): `%N <leaf> <marker>`
-    // where marker `*` is the window's active pane and `-` is every other
-    // pane — the roster's fixed-prefix rule, and no -F.
+    // `list-panes -t <window|session|pane>` (the attach card's criterion
+    // 2, widened by R7 to every scope): a window lists its own panes, a
+    // session its active window's, a pane its owning window's — one line
+    // per pane in layout leaf order, the same left-to-right/top-to-bottom
+    // order `LayoutTree::render` emits leaves in, so `leaf` is the index
+    // a client maps tmux layout-string leaves to pane ids by. Fixed
+    // positional shape (T4.E): `%N <leaf> <marker>` where marker `*` is
+    // the window's active pane and `-` is every other pane.
+    //
+    // `-F <format>` replaces the row shape: one expansion per pane
+    // (`#{session_id}`, `#{session_name}`, `#{window_id}`,
+    // `#{window_name}`, `#{pane_id}`, `#{pane_active}`).
     let guard = ctx.tree.lock();
-    let Some(window_id) = window.map(|target| guard.resolve_window_target(target)) else {
-        let body = guard
-            .sessions()
-            .iter()
-            .filter_map(|s| guard.session(*s))
-            .flat_map(|s| s.windows.clone())
-            .filter_map(|w| guard.window(w))
-            .flat_map(|w| w.panes())
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
+    let Some(target) = target else {
+        let mut lines: Vec<String> = Vec::new();
+        for s in guard.sessions().iter().filter_map(|s| guard.session(*s)) {
+            let (session_id, session_name) = (s.id.to_string(), s.name.clone());
+            for w in s
+                .windows
+                .clone()
+                .into_iter()
+                .filter_map(|w| guard.window(w))
+            {
+                let active = w.active;
+                for (leaf, pane) in w.panes().into_iter().enumerate() {
+                    match &format {
+                        Some(format) => lines.push(super::format_expansion(
+                            format,
+                            &[
+                                ("session_id", session_id.as_str()),
+                                ("session_name", session_name.as_str()),
+                                ("window_id", w.id.to_string().as_str()),
+                                ("window_name", w.name.as_str()),
+                                ("pane_id", pane.to_string().as_str()),
+                                ("pane_active", if pane == active { "1" } else { "0" }),
+                                ("pane_leaf", leaf.to_string().as_str()),
+                            ],
+                        )),
+                        None => lines.push(format!("{pane}")),
+                    }
+                }
+            }
+        }
+        let body = lines.join("\n");
         return Outcome::ok(ctx, &body);
     };
-    let window_id = match window_id {
+    // R7: any target kind narrows to a window — a window directly, a
+    // session through its active window, a pane through its owner, a
+    // name through the window-then-session rule.
+    let window_id = match guard.resolve_pane_listing_target(target) {
         Ok(id) => id,
         Err(err) => return Outcome::err(ctx, &err.to_string()),
     };
     let Some(window) = guard.window(window_id) else {
         return Outcome::err(ctx, &MuxError::NoSuchWindow(window_id).to_string());
     };
+    let session_vars = guard
+        .session_of_window(window_id)
+        .and_then(|s| guard.session(s))
+        .map(|s| (s.id.to_string(), s.name.clone()));
     let body = window
         .panes()
         .into_iter()
         .enumerate()
         .map(|(leaf, pane)| {
             let marker = if pane == window.active { '*' } else { '-' };
-            format!("{pane} {leaf} {marker}")
+            match &format {
+                Some(format) => {
+                    // Owned id spellings: the vars vec borrows them past
+                    // the push statements.
+                    let window_id = window.id.to_string();
+                    let pane_id = pane.to_string();
+                    let pane_leaf = leaf.to_string();
+                    let mut vars: Vec<(&str, &str)> = Vec::new();
+                    if let Some((sid, sname)) = &session_vars {
+                        vars.push(("session_id", sid.as_str()));
+                        vars.push(("session_name", sname.as_str()));
+                    }
+                    vars.push(("window_id", window_id.as_str()));
+                    vars.push(("window_name", window.name.as_str()));
+                    vars.push(("pane_id", pane_id.as_str()));
+                    vars.push(("pane_active", if pane == window.active { "1" } else { "0" }));
+                    vars.push(("pane_leaf", pane_leaf.as_str()));
+                    super::format_expansion(format, &vars)
+                }
+                None => format!("{pane} {leaf} {marker}"),
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -209,6 +265,7 @@ pub(super) fn cmd_split_window(
     percent: u32,
     before: bool,
     start_dir: Option<&str>,
+    command: Option<&str>,
 ) -> Outcome {
     let (cwd, note) = resolve_start_dir(start_dir);
     // Two-phase spawn (ARC-022): resolve + reserve under the lock, fork/exec
@@ -233,7 +290,7 @@ pub(super) fn cmd_split_window(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
-    match spawn_and_wire(ctx, &*factory, plan, None, note.as_deref()) {
+    match spawn_and_wire(ctx, &*factory, plan, command, note.as_deref()) {
         Ok((new_pane, window_id)) => {
             // split-window focuses the new pane (tmux semantics).
             Outcome::ok(ctx, &new_pane.to_string())

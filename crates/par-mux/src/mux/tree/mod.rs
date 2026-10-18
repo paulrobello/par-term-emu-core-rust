@@ -166,6 +166,9 @@ pub struct SessionSpawn {
     /// The first window's name; the session's own name when `None`.
     window_name: Option<String>,
     env: BTreeMap<String, String>,
+    /// The first pane's working directory (`new-session -c`); `None`
+    /// defers to the factory's cwd.
+    cwd: Option<std::path::PathBuf>,
     /// The workspace the session links to in phase 3, resolved at begin
     /// (explicit target, else active, else the lazily created default).
     workspace_id: WorkspaceId,
@@ -219,13 +222,19 @@ impl SessionSpawn {
         self
     }
 
+    /// Start the first pane in `cwd` (`new-session -c`).
+    pub fn with_cwd(mut self, cwd: Option<std::path::PathBuf>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
     /// The factory-facing context — the same fields the one-shot path passes.
     pub fn context(&self) -> SpawnContext<'_> {
         SpawnContext {
             session: Some((self.session_id, &self.name)),
             window: Some(self.window_id),
             env: Some(&self.env),
-            cwd: None,
+            cwd: self.cwd.as_deref(),
             output: None,
         }
     }
@@ -711,6 +720,37 @@ impl MuxTree {
                     .ok_or(MuxError::NoSuchSession(session))
             }
             AnyTarget::Name(name) => self.resolve_pane_target(Target::Name(name)),
+        }
+    }
+
+    /// Resolve a `list-panes` target to the window whose panes are
+    /// listed (R7's one-rule grammar): `@N` the window itself, `$N` the
+    /// session's active window, `%N` the pane's owning window, a name a
+    /// window name first (the legacy rule) then a session name's active
+    /// window — every scope a client can name lists something.
+    pub fn resolve_pane_listing_target(&self, target: AnyTarget) -> Result<WindowId, MuxError> {
+        match target {
+            AnyTarget::Window(window) => self
+                .windows
+                .get(&window)
+                .map(|w| w.id)
+                .ok_or(MuxError::NoSuchWindow(window)),
+            AnyTarget::Pane(pane) => self.window_of_pane(pane).ok_or(MuxError::NoSuchPane(pane)),
+            AnyTarget::Session(session) => self
+                .sessions
+                .get(&session)
+                .and_then(|s| s.windows.get(s.active).copied())
+                .ok_or(MuxError::NoSuchSession(session)),
+            AnyTarget::Name(name) => match self.resolve_window_target(Target::Name(name.clone())) {
+                Ok(window) => Ok(window),
+                Err(_) => {
+                    let session = self.resolve_session_target(Target::Name(name))?;
+                    self.sessions
+                        .get(&session)
+                        .and_then(|s| s.windows.get(s.active).copied())
+                        .ok_or(MuxError::NoSuchSession(session))
+                }
+            },
         }
     }
 

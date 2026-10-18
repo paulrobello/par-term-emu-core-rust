@@ -171,6 +171,19 @@ par-mux --cmd 'split-window -h -t %3'
 par-mux work --cmd list-panes
 par-mux --socket /tmp/par-mux-test.sock --cmd version
 par-mux --cmd list-sessions   # resolves $PAR_MUX_SOCKET before the default socket
+
+# The one-shot type-and-run form (R5): --enter appends the Enter byte
+par-mux --cmd "send-keys -t %3 -l 'make check' --enter"
+
+# Existence probe without roster parsing; exit 0/1
+par-mux --cmd 'has-session -t work'
+
+# Stable field output for scripts
+par-mux --cmd "list-sessions -F '#{session_id}=#{session_name}'"
+
+# Live daemon settings
+par-mux --cmd show-options
+par-mux --cmd 'set-option exit-empty off'
 ```
 
 | Outcome | stdout | stderr | Exit code |
@@ -181,7 +194,23 @@ par-mux --cmd list-sessions   # resolves $PAR_MUX_SOCKET before the default sock
 | Transport failure after connecting (no reply block, connection closed) | — | The I/O error | 2 |
 | Target is a pane endpoint (`--pane-endpoints` daemon) | — | `this pane has hook-only access; start the daemon with --expose-control-socket or pass --socket` | 1 |
 
-Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with nothing running fails immediately instead of booting one. The command string follows the daemon's grammar (see the quoting rules under [Command Reference](#command-reference)); wrap it in single quotes in the shell so its inner double quotes reach the daemon intact. One command per invocation — there is no `;` sequencing, interactive attach, or follow mode. Pushed notifications that arrive while the reply is pending are discarded. Stdout writes stop quietly on a closed pipe, so `par-mux --cmd '...' | head -1` does not panic.
+Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with nothing running fails immediately instead of booting one (the error carries the start hint). The command string follows the daemon's grammar (see the quoting rules under [Command Reference](#command-reference)); wrap it in single quotes in the shell so its inner double quotes reach the daemon intact. One command per invocation — there is no `;` sequencing, interactive attach, or follow mode. Pushed notifications that arrive while the reply is pending are discarded. Stdout writes stop quietly on a closed pipe, so `par-mux --cmd '...' | head -1` does not panic.
+
+### Subcommands
+
+The verb forms are the discoverable front door (every long-standing flag keeps working — `par-mux --stop` and `par-mux stop` are the same handler):
+
+| Subcommand | Same as | Notes |
+|------------|---------|-------|
+| `par-mux start [NAME] [--socket P] [--state-dir D] [--foreground] [--no-attach] [--pane-endpoints] [--expose-control-socket]` | bare `par-mux [NAME]` | The daemon-start action, spelled as a verb |
+| `par-mux stop [NAME\|--socket P]` | `--stop` | Clean shutdown, waits for the socket |
+| `par-mux restart [NAME\|--socket P]` | `--restart` | Stop + fresh start restoring the saved tree |
+| `par-mux status [NAME\|--socket P]` | — | The orientation block: `par-mux <socket> <stamp>`, `workspaces:`, `sessions:`, `displayed: $N`, `panes: N` — the orient step in one invocation; each section degrades to `?` rather than failing the reply |
+| `par-mux ls [NAME\|--socket P]` | `--cmd list-sessions` | The tmux-habit session listing |
+| `par-mux attach …` | the attach client | Feature `attach`; see [Attaching from a terminal](#attaching-from-a-terminal) |
+| `par-mux config [--force]` | `--gen-config [--force]` | Write the effective config file |
+
+A subcommand shadows the same-named NAME-form daemon start (`par-mux attach` never starts a daemon named "attach" — that needs `--socket`). The bare NAME form carries a collision guard of its own: a name that spells a control command (`par-mux list-sessions`) is refused with a "command word" hint instead of silently starting a stray daemon; an explicit `--socket` alongside the name reads as deliberate and is allowed.
 
 ### Discovering servers
 
@@ -193,7 +222,7 @@ par-mux --list-servers
 # /tmp/scratch.sock  sessions=0  0.58.1+a1b2c3d
 ```
 
-Each daemon writes one pointer file into its state directory at bind (`<state-base>/servers/<socket-stem>.json`: socket path, pid, start time, build stamp) and removes it on the clean shutdown path (`kill-server`/`--stop`). A crash leaves the file behind; the next list-servers run probes every registered socket with `version` + `list-servers` through the same transport a client uses, prunes the entries whose probe fails (the pruning is reported on stderr), and — when the registry base is the platform default — also sweeps the named-default socket directory, so named daemons an older binary never registered still appear. `--list-servers` honors `--state-dir`, which scopes both the registry and the sweep to that base (what tests and sandboxes use). Registry failure never blocks a daemon from serving; discovery then simply falls back to the directory sweep.
+Each daemon writes one pointer file into its state directory at bind (`<state-base>/servers/<socket-stem>.json`: socket path, pid, start time, build stamp) and removes it on the clean shutdown path (`kill-server`/`--stop`). A crash leaves the file behind; the next list-servers run probes every registered socket with `version` + `list-servers` through the same transport a client uses and prunes the entries whose probe fails silently (the enumeration owns cleanup; the per-entry "pruned" notes were noise in every caller's output), and — when the registry base is the platform default — also sweeps the named-default socket directory, so named daemons an older binary never registered still appear. `--list-servers` honors `--state-dir`, which scopes both the registry and the sweep to that base (what tests and sandboxes use). Registry failure never blocks a daemon from serving; discovery then simply falls back to the directory sweep.
 
 `par-mux attach` with no NAME and no `--socket` while MORE THAN ONE server is live refuses with the same list plus a one-line hint (`attach to one with par-mux attach <name|path>`, exit 1) instead of silently picking one; exactly one live server attaches to it directly.
 
@@ -251,8 +280,8 @@ The pane renderer (the crate-private `render::PaneRenderer`) mirrors every visib
 ### Render mode (`--mode render`)
 
 `par-mux attach` defaults to the pane renderer; `--mode passthrough` selects the passthrough byte pump instead, and an unknown `--mode` flag value is a loud error naming the valid modes (a silent fallback once ran a typo'd session in the wrong mode).
-With no `-t`, the target resolves to the displayed session's (the bare `switch-client` query: the active workspace's active session) active window's active pane; a daemon without `switch-client` falls back to the newest session (highest id).
-Every user-initiated landing (window/session/workspace switches, tab and picker clicks, the new-window landings, the closed-tab survivor) goes through `switch-client -t <window>`, so the displayed session — persisted, and what the next no-target attach and the follow broadcasts read — always names what the user last landed on; follow re-seeds never write it.
+With no `-t`, the target-less rule runs (both modes): a daemon with no sessions gets the default tree created (`new-workspace -n default` — workspace and session `default`, a window named `1`, one unnamed pane) and that session attaches; exactly one existing session attaches as-is; several are a refusal that lists them with the `par-mux attach -t <session>` hint (exit 1) — the user picks, the client does not.
+Every user-initiated landing (window/session/workspace switches, tab and picker clicks, the new-window landings, the closed-tab survivor) goes through `switch-client -t <window>`, so the displayed session — persisted, and what the follow broadcasts read — always names what the user last landed on.
 The client enters the alternate screen, mirrors every visible pane of the window in its own core emulator, and paints the layout at 16 ms frame cadence.
 The host terminal captures the mouse (SGR + button-event tracking), and stdin is routed rather than forwarded.
 
@@ -637,7 +666,7 @@ integrations always match the shipped binary.
 
 ## Command Reference
 
-The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `split-window -c DIR` / `new-window -c DIR` start directories, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value, the `rename-session` / `rename-workspace` names), the `set-buffer` payload, and the `-t`/`-s` targets, so a name, directory, title, value, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` takes the rest of the line after `-t` as the name (whitespace-split tokens joined with single spaces — rename clients send the raw name, since quoting would become part of it). List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `split-window -c DIR` / `new-window -c DIR` / `new-session -c DIR` start directories, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value, the `rename-session` / `rename-workspace` names), the `set-buffer` payload, the `-t`/`-s` targets, and the `-F` format strings — so a name, directory, title, value, format, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` takes the rest of the line after `-t` as the name (whitespace-split tokens joined with single spaces — rename clients send the raw name, since quoting would become part of it). The three create commands (`new-session`, `new-window`, `split-window`) take a trailing start command, tmux's positional form: the raw text after the flags (or after a bare `--`) runs in the new pane instead of the default shell, the same shell handling `respawn-pane`'s command gets; unknown value-taking flags on them are refused loudly rather than silently dropped (`new-session -F …` is an error, not a dropped format request). List replies have fixed shapes, and `-F` replaces them with per-row format expansions (see the table rows); an unknown `#{name}` expands to nothing, and text outside the braces rides verbatim.
 
 A target placeholder in the table below (`<pane>`, `<window>`, `<session>`) is either the typed id (`%N`, `@N`, `$N`) or a **name**, resolved daemon-side against the tree:
 
@@ -650,21 +679,21 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|
-| `new-session` | `[-s name] [-e NAME=VALUE]… [-t <workspace>]` (no start command) | The session id (`$N`) | `%window-add` per window, `%sessions-changed`; `%session-changed` to the issuer |
+| `new-session` | `[-s name] [-e NAME=VALUE]… [-t <workspace>] [-n window-name] [-c dir] [-x cols] [-y rows] [--] [command]` | The session id (`$N`) | `%window-add` per window, `%sessions-changed`; `%session-changed` to the issuer |
 | `new-workspace` | `[-n name]` | The workspace id (`+N`); the new workspace becomes the daemon's active one and spawns its FIRST session (named after the workspace) with a window named `1` (the default shell), so it is landable the moment it exists | `%workspaces-changed`, `%sessions-changed` |
 | `list-workspaces` | — | One `+N: name` line per workspace, id order; the daemon's active workspace ends with ` active` | — |
 | `select-workspace` | `-t <workspace>` | empty; the workspace's previously active session resumes as the active session | `%workspaces-changed`, and `%client-session-changed` when the displayed session moved |
-| `switch-client` | `[-t <session\|window\|pane>]` | Bare: the displayed session's id (`$N` — the active workspace's active session; empty when none). With `-t`: empty; the target's session becomes the displayed one (its workspace becomes active and it becomes that workspace's active session) and a window/pane target's window is selected. Persisted. Both attach modes (render and passthrough) send it on every user-initiated landing so the next no-target attach, the follow broadcasts, and a restored daemon all agree on what is shown | A target in the already-displayed session: exactly `select-window`'s (`%session-window-changed` when the active window moved, `%window-pane-changed`). A cross-session switch: `%workspaces-changed` when the workspace moved, `%client-session-changed` when the displayed window moved, `%window-pane-changed` for a window/pane target. Only `-t` is accepted — tmux's other `switch-client` flags are an error |
+| `switch-client` | `[-t <session\|window\|pane>]` | Bare: the displayed session's id (`$N` — the active workspace's active session; empty when none). With `-t`: empty; the target's session becomes the displayed one (its workspace becomes active and it becomes that workspace's active session) and a window/pane target's window is selected. Persisted. Both attach modes (render and passthrough) send it on every user-initiated landing, so the follow broadcasts and a restored daemon all agree on what is shown | A target in the already-displayed session: exactly `select-window`'s (`%session-window-changed` when the active window moved, `%window-pane-changed`). A cross-session switch: `%workspaces-changed` when the workspace moved, `%client-session-changed` when the displayed window moved, `%window-pane-changed` for a window/pane target. Only `-t` is accepted — tmux's other `switch-client` flags are an error |
 | `rename-workspace` | `-t <workspace> <name>` | empty | `%workspaces-changed` |
 | `kill-workspace` | `-t <workspace>` | empty | `%window-close` per killed window, then `%sessions-changed` and `%workspaces-changed` |
 | `set-workspace-respawn` | `-t <workspace> [on\|off\|toggle]` | The flag's resulting state, `on` or `off`; the bare form is a read-only query. The keep-one-tab respawn option (see [Pane Reaping](#pane-reaping)); off by default, persisted | none |
-| `new-window` | `[-t <session\|window\|pane>] [-n name] [-c dir]` (no start command) | The window id (`@N`) | `%window-add` |
+| `new-window` | `[-t <session\|window\|pane>] [-n name] [-c dir] [--] [command]` | The window id (`@N`) | `%window-add` |
 | `select-window` | `-t <window>` | empty | `%window-pane-changed`; plus `%session-window-changed` when the displayed session's active window moved |
 | `kill-window` | `-t <window>` | empty | `%window-close`; `%sessions-changed` when it emptied the session |
 | `rename-window` | `-t <window> <name>` | empty | `%window-renamed` |
 | `rename-session` | `-t <session> <name>` | empty | `%session-renamed` |
 | `kill-session` | `-t <session>` | empty | `%window-close` per killed window, then `%sessions-changed` |
-| `split-window` | `-t <pane\|window\|session> [-h\|-v] [-b] [-p 1-99] [-c dir]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
+| `split-window` | `-t <pane\|window\|session> [-h\|-v] [-b] [-p 1-99] [-c dir] [--] [command]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
 | `select-pane` | `-t <pane> [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
 | `pane-title` | `-t <pane>` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
 | `pane-info` | `-t %N` | One line, `%N @W COLSxROWS [cmd=<base64>] [exited=<code\|?>]` for the resolved pane: its window, current grid size (read-only; lets a mirroring client seed at the pane's size instead of resizing it), and — when knowable — the foreground command name (standard base64 of the basename of the deepest descendant of the pane's child process; absent on Windows and when the argv is unreadable, so older clients keep parsing the fixed prefix). The name is a hint set by the program itself (argv[0]); names with control characters or over 128 bytes are served absent. tmux's `#{pane_current_command}` equivalent, for close-confirmation prompts. `exited=` appears only for a held-dead pane: its exit code, or `?` when the code was unreadable (a dead pane has no `cmd=`, since its child is reaped) | — |
@@ -678,14 +707,15 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `swap-window` | `-s <window> -t <window>` | empty | `%sessions-changed` |
 | `respawn-pane` | `-t <pane> [-k] [-c dir] [--] [command]` (flags before the command) | empty | `%pane-respawned` |
 | `kill-pane` | `-t <pane>` | empty | `%layout-change`, `%window-pane-changed`; `%window-close` instead when it was the window's last pane, then `%sessions-changed` when that emptied the session |
-| `list-panes` | `-t <window>` | One `%N <leaf> <marker>` line per pane of that window in layout leaf order (`leaf` is the deterministic index mapping tmux layout-string leaves to pane ids; `*` marks the window's active pane). Bare form: one `%N` line per pane, globally | — |
-| `list-windows` | `-t <session>`, `-a` | One `@N <marker> <name>` line per window of that session in window order (`*` marks the session's active window; the name is the line remainder, so spaced names survive). `-a`: every session's rows, each prefixed with its session id (`$S @N <marker> <name>`), so a client finds a window's owner in one query (feature token `all`; not combinable with `-t`). Bare form: one `@N: name` line per window, globally | — |
-| `list-sessions` | `[-t <workspace>]` | One line per session, every workspace when bare (workspace order, then session order): `+W: wname: $N: name` — the session id is the last `$<digits>:` marker; `-t` restricts the listing to one workspace | — |
+| `list-panes` | `[-t <window\|session\|pane>] [-F format]` | One `%N <leaf> <marker>` line per pane in layout leaf order (`leaf` is the deterministic index mapping tmux layout-string leaves to pane ids; `*` marks the window's active pane). `-t` scopes to one window — a session target means its active window, a pane target its owning window, a name a window then a session (every scope a client can name). `-F` replaces the row shape with one expansion per pane (`#{session_id}`, `#{session_name}`, `#{window_id}`, `#{window_name}`, `#{pane_id}`, `#{pane_active}`, `#{pane_leaf}`; an unknown name expands to nothing). Bare form: one `%N` line per pane, globally | — |
+| `list-windows` | `[-t <session>]`, `-a`, `[-F format]` | One `@N <marker> <name>` line per window of that session in window order (`*` marks the session's active window; the name is the line remainder, so spaced names survive). `-a`: every session's rows, each prefixed with its session id (`$S @N <marker> <name>`), so a client finds a window's owner in one query (feature token `all`; not combinable with `-t`). `-F` replaces the row shape with one expansion per window (`#{session_id}`, `#{session_name}`, `#{window_id}`, `#{window_name}`, `#{window_active}`). Bare form: one `@N: name` line per window, globally | — |
+| `list-sessions` | `[-t <workspace>] [-F format]` | One line per session, every workspace when bare (workspace order, then session order): `+W: wname: $N: name` — the session id is the last `$<digits>:` marker; `-t` restricts the listing to one workspace. `-F` replaces the row shape with one expansion per session (`#{workspace_id}`, `#{workspace_name}`, `#{session_id}`, `#{session_name}`) | — |
+| `has-session` | `-t <session>` | empty when the session resolves; `%error` naming it otherwise — the exit-code probe agents script against (exit 0/1 through `--cmd`) | — |
 | `list-agents` | — | Roster: one `%N <agent> <state> <source>` line per state-carrying pane (see below) | — |
 | `list-commands` | — | One line per dispatchable command, sorted: `name [feature …]`, plus a trailing daemon-level `features replay-held-state` line (see the capability-discovery bullet below) | — |
 | `client-snapshot` | `-t <window>` | One reply carrying the attach client's whole status read: `snapshot 1`, then `workspace`, `session`, `window`, `pane` and `agent` rows (see the client-snapshot bullet below) | — |
 | `capture-pane` | `-t <pane> [-S start] [-E end] [-e]` | The captured lines | — |
-| `send-keys` | `-t <pane> <keys>` | empty | — (space lives inside a quoted run; see below) |
+| `send-keys` | `-t <pane> <keys> [--enter]` | empty | — (space lives inside a quoted run; see below) |
 | `refresh-client` | `-t <pane> [-C WxH] [-p WxH] [-I border=B,gap=N,gutter=G]` or `[-C WxH] [-p WxH] [-I …]` | Pane's screen-restore replay (with `-t`, no `-C`); empty otherwise | `%layout-change` (with `-C`) |
 | `set-buffer` | `<content>` or `-H <hex bytes…>` (one byte per token, the `send-keys -H` form — the escape hatch for content a line-delimited wire cannot carry, newlines included) | empty | — |
 | `set-client-colors` | `-f rrggbb` and/or `-b rrggbb` | empty | — |
@@ -694,6 +724,8 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `paste-buffer` | `-t <pane>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
 | `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit`/`applied: daemon.exit-empty` when the file flips either), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | `%config-changed` to every client when the file re-read succeeded (an `%error` reply broadcasts nothing) |
+| `show-options` | — | One `key=value` line per applied daemon setting (booleans as `on`/`off`): `exit-empty`, `remain-on-exit`, `mode`, `prefix`, `reload`, `socket`, `state-dir`, `pane-endpoints`, `expose-control-socket` | — |
+| `set-option` | `<key> <value>` | empty. The LIVE keys are `exit-empty` and `remain-on-exit` (`on`/`off`, also `true`/`false`); everything else is refused as restart-required. The change is volatile — the config file stays the durable record, and `reload-config` re-reads over it | — |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:

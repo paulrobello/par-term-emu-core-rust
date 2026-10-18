@@ -64,6 +64,8 @@ fn serve_one(stream: crate::mux::LocalStream, tx: std::sync::mpsc::Sender<(Strin
             "version" => "9.9.9+deadbeef".to_string(),
             "list-commands" => "list-commands\nfeatures replay-held-state\n".to_string(),
             "list-panes" => "%0\n".to_string(),
+            "list-sessions" => "$0: default\n".to_string(),
+            "list-windows" => "@0 * default\n".to_string(),
             // The resync's scripted restore body: absolute row
             // addressing like the real encoder's, ending with the
             // pane's real cursor CUP (row 2, col 9 — right after
@@ -278,8 +280,8 @@ fn no_daemon_path_reports_no_daemon_without_spawning() {
     assert!(!path.exists(), "attach must not spawn a daemon");
 }
 
-/// A real server answers the whole handshake; attach resolves the
-/// newest session's newest pane, pumps, and exits cleanly when the
+/// A real server answers the whole handshake; attach resolves the only
+/// session's active pane, pumps, and exits cleanly when the
 /// daemon shuts down (`%exit`). The headless test ends through that
 /// shutdown — stdin never delivers bytes here, so `%exit` is the
 /// deterministic exit path.
@@ -382,21 +384,34 @@ fn prefix_parsing_covers_tmux_spellings_and_literals() {
     assert_eq!(parse_prefix("C-bb"), None);
 }
 
-/// The default target: the newest session's newest pane — the highest
-/// pane id in the global roster. A real tree over the default factory
-/// pins the pick with one pane.
+/// The default target: the only session's active window's marked pane,
+/// via the target-less rule (list-sessions picks the single session — no
+/// create, no refusal). A fake daemon scripts the roster.
 #[test]
-fn default_target_is_the_newest_sessions_newest_pane() {
+fn default_target_is_the_only_sessions_active_pane() {
     let (daemon, path) = FakeDaemon::bind("resolve");
     {
         let mut conn = conn::AttachConn::connect(&path).expect("connect");
         let pane = resolve_target(&mut conn, None).expect("resolve");
         assert_eq!(pane, "%0");
-        // The fake saw list-panes after the handshake's four lines.
-        let lines = recorded(&daemon.received, 5);
+        // The fake saw list-sessions, list-windows -t $0, and
+        // list-panes -t @0 after the handshake's four lines — and no
+        // new-workspace, because a session already existed.
+        let lines = recorded(&daemon.received, 7);
+        let names: Vec<&str> = lines.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !names.contains(&"new-workspace"),
+            "one existing session must attach without a create: {lines:?}"
+        );
+        let windows_line = &lines[5].1;
         assert_eq!(
-            lines[4].0, "list-panes",
-            "handshake then list-panes: {lines:?}"
+            windows_line, "list-windows -t $0",
+            "the session narrows through its active window: {lines:?}"
+        );
+        let panes_line = &lines[6].1;
+        assert_eq!(
+            panes_line, "list-panes -t @0",
+            "the window narrows to its marked pane: {lines:?}"
         );
     }
 }
@@ -467,6 +482,21 @@ fn explicit_targets_resolve_through_the_daemon() {
             }
             let trimmed = line.trim_end();
             if trimmed.is_empty() {
+                continue;
+            }
+            // A window-shaped target is NOT a session: the real daemon
+            // errors `list-windows -t @N`, and the resolver's
+            // session-before-window probe order depends on that.
+            if trimmed == "list-windows -t @1" {
+                number += 1;
+                tx.send(("list-windows".to_owned(), trimmed.to_owned()))
+                    .ok();
+                writer
+                    .write_all(
+                        crate::mux::emit_block(number, "no such session: @1", false).as_bytes(),
+                    )
+                    .ok();
+                writer.flush().ok();
                 continue;
             }
             let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();

@@ -4,22 +4,21 @@
 use super::*;
 
 pub(super) fn parse_list_panes(a: &Args<'_>) -> Result<MuxCommand, String> {
-    // `-t <window>` scopes the listing to one window (tmux's
-    // `list-panes -t <window>`); the bare form stays global. Any other
-    // positional is a client bug the reject_positionals rule exists for.
-    let window = match a.quoted_flag("-t")? {
-        Some(raw) => {
-            Some(Target::parse(&raw).map_err(|_| format!("invalid window target: {raw}"))?)
-        }
-        None => None,
-    };
+    // `-t <window|session|pane>` scopes the listing (R7): a window lists
+    // its own panes, a session its active window's, a pane its owning
+    // window's — every scope a client can name. The bare form stays
+    // global.
+    let target = a.any_target_opt("-t", "window")?;
     reject_positionals(a, LIST_PANES_VALUE_FLAGS)?;
-    Ok(MuxCommand::ListPanes { window })
+    Ok(MuxCommand::ListPanes {
+        target,
+        format: a.quoted_flag("-F")?,
+    })
 }
 
-/// tmux's value-taking `list-panes` flags (QA-219's rule): the target, and
-/// the format flags a tmux-shaped sender may emit that this daemon ignores
-/// rather than misreading as pane names.
+/// tmux's value-taking `list-panes` flags (QA-219's rule). `-F` rides
+/// here too — reject_positionals must skip its value while the parser
+/// above reads the format out of it.
 pub(super) const LIST_PANES_VALUE_FLAGS: &[&str] = &["-t", "-F", "-f"];
 
 pub(super) fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -112,12 +111,16 @@ pub(super) fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32)
 pub(super) fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     let target = a.any_target("-t", "pane")?;
     let (direction, percent) = parse_split_geometry(a)?;
+    // The trailing start command (R4): tmux's positional form. The
+    // geometry flags are valueless, `-t`/`-c`/`-p` take values.
+    let command = a.start_command(&["-t", "-c", "-p"], &[])?;
     Ok(MuxCommand::SplitWindow {
         target,
         direction,
         percent,
         before: a.has_flag("-b"),
         start_dir: a.quoted_flag("-c")?,
+        command,
     })
 }
 
