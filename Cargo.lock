@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "par-mux"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "par-term-emu-core"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "par-term-emu-core-rust"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "anyhow",
  "axum",
