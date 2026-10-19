@@ -72,6 +72,10 @@ pub struct PyTmuxNotification {
     /// Owning workspace id `+N` (for `agent-state-changed`; None when the
     /// daemon sent no `ws=` token)
     pub workspace_id: Option<String>,
+
+    /// The agent state's message (the blocked reason, for
+    /// `agent-state-changed`; None when the daemon sent no `msg=` token)
+    pub message: Option<String>,
 }
 
 #[pymethods]
@@ -159,6 +163,7 @@ impl PyTmuxNotification {
             window_raw_flags: None,
             raw_line: None,
             workspace_id: None,
+            message: None,
         }
     }
 }
@@ -223,7 +228,8 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             ClientLeft { client => client: own, session_id => session_id: opt, window_id => window_id: opt };
             Exit;
             AgentStateChanged { pane_id => pane_id: own, agent => name: own, state => value: own,
-                                source => source: own, ws => workspace_id: nonempty };
+                                source => source: own, ws => workspace_id: nonempty,
+                                msg => message: nonempty };
             AgentReleased { pane_id => pane_id: own, agent => name: own };
             // Identity only — the fresh telemetry blob lives on the
             // list-agents roster, so clients re-query.
@@ -544,6 +550,7 @@ mod tests {
                 state: "working".to_string(),
                 source: "hook".to_string(),
                 ws: "+1".to_string(),
+                msg: String::new(),
             },
             TmuxNotification::AgentReleased {
                 pane_id: "p-agent-released".to_string(),

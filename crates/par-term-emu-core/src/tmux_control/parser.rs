@@ -601,7 +601,7 @@ impl TmuxControlParser {
         // state), and unknown keys are ignored so a future token never
         // folds into it.
         let mut end = parts.len();
-        let (mut source, mut ws) = (String::new(), String::new());
+        let (mut source, mut ws, mut msg) = (String::new(), String::new(), String::new());
         while end > 3 {
             let Some((key, value)) = parts[end - 1].split_once('=') else {
                 break;
@@ -611,6 +611,18 @@ impl TmuxControlParser {
             }
             match key {
                 "source" => source = value.to_string(),
+                // The blocked reason rides the standard base64 of the
+                // whitespace-collapsed text (any text, one token);
+                // malformed base64 or non-UTF-8 stays empty — the
+                // consumer renders no message, never garbage.
+                "msg" => {
+                    use base64::Engine as _;
+                    msg = base64::engine::general_purpose::STANDARD
+                        .decode(value)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .unwrap_or_default()
+                }
                 "ws" => ws = value.to_string(),
                 _ => {}
             }
@@ -624,6 +636,7 @@ impl TmuxControlParser {
             state: parts[2..end].join(" "),
             source,
             ws,
+            msg,
         })
     }
 

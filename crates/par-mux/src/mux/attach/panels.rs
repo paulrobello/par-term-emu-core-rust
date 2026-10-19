@@ -2,6 +2,8 @@
 //! modes: key spelling, help rows and filtering, prompt panels, the
 //! session/window picker, and the workspace sidebar.
 
+use super::ManagementKey;
+
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
 /// Space spelling), the literal character otherwise.
 pub(crate) fn spell_key(byte: u8) -> String {
@@ -82,6 +84,10 @@ pub(crate) fn help_rows(
                 "reload the config".to_string(),
             ),
             (
+                format!("{p} {}", spell_key(m.palette)),
+                "command palette".to_string(),
+            ),
+            (
                 format!("{p} {}", spell_key(m.respawn)),
                 "respawn the held-dead pane".to_string(),
             ),
@@ -151,6 +157,14 @@ pub(crate) fn help_rows(
             (
                 format!("{p} {}", spell_key(m.kill_pane)),
                 "kill the focused pane".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.break_pane)),
+                "break the pane out to a new tab".to_string(),
+            ),
+            (
+                format!("{p} {}", spell_key(m.join_pane)),
+                "join the pane into a picked tab".to_string(),
             ),
             (format!("{p} o"), "cycle panes".to_string()),
             (
@@ -433,7 +447,35 @@ pub(crate) enum PickerRef {
     /// One workspace row (the workspace picker): the workspace's index
     /// into the picker's queried workspace list.
     Workspace(usize),
+    /// One command row (the keyboard palette): the action's index into
+    /// [`PALETTE_ACTIONS`].
+    Command(usize),
 }
+
+/// The keyboard palette's actions (`prefix :`): every management chord
+/// plus the settings/help/reload/detach paths, filterable by the picker's
+/// `/`. The labels show; the action dispatches through
+/// [`crate::mux::attach::ManagementKey`] where one exists.
+pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
+    (None, "settings"),
+    (None, "keybinds"),
+    (None, "reload config"),
+    (None, "detach"),
+    (Some(ManagementKey::NewWindow), "new window"),
+    (Some(ManagementKey::BreakPane), "break pane out"),
+    (Some(ManagementKey::JoinPane), "join pane into tab"),
+    (Some(ManagementKey::SplitRight), "split right"),
+    (Some(ManagementKey::SplitDown), "split down"),
+    (Some(ManagementKey::KillPane), "kill pane"),
+    (Some(ManagementKey::Zoom), "zoom pane"),
+    (Some(ManagementKey::RenameWindow), "rename window"),
+    (Some(ManagementKey::RenamePane), "rename pane"),
+    (Some(ManagementKey::WorkspacePicker), "workspace picker"),
+    (Some(ManagementKey::Sidebar), "toggle sidebar"),
+    (Some(ManagementKey::StatusBar), "toggle status bar"),
+    (Some(ManagementKey::WorkspaceNext), "next workspace"),
+    (Some(ManagementKey::WorkspacePrev), "previous workspace"),
+];
 
 /// The picker's display rows from the queried entries: one accent
 /// header per session (` $N: name`, `>`-marked when the session is the
@@ -617,6 +659,9 @@ pub(crate) struct AgentFacts<'a> {
     pub state: &'a str,
     pub workspace: Option<&'a str>,
     pub project: Option<&'a str>,
+    /// The state's message (the blocked reason); the `message` token
+    /// renders it, and drops out when absent.
+    pub message: Option<&'a str>,
 }
 
 /// The status-glyph placeholder an `agent-rows` line leads with: the
@@ -641,6 +686,7 @@ pub(crate) fn agent_entry_lines(rows: &[Vec<String>], facts: &AgentFacts<'_>) ->
                 "state" => Some(facts.state.to_string()),
                 "workspace" => facts.workspace.map(str::to_string),
                 "project" => facts.project.map(str::to_string),
+                "message" => facts.message.filter(|m| !m.is_empty()).map(str::to_string),
                 "agent" => Some(facts.agent.to_string()),
                 "pane" => Some(format!("%{}", facts.pane)),
                 _ => None,

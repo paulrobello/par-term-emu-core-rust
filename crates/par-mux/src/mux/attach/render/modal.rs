@@ -98,6 +98,11 @@ impl WindowSession {
         if matches!(self.modal, Modal::Scroll) {
             self.modal = Modal::None;
         }
+        self.renderer.set_selection(None);
+        self.copy_anchor = None;
+        self.scroll_query = None;
+        self.scroll_matches.clear();
+        self.scroll_match_ix = 0;
         if let Some(id) = self.renderer.focused() {
             self.renderer.exit_scroll_mode(id);
         }
@@ -139,7 +144,195 @@ impl WindowSession {
             }
             (TermKey::End, 0) => self.leave_scroll_mode(),
             (TermKey::Char, 0) if ev.codepoint == u32::from(b'q') => self.leave_scroll_mode(),
+            // The copy-mode extension (the TUI audit's R1): v anchors the
+            // line selection, y copies it (OSC 52), / types a search the
+            // committed query of which n/N walk.
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'v') => {
+                if let Some(id) = self.renderer.focused() {
+                    self.toggle_line_selection(id);
+                }
+            }
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'y') => self.copy_selection(),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => self.begin_scroll_search(),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'n') => self.scroll_search(1),
+            (TermKey::Char, 0) if ev.codepoint == u32::from(b'N') => self.scroll_search(-1),
             _ => {}
         }
+        // The viewport moved: while a selection is up, its head follows.
+        if let Some(id) = self.renderer.focused() {
+            self.update_selection_head(id);
+        }
+    }
+
+    /// Toggle the line selection: `v` anchors at the viewport's top line
+    /// and the scrolling viewport extends it, a second `v` clears.
+    pub(super) fn toggle_line_selection(&mut self, pane: u32) {
+        if self.renderer.selection.is_some() {
+            self.renderer.set_selection(None);
+            self.copy_anchor = None;
+            self.chrome.flash("selection cleared".to_string());
+            self.draw_status_row();
+            return;
+        }
+        let Some(top) = self.renderer.viewport_top_line(pane) else {
+            return;
+        };
+        self.copy_anchor = Some(top);
+        self.renderer.set_selection(Some((pane, top, top)));
+        self.chrome
+            .flash("selecting lines — scroll, then y copies".to_string());
+        self.draw_status_row();
+    }
+
+    /// While a selection is up, the viewport's top line is its moving
+    /// head.
+    pub(super) fn update_selection_head(&mut self, pane: u32) {
+        let Some((p, anchor, _)) = self.renderer.selection else {
+            return;
+        };
+        if p != pane {
+            return;
+        }
+        let Some(top) = self.renderer.viewport_top_line(pane) else {
+            return;
+        };
+        self.renderer
+            .set_selection(Some((p, anchor.min(top), anchor.max(top))));
+    }
+
+    /// y: copy the selected lines' text as an OSC 52 clipboard write —
+    /// the host terminal's clipboard policy applies — and clear the
+    /// selection. The escape rides the frame's outbox with the
+    /// notifications.
+    pub(super) fn copy_selection(&mut self) {
+        let Some(text) = self.renderer.selection_text() else {
+            return;
+        };
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        let lines = text.lines().count();
+        self.notify
+            .outbox
+            .extend_from_slice(format!("\x1b]52;c;{encoded}\x1b\\").as_bytes());
+        self.renderer.set_selection(None);
+        self.copy_anchor = None;
+        self.chrome.flash(format!("copied {lines} lines"));
+        self.draw_status_row();
+    }
+
+    /// `/`: the search line lives on the status row's flash; typed bytes
+    /// route through [`Self::search_typing_byte`] until Enter or Escape.
+    pub(super) fn begin_scroll_search(&mut self) {
+        self.scroll_query = Some(String::new());
+        self.chrome.flash("search: ".to_string());
+        self.draw_status_row();
+    }
+
+    /// One plain byte while the search line is up. Returns whether the
+    /// line is still up.
+    pub(super) fn search_typing_byte(&mut self, byte: u8) -> bool {
+        let Some(query) = self.scroll_query.as_mut() else {
+            return false;
+        };
+        match byte {
+            0x1b => {
+                self.scroll_query = None;
+                self.chrome.flash("search cancelled".to_string());
+                self.draw_status_row();
+                false
+            }
+            b'\r' => {
+                let query = std::mem::take(&mut self.scroll_query).unwrap_or_default();
+                self.run_scroll_search(&query, 1);
+                false
+            }
+            0x7f => {
+                query.pop();
+                self.chrome.flash(format!("search: {query}"));
+                self.draw_status_row();
+                true
+            }
+            b if b.is_ascii_graphic() || b == b' ' => {
+                query.push(b as char);
+                self.chrome.flash(format!("search: {query}"));
+                self.draw_status_row();
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Find `query` in the focused pane's scrollback + live text and
+    /// walk it: `dir` 1 takes the next match at or after the viewport
+    /// top (wrapping), -1 the previous; the viewport lands on the match
+    /// and the flash names the index.
+    fn run_scroll_search(&mut self, query: &str, dir: i32) {
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        if query.is_empty() {
+            return;
+        }
+        // Collect the matches once per query; n/N re-walk them.
+        let mut matches: Vec<usize> = Vec::new();
+        if let Some(emulator) = self.renderer.pane_terminal(pane) {
+            let grid = emulator.active_grid();
+            let len = grid.scrollback_len();
+            for line in 0..len {
+                if let Some(cells) = grid.scrollback_line(line) {
+                    let text: String = cells.iter().map(|c| c.c()).collect();
+                    if text.to_lowercase().contains(&query.to_lowercase()) {
+                        matches.push(line);
+                    }
+                }
+            }
+            for row in 0..grid.rows() {
+                if grid
+                    .row_text(row)
+                    .to_lowercase()
+                    .contains(&query.to_lowercase())
+                {
+                    matches.push(len + row);
+                }
+            }
+        }
+        if matches.is_empty() {
+            self.chrome.flash(format!("no matches: {query}"));
+            self.draw_status_row();
+            return;
+        }
+        self.scroll_matches = matches;
+        self.scroll_search(dir);
+    }
+
+    /// Walk the committed match list (`n` forward, `N` back): land the
+    /// viewport on the match line.
+    pub(super) fn scroll_search(&mut self, dir: i32) {
+        if self.scroll_matches.is_empty() {
+            self.chrome.flash("no search".to_string());
+            self.draw_status_row();
+            return;
+        }
+        let count = self.scroll_matches.len();
+        let next = if dir > 0 {
+            (self.scroll_match_ix + 1).min(count.saturating_sub(1))
+        } else {
+            self.scroll_match_ix.saturating_sub(1)
+        };
+        self.scroll_match_ix = next;
+        let line = self.scroll_matches[next];
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        if let Some(emulator) = self.renderer.pane_terminal(pane) {
+            let len = emulator.active_grid().scrollback_len();
+            let offset = len.saturating_sub(line);
+            let current = self.renderer.scroll_offset_of(pane);
+            self.renderer
+                .scroll_viewport(pane, offset as isize - current as isize);
+        }
+        self.chrome
+            .flash(format!("match {} of {}", next + 1, count));
+        self.draw_status_row();
     }
 }

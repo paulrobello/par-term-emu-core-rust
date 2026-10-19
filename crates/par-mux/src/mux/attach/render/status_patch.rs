@@ -42,6 +42,7 @@ impl WindowSession {
         agent: &str,
         state: Option<&str>,
         ws: &str,
+        msg: &str,
     ) {
         // The notification compares against the state BEFORE the patch.
         if let (Some(state), Some(pane)) = (
@@ -56,9 +57,9 @@ impl WindowSession {
                 .iter()
                 .find(|entry| entry.pane == pane)
                 .map(|entry| entry.state.clone());
-            self.notify_agent_state(pane, agent, previous.as_deref(), state, ws);
+            self.notify_agent_state(pane, agent, previous.as_deref(), state, ws, msg);
         }
-        let patched = self.status.patch_agent(pane_id, agent, state, ws);
+        let patched = self.status.patch_agent(pane_id, agent, state, ws, msg);
         if state.is_some() && patched {
             self.status_dirty = true;
         }
@@ -79,6 +80,22 @@ impl WindowSession {
         };
         self.held.insert(pane, exit_code);
         if self.renderer.layout().iter().any(|r| r.pane == pane) {
+            // Discoverability (the TUI audit's F4): under the default
+            // auto-remove the held exit cue never gets to show — the
+            // reaper strips the pane moments later — so the death itself
+            // announces the respawn affordance and its opt-in. The flash
+            // spells the live chords like the held cue does.
+            let code = exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let chord = format!(
+                "{} {}",
+                crate::mux::attach::panels::spell_key(self.prefix),
+                crate::mux::attach::panels::spell_key(self.management.respawn)
+            );
+            self.chrome.flash(format!(
+                "pane %{pane} exited ({code}) — {chord} respawns when [daemon] remain-on-exit holds the pane"
+            ));
             self.draw_status_row();
         }
     }

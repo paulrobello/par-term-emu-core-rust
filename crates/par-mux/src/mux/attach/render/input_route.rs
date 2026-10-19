@@ -52,6 +52,11 @@ pub(super) enum Hit {
     HelpScroll(isize),
     /// A right press on a tab: open that window's (`@N`) context menu.
     TabMenu(String),
+    /// A wheel over an overflowing tab strip: shift the visible run.
+    TabWheel(isize),
+    /// Motion or release on the strip while a tab drag is armed: the
+    /// raw host column to drop at.
+    TabDrop(u16),
     /// A left press on the tab strip at this raw host column.
     TabPress(u16),
     /// A wheel over a pane: scroll the client's scrollback, or forward
@@ -126,6 +131,17 @@ impl WindowSession {
         bytes: &[u8],
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> bool {
+        // The scroll-mode search line owns the bytes while it is up —
+        // before every other router (the viewport's pane must see
+        // nothing of the query).
+        if self.scroll_query.is_some() {
+            for &byte in bytes {
+                if !self.search_typing_byte(byte) {
+                    break;
+                }
+            }
+            return false;
+        }
         if self.feed_modal_run(bytes, conn) {
             return false;
         }
@@ -330,6 +346,9 @@ impl WindowSession {
             (m.split_right, ManagementKey::SplitRight),
             (m.split_down, ManagementKey::SplitDown),
             (m.kill_pane, ManagementKey::KillPane),
+            (m.break_pane, ManagementKey::BreakPane),
+            (m.join_pane, ManagementKey::JoinPane),
+            (m.palette, ManagementKey::Palette),
             (m.new_window, ManagementKey::NewWindow),
             (m.swap_prev, ManagementKey::SwapPrev),
             (m.swap_next, ManagementKey::SwapNext),
@@ -565,6 +584,11 @@ impl WindowSession {
             Hit::HelpScroll(delta) => self.help_scroll_by(delta),
             Hit::TabMenu(id) => self.open_menu(MenuTarget::Tab(id)),
             Hit::TabPress(rx) => self.tab_click(conn, rx),
+            Hit::TabWheel(delta) => {
+                self.chrome.tab_strip.wheel(delta);
+                self.draw_tab_strip();
+            }
+            Hit::TabDrop(rx) => self.tab_drop(conn, rx),
             Hit::Wheel { rect, x, cy, delta } => {
                 let forwards = self.pane_accepts_mouse(rect.pane, &mouse);
                 if !forwards && self.renderer.wheel_scroll(x, cy, delta) {
@@ -883,10 +907,22 @@ impl WindowSession {
                 .and_then(|index| self.status.windows().get(index))
                 .map_or(Hit::Consumed, |(id, _)| Hit::TabMenu(id.clone()));
         }
+        if mouse.is_wheel_up() || mouse.is_wheel_down() {
+            // A wheel only matters when the strip hides tabs; anything
+            // else falls through consumed (the panes get nothing from
+            // the strip row).
+            let delta = if mouse.is_wheel_up() { 3 } else { -3 };
+            if self.chrome.tab_strip.overflowing() {
+                return Hit::TabWheel(delta);
+            }
+            return Hit::Consumed;
+        }
         let is_press =
             !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down();
         if is_press {
             Hit::TabPress(rx)
+        } else if self.tab_drag_from.is_some() {
+            Hit::TabDrop(rx)
         } else {
             Hit::Consumed
         }
@@ -950,6 +986,9 @@ impl WindowSession {
     /// a pad/marker column, does nothing. No pane focus, no pane
     /// forwarding.
     pub(super) fn tab_click(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, x: u16) {
+        // A press arms a drag regardless of what the press does: motion
+        // to another tab and a release reorder.
+        self.tab_drag_from = self.chrome.tab_strip.hit_test(x);
         if self.chrome.tab_strip.plus_hit(x) {
             self.enter_prompt(PromptTarget::NewWindow);
             return;
@@ -965,6 +1004,38 @@ impl WindowSession {
             return; // the shown window: a no-op click
         }
         self.land_window(conn, &id);
+    }
+
+    /// Motion or release on the strip while a tab drag is armed: a drop
+    /// on another tab reorders (`move-window -s @from -t <slot>`, the
+    /// %sessions-changed reply refreshing the strip); a drop on the
+    /// origin tab is just the click the press already handled. The wheel
+    /// scroll offset resets with the fresh order.
+    pub(super) fn tab_drop(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, x: u16) {
+        let Some(from) = self.tab_drag_from.take() else {
+            return;
+        };
+        let Some(to) = self.chrome.tab_strip.hit_test(x) else {
+            return;
+        };
+        if to == from {
+            return;
+        }
+        let Some((id, _)) = self.status.windows().get(from) else {
+            return;
+        };
+        let id = id.clone();
+        self.send_then(
+            conn,
+            &format!("move-window -s {id} -t {to}"),
+            |s, _c, reply| {
+                if reply.ok {
+                    s.chrome.tab_strip.reset_scroll();
+                    s.status_dirty = true;
+                    s.draw_tab_strip();
+                }
+            },
+        );
     }
 
     /// Whether the pane's negotiated mouse mode accepts THIS report —

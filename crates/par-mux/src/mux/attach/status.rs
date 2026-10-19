@@ -123,12 +123,14 @@ impl StatusFacts {
     fn agent_entry(row: AgentRow) -> Option<RosterEntry> {
         let workspace = row.workspace().map(str::to_string);
         let project = row.project();
+        let message = row.reason();
         Some(RosterEntry {
             pane: pane_number(&row.pane)?,
             agent: row.agent,
             state: row.state,
             workspace,
             project,
+            message,
         })
     }
 
@@ -230,6 +232,10 @@ pub(crate) struct RosterEntry {
     /// `None` until a probe sweep reached the pane. A state push carries
     /// no project, so a patch keeps the known one.
     pub project: Option<String>,
+    /// The state's message (the blocked reason), decoded from the row's
+    /// `reason=` extra or a push's `msg=` token. `None` when the daemon
+    /// holds none — the roster renders no line, never a placeholder.
+    pub message: Option<String>,
 }
 
 /// A window row's display name: an unnamed window shows its id, and a
@@ -597,9 +603,16 @@ impl StatusState {
         &self.pane_titles
     }
 
-    /// The daemon's active workspace id, `"+N"`.
-    pub(crate) fn active_workspace(&self) -> Option<&str> {
-        self.active_workspace.as_deref()
+    /// The workspace the client's chrome highlights: the DISPLAYED
+    /// session's own workspace, falling back to the daemon's active one
+    /// (an older daemon whose session rows carry no workspace). The
+    /// initial `attach -t` used to land on the displayed session's
+    /// windows while the status segment and side panel shaded the
+    /// daemon's active workspace — the TUI audit's F1.
+    pub(crate) fn chrome_workspace(&self) -> Option<&str> {
+        self.session_workspace
+            .as_deref()
+            .or(self.active_workspace.as_deref())
     }
 
     /// Patch one pane's roster entry from a notification payload:
@@ -616,6 +629,7 @@ impl StatusState {
         agent: &str,
         state: Option<&str>,
         ws: &str,
+        message: &str,
     ) -> bool {
         let Some(pane) = pane_number(pane) else {
             return false;
@@ -629,6 +643,10 @@ impl StatusState {
                     if !ws.is_empty() {
                         entry.workspace = Some(ws.to_string());
                     }
+                    // An empty message means the daemon holds none (the
+                    // push token only rides when set), so the patch
+                    // mirrors the roster refresh: absent replaces.
+                    entry.message = (!message.is_empty()).then(|| message.to_string());
                     false
                 }
                 Err(index) => {
@@ -640,6 +658,7 @@ impl StatusState {
                             state: state.to_string(),
                             workspace: (!ws.is_empty()).then(|| ws.to_string()),
                             project: None,
+                            message: (!message.is_empty()).then(|| message.to_string()),
                         },
                     );
                     ws.is_empty()
@@ -711,7 +730,7 @@ impl StatusState {
             if let Some(name) = self
                 .workspaces
                 .iter()
-                .find(|(id, _)| Some(id.as_str()) == self.active_workspace.as_deref())
+                .find(|(id, _)| Some(id.as_str()) == self.chrome_workspace())
                 .map(|(_, name)| name)
             {
                 push(&mut segments, format!(" {name} "), true, false, true);
@@ -721,7 +740,7 @@ impl StatusState {
                 if index > 0 {
                     push(&mut segments, " | ".to_string(), false, false, false);
                 }
-                let active = self.active_workspace.as_deref() == Some(id.as_str());
+                let active = self.chrome_workspace() == Some(id.as_str());
                 push(&mut segments, format!(" {name} "), false, !active, active);
             }
             if !self.workspaces.is_empty() {
@@ -955,7 +974,11 @@ mod tests {
             active_window: Some("@0".to_string()),
             pane_title: "~/src".to_string(),
             pane_titles: Vec::new(),
-            agents: vec![entry(1, "claude", "working"), entry(2, "kimi", "blocked")],
+            agents: vec![entry(1, "claude", "working"), {
+                let mut kimi = entry(2, "kimi", "blocked");
+                kimi.message = Some("wait".to_string());
+                kimi
+            }],
         }
     }
 
@@ -967,7 +990,25 @@ mod tests {
             state: state.to_string(),
             workspace: None,
             project: None,
+            message: None,
         }
+    }
+
+    /// The blocked reason decodes from the row's `reason=` base64 extra;
+    /// a row without one keeps the message empty.
+    #[test]
+    fn agent_reason_decodes_into_the_entry_message() {
+        let row = crate::mux::ipc::AgentRow::parse("%2 kimi blocked hook reason=d2FpdA==")
+            .expect("parses");
+        let entry = super::StatusFacts::agent_entry(row).expect("entry");
+        assert_eq!(entry.message.as_deref(), Some("wait"));
+        let bare = crate::mux::ipc::AgentRow::parse("%2 kimi blocked hook").expect("parses");
+        assert_eq!(
+            super::StatusFacts::agent_entry(bare)
+                .expect("entry")
+                .message,
+            None
+        );
     }
 
     fn lines(body: &[&str]) -> Vec<String> {
@@ -1142,11 +1183,11 @@ mod tests {
     fn payload_patches_update_agents_and_window_names() {
         let mut got = state();
         assert!(
-            !got.patch_agent("%2", "kimi", Some("working"), ""),
+            !got.patch_agent("%2", "kimi", Some("working"), "", ""),
             "update"
         );
         assert!(
-            !got.patch_agent("%0", "pi", Some("blocked"), "+1"),
+            !got.patch_agent("%0", "pi", Some("blocked"), "+1", ""),
             "an insert carrying its ws needs no refresh (ENH-061)"
         );
         assert_eq!(
@@ -1158,12 +1199,13 @@ mod tests {
                     state: "blocked".to_string(),
                     workspace: Some("+1".to_string()),
                     project: None,
+                    message: None,
                 },
                 entry(1, "claude", "working"),
                 entry(2, "kimi", "working"),
             ]
         );
-        assert!(!got.patch_agent("%1", "claude", None, ""), "release");
+        assert!(!got.patch_agent("%1", "claude", None, "", ""), "release");
         assert!(got.agents.iter().all(|e| e.pane != 1));
         got.patch_window_name("@1", "  edit  me ");
         assert_eq!(got.windows[1], ("@1".to_string(), "edit me".to_string()));
@@ -1211,6 +1253,47 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert!(dim.contains(" beta "), "inactive tab dim: {dim}");
+    }
+
+    /// The chrome highlights the DISPLAYED session's workspace, not the
+    /// daemon's active one (the TUI audit's F1: the initial `attach -t`
+    /// lands on the session's windows while the shading used to follow
+    /// the daemon-wide pointer). With no session workspace the daemon's
+    /// active one still shades.
+    #[test]
+    fn compose_shades_the_displayed_sessions_workspace() {
+        let mut got = state();
+        got.session_workspace = Some("+1".to_string());
+        let segments = got.compose(120, None, false);
+        let shaded = joined(
+            &segments
+                .iter()
+                .filter(|s| s.shaded)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            shaded.contains(" beta "),
+            "the displayed session's workspace shades: {shaded}"
+        );
+        assert!(
+            !shaded.contains(" alpha "),
+            "the daemon-active workspace does not: {shaded}"
+        );
+        let mut fallback = state();
+        fallback.session_workspace = None;
+        let segments = fallback.compose(120, None, false);
+        let shaded = joined(
+            &segments
+                .iter()
+                .filter(|s| s.shaded)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            shaded.contains(" alpha "),
+            "no session workspace falls back to the daemon's: {shaded}"
+        );
     }
 
     /// The composed line carries every fact the card lists: sessions,

@@ -23,9 +23,12 @@ pub(super) struct Removal {
 /// client offers on a crashed program) or REMOVE them (remain-on-exit
 /// `= false`, the default: the kill-pane contract runs — the pane goes, its
 /// window closes when it was the last pane, and an emptied session cascades
-/// with it). Auto-remove never empties a workspace: a pane that is its
-/// workspace's last ([`MuxTree::is_workspace_last_pane`]) is held dead as
-/// under remain-on-exit (keep-one-tab). Explicit `kill-*` commands keep
+/// with it). The removal runs the FULL cascade: a pane that is its
+/// workspace's last is removed too, emptying the workspace and cascading it
+/// closed — Paul's rule (2026-10-18) that a pane closes when its child
+/// exits — unless that workspace opted into keep-one-tab
+/// (`respawn_last`, the `set-workspace-respawn` option), which holds its
+/// last pane for the respawn below instead. Explicit `kill-*` commands keep
 /// their full cascade. The PTY reader flips
 /// `is_running` on EOF; this pass (the accept loop's idle tick,
 /// [`REAP_INTERVAL`]) observes the death ONCE, records the exit code while
@@ -93,19 +96,20 @@ pub(super) fn reap_dead_panes(
     if !remain_on_exit && !just_died.is_empty() {
         let fingerprint = workspace_roster_fingerprint(tree);
         for &(pane_id, _) in &just_died {
-            // Keep-one-tab: an app exit never empties a workspace. The
-            // workspace's last pane is HELD dead (window, session, and
-            // workspace stay; `respawn-pane` restarts it) and announces
-            // only its `%pane-exited`. The test and the kill share one
-            // lock, so of two same-tick deaths in a two-pane workspace the
-            // first is removed and the second, now the last, is held.
-            // Let-bound, NOT an `if let` scrutinee: the scrutinee's lock
-            // temporary would live through the body (parking_lot is not
-            // reentrant) and the window lookup below would deadlock on the
-            // tree — the same trap cmd_kill_pane documents.
+            // Keep-one-tab opt-in: a workspace with `respawn_last` on
+            // holds its last pane dead (window, session, and workspace
+            // stay; the respawn below restarts it). Every other pane —
+            // including a workspace's last — runs the kill-pane cascade.
+            // The test and the kill share one lock, so of two same-tick
+            // deaths in a two-pane workspace the first is removed and the
+            // second, now the last, is held only if the workspace opted
+            // in. Let-bound, NOT an `if let` scrutinee: the scrutinee's
+            // lock temporary would live through the body (parking_lot is
+            // not reentrant) and the window lookup below would deadlock
+            // on the tree — the same trap cmd_kill_pane documents.
             let killed = {
                 let mut guard = tree.lock();
-                if guard.is_workspace_last_pane(pane_id) {
+                if guard.respawns_as_workspace_last_pane(pane_id) {
                     continue;
                 }
                 guard.kill_pane(pane_id)

@@ -611,6 +611,7 @@ pub(crate) fn scrape_tick_with(
                         state: state.to_string(),
                         source: "scrape".to_string(),
                         ws,
+                        msg: String::new(),
                     });
                 }
             }
@@ -1056,6 +1057,7 @@ contains = ["Override Idle"]
                     .workspace_of_pane(pane_id)
                     .map(|w| w.to_string())
                     .unwrap_or_default(),
+                msg: String::new(),
             }
         );
         {

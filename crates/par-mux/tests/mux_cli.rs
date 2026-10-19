@@ -733,6 +733,14 @@ fn pane_env_names(socket: &Path, pane: &str) -> Vec<String> {
         .filter(|l| {
             l.starts_with("PAR_MUX_") && l.chars().all(|c| c.is_ascii_uppercase() || c == '_')
         })
+        // The pane's interactive shell has sourced the invoking machine's
+        // dotfiles by now, and measured reality (~/.bashrc's
+        // PAR_MUX_CONTROL=1) leaks a variable the daemon never exports.
+        // The contract asserts over the daemon's export universe, so the
+        // ambient dotfile copy comes off the measurement; the daemon-side
+        // CONTROL grant keeps its behavioral coverage in the
+        // endpoint-refusal tests.
+        .filter(|l| *l != "PAR_MUX_CONTROL")
         .map(str::to_string)
         .collect();
     names.sort();
@@ -1639,6 +1647,40 @@ fn bare_name_matching_a_command_word_is_refused() {
         "the refusal explains itself: {}",
         run.stderr
     );
+}
+
+/// The reserved name "server" is refused in every name position — bare,
+/// verb-first (`par-mux server stop`), and verb-last (`par-mux status
+/// server` / `par-mux start server`) — with the default-daemon spelling
+/// in the explanation and --socket as the escape (Paul, 2026-10-18).
+#[test]
+fn the_reserved_name_server_is_refused_in_every_name_position() {
+    for args in [
+        vec!["server"],
+        vec!["server", "stop"],
+        vec!["server", "status"],
+        vec!["status", "server"],
+        vec!["start", "server"],
+        vec!["stop", "server"],
+    ] {
+        let run = par_mux(&args);
+        assert_eq!(
+            run.code,
+            Some(2),
+            "the guard refuses {args:?}; stderr: {}",
+            run.stderr
+        );
+        assert!(
+            run.stderr.contains("reserved"),
+            "the refusal explains the reservation: {}",
+            run.stderr
+        );
+        assert!(
+            run.stderr.contains("--socket"),
+            "the refusal names the escape: {}",
+            run.stderr
+        );
+    }
 }
 
 /// `--cmd`'s no-daemon error carries the same start hint (R9).

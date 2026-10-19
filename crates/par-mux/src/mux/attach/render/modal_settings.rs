@@ -5,8 +5,9 @@
 //! numbers, hex colors, and chords edit through the prompt modal seeded
 //! with the value in force and validated before anything is written.
 //! Arrows (or `j`/`k`) move the selection, Tab/←/→ (or `h`/`l`) switch
-//! sections, Escape (or `q`) closes. The integrations section is
-//! read-only, and the states section is a multi-select (space toggles).
+//! sections, Escape (or `q`) closes. The integrations section lists the
+//! installs and its Enter (or `u`) reinstalls the stale ones; the states
+//! section is a multi-select (space toggles).
 
 use super::{Modal, WindowSession};
 use crate::mux::attach::panels::{spell_key, HelpRow};
@@ -44,6 +45,10 @@ const AGENT_ROWS_PRESETS: &[(&str, &[&[&str]])] = &[
             &["state_icon", "state", "workspace", "project"],
             &["agent", "pane"],
         ],
+    ),
+    (
+        "verbose",
+        &[&["state_icon", "state", "agent"], &["message"]],
     ),
 ];
 
@@ -115,7 +120,7 @@ impl SettingsSection {
                 SettingSpec {
                     key: "agent-rows",
                     label: "agent lines",
-                    kind: SettingKind::Choice(&["default", "compact", "detailed"]),
+                    kind: SettingKind::Choice(&["default", "compact", "detailed", "verbose"]),
                 },
             ],
             Self::Borders => &[
@@ -201,6 +206,21 @@ impl SettingsSection {
                 SettingSpec {
                     key: "kill-pane",
                     label: "kill pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "break-pane",
+                    label: "break pane out",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "join-pane",
+                    label: "join pane into tab",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "palette",
+                    label: "command palette",
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
@@ -412,6 +432,9 @@ impl SettingsValues {
             "split-right" => FieldVal::Text(spell_key(m.split_right)),
             "split-down" => FieldVal::Text(spell_key(m.split_down)),
             "kill-pane" => FieldVal::Text(spell_key(m.kill_pane)),
+            "break-pane" => FieldVal::Text(spell_key(m.break_pane)),
+            "join-pane" => FieldVal::Text(spell_key(m.join_pane)),
+            "palette" => FieldVal::Text(spell_key(m.palette)),
             "new-window" => FieldVal::Text(spell_key(m.new_window)),
             "resize" => FieldVal::Text(spell_key(m.resize)),
             "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
@@ -596,7 +619,9 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
         rows.push(row(text, false, false));
     }
     let controls = match state.section {
-        SettingsSection::Integrations => " \u{2190}\u{2192} section \u{b7} esc close ",
+        SettingsSection::Integrations => {
+            " \u{2190}\u{2192} section \u{b7} enter/u update outdated \u{b7} esc close "
+        }
         SettingsSection::States => {
             " \u{2191}\u{2193} select \u{b7} space toggle \u{b7} tab section \u{b7} esc close "
         }
@@ -610,6 +635,25 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
     }
 }
 
+/// The integrations rows as the dialog shows them: every hook, then the
+/// extensions, then the bundled skill — name plus the version-aware
+/// currency string.
+fn integrations_rows() -> Vec<(String, String)> {
+    let mut integrations: Vec<(String, String)> = crate::mux::integrations::hook_status()
+        .into_iter()
+        .map(|hook| (hook.agent, hook.asset.display(hook.installed)))
+        .collect();
+    integrations.extend(
+        crate::mux::integrations::extension_status()
+            .into_iter()
+            .map(|ext| (ext.agent, ext.asset.display(ext.installed))),
+    );
+    if let Ok(skill) = crate::mux::skill_installer::skill_status() {
+        integrations.push(("skill".to_string(), skill.asset.display(skill.installed)));
+    }
+    integrations
+}
+
 impl WindowSession {
     /// Open the settings dialog on its first section.
     pub(super) fn enter_settings(&mut self) {
@@ -617,18 +661,7 @@ impl WindowSession {
         // currency (`v2`, `v1 → v2 outdated`, `asset missing`, `not
         // installed`) so a stale install is visible without leaving the
         // dialog.
-        let mut integrations: Vec<(String, String)> = crate::mux::integrations::hook_status()
-            .into_iter()
-            .map(|hook| (hook.agent, hook.asset.display(hook.installed)))
-            .collect();
-        integrations.extend(
-            crate::mux::integrations::extension_status()
-                .into_iter()
-                .map(|ext| (ext.agent, ext.asset.display(ext.installed))),
-        );
-        if let Ok(skill) = crate::mux::skill_installer::skill_status() {
-            integrations.push(("skill".to_string(), skill.asset.display(skill.installed)));
-        }
+        let integrations = integrations_rows();
         // `mode` is chosen at launch: the file is the only record of it.
         let file_mode = match &self.settings_path {
             Some(path) => crate::mux::config::load_file(path)
@@ -695,6 +728,31 @@ impl WindowSession {
         self.renderer.set_overlay(None);
     }
 
+    /// The integrations tab's button: reinstall every integration graded
+    /// stale (`v1 → v2 outdated`, `asset missing` under a surviving
+    /// registration) — never-installed rows are left alone. The rows
+    /// re-grade and the outcome flashes on the status row.
+    fn settings_update_integrations(&mut self) {
+        let (updated, failed) = crate::mux::integrations::update_outdated_integrations();
+        if let Modal::Settings(state) = &mut self.modal {
+            state.integrations = integrations_rows();
+        }
+        if !failed.is_empty() {
+            self.chrome.flash(format!(
+                "integrations: update failed — {}",
+                failed.join(", ")
+            ));
+        } else if updated.is_empty() {
+            self.chrome
+                .flash("integrations: everything current".to_string());
+        } else {
+            self.chrome
+                .flash(format!("integrations: updated {}", updated.join(", ")));
+        }
+        self.draw_status_row();
+        self.refresh_settings();
+    }
+
     /// Switch section by `delta` (wrapping).
     fn settings_move_section(&mut self, delta: isize) {
         let Modal::Settings(state) = &self.modal else {
@@ -749,7 +807,7 @@ impl WindowSession {
     /// cycles by `delta` (wrapping), and a number/hex/chord opens the
     /// prompt seeded with the value in force (the prompt's commit
     /// validates and writes). The states section toggles its entry; the
-    /// integrations section applies nothing.
+    /// integrations section runs the update button (reinstall the stale).
     pub(super) fn settings_apply(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -781,7 +839,7 @@ impl WindowSession {
                 });
                 self.settings_write_and_reload(conn, "notify-states", SettingValue::List(states));
             }
-            SettingsSection::Integrations => {}
+            SettingsSection::Integrations => self.settings_update_integrations(),
             section => {
                 let Some(spec) = section.rows().get(selected) else {
                     return;
@@ -982,6 +1040,15 @@ impl WindowSession {
             b'\t' | b'l' => self.settings_move_section(1),
             b'h' => self.settings_move_section(-1),
             b'\r' | b'\n' | b' ' => self.settings_apply(conn, 1),
+            b'u' => {
+                let on_integrations = matches!(
+                    &self.modal,
+                    Modal::Settings(state) if state.section == SettingsSection::Integrations
+                );
+                if on_integrations {
+                    self.settings_update_integrations();
+                }
+            }
             _ => {}
         }
         matches!(self.modal, Modal::Settings(_))
@@ -1063,6 +1130,26 @@ mod tests {
             integrations: Vec::new(),
             file_mode: "render".to_string(),
         }
+    }
+
+    /// The integrations tab's footer names its button: Enter (or `u`)
+    /// reinstalls the stale installs, and a stale row's status string
+    /// renders under the mark.
+    #[test]
+    fn integrations_footer_offers_the_update_outdated_button() {
+        let mut state = state(SettingsSection::Integrations);
+        state.integrations = vec![("claude".to_string(), "v1 \u{2192} v2 outdated".to_string())];
+        let composed = compose_settings(&state, &values());
+        let footer = &composed.rows.last().unwrap().text;
+        assert!(
+            footer.contains("update outdated"),
+            "the footer offers the button: {footer}"
+        );
+        let body: Vec<&String> = composed.rows.iter().map(|r| &r.text).collect();
+        assert!(
+            body.iter().any(|t| t.contains("v1 \u{2192} v2 outdated")),
+            "the status string is visible: {body:?}"
+        );
     }
 
     /// The tabs row keeps every section's tab inside the fixed panel

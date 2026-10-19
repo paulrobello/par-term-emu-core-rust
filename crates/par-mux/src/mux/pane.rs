@@ -34,6 +34,10 @@ pub enum MuxError {
     AmbiguousWindowTarget(String, Vec<WindowId>),
     /// A session name matched more than one session.
     AmbiguousSessionTarget(String, Vec<SessionId>),
+    /// A create or rename asked for a session name another live session
+    /// already holds — session names are unique so name targeting stays
+    /// unambiguous.
+    DuplicateSessionName(String),
     /// The requested workspace does not exist.
     NoSuchWorkspace(WorkspaceId),
     /// A workspace name matched no workspace.
@@ -87,6 +91,7 @@ impl std::fmt::Display for MuxError {
                     join_ids(ids)
                 )
             }
+            MuxError::DuplicateSessionName(name) => write!(f, "duplicate session: {name}"),
             MuxError::NoSuchWorkspace(id) => write!(f, "no such workspace: {id}"),
             MuxError::NoSuchWorkspaceNamed(name) => write!(f, "no such workspace: {name}"),
             MuxError::AmbiguousWorkspaceTarget(name, ids) => {

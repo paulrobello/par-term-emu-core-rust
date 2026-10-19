@@ -12,6 +12,9 @@ use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle}
 pub(crate) struct Toast {
     pub title: String,
     pub body: String,
+    /// The state's message (the blocked reason) — the card's third line,
+    /// omitted when the push carried none.
+    pub message: Option<String>,
     pub status: AgentStatus,
     /// The agent's pane, focused by a click on the card.
     pub pane: u32,
@@ -34,7 +37,8 @@ impl PaneRenderer {
 
     /// The toast's frame rect `(x, y, w, h)` while one is up: the card
     /// at the content area's bottom-right, its width the longer line plus
-    /// the ring and padding, clipped to the content area.
+    /// the ring and padding, clipped to the content area. A message adds
+    /// the card's fourth row.
     pub(crate) fn toast_rect(&self) -> Option<(u16, u16, u16, u16)> {
         let toast = self.toast.as_ref()?;
         let left = self.geometry.sidebar_w.min(self.width);
@@ -43,9 +47,10 @@ impl PaneRenderer {
             .title
             .chars()
             .count()
-            .max(toast.body.chars().count() + 2);
+            .max(toast.body.chars().count() + 2)
+            .max(toast.message.as_ref().map_or(0, |m| m.chars().count() + 2));
         let w = u16::try_from(lines + 6).unwrap_or(u16::MAX).min(area_w);
-        let h = 4u16.min(self.height);
+        let h = (4 + u16::from(toast.message.is_some())).min(self.height);
         if w < 8 || h < 3 {
             return None;
         }
@@ -122,6 +127,11 @@ impl PaneRenderer {
         );
         if h > 3 {
             put(x0 + 4, y0 + 2, &toast.body, dim);
+        }
+        if h > 4 {
+            if let Some(message) = &toast.message {
+                put(x0 + 4, y0 + 3, message, dim);
+            }
         }
     }
 }

@@ -159,6 +159,143 @@ fn strip_click_switches_windows_without_forwarding() {
     );
 }
 
+/// The copy-mode extension (the TUI audit's R1): `v` anchors the line
+/// selection at the viewport top, scrolling extends it, `y` copies the
+/// selected lines as an OSC 52 write in the frame's outbox, and `/`
+/// searches the pane's text with the match landing in view.
+#[test]
+fn copy_mode_selects_copies_and_searches() {
+    let (rx, mut conn, mut session) = two_pane_session("copymode", FakeScript::default());
+    drained(&rx);
+    // Real scrollback on pane 1: 60 numbered lines.
+    for i in 0..60 {
+        session
+            .renderer
+            .feed_output(1, format!("line {i:03} marker\n").as_bytes());
+    }
+    session.renderer.focus(1);
+    // prefix [ enters the scroll viewport.
+    session.route_stdin_bytes(&mut conn, &[0x02, b'[']);
+    drained(&rx);
+    // `v` anchors at the viewport top; scrolling extends the head.
+    session.toggle_line_selection(1);
+    let (pane, a, b) = session.renderer.selection.expect("selection up");
+    assert_eq!((pane, a, b), (1, a, a), "the anchor starts the span");
+    session.renderer.scroll_viewport(1, 6);
+    session.update_selection_head(1);
+    let (_, a, b) = session.renderer.selection.expect("still up");
+    assert!(b > a, "the head moved past the anchor: {a}..{b}");
+    // `y` copies: an OSC 52 write rides the frame's outbox.
+    session.copy_selection();
+    let osc = session
+        .notify
+        .outbox
+        .windows(7)
+        .position(|w| w == b"\x1b]52;c;")
+        .is_some();
+    assert!(
+        osc,
+        "the copy emits an OSC 52 write: {:?}",
+        session.notify.outbox
+    );
+    assert!(session.renderer.selection.is_none(), "copied clears");
+    // `/` searches; Enter commits; the match lands in the viewport.
+    session.begin_scroll_search();
+    for byte in b"line 042" {
+        assert!(session.search_typing_byte(*byte), "typing continues");
+    }
+    assert!(!session.search_typing_byte(b'\r'), "Enter closes the line");
+    assert!(
+        !session.scroll_matches.is_empty(),
+        "the query matched the fed scrollback"
+    );
+    session.scroll_search(1);
+    let offset = session.renderer.scroll_offset_of(1);
+    assert!(offset > 0, "the viewport landed on the match");
+    drained(&rx);
+}
+
+/// A tab press arms a drag; dropping on another tab sends
+/// `move-window -s @from -t <slot>` (the TUI audit's R6 drag reorder);
+/// dropping back on the origin is just the click. The wheel offset
+/// resets with the fresh order.
+#[test]
+fn tab_drag_reorders_via_move_window() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 - main\n@1 - vim".to_string(),
+    );
+    let (rx, mut conn) = scripted_conn("tabdrag", replies);
+    let mut session = WindowSession::new(80, 25);
+    session.window = "@0".to_string();
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+
+    // Press arms on the first tab; the drop on the second reorders.
+    session.tab_click(&mut conn, 0);
+    assert_eq!(session.tab_drag_from, Some(0), "the press armed the drag");
+    session.tab_drop(&mut conn, 12);
+    settle(&mut session, &mut conn);
+    let moved = wait_recorded(&rx, "move-window");
+    assert!(
+        moved.contains("-s @0") && moved.contains("-t 1"),
+        "the drop reorders: {moved}"
+    );
+    assert_eq!(session.tab_drag_from, None, "the drop disarms");
+
+    // A drop on the origin tab sends nothing.
+    session.tab_click(&mut conn, 0);
+    session.tab_drop(&mut conn, 0);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(150))
+            .is_err(),
+        "same-tab drop: no wire line"
+    );
+}
+
+/// A wheel over an overflowing strip shifts the visible run toward the
+/// hidden tabs; a strip that fits ignores it (the R6 wheel scroll).
+#[test]
+fn tab_wheel_scrolls_an_overflowing_strip() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 * a\n@1 - b\n@2 - c\n@3 - d\n@4 - e\n@5 - f\n@6 - g\n@7 - h".to_string(),
+    );
+    let (rx, mut conn) = scripted_conn("tabwheel", replies);
+    let mut session = WindowSession::new(24, 25);
+    session.window = "@0".to_string();
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+    assert!(
+        session.chrome.tab_strip.overflowing(),
+        "eight tabs overflow a 24-column strip"
+    );
+    let before = session.chrome.tab_strip.hit_test(0);
+    session.chrome.tab_strip.wheel(3);
+    session.draw_tab_strip();
+    let after = session.chrome.tab_strip.hit_test(0);
+    assert_ne!(before, after, "the wheel shifted the visible run");
+    session.chrome.tab_strip.wheel(-30);
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.hit_test(0),
+        before,
+        "the offset clamps back to 0"
+    );
+}
+
 /// The drag affordance, headless end-to-end: a press ON the
 /// two-pane divider column starts a PENDING drag (no focus, no
 /// forward), motion promotes it and the pump's apply_drag sends one
@@ -2152,8 +2289,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.section, SettingsSection::Keys);
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
-    // Down to the last row: the window follows the selection.
-    session.route_stdin_bytes(&mut conn, &[b'j'; 22][..]);
+    // Down to the last row: the window follows the selection (the keys
+    // section holds every management chord plus prefix and reload — 24
+    // rows with break-pane and join-pane aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 24][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2166,7 +2305,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 22][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 24][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3063,6 +3202,7 @@ fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) ->
         state: state.to_string(),
         workspace: workspace.map(str::to_string),
         project: None,
+        message: None,
     }
 }
 
@@ -3233,6 +3373,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
         state: "blocked".to_string(),
         source: "hook".to_string(),
         ws: String::new(),
+        msg: String::new(),
     });
     assert!(session.status_dirty);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
@@ -3373,6 +3514,7 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
         state: "blocked".to_string(),
         source: "hook".to_string(),
         ws: "+0".to_string(),
+        msg: String::new(),
     });
     assert_eq!(
         session.notify.outbox,
@@ -3413,6 +3555,7 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
         state: "idle".to_string(),
         source: "hook".to_string(),
         ws: "+0".to_string(),
+        msg: String::new(),
     });
     session.notify.states.push("idle".to_string());
     session.handle_event(TmuxNotification::AgentStateChanged {
@@ -3421,11 +3564,66 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
         state: "blocked".to_string(),
         source: "hook".to_string(),
         ws: "+0".to_string(),
+        msg: String::new(),
     });
     assert!(session.renderer.toast.is_some());
     let until = session.notify.toast_until.expect("deadline set");
     session.tick_flash(until);
     assert!(session.renderer.toast.is_none(), "the toast expired");
+}
+
+/// A blocked push's `msg=` renders as the toast's reason line: the why
+/// is the point of a blocked card (the TUI audit's F5 — the reason rode
+/// the wire end to end and rendered nowhere).
+#[test]
+fn toast_renders_the_blocked_reason_line() {
+    use super::super::notify::NotifyDelivery;
+    let (rx, mut conn) = fake_daemon("snapreason", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    session.refresh_status_facts(&mut conn).expect("seed");
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    drained(&rx);
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%1".to_string(),
+        agent: "claude".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+        msg: "needs approval".to_string(),
+    });
+    let toast = session.renderer.toast.clone().expect("a toast is up");
+    assert_eq!(toast.message.as_deref(), Some("needs approval"));
+    session.renderer.render_frame();
+    let (tx, ty, tw, th) = session.renderer.toast_rect().expect("on screen");
+    assert_eq!(th, 5, "the reason adds the card's fourth row");
+    let reason_row: String = (tx..tx + tw)
+        .map(|x| session.renderer.buffer[(x, ty + 3)].symbol().to_string())
+        .collect();
+    assert!(
+        reason_row.contains("needs approval"),
+        "the reason paints: {reason_row:?}"
+    );
+}
+
+/// A shown pane's death announces the respawn affordance even under the
+/// default auto-remove, where the held exit cue never gets to show (the
+/// TUI audit's F4).
+#[test]
+fn a_shown_pane_exit_flashes_the_respawn_opt_in() {
+    let (rx, _conn) = fake_daemon("snapexit", snapshot_script());
+    let mut session = snapshot_session();
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,1").expect("parses"));
+    drained(&rx);
+    session.on_pane_exited("%1", Some(7));
+    let flash = session.chrome.flash_text().expect("the flash is up");
+    assert!(flash.contains("exited (7)"), "{flash}");
+    assert!(flash.contains("remain-on-exit"), "{flash}");
 }
 
 #[test]
@@ -3447,6 +3645,7 @@ fn agent_state_push_notifies_selected_transitions_only() {
             state: state.to_string(),
             source: "hook".to_string(),
             ws: "+0".to_string(),
+            msg: String::new(),
         });
     };
     // The snapshot session shows %1..%3, so their agents are in view and
@@ -3500,7 +3699,7 @@ fn missing_project_polls_the_roster_until_it_arrives() {
     for pane in [1, 3] {
         session
             .status
-            .patch_agent(&format!("%{pane}"), "x", Some("idle"), "+0");
+            .patch_agent(&format!("%{pane}"), "x", Some("idle"), "+0", "");
     }
     session.status.set_projects_for_test("par-term");
     let much_later = later + super::super::sidebar::PROJECT_POLL_INTERVAL;
@@ -3536,6 +3735,7 @@ fn agent_event_patches_without_a_query() {
         state: "working".to_string(),
         source: "hook".to_string(),
         ws: "+1".to_string(),
+        msg: String::new(),
     });
     assert!(!session.status_dirty);
     assert!(

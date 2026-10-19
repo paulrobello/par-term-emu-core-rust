@@ -4,8 +4,8 @@
 
 use super::{Modal, PickerState, WindowSession};
 use crate::mux::attach::panels::{
-    compose_picker_panel, picker_rows, HelpRow, PickerEntry, PickerRef, PICKER_OVERLAY_TITLE,
-    WORKSPACE_PICKER_OVERLAY_TITLE,
+    compose_picker_panel, picker_rows, HelpRow, PickerEntry, PickerRef, PALETTE_ACTIONS,
+    PICKER_OVERLAY_TITLE, WORKSPACE_PICKER_OVERLAY_TITLE,
 };
 use crate::mux::attach::targets::{parse_session_line, parse_workspace_line};
 use par_term_emu_core::keyboard::TermKeyEvent;
@@ -95,6 +95,81 @@ impl WindowSession {
         }));
         self.refresh_picker();
     }
+
+    /// The palette overlay's title.
+    pub(super) const PALETTE_TITLE: &str = " command ";
+
+    /// Open the command palette (the `palette` chord): every management
+    /// action plus settings/keybinds/reload/detach as a filterable picker
+    /// list — the keyboard path to the click-only menu chips and every
+    /// chord, one list (the TUI audit's R2). Same picker machinery: `/`
+    /// filters, arrows/j/k move, Enter runs, esc/q dismisses.
+    pub(super) fn enter_palette(&mut self) {
+        let commands: Vec<(usize, String)> = PALETTE_ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(index, (_, label))| (index, label.to_string()))
+            .collect();
+        self.open_modal(Modal::Picker(PickerState {
+            commands: Some(commands),
+            ..PickerState::default()
+        }));
+        self.refresh_picker();
+    }
+
+    /// Compose the palette's overlay: one row per action label, through
+    /// the picker's filter, cursor, and windowing.
+    fn refresh_palette(&mut self, commands: &[(usize, String)]) {
+        let Modal::Picker(picker) = &self.modal else {
+            return;
+        };
+        let rows: Vec<HelpRow> = commands
+            .iter()
+            .map(|(_, label)| HelpRow {
+                text: format!(" {label} "),
+                accent: false,
+                footer: false,
+            })
+            .collect();
+        let refs: Vec<PickerRef> = commands
+            .iter()
+            .map(|(i, _)| PickerRef::Command(*i))
+            .collect();
+        let visible = self.picker_visible();
+        let (lines, filtered_refs, start) = compose_picker_panel(
+            &rows,
+            &refs,
+            &picker.filter,
+            picker.filtering,
+            picker.selected,
+            visible,
+            picker.start,
+        );
+        self.store_picker_compose(filtered_refs, start, lines.len());
+        self.renderer
+            .set_overlay(Some((Self::PALETTE_TITLE, lines, None)));
+    }
+
+    /// Dispatch one palette action: the table's first four rows are the
+    /// non-chord paths (fixed order), the rest through the management
+    /// chord table.
+    fn run_palette_action(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        action: usize,
+    ) {
+        match action {
+            0 => self.enter_settings(),
+            1 => self.enter_help(),
+            2 => self.reload_config(conn),
+            3 => self.detach_requested = true,
+            _ => {
+                if let Some((Some(key), _)) = PALETTE_ACTIONS.get(action) {
+                    self.management_chord(*key, conn);
+                }
+            }
+        }
+    }
     /// Open the workspace picker (the workspace-picker chord): the
     /// daemon's workspace roster — id, name, the active one `>`-marked —
     /// in the same themed modal, filter, cursor, and click handling the
@@ -128,6 +203,7 @@ impl WindowSession {
         if matches!(self.modal, Modal::Picker(_)) {
             self.modal = Modal::None;
         }
+        self.join_source = None;
         self.renderer.set_overlay(None);
     }
     /// Re-compose the picker overlay from the live state (filter,
@@ -137,6 +213,10 @@ impl WindowSession {
         let Modal::Picker(picker) = &self.modal else {
             return;
         };
+        if let Some(commands) = picker.commands.clone() {
+            self.refresh_palette(&commands);
+            return;
+        }
         if picker.workspaces.is_some() {
             self.refresh_ws_picker();
             return;
@@ -198,6 +278,35 @@ impl WindowSession {
         let Some(item) = picker.refs.get(idx).copied() else {
             return;
         };
+        // Palette mode: the row's action runs instead of a landing.
+        if let PickerRef::Command(action) = item {
+            self.leave_picker();
+            self.run_palette_action(conn, action);
+            return;
+        }
+        // Join mode: the picked window (a session header → its active
+        // window) receives the offered pane, instead of a landing.
+        if let Some(source) = self.join_source.take() {
+            let window = match item {
+                PickerRef::Session(i) => picker.entries.get(i).and_then(|e| {
+                    e.active_window
+                        .clone()
+                        .or_else(|| e.windows.first().map(|(_, id)| id.clone()))
+                }),
+                PickerRef::Window(i, w) => picker
+                    .entries
+                    .get(i)
+                    .and_then(|e| e.windows.get(w).map(|(id, _)| id.clone())),
+                PickerRef::Workspace(_) | PickerRef::Command(_) => None,
+            };
+            let Some(window) = window else {
+                self.leave_picker();
+                return;
+            };
+            self.leave_picker();
+            self.join_pane_into(conn, source, window);
+            return;
+        }
         let PickerRef::Workspace(index) = item else {
             return self.ws_picker_activate(conn, item);
         };
@@ -221,7 +330,7 @@ impl WindowSession {
     ) {
         let entry_index = match item {
             PickerRef::Session(i) | PickerRef::Window(i, _) => i,
-            PickerRef::Workspace(_) => return,
+            PickerRef::Workspace(_) | PickerRef::Command(_) => return,
         };
         let Modal::Picker(picker) = &self.modal else {
             return;
@@ -229,7 +338,7 @@ impl WindowSession {
         let entry = &picker.entries[entry_index];
         let window = match item {
             // Unreachable: ws_picker_activate returned early on Workspace.
-            PickerRef::Workspace(_) => None,
+            PickerRef::Workspace(_) | PickerRef::Command(_) => None,
             PickerRef::Session(_) => entry
                 .active_window
                 .clone()

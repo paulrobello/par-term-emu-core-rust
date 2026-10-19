@@ -46,6 +46,9 @@ impl WindowSession {
             ManagementKey::SplitRight => self.chord_split(conn, true),
             ManagementKey::SplitDown => self.chord_split(conn, false),
             ManagementKey::KillPane => self.chord_kill_pane(conn),
+            ManagementKey::BreakPane => self.chord_break_pane(conn),
+            ManagementKey::JoinPane => self.chord_join_pane(conn),
+            ManagementKey::Palette => self.enter_palette(),
             ManagementKey::SwapPrev => self.chord_swap(conn, -1),
             ManagementKey::SwapNext => self.chord_swap(conn, 1),
             ManagementKey::NewWindow => self.chord_new_window(conn),
@@ -163,6 +166,71 @@ impl WindowSession {
                         // Ending NOW would skip the terminal restore; flag it
                         // and let the pump's normal path decide.
                         s.status_dirty = true;
+                    },
+                );
+            },
+        );
+    }
+
+    /// prefix !: `break-pane -s <focused>` — the focused pane becomes its
+    /// session's new window and the view lands on it (the reply body IS
+    /// the new window id, like new-window's).
+    fn chord_break_pane(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let focused = self.focused_pane();
+        self.send_then(conn, &format!("break-pane -s {focused}"), |s, c, reply| {
+            if !reply.ok {
+                return;
+            }
+            if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
+                s.land_window(c, &window);
+            }
+        });
+    }
+
+    /// prefix J: the window picker in join mode — the picked window
+    /// receives the focused pane (`join-pane -s <focused> -t <its marked
+    /// pane>`). The picker is the session/window roster itself; the
+    /// activation routes through the join arm while `join_source` is set,
+    /// and every dismissal path clears it.
+    fn chord_join_pane(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        self.join_source = Some(pane);
+        self.enter_picker(conn);
+    }
+
+    /// The join arm: move `source` next to `window`'s marked pane
+    /// (`join-pane -s <source> -t <marked>`), then land the view on the
+    /// destination window — tmux's join-pane follows the joined pane. A
+    /// refused join flashes instead of landing.
+    pub(super) fn join_pane_into(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        source: u32,
+        window: String,
+    ) {
+        self.send_then(
+            conn,
+            &format!("list-panes -t {window}"),
+            move |s, c, listed| {
+                if !listed.ok {
+                    return;
+                }
+                let Some(target) = marked_pane(&listed.body, &window).ok() else {
+                    return;
+                };
+                s.send_then(
+                    c,
+                    &format!("join-pane -s %{source} -t {target}"),
+                    move |s, c, reply| {
+                        if !reply.ok {
+                            let why = reply.body.first().cloned().unwrap_or_default();
+                            s.chrome.flash(format!("join failed: {why}"));
+                            s.draw_status_row();
+                            return;
+                        }
+                        s.land_window(c, &window);
                     },
                 );
             },
@@ -835,6 +903,7 @@ impl WindowSession {
         self.chrome.status_row.invalidate();
         self.draw_status_row();
         self.chrome.tab_strip.invalidate();
+        self.chrome.tab_strip.reset_scroll();
         self.draw_tab_strip();
         self.pending.clear_view_work();
     }

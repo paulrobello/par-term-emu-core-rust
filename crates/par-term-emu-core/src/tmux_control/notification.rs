@@ -285,6 +285,12 @@ pub enum TmuxNotification {
         /// Empty when the line carried no `ws=` token (a pre-ENH-061
         /// daemon).
         ws: String,
+        /// The state's message (the blocked reason), the standard base64
+        /// of the whitespace-collapsed text from the `msg=` token. Empty
+        /// when the line carried no token (an older daemon, or a state
+        /// reported without a message) — a consumer renders no message
+        /// line, never a placeholder.
+        msg: String,
     },
 
     /// A pane's agent released its claim (`pane.release_agent`; the agent

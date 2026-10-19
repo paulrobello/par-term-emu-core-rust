@@ -99,6 +99,13 @@ impl PaneRenderer {
             // scrollback line S_len - S + r (newest history first).
             let scrollback_row: isize = scrollback_len - scroll as isize + row as isize;
             let in_history = (row as usize) < scroll;
+            // The painted cell's ABSOLUTE line (the selection's
+            // coordinate): scrollback lines first, then live rows.
+            let abs_line = if in_history {
+                scrollback_row.max(0) as usize
+            } else {
+                scrollback_len.max(0) as usize - scroll + (row as usize - scroll)
+            };
             for col in 0..max_cols {
                 let core_cell: &par_term_emu_core::cell::Cell = if in_history {
                     let logical = scrollback_row.max(0) as usize;
@@ -150,6 +157,13 @@ impl PaneRenderer {
                     cell.set_bg(map_color(core_cell.bg()));
                 }
                 cell.set_style(map_flags(core_cell.flags()));
+                // The scroll-mode selection reverses its lines.
+                if let Some((spane, a, b)) = self.selection {
+                    if spane == rect.pane && abs_line >= a && abs_line <= b {
+                        let style = cell.style().add_modifier(RtModifier::REVERSED);
+                        cell.set_style(style);
+                    }
+                }
                 // A double-width base marks its right-hand spacer skip so
                 // the diff's flush never draws into it.
                 if core_cell.width() == 2 && col + 1 < view_w && x + 1 < self.width {

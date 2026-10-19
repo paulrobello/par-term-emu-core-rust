@@ -194,6 +194,103 @@ fn new_window_chord_creates_selects_and_reseeds() {
     assert!(drained(&rx).is_empty(), "no session: nothing to create in");
 }
 
+/// Break pane (prefix !): `break-pane -s <focused>`, then the view
+/// lands on the fresh window the reply names (the R3 audit rec).
+#[test]
+fn break_pane_chord_breaks_out_and_lands() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("break-pane -s %1".to_string(), "@7".to_string());
+    reseed_replies(&mut replies, "@0 - main\n@7 * solo", "@7", "%9");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "brk",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    chord(&mut session, &mut conn, b'!');
+    let lines = drained(&rx);
+    assert_eq!(lines[0], "break-pane -s %1", "{lines:?}");
+    assert_eq!(lines[1], "switch-client -t @7", "{lines:?}");
+    assert_eq!(session.window, "@7");
+}
+
+/// Join pane (prefix J): the chord opens the window picker with the
+/// focused pane offered; activating a window row sends list-panes then
+/// `join-pane -s <focused> -t <its marked pane>` and lands the view on
+/// the destination window.
+#[test]
+fn join_pane_chord_picks_a_window_and_joins() {
+    let mut replies = std::collections::HashMap::new();
+    // The picker's roster chain, then the join arm's pair.
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 * main\n@1 - side".to_string(),
+    );
+    replies.insert("list-panes -t @1".to_string(), "%5 * joined".to_string());
+    replies.insert("join-pane -s %1 -t %5".to_string(), String::new());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "join",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    chord(&mut session, &mut conn, b'J');
+    drained(&rx);
+    settle(&mut session, &mut conn);
+    // The picker is up with the join intent; walk to the @1 window row
+    // (refs: session header, @0, @1) and activate it.
+    chord(&mut session, &mut conn, b'j');
+    chord(&mut session, &mut conn, b'j');
+    chord(&mut session, &mut conn, b'\r');
+    settle(&mut session, &mut conn);
+    let lines = drained(&rx);
+    assert!(lines.contains(&"list-panes -t @1".to_string()), "{lines:?}");
+    assert!(
+        lines.contains(&"join-pane -s %1 -t %5".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"switch-client -t @1".to_string()),
+        "{lines:?}"
+    );
+    assert_eq!(session.window, "@1");
+}
+
+/// The command palette (prefix :): the chord opens the picker with the
+/// action list; Enter on a filtered row runs the action — `detach` ends
+/// the session, `reload config` takes the reload path (the R2 audit rec:
+/// a keyboard path to the click-only menu chips).
+#[test]
+fn palette_chord_filters_and_runs_actions() {
+    let (rx, mut conn, mut session) = two_pane_session("palette", FakeScript::default());
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    settle(&mut session, &mut conn);
+    // Filter to the detach row and run it (Enter commits the filter, a
+    // second Enter activates the selected row).
+    chord(&mut session, &mut conn, b'/');
+    for byte in b"deta" {
+        chord(&mut session, &mut conn, *byte);
+    }
+    chord(&mut session, &mut conn, b'\r');
+    chord(&mut session, &mut conn, b'\r');
+    settle(&mut session, &mut conn);
+    drained(&rx);
+    assert!(session.detach_requested, "the detach action ran");
+    // Settings open from the palette too (fresh session, first row).
+    let (rx, mut conn, mut session) = two_pane_session("palette2", FakeScript::default());
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    settle(&mut session, &mut conn);
+    chord(&mut session, &mut conn, b'\r');
+    settle(&mut session, &mut conn);
+    drained(&rx);
+    assert!(matches!(session.modal, Modal::Settings(_)));
+}
+
 /// Zoom toggles the cue on an ok reply (flash + ` Z |` head on the
 /// status row) and back; a refused zoom leaves the cue alone.
 #[cfg(unix)]
@@ -2605,16 +2702,17 @@ fn exit_cue_and_respawn_chord_follow_the_held_pane() {
         "the dead screen is gone: {text:?}"
     );
 
-    // The chord is configurable: a rebound key drives it.
+    // The chord is configurable: a rebound key drives it (one no default
+    // claims — `!` broke out to break-pane).
     session.handle_event(TmuxNotification::PaneExited {
         pane_id: "%1".to_string(),
         exit_code: None,
     });
-    session.management.respawn = b'!';
+    session.management.respawn = b'&';
     assert_eq!(
         session.exit_cue().as_deref(),
-        Some("(exited ? — C-b ! respawns)")
+        Some("(exited ? — C-b & respawns)")
     );
-    chord(&mut session, &mut conn, b'!');
+    chord(&mut session, &mut conn, b'&');
     assert_eq!(drained(&rx), vec!["respawn-pane -t %1".to_string()]);
 }

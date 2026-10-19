@@ -482,7 +482,7 @@ impl WindowSession {
             .has_command_feature("client-snapshot", "v1")
             && !self.status.workspaces().is_empty()
         {
-            let active = self.status.active_workspace().map(str::to_string);
+            let active = self.status.chrome_workspace().map(str::to_string);
             self.status
                 .workspaces()
                 .iter()
@@ -537,7 +537,7 @@ impl WindowSession {
             self.status_dirty = true;
             return;
         }
-        let active = self.status.active_workspace();
+        let active = self.status.chrome_workspace();
         let roster: Vec<(String, String, bool)> = self
             .status
             .workspaces()
@@ -621,6 +621,7 @@ impl WindowSession {
                             state: &entry.state,
                             workspace: ws_name,
                             project: entry.project.as_deref(),
+                            message: entry.message.as_deref(),
                         },
                     );
                     let label = lines.remove(0);

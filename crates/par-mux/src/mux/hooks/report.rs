@@ -127,6 +127,7 @@ pub(super) fn handle_state_report(
             state: state.to_string(),
             source: "hook".to_string(),
             ws,
+            msg: claim.message.clone().unwrap_or_default(),
         })
     };
     (ok_reply(id), notification)
@@ -278,6 +279,7 @@ pub(super) fn handle_session_report(
                     .clone()
                     .unwrap_or_else(|| "hook".to_string()),
                 ws,
+                msg: claim.message.clone().unwrap_or_default(),
             })
     };
     (ok_reply(id), notification)

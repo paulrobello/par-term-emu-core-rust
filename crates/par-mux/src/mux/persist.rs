@@ -739,7 +739,9 @@ impl MuxTree {
     /// live daemon with the setting off would have held: the reaper's
     /// keep-one-tab rule applies here too, so a dead entry that is (or,
     /// after earlier drops, becomes) its workspace's last pane is kept
-    /// held dead. No PTY concern: a dead entry is processless.
+    /// held dead only when that workspace opted into keep-one-tab
+    /// (`respawn_last`); every other last pane cascades closed. No PTY
+    /// concern: a dead entry is processless.
     fn drop_restored_dead_entries(&mut self, state: &PersistState) {
         let dead_ids: Vec<PaneId> = state
             .sessions
@@ -750,7 +752,7 @@ impl MuxTree {
             .map(|pane| PaneId(pane.id))
             .collect();
         for pane_id in dead_ids {
-            if !self.is_workspace_last_pane(pane_id) {
+            if !self.respawns_as_workspace_last_pane(pane_id) {
                 let _ = self.kill_pane(pane_id);
             }
         }
@@ -1144,6 +1146,23 @@ pub fn write_job(
     target: &Path,
 ) -> Result<(), PersistError> {
     if let Some(parent) = target.parent() {
+        // A state dir deleted while the daemon ran must not be resurrected
+        // by the final save (the measured case: a script's
+        // `--stop; rm -rf state; start` — the --stop reply lands ~2.5 s
+        // before the process exits, and the save-on-exit used to re-create
+        // the deleted dir inside that window). A shutdown-family save
+        // whose target dir is gone respects the deletion; earlier saves of
+        // a live daemon keep creating the dir (the daemon owns its state
+        // until the exit), and a cold start's first save creates it as
+        // always.
+        if matches!(origin, SaveOrigin::Shutdown | SaveOrigin::ShutdownEmpty) && !parent.exists() {
+            par_term_emu_core::debug_error!(
+                "MUX",
+                "state dir deleted while running; shutdown save skipped: {}",
+                parent.display()
+            );
+            return Ok(());
+        }
         fs::create_dir_all(parent)?;
     }
     let mut tmp = target.as_os_str().to_os_string();
@@ -2177,12 +2196,40 @@ mod tests {
         tree_consistency(&restored);
     }
 
-    /// remain-on-exit off, dead-only save: the workspace's last pane is
-    /// kept held dead (keep-one-tab), exactly what a live daemon with the
-    /// setting off would have been left holding — the reaper holds it too.
+    /// remain-on-exit off, dead-only save, the DEFAULT: the workspace's
+    /// last pane cascades closed with its exit — the restored tree is
+    /// empty (session and workspace gone with it), matching what the live
+    /// reaper removes.
     #[test]
-    fn auto_remove_restore_keeps_a_workspaces_last_dead_pane_held() {
+    fn auto_remove_restore_cascades_a_workspaces_last_dead_pane() {
         let (tree, pane_id) = held_dead_tree(Some(3));
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            false,
+        )
+        .unwrap();
+        assert!(
+            restored.pane(pane_id).is_none(),
+            "the last dead entry cascades away, it is not held"
+        );
+        assert!(
+            restored.sessions.is_empty(),
+            "the emptied session cascaded away"
+        );
+        assert!(restored.workspaces.is_empty(), "the workspace went too");
+        tree_consistency(&restored);
+    }
+
+    /// remain-on-exit off, keep-one-tab opt-in: a respawn-on workspace's
+    /// last dead pane is kept held dead, exactly what the live reaper
+    /// holds for the `set-workspace-respawn` path.
+    #[test]
+    fn auto_remove_restore_keeps_a_respawn_workspaces_last_dead_pane_held() {
+        let (mut tree, pane_id) = held_dead_tree(Some(3));
+        let ws = tree.workspace_of_pane(pane_id).unwrap();
+        tree.set_workspace_respawn(ws, true).unwrap();
         let state = tree.to_persist_state();
         let restored = MuxTree::from_persist_state_with_policy(
             &state,
@@ -2198,8 +2245,9 @@ mod tests {
     }
 
     /// remain-on-exit off, two dead panes in one workspace (separate
-    /// windows): the first is dropped through the cascade, the second —
-    /// now the workspace's last — is kept held dead.
+    /// windows): both drop through the cascade — the second is also its
+    /// workspace's last once the first is gone, and the default no longer
+    /// keeps it.
     #[test]
     fn auto_remove_restore_drops_dead_entries_down_to_the_last() {
         let (mut tree, first) = held_dead_tree(Some(3));
@@ -2218,7 +2266,14 @@ mod tests {
             restored.pane(first).is_none(),
             "the first dead entry is gone"
         );
-        assert!(restored.pane(second).unwrap().dead(), "the last is held");
+        assert!(
+            restored.pane(second).is_none(),
+            "the last dead entry cascades away too"
+        );
+        assert!(
+            restored.workspaces.is_empty(),
+            "the emptied workspace cascaded away"
+        );
         tree_consistency(&restored);
     }
 
@@ -2928,6 +2983,29 @@ mod tests {
             state_has_panes(&snapshot),
             "an all-dead exit keeps its panes for the next start"
         );
+    }
+
+    /// The shutdown-family save respects a state dir deleted while the
+    /// daemon ran (the `--stop; rm -rf state` script window): no dir is
+    /// re-created, and the save is a silent Ok. A live daemon's earlier
+    /// saves keep creating the dir.
+    #[test]
+    fn a_shutdown_save_does_not_resurrect_a_deleted_state_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state").join("par-mux-state.json");
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        assert!(target.exists(), "precondition: the live save created it");
+        // The script's deletion, inside the --stop-to-exit window.
+        fs::remove_file(&target).unwrap();
+        fs::remove_dir(target.parent().unwrap()).unwrap();
+        write_job(SaveOrigin::Shutdown, &tree().to_persist_state(), &target).unwrap();
+        assert!(
+            !target.parent().unwrap().exists(),
+            "the shutdown save did not re-create the deleted dir"
+        );
+        // An earlier save of a still-running daemon keeps creating the dir.
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        assert!(target.exists(), "a live save re-creates it");
     }
 
     /// ARC-119: the off-lock shutdown save lands the tree's structure,

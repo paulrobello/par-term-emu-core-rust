@@ -340,6 +340,10 @@ pub struct PaneRenderer {
     overlay_anchor: Option<(u16, u16)>,
     /// The in-app notification card (notify-delivery `inside`).
     toast: Option<toast::Toast>,
+    /// The scroll-mode line selection: the pane and its INCLUSIVE
+    /// absolute line span — scrollback lines first (0 = the oldest),
+    /// then the live grid rows. `None` when nothing is selected.
+    pub(crate) selection: Option<(u32, usize, usize)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -741,6 +745,24 @@ struct WindowSession {
     /// last saw it) — bolds a ` Z |` head on the status row. The daemon
     /// holds the truth; a window switch resets the cue.
     zoomed: bool,
+    /// The focused pane a `join-pane` chord is offering: set when the
+    /// join-mode window picker opens, taken by the activation (or cleared
+    /// with the picker's dismissal).
+    join_source: Option<u32>,
+    /// The visible-tab index a tab drag was armed on (the press), so the
+    /// strip's motion/release can reorder — `None` when no drag is in
+    /// flight.
+    tab_drag_from: Option<usize>,
+    /// The scroll-mode line selection's anchor (the absolute line `v`
+    /// fixed); `None` when no selection is in progress.
+    copy_anchor: Option<usize>,
+    /// The scroll-mode search line's live typing (`/`); `None` when no
+    /// search is being typed. Enter commits it as the query.
+    scroll_query: Option<String>,
+    /// The committed search's matching absolute lines (n/N walk them).
+    scroll_matches: Vec<usize>,
+    /// Where the match walk stands.
+    scroll_match_ix: usize,
     /// The daemon's last known (unzoomed) tree layout, so the
     /// prefix+arrow navigation can aim through a zoom.
     daemon_layout: Vec<PaneRect>,
@@ -951,6 +973,10 @@ struct PickerState {
     /// When set, this is the WORKSPACE picker: the queried
     /// `(id, name, active)` roster its rows compose from.
     workspaces: Option<Vec<(String, String, bool)>>,
+    /// When set, this is the COMMAND palette: `(action index, label)`
+    /// rows over [`super::super::panels::PALETTE_ACTIONS`], filterable
+    /// like any picker list.
+    commands: Option<Vec<(usize, String)>>,
 }
 
 /// Work the nonblocking event handlers and the sink-less chords park for
@@ -1015,6 +1041,12 @@ impl WindowSession {
             agent_rows: chords.agent_rows.clone(),
             notify: notify::NotifyState::default(),
             held: std::collections::HashMap::new(),
+            join_source: None,
+            tab_drag_from: None,
+            copy_anchor: None,
+            scroll_query: None,
+            scroll_matches: Vec::new(),
+            scroll_match_ix: 0,
             sidebar_on_launch: chords.sidebar_on_launch,
             settings_path: None,
             applied_client: crate::mux::config::ClientSection::default(),
@@ -1463,13 +1495,14 @@ impl WindowSession {
                 agent,
                 state,
                 ws,
+                msg,
                 ..
             } => {
-                self.on_agent_changed(&pane_id, &agent, Some(&state), &ws);
+                self.on_agent_changed(&pane_id, &agent, Some(&state), &ws, &msg);
                 EventOutcome::Continue
             }
             TmuxNotification::AgentReleased { pane_id, agent } => {
-                self.on_agent_changed(&pane_id, &agent, None, "");
+                self.on_agent_changed(&pane_id, &agent, None, "", "");
                 EventOutcome::Continue
             }
             TmuxNotification::PaneExited { pane_id, exit_code } => {

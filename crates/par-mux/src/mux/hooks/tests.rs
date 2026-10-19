@@ -118,6 +118,7 @@ fn state_report_writes_metadata_and_returns_the_broadcast() {
                 .workspace_of_pane(pane_id)
                 .map(|w| w.to_string())
                 .unwrap_or_default(),
+            msg: String::new(),
         })
     );
 
@@ -737,6 +738,7 @@ fn a_report_from_a_new_source_is_not_stale_against_another_sources_clock() {
                 .workspace_of_pane(pane_id)
                 .map(|w| w.to_string())
                 .unwrap_or_default(),
+            msg: String::new(),
         }),
         "the pi report took the pane despite the smaller clock"
     );
@@ -1039,6 +1041,7 @@ fn session_report_after_a_state_report_broadcasts_the_known_state() {
                 .workspace_of_pane(pane_id)
                 .map(|w| w.to_string())
                 .unwrap_or_default(),
+            msg: String::new(),
         })
     );
 }

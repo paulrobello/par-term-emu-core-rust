@@ -122,18 +122,30 @@ pub fn emit(notification: &TmuxNotification) -> String {
             state,
             source,
             ws,
+            msg,
         } => {
             // The source token rides only when set, so a hand-constructed
             // notification with no provenance emits the Phase 5 line shape
             // unchanged. ws comes after source: a pre-ENH-061 parser then
             // drops the line (empty source) rather than accepting `ws=` as
-            // part of a hook-attributed state.
+            // part of a hook-attributed state. msg comes after ws: a
+            // pre-message parser ignores the unknown key (the trailing
+            // key=value contract), and the reason rides the standard
+            // base64 of the whitespace-collapsed text — one whitespace-free
+            // token, any text.
             let mut tail = String::new();
             if !source.is_empty() {
                 tail.push_str(&format!(" source={source}"));
             }
             if !ws.is_empty() {
                 tail.push_str(&format!(" ws={ws}"));
+            }
+            if !msg.is_empty() {
+                use base64::Engine as _;
+                tail.push_str(&format!(
+                    " msg={}",
+                    base64::engine::general_purpose::STANDARD.encode(msg.as_bytes())
+                ));
             }
             format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
         }
@@ -655,10 +667,31 @@ mod tests {
             state: "working".to_string(),
             source: "hook".to_string(),
             ws: "+1".to_string(),
+            msg: String::new(),
         };
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn agent_state_changed_message_round_trips() {
+        // The blocked reason rides `msg=` as the standard base64 of the
+        // whitespace-collapsed text: one whitespace-free token, any text.
+        let original = TmuxNotification::AgentStateChanged {
+            pane_id: "%3".to_string(),
+            agent: "claude".to_string(),
+            state: "blocked".to_string(),
+            source: "hook".to_string(),
+            ws: "+1".to_string(),
+            msg: "needs approval to run tests".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(
+            &parsed[0], &original,
+            "the msg token did not survive the round trip"
+        );
     }
 
     #[test]
@@ -675,6 +708,7 @@ mod tests {
                 state,
                 source,
                 ws,
+                msg,
             }] => {
                 assert_eq!(
                     (pane_id.as_str(), agent.as_str(), state.as_str()),
@@ -682,6 +716,7 @@ mod tests {
                 );
                 assert!(source.is_empty(), "no source token on the wire");
                 assert!(ws.is_empty(), "no ws token on the wire either");
+                assert!(msg.is_empty(), "no message token on the wire either");
             }
             other => panic!("unexpected parse: {other:?}"),
         }

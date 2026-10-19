@@ -929,6 +929,11 @@ fn unknown_targets_error_exactly_and_change_nothing() {
         ("rename-workspace -t nope x", "no such workspace: nope"),
         ("kill-workspace -t +99", "no such workspace: +99"),
         ("kill-workspace -t nope", "no such workspace: nope"),
+        ("new-session -s main", "duplicate session: main"),
+        (
+            "new-workspace -n main",
+            "duplicate session: main — new-workspace names its first session after the workspace",
+        ),
     ];
     let mut mismatches = Vec::new();
     for (line, expected) in cases {
@@ -1000,7 +1005,21 @@ fn ambiguous_names_list_the_candidates_and_touch_nothing() {
     );
     assert!(h.drain().is_empty());
 
-    assert_ok(&h.run("new-session -s main"));
+    // Duplicates cannot be minted any more — the unique-names rule — so
+    // create a second session and stage the legacy state the ambiguity
+    // message still answers.
+    assert_ok(&h.run("new-session -s scratch"));
+    {
+        let mut guard = h.tree.lock();
+        // sessions() walks a HashMap, so pick the session by name, not
+        // by position.
+        let scratch = guard
+            .sessions()
+            .into_iter()
+            .find(|id| guard.session(*id).unwrap().name == "scratch")
+            .expect("scratch session exists");
+        guard.stage_legacy_duplicate_name(scratch, "main");
+    }
     let before = h.snapshot();
     let mut sessions = h.tree.lock().sessions();
     sessions.sort();

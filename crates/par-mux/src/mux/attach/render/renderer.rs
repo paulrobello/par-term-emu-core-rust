@@ -111,6 +111,7 @@ impl PaneRenderer {
             overlay: None,
             overlay_anchor: None,
             toast: None,
+            selection: None,
             overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
             show_label_in_border: options.show_label_in_border,
@@ -845,6 +846,45 @@ impl PaneRenderer {
         self.emulators
             .get(&pane)
             .is_some_and(|e| e.scroll_offset() > 0 || e.hold_scroll)
+    }
+
+    /// Set (or clear) the line selection. Repaints on change.
+    pub(crate) fn set_selection(&mut self, sel: Option<(u32, usize, usize)>) {
+        if self.selection != sel {
+            self.selection = sel;
+            self.dirty = true;
+        }
+    }
+
+    /// `pane`'s viewport-top absolute line: scrollback lines first, then
+    /// live rows (the selection's coordinate).
+    pub(crate) fn viewport_top_line(&self, pane: u32) -> Option<usize> {
+        let emulator = self.emulators.get(&pane)?;
+        let len = emulator.terminal().active_grid().scrollback_len();
+        Some(len.saturating_sub(emulator.scroll_offset()))
+    }
+
+    /// The selected lines' text — one trimmed line per row, newline
+    /// joined (the OSC 52 copy payload).
+    pub(crate) fn selection_text(&self) -> Option<String> {
+        let (pane, a, b) = self.selection?;
+        let emulator = self.emulators.get(&pane)?;
+        let grid = emulator.terminal().active_grid();
+        let len = grid.scrollback_len();
+        let mut text = String::new();
+        for line in a..=b {
+            let line_text = if line < len {
+                grid.scrollback_line(line).map(|cells| {
+                    let row: String = cells.iter().map(|cell| cell.c()).collect();
+                    row.trim_end().to_string()
+                })
+            } else {
+                Some(grid.row_text(line - len).trim_end().to_string())
+            };
+            text.push_str(&line_text.unwrap_or_default());
+            text.push('\n');
+        }
+        Some(text)
     }
 
     /// `pane`'s client scroll offset (0 for an unknown pane).

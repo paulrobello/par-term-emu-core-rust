@@ -6403,20 +6403,20 @@ fn render_mode_ctrl_d_on_a_sessions_last_pane_lands_on_the_sibling_session() {
     b.killer.kill().ok();
 }
 
-/// Card 01a13d03, keep-one-tab end to end: Ctrl+D exits the ONLY pane of
-/// the only workspace under auto-remove. The daemon holds the pane dead
-/// (the workspace never empties on an app exit) and the attached client
-/// holds the all-dead daemon past its 5 s exit-when-empty grace, so the
-/// render client stays attached instead of detaching.
+/// Paul's rule at the client rung (2026-10-18): Ctrl+D exits the ONLY
+/// pane of the only workspace under auto-remove, the full cascade takes
+/// the pane, its session, and its workspace, and with nothing left to
+/// show the daemon exits after its exit-when-empty grace — so the render
+/// client ends instead of holding a dead pane. The keep-one-tab hold is
+/// the `set-workspace-respawn` opt-in now.
 #[cfg(unix)]
 #[test]
-fn render_mode_ctrl_d_on_the_workspaces_last_pane_keeps_the_client() {
+fn render_mode_ctrl_d_on_the_workspaces_last_pane_cascades_and_ends() {
     let fixture = MuxFixture::new("ctrldkeep");
     let _daemon = common::spawn_daemon_auto_remove(&fixture);
     wait_listening(fixture.socket());
     let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
     client.send("new-session -s att").expect("new-session");
-    let pane = session_first_pane(&mut client, "$0");
     // settle: the fresh pane's shell starts before the client attaches
     std::thread::sleep(Duration::from_millis(500));
 
@@ -6437,23 +6437,26 @@ fn render_mode_ctrl_d_on_the_workspaces_last_pane_keeps_the_client() {
         saw_pane_exited(&client, Duration::from_secs(10)),
         "the shell's exit must reach observers as %pane-exited"
     );
-    // The control client disconnects: only the render client holds the
-    // all-dead daemon now.
-    drop(client);
-    // negative check: past the 5 s grace, nothing positive to wait on
-    std::thread::sleep(Duration::from_secs(7));
-    assert_eq!(
-        child_exit(&mut a, Duration::from_millis(200)),
-        None,
-        "the client must stay attached to the held pane. stderr: {}",
-        a_err.lock().unwrap()
-    );
-    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("daemon serves");
-    let info = client
-        .send(&format!("pane-info -t {pane}"))
-        .expect("pane-info")
-        .join("\n");
-    assert!(info.contains(" exited="), "the pane is held dead: {info}");
+    // The cascade empties the tree; the daemon exits after its
+    // exit-when-empty grace (connected client or not) and the client ends
+    // with it.
+    child_exit(&mut a, Duration::from_secs(20)).unwrap_or_else(|| {
+        panic!(
+            "the client ends when the emptied daemon exits. stderr: {}",
+            a_err.lock().unwrap()
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if par_mux::mux::MuxClient::connect(fixture.socket()).is_err() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon is gone after the grace"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
     a.killer.kill().ok();
 }
 
@@ -7364,14 +7367,14 @@ fn strip_sgr(row: &str) -> String {
 
 /// Card 01a13d03's render-mode gap: a held pane shows the exit cue on the
 /// status row, and the respawn chord (`C-b r`) restarts it — the client
-/// repaints the live shell on the same pane. Driven through Ctrl+D on the
-/// workspace's last pane (keep-one-tab holds it under the product
-/// default).
+/// repaints the live shell on the same pane. Driven through Ctrl+D on a
+/// pane's shell under a remain-on-exit daemon — the hold is what makes
+/// the pane held dead now that the auto-remove default cascades.
 #[cfg(unix)]
 #[test]
 fn render_mode_held_pane_shows_the_exit_cue_and_the_chord_respawns_it() {
     let fixture = MuxFixture::new("rendercue");
-    let _daemon = common::spawn_daemon_auto_remove(&fixture);
+    let _daemon = common::spawn_daemon(&fixture);
     wait_listening(fixture.socket());
     let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
     client.send("new-session -s att").expect("new-session");

@@ -209,6 +209,24 @@ impl AgentRow {
             .map(|(_, v)| v.as_str())
     }
 
+    /// The state's message (the blocked reason) from the `reason=` extra:
+    /// the standard base64 of the whitespace-collapsed text. `None` when
+    /// the row carries no token; malformed base64 or non-UTF-8 stays
+    /// `None` — a renderer drops the line, never garbage.
+    pub fn reason(&self) -> Option<String> {
+        use base64::Engine as _;
+        let token = self
+            .extras
+            .iter()
+            .find(|(k, _)| k == "reason")
+            .map(|(_, v)| v)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .filter(|message| !message.is_empty())
+    }
+
     /// The pane's project — the host probe's `project` field (the git
     /// work tree's basename) from the `host_telemetry=` extra. `None`
     /// when the token is absent, aged out, or does not decode.

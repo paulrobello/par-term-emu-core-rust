@@ -224,6 +224,73 @@ pub fn hook_status() -> Vec<AgentHookStatus> {
     })
     .collect()
 }
+
+/// Whether the settings dialog's update button reinstalls this
+/// integration: it is installed and its asset is not the bundled copy
+/// (`v1 → v2 outdated`, or `asset missing` under a surviving
+/// registration). Never-installed rows are left alone — the button
+/// updates, it does not adopt.
+fn wants_update(installed: bool, asset: &AssetState) -> bool {
+    installed && asset.currency != AssetCurrency::Current
+}
+
+/// Reinstall every integration the update button selects (the predicate
+/// [`update_outdated_integrations`] documents), dispatching each
+/// name through `install`. Returns `(updated, failed)` name lists, a
+/// failure as `name: error`. Pure over its inputs, so tests drive it with
+/// fake statuses and a recording closure.
+pub fn update_outdated_with(
+    hooks: Vec<AgentHookStatus>,
+    extensions: Vec<ExtensionStatus>,
+    skill: Option<crate::mux::skill_installer::SkillStatus>,
+    install: &mut dyn FnMut(&str) -> io::Result<()>,
+) -> (Vec<String>, Vec<String>) {
+    let mut updated: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    let mut run = |name: &str, stale: bool| {
+        if !stale {
+            return;
+        }
+        match install(name) {
+            Ok(()) => updated.push(name.to_string()),
+            Err(err) => failed.push(format!("{name}: {err}")),
+        }
+    };
+    for hook in hooks {
+        run(&hook.agent, wants_update(hook.installed, &hook.asset));
+    }
+    for ext in extensions {
+        run(&ext.agent, wants_update(ext.installed, &ext.asset));
+    }
+    if let Some(skill) = skill {
+        run("skill", wants_update(skill.installed, &skill.asset));
+    }
+    (updated, failed)
+}
+
+/// The settings dialog's update button: reinstall every integration the
+/// status surfaces grade as stale (installed, and the asset is not the
+/// bundled copy) through the real
+/// installers. Returns `(updated, failed)` as [`update_outdated_with`].
+pub fn update_outdated_integrations() -> (Vec<String>, Vec<String>) {
+    let skill = crate::mux::skill_installer::skill_status().ok();
+    update_outdated_with(
+        hook_status(),
+        extension_status(),
+        skill,
+        &mut |name| match name {
+            "claude" => claude::install_claude_hook().map(|_| ()),
+            "codex" => codex::install_codex_hook().map(|_| ()),
+            "grok" => grok::install_grok_hook().map(|_| ()),
+            "muse" => muse::install_muse_hook().map(|_| ()),
+            "pi" => extensions::install_pi_extension().map(|_| ()),
+            "omp" => extensions::install_omp_extension().map(|_| ()),
+            "skill" => crate::mux::skill_installer::install_skill().map(|_| ()),
+            _ => Ok(()),
+        },
+    )
+}
+
 use jsonc_parser::ast::{
     Array as AstArray, Object as AstObject, ObjectPropName, Value as AstValue,
 };
@@ -1043,6 +1110,81 @@ mod tests {
             bundled_version: Some("2".to_string()),
         };
         assert_eq!(outdated.display(true), "v1 \u{2192} v2 outdated");
+    }
+
+    /// The settings dialog's update button selects only INSTALLED
+    /// integrations whose asset is not the bundled copy — outdated, or an
+    /// asset gone missing under a surviving registration — and never
+    /// adopts a never-installed row.
+    #[test]
+    fn update_outdated_reinstalls_only_stale_installed_integrations() {
+        let stale = |installed_version: Option<&str>| AssetState {
+            currency: if installed_version.is_some() {
+                AssetCurrency::Outdated
+            } else {
+                AssetCurrency::Absent
+            },
+            installed_version: installed_version.map(String::from),
+            bundled_version: Some("2".to_string()),
+        };
+        let hooks = vec![
+            AgentHookStatus {
+                agent: "stale".to_string(),
+                installed: true,
+                asset: stale(Some("1")),
+            },
+            AgentHookStatus {
+                agent: "current".to_string(),
+                installed: true,
+                asset: AssetState {
+                    currency: AssetCurrency::Current,
+                    installed_version: Some("2".to_string()),
+                    bundled_version: Some("2".to_string()),
+                },
+            },
+            AgentHookStatus {
+                agent: "gone".to_string(),
+                installed: true,
+                asset: stale(None),
+            },
+            AgentHookStatus {
+                agent: "off".to_string(),
+                installed: false,
+                asset: stale(Some("1")),
+            },
+        ];
+        let mut called: Vec<String> = Vec::new();
+        let (updated, failed) = update_outdated_with(hooks, vec![], None, &mut |name| {
+            called.push(name.to_string());
+            Ok(())
+        });
+        assert_eq!(
+            updated,
+            vec!["stale".to_string(), "gone".to_string()],
+            "installed-but-stale rows reinstall, current and never-installed do not"
+        );
+        assert!(failed.is_empty(), "no failures expected: {failed:?}");
+        assert_eq!(called, updated);
+    }
+
+    /// An installer failure surfaces as `name: error` in the failed list,
+    /// so the dialog's flash can name what did not move.
+    #[test]
+    fn update_outdated_reports_installer_failures_by_name() {
+        let hooks = vec![AgentHookStatus {
+            agent: "stale".to_string(),
+            installed: true,
+            asset: AssetState {
+                currency: AssetCurrency::Outdated,
+                installed_version: Some("1".to_string()),
+                bundled_version: Some("2".to_string()),
+            },
+        }];
+        let (updated, failed) = update_outdated_with(hooks, vec![], None, &mut |_name| {
+            Err(std::io::Error::other("boom"))
+        });
+        assert!(updated.is_empty(), "nothing counts as updated: {updated:?}");
+        assert_eq!(failed, vec!["stale: boom".to_string()]);
     }
 
     /// Every bundled asset must carry the marker the status surfaces parse

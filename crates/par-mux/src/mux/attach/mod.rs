@@ -358,6 +358,12 @@ struct Session {
     /// active one (status line's workspaces segment).
     workspaces: Vec<(String, String)>,
     active_workspace: Option<String>,
+    /// The DISPLAYED session's own workspace (the owner session row's
+    /// `ws`), the pass-through status line's bracket target: on an
+    /// `attach -t` to a non-active-workspace session the bracket used to
+    /// name the daemon's active workspace, not the session shown (the
+    /// TUI audit's F1, render mode's mirror).
+    session_workspace: Option<String>,
     /// The pane's effective title (status line).
     pane_title: String,
     /// Agents rostered on the target pane (status line).
@@ -462,6 +468,7 @@ impl Session {
             session_name: String::new(),
             workspaces: Vec::new(),
             active_workspace: None,
+            session_workspace: None,
             pane_title: String::new(),
             agents: 0,
             exited: None,
@@ -596,6 +603,18 @@ impl Session {
                     Some(ManagementKey::SplitRight) => self.split_pane(true),
                     Some(ManagementKey::SplitDown) => self.split_pane(false),
                     Some(ManagementKey::KillPane) => self.kill_focused_pane(),
+                    Some(ManagementKey::BreakPane) => self.break_focused_pane(),
+                    // Join needs the window picker's overlay surface:
+                    // passthrough consumes the chord and says so.
+                    Some(ManagementKey::JoinPane) => {
+                        self.flash = Some("join-pane: render mode only".to_string());
+                        self.draw_status();
+                    }
+                    // The palette needs the picker's overlay surface too.
+                    Some(ManagementKey::Palette) => {
+                        self.flash = Some("palette: render mode only".to_string());
+                        self.draw_status();
+                    }
                     Some(ManagementKey::NewWindow) => self.new_window_in_session(),
                     Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
@@ -754,6 +773,15 @@ pub(crate) enum ManagementKey {
     SplitDown,
     /// Kill the focused pane (`kill-pane`).
     KillPane,
+    /// Break the focused pane out into its session's new window
+    /// (`break-pane`), landing on it.
+    BreakPane,
+    /// Open the window picker in join mode: the picked window receives
+    /// the focused pane (`join-pane`).
+    JoinPane,
+    /// Open the command palette: every management action (and
+    /// settings/keybinds/reload/detach) as one filterable list.
+    Palette,
     /// New window in the focused pane's session (`new-window`).
     NewWindow,
     /// Swap the focused pane with the previous pane in layout order

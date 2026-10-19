@@ -157,6 +157,7 @@ impl WindowSession {
         previous: Option<&str>,
         state: &str,
         ws: &str,
+        msg: &str,
     ) {
         // Background-only (herdr's rule): an agent in the window this
         // client shows is already in view, so it never notifies.
@@ -200,9 +201,14 @@ impl WindowSession {
                 };
                 self.notify.toast_until =
                     Some(std::time::Instant::now() + super::toast::toast_lifetime(status));
+                // The reason rides its own line: the why is the point of a
+                // blocked card (the TUI audit's finding — the message was
+                // wired end to end and rendered nowhere).
+                let message = sanitize(msg);
                 self.renderer.set_toast(Some(super::toast::Toast {
                     title: sanitize(&title),
                     body: sanitize(&detail),
+                    message: (!message.is_empty()).then_some(message),
                     status,
                     pane,
                 }));

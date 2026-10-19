@@ -160,15 +160,36 @@ impl MuxTree {
         rows: u16,
         env: BTreeMap<String, String>,
     ) -> Result<SessionId, MuxError> {
-        let plan = self.begin_session(name, cols, rows, &env, None);
+        let plan = self.begin_session(name, cols, rows, &env, None)?;
         let pane = self.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
         self.complete_session(plan, pane?)
     }
 
-    /// Phase 1 of `new-session` (ARC-022): reserve the ids under the tree
-    /// lock. Infallible — fresh ids depend on no existing state. The session
-    /// links to the workspace the explicit `-t` target resolves to, else
-    /// the active workspace, else the lazily created default (`main`).
+    /// The lowest unused numeric session name (`"0"`, `"1"`, …) — tmux's
+    /// `new-session` default, so nameless creates keep working under the
+    /// unique-names rule.
+    pub fn next_session_name(&self) -> String {
+        let mut n = 0u64;
+        loop {
+            let name = n.to_string();
+            if !self.sessions.values().any(|s| s.name == name) {
+                return name;
+            }
+            n += 1;
+        }
+    }
+
+    /// Whether another live session already holds `name`.
+    pub fn session_name_taken(&self, name: &str) -> bool {
+        let name = strip_controls(name);
+        self.sessions.values().any(|s| s.name == name)
+    }
+
+    /// Phase 1 of `new-session` (ARC-022): resolve the workspace, then
+    /// reserve the ids. The session links to the workspace the explicit
+    /// `-t` target resolves to, else the active workspace, else the
+    /// lazily created default (`main`). Errs when another live session
+    /// already holds the name.
     pub fn begin_session(
         &mut self,
         name: &str,
@@ -176,7 +197,7 @@ impl MuxTree {
         rows: u16,
         env: &BTreeMap<String, String>,
         workspace: Option<crate::mux::ids::Target<WorkspaceId>>,
-    ) -> SessionSpawn {
+    ) -> Result<SessionSpawn, MuxError> {
         let workspace_id = self
             .resolve_new_session_workspace(workspace)
             .unwrap_or_else(|_| self.ensure_default_workspace());
@@ -185,7 +206,8 @@ impl MuxTree {
 
     /// [`Self::begin_session`] with the workspace already resolved — the
     /// dispatcher's form, so an unknown explicit target fails the command
-    /// before any id is reserved.
+    /// before any id is reserved. Errs when another live session already
+    /// holds the name.
     pub fn begin_session_at(
         &mut self,
         workspace_id: WorkspaceId,
@@ -193,19 +215,23 @@ impl MuxTree {
         cols: u16,
         rows: u16,
         env: &BTreeMap<String, String>,
-    ) -> SessionSpawn {
-        SessionSpawn {
+    ) -> Result<SessionSpawn, MuxError> {
+        let name = strip_controls(name).into_owned();
+        if self.sessions.values().any(|s| s.name == name) {
+            return Err(MuxError::DuplicateSessionName(name));
+        }
+        Ok(SessionSpawn {
             session_id: self.ids.next_session(),
             window_id: self.ids.next_window(),
             pane_id: self.ids.next_pane(),
             cols,
             rows,
-            name: strip_controls(name).into_owned(),
+            name,
             window_name: None,
             env: env.clone(),
             cwd: None,
             workspace_id,
-        }
+        })
     }
 
     /// Phase 3 of `new-session`: insert the spawned pane and its window and
@@ -643,12 +669,28 @@ impl MuxTree {
     /// as `PAR_MUX_SESSION`; panes already running keep the name they were
     /// spawned with (the fixed-at-spawn contract, MUX.md).
     pub fn rename_session(&mut self, session_id: SessionId, name: &str) -> Result<(), MuxError> {
+        let name = strip_controls(name).into_owned();
+        if self
+            .sessions
+            .iter()
+            .any(|(id, session)| *id != session_id && session.name == name)
+        {
+            return Err(MuxError::DuplicateSessionName(name));
+        }
         let session = self
             .sessions
             .get_mut(&session_id)
             .ok_or(MuxError::NoSuchSession(session_id))?;
-        session.name = strip_controls(name).into_owned();
+        session.name = name;
         Ok(())
+    }
+
+    /// Test support: stage a duplicate session name, bypassing the
+    /// create/rename guards — the ambiguity answers stay live for legacy
+    /// persisted trees, and only tests can build that state now.
+    #[cfg(test)]
+    pub fn stage_legacy_duplicate_name(&mut self, session: SessionId, name: &str) {
+        self.sessions.get_mut(&session).unwrap().name = strip_controls(name).into_owned();
     }
 
     /// Kill a session and every window and pane in it. The Ok value lists

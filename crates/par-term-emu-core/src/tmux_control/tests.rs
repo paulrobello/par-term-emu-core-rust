@@ -868,6 +868,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "waiting for input".into(),
             source: "hook".into(),
             ws: String::new(),
+            msg: String::new(),
         }]
     );
     assert_eq!(
@@ -878,6 +879,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "busy".into(),
             source: String::new(),
             ws: String::new(),
+            msg: String::new(),
         }]
     );
     assert_eq!(
@@ -888,6 +890,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "source=hook".into(),
             source: String::new(),
             ws: String::new(),
+            msg: String::new(),
         }],
         "with only three tokens the third is the state, never provenance"
     );
@@ -901,6 +904,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "working".into(),
             source: "hook".into(),
             ws: "+2".into(),
+            msg: String::new(),
         }]
     );
     assert_eq!(
@@ -911,6 +915,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "waiting for input".into(),
             source: "scrape".into(),
             ws: "+0".into(),
+            msg: String::new(),
         }]
     );
     assert_eq!(
@@ -921,8 +926,35 @@ fn par_mux_extension_optional_fields_decode() {
             state: "working".into(),
             source: "hook".into(),
             ws: String::new(),
+            msg: String::new(),
         }],
         "an unknown key is ignored, never folded into the state"
+    );
+    assert_eq!(
+        parse_one(
+            "%agent-state-changed %1 claude blocked source=hook ws=+2 msg=bmVlZHMgYXBwcm92YWw="
+        ),
+        vec![N::AgentStateChanged {
+            pane_id: "%1".into(),
+            agent: "claude".into(),
+            state: "blocked".into(),
+            source: "hook".into(),
+            ws: "+2".into(),
+            msg: "needs approval".into(),
+        }],
+        "the msg token decodes the base64 reason"
+    );
+    assert_eq!(
+        parse_one("%agent-state-changed %1 claude blocked source=hook ws=+2 msg=!!!"),
+        vec![N::AgentStateChanged {
+            pane_id: "%1".into(),
+            agent: "claude".into(),
+            state: "blocked".into(),
+            source: "hook".into(),
+            ws: "+2".into(),
+            msg: String::new(),
+        }],
+        "malformed base64 stays empty: no message, never garbage"
     );
     assert_eq!(
         parse_one("%agent-state-changed %1 claude working ws=+2"),
@@ -932,6 +964,7 @@ fn par_mux_extension_optional_fields_decode() {
             state: "working".into(),
             source: String::new(),
             ws: "+2".into(),
+            msg: String::new(),
         }],
         "ws rides without a source token"
     );

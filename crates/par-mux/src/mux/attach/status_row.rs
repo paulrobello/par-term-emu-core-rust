@@ -42,17 +42,23 @@ impl Session {
             crate::mux::strip_controls(&self.pane_title)
         };
         // The workspaces segment leads the line: every workspace's name
-        // in id order, the daemon's active one bracketed (passthrough has
-        // no styling surface inside the inverse-video row).
+        // in id order, the DISPLAYED session's workspace bracketed (the
+        // daemon's active one when the session carries none — the TUI
+        // audit's F1: the bracket names what the view shows, not the
+        // daemon-wide pointer).
         let mut line = String::new();
         if !self.workspaces.is_empty() {
             line.push(' ');
+            let bracket = self
+                .session_workspace
+                .clone()
+                .or_else(|| self.active_workspace.clone());
             for (index, (id, name)) in self.workspaces.iter().enumerate() {
                 if index > 0 {
                     line.push(' ');
                 }
                 let name = crate::mux::strip_controls(name);
-                if Some(id) == self.active_workspace.as_ref() {
+                if Some(id) == bracket.as_ref() {
                     line.push('[');
                     line.push_str(&name);
                     line.push(']');

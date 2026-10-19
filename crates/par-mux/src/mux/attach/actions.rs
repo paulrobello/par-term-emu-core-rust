@@ -159,6 +159,9 @@ impl Session {
             k if k == m.split_right => Some(ManagementKey::SplitRight),
             k if k == m.split_down => Some(ManagementKey::SplitDown),
             k if k == m.kill_pane => Some(ManagementKey::KillPane),
+            k if k == m.break_pane => Some(ManagementKey::BreakPane),
+            k if k == m.join_pane => Some(ManagementKey::JoinPane),
+            k if k == m.palette => Some(ManagementKey::Palette),
             k if k == m.new_window => Some(ManagementKey::NewWindow),
             k if k == m.swap_prev => Some(ManagementKey::SwapPrev),
             k if k == m.swap_next => Some(ManagementKey::SwapNext),
@@ -230,6 +233,29 @@ impl Session {
         self.exited = Some(None);
         self.refresh_status();
         self.draw_status();
+    }
+
+    /// prefix !: `break-pane -s <focused>` — the focused pane becomes its
+    /// session's new window and the view lands on it (the reply body IS
+    /// the new window id, like new-window's). The source window's frame
+    /// follows through the %layout-change / %window-close broadcasts.
+    pub(super) fn break_focused_pane(&mut self) {
+        let Ok(reply) = self
+            .conn
+            .send_checked(&format!("break-pane -s {}", self.pane))
+        else {
+            return;
+        };
+        if !reply.ok {
+            return;
+        }
+        if let Some(window) = reply.body.first() {
+            let window = window.trim().to_string();
+            if self.land(&window) {
+                self.attach_window_active_pane(&window);
+                self.window = window;
+            }
+        }
     }
 
     /// prefix c: `new-window -t <session>` — the daemon replies with the

@@ -109,6 +109,7 @@ impl Session {
         self.session_name.clear();
         self.workspaces.clear();
         self.active_workspace = None;
+        self.session_workspace = None;
         self.pane_title.clear();
         let mut agents = 0usize;
         for line in body {
@@ -133,9 +134,16 @@ impl Session {
                         continue;
                     };
                     if marker == "*" {
-                        let name = parts.nth(1).unwrap_or_default();
+                        // The owner session row's shape is
+                        // `session $N * <ws> <name>`: the ws is the
+                        // bracket target (the TUI audit's F1 — the
+                        // displayed session's workspace, not the daemon's
+                        // active one).
+                        let ws = parts.next();
+                        let name = parts.next().unwrap_or_default().to_string();
                         self.session_id = Some(id.to_string());
-                        self.session_name = name.to_string();
+                        self.session_name = name;
+                        self.session_workspace = ws.map(str::to_string);
                     }
                 }
                 "pane" => {

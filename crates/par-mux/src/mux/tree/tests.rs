@@ -1768,6 +1768,7 @@ fn with_window_name_strips_control_characters() {
     let workspace = tree.new_workspace("ws");
     let plan = tree
         .begin_session_at(workspace, "s", 80, 24, &Default::default())
+        .expect("unique session name")
         .with_window_name("w\x07\u{9b}1");
     assert_eq!(plan.window_name.as_deref(), Some("w1"));
 }
@@ -2082,7 +2083,11 @@ fn typed_ids_pass_through_resolution_untouched() {
 fn duplicate_session_names_are_ambiguous_not_silently_picked() {
     let (mut tree, _factory) = recording_tree();
     tree.new_session("dup", 80, 24).unwrap();
-    tree.new_session("dup", 80, 24).unwrap();
+    tree.new_session("two", 80, 24).unwrap();
+    // The unique-names rule keeps duplicates from being minted, so this
+    // state is reachable only from a legacy persisted tree: stage it with
+    // the test-support helper.
+    tree.stage_legacy_duplicate_name(SessionId(1), "dup");
     match tree.resolve_session_target(Target::Name("dup".to_string())) {
         Err(MuxError::AmbiguousSessionTarget(_, ids)) => {
             assert_eq!(ids, vec![SessionId(0), SessionId(1)]);
@@ -2109,6 +2114,40 @@ fn rename_session_updates_the_name_for_resolution_and_future_spawns() {
         tree.rename_session(SessionId(9), "x"),
         Err(MuxError::NoSuchSession(_))
     ));
+}
+
+/// The unique-names rule: create and rename refuse a name another live
+/// session holds, while a session may keep its own name and the numeric
+/// default walks past taken names.
+#[test]
+fn duplicate_session_names_are_refused_at_create_and_rename() {
+    let mut tree = tree();
+    tree.new_session("par", 80, 24).unwrap();
+    assert!(tree.session_name_taken("par"));
+    assert!(!tree.session_name_taken("zz"));
+    assert!(matches!(
+        tree.new_session("par", 80, 24),
+        Err(MuxError::DuplicateSessionName(n)) if n == "par"
+    ));
+    let ws = tree.workspaces()[0];
+    assert!(matches!(
+        tree.begin_session_at(ws, "par", 80, 24, &Default::default()),
+        Err(MuxError::DuplicateSessionName(_))
+    ));
+
+    let b = tree.new_session("other", 80, 24).unwrap();
+    assert!(matches!(
+        tree.rename_session(b, "par"),
+        Err(MuxError::DuplicateSessionName(n)) if n == "par"
+    ));
+    // A session may keep its own name.
+    tree.rename_session(b, "other").unwrap();
+
+    tree.new_session("0", 80, 24).unwrap();
+    tree.new_session("1", 80, 24).unwrap();
+    assert_eq!(tree.next_session_name(), "2");
+    let auto = tree.new_session(&tree.next_session_name(), 80, 24).unwrap();
+    assert_eq!(tree.session(auto).unwrap().name, "2");
 }
 
 #[test]

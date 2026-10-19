@@ -61,7 +61,6 @@ pub(super) fn cmd_new_session(
     rows: Option<u16>,
     command: Option<String>,
 ) -> Outcome {
-    let name = name.unwrap_or_else(|| "0".to_string());
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
     let (cwd, note) = resolve_start_dir(start_dir.as_deref());
     // Two-phase spawn (ARC-022): reserve ids under the lock, run the
@@ -70,8 +69,12 @@ pub(super) fn cmd_new_session(
     // until the insert lands. The workspace target resolves here (under
     // the lock, against the tree): an unknown one fails the command before
     // anything spawns.
-    let (plan, factory) = {
+    let (name, plan, factory) = {
         let mut guard = ctx.tree.lock();
+        // A nameless new-session takes the lowest unused numeric name
+        // (tmux's default), so repeated nameless creates keep working
+        // under the unique-names rule.
+        let name = name.unwrap_or_else(|| guard.next_session_name());
         let workspace_id = match guard.resolve_new_session_workspace(workspace) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
@@ -80,11 +83,14 @@ pub(super) fn cmd_new_session(
         // default (the first client size report re-sizes anyway).
         let cols = cols.unwrap_or(DEFAULT_COLS);
         let rows = rows.unwrap_or(DEFAULT_ROWS);
-        let mut plan = guard.begin_session_at(workspace_id, &name, cols, rows, &env);
+        let mut plan = match guard.begin_session_at(workspace_id, &name, cols, rows, &env) {
+            Ok(plan) => plan,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
         if let Some(window_name) = window_name.as_deref() {
             plan = plan.with_window_name(window_name);
         }
-        (plan.with_cwd(cwd), guard.factory())
+        (name, plan.with_cwd(cwd), guard.factory())
     };
     let window_id = plan.window_id;
     let outcome = spawn_and_wire(ctx, &*factory, plan, command.as_deref(), note.as_deref())
@@ -311,11 +317,23 @@ pub(super) fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome 
     // in the side panel while the view stayed on the old one's tabs).
     let (id, plan, factory) = {
         let mut guard = ctx.tree.lock();
+        // new-workspace names its first session after the workspace, so a
+        // taken session name fails the whole command before the workspace
+        // row is created — never a half-created workspace on a name clash.
+        if guard.session_name_taken(&name) {
+            return Outcome::err(
+                ctx,
+                &format!(
+                    "duplicate session: {name} — new-workspace names its first session after the workspace"
+                ),
+            );
+        }
         let id = guard.new_workspace(&name);
         (
             id,
             guard
                 .begin_session_at(id, &name, DEFAULT_COLS, DEFAULT_ROWS, &Default::default())
+                .expect("session name verified free under the held lock")
                 .with_window_name("1"),
             guard.factory(),
         )

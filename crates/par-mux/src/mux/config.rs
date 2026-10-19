@@ -73,6 +73,24 @@ pub struct ClientSection {
     /// that kills the focused pane and lands on the successor.
     #[serde(default, rename = "kill-pane", skip_serializing_if = "Option::is_none")]
     pub kill_pane: Option<String>,
+    /// The break-pane chord (`!`): the key matched after the prefix that
+    /// breaks the focused pane out into a new window of its session and
+    /// lands on it.
+    #[serde(
+        default,
+        rename = "break-pane",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub break_pane: Option<String>,
+    /// The join-pane chord (`J`): the key matched after the prefix that
+    /// opens the window picker in join mode — the picked window receives
+    /// the focused pane.
+    #[serde(default, rename = "join-pane", skip_serializing_if = "Option::is_none")]
+    pub join_pane: Option<String>,
+    /// The command-palette chord (`:`): the key matched after the prefix
+    /// that opens the filterable palette over every management action.
+    #[serde(default, rename = "palette", skip_serializing_if = "Option::is_none")]
+    pub palette: Option<String>,
     /// The new-window chord (tmux's `c`): the key matched after the prefix
     /// that opens a window in the focused pane's session and lands on it.
     #[serde(
@@ -572,6 +590,9 @@ pub fn render(eff: &EffectiveConfig) -> String {
             split_right: None,
             split_down: None,
             kill_pane: None,
+            break_pane: None,
+            join_pane: None,
+            palette: None,
             new_window: None,
             resize: None,
             resize_step: None,
@@ -753,6 +774,7 @@ pub const AGENT_ROW_TOKENS: &[&str] = &[
     "state",
     "workspace",
     "project",
+    "message",
     "agent",
     "pane",
 ];
@@ -802,6 +824,15 @@ pub struct Management {
     pub split_down: u8,
     /// Kill the focused pane — `kill-pane -t <pane>`.
     pub kill_pane: u8,
+    /// Break the focused pane out into a new window of its session —
+    /// `break-pane -s <pane>` — and land on the fresh window.
+    pub break_pane: u8,
+    /// Open the window picker in join mode: the picked window receives
+    /// the focused pane (`join-pane -s <pane> -t <pane>`).
+    pub join_pane: u8,
+    /// Open the command palette: every management action (and
+    /// settings/keybinds/reload/detach) as one filterable list.
+    pub palette: u8,
     /// New window in the focused pane's session — `new-window -t <session>`.
     pub new_window: u8,
     /// Enter the sticky resize mode — arrows adjust the focused pane's
@@ -860,6 +891,9 @@ impl Default for Management {
             split_right: b'%',
             split_down: b'"',
             kill_pane: b'x',
+            break_pane: b'!',
+            join_pane: b'J',
+            palette: b':',
             new_window: b'c',
             resize: b'R',
             swap_prev: b'{',
@@ -938,6 +972,9 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         split_right: chord!(split_right, "split-right"),
         split_down: chord!(split_down, "split-down"),
         kill_pane: chord!(kill_pane, "kill-pane"),
+        break_pane: chord!(break_pane, "break-pane"),
+        join_pane: chord!(join_pane, "join-pane"),
+        palette: chord!(palette, "palette"),
         new_window: chord!(new_window, "new-window"),
         resize: chord!(resize, "resize"),
         swap_prev: chord!(swap_prev, "swap-prev"),
@@ -1499,6 +1536,9 @@ remain-on-exit = true
                 split_right: b'%',
                 split_down: b'"',
                 kill_pane: b'x',
+                break_pane: b'!',
+                join_pane: b'J',
+                palette: b':',
                 new_window: b'c',
                 resize: b'R',
                 swap_prev: b'{',

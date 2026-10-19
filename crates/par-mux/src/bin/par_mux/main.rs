@@ -821,6 +821,17 @@ fn main() -> std::process::ExitCode {
     // Whether a subcommand verb drove this invocation: the collision
     // guard below only fires on the bare NAME form, where intent is
     // ambiguous (`par-mux ls`), never on an explicit `par-mux start ls`.
+    // The reserved name "server" (Paul, 2026-10-18): `par-mux server stop`
+    // reads as "stop the server" but clap takes "server" as the daemon
+    // NAME, silently narrowing to a daemon literally named "server"
+    // (socket par-mux-server.sock). Refused in every name position, before
+    // the verb dispatch (status/ls return inside it) and again after it
+    // (`par-mux start server` merges the name below); only an explicit
+    // --socket reads as deliberate. Checked before the subcommand block
+    // AND after it — see refuse_reserved_server_name's call sites.
+    if refuse_reserved_server_name(cli.name.as_deref(), cli.socket.as_ref()) {
+        return std::process::ExitCode::from(2);
+    }
     let mut verb_drove = false;
     if let Some(sub) = cli.sub.take() {
         let mut merge = |name: Option<String>,
@@ -873,6 +884,9 @@ fn main() -> std::process::ExitCode {
                     state_dir,
                 } = args;
                 merge(name, socket, state_dir);
+                if refuse_reserved_server_name(cli.name.as_deref(), cli.socket.as_ref()) {
+                    return std::process::ExitCode::from(2);
+                }
                 let path = resolve_cli_socket(&cli);
                 return run_status(&path);
             }
@@ -883,6 +897,9 @@ fn main() -> std::process::ExitCode {
                     state_dir,
                 } = args;
                 merge(name, socket, state_dir);
+                if refuse_reserved_server_name(cli.name.as_deref(), cli.socket.as_ref()) {
+                    return std::process::ExitCode::from(2);
+                }
                 let path = resolve_cli_socket(&cli);
                 return run_command(&path, "list-sessions");
             }
@@ -893,6 +910,11 @@ fn main() -> std::process::ExitCode {
                 cli.force |= args.force;
             }
         }
+    }
+    // `par-mux start server` and friends: the verb's own NAME argument
+    // merged above, so the reserved check runs again on the merged name.
+    if refuse_reserved_server_name(cli.name.as_deref(), cli.socket.as_ref()) {
+        return std::process::ExitCode::from(2);
     }
 
     // The mux library logs through `log` (ARC-010); without a logger
@@ -1116,6 +1138,25 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// The reserved daemon name "server" (`par-mux server stop` reads as
+/// "stop the server" but addresses a daemon literally named "server" on
+/// `par-mux-server.sock` — Paul, 2026-10-18). Returns true (after
+/// printing the explanation) when the invocation must be refused; an
+/// explicit `--socket` reads as deliberate and is allowed, and attach
+/// keeps resolving any NAME normally.
+fn refuse_reserved_server_name(name: Option<&str>, socket: Option<&std::path::PathBuf>) -> bool {
+    if socket.is_some() || name != Some("server") {
+        return false;
+    }
+    eprintln!(
+        "par-mux: \"server\" is reserved — `par-mux server …` addresses a daemon literally \
+         named \"server\" (socket par-mux-server.sock), not \"the server\". The default \
+         daemon takes no name: `par-mux stop`, `par-mux --stop`, `par-mux status`. To run \
+         or address one named \"server\", pass --socket"
+    );
+    true
 }
 
 /// The socket-path resolution every client-side verb and the daemon
