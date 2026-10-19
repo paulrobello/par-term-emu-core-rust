@@ -798,7 +798,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `output` | `data: bytes`, `timestamp?: uint64` | Terminal output data |
 | `resize` | `cols: uint32`, `rows: uint32` | Terminal size changed |
 | `title` | `title: string` | Terminal title changed |
-| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo`, `badge?: string`, `faint_text_alpha?: float`, `cwd?: string`, `modify_other_keys?: uint32`, `client_id?: string`, `readonly?: bool` | Connection established |
+| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo`, `badge?: string`, `faint_text_alpha?: float`, `cwd?: string`, `modify_other_keys?: uint32`, `client_id?: string`, `readonly?: bool`, `pointer_shape?: string` | Connection established |
 | `refresh` | `cols`, `rows`, `screen_content: bytes` | Full screen content |
 | `cursor` | `col: uint32`, `row: uint32`, `visible: bool` | Cursor position |
 | `bell` | (none) | Bell event |
@@ -834,6 +834,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `screen_cleared` | `include_scrollback: bool` | Screen cleared (ED 2J or ED 3J) |
 | `agent_roster` | `agents: AgentEntry[]` | Full agent roster snapshot (pane-id ascending), pushed once per client connect in mux-backed sessions |
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
+| `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 
 `AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none). Both roster messages are always sent — event subscriptions do not filter them.
 
@@ -967,6 +968,7 @@ Clients can subscribe to specific event types to filter server messages and redu
 | `FILE_TRANSFER` | 24 | File transfer events (started, progress, completed, failed) |
 | `UPLOAD_REQUEST` | 25 | Upload request events |
 | `SCREEN_CLEARED` | 26 | Screen cleared events (ED 2J / ED 3J) |
+| `POINTER_SHAPE` | 27 | Pointer shape changes (OSC 22) |
 
 **Example (TypeScript):**
 ```typescript

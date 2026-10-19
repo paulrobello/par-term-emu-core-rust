@@ -70,10 +70,8 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
             timestamp,
             cursor_line.map(|l| l as u64),
         ),
-        // No streaming representation yet: the pointer shape is a local
-        // rendering concern (a card can add the message type when a
-        // web client needs it).
-        TerminalEvent::PointerShapeChanged(_) => return None,
+        TerminalEvent::PointerShapeChanged(shape) => ServerMessage::pointer_shape_changed(shape),
+        // Local rendering hint: no streaming representation.
         TerminalEvent::DirtyRegion(_, _) => return None,
         TerminalEvent::ZoneOpened {
             zone_id,
@@ -482,6 +480,17 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         readonly: Option<bool>,
+        /// Pointer shape requested via OSC 22 (`ew-resize`, `text`, …);
+        /// absent = the client's own pointer applies
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        pointer_shape: Option<String>,
     },
 
     /// Screen refresh response (full screen content)
@@ -1027,6 +1036,14 @@ pub enum ServerMessage {
         /// True when the pane's agent was released or the pane exited
         released: bool,
     },
+
+    /// Pointer shape change (OSC 22)
+    #[serde(rename = "pointer_shape_changed")]
+    PointerShapeChanged {
+        /// Requested shape name (`ew-resize`, `text`, …); `None` = the client's own pointer applies
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shape: Option<String>,
+    },
 }
 
 /// One par-mux agent roster entry, verbatim from `list-agents`.
@@ -1337,6 +1354,9 @@ pub enum EventType {
     /// Screen cleared events (ED 2J, ED 3J)
     #[serde(rename = "screen_cleared")]
     ScreenCleared,
+    /// Pointer shape change events (OSC 22)
+    #[serde(rename = "pointer_shape")]
+    PointerShape,
 }
 
 /// Builder for [`ServerMessage::Connected`] (QA-003).
@@ -1368,6 +1388,8 @@ pub struct ConnectedBuilder {
     pub client_id: Option<String>,
     /// Optional read-only flag
     pub readonly: Option<bool>,
+    /// Optional pointer shape requested via OSC 22
+    pub pointer_shape: Option<String>,
 }
 
 impl ConnectedBuilder {
@@ -1437,6 +1459,12 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Set the pointer shape requested via OSC 22
+    pub fn pointer_shape(mut self, shape: Option<String>) -> Self {
+        self.pointer_shape = shape;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -1451,6 +1479,7 @@ impl ConnectedBuilder {
             modify_other_keys: self.modify_other_keys,
             client_id: self.client_id,
             readonly: self.readonly,
+            pointer_shape: self.pointer_shape,
         }
     }
 }
@@ -1750,6 +1779,11 @@ impl ServerMessage {
     /// Create a badge changed message
     pub fn badge_changed(badge: Option<String>) -> Self {
         Self::BadgeChanged { badge }
+    }
+
+    /// Create a pointer shape changed message
+    pub fn pointer_shape_changed(shape: Option<String>) -> Self {
+        Self::PointerShapeChanged { shape }
     }
 
     /// Create a selection changed message

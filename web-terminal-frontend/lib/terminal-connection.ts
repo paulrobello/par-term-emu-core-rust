@@ -55,6 +55,8 @@ export interface TerminalConnectionCallbacks {
   onHyperlinkAdded?(link: ServerCase<'hyperlinkAdded'>): void;
   onUserVarChanged?(userVar: ServerCase<'userVarChanged'>): void;
   onSelectionChanged?(selection: ServerCase<'selectionChanged'>): void;
+  /** OSC 22 pointer shape; `null` restores the client's own pointer. */
+  onPointerShapeChanged?(shape: string | null): void;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
@@ -336,6 +338,10 @@ export class TerminalConnection {
 
       case 'selectionChanged':
         this.callbacks.onSelectionChanged?.(msg.message.value);
+        break;
+
+      case 'pointerShapeChanged':
+        this.callbacks.onPointerShapeChanged?.(msg.message.value.shape ?? null);
         break;
 
       default:

@@ -241,6 +241,7 @@ impl StreamSessionState {
             .modify_other_keys(mok_mode)
             .client_id(Some(client_id.to_string()))
             .readonly(Some(readonly))
+            .pointer_shape(terminal.pointer_shape().map(str::to_string))
             .build()
     }
 

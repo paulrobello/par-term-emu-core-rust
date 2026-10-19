@@ -475,6 +475,7 @@ event_type_conversions!(
     FileTransfer,
     UploadRequest,
     ScreenCleared,
+    PointerShape,
 );
 
 // =============================================================================
@@ -953,6 +954,7 @@ mod tests {
             modify_other_keys: None,
             client_id: None,
             readonly: None,
+            pointer_shape: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1244,6 +1246,7 @@ mod tests {
             .modify_other_keys(Some(2))
             .client_id(Some("client-42".to_string()))
             .readonly(Some(true))
+            .pointer_shape(Some("ew-resize".to_string()))
             .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1259,6 +1262,7 @@ mod tests {
             modify_other_keys,
             client_id,
             readonly,
+            pointer_shape,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1274,6 +1278,7 @@ mod tests {
         assert_eq!(modify_other_keys, Some(2));
         assert_eq!(client_id, Some("client-42".to_string()));
         assert_eq!(readonly, Some(true));
+        assert_eq!(pointer_shape, Some("ew-resize".to_string()));
     }
 
     #[test]

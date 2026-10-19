@@ -48,7 +48,7 @@ SERVER_VALID_TYPES = (
     "shell_integration, cwd_changed, trigger_matched, user_var_changed, "
     "progress_bar_changed, system_stats, file_transfer_started, "
     "file_transfer_progress, file_transfer_completed, file_transfer_failed, "
-    "upload_requested, screen_cleared"
+    "upload_requested, screen_cleared, pointer_shape_changed"
 )
 
 CLIENT_VALID_TYPES = (
@@ -90,8 +90,8 @@ SERVER_CASES = [
             "session_id": "sess-1",
             "theme": THEME,
             # QUIRK: encode never reads badge/faint_text_alpha/cwd/
-            # modify_other_keys/client_id/readonly kwargs — the Connected
-            # constructors hard-code them to None.
+            # modify_other_keys/client_id/readonly/pointer_shape kwargs — the
+            # Connected constructors hard-code them to None.
             "badge": "main",
             "faint_text_alpha": 0.7,
             "cwd": "/tmp",
@@ -116,6 +116,7 @@ SERVER_CASES = [
             "modify_other_keys": None,
             "client_id": None,
             "readonly": None,
+            "pointer_shape": None,
         },
     ),
     (
@@ -133,6 +134,7 @@ SERVER_CASES = [
             "modify_other_keys": None,
             "client_id": None,
             "readonly": None,
+            "pointer_shape": None,
         },
     ),
     ("error", {"message": "boom", "code": "E42"}, {"message": "boom", "code": "E42"}),
@@ -176,6 +178,8 @@ SERVER_CASES = [
     ("hyperlink_added", {"url": "u"}, {"url": "u", "row": 0, "col": 0, "id": None}),
     ("badge_changed", {"badge": "b"}, {"badge": "b"}),
     ("badge_changed", {}, {"badge": None}),
+    ("pointer_shape_changed", {"shape": "ew-resize"}, {"shape": "ew-resize"}),
+    ("pointer_shape_changed", {}, {"shape": None}),
     (
         "selection_changed",
         {

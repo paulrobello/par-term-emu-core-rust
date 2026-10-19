@@ -4507,6 +4507,20 @@ class StreamingServer:
             server.send_output("\\x1b[1mhello\\x1b[0m\\r\\n")
             ```
         """
+    def send_pointer_shape_changed(self, shape: Any = None) -> Any:
+        """Send a pointer shape changed event to all clients
+
+        Args:
+            shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
+                restore the client's own pointer
+
+        Example:
+            ```python
+            server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+            server.send_pointer_shape_changed("ew-resize")
+            server.send_pointer_shape_changed(None)  # restore default
+            ```
+        """
     def send_progress_bar_changed(
         self,
         action: Any,
@@ -9284,6 +9298,13 @@ class TmuxNotification:
         """Flags (for begin/end/error notifications)"""
     @flags.setter
     def flags(self, value: Any) -> None: ...
+    @property
+    def message(self) -> Any:
+        """The agent state's message (the blocked reason, for
+        `agent-state-changed`; None when the daemon sent no `msg=` token)
+        """
+    @message.setter
+    def message(self, value: Any) -> None: ...
     @property
     def name(self) -> Any:
         """Name (for window/session rename notifications)"""

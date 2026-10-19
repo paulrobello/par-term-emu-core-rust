@@ -74,6 +74,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             modify_other_keys: Some(2),
             client_id: Some("cid".into()),
             readonly: Some(true),
+            pointer_shape: Some("text".into()),
         },
         S::Connected {
             cols: 1,
@@ -87,6 +88,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             modify_other_keys: None,
             client_id: None,
             readonly: None,
+            pointer_shape: None,
         },
         S::Refresh {
             cols: 7,
@@ -326,6 +328,10 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             agent: agent(0),
             released: true,
         },
+        S::PointerShapeChanged {
+            shape: Some("ew-resize".into()),
+        },
+        S::PointerShapeChanged { shape: None },
     ]
 }
 
@@ -656,9 +662,10 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::ScreenCleared { .. } => "ScreenCleared",
             S::AgentRoster { .. } => "AgentRoster",
             S::AgentStateChanged { .. } => "AgentStateChanged",
+            S::PointerShapeChanged { .. } => "PointerShapeChanged",
         });
     }
-    assert_eq!(seen.len(), 39, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 40, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {

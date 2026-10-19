@@ -18,6 +18,7 @@ import {
   themeToXtermOptions,
 } from '@/lib/protocol';
 import { TerminalConnection } from '@/lib/terminal-connection';
+import { cursorForPointerShape } from '@/lib/pointer-shape';
 import {
   clamp,
   clampPan,
@@ -45,6 +46,7 @@ interface TerminalProps {
   onHyperlinkAdded?: (url: string, row: number, col: number, id?: string) => void;
   onUserVarChanged?: (name: string, value: string, oldValue?: string) => void;
   onSelectionChanged?: (text: string | undefined, cleared: boolean) => void;
+  onPointerShapeChanged?: (shape: string | null) => void;
 }
 
 // Module-level storage to preserve terminal across StrictMode unmount/remount
@@ -146,7 +148,7 @@ const sharedDecoder = new TextDecoder();
 // Maximum snapshot size (1MB) to prevent UI freeze from large payloads
 const MAX_SNAPSHOT_SIZE = 1024 * 1024;
 
-export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput, onHyperlinkAdded, onUserVarChanged, onSelectionChanged }: TerminalProps) {
+export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput, onHyperlinkAdded, onUserVarChanged, onSelectionChanged, onPointerShapeChanged }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -212,6 +214,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     onHyperlinkAdded,
     onSelectionChanged,
     onUserVarChanged,
+    onPointerShapeChanged,
   });
   useEffect(() => {
     propsRef.current = {
@@ -223,8 +226,18 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       onHyperlinkAdded,
       onSelectionChanged,
       onUserVarChanged,
+      onPointerShapeChanged,
     };
   });
+
+  // Apply an OSC 22 pointer shape to the terminal host. An unknown name keeps
+  // the current cursor (cursorForPointerShape returns null for those).
+  const applyCursor = (shape: string | null): void => {
+    const host = terminalRef.current;
+    if (!host) return;
+    const cursor = cursorForPointerShape(shape);
+    if (cursor) host.style.cursor = cursor;
+  };
 
   // Flush buffered writes to terminal - called once per animation frame
   const flushWrites = useCallback(() => {
@@ -944,6 +957,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             applyTheme(connected.theme);
           }
 
+          // Apply the OSC 22 pointer shape the session already carries
+          applyCursor(connected.pointerShape ?? null);
+
           // A fresh connection starts fit-to-width and unpanned on a phone.
           connectedOnceRef.current = true;
           zoomFontRef.current = null;
@@ -1113,6 +1129,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           }
 
           propsRef.current.onSelectionChanged?.(sel.text, sel.cleared);
+        },
+        onPointerShapeChanged: (shape) => {
+          applyCursor(shape);
         },
       });
     }

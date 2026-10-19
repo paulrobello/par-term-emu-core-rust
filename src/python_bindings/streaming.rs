@@ -1201,6 +1201,28 @@ impl PyStreamingServer {
         }
     }
 
+    /// Send a pointer shape changed event to all clients
+    ///
+    /// Args:
+    ///     shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
+    ///         restore the client's own pointer
+    ///
+    /// Example:
+    ///     ```python
+    ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
+    ///     server.send_pointer_shape_changed("ew-resize")
+    ///     server.send_pointer_shape_changed(None)  # restore default
+    ///     ```
+    #[pyo3(signature = (shape=None))]
+    fn send_pointer_shape_changed(&self, shape: Option<String>) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_pointer_shape_changed(shape);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
     /// Send a trigger action notify event to all clients
     ///
     /// Args:

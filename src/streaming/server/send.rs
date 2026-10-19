@@ -148,6 +148,12 @@ impl StreamingServer {
         self.broadcast(msg);
     }
 
+    /// Send a pointer shape changed event to all clients
+    pub fn send_pointer_shape_changed(&self, shape: Option<String>) {
+        let msg = ServerMessage::pointer_shape_changed(shape);
+        self.broadcast(msg);
+    }
+
     /// Shutdown the server and disconnect all clients
     pub fn shutdown(&self, reason: String) {
         crate::debug_info!("STREAMING", "Shutting down server: {}", reason);

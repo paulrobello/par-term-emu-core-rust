@@ -50,6 +50,7 @@ enum EventType {
   EVENT_TYPE_FILE_TRANSFER = 24;
   EVENT_TYPE_UPLOAD_REQUEST = 25;
   EVENT_TYPE_SCREEN_CLEARED = 26;
+  EVENT_TYPE_POINTER_SHAPE = 27;
 }
 
 // =============================================================================
@@ -97,6 +98,7 @@ message ServerMessage {
     ScreenCleared screen_cleared = 37;
     AgentRoster agent_roster = 38;
     AgentStateChanged agent_state_changed = 39;
+    PointerShapeChanged pointer_shape_changed = 40;
   }
 }
 
@@ -130,6 +132,7 @@ message Connected {
   optional uint32 modify_other_keys = 9;  // modifyOtherKeys mode (0-2)
   optional string client_id = 10;         // Unique client identifier
   optional bool readonly = 11;            // Whether this connection is read-only
+  optional string pointer_shape = 12;     // Requested pointer shape (OSC 22); absent = client's own pointer
 }
 
 // Full screen refresh response
@@ -519,4 +522,9 @@ message AgentRoster {
 message AgentStateChanged {
   AgentEntry agent = 1;
   bool released = 2;  // true → remove; only pane_id is set
+}
+
+// Pointer shape change (OSC 22)
+message PointerShapeChanged {
+  optional string shape = 1;  // Shape name ("ew-resize", "text", …); absent = client's own pointer
 }

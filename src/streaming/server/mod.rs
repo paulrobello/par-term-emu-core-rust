@@ -636,6 +636,7 @@ fn should_send(
         | ServerMessage::FileTransferFailed { .. } => subs.contains(&EventType::FileTransfer),
         ServerMessage::UploadRequested { .. } => subs.contains(&EventType::UploadRequest),
         ServerMessage::ScreenCleared { .. } => subs.contains(&EventType::ScreenCleared),
+        ServerMessage::PointerShapeChanged { .. } => subs.contains(&EventType::PointerShape),
         // Always send system messages
         ServerMessage::Connected { .. }
         | ServerMessage::Refresh { .. }

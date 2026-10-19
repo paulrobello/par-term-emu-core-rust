@@ -1457,6 +1457,97 @@ mod streaming_tests {
         }
     }
 
+    // =========================================================================
+    // Pointer Shape (OSC 22) Tests
+    // =========================================================================
+
+    mod pointer_shape_tests {
+        use par_term_emu_core_rust::streaming::protocol::{
+            terminal_event_to_server_message, ServerMessage,
+        };
+        use par_term_emu_core_rust::streaming::StreamSessionState;
+        use par_term_emu_core_rust::terminal::Terminal;
+        use parking_lot::RwLock;
+        use std::sync::Arc;
+
+        fn create_session_with_terminal(term: Terminal) -> StreamSessionState {
+            StreamSessionState::new(
+                "test-session".to_string(),
+                Arc::new(RwLock::new(term)),
+                None,
+                false,
+            )
+        }
+
+        /// An OSC 22 shape lands on streaming clients as `pointer_shape_changed`
+        /// carrying the name.
+        #[test]
+        fn test_osc22_event_maps_to_pointer_shape_changed() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b]22;ew-resize\x07");
+            let mapped: Vec<_> = term
+                .poll_events()
+                .into_iter()
+                .filter_map(terminal_event_to_server_message)
+                .collect();
+            assert_eq!(mapped.len(), 1, "expected one mapped message: {mapped:?}");
+            match &mapped[0] {
+                ServerMessage::PointerShapeChanged { shape } => {
+                    assert_eq!(shape.as_deref(), Some("ew-resize"));
+                }
+                other => panic!("expected PointerShapeChanged, got {other:?}"),
+            }
+        }
+
+        /// The empty-shape reset maps to `shape: None` (the client's own pointer).
+        #[test]
+        fn test_osc22_reset_maps_to_none() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b]22;ew-resize\x07");
+            let _ = term.poll_events();
+            term.process(b"\x1b]22;\x07");
+            let mapped: Vec<_> = term
+                .poll_events()
+                .into_iter()
+                .filter_map(terminal_event_to_server_message)
+                .collect();
+            assert_eq!(mapped.len(), 1, "expected one mapped message: {mapped:?}");
+            match &mapped[0] {
+                ServerMessage::PointerShapeChanged { shape } => {
+                    assert!(shape.is_none(), "expected None, got {shape:?}");
+                }
+                other => panic!("expected PointerShapeChanged, got {other:?}"),
+            }
+        }
+
+        /// `Connected` carries the session's initial shape so a connecting client
+        /// applies it without waiting for a change.
+        #[test]
+        fn test_connect_message_carries_initial_pointer_shape() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b]22;ns-resize\x07");
+            let session = create_session_with_terminal(term);
+            match session.build_connect_message("client-1", false) {
+                ServerMessage::Connected { pointer_shape, .. } => {
+                    assert_eq!(pointer_shape.as_deref(), Some("ns-resize"));
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// A terminal with no OSC 22 history sends no pointer shape on `Connected`.
+        #[test]
+        fn test_connect_message_default_terminal_has_no_pointer_shape() {
+            let session = create_session_with_terminal(Terminal::new(80, 24));
+            match session.build_connect_message("client-1", false) {
+                ServerMessage::Connected { pointer_shape, .. } => {
+                    assert!(pointer_shape.is_none());
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+    }
+
     mod system_stats_tests {
         use super::*;
         use par_term_emu_core_rust::streaming::protocol::{
