@@ -116,6 +116,7 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Capture screen | `capture-pane -t %N` — visible screen; `-S -200` adds 200 history lines |
 | Capture styled | `capture-pane -t %N -e` — one line per grid row with SGR escapes inline |
 | Wait for output | `wait-output -t %N (-m TEXT \| -r REGEX) [-T ms]` — blocks until a line matches; exit 0 + the line, exit 1 on timeout/exit/close |
+| Stream raw bytes | `par-mux observe -t %N [--no-seed]` — the pane's raw PTY bytes to stdout, read-only; `par-mux control -t %N [--size WxH]` also forwards stdin. For scripts/embedders, not interactive use (that is `par-mux attach -t %N`) |
 | Launch an agent | `agent-start -t %N [-T ms] <kind> [args…]` — types the agent into a pane at its shell prompt; exit 0 with `%N <agent> <state> <source>` once detected ready (idle), exit 1 on timeout or blocked startup |
 | Prompt an agent | `agent-prompt -t %N -w [-T ms] -- <text>` — submits the prompt and blocks until the agent is idle/done/blocked; exit 1 with `stalled` if it never started working within 5 s. `agent-explain -t %N` shows how its state is detected |
 | Read a title | `pane-title -t %N` (empty reply = none set) |
@@ -214,6 +215,22 @@ A finished agent reads `idle` OR `done`: `done` means it finished while no
 attached client was viewing its pane, and it stays `done` until one does. With
 no render client attached every finish reads `done`, so a script waiting for
 an agent to finish must accept both.
+
+When the rendered screen is not enough — escapes, graphics, or modes must
+survive — stream the pane's raw bytes instead of capturing it:
+
+```sh
+par-mux observe -t %3              # screen seed + live raw PTY bytes, read-only
+par-mux observe -t %3 --no-seed    # live bytes only
+printf 'make test\r' | par-mux control -t %3 --no-seed   # the same stream, plus stdin
+```
+
+The seed reproduces the screen in a fresh emulator of the reported size;
+apply the following `%output` bytes to stay live. `observe` is for scripts
+and embedders running their own terminal model (piping a pane into a logger
+or an emulator); `control` adds input for driving a program that must see
+raw bytes. Both exit 0 on the daemon's `%exit`, 1 when refused, 2 on a
+mid-stream drop. For interactive single-pane use, run `par-mux attach -t %N`.
 
 Agent panes spawn with an env contract a script inside the pane can use:
 
