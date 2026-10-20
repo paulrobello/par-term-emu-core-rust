@@ -126,25 +126,21 @@ pub(super) fn validate_env_name(name: &str, command: &str) -> Result<(), String>
 }
 
 /// `set-environment -t $N NAME VALUE` or `set-environment -t $N -u NAME`.
-/// The words after the flags go through [`shell_split`], so a quoted value
-/// may contain spaces; exactly one value word is accepted.
+/// Flags lead ([`split_leading_flags`]), so a VALUE that is literally `-u`
+/// or `-t` stays the value. The words after the flags go through
+/// [`shell_split`], so a quoted value may contain spaces; exactly one value
+/// word is accepted.
 pub(super) fn parse_set_environment(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let session = a
-        .session("-t")?
-        .ok_or_else(|| format!("{} requires -t", a.name))?;
-    let unset = a.has_flag("-u");
-    let words = shell_split(a.line);
-    let mut positional = Vec::new();
-    let mut iter = words.iter().skip(1);
-    while let Some(word) = iter.next() {
-        match word.as_str() {
-            "-t" => {
-                iter.next();
-            }
-            "-u" => {}
-            _ => positional.push(word.clone()),
-        }
-    }
+    use LeadingFlag::{Bare, Valued};
+    let lead = split_leading_flags(a.line, a.name, &[Valued("-t"), Bare("-u")])?;
+    let raw = match lead.value("-t") {
+        None => return Err(format!("{} requires -t", a.name)),
+        Some("") => return Err(format!("{}: -t requires a non-empty name", a.name)),
+        Some(raw) => raw,
+    };
+    let session = Target::parse(raw).map_err(|_| format!("invalid session target: {raw}"))?;
+    let unset = lead.has("-u");
+    let positional = shell_split(lead.tail);
     let (name, value) = match (unset, positional.as_slice()) {
         (true, [name]) => (name.clone(), None),
         (false, [name, value]) => (name.clone(), Some(value.clone())),

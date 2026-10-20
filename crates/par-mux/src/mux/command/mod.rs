@@ -1027,19 +1027,6 @@ impl<'a> Args<'a> {
         }
     }
 
-    /// Everything after a `<flag> <value>` pair, joined back with spaces —
-    /// the same "trailing free text is the payload" shape `send-keys`
-    /// already uses.
-    fn trailing_after(&self, flag: &str) -> String {
-        self.args
-            .iter()
-            .skip_while(|a| **a != flag)
-            .skip(2)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
     /// The trailing start command a create command carries (tmux's
     /// positional form): the RAW remainder of the line from the first
     /// word that is neither a flag nor a flag's value, quoting and
@@ -1559,8 +1546,8 @@ pub const COMMAND_SCHEMA_JSON: &str = include_str!("../../../schema/par-mux-comm
 /// Two commands take trailing free text. `respawn-pane` reads its flags
 /// only up to the first command word or `--` and passes the raw rest of
 /// the line to the pane's shell, quoting and whitespace intact (see
-/// `split_leading_flags`). `rename-window` is the one remaining
-/// `Args::trailing_after` user, joining the words after `-t`.
+/// `split_leading_flags`). `rename-window` joins the words after `-t`'s
+/// value (and an optional `--`) with single spaces.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {

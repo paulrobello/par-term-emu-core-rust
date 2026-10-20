@@ -726,6 +726,11 @@ fn prompt_commits_send_each_targets_wire_spelling() {
             "rename-window -t @0 my notes",
         ),
         (
+            PromptTarget::Window("@0".to_string()),
+            "-- x",
+            "rename-window -t @0 -- -- x",
+        ),
+        (
             PromptTarget::Workspace("+2".to_string()),
             "it's",
             "rename-workspace -t +2 'it'\\''s'",

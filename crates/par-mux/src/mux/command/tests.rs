@@ -2827,3 +2827,118 @@ fn set_buffer_hex_mode_needs_a_leading_flag() {
         }
     );
 }
+
+/// Flags lead `set-environment` (getopt semantics): a VALUE that is
+/// literally `-u` or `-t` is the value, not the unset flag or a target.
+#[test]
+fn set_environment_value_shaped_like_a_flag_is_the_value() {
+    for (line, value) in [
+        ("set-environment -t $0 NAME -u", "-u"),
+        ("set-environment -t $0 NAME -t", "-t"),
+        ("set-environment -t $0 NAME '-u'", "-u"),
+    ] {
+        assert_eq!(
+            parse_command(line).unwrap(),
+            MuxCommand::SetEnvironment {
+                session: Target::Id(SessionId(0)),
+                name: "NAME".into(),
+                value: Some(value.into()),
+            },
+            "{line}"
+        );
+    }
+    assert_eq!(
+        parse_command("set-environment -t $0 -u -- NAME").unwrap(),
+        MuxCommand::SetEnvironment {
+            session: Target::Id(SessionId(0)),
+            name: "NAME".into(),
+            value: None,
+        }
+    );
+    // An unsupported flag is refused, not taken as a NAME.
+    assert!(parse_command("set-environment -g -t $0 NAME V").is_err());
+}
+
+/// `worktree-create`'s `-n` refusal reads shell words: a `-n` inside a
+/// quoted value, or as a value, is not the removed branch flag.
+#[test]
+fn worktree_create_n_refusal_ignores_n_inside_values() {
+    assert_eq!(
+        parse_command("worktree-create -c /src -b x -s 'a -n b'").unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/src".to_string(),
+            branch: "x".to_string(),
+            base: None,
+            path: None,
+            name: Some("a -n b".to_string()),
+        }
+    );
+    assert_eq!(
+        parse_command("worktree-create -c /src -b x -s -n").unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/src".to_string(),
+            branch: "x".to_string(),
+            base: None,
+            path: None,
+            name: Some("-n".to_string()),
+        }
+    );
+    let err = parse_command("worktree-create -c /src -s 'a b' -n x").unwrap_err();
+    assert!(err.contains("-b <branch>"), "{err}");
+}
+
+/// `rename-window` drops one leading `--` (flags end there) and skips a
+/// quoted target whole.
+#[test]
+fn rename_window_strips_a_leading_double_dash() {
+    for (line, name) in [
+        ("rename-window -t @0 -- x", "x"),
+        ("rename-window -t @0 -- -- x", "-- x"),
+        ("rename-window -t @0 x -- y", "x -- y"),
+        ("rename-window -t @0 --  my   notes", "my notes"),
+    ] {
+        assert_eq!(
+            parse_command(line).unwrap(),
+            MuxCommand::RenameWindow {
+                window: Target::Id(WindowId(0)),
+                name: name.into(),
+            },
+            "{line}"
+        );
+    }
+    assert!(parse_command("rename-window -t @0 --").is_err());
+    assert_eq!(
+        parse_command("rename-window -t 'my win' new").unwrap(),
+        MuxCommand::RenameWindow {
+            window: Target::Name("my win".into()),
+            name: "new".into(),
+        }
+    );
+}
+
+/// tmux's `split-window -l <size>` (and `-e`/`-F`) are refused: their value
+/// must never become the start command.
+#[test]
+fn split_window_refuses_size_env_and_format_flags() {
+    for line in [
+        "split-window -t %0 -l 30",
+        "split-window -t %0 -h -l 30%",
+        "split-window -t %0 -e A=1",
+        "split-window -t %0 -F '#{pane_id}'",
+    ] {
+        let err = parse_command(line).unwrap_err();
+        assert!(err.contains("not supported"), "{line}: {err}");
+    }
+    // Inside the start command they are the command's.
+    assert_eq!(
+        parse_command("split-window -t %0 -- ls -l 30").unwrap(),
+        MuxCommand::SplitWindow {
+            target: AnyTarget::Pane(PaneId(0)),
+            direction: SplitDirection::Horizontal,
+            percent: 50,
+            before: false,
+            start_dir: None,
+            command: Some("ls -l 30".into()),
+        }
+    );
+}

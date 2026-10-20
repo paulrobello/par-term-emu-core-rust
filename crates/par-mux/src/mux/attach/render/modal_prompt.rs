@@ -198,8 +198,16 @@ impl WindowSession {
                 // rename-window takes the REST OF THE LINE verbatim (the
                 // daemon grammar's documented exception) — quoting would
                 // become part of the name (the manual-pass round-8
-                // report: renamed tabs wore literal quotes).
-                let _ = conn.send_forget(&format!("rename-window -t {id} {text}"));
+                // report: renamed tabs wore literal quotes). Only a name
+                // whose first word is `--` gets a guarding `--`: a daemon
+                // older than the client (a stamp mismatch only warns)
+                // would keep an unconditional `--` in every name.
+                let guard = if text.split_whitespace().next() == Some("--") {
+                    "-- "
+                } else {
+                    ""
+                };
+                let _ = conn.send_forget(&format!("rename-window -t {id} {guard}{text}"));
                 self.leave_prompt();
                 self.status_dirty = true;
             }

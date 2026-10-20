@@ -330,7 +330,7 @@
       "flags": [
         "-t"
       ],
-      "synopsis": "-t <window> <name>"
+      "synopsis": "-t <window> [--] <name>"
     },
     {
       "name": "rename-workspace",

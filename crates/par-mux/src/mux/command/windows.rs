@@ -33,9 +33,27 @@ pub(super) fn parse_kill_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+/// `rename-window -t <window> [--] <name>`: the name is the rest of the
+/// line after the target's value (read as a shell word, so a quoted target
+/// is skipped whole), whitespace-split and rejoined with single spaces —
+/// rename clients send the raw name, so quoting would become part of it.
+/// A leading `--` ends the flags and is not part of the name.
 pub(super) fn parse_rename_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     let window = a.window("-t")?;
-    let name = a.trailing_after("-t");
+    let rest = a.line.trim_start().strip_prefix(a.name).unwrap_or_default();
+    let mut pos = a.line.len() - rest.len();
+    let mut tail = "";
+    while let Some((_, end, word)) = next_shell_word(a.line, pos) {
+        pos = end;
+        if word == "-t" {
+            tail =
+                next_shell_word(a.line, pos).map_or("", |(_, value_end, _)| &a.line[value_end..]);
+            break;
+        }
+    }
+    let mut words = tail.split_whitespace().peekable();
+    words.next_if_eq(&"--");
+    let name = words.collect::<Vec<_>>().join(" ");
     if name.is_empty() {
         return Err("rename-window requires a new name".to_string());
     }
