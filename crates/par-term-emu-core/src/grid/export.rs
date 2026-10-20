@@ -366,8 +366,9 @@ impl Grid {
     /// Export scrollback lines only, with ANSI styling
     ///
     /// The styled counterpart of the plain scrollback export: the same line
-    /// selection and order (`max_lines` honored, same iteration as the Plain
-    /// path), with per-run SGR so colors and attributes survive the export.
+    /// selection and order (`max_lines` keeps the NEWEST rows, emitted
+    /// newest-first like the Plain path), with per-run SGR so colors and
+    /// attributes survive the export.
     pub fn export_scrollback_styled(&self, max_lines: Option<usize>) -> String {
         let lines_to_export = max_lines
             .unwrap_or(self.scrollback_lines)
@@ -375,7 +376,7 @@ impl Grid {
         let mut result = String::new();
         let mut state = SgrState::reset();
 
-        for i in (0..lines_to_export).rev() {
+        for i in (self.scrollback_lines - lines_to_export..self.scrollback_lines).rev() {
             if let Some(line) = self.scrollback_line(i) {
                 let last_sig = self.find_last_significant(line);
                 push_styled_cells(&mut result, line, last_sig, &mut state);

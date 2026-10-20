@@ -3372,9 +3372,59 @@ fn test_export_scrollback_with_limit() {
         term.process(format!("Line{}\r\n", i).as_bytes());
     }
 
-    let export = term.export_scrollback(ExportFormat::Plain, Some(5));
-    let line_count = export.lines().count();
-    assert!(line_count <= 5);
+    // 20 lines + the trailing blank row on a 5-row screen: Line0..Line15
+    // scrolled off, Line15 directly above the screen.
+    let lines: Vec<String> = term
+        .export_scrollback(ExportFormat::Plain, Some(5))
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    assert_eq!(lines, ["Line15", "Line14", "Line13", "Line12", "Line11"]);
+}
+
+/// `max_lines` is a tail limit: `Some(n)` keeps the NEWEST `n` scrollback
+/// rows in the same newest-first order as the full export, so it is always
+/// the first `n` rows of the `None` export — in every format.
+#[test]
+fn export_scrollback_limit_keeps_the_newest_rows_in_every_format() {
+    let mut term = Terminal::with_scrollback(20, 3, 100);
+    for i in 0..12 {
+        term.process(format!("\x1b[3{}mrow-{i:02}\x1b[0m\r\n", i % 7 + 1).as_bytes());
+    }
+    let len = term.grid().scrollback_len();
+    assert!(len >= 8, "fixture scrolls enough history: {len}");
+
+    let rows = |format: ExportFormat, max: Option<usize>| -> Vec<String> {
+        let text = term.export_scrollback(format, max);
+        let body = match format {
+            ExportFormat::Html => text
+                .strip_prefix("<pre>\n")
+                .and_then(|t| t.strip_suffix("</pre>"))
+                .expect("html framing")
+                .to_string(),
+            _ => text,
+        };
+        body.lines().map(str::to_string).collect()
+    };
+
+    for format in [ExportFormat::Plain, ExportFormat::Html, ExportFormat::Ansi] {
+        let full = rows(format, None);
+        assert_eq!(full.len(), len, "{format:?}");
+        for n in [1, 3, len - 1] {
+            assert_eq!(rows(format, Some(n)), full[..n], "{format:?} Some({n})");
+        }
+        assert_eq!(rows(format, Some(len + 10)), full, "{format:?} over-long");
+        assert!(rows(format, Some(0)).is_empty(), "{format:?} Some(0)");
+    }
+
+    let newest = format!("row-{:02}", len - 1);
+    let tail = term.export_scrollback(ExportFormat::Plain, Some(2));
+    assert!(tail.contains(&newest), "newest row kept: {tail:?}");
+    assert!(!tail.contains("row-00"), "oldest row dropped: {tail:?}");
+    assert_eq!(
+        term.export_scrollback(ExportFormat::Html, Some(0)),
+        "<pre>\n</pre>"
+    );
 }
 
 #[test]

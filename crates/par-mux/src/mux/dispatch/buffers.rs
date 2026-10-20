@@ -103,34 +103,21 @@ pub(super) fn capture_text(
 }
 
 /// The newest-first plain history rows a `-S/-E` range can reach — the
-/// shape `export_scrollback(Plain, None)` emits, cut to the deepest
-/// negative bound so a range near the screen does not walk the whole
-/// scrollback under the terminal's read lock. `export_scrollback`'s own
-/// count keeps the OLDEST rows, so it cannot do this cut. Only a `None`
-/// start reaches all of history, and every caller passing `None` with an
-/// `end` gets the full walk as before.
+/// shape `export_scrollback(Plain, None)` emits, cut by its tail limit to
+/// the deepest negative bound so a range near the screen does not walk the
+/// whole scrollback under the terminal's read lock. Only a `None` start
+/// reaches all of history, and every caller passing `None` with an `end`
+/// gets the full walk as before.
 fn plain_history_tail(
     term: &par_term_emu_core::terminal::Terminal,
     start: Option<i64>,
     end: Option<i64>,
 ) -> String {
-    let grid = term.grid();
-    let len = grid.scrollback_len();
-    let needed = match start {
-        None => len,
-        Some(start) => {
-            let deepest = start.min(end.unwrap_or(0)).min(0);
-            usize::try_from(deepest.unsigned_abs()).map_or(len, |n| n.min(len))
-        }
-    };
-    let mut out = String::new();
-    for i in (len - needed..len).rev() {
-        if let Some(line) = grid.scrollback_line(i) {
-            out.push_str(&par_term_emu_core::text_utils::cells_to_text(line));
-            out.push('\n');
-        }
-    }
-    out
+    let needed = start.and_then(|start| {
+        let deepest = start.min(end.unwrap_or(0)).min(0);
+        usize::try_from(deepest.unsigned_abs()).ok()
+    });
+    term.export_scrollback(par_term_emu_core::terminal::ExportFormat::Plain, needed)
 }
 
 /// How long one `wait-output` park lasts before the waiter re-checks the

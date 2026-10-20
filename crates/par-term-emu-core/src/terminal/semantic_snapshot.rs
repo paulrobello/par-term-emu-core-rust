@@ -679,17 +679,21 @@ impl Terminal {
     ///
     /// # Arguments
     /// * `format` - Export format (Plain, Html, Ansi)
-    /// * `max_lines` - Maximum number of scrollback lines to export (None = all)
+    /// * `max_lines` - Tail limit: export only the NEWEST `max_lines`
+    ///   scrollback rows (None = all)
     ///
-    /// Returns the exported content as a string.
+    /// Rows are emitted newest-first (the row directly above the screen
+    /// leads), so `Some(n)` is always the first `n` rows of the `None`
+    /// export. Returns the exported content as a string.
     pub fn export_scrollback(&self, format: ExportFormat, max_lines: Option<usize>) -> String {
         let scrollback_len = self.grid.scrollback_len();
         let lines_to_export = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+        let newest = scrollback_len - lines_to_export..scrollback_len;
 
         match format {
             ExportFormat::Plain => {
                 let mut output = String::new();
-                for i in (0..lines_to_export).rev() {
+                for i in newest.rev() {
                     if let Some(line) = self.grid.scrollback_line(i) {
                         output.push_str(&crate::text_utils::cells_to_text(line));
                         output.push('\n');
@@ -699,7 +703,7 @@ impl Terminal {
             }
             ExportFormat::Html => {
                 let mut output = String::from("<pre>\n");
-                for i in (0..lines_to_export).rev() {
+                for i in newest.rev() {
                     if let Some(line) = self.grid.scrollback_line(i) {
                         let text = crate::text_utils::cells_to_text(line);
                         output.push_str(&crate::text_utils::html_escape(&text));

@@ -1058,6 +1058,31 @@ fn test_styled_exports_golden_bytes() {
     assert_eq!(grid.export_row_styled(grid.row(1).unwrap()), "");
 }
 
+/// `export_scrollback_styled(Some(n))` keeps the NEWEST `n` scrollback rows,
+/// newest-first like the full export (the oldest-`n` selection was a bug).
+#[test]
+fn styled_scrollback_limit_keeps_the_newest_rows() {
+    let mut grid = Grid::new(4, 1, 10);
+    for c in ['a', 'b', 'c', 'd'] {
+        let mut cell = Cell::new(c);
+        cell.set_fg(Color::Named(NamedColor::Red));
+        grid.set(0, 0, cell);
+        grid.scroll_up(1);
+    }
+    assert_eq!(grid.scrollback_len(), 4);
+    let full = grid.export_scrollback_styled(None);
+    assert_eq!(
+        full,
+        "\x1b[0;31md\x1b[0m\n\x1b[0;31mc\x1b[0m\n\x1b[0;31mb\x1b[0m\n\x1b[0;31ma\x1b[0m\n"
+    );
+    assert_eq!(
+        grid.export_scrollback_styled(Some(2)),
+        "\x1b[0;31md\x1b[0m\n\x1b[0;31mc\x1b[0m\n"
+    );
+    assert_eq!(grid.export_scrollback_styled(Some(9)), full);
+    assert_eq!(grid.export_scrollback_styled(Some(0)), "");
+}
+
 #[test]
 fn test_clear_row() {
     let mut grid = Grid::new(80, 24, 1000);

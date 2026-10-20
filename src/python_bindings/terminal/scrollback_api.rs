@@ -23,10 +23,14 @@ impl PyTerminal {
     ///
     /// Args:
     ///     format: Export format: "plain", "html", or "ansi"
-    ///     max_lines: Maximum number of scrollback lines to export (None = all)
+    ///     max_lines: Tail limit: export only the newest ``max_lines``
+    ///         scrollback lines (None = all)
     ///
     /// Returns:
-    ///     Exported content as string
+    ///     Exported content as string. Rows are newest-first (the row
+    ///     directly above the screen leads), so ``max_lines=n`` returns a
+    ///     prefix of the full export: its first ``n`` rows ("ansi" joins
+    ///     soft-wrapped rows, so it can hold fewer than ``n`` lines).
     ///
     /// Raises:
     ///     ValueError: If format is not "plain", "html", or "ansi"

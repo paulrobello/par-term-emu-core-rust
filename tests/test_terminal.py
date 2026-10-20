@@ -113,6 +113,26 @@ def test_scrollback():
     assert term.scrollback_len() > 0
 
 
+@pytest.mark.parametrize("fmt", ["plain", "html", "ansi"])
+def test_export_scrollback_max_lines_keeps_newest(fmt: str) -> None:
+    """max_lines is a tail limit: the newest lines, in the full export's order."""
+    term = Terminal(20, 3, scrollback=100)
+    for i in range(12):
+        term.process_str(f"row-{i:02}\r\n")
+    newest = f"row-{term.scrollback_len() - 1:02}"
+
+    def body(text: str) -> list[str]:
+        if fmt == "html":
+            text = text.removeprefix("<pre>\n").removesuffix("</pre>")
+        return text.splitlines()
+
+    full = body(term.export_scrollback(fmt))
+    tail = body(term.export_scrollback(fmt, max_lines=2))
+    assert tail == full[:2]
+    assert newest in tail[0]
+    assert all("row-00" not in line for line in tail)
+
+
 def test_resize():
     """Test terminal resizing"""
     term = Terminal(80, 24)
