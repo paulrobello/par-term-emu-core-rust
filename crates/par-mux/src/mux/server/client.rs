@@ -131,7 +131,15 @@ pub(super) fn handle_client(
         abort: Some(abort),
     };
 
-    if spawn_writer(&stream, rx, Arc::clone(&queued), Arc::clone(&evicted)).is_err() {
+    if spawn_writer(
+        &stream,
+        rx,
+        Arc::clone(&queued),
+        Arc::clone(&evicted),
+        (Arc::clone(&clients), client_id),
+    )
+    .is_err()
+    {
         return;
     }
 
@@ -156,13 +164,18 @@ pub(super) fn handle_client(
 }
 
 /// Start the connection's writer thread: it drains the client's queue to a
-/// clone of the socket until the queue closes, a write fails, or eviction
-/// is flagged. Fails only when the socket cannot be cloned.
+/// clone of the socket until the queue closes, a write fails, eviction is
+/// flagged, or it has written a [`final_item`] — after which it aborts the
+/// connection's blocked I/O through its registry entry (`owner`), so a
+/// Windows reader parked in `ReadFile` wakes and the connection tears down
+/// without waiting for the client to hang up. Fails only when the socket
+/// cannot be cloned.
 fn spawn_writer(
     stream: &LocalStream,
     rx: Receiver<String>,
     queued: Arc<AtomicUsize>,
     evicted: Arc<AtomicBool>,
+    owner: (Clients, u64),
 ) -> std::io::Result<()> {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -182,6 +195,7 @@ fn spawn_writer(
                 if queued.load(Ordering::Relaxed) > 0 {
                     queued.fetch_sub(1, Ordering::Relaxed);
                 }
+                let (last, line) = take_final_marker(line);
                 let line = match take_stream_marker(line) {
                     (Some(pane), rest) => {
                         stream_pane = Some(pane);
@@ -189,13 +203,22 @@ fn spawn_writer(
                     }
                     (None, line) => line,
                 };
-                if stream_pane
+                let passes = stream_pane
                     .as_deref()
-                    .is_some_and(|pane| !pane_stream_passes(&line, pane))
-                {
-                    continue;
+                    .is_none_or(|pane| pane_stream_passes(&line, pane));
+                let wrote = if passes {
+                    write_line(&mut writer, &line, &evicted)
+                } else {
+                    Ok(())
+                };
+                // The cancel waits until the final line is written: it
+                // aborts every pending call on the pipe, the writer's own
+                // `WriteFile` included.
+                if last {
+                    cancel_connection_io(&owner.0, owner.1);
+                    break;
                 }
-                if write_line(&mut writer, &line, &evicted).is_err() {
+                if wrote.is_err() {
                     break;
                 }
             }
@@ -248,6 +271,35 @@ fn take_stream_marker(item: String) -> (Option<String>, String) {
     }
 }
 
+/// The in-band prefix of a connection's last queue item. SOH, like the
+/// stream marker's NUL, never starts an emitted line.
+const FINAL_MARKER: char = '\u{1}';
+
+/// `line` as the connection's last item: the writer writes it, aborts the
+/// connection's blocked I/O, and exits.
+fn final_item(line: &str) -> String {
+    format!("{FINAL_MARKER}{line}")
+}
+
+/// Split a queue item into whether it is the connection's last and the
+/// item itself (stream marker, if any, still attached).
+fn take_final_marker(item: String) -> (bool, String) {
+    match item.strip_prefix(FINAL_MARKER) {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, item),
+    }
+}
+
+/// Abort `client_id`'s blocked socket I/O through its registry entry's
+/// [`ConnectionAbort`] — a no-op on Unix, where the eviction flag's poll
+/// wakes the threads, and a `CancelIoEx` on Windows, where nothing else
+/// would.
+fn cancel_connection_io(clients: &Clients, client_id: u64) {
+    if let Some((.., abort)) = clients.lock().iter().find(|(id, ..)| *id == client_id) {
+        abort.cancel_blocked_io();
+    }
+}
+
 /// What a raw pane stream delivers: reply blocks (the connection's own
 /// commands), the pane's `%output`/`%pane-exited`/`%pane-respawned`, and
 /// `%exit`. Every other broadcast is dropped at the writer.
@@ -265,12 +317,14 @@ pub(super) fn pane_stream_passes(line: &str, pane: &str) -> bool {
 }
 
 /// Queue `line` as `client_id`'s last item and flag the connection for
-/// teardown: its writer drains what is queued (this line included), then
-/// both connection threads exit on their next poll and the socket closes.
-fn end_connection_with(clients: &Clients, client_id: u64, line: String) {
+/// teardown: its writer drains what is queued (this line included) and
+/// then aborts the connection's blocked I/O, so both connection threads
+/// exit — on Unix their poll sees the flag; on Windows the abort wakes the
+/// reader parked in `ReadFile` — and the socket closes.
+fn end_connection_with(clients: &Clients, client_id: u64, line: &str) {
     let guard = clients.lock();
     if let Some((_, tx, queued, evicted, _)) = guard.iter().find(|(id, ..)| *id == client_id) {
-        if tx.try_send(line).is_ok() {
+        if tx.try_send(final_item(line)).is_ok() {
             queued.fetch_add(1, Ordering::Relaxed);
         }
         evicted.store(true, Ordering::Relaxed);
@@ -283,6 +337,12 @@ struct PaneStreamMode {
     /// `control-pane`: later commands still dispatch.
     control: bool,
 }
+
+/// How long an ended stream's connection may stay registered before the
+/// watch aborts its I/O itself: a client too wedged to drain `%exit` keeps
+/// the writer parked in its write, so the writer never reaches its own
+/// cancel.
+const STREAM_END_GRACE: Duration = Duration::from_secs(5);
 
 /// Watch a streamed pane until it leaves the tree, then end the
 /// connection with `%exit`; returns early once the connection itself is
@@ -300,7 +360,15 @@ fn spawn_pane_stream_watch(
             return;
         }
         if tree.lock().pane(pane).is_none() {
-            end_connection_with(&clients, client_id, "%exit\n".to_string());
+            end_connection_with(&clients, client_id, "%exit\n");
+            let deadline = std::time::Instant::now() + STREAM_END_GRACE;
+            while clients.lock().iter().any(|(id, ..)| *id == client_id) {
+                if std::time::Instant::now() >= deadline {
+                    cancel_connection_io(&clients, client_id);
+                    return;
+                }
+                std::thread::sleep(EVICTION_POLL);
+            }
             return;
         }
     });
@@ -604,7 +672,9 @@ impl Connection {
 
 #[cfg(test)]
 mod pane_stream_tests {
-    use super::{pane_stream_passes, stream_marker, take_stream_marker};
+    use super::{
+        final_item, pane_stream_passes, stream_marker, take_final_marker, take_stream_marker,
+    };
     use crate::mux::ids::PaneId;
 
     #[test]
@@ -640,6 +710,24 @@ mod pane_stream_tests {
         let (none, plain) = take_stream_marker("%output %7 x\n".to_string());
         assert_eq!(none, None);
         assert_eq!(plain, "%output %7 x\n");
+    }
+
+    #[test]
+    fn the_final_marker_flags_only_the_last_item_and_leaves_its_bytes_intact() {
+        let (last, line) = take_final_marker(final_item("%exit\n"));
+        assert!(last);
+        assert_eq!(line, "%exit\n");
+        assert!(
+            pane_stream_passes(&line, "%3"),
+            "the final %exit passes the filter"
+        );
+        let (last, line) = take_final_marker("%output %3 x\n".to_string());
+        assert!(!last);
+        assert_eq!(line, "%output %3 x\n");
+        let marked = format!("{}%begin 1 1 1\n", stream_marker(PaneId(3)));
+        let (last, line) = take_final_marker(marked.clone());
+        assert!(!last, "a stream-marked reply is not a final item");
+        assert_eq!(line, marked);
     }
 }
 

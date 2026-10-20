@@ -2492,6 +2492,156 @@ fn an_evicted_clients_connection_closes() {
     let _ = std::fs::remove_file(&socket_path);
 }
 
+/// A pane stream's `%exit` ends the connection from the daemon side,
+/// even while the client sits silent and never hangs up: the client reads
+/// `%exit` and then EOF, and the connection leaves the registry (its
+/// reader thread returned through teardown). On Unix the eviction flag's
+/// recv-timeout poll wakes the reader; on Windows named pipes have no
+/// timeout, so the reader stays parked in `ReadFile` — and the registry's
+/// abort handle keeps the pipe open — until the writer's
+/// `cancel_blocked_io` after `%exit` aborts it. Without that cancel this
+/// test fails on Windows only.
+#[test]
+fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
+    use crate::mux::dispatch::{dispatch_command, Ctx};
+    use crate::mux::ipc::connect_local_stream;
+    use std::io::{BufRead, BufReader, Write};
+
+    let dir = temp_dir();
+    let socket_path = dir.path().join("stream-exit.sock");
+    let listener = bind_local_listener(&socket_path).expect("binds the test listener");
+
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        crate::mux::dispatch::tests::DeadPaneFactory,
+    ))));
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let created = dispatch_command(
+        parse_command("new-session -s s").expect("parses"),
+        &Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
+
+    let (server_tree, registry) = (Arc::clone(&tree), Arc::clone(&clients));
+    std::thread::spawn(
+        move || match crate::mux::ipc::accept_connection(&listener) {
+            Ok((stream, abort)) => {
+                handle_client(stream, server_tree, registry, None, None, abort, None)
+            }
+            Err(err) => panic!("accept_connection failed: {err}"),
+        },
+    );
+
+    let started = std::time::Instant::now();
+    let mut timeline: Vec<String> = Vec::new();
+    let mut client = connect_local_stream(&socket_path).expect("connects");
+    let reader_half = client.try_clone().expect("clones the client stream");
+    client
+        .write_all(b"observe-pane -t %0\n")
+        .expect("sends observe-pane");
+    // The client never writes again: on Windows the daemon's reader is
+    // parked in ReadFile from here on.
+
+    let (line_tx, line_rx) = channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader_half);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    let _ = line_tx.send(None);
+                    return;
+                }
+                Ok(_) => {
+                    if line_tx.send(Some(line)).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let next = |timeline: &mut Vec<String>, what: &str| -> Option<String> {
+        match line_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(Some(line)) => {
+                timeline.push(format!("{:?} read {line:?}", started.elapsed()));
+                Some(line)
+            }
+            Ok(None) => {
+                timeline.push(format!("{:?} EOF", started.elapsed()));
+                None
+            }
+            Err(_) => panic!("no {what} within 30 s; timeline: {timeline:#?}"),
+        }
+    };
+
+    loop {
+        match next(&mut timeline, "observe-pane reply") {
+            Some(line) if line.starts_with("%end") => break,
+            Some(line) if line.starts_with("%error") => {
+                panic!("observe-pane refused; timeline: {timeline:#?}")
+            }
+            Some(_) => {}
+            None => panic!("EOF before the observe-pane reply; timeline: {timeline:#?}"),
+        }
+    }
+    let client_id = clients
+        .lock()
+        .first()
+        .map(|(id, ..)| *id)
+        .expect("the stream registered");
+
+    let killed = dispatch_command(
+        parse_command("kill-pane -t %0").expect("parses"),
+        &Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 2,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    timeline.push(format!("{:?} killed the pane", started.elapsed()));
+    assert!(
+        !reply_is_error(&killed),
+        "kill-pane failed: {killed}; timeline: {timeline:#?}"
+    );
+
+    let mut saw_exit = false;
+    loop {
+        match next(&mut timeline, "%exit and EOF") {
+            Some(line) if line == "%exit\n" => saw_exit = true,
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(
+        saw_exit,
+        "%exit arrives before EOF; timeline: {timeline:#?}"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while clients.lock().iter().any(|(id, ..)| *id == client_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the ended stream's connection never left the registry (its reader \
+             thread is still blocked); timeline: {timeline:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(client);
+}
+
 /// QA-113: a panicking dispatcher is contained — the issuer gets an
 /// error block, and the same "connection" answers the next command.
 #[test]
