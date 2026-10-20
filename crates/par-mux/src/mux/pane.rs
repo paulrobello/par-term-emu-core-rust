@@ -194,6 +194,12 @@ pub struct MuxPane {
     /// `hook_report_sequences`; ARC-113). Reports without a source share
     /// the empty-string bucket.
     pub(crate) seq_by_source: HashMap<String, u64>,
+    /// Transitions of the stored agent state INTO `working` or `blocked`,
+    /// from any writer (hook, scrape). `agent-prompt -w` reads it as its
+    /// anti-stall evidence: a counter, not the current state, so a
+    /// working→idle bounce between two polls still counts, and the seen
+    /// flip (`done`→`idle`) never does. Ephemeral, never persisted.
+    pub(crate) agent_activity: u64,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
     /// handle so a capture started under the tree lock can finish OFF it
@@ -500,7 +506,19 @@ impl MuxPane {
 
     /// Record a metadata entry (seam S2).
     pub fn set_metadata(&mut self, key: &str, value: &str) {
+        if key == "agent_state" {
+            self.note_agent_state(Some(value));
+        }
         self.metadata.insert(key.to_string(), value.to_string());
+    }
+
+    /// Bump [`Self::agent_activity`] when the stored state is about to
+    /// change into `working` or `blocked`.
+    fn note_agent_state(&mut self, next: Option<&str>) {
+        let prior = self.metadata.get("agent_state").map(String::as_str);
+        if prior != next && matches!(next, Some("working" | "blocked")) {
+            self.agent_activity = self.agent_activity.wrapping_add(1);
+        }
     }
 
     /// Remove metadata entries (seam S2). The scrape tier's honesty rule:
@@ -522,6 +540,7 @@ impl MuxPane {
     /// stringly key and every cleared field's key is removed, so a stale
     /// value cannot survive a write that did not carry it.
     pub(crate) fn set_agent_claim(&mut self, claim: &crate::mux::hooks::AgentClaim) {
+        self.note_agent_state(claim.state.as_deref());
         claim.write_to_metadata(&mut self.metadata);
     }
 
@@ -926,6 +945,7 @@ impl ShellPaneFactory {
             telemetry: None,
             host_telemetry: None,
             seq_by_source: HashMap::new(),
+            agent_activity: 0,
             snapshot_cache: Arc::new(Mutex::new(None)),
             pane_endpoint,
         }

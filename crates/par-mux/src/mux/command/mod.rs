@@ -439,6 +439,44 @@ pub enum MuxCommand {
         /// `-E`: last line searched, inclusive; `None` = the screen bottom.
         end_line: Option<i64>,
     },
+    /// Launch an agent CLI into a pane sitting at its shell prompt and
+    /// reply once the agent is detected (herdr `agent start`).
+    AgentStart {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// The agent label (`claude`, `codex`, …): tagged as the pane's
+        /// `agent` so the scrape tier watches it, and matched by detection.
+        kind: String,
+        /// `-x`: the program typed instead of `kind`.
+        program: Option<String>,
+        /// Arguments after the kind, shell-quoted when typed.
+        args: Vec<String>,
+        /// `-T MS`: the detection deadline; `None` =
+        /// [`AGENT_START_DEFAULT_TIMEOUT_MS`].
+        timeout_ms: Option<u64>,
+    },
+    /// Submit a prompt to a pane's agent, optionally blocking until it
+    /// settles (herdr `agent prompt --wait`).
+    AgentPrompt {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// The prompt text, sent as a paste when the agent enabled
+        /// bracketed paste, then Enter.
+        text: String,
+        /// `-w`: block until the agent reaches an `until` state.
+        wait: bool,
+        /// `-u`: the states that end the wait; empty = idle, done, blocked.
+        until: Vec<String>,
+        /// `-T MS`: the whole wait's deadline; `None` waits as long as the
+        /// agent works.
+        timeout_ms: Option<u64>,
+    },
+    /// Report how a pane's agent state is detected: hook claim or scrape
+    /// rule, with the rule's pattern file (herdr `agent explain`).
+    AgentExplain {
+        /// Target pane.
+        pane: Target<PaneId>,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -663,6 +701,7 @@ impl MuxCommand {
             | MuxCommand::WorktreeCreate { .. }
             | MuxCommand::WorktreeOpen { .. }
             | MuxCommand::WorktreeRemove { .. } => true,
+            | MuxCommand::AgentStart { .. } => true,
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
@@ -680,6 +719,8 @@ impl MuxCommand {
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
             | MuxCommand::WaitOutput { .. }
+            | MuxCommand::AgentPrompt { .. }
+            | MuxCommand::AgentExplain { .. }
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::PaneExitedReplay
@@ -735,6 +776,19 @@ pub fn reply_timeout(line: &str) -> Option<std::time::Duration> {
         Ok(MuxCommand::WorktreeCreate { .. } | MuxCommand::WorktreeRemove { .. }) => {
             Some(std::time::Duration::from_secs(600))
         }
+        Ok(MuxCommand::AgentStart { timeout_ms, .. }) => Some(
+            std::time::Duration::from_millis(timeout_ms.unwrap_or(AGENT_START_DEFAULT_TIMEOUT_MS))
+                .saturating_add(GRACE),
+        ),
+        Ok(MuxCommand::AgentPrompt {
+            wait: true,
+            timeout_ms,
+            ..
+        }) => Some(timeout_ms.map_or(UNBOUNDED, |ms| {
+            std::time::Duration::from_millis(ms)
+                .saturating_add(GRACE)
+                .min(UNBOUNDED)
+        })),
         _ => None,
     }
 }
@@ -768,12 +822,15 @@ pub(crate) const MAX_CELL_PIXELS: u16 = 512;
 
 // Per-verb parsers (ARC-003): `COMMANDS` below names them; the shared
 // `Args`/`LeadingFlags` grammar stays here.
+mod agents;
 mod buffers;
 mod keys;
 mod panes;
 mod sessions;
 mod windows;
 mod worktrees;
+use agents::*;
+pub use agents::{AGENT_START_DEFAULT_TIMEOUT_MS, AGENT_START_MAX_TIMEOUT_MS};
 use buffers::*;
 use keys::*;
 use panes::*;
@@ -1369,6 +1426,9 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("respawn-pane", parse_respawn_pane, &["kill", "start-dir"]),
     ("capture-pane", parse_capture_pane, &["escape"]),
     ("wait-output", parse_wait_output, &["match", "regex"]),
+    ("agent-start", parse_agent_start, &[]),
+    ("agent-prompt", parse_agent_prompt, &["wait", "until"]),
+    ("agent-explain", parse_agent_explain, &[]),
     ("set-buffer", parse_set_buffer, &[]),
     ("set-client-colors", parse_set_client_colors, &[]),
     ("set-environment", parse_set_environment, &[]),

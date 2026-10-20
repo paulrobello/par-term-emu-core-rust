@@ -116,6 +116,8 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Capture screen | `capture-pane -t %N` — visible screen; `-S -200` adds 200 history lines |
 | Capture styled | `capture-pane -t %N -e` — one line per grid row with SGR escapes inline |
 | Wait for output | `wait-output -t %N (-m TEXT \| -r REGEX) [-T ms]` — blocks until a line matches; exit 0 + the line, exit 1 on timeout/exit/close |
+| Launch an agent | `agent-start -t %N [-T ms] <kind> [args…]` — types the agent into a pane at its shell prompt; exit 0 with `%N <agent> <state> <source>` once detected ready (idle), exit 1 on timeout or blocked startup |
+| Prompt an agent | `agent-prompt -t %N -w [-T ms] -- <text>` — submits the prompt and blocks until the agent is idle/done/blocked; exit 1 with `stalled` if it never started working within 5 s. `agent-explain -t %N` shows how its state is detected |
 | Read a title | `pane-title -t %N` (empty reply = none set) |
 | Set a sticky title | `select-pane -t %N -T 'dev server'` (``-T ''`` clears) |
 | Pane geometry | `pane-info -t %N` → `%N @W COLSxROWS`; `resize-pane -t %N -x 80 -y 24` (or `-L\|-R\|-U\|-D [cells]`) |

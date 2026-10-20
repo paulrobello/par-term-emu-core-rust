@@ -124,13 +124,13 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Hooked / integrated agents | claude, codex, grok, muse, droid, copilot, cursor session hooks (scrape patterns for all seven) + pi/omp state extensions | 18 installable integrations; 22 agents supported + 5 self-reporting without install | PM-MUX / H-AGENTS |
-| Detection tiers | Hooks primary; scrape tier from screen text + OSC title using bundled herdr patterns (local override dir) | Foreground process discovery, evidence-based screen manifests, vendor hooks; `agent explain` shows the matched rule | PM-MUX / H-AGENTS |
+| Detection tiers | Hooks primary; scrape tier from screen text + OSC title using bundled herdr patterns (local override dir); `agent-explain -t %N` reports the source (hook reporter and seq, or scrape rule), the pattern file (bundled or override path), and the rule matching the live screen | Foreground process discovery, evidence-based screen manifests, vendor hooks; `agent explain` shows the matched rule | PM-MUX / H-AGENTS |
 | States | working / blocked / done / idle (`done` = finished while no client viewed the pane, cleared to `idle` daemon-side when a client views it; `unknown` never reported, `idle` never guessed) | blocked / working / done / idle / unknown (blocked deliberately strict; idle is never authorization) | PM-MUX / H-AGENTS |
 | Structured telemetry | `report_agent_telemetry`: model, effort, context used/remaining %, reset times | Metadata reports with `--seq`/`--ttl-ms`; no model/context telemetry equivalent | PM-MUX / H-CLI |
 | Claim liveness | Once-per-second descendant-tree probe clears stale claims (macOS/Linux) | Agent identity survives Ctrl+Z suspend / `fg` resume and follows pane moves | PM-MUX / H-SKILL |
 | Resume after restart | Per-agent resume argv table; failed resume drops onto a live shell | Native conversation restore for 18 integrations, staggered startup, per-agent minimum versions | PM-MUX / H-STATE |
-| Launching agents | `AgentPaneFactory` for Rust embedders | `agent start <name> --kind KIND --pane` into a ready shell; returns only when detected ready | PM-MUX / H-CLI |
-| Prompting / orchestration | `send-keys` into the pane | `agent prompt --wait/--until/--timeout` with anti-stall gating; server-owned `agent.wait` | PM-MUX / H-CLI |
+| Launching agents | `agent-start -t %N [-T ms] [-x program] <kind> [args]` types the agent into a pane at its shell prompt and replies only once a hook claim or scrape rule reports it ready (`idle`/`done`; blocked startup, timeout, or exit is an error; droid/copilot/cursor lack an idle signal, so cannot be confirmed yet); `AgentPaneFactory` for Rust embedders | `agent start <name> --kind KIND --pane` into a ready shell; returns only when detected ready | PM-MUX / H-CLI |
+| Prompting / orchestration | `agent-prompt -t %N [-w] [-u states] [-T ms] -- <text>`: bracketed-paste-aware submit, then with `-w` blocks until the agent settles, behind an anti-stall gate (no working/blocked entry within 5 s is a `stalled` error); `send-keys` for raw input | `agent prompt --wait/--until/--timeout` with anti-stall gating; server-owned `agent.wait` | PM-MUX / H-CLI |
 | Bundled skill | `--install-skill` writes the embedded skill to `~/.claude/skills/` | Skill bundled in the binary (`herdr --skill`) and installable via `npx skills add` | PM-MUX / H-SKILL |
 | Roster query | `list-agents` with base64 `reason`/`telemetry`/`host_telemetry` tokens | `agent list` / `agent get` JSON | PM-MUX / H-CLI |
 | Direct agent attach | `attach -t %N` to the pane | `agent attach [--takeover]`; `agent.view.set/clear` socket methods | PM-MUX / H-AGENTS |
@@ -204,7 +204,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Style | tmux verbs sent over the socket via `--cmd`; subcommands for lifecycle | Noun-verb JSON CLI (`workspace/pane/agent/...`), identical arguments over the socket API | PM-MUX / H-CLI |
-| Scale | 53 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
+| Scale | 56 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
 | Full enumerations | See [Appendix](#appendix-command-enumerations) | See [Appendix](#appendix-command-enumerations) | — |
 
 ## Where each leads
@@ -226,7 +226,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 - A plugin system with event hooks and link handlers.
 - Git worktree workspace UX: keybindings, sidebar grouping, and worktree events for plugins (par-mux has the control commands and grouping, no TUI surface yet).
 - Remote operation: SSH thin client, saved machines, remote scripting without a TUI.
-- Orchestration primitives: `pane wait-output`, `agent prompt --wait`, `agent wait`, anti-stall gating.
+- Orchestration primitives: a standalone `agent wait`, named agents (`agent start <name>`), and a server-owned wait API (par-mux now has `wait-output`, `agent-start`, and an anti-stall-gated `agent-prompt -w`).
 - Self-update channels and polished installers; native conversation restore across a wider agent set.
 
 ## Appendix: command enumerations
@@ -237,7 +237,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (wire commands)
 
-`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
+`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `agent-start`, `agent-prompt`, `agent-explain`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
 
 ### herdr (CLI noun groups)
 

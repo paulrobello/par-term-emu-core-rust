@@ -349,13 +349,14 @@ impl MuxServer {
         // overrides live beside the state file when there is one, and the
         // idle poll doubles as the 1 s tick without a thread of its own to
         // own a lifecycle for.
-        let engine = crate::mux::scrape::ScrapeEngine::load(
+        let engine = Arc::new(crate::mux::scrape::ScrapeEngine::load(
             state_path
                 .as_ref()
                 .and_then(|path| path.parent())
                 .map(|dir| dir.join("agent-patterns"))
                 .as_deref(),
-        );
+        ));
+        self.tree.lock().scrape_engine = Some(Arc::clone(&engine));
         let mut last_scrape = std::time::Instant::now();
         let mut last_reap = std::time::Instant::now();
         // When the daemon (persisting only) first observed an empty tree —

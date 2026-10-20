@@ -2479,3 +2479,130 @@ fn worktree_commands_parse_quoted_paths_and_flags() {
     assert!(reply_timeout("worktree-create -c /src -n x").is_some());
     assert!(reply_timeout("worktree-remove -t +1").is_some());
 }
+#[test]
+fn parses_agent_start() {
+    assert_eq!(
+        parse_command("agent-start -t %2 claude --model 'opus 5'").unwrap(),
+        MuxCommand::AgentStart {
+            pane: Target::Id(PaneId(2)),
+            kind: "claude".to_string(),
+            program: None,
+            args: vec!["--model".to_string(), "opus 5".to_string()],
+            timeout_ms: None,
+        }
+    );
+    assert_eq!(
+        parse_command("agent-start -T 9000 -x /opt/bin/cc -t %0 claude").unwrap(),
+        MuxCommand::AgentStart {
+            pane: Target::Id(PaneId(0)),
+            kind: "claude".to_string(),
+            program: Some("/opt/bin/cc".to_string()),
+            args: Vec::new(),
+            timeout_ms: Some(9000),
+        }
+    );
+    assert!(parse_command("agent-start -t %0 codex").unwrap().mutates());
+    for (line, needle) in [
+        ("agent-start claude", "requires -t"),
+        ("agent-start -t %0", "requires an agent kind"),
+        ("agent-start -t %0 Claude", "invalid agent kind"),
+        ("agent-start -t %0 'two words'", "invalid agent kind"),
+        ("agent-start -t %0 -T 0 claude", "-T must be between"),
+        ("agent-start -t %0 -T 300001 claude", "-T must be between"),
+        ("agent-start -t %0 -T soon claude", "invalid -T"),
+        ("agent-start -t %0 -x '' claude", "non-empty program"),
+        ("agent-start -t %0 -q claude", "unknown flag -q"),
+    ] {
+        let err = parse_command(line).expect_err(line);
+        assert!(err.contains(needle), "{line}: {err}");
+    }
+}
+
+#[test]
+fn parses_agent_prompt() {
+    assert_eq!(
+        parse_command("agent-prompt -t %1 -w -u idle,done -T 60000 -- fix the -t flag").unwrap(),
+        MuxCommand::AgentPrompt {
+            pane: Target::Id(PaneId(1)),
+            text: "fix the -t flag".to_string(),
+            wait: true,
+            until: vec!["idle".to_string(), "done".to_string()],
+            timeout_ms: Some(60000),
+        }
+    );
+    // The raw rest of the line is the text; one quoted word is unquoted.
+    assert_eq!(
+        parse_command("agent-prompt -t %1 say \"hi\" twice").unwrap(),
+        MuxCommand::AgentPrompt {
+            pane: Target::Id(PaneId(1)),
+            text: "say \"hi\" twice".to_string(),
+            wait: false,
+            until: Vec::new(),
+            timeout_ms: None,
+        }
+    );
+    assert_eq!(
+        parse_command("agent-prompt -t %1 'one quoted prompt'").unwrap(),
+        MuxCommand::AgentPrompt {
+            pane: Target::Id(PaneId(1)),
+            text: "one quoted prompt".to_string(),
+            wait: false,
+            until: Vec::new(),
+            timeout_ms: None,
+        }
+    );
+    assert!(!parse_command("agent-prompt -t %1 hi").unwrap().mutates());
+    for (line, needle) in [
+        ("agent-prompt -t %1", "requires prompt text"),
+        ("agent-prompt hi", "requires -t"),
+        ("agent-prompt -t %1 -T 5 hi", "-T requires -w"),
+        ("agent-prompt -t %1 -u idle hi", "-u requires -w"),
+        ("agent-prompt -t %1 -w -u sleeping hi", "invalid -u state"),
+    ] {
+        let err = parse_command(line).expect_err(line);
+        assert!(err.contains(needle), "{line}: {err}");
+    }
+}
+
+#[test]
+fn parses_agent_explain() {
+    assert_eq!(
+        parse_command("agent-explain -t %4").unwrap(),
+        MuxCommand::AgentExplain {
+            pane: Target::Id(PaneId(4))
+        }
+    );
+    assert!(!parse_command("agent-explain -t %4").unwrap().mutates());
+    assert!(parse_command("agent-explain").is_err());
+    assert!(parse_command("agent-explain -t %4 extra").is_err());
+}
+
+#[test]
+fn agent_verbs_reply_timeout_covers_their_waits() {
+    use std::time::Duration;
+    assert_eq!(
+        reply_timeout("agent-start -t %0 claude"),
+        Some(Duration::from_millis(
+            AGENT_START_DEFAULT_TIMEOUT_MS + 5_000
+        ))
+    );
+    assert_eq!(
+        reply_timeout("agent-start -t %0 -T 60000 claude"),
+        Some(Duration::from_millis(65_000))
+    );
+    assert_eq!(
+        reply_timeout("agent-prompt -t %0 -w -T 120000 -- go"),
+        Some(Duration::from_millis(125_000))
+    );
+    assert!(reply_timeout("agent-prompt -t %0 -w -- go").unwrap() > Duration::from_secs(86_400));
+    assert_eq!(reply_timeout("agent-prompt -t %0 go"), None);
+    assert_eq!(reply_timeout("agent-explain -t %0"), None);
+}
+
+#[test]
+fn agent_verbs_appear_in_list_commands() {
+    let body = list_commands_body();
+    for line in ["agent-start", "agent-prompt wait until", "agent-explain"] {
+        assert!(body.lines().any(|l| l == line), "{line}: {body}");
+    }
+}

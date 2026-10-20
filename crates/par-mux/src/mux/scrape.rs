@@ -120,6 +120,8 @@ struct CompiledRule {
     state: String,
     priority: i64,
     region: Region,
+    /// The region as written, for `agent-explain`.
+    region_text: String,
     cond: CompiledCond,
 }
 
@@ -131,6 +133,9 @@ struct CompiledRule {
 pub struct CompiledSet {
     rules: Vec<CompiledRule>,
     version: String,
+    /// Where the set came from: `bundled:patterns/<id>.toml`, or the
+    /// override file's path. `agent-explain` names it.
+    origin: String,
 }
 
 /// The regions a v1 rule can look at. herdr's engine-v3 regions (prompt
@@ -331,6 +336,7 @@ impl CompiledSet {
                 state: rule.state.clone(),
                 priority: rule.priority,
                 region: parse_region(&rule.region)?,
+                region_text: rule.region.clone(),
                 cond: CompiledCond::compile(&rule.cond)
                     .map_err(|err| format!("rule `{}`: {err}", rule.id))?,
             });
@@ -343,10 +349,38 @@ impl CompiledSet {
             CompiledSet {
                 rules,
                 version: set.version,
+                origin: format!("bundled:patterns/{id}.toml"),
             },
             id,
             aliases,
         ))
+    }
+
+    /// Where this set was loaded from: `bundled:patterns/<id>.toml` or an
+    /// override file's path.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// The set's `version` field.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// The rule the scrape tick would pick, with what `agent-explain`
+    /// reports about it, plus how many rules the set holds.
+    pub fn explain(&self, snapshot: &PaneSnapshot) -> (Option<RuleMatch<'_>>, usize) {
+        let matched = self.rules.iter().find_map(|rule| {
+            let text = region_text(&rule.region, snapshot);
+            let lines: Vec<&str> = text.lines().collect();
+            rule.cond.matches(&text, &lines).then_some(RuleMatch {
+                id: &rule.id,
+                state: &rule.state,
+                priority: rule.priority,
+                region: &rule.region_text,
+            })
+        });
+        (matched, self.rules.len())
     }
 
     /// The highest-priority matching rule's state and id, or None when no
@@ -361,6 +395,19 @@ impl CompiledSet {
         }
         None
     }
+}
+
+/// The rule a scrape picks for a snapshot, as `agent-explain` reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleMatch<'a> {
+    /// The rule's `id`.
+    pub id: &'a str,
+    /// The state it asserts.
+    pub state: &'a str,
+    /// Its priority.
+    pub priority: i64,
+    /// Its region, as written in the pattern file.
+    pub region: &'a str,
 }
 
 /// The loaded pattern sets, keyed by agent id and alias.
@@ -391,7 +438,8 @@ impl ScrapeEngine {
                 if path.exists() {
                     match std::fs::read_to_string(&path) {
                         Ok(text) => match CompiledSet::compile(&text) {
-                            Ok((shadow, shadow_id, shadow_aliases)) => {
+                            Ok((mut shadow, shadow_id, shadow_aliases)) => {
+                                shadow.origin = path.display().to_string();
                                 log::warn!(
                                     "par-mux: agent patterns for `{agent}` overridden by {} (v{} shadows bundled v{})",
                                     path.display(),
@@ -441,7 +489,8 @@ impl ScrapeEngine {
                     continue;
                 }
                 if let Ok(text) = std::fs::read_to_string(&path) {
-                    if let Ok((set, id, aliases)) = CompiledSet::compile(&text) {
+                    if let Ok((mut set, id, aliases)) = CompiledSet::compile(&text) {
+                        set.origin = path.display().to_string();
                         log::warn!(
                             "par-mux: agent patterns for `{agent}` loaded from {} (no bundled set)",
                             path.display()
@@ -457,6 +506,13 @@ impl ScrapeEngine {
             }
         }
         engine
+    }
+
+    /// The bundled-only engine, compiled once per process — what
+    /// `agent-explain` reads when the tree carries no daemon engine.
+    pub fn bundled() -> Arc<ScrapeEngine> {
+        static BUNDLED: std::sync::OnceLock<Arc<ScrapeEngine>> = std::sync::OnceLock::new();
+        Arc::clone(BUNDLED.get_or_init(|| Arc::new(ScrapeEngine::load(None))))
     }
 
     /// The compiled set for an agent label (id or alias), if any.

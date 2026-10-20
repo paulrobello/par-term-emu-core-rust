@@ -486,6 +486,11 @@ pub struct MuxTree {
     /// [`deliver_pending_observer_events`] after releasing it. Only
     /// non-empty batches are kept.
     pending_observer_batches: Vec<ObserverDispatchBatch>,
+    /// The daemon's loaded scrape engine (bundled + overrides), set by the
+    /// server loop so `agent-explain` and `agent-start` read the same rules
+    /// the scrape tick runs. `None` for embedders and tests, which fall
+    /// back to [`crate::mux::scrape::ScrapeEngine::bundled`].
+    pub(crate) scrape_engine: Option<Arc<crate::mux::scrape::ScrapeEngine>>,
 }
 
 impl MuxTree {
@@ -508,6 +513,7 @@ impl MuxTree {
             session_workspace: HashMap::new(),
             client_views: HashMap::new(),
             pending_observer_batches: Vec::new(),
+            scrape_engine: None,
         }
     }
 

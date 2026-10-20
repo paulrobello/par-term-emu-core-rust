@@ -48,12 +48,14 @@ const DEFAULT_BUFFER: &str = "default";
 
 // Handlers by command group (ARC-003); `dispatch_command` below routes to
 // them by name.
+mod agents;
 mod buffers;
 mod client;
 mod panes;
 mod sessions;
 mod windows;
 mod worktrees;
+use agents::*;
 use buffers::*;
 use client::*;
 use panes::*;
@@ -260,6 +262,9 @@ fn route_command(
         | MuxCommand::WorktreeOpen { .. }
         | MuxCommand::WorktreeRemove { .. }
         | MuxCommand::ListWorktrees) => route_worktree_command(ctx, command),
+        command @ (MuxCommand::AgentStart { .. }
+        | MuxCommand::AgentPrompt { .. }
+        | MuxCommand::AgentExplain { .. }) => route_agent_command(ctx, command),
     }
 }
 

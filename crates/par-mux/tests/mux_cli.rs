@@ -2065,3 +2065,64 @@ fn worktree_workspaces_group_and_survive_a_restart() {
     assert!(!checkout.exists(), "the checkout was removed");
     cmd_ok(socket, &format!("kill-workspace -t {parent}"));
 }
+/// The agent lifecycle over a real daemon and its 1 s scrape tick: the
+/// launched program (a stand-in, never a real agent CLI) sets claude's idle
+/// OSC title and stays in the foreground, `agent-start` exits 0 only once
+/// the scrape tier detected it, `agent-explain` names the scrape rule and
+/// its bundled pattern file, and a prompt nothing reacts to stalls (exit 1).
+#[cfg(unix)]
+#[test]
+fn agent_start_explain_and_prompt_stall_through_the_cli() {
+    let fixture = MuxFixture::new("cliagent");
+    let _daemon = daemon_with_session(&fixture, "cliagent");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    cmd_ok(
+        socket,
+        &format!(r#"send-keys -t {pane} 'echo AGENT""-READY' Enter"#),
+    );
+    cmd_ok(
+        socket,
+        &format!("wait-output -t {pane} -r '^AGENT-READY$' -T 10000"),
+    );
+    let started = Instant::now();
+    let run = cmd(
+        socket,
+        &format!(
+            r#"agent-start -t {pane} -T 12000 -x sh claude -c 'printf "\033]0;\342\234\263 ready\007"; exec sleep 60'"#
+        ),
+    );
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.stdout, format!("{pane} claude idle scrape\n"));
+    assert!(started.elapsed() < Duration::from_secs(12));
+
+    let explain = cmd_ok(socket, &format!("agent-explain -t {pane}"));
+    for want in [
+        "source scrape",
+        "rule osc_title_idle",
+        "patterns bundled:patterns/claude.toml",
+        "live-rule osc_title_idle state=idle priority=250 region=osc_title",
+    ] {
+        assert!(explain.lines().any(|l| l == want), "{want}: {explain}");
+    }
+
+    let stalled = cmd(
+        socket,
+        &format!("agent-prompt -t {pane} -w -T 15000 -- hello"),
+    );
+    assert_eq!(stalled.code, Some(1), "stdout={:?}", stalled.stdout);
+    assert!(
+        stalled.stderr.contains("agent-prompt: stalled"),
+        "{:?}",
+        stalled.stderr
+    );
+}

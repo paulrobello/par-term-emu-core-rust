@@ -7,6 +7,38 @@
   ],
   "commands": [
     {
+      "name": "agent-explain",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
+      "name": "agent-prompt",
+      "features": [
+        "wait",
+        "until"
+      ],
+      "flags": [
+        "-T",
+        "-t",
+        "-u",
+        "-w"
+      ],
+      "synopsis": "-t <pane> [-w] [-u state,…] [-T ms] [--] <text>"
+    },
+    {
+      "name": "agent-start",
+      "features": [],
+      "flags": [
+        "-T",
+        "-t",
+        "-x"
+      ],
+      "synopsis": "-t <pane> [-T ms] [-x program] <kind> [arg …]"
+    },
+    {
       "name": "break-pane",
       "features": [],
       "flags": [
