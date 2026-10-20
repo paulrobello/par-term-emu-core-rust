@@ -2550,7 +2550,12 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
     client.send("new-session -s t").expect("new-session");
     client.send("kill-pane -t %0").expect("kill-pane");
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Load-tolerant by design: the wait polls the notification channel
+    // (no wall-clock sleep loop) and the 60 s cap only catches a wedged
+    // server — the broadcast itself is signal-driven, so a starved host
+    // delays the test without failing it. The old 5 s cap flaked at host
+    // load >= 60 (twice on 2026-10-19, load 60-146, green in isolation).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         match client
             .notifications()
