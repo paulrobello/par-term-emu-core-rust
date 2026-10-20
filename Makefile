@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
@@ -86,7 +86,8 @@ help:
 	@echo "  gen-extensions  - Regenerate the pi/omp agent-state extension assets from scripts/gen_extensions.py (ARC-002)"
 	@echo "  extensions-check - Fail when a committed extension asset differs from the template, or the renderer self-test fails"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
-	@echo "  checkall-ci     - CI-parity gate: checkall + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
+	@echo "  checkall-ci     - CI-parity gate: checkall + Windows MSVC cross-checks + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
+	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
@@ -670,9 +671,10 @@ checkall: extensions-check ffi-header-check ffi-surface-check derive-version-che
 # CI-parity gate (two-tier convention: checkall stays fast, checkall-ci adds
 # what CI's mux-test job runs that the fast gate skips — the par-mux
 # integration suites incl. the attach client, the D1 sim isolation build,
-# the mux feature-set runs — plus the local-only python-test,streaming combo).
+# the mux feature-set runs — plus the local-only python-test,streaming combo
+# and the Windows MSVC cross-target checks).
 # Heavy; run before pushing, not per-iteration.
-checkall-ci: checkall test-mux-ci test-python-streaming-ci
+checkall-ci: cross-target-check checkall test-mux-ci test-python-streaming-ci
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All CI-parity checks passed!"
@@ -691,6 +693,24 @@ test-mux-ci:
 	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
 	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
 	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
+
+# Windows MSVC cross-target checks: a misplaced #[cfg(unix)] broke the Windows
+# attach build for weeks (merge 37da2f8d) while every host gate stayed green.
+# `cargo check` stops before the link step, so no MSVC linker is needed; the
+# triples only need `rustup target add`. Warnings fail via RUSTFLAGS="-D
+# warnings" (same shape as rustdoc-check): with --target the flags reach only
+# target/<triple> artifacts, so the host build cache is untouched, and
+# registry deps stay cap-lints'd. One cargo line per check so either triple
+# going red fails the target.
+CROSS_TARGETS := aarch64-pc-windows-msvc x86_64-pc-windows-msvc
+cross-target-check:
+	@for t in $(CROSS_TARGETS); do \
+		rustup target list --installed | grep -qx "$$t" || { echo "Missing rustup target $$t: run 'rustup target add $$t'"; exit 1; }; \
+	done
+	RUSTFLAGS="-D warnings" cargo check --locked --target aarch64-pc-windows-msvc -p par-mux --lib --tests --features mux-bin,attach
+	RUSTFLAGS="-D warnings" cargo check --locked --target aarch64-pc-windows-msvc -p par-term-emu-core --lib --tests
+	RUSTFLAGS="-D warnings" cargo check --locked --target x86_64-pc-windows-msvc -p par-mux --lib --tests --features mux-bin,attach
+	RUSTFLAGS="-D warnings" cargo check --locked --target x86_64-pc-windows-msvc -p par-term-emu-core --lib --tests
 
 # The pinned ARC-006 stats-dict test needs python-test + streaming together;
 # CI runs each feature alone and never the combo, so this leg is local-only
