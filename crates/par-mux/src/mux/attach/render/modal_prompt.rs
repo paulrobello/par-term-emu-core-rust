@@ -159,7 +159,8 @@ impl WindowSession {
         // look); for every other target it cancels.
         let empty_clears = matches!(
             &target,
-            PromptTarget::Setting(edit) if matches!(edit.kind, SettingKind::Hex)
+            PromptTarget::Setting(edit)
+                if matches!(edit.kind, SettingKind::Hex | SettingKind::Text | SettingKind::List)
         );
         if text.is_empty() && !empty_clears {
             self.leave_prompt();

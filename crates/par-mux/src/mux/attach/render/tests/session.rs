@@ -2079,6 +2079,53 @@ fn settings_rows_write_and_apply_live() {
     );
 }
 
+/// The notify tab's sound rows write and apply live: `sounds` flips on,
+/// `muted agents` takes a comma list from the prompt, `done sound` a
+/// path, and an empty prompt clears the list back to none.
+#[test]
+fn settings_sound_rows_write_and_apply_live() {
+    let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-sound");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    // The notify tab (three Tabs), `sounds` (row 1): Enter flips it on.
+    session.route_stdin_bytes(&mut conn, b"\t\t\tj\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("sound = true"), "{written}");
+    assert!(session.notify.sound.enabled, "applied live");
+    // `muted agents` (row 4): the prompt takes a comma list.
+    session.route_stdin_bytes(&mut conn, b"jjj\r");
+    assert!(
+        matches!(session.modal, Modal::Prompt(_)),
+        "{:?}",
+        session.modal
+    );
+    session.route_stdin_bytes(&mut conn, b"droid, codex\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("sound-mute = [\"droid\", \"codex\"]"),
+        "{written}"
+    );
+    assert_eq!(session.notify.sound.mute, vec!["droid", "codex"]);
+    assert!(matches!(session.modal, Modal::Settings(_)), "dialog back");
+    // `done sound` (row 2): a path.
+    session.route_stdin_bytes(&mut conn, b"kk\r");
+    session.route_stdin_bytes(&mut conn, b"sounds/done.mp3\r");
+    settle(&mut session, &mut conn);
+    assert_eq!(session.notify.sound.done, "sounds/done.mp3");
+    // `muted agents` again: clear the seeded list, commit empty.
+    session.route_stdin_bytes(&mut conn, b"jj\r");
+    session.route_stdin_bytes(&mut conn, b"\x03\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("sound-mute = []"), "{written}");
+    assert!(session.notify.sound.mute.is_empty());
+}
+
 /// `%config-changed` (another client's reload): the pump re-applies the
 /// file's `[client]` settings through the reload chord's rebind, flashes
 /// once, and NEVER sends `reload-config` (that would re-broadcast to
@@ -3831,6 +3878,86 @@ fn done_notifies_and_the_seen_flip_does_not() {
         session.notify.outbox.is_empty(),
         "done -> idle is the seen flip, not news"
     );
+}
+
+/// Sounds ride their own channel (herdr's `[ui.sound]`): with delivery
+/// `off` a blocked push still plays the blocked file and a background
+/// finish the done file; a muted agent and an unselected sound key stay
+/// silent; a missing file falls back to the bell.
+#[test]
+fn transition_sounds_play_per_event_and_respect_the_mute_list() {
+    use super::super::notify::NotifyDelivery;
+    use crate::mux::attach::sound::SPAWNED;
+    let (_rx, mut conn) = fake_daemon("snapsound", snapshot_script());
+    let mut session = snapshot_session();
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("done.wav"), b"RIFF").unwrap();
+    std::fs::write(dir.path().join("blocked.wav"), b"RIFF").unwrap();
+    session.settings_path = Some(dir.path().join("config.toml"));
+    session.notify.delivery = NotifyDelivery::Off;
+    session.notify.sound = crate::mux::config::SoundSettings {
+        enabled: true,
+        player: "true".to_string(),
+        done: "done.wav".to_string(),
+        blocked: "blocked.wav".to_string(),
+        mute: vec!["droid".to_string()],
+    };
+    session.refresh_status_facts(&mut conn).expect("seed");
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,80x24,0,0,9").expect("parses"));
+    let push = |session: &mut WindowSession, agent: &str, state: &str| {
+        session.handle_event(TmuxNotification::AgentStateChanged {
+            pane_id: "%1".to_string(),
+            agent: agent.to_string(),
+            state: state.to_string(),
+            source: "hook".to_string(),
+            ws: "+0".to_string(),
+            msg: String::new(),
+        });
+    };
+    let take = || SPAWNED.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    take();
+    push(&mut session, "claude", "working");
+    assert!(take().is_empty(), "working never sounds");
+    push(&mut session, "claude", "blocked");
+    push(&mut session, "claude", "done");
+    let played: Vec<std::ffi::OsString> = take().into_iter().map(|argv| argv[1].clone()).collect();
+    assert_eq!(
+        played,
+        vec![
+            dir.path().join("blocked.wav").into_os_string(),
+            dir.path().join("done.wav").into_os_string()
+        ]
+    );
+    assert!(
+        session.notify.outbox.is_empty(),
+        "delivery off: no escape, no bell"
+    );
+    push(&mut session, "droid", "blocked");
+    assert!(take().is_empty(), "a muted agent never sounds");
+    // A missing custom file falls back to the built-in OS sound; with
+    // no built-in on this host the bell rings in its place.
+    session.notify.sound.mute.clear();
+    session.notify.sound.blocked = "missing.wav".to_string();
+    let builtin_present =
+        crate::mux::attach::sound::builtin_file(crate::mux::attach::sound::Sound::Blocked)
+            .is_some_and(|f| std::path::Path::new(f).is_file());
+    push(&mut session, "codex", "working");
+    push(&mut session, "codex", "blocked");
+    if builtin_present {
+        assert_eq!(take().len(), 1, "the built-in plays");
+        assert!(session.notify.outbox.is_empty());
+    } else {
+        assert!(take().is_empty());
+        assert_eq!(session.notify.outbox, vec![0x07], "the bell stands in");
+    }
+    session.notify.outbox.clear();
+    session.notify.sound.enabled = false;
+    push(&mut session, "codex", "working");
+    push(&mut session, "codex", "blocked");
+    assert!(take().is_empty(), "sound off");
+    assert!(session.notify.outbox.is_empty());
 }
 
 /// The notification-jump chord (prefix `j`, herdr's

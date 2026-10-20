@@ -97,7 +97,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Theming | Border styles (`herdr`/unicode/double/heavy/ascii), border colors, OSC 11 background probe | 11 built-in themes, auto light/dark switching, per-token overrides, accent color | PM-MUX / H-CFG |
 | Graphics in UI | Kitty `t=t` temp-file media retained daemon-side for client mirrors | Kitty graphics rendered in panes (enabled by default) | PM-MUX / H-CFG |
 | IME / CJK | Not found | ASCII input-source switch in prefix mode, CJK cursor reveal with agent allow-list | — / H-CFG |
-| Sounds | No | Built-in per-event sounds, custom paths, per-agent mute | — / H-CFG |
+| Sounds | `[client] sound` (default off): `blocked` (even in view) and background `done` sounds, custom files (`sound-done`/`sound-blocked`) over OS stock built-ins, a configurable `sound-player` (afplay/paplay default; bell fallback, no Windows player), per-agent `sound-mute` list; all in the settings `notify` tab. No per-call sound on `show-notification` | Built-in per-event sounds, custom paths, per-agent mute | PM-MUX / H-CFG |
 | Popups | No | Popup command windows (`[[keys.command]] type = "popup"`) | — / H-CFG |
 | Onboarding | No | First-run onboarding flow | — / H-CFG |
 | Mobile layout | Via web frontend (streaming) | Single-column layout below a width threshold | PM-MUX / H-CFG |
@@ -143,7 +143,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Delivery channels | `inside` (in-app toast + bell), `terminal` (OSC 99 under kitty / OSC 9 elsewhere), `system` (osascript/notify-send), `off` | `herdr` toasts, `terminal`, `system`; configurable delay and toast positions | PM-MUX / H-CFG |
 | State filtering | `notify-states` (default blocked+done), background-only rule | Per agent state and background-workspace triggers | PM-MUX / H-README |
 | Click / jump to source | Toast click focuses the agent's pane; prefix `j` (`[client] notify-jump`, rebindable in the settings `keys` tab) focuses the pane behind the most recent notification the client delivered, across windows and workspaces | `open_notification_target` keybinding; Windows toast click focuses the pane | PM-MUX / H-CFG |
-| Ad-hoc notification command | `show-notification [-b body] [--] <title>` broadcasts `%notification`; each attached TUI delivers it through its own `notify-delivery` channel (toast, OSC 9/99, OS notifier). No position or sound options | `herdr notification show <title> [--body] [--position] [--sound]` | PM-MUX / H-CLI |
+| Ad-hoc notification command | `show-notification [-b body] [--] <title>` broadcasts `%notification`; each attached TUI delivers it through its own `notify-delivery` channel (toast, OSC 9/99, OS notifier). No position or per-call sound options (agent transitions sound via `[client] sound`) | `herdr notification show <title> [--body] [--position] [--sound]` | PM-MUX / H-CLI |
 | Plugin event hooks | No plugin system | Plugin manifest `[[events]] on = "worktree.created"` triggers; `[[link_handlers]]` for OSC 8 links | — / H-PLUG |
 | OSC handling | OSC 11 background probe, OSC 22 drag-cursor shape, kitty `t=t` media retention | OSC 0/2 titles tracked server-side (sidebar tokens), OSC 8 clickable links | PM-MUX / H-AGENTS |
 | Ad-hoc pane metadata | Not found | `pane report-metadata` sequenced, TTL-expiring, max 32 sources per pane | — / H-CLI |

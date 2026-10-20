@@ -177,11 +177,38 @@ impl SettingsSection {
                     kind: SettingKind::Number { min: 1, max: 99 },
                 },
             ],
-            Self::Notify => &[SettingSpec {
-                key: "notify-delivery",
-                label: "delivery",
-                kind: SettingKind::Choice(crate::mux::config::NOTIFY_DELIVERIES),
-            }],
+            Self::Notify => &[
+                SettingSpec {
+                    key: "notify-delivery",
+                    label: "delivery",
+                    kind: SettingKind::Choice(crate::mux::config::NOTIFY_DELIVERIES),
+                },
+                SettingSpec {
+                    key: "sound",
+                    label: "sounds",
+                    kind: SettingKind::Toggle,
+                },
+                SettingSpec {
+                    key: "sound-done",
+                    label: "done sound",
+                    kind: SettingKind::Text,
+                },
+                SettingSpec {
+                    key: "sound-blocked",
+                    label: "blocked sound",
+                    kind: SettingKind::Text,
+                },
+                SettingSpec {
+                    key: "sound-mute",
+                    label: "muted agents",
+                    kind: SettingKind::List,
+                },
+                SettingSpec {
+                    key: "sound-player",
+                    label: "sound player",
+                    kind: SettingKind::Text,
+                },
+            ],
             Self::Keys => &[
                 SettingSpec {
                     key: "prefix",
@@ -344,6 +371,11 @@ pub(super) enum SettingKind {
     Chord,
     /// The reload chord (prefix + key spelling; the last token binds).
     ReloadChord,
+    /// Free text, e.g. a file path (an empty prompt clears to the
+    /// built-in).
+    Text,
+    /// A comma-separated list (an empty prompt clears it).
+    List,
 }
 
 /// One editable `[client]` key.
@@ -395,6 +427,7 @@ pub(super) struct SettingsValues {
     pub resize_step: u32,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
+    pub sound: crate::mux::config::SoundSettings,
     pub prefix: u8,
     pub reload: u8,
     pub management: Management,
@@ -428,6 +461,11 @@ impl SettingsValues {
             "drag-cursor-shape" => FieldVal::Bool(self.drag_cursor_shape),
             "resize-step" => FieldVal::Num(self.resize_step),
             "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
+            "sound" => FieldVal::Bool(self.sound.enabled),
+            "sound-done" => FieldVal::Text(self.sound.done.clone()),
+            "sound-blocked" => FieldVal::Text(self.sound.blocked.clone()),
+            "sound-mute" => FieldVal::Text(self.sound.mute.join(", ")),
+            "sound-player" => FieldVal::Text(self.sound.player.clone()),
             "prefix" => FieldVal::Text(spell_key(self.prefix)),
             "reload" => FieldVal::Text(format!(
                 "{} {}",
@@ -520,14 +558,28 @@ fn row(text: String, accent: bool, footer: bool) -> HelpRow {
 }
 
 /// One row's display text: `on`/`off` for toggles, digits for numbers,
-/// the text itself otherwise (an empty hex color reads `built-in`).
-fn field_display(field: &FieldVal) -> String {
-    match field {
+/// the text itself otherwise (an empty value reads `built-in`, `none`
+/// for the mute list, `os default` for the player). Text wider than the
+/// value column keeps its tail (a path's file name) behind `…`.
+fn field_display(key: &str, field: &FieldVal) -> String {
+    let text = match field {
         FieldVal::Bool(on) => if *on { "on" } else { "off" }.to_string(),
         FieldVal::Num(n) => n.to_string(),
-        FieldVal::Text(text) if text.is_empty() => "built-in".to_string(),
+        FieldVal::Text(text) if text.is_empty() => match key {
+            "sound-mute" => "none",
+            "sound-player" => "os default",
+            _ => "built-in",
+        }
+        .to_string(),
         FieldVal::Text(text) => text.clone(),
+    };
+    let width = PANEL_WIDTH - 4 - LABEL_WIDTH;
+    let len = text.chars().count();
+    if len <= width {
+        return text;
     }
+    let tail: String = text.chars().skip(len - (width - 1)).collect();
+    format!("\u{2026}{tail}")
 }
 
 /// Compose the dialog (herdr's layout): the tab row with the current
@@ -598,7 +650,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
                 } else {
                     " "
                 };
-                let value = field_display(&values.field(spec.key, &state.file_mode));
+                let value = field_display(spec.key, &values.field(spec.key, &state.file_mode));
                 format!(
                     " {} {:<width$} {:>vwidth$}",
                     pointer,
@@ -709,6 +761,7 @@ impl WindowSession {
             resize_step: self.resize_step,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
+            sound: self.notify.sound.clone(),
             prefix: self.prefix,
             reload: self.reload_key,
             management: self.management,
@@ -879,7 +932,9 @@ impl WindowSession {
                     kind @ (SettingKind::Number { .. }
                     | SettingKind::Hex
                     | SettingKind::Chord
-                    | SettingKind::ReloadChord) => {
+                    | SettingKind::ReloadChord
+                    | SettingKind::Text
+                    | SettingKind::List) => {
                         let seed = match values.field(spec.key, &file_mode) {
                             FieldVal::Text(text) => text,
                             FieldVal::Num(n) => n.to_string(),
@@ -967,7 +1022,15 @@ impl WindowSession {
                     None
                 }
             }
-            _ => None,
+            SettingKind::Text => Some(SettingValue::Str(text.to_string())),
+            SettingKind::List => Some(SettingValue::List(
+                text.split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            )),
+            SettingKind::Toggle | SettingKind::Choice(_) => None,
         };
         let Some(value) = value else {
             self.draw_status_row();
@@ -1122,6 +1185,7 @@ mod tests {
             resize_step: 1,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
+            sound: crate::mux::config::SoundSettings::default(),
             prefix: 0x02,
             reload: 0x12,
             management: Management::default(),
@@ -1199,6 +1263,59 @@ mod tests {
         assert!(rows[1].trim_end().ends_with("off"), "{rows:?}");
         assert!(rows[4].trim_end().ends_with("built-in"), "{rows:?}");
         assert!(rows[5].trim_end().ends_with("#00ffff"), "{rows:?}");
+    }
+
+    /// The notify section lists every sound key with its value in force:
+    /// empty files read `built-in`, an empty mute list `none`, an empty
+    /// player `os default`; a long path keeps its tail inside the panel.
+    #[test]
+    fn notify_section_lists_the_sound_keys() {
+        let keys: Vec<&str> = SettingsSection::Notify
+            .rows()
+            .iter()
+            .map(|spec| spec.key)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "notify-delivery",
+                "sound",
+                "sound-done",
+                "sound-blocked",
+                "sound-mute",
+                "sound-player"
+            ]
+        );
+        let st = state(SettingsSection::Notify);
+        let rows = |v: &SettingsValues| -> Vec<String> {
+            compose_settings(&st, v).rows[5..11]
+                .iter()
+                .map(|r| r.text.trim_end().to_string())
+                .collect()
+        };
+        let shown = rows(&values());
+        assert!(shown[1].ends_with("off"), "{shown:?}");
+        assert!(shown[2].ends_with("built-in"), "{shown:?}");
+        assert!(shown[3].ends_with("built-in"), "{shown:?}");
+        assert!(shown[4].ends_with("none"), "{shown:?}");
+        assert!(shown[5].ends_with("os default"), "{shown:?}");
+        let mut v = values();
+        v.sound = crate::mux::config::SoundSettings {
+            enabled: true,
+            player: "mpv --no-video".to_string(),
+            done: format!("/very/long/{}/done.mp3", "x".repeat(80)),
+            blocked: "b.wav".to_string(),
+            mute: vec!["droid".to_string(), "codex".to_string()],
+        };
+        let shown = rows(&v);
+        assert!(shown[1].ends_with("on"), "{shown:?}");
+        assert!(shown[2].ends_with("xx/done.mp3"), "{shown:?}");
+        assert!(shown[2].contains('\u{2026}'), "{shown:?}");
+        assert!(shown[4].ends_with("droid, codex"), "{shown:?}");
+        assert!(shown[5].ends_with("mpv --no-video"), "{shown:?}");
+        for row in compose_settings(&st, &v).rows {
+            assert_eq!(row.text.chars().count(), PANEL_WIDTH, "{:?}", row.text);
+        }
     }
 
     /// The keys section scrolls its window with the selection; the

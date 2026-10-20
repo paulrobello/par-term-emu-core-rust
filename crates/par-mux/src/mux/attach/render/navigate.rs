@@ -652,6 +652,7 @@ impl WindowSession {
                 agent_rows: self.agent_rows.clone(),
                 notify_delivery: self.notify.delivery.name().to_string(),
                 notify_states: self.notify.states.clone(),
+                sound: self.notify.sound.clone(),
             },
         ) {
             Ok(chords) => {

@@ -264,6 +264,46 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub notify_states: Option<Vec<String>>,
+    /// Play a sound on agent state changes (herdr's `[ui.sound]
+    /// enabled`): `blocked` when an agent needs input, `done` when one
+    /// finishes out of view. Independent of `notify-delivery`. Default
+    /// off.
+    #[serde(default, rename = "sound", skip_serializing_if = "Option::is_none")]
+    pub sound: Option<bool>,
+    /// The player command a sound file is handed to, split on
+    /// whitespace with the file appended as the last argument. Empty =
+    /// the OS default (`afplay` on macOS, `paplay` elsewhere on Unix;
+    /// none on Windows, where the terminal bell rings instead).
+    #[serde(
+        default,
+        rename = "sound-player",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sound_player: Option<String>,
+    /// The `done` sound's file. Empty = the built-in OS sound; a relative
+    /// path resolves from the config file's directory.
+    #[serde(
+        default,
+        rename = "sound-done",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sound_done: Option<String>,
+    /// The `blocked` sound's file. Empty = the built-in OS sound; a
+    /// relative path resolves from the config file's directory.
+    #[serde(
+        default,
+        rename = "sound-blocked",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sound_blocked: Option<String>,
+    /// Agent labels whose state changes never sound (herdr's
+    /// `[ui.sound.agents] <agent> = "off"`). Default empty.
+    #[serde(
+        default,
+        rename = "sound-mute",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sound_mute: Option<Vec<String>>,
     /// The divider/border line style: `herdr` (default), `unicode`,
     /// `double`, `heavy`, or `ascii`. An unknown value warns and uses
     /// the default.
@@ -626,6 +666,11 @@ pub fn render(eff: &EffectiveConfig) -> String {
             agent_rows: Some(defaults.agent_rows.clone()),
             notify_delivery: Some(defaults.notify_delivery.clone()),
             notify_states: Some(defaults.notify_states.clone()),
+            sound: Some(defaults.sound.enabled),
+            sound_player: Some(defaults.sound.player.clone()),
+            sound_done: Some(defaults.sound.done.clone()),
+            sound_blocked: Some(defaults.sound.blocked.clone()),
+            sound_mute: Some(defaults.sound.mute.clone()),
             border_lines: Some(defaults.border_lines.clone()),
             pane_borders: None,
             show_label_in_border: Some(defaults.show_label_in_border),
@@ -738,6 +783,25 @@ pub struct Chords {
     /// The agent states that notify (config `notify-states`): a subset of
     /// [`NOTIFY_STATES`].
     pub notify_states: Vec<String>,
+    /// The agent state-change sounds (config `sound*`).
+    pub sound: SoundSettings,
+}
+
+/// The notification sounds (config `sound`, `sound-player`,
+/// `sound-done`, `sound-blocked`, `sound-mute`). Default: off, the OS
+/// player, the built-in OS sounds, nothing muted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SoundSettings {
+    /// Whether transitions sound at all (config `sound`).
+    pub enabled: bool,
+    /// The player command; empty = the OS default.
+    pub player: String,
+    /// The `done` sound file; empty = built-in.
+    pub done: String,
+    /// The `blocked` sound file; empty = built-in.
+    pub blocked: String,
+    /// Agent labels that never sound (matched case-insensitively).
+    pub mute: Vec<String>,
 }
 
 /// The `notify-delivery` spellings.
@@ -818,6 +882,7 @@ impl Chords {
             agent_rows: default_agent_rows(),
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "done".to_string()],
+            sound: SoundSettings::default(),
         }
     }
 }
@@ -1049,6 +1114,26 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .notify_states
         .clone()
         .unwrap_or_else(|| current.notify_states.clone());
+    let client = &file.client;
+    let sound = SoundSettings {
+        enabled: client.sound.unwrap_or(current.sound.enabled),
+        player: client
+            .sound_player
+            .clone()
+            .unwrap_or_else(|| current.sound.player.clone()),
+        done: client
+            .sound_done
+            .clone()
+            .unwrap_or_else(|| current.sound.done.clone()),
+        blocked: client
+            .sound_blocked
+            .clone()
+            .unwrap_or_else(|| current.sound.blocked.clone()),
+        mute: client
+            .sound_mute
+            .clone()
+            .unwrap_or_else(|| current.sound.mute.clone()),
+    };
     // Display options: default OFF — absent keys preserve the shared-
     // divider, label-free look exactly.
     let pane_borders = file.client.pane_borders.unwrap_or(current.pane_borders);
@@ -1091,6 +1176,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         agent_rows,
         notify_delivery,
         notify_states,
+        sound,
     })
 }
 
@@ -1899,6 +1985,49 @@ remain-on-exit = true
             generated.contains("notify-delivery = \"terminal\""),
             "{generated}"
         );
+    }
+
+    /// The sound keys resolve to off / OS player / built-ins / no mutes
+    /// when absent, follow explicit values, keep the current value for
+    /// an absent key on reload, and the generated config spells them.
+    #[test]
+    fn sound_keys_resolve_defaults_and_explicit_values() {
+        let file: ConfigFile = toml::from_str("").unwrap();
+        let chords = reload_client_chords(&file, &Chords::with_defaults()).unwrap();
+        assert_eq!(chords.sound, SoundSettings::default());
+        assert!(!chords.sound.enabled);
+        let file: ConfigFile = toml::from_str(
+            "[client]\nsound = true\nsound-player = \"mpv --no-video\"\n\
+             sound-done = \"sounds/done.mp3\"\nsound-blocked = \"/tmp/b.wav\"\n\
+             sound-mute = [\"droid\", \"codex\"]\n",
+        )
+        .unwrap();
+        let chords = reload_client_chords(&file, &Chords::with_defaults()).unwrap();
+        assert_eq!(
+            chords.sound,
+            SoundSettings {
+                enabled: true,
+                player: "mpv --no-video".to_string(),
+                done: "sounds/done.mp3".to_string(),
+                blocked: "/tmp/b.wav".to_string(),
+                mute: vec!["droid".to_string(), "codex".to_string()],
+            }
+        );
+        // An absent key keeps what is in force.
+        let partial: ConfigFile = toml::from_str("[client]\nsound = false\n").unwrap();
+        let kept = reload_client_chords(&partial, &chords).unwrap();
+        assert!(!kept.sound.enabled);
+        assert_eq!(kept.sound.mute, chords.sound.mute);
+        let generated = render(&EffectiveConfig::default());
+        for key in [
+            "sound = false",
+            "sound-player = \"\"",
+            "sound-done = \"\"",
+            "sound-blocked = \"\"",
+            "sound-mute = []",
+        ] {
+            assert!(generated.contains(key), "{key}: {generated}");
+        }
     }
 
     /// `sidebar-on-launch` resolves to true when absent, and follows an

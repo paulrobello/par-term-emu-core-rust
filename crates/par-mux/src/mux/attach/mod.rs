@@ -64,6 +64,7 @@ mod panels;
 mod prefs;
 mod pump;
 mod settings_write;
+mod sound;
 mod status_row;
 mod targets;
 use panels::*;

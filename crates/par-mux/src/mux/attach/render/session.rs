@@ -258,6 +258,7 @@ impl WindowSession {
         self.notify.delivery = super::notify::NotifyDelivery::parse(&chords.notify_delivery)
             .unwrap_or(super::notify::NotifyDelivery::Terminal);
         self.notify.states = chords.notify_states.clone();
+        self.notify.sound = chords.sound.clone();
         self.sidebar_on_launch = chords.sidebar_on_launch;
         // The border style first, the explicit `pane-borders` flag after
         // it — the style implies a paint mode (herdr = per-pane boxes),

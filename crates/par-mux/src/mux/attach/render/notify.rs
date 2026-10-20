@@ -171,12 +171,20 @@ impl WindowSession {
         // done -> idle is the daemon marking the pane seen (another client
         // viewed it), not the agent changing anything.
         let seen_flip = previous == Some("done") && state == "idle";
-        if self.notify.delivery == NotifyDelivery::Off
+        // Sounds are herdr's own channel, independent of the delivery
+        // and of `notify-states`; the inside toast's bell stands in for
+        // a bell fallback.
+        let silent = self.notify.delivery == NotifyDelivery::Off
             || in_view
             || seen_flip
             || previous == Some(state)
-            || !self.notify.states.iter().any(|s| s == state)
-        {
+            || !self.notify.states.iter().any(|s| s == state);
+        let bell_fallback = self.play_transition_sound(agent, previous, state, in_view);
+        // The inside toast rings the bell itself.
+        if bell_fallback && (silent || self.notify.delivery != NotifyDelivery::Inside) {
+            self.notify.outbox.push(0x07);
+        }
+        if silent {
             return;
         }
         // A push without `ws=` (an older daemon) falls back to the
@@ -238,6 +246,30 @@ impl WindowSession {
 }
 
 impl WindowSession {
+    /// Play the sound a pushed transition maps to, when sounds are on and
+    /// the agent is not muted. Returns whether the terminal bell should
+    /// ring in its place (no player or sound file available).
+    fn play_transition_sound(
+        &mut self,
+        agent: &str,
+        previous: Option<&str>,
+        state: &str,
+        in_view: bool,
+    ) -> bool {
+        use crate::mux::attach::sound;
+        if !sound::allows(&self.notify.sound, agent) {
+            return false;
+        }
+        let Some(which) = sound::sound_for_transition(previous, state, in_view) else {
+            return false;
+        };
+        let config_dir = self
+            .settings_path
+            .as_deref()
+            .and_then(std::path::Path::parent);
+        sound::play(which, &self.notify.sound, config_dir)
+    }
+
     /// An ad-hoc `%notification` (a script's `show-notification`): deliver
     /// `title` / `body` through the configured channel. Unlike an agent
     /// transition it ignores `notify-states` and the background-only rule
@@ -282,6 +314,8 @@ pub(super) struct NotifyState {
     /// The pane behind the most recent agent notification this client
     /// delivered — the notification-jump chord's target.
     pub last_target: Option<u32>,
+    /// The agent state-change sounds (config `sound*`).
+    pub sound: crate::mux::config::SoundSettings,
 }
 
 impl Default for NotifyState {
@@ -292,6 +326,7 @@ impl Default for NotifyState {
             outbox: Vec::new(),
             toast_until: None,
             last_target: None,
+            sound: crate::mux::config::SoundSettings::default(),
         }
     }
 }
