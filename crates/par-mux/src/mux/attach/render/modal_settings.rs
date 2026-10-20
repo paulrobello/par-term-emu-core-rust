@@ -196,6 +196,11 @@ impl SettingsSection {
                     label: "kitty graphics",
                     kind: SettingKind::Toggle,
                 },
+                SettingSpec {
+                    key: "session-picker",
+                    label: "session picker",
+                    kind: SettingKind::Toggle,
+                },
             ],
             Self::Notify => &[
                 SettingSpec {
@@ -451,6 +456,7 @@ pub(super) struct SettingsValues {
     pub scrollbar_gutter: bool,
     pub drag_cursor_shape: bool,
     pub kitty_graphics: bool,
+    pub session_picker: bool,
     pub resize_step: u32,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
@@ -497,6 +503,7 @@ impl SettingsValues {
             "scrollbar-gutter" => FieldVal::Bool(self.scrollbar_gutter),
             "drag-cursor-shape" => FieldVal::Bool(self.drag_cursor_shape),
             "kitty-graphics" => FieldVal::Bool(self.kitty_graphics),
+            "session-picker" => FieldVal::Bool(self.session_picker),
             "resize-step" => FieldVal::Num(self.resize_step),
             "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
             "sound" => FieldVal::Bool(self.sound.enabled),
@@ -805,6 +812,7 @@ impl WindowSession {
             scrollbar_gutter: self.render_opts.scrollbar_gutter,
             drag_cursor_shape: self.cursor.drag_shape,
             kitty_graphics: self.kitty.enabled,
+            session_picker: self.session_picker,
             resize_step: self.resize_step,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
@@ -1240,6 +1248,7 @@ mod tests {
             scrollbar_gutter: false,
             drag_cursor_shape: false,
             kitty_graphics: true,
+            session_picker: false,
             resize_step: 1,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],

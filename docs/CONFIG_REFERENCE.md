@@ -369,6 +369,8 @@ The `par-mux attach` render client's chrome colors are not terminal settings: th
 
 The same file's `[client] kitty-graphics` (default `true`) draws the kitty graphics protocol images panes emit on the host terminal, only after the host answers the client's launch kitty query (`a=q`) with `OK`; `false` sends neither the query nor any image. See [MUX.md Kitty graphics](MUX.md#kitty-graphics).
 
+The same file's `[client] session-picker` (default `false`) turns a target-less `par-mux attach` against several sessions into an inline picker (arrow keys or `j`/`k`, Enter attaches, Esc/`q` cancels to the usual refusal) instead of the refusal; it never runs unless stdin and stdout are both terminals. See [MUX.md Attaching from a terminal](MUX.md#attaching-from-a-terminal).
+
 The same file's `[[client.popup]]` tables (`key`, `command`, optional `width`/`height` as cells or `"N%"`, and `description`) bind popup command windows: prefix + the key runs the command in a floating box over the attach TUI. See [MUX.md Popups](MUX.md#popups).
 
 ### Default Colors

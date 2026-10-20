@@ -540,8 +540,16 @@ fn render_session_inner(
     client: &super::ResolvedClient,
 ) -> Result<(), String> {
     let path = options.socket_path();
-    let mut conn = crate::mux::attach::conn::AttachConn::connect(&path)
-        .map_err(|_| format!("no daemon running on {}", path.display()))?;
+    let no_daemon = || format!("no daemon running on {}", path.display());
+    // The session picker runs before the attach connection and the
+    // terminal guards exist.
+    let target = super::picker::picked_target_on_host(
+        &path,
+        options.target.as_deref(),
+        client.chords.session_picker,
+    )
+    .map_err(|err| err.unwrap_or_else(no_daemon))?;
+    let mut conn = crate::mux::attach::conn::AttachConn::connect(&path).map_err(|_| no_daemon())?;
     if let Some(warning) = &conn.warnings().stamp_mismatch {
         eprintln!("{warning}");
     }
@@ -633,7 +641,7 @@ fn render_session_inner(
     // being eaten.
     session.stdin_primer = probe.primer;
 
-    let result = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
+    let result = session.run(&mut conn, target.as_deref(), &mut StdoutSink);
     session.popup_teardown(&mut conn);
     // Host-side images outlive the alternate screen on some terminals:
     // delete them while the screen guard still holds the screen.
@@ -790,6 +798,9 @@ struct WindowSession {
     /// The config's `sidebar-on-launch` (the settings dialog shows and
     /// edits it; the live panel's visibility is `sidebar`).
     sidebar_on_launch: bool,
+    /// The config's `session-picker` (launch-only like
+    /// `sidebar_on_launch`: the next target-less attach reads it).
+    session_picker: bool,
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
     settings_path: Option<std::path::PathBuf>,
@@ -1159,6 +1170,7 @@ impl WindowSession {
             scroll_matches: Vec::new(),
             scroll_match_ix: 0,
             sidebar_on_launch: chords.sidebar_on_launch,
+            session_picker: chords.session_picker,
             settings_path: None,
             editor_lookup: scrollback_edit::env_editor_lookup,
             popups: chords.popups.clone(),

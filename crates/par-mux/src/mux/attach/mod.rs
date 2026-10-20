@@ -61,6 +61,7 @@ pub mod fuzz_support {
 mod actions;
 mod navigate;
 mod panels;
+mod picker;
 mod prefs;
 mod pump;
 mod settings_write;
@@ -275,6 +276,14 @@ fn run_inner(
     chords: &crate::mux::config::Chords,
 ) -> Result<(), AttachError> {
     let path = options.socket_path();
+    // The session picker runs before the attach connection and the
+    // terminal guard exist.
+    let target =
+        picker::picked_target_on_host(&path, options.target.as_deref(), chords.session_picker)
+            .map_err(|err| match err {
+                Some(err) => AttachError::Handshake(std::io::Error::other(err)),
+                None => AttachError::NoDaemon(path.clone()),
+            })?;
     let conn = conn::AttachConn::connect(&path).map_err(|_| AttachError::NoDaemon(path.clone()))?;
 
     // Client-contract warnings: stamp mismatch (warn-only). Written BEFORE
@@ -291,7 +300,7 @@ fn run_inner(
     let session = match Session::new(
         conn,
         &path,
-        options.target.as_deref(),
+        target.as_deref(),
         chords.prefix,
         chords.reload,
         chords.management,

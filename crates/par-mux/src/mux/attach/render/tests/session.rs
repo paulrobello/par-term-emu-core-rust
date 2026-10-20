@@ -4522,3 +4522,29 @@ fn async_reply_never_answers_a_later_sync_query() {
         "the continuation received its own (empty agents) reply, not a status reply"
     );
 }
+
+/// The settings dialog's `general` tab lists `session picker` (default
+/// off) and its toggle writes `session-picker = true` into the file and
+/// applies it to the session, for the next target-less attach to read.
+#[test]
+fn settings_row_toggles_the_session_picker() {
+    let (_rx, mut conn, mut session) = command_menu_session("pickersettings");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t");
+    let rows = overlay_text(&session);
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("session picker") && r.contains("off")),
+        "the row shows the default in force: {rows:#?}"
+    );
+    assert!(!session.session_picker);
+    session.route_stdin_bytes(&mut conn, b"jjjjj\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("session-picker = true"), "{written}");
+    assert!(session.session_picker, "applied to the session");
+}

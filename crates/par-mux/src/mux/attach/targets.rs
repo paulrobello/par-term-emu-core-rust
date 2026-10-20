@@ -170,6 +170,72 @@ pub(crate) fn initial_attach_session(conn: &mut conn::AttachConn) -> Result<Stri
     }
 }
 
+/// The attach target after the session picker (`[client]
+/// session-picker`): an explicit `target` passes through; with none and
+/// `active` (the setting on, both stdio streams terminals — see
+/// [`super::picker::picker_active`]), a daemon holding several sessions
+/// hands them to `choose`, and its pick becomes the target. `Ok(None)`
+/// leaves the target-less rule ([`initial_attach_session`]) to the
+/// resolver: the picker is off (no query is sent, so the refusal path is
+/// unchanged), or zero or one session exists. An abort is the same
+/// [`multi_session_error`] the refusal prints.
+pub(crate) fn picked_target(
+    query: &mut dyn FnMut(&str) -> std::io::Result<crate::mux::client::Reply>,
+    target: Option<&str>,
+    active: bool,
+    choose: &mut dyn FnMut(&[super::picker::PickerRow]) -> Option<usize>,
+) -> Result<Option<String>, String> {
+    if let Some(target) = target {
+        return Ok(Some(target.to_string()));
+    }
+    if !active {
+        return Ok(None);
+    }
+    let sessions: Vec<(String, String)> = query("list-sessions")
+        .map_err(|err| format!("list-sessions failed: {err}"))?
+        .body
+        .iter()
+        .filter_map(|l| parse_session_line(l))
+        .collect();
+    if sessions.len() < 2 {
+        return Ok(None);
+    }
+    let counts = window_counts(query);
+    let rows: Vec<super::picker::PickerRow> = sessions
+        .iter()
+        .map(|(id, name)| super::picker::PickerRow {
+            id: id.clone(),
+            name: name.clone(),
+            windows: counts
+                .as_ref()
+                .map(|counts| counts.iter().filter(|session| *session == id).count()),
+        })
+        .collect();
+    match choose(&rows).and_then(|index| rows.get(index)) {
+        Some(row) => Ok(Some(row.id.clone())),
+        None => Err(multi_session_error(&sessions)),
+    }
+}
+
+/// The owning session id of every window (`list-windows -a` rows are
+/// `$S @N <marker> <name>`), or `None` when the query fails.
+fn window_counts(
+    query: &mut dyn FnMut(&str) -> std::io::Result<crate::mux::client::Reply>,
+) -> Option<Vec<String>> {
+    let reply = query("list-windows -a").ok().filter(|reply| reply.ok)?;
+    Some(
+        reply
+            .body
+            .iter()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(session, rest)| {
+                session.starts_with('$') && crate::mux::ipc::WindowRow::parse(rest).is_some()
+            })
+            .map(|(session, _)| session.to_string())
+            .collect(),
+    )
+}
+
 /// The `(id, name)` pairs of every session, in `list-sessions` order.
 fn session_ids(conn: &mut conn::AttachConn) -> Result<Vec<(String, String)>, String> {
     let sessions = conn

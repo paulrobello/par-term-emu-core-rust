@@ -3469,3 +3469,103 @@ fn passthrough_status_snapshot_refusal_falls_back_to_legacy() {
         "the legacy round re-derived the window"
     );
 }
+
+/// A scripted daemon query for the picker resolution tests: the
+/// two-session roster (`list-windows -a` gives `$1` two windows), with
+/// every command it was asked recorded in `asked`.
+fn two_session_query(
+    asked: &mut Vec<String>,
+) -> impl FnMut(&str) -> std::io::Result<crate::mux::client::Reply> + '_ {
+    move |command| {
+        asked.push(command.to_string());
+        let body = match command {
+            "list-sessions" => "+0: default: $0: att\n+0: default: $1: second",
+            "list-windows -a" => "$0 @0 * one\n$1 @1 * two\n$1 @2 - three",
+            _ => "",
+        };
+        Ok(crate::mux::client::Reply {
+            body: body.lines().map(str::to_string).collect(),
+            ok: true,
+        })
+    }
+}
+
+/// The picker on: several sessions reach the chooser as rows with their
+/// window counts, and its pick becomes the target.
+#[test]
+fn picked_target_hands_several_sessions_to_the_chooser() {
+    let mut asked = Vec::new();
+    let mut seen = Vec::new();
+    let picked = picked_target(
+        &mut two_session_query(&mut asked),
+        None,
+        true,
+        &mut |rows| {
+            seen = rows.to_vec();
+            Some(1)
+        },
+    )
+    .expect("picked");
+    assert_eq!(picked.as_deref(), Some("$1"));
+    let summary: Vec<(String, String, Option<usize>)> = seen
+        .iter()
+        .map(|r| (r.id.clone(), r.name.clone(), r.windows))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("$0".to_string(), "att".to_string(), Some(1)),
+            ("$1".to_string(), "second".to_string(), Some(2)),
+        ]
+    );
+    assert_eq!(asked, ["list-sessions", "list-windows -a"], "reads only");
+}
+
+/// An abort is the refusal, byte for byte.
+#[test]
+fn picked_target_abort_is_the_refusal() {
+    let mut asked = Vec::new();
+    let err = picked_target(&mut two_session_query(&mut asked), None, true, &mut |_| {
+        None
+    })
+    .expect_err("aborted");
+    assert_eq!(
+        err,
+        multi_session_error(&[
+            ("$0".to_string(), "att".to_string()),
+            ("$1".to_string(), "second".to_string()),
+        ])
+    );
+}
+
+/// Inactive (the setting off, or a non-terminal stdio), an explicit
+/// target, or a single session: the chooser never runs, and an inactive
+/// picker queries nothing, so the target-less rule (and its refusal) is
+/// untouched.
+#[test]
+fn picked_target_stays_out_of_the_way() {
+    let mut never =
+        |_: &[picker::PickerRow]| -> Option<usize> { panic!("the chooser must not run") };
+    let mut asked = Vec::new();
+    assert_eq!(
+        picked_target(&mut two_session_query(&mut asked), None, false, &mut never),
+        Ok(None)
+    );
+    assert_eq!(
+        picked_target(
+            &mut two_session_query(&mut asked),
+            Some("$0"),
+            true,
+            &mut never
+        ),
+        Ok(Some("$0".to_string()))
+    );
+    assert!(asked.is_empty(), "nothing queried: {asked:?}");
+    let mut single = |_: &str| {
+        Ok(crate::mux::client::Reply {
+            body: vec!["$0: only".to_string()],
+            ok: true,
+        })
+    };
+    assert_eq!(picked_target(&mut single, None, true, &mut never), Ok(None));
+}

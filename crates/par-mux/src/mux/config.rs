@@ -362,6 +362,15 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub kitty_graphics: Option<bool>,
+    /// A target-less attach against several sessions opens an inline
+    /// session picker instead of refusing (both modes; only when stdin
+    /// and stdout are both terminals). Default off.
+    #[serde(
+        default,
+        rename = "session-picker",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_picker: Option<bool>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -717,6 +726,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             scrollbar_gutter: Some(defaults.scrollbar_gutter),
             drag_cursor_shape: Some(defaults.drag_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
+            session_picker: Some(defaults.session_picker),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
             theme: Some(defaults.theme.clone()),
@@ -812,6 +822,9 @@ pub struct Chords {
     /// Kitty graphics drawn on a kitty-capable host (config
     /// `kitty-graphics`). Default on.
     pub kitty_graphics: bool,
+    /// The target-less multi-session picker (config `session-picker`).
+    /// Default off. Read at launch: a reload changes the next attach.
+    pub session_picker: bool,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
@@ -935,6 +948,7 @@ impl Chords {
             scrollbar_gutter: false,
             drag_cursor_shape: false,
             kitty_graphics: true,
+            session_picker: false,
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
@@ -1216,6 +1230,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .drag_cursor_shape
         .unwrap_or(current.drag_cursor_shape);
     let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
+    let session_picker = file.client.session_picker.unwrap_or(current.session_picker);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
     // reload error.
@@ -1251,6 +1266,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         scrollbar_gutter,
         drag_cursor_shape,
         kitty_graphics,
+        session_picker,
         border_lines,
         sidebar_width,
         sidebar_on_launch,
@@ -1664,6 +1680,29 @@ remain-on-exit = true
     /// (all OFF — the byte-identical contract), stated keys resolve, and
     /// gen-config emits all three at their defaults.
     #[test]
+    fn session_picker_defaults_off_resolves_and_reload_keeps_it() {
+        let defaults = Chords::with_defaults();
+        assert!(!defaults.session_picker, "off unless the user opts in");
+        let absent: ConfigFile = toml::from_str("[client]\n").unwrap();
+        assert!(
+            !reload_client_chords(&absent, &defaults)
+                .unwrap()
+                .session_picker
+        );
+        let on: ConfigFile = toml::from_str("[client]\nsession-picker = true\n").unwrap();
+        let chords = reload_client_chords(&on, &defaults).unwrap();
+        assert!(chords.session_picker);
+        assert!(
+            reload_client_chords(&absent, &chords)
+                .unwrap()
+                .session_picker,
+            "an absent key keeps the value in force"
+        );
+        let text = render(&EffectiveConfig::default());
+        assert!(text.contains("session-picker = false"), "{text}");
+    }
+
+    #[test]
     fn herdr_parity_display_options_resolve_and_gen_config_emits() {
         let defaults = Chords::with_defaults();
         let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
@@ -1994,6 +2033,7 @@ remain-on-exit = true
         assert_eq!(c.scrollbar_gutter, Some(defaults.scrollbar_gutter));
         assert_eq!(c.drag_cursor_shape, Some(defaults.drag_cursor_shape));
         assert_eq!(c.kitty_graphics, Some(defaults.kitty_graphics));
+        assert_eq!(c.session_picker, Some(defaults.session_picker));
         assert_eq!(
             reload_client_chords(&file, &Chords::with_defaults()).expect("resolves"),
             defaults

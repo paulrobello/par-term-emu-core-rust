@@ -644,6 +644,7 @@ impl WindowSession {
                 scrollbar_gutter: self.render_opts.scrollbar_gutter,
                 drag_cursor_shape: self.cursor.drag_shape,
                 kitty_graphics: self.kitty.enabled,
+                session_picker: self.session_picker,
                 border_lines: self.render_opts.glyphs.name().to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: the live panel's visibility stays as it

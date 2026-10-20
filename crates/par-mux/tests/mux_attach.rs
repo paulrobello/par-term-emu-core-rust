@@ -3483,6 +3483,285 @@ fn render_mode_without_target_refuses_when_several_sessions_exist() {
     let _ = stderr;
 }
 
+/// A fixture daemon holding two sessions, `att` and `second`, with their
+/// shells started.
+#[cfg(unix)]
+fn fixture_with_two_sessions(
+    tag: &str,
+) -> (MuxFixture, common::DaemonGuard, par_mux::mux::MuxClient) {
+    let (fixture, daemon, mut client) = fixture_with_session(tag);
+    client
+        .send("new-session -s second")
+        .expect("second session");
+    std::thread::sleep(Duration::from_millis(500));
+    (fixture, daemon, client)
+}
+
+/// The refusal text for the daemon's current roster, spelled out here so
+/// the test pins the bytes rather than re-deriving them from the code.
+#[cfg(unix)]
+fn expected_refusal(client: &mut par_mux::mux::MuxClient) -> String {
+    let mut text = String::from("par-mux: attach failed: multiple sessions exist — choose one:\n");
+    for line in client
+        .send("list-sessions -F '#{session_id}: #{session_name}'")
+        .expect("list-sessions")
+    {
+        text.push_str(&format!("  {line}\n"));
+    }
+    text.push_str(
+        "attach to one with `par-mux attach -t <session>` — with several servers \
+         running, name the server too: `par-mux attach <server> -t <session>`\n",
+    );
+    text
+}
+
+/// `[client] session-picker` absent, off, or on with stdio that is not a
+/// terminal (stdin null, stdout and stderr piped — a script or agent
+/// shell): a target-less attach against two sessions prints exactly the
+/// refusal on stderr, exits 1, and never draws the picker. Both modes.
+#[cfg(unix)]
+#[test]
+fn session_picker_off_or_without_a_terminal_keeps_the_refusal_bytes() {
+    let (fixture, _daemon, mut client) = fixture_with_two_sessions("pickrefuse");
+    let expected = expected_refusal(&mut client);
+    for mode in ["render", "passthrough"] {
+        for config in [
+            "[client]\n",
+            "[client]\nsession-picker = false\n",
+            "[client]\nsession-picker = true\n",
+        ] {
+            std::fs::write(fixture.client_config_path(), config).expect("write client config");
+            let output = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+                .args(["attach", "--mode", mode, "--socket"])
+                .arg(fixture.socket())
+                .env("PAR_MUX_CONFIG", fixture.client_config_path())
+                .stdin(std::process::Stdio::null())
+                .output()
+                .expect("run attach");
+            assert_eq!(output.status.code(), Some(1), "{mode} {config:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                expected,
+                "{mode} {config:?}: the refusal, byte for byte"
+            );
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("choose one"),
+                "{mode} {config:?}: no picker on a non-terminal stdout"
+            );
+        }
+    }
+}
+
+/// `[client] session-picker = true` with ONE stdio stream a terminal:
+/// stdin redirected (stdout on the PTY), then stdout redirected to a file
+/// (stdin on the PTY). Either way the picker stays off — no footer is
+/// drawn, nothing waits for a key — and the refusal prints, exit 1.
+#[cfg(unix)]
+#[test]
+fn session_picker_needs_both_stdin_and_stdout_on_a_terminal() {
+    let (fixture, _daemon, _client) = fixture_with_two_sessions("pickhalf");
+    std::fs::write(
+        fixture.client_config_path(),
+        "[client]\nsession-picker = true\n",
+    )
+    .expect("write client config");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_file = dir.path().join("stdout.txt");
+    let attach = format!(
+        "exec '{}' attach --mode render --socket '{}'",
+        env!("CARGO_BIN_EXE_par-mux"),
+        fixture.socket().display()
+    );
+    for (what, script) in [
+        ("stdin redirected", format!("{attach} </dev/null")),
+        (
+            "stdout redirected",
+            format!("{attach} >'{}'", out_file.display()),
+        ),
+    ] {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", &script]);
+        cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let (tx, rx) = channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let end = Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                break status;
+            }
+            assert!(
+                Instant::now() < end,
+                "{what}: the client must not wait in a picker"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut seen = Vec::new();
+        while let Ok(bytes) = rx.recv_timeout(Duration::from_millis(300)) {
+            seen.extend_from_slice(&bytes);
+        }
+        let mut text = String::from_utf8_lossy(&seen).into_owned();
+        if what == "stdout redirected" {
+            text.push_str(&std::fs::read_to_string(&out_file).unwrap_or_default());
+        }
+        assert_eq!(status.exit_code(), 1, "{what}: {text}");
+        assert!(
+            text.contains("multiple sessions exist")
+                && text.contains("par-mux attach -t <session>"),
+            "{what}: the refusal prints: {text:?}"
+        );
+        assert!(
+            !text.contains("enter attach"),
+            "{what}: no picker: {text:?}"
+        );
+    }
+}
+
+/// `[client] session-picker = true` under a real terminal: the picker
+/// lists both sessions; moving to `second` and pressing Enter attaches
+/// that session (typed input reaches its pane).
+#[cfg(unix)]
+fn session_picker_pick_attaches(mode: &str, tag: &str, ready: &[u8]) {
+    let (fixture, _daemon, mut client) = fixture_with_two_sessions(tag);
+    let order: Vec<String> = client
+        .send("list-sessions -F '#{session_name}'")
+        .expect("list-sessions");
+    let index = order
+        .iter()
+        .position(|name| name == "second")
+        .expect("second listed");
+    let (mut host, _stderr) = spawn_attach_with_config(
+        &fixture,
+        &[],
+        mode,
+        "[client]\nsidebar-on-launch = false\nsession-picker = true\n",
+    );
+    let shown = expect_output(
+        &host,
+        b"enter attach",
+        Duration::from_secs(10),
+        "the picker's footer",
+    );
+    let text = String::from_utf8_lossy(&shown);
+    assert!(
+        text.contains("choose one") && text.contains("att") && text.contains("second"),
+        "the picker lists both sessions: {text}"
+    );
+    // Down past the first row (arrows and j both move), then back up
+    // once with k, landing on `second`.
+    for _ in 0..index {
+        host.to_child.write_all(b"\x1b[B").expect("down");
+        host.to_child.flush().ok();
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    host.to_child.write_all(b"j").expect("j");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(100));
+    host.to_child.write_all(b"k").expect("k");
+    host.to_child.flush().ok();
+    std::thread::sleep(Duration::from_millis(100));
+    host.to_child.write_all(b"\r").expect("enter");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        ready,
+        Duration::from_secs(10),
+        "the client attached after the pick",
+    );
+    let pane = session_first_pane(&mut client, "second");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        host.to_child
+            .write_all(b"echo PICKED-MARKER\r")
+            .expect("type");
+        host.to_child.flush().ok();
+        std::thread::sleep(Duration::from_millis(300));
+        let capture = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture");
+        if capture.join("\n").contains("PICKED-MARKER") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "keys must reach the picked session's pane: {capture:?}"
+        );
+    }
+    host.killer.kill().ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn session_picker_pick_attaches_the_chosen_session_render() {
+    session_picker_pick_attaches("render", "pickrender", b"\x1b[?1049h");
+}
+
+#[cfg(unix)]
+#[test]
+fn session_picker_pick_attaches_the_chosen_session_passthrough() {
+    session_picker_pick_attaches("passthrough", "pickpass", b"\x1b[1;23r");
+}
+
+/// Aborting the picker (`q`) prints the refusal so the `-t` syntax stays
+/// on screen, exits 1, and leaves the terminal out of raw mode with the
+/// cursor shown.
+#[cfg(unix)]
+#[test]
+fn session_picker_abort_prints_the_refusal_and_exits_nonzero() {
+    let (fixture, _daemon, _client) = fixture_with_two_sessions("pickquit");
+    let (mut host, _stderr) = spawn_attach_with_config(
+        &fixture,
+        &[],
+        "render",
+        "[client]\nsidebar-on-launch = false\nsession-picker = true\n",
+    );
+    expect_output(
+        &host,
+        b"enter attach",
+        Duration::from_secs(10),
+        "the picker's footer",
+    );
+    host.to_child.write_all(b"q").expect("q");
+    host.to_child.flush().ok();
+    let got = wait_for_output(&host, b"<server> -t <session>", Duration::from_secs(10));
+    assert_eq!(
+        child_exit(&mut host, Duration::from_secs(10)),
+        Some(1),
+        "an aborted pick exits 1: {}",
+        String::from_utf8_lossy(&got)
+    );
+    let text = String::from_utf8_lossy(&got);
+    assert!(
+        text.contains("multiple sessions exist") && text.contains("par-mux attach -t <session>"),
+        "the refusal follows the abort: {text}"
+    );
+    assert!(
+        text.contains("\x1b[?25h"),
+        "the cursor is shown again: {text:?}"
+    );
+    assert!(
+        !text.contains("\x1b[?1049h"),
+        "no attach screen was entered: {text:?}"
+    );
+}
+
 /// The target-less render client on a daemon with NO sessions creates the
 /// default tree and attaches to it: `new-workspace -n default` builds
 /// workspace + session `default`, a window named `1`, one unnamed pane.
