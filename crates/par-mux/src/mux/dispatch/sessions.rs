@@ -415,6 +415,9 @@ pub(super) fn cmd_select_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>
             },
             _ => Vec::new(),
         };
+        if let Some(window) = window {
+            super::client::pin_issuer_focus(ctx, &mut guard, window);
+        }
         (workspace, session, window, moved, resized)
     };
     let mut result = Outcome::ok(ctx, "").notifying(TmuxNotification::WorkspacesChanged);
@@ -499,6 +502,9 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             (true, Some(shown), Some(previous)) => guard.follow_workspace_views(previous, shown),
             _ => Vec::new(),
         };
+        if let Some(shown) = shown {
+            super::client::pin_issuer_focus(ctx, &mut guard, shown);
+        }
         let name = guard
             .session(session)
             .map(|s| s.name.clone())

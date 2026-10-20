@@ -14,6 +14,13 @@ impl Session {
     /// emulator verbatim; its tracked cursor becomes the pane's truth the
     /// status draw re-places.
     pub(super) fn resync(&mut self) {
+        // The shown pane is the window's active pane daemon-side: the
+        // seen rule views a window's active pane, and the size report
+        // below names the whole window. An explicit `-t %N` attach and
+        // the reconnect land here without a prior select.
+        let _ = self
+            .conn
+            .send_checked(&format!("select-pane -t {}", self.pane));
         // Size report against the target pane's window, BEFORE the replay:
         // the handshake's target-less -C sizes only the newest session's
         // active window, and every switch re-enters here — a window

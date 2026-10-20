@@ -8,28 +8,41 @@
 //! a hook or a scrape rule.
 //!
 //! "Viewed" is decided daemon-side so every client agrees: a pane is in
-//! view when some render client's reported view (`refresh-client -C`, the
-//! `client_views` map) displays the pane's window, and the window is not
-//! zoomed onto a different pane. One-shot CLI and hook connections never
-//! report a view, so they never mark anything seen.
+//! view when it is the pane some render client shows — the zoomed pane,
+//! else the active pane, of the client's focused window. The focus is the
+//! window the client last selected for itself (`select-window`,
+//! `switch-client -t`, `select-workspace`), a shared-selection follow, or
+//! its latest size report (`refresh-client -t <pane> -C`), whichever came
+//! last — except that a report naming another window does not move a
+//! focus the client's own selection placed: that report was sent for the
+//! window it left ([`MuxTree::set_client_focus`]). The pane rule makes a
+//! passthrough client, which reports a whole window while showing its
+//! active pane, view that pane alone. Only connections holding a size
+//! report are viewers; one-shot CLI and hook connections never report
+//! one, so they never mark anything seen.
 
 use crate::mux::ids::PaneId;
 use crate::mux::tree::MuxTree;
 use par_term_emu_core::tmux_control::TmuxNotification;
 
+/// The panes the attached render clients show: per viewer, the zoomed
+/// pane of its focused window, else that window's active pane.
+fn viewed_panes(tree: &MuxTree) -> Vec<PaneId> {
+    let mut viewed: Vec<PaneId> = tree
+        .client_views
+        .keys()
+        .filter_map(|client_id| tree.client_focus_window(*client_id))
+        .filter_map(|window_id| tree.window(window_id))
+        .map(|window| window.zoomed.unwrap_or(window.active))
+        .collect();
+    viewed.sort_unstable();
+    viewed.dedup();
+    viewed
+}
+
 /// Whether any attached render client currently shows `pane`.
 pub(crate) fn pane_in_view(tree: &MuxTree, pane: PaneId) -> bool {
-    let Some(window_id) = tree.window_of_pane(pane) else {
-        return false;
-    };
-    let unzoomed_or_this = tree
-        .window(window_id)
-        .is_some_and(|window| window.zoomed.is_none_or(|zoomed| zoomed == pane));
-    unzoomed_or_this
-        && tree
-            .client_views
-            .values()
-            .any(|view| view.window == window_id)
+    viewed_panes(tree).contains(&pane)
 }
 
 /// The state to store for an incoming `incoming` state given the pane's
@@ -46,19 +59,8 @@ pub(crate) fn derive_state<'a>(prior: Option<&str>, incoming: &'a str, in_view: 
 /// `%agent-state-changed` pushes announcing it. Only `agent_state` is
 /// written: provenance, sequence stamps, and the message survive.
 pub(crate) fn mark_viewed_done_seen(tree: &mut MuxTree) -> Vec<TmuxNotification> {
-    let mut viewed: Vec<PaneId> = tree
-        .client_views
-        .values()
-        .filter_map(|view| tree.window(view.window))
-        .flat_map(|window| window.panes())
-        .collect();
-    viewed.sort_unstable();
-    viewed.dedup();
     let mut notifications = Vec::new();
-    for pane_id in viewed {
-        if !pane_in_view(tree, pane_id) {
-            continue;
-        }
+    for pane_id in viewed_panes(tree) {
         let ws = tree
             .workspace_of_pane(pane_id)
             .map(|w| w.to_string())

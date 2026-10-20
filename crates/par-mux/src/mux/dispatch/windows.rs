@@ -138,6 +138,7 @@ pub(super) fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outc
         } else {
             Vec::new()
         };
+        super::client::pin_issuer_focus(ctx, &mut guard, window);
         (
             window,
             guard.window(window).map(|w| w.active),

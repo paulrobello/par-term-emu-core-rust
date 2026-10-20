@@ -1700,6 +1700,189 @@ fn an_explicit_done_report_is_accepted_and_seen_when_in_view() {
         "idle"
     );
 }
+
+/// The stored agent state of `pane`'s claim.
+fn stored_state(h: &Harness, pane: PaneId) -> Option<String> {
+    h.tree
+        .lock()
+        .pane(pane)
+        .and_then(|p| p.metadata().get("agent_state").cloned())
+}
+
+/// Drive `pane` through working -> idle as agent `claude`, starting at
+/// sequence `seq`; the stored result.
+fn finish(h: &Harness, pane: PaneId, seq: u64) -> String {
+    pushed_state(report_state(h, pane, "claude", "working", seq).1);
+    pushed_state(report_state(h, pane, "claude", "idle", seq + 1).1)
+}
+
+/// Whether anything broadcast since the last drain was a seen flip.
+fn flipped(h: &Harness) -> bool {
+    h.drain()
+        .iter()
+        .any(|l| l.starts_with("%agent-state-changed"))
+}
+
+/// A size report that arrives AFTER the client switched windows (the
+/// renderer's report for the window it just left, still in flight) does
+/// not move the seen focus back: the left window's finish stays `done`,
+/// and a later finish there is `done` too. Landing on the window clears it.
+#[test]
+fn a_late_size_report_for_a_left_window_does_not_mark_it_seen() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let session = h.session_named("main");
+    assert_ok(&h.run(&format!("new-window -t {session}")));
+    let windows = h.windows_of(session);
+    let (left, landed) = (windows[0], windows[1]);
+    let agent_pane = h.panes_of(left)[0];
+    let other_pane = h.panes_of(landed)[0];
+    assert_ok(&h.run_as(Some(1), &format!("select-window -t {left}")));
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    // The client switches away and reports the window it landed on.
+    assert_ok(&h.run_as(Some(1), &format!("select-window -t {landed}")));
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {other_pane} -C 100x30"),
+    ));
+    assert_eq!(finish(&h, agent_pane, 1), "done");
+    h.drain();
+
+    // The late report against the window it left.
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    assert!(!flipped(&h), "a stale report must not mark the finish seen");
+    assert_eq!(stored_state(&h, agent_pane).as_deref(), Some("done"));
+    assert_eq!(
+        finish(&h, agent_pane, 3),
+        "done",
+        "a finish after the stale report is still unseen"
+    );
+
+    // Positive control: landing on the window is a view.
+    assert_ok(&h.run_as(Some(1), &format!("select-window -t {left}")));
+    assert!(flipped(&h), "landing on the window clears the done");
+    assert_eq!(stored_state(&h, agent_pane).as_deref(), Some("idle"));
+}
+
+/// The same stale report after a cross-session `switch-client`: the left
+/// session's window is still its session's active one, and the report
+/// still must not count as a view.
+#[test]
+fn a_late_size_report_after_a_session_switch_does_not_mark_it_seen() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s left"));
+    assert_ok(&h.run("new-session -s landed"));
+    let left = h.session_named("left");
+    let landed = h.session_named("landed");
+    let agent_pane = h.panes_of(h.windows_of(left)[0])[0];
+    let other_pane = h.panes_of(h.windows_of(landed)[0])[0];
+    assert_ok(&h.run_as(Some(1), &format!("switch-client -t {left}")));
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    assert_ok(&h.run_as(Some(1), &format!("switch-client -t {landed}")));
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {other_pane} -C 100x30"),
+    ));
+    assert_eq!(finish(&h, agent_pane, 1), "done");
+    h.drain();
+
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    assert!(!flipped(&h), "a stale report must not mark the finish seen");
+    assert_eq!(stored_state(&h, agent_pane).as_deref(), Some("done"));
+
+    assert_ok(&h.run_as(Some(1), &format!("switch-client -t {left}")));
+    assert!(flipped(&h), "switching back clears the done");
+}
+
+/// Passthrough attach shows ONE pane of a split window (select-pane, then
+/// the window-wide size report): the sibling it does not show keeps its
+/// `done` until it is the one shown.
+#[test]
+fn a_single_pane_view_does_not_mark_its_siblings_seen() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let window = h.windows_of(h.session_named("main"))[0];
+    let shown = h.panes_of(window)[0];
+    assert_ok(&h.run(&format!("split-window -t {shown}")));
+    let sibling = *h
+        .panes_of(window)
+        .iter()
+        .find(|p| **p != shown)
+        .expect("the split made a sibling");
+    assert_eq!(finish(&h, sibling, 1), "done", "nobody views anything yet");
+    h.drain();
+
+    // The passthrough wire order: select-pane, then the resync's report.
+    assert_ok(&h.run_as(Some(1), &format!("select-pane -t {shown}")));
+    assert_ok(&h.run_as(Some(1), &format!("refresh-client -t {shown} -C 100x30")));
+    assert!(!flipped(&h), "the shown pane's view is not the sibling's");
+    assert_eq!(stored_state(&h, sibling).as_deref(), Some("done"));
+    assert_eq!(finish(&h, sibling, 3), "done", "still out of view");
+
+    // Positive control: showing the sibling is a view.
+    assert_ok(&h.run_as(Some(1), &format!("select-pane -t {sibling}")));
+    assert!(flipped(&h), "showing the sibling clears it");
+    assert_eq!(stored_state(&h, sibling).as_deref(), Some("idle"));
+}
+
+/// A zoomed window shows only its zoomed pane: the panes hidden behind
+/// the zoom are not viewed.
+#[test]
+fn a_zoomed_window_views_only_the_zoomed_pane() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let window = h.windows_of(h.session_named("main"))[0];
+    let first = h.panes_of(window)[0];
+    assert_ok(&h.run(&format!("split-window -t {first}")));
+    let second = *h.panes_of(window).iter().find(|p| **p != first).unwrap();
+    assert_eq!(finish(&h, first, 1), "done");
+    assert_ok(&h.run(&format!("resize-pane -Z -t {second}")));
+    h.drain();
+    assert_ok(&h.run_as(Some(1), &format!("refresh-client -t {second} -C 100x30")));
+    assert!(!flipped(&h), "the pane behind the zoom is not viewed");
+    assert_eq!(stored_state(&h, first).as_deref(), Some("done"));
+}
+
+/// The focus a switch pinned is released when its window dies: the
+/// client's next report is where it is.
+#[test]
+fn a_report_after_the_focused_window_dies_moves_the_focus() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let session = h.session_named("main");
+    assert_ok(&h.run(&format!("new-window -t {session}")));
+    assert_ok(&h.run(&format!("new-window -t {session}")));
+    let windows = h.windows_of(session);
+    let (agent_window, doomed) = (windows[0], windows[2]);
+    let agent_pane = h.panes_of(agent_window)[0];
+    let doomed_pane = h.panes_of(doomed)[0];
+    assert_ok(&h.run_as(Some(1), &format!("select-window -t {doomed}")));
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {doomed_pane} -C 100x30"),
+    ));
+    assert_eq!(finish(&h, agent_pane, 1), "done");
+    assert_ok(&h.run(&format!("kill-window -t {doomed}")));
+    h.drain();
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    assert!(flipped(&h), "the report lands the focus on the live window");
+}
+
 /// `wait-output` searches what is already there before parking: the
 /// matched line is the reply body, for a substring and a regex alike, and
 /// a line scrolled into recent history still matches under the default

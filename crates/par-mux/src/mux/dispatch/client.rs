@@ -85,9 +85,16 @@ fn refresh_newest_window(ctx: &Ctx<'_>, size: (u16, u16), chrome: PaneChrome) ->
                     .session(session)
                     .and_then(|s| s.windows.get(s.active).copied());
                 match window {
-                    Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
-                        .map(|resized| (window_id, resized))
-                        .map_err(|err| err.to_string()),
+                    Some(window_id) => apply_size_report(
+                        ctx,
+                        &mut guard,
+                        window_id,
+                        size,
+                        chrome,
+                        crate::mux::tree::FocusSource::Fallback,
+                    )
+                    .map(|resized| (window_id, resized))
+                    .map_err(|err| err.to_string()),
                     None => Err(format!("no such session: {session}")),
                 }
             }
@@ -116,8 +123,15 @@ fn refresh_pane_window(
     let outcome = {
         let mut guard = ctx.tree.lock();
         match guard.window_of_pane(pane) {
-            Some(window_id) => apply_size_report(ctx, &mut guard, window_id, size, chrome)
-                .map(|resized| (window_id, resized)),
+            Some(window_id) => apply_size_report(
+                ctx,
+                &mut guard,
+                window_id,
+                size,
+                chrome,
+                crate::mux::tree::FocusSource::Report,
+            )
+            .map(|resized| (window_id, resized)),
             None => Err(MuxError::NoSuchPane(pane)),
         }
     };
@@ -148,6 +162,16 @@ fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
     }
 }
 
+/// The issuing connection selected `window` for itself (`select-window`,
+/// `switch-client -t`, `select-workspace`): its seen focus lands there
+/// and holds against size reports still in flight for the window it
+/// left. Embedder/test dispatch has no connection and pins nothing.
+pub(super) fn pin_issuer_focus(ctx: &Ctx<'_>, guard: &mut MuxTree, window: WindowId) {
+    if let Some(client_id) = ctx.client_id {
+        guard.set_client_focus(client_id, window, crate::mux::tree::FocusSource::Selection);
+    }
+}
+
 /// Record a `-C` size report against `window_id` — the connection's
 /// sizing contribution, or the legacy direct resize when dispatch has no
 /// connection identity (embedder/test dispatch) — and return every
@@ -158,9 +182,13 @@ fn apply_size_report(
     window_id: WindowId,
     (cols, rows): (u16, u16),
     chrome: PaneChrome,
+    focus: crate::mux::tree::FocusSource,
 ) -> Result<Vec<WindowId>, MuxError> {
     match ctx.client_id {
-        Some(client_id) => Ok(guard.set_client_view(client_id, window_id, cols, rows, chrome)),
+        Some(client_id) => {
+            guard.set_client_focus(client_id, window_id, focus);
+            Ok(guard.set_client_view(client_id, window_id, cols, rows, chrome))
+        }
         None => guard
             .resize_window_with_chrome(window_id, cols, rows, chrome)
             .map(|()| vec![window_id]),

@@ -785,6 +785,39 @@ fn resync_size_reports_the_target_window_before_the_replay() {
     );
 }
 
+/// The shown pane is selected daemon-side before the window-wide size
+/// report on EVERY resync — an explicit `-t %N` attach and the reconnect
+/// included, not only in-session switches — so the daemon's seen rule
+/// (the reported window's active pane) views the pane passthrough shows
+/// and not a sibling.
+#[test]
+fn resync_selects_the_shown_pane_before_the_size_report() {
+    let (_daemon, path) = FakeDaemon::bind("resync-select");
+    let mut session = passthrough_session(
+        conn::AttachConn::connect(&path).expect("connect"),
+        "@0",
+        "%3",
+    );
+    session.resync();
+    let mut sent = Vec::new();
+    while let Ok((name, line)) = _daemon
+        .received
+        .recv_timeout(std::time::Duration::from_secs(5))
+    {
+        if name == "select-pane" || (name == "refresh-client" && line.contains("-t %3")) {
+            sent.push(line);
+        }
+        if sent.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(sent.len(), 2, "select and a targeted refresh: {sent:?}");
+    assert_eq!(
+        sent[0], "select-pane -t %3",
+        "the select comes first: {sent:?}"
+    );
+}
+
 /// chunk containing a CUP and a line feed; the bytes `draw_status`
 /// emits must end with an absolute CUP at the EMULATOR's tracked cell,
 /// not a bare ESC8 restore. A pane scroll landing between the draw and
@@ -1014,11 +1047,13 @@ fn respawn_chord_resumes_forwarding_after_revival() {
     assert!(!session.route_bytes(b"x"));
     // Handshake lines first (version, list-commands, set-client-colors,
     // refresh-client -C), then the chord and respawn's resync
-    // (refresh-client -t) — the wire evidence forwarding is live again.
-    let lines = recorded(&daemon.received, 6);
+    // (select-pane, then refresh-client -t) — the wire evidence
+    // forwarding is live again.
+    let lines = recorded(&daemon.received, 7);
     assert_eq!(lines[4].0, "respawn-pane", "the chord respawned: {lines:?}");
     assert_eq!(
-        lines[5].0, "refresh-client",
+        (lines[5].0.as_str(), lines[6].0.as_str()),
+        ("select-pane", "refresh-client"),
         "the respawn resync rode the revived connection: {lines:?}"
     );
 }

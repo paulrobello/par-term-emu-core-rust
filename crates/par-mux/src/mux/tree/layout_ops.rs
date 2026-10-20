@@ -2,7 +2,7 @@
 //! moves, resizes, client metrics, and the `mutate_layout` choke point
 //! every layout-shape edit goes through (ARC-090).
 
-use super::{kill_detached, ClientView, MuxTree, MuxWindow, SplitSpawn};
+use super::{kill_detached, ClientView, FocusSource, MuxTree, MuxWindow, SeenFocus, SplitSpawn};
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
@@ -679,10 +679,76 @@ impl MuxTree {
         self.refit_reported_windows(&candidates)
     }
 
+    /// Place `client_id`'s seen focus on `window` when `source` outranks
+    /// what placed the current one. A selection always lands. A targeted
+    /// report lands unless the client's own selection put the focus on
+    /// another live window — a report still in flight from before the
+    /// switch is stale. A target-less report only fills an empty (or
+    /// target-less) focus. A focus on a window that no longer exists
+    /// yields to anything.
+    pub(crate) fn set_client_focus(
+        &mut self,
+        client_id: u64,
+        window: WindowId,
+        source: FocusSource,
+    ) {
+        let lands = match self.client_focus.get(&client_id) {
+            None => true,
+            Some(current) if !self.windows.contains_key(&current.window) => true,
+            Some(current) => match source {
+                FocusSource::Selection => true,
+                FocusSource::Report => {
+                    current.source != FocusSource::Selection || current.window == window
+                }
+                FocusSource::Fallback => current.source == FocusSource::Fallback,
+            },
+        };
+        if !lands {
+            return;
+        }
+        let source = match self.client_focus.get(&client_id) {
+            // An acknowledging report keeps the selection's pin.
+            Some(current)
+                if current.window == window && current.source == FocusSource::Selection =>
+            {
+                FocusSource::Selection
+            }
+            _ => source,
+        };
+        self.client_focus
+            .insert(client_id, SeenFocus { window, source });
+    }
+
+    /// A shared-selection follow moved `client_id`'s view to `window`:
+    /// the focus moves with it, past any pin, but only at report rank —
+    /// a client that does not follow (passthrough) re-places it with its
+    /// next report of what it actually shows.
+    fn follow_client_focus(&mut self, client_id: u64, window: WindowId) {
+        self.client_focus.insert(
+            client_id,
+            SeenFocus {
+                window,
+                source: FocusSource::Report,
+            },
+        );
+    }
+
+    /// The window `client_id` shows for the seen rule: its focus, else
+    /// (no focus yet, or its window died) the window its size report
+    /// names.
+    pub(crate) fn client_focus_window(&self, client_id: u64) -> Option<WindowId> {
+        self.client_focus
+            .get(&client_id)
+            .map(|focus| focus.window)
+            .filter(|window| self.windows.contains_key(window))
+            .or_else(|| self.client_views.get(&client_id).map(|view| view.window))
+    }
+
     /// Drop `client_id`'s sizing contribution and re-fit the window it was
     /// displaying — the disconnect path: with the constraining report gone
     /// the window may grow to the remaining viewers' minimum.
     pub fn clear_client_view(&mut self, client_id: u64) -> Vec<WindowId> {
+        self.client_focus.remove(&client_id);
         let Some(removed) = self.client_views.remove(&client_id) else {
             return Vec::new();
         };
@@ -719,6 +785,7 @@ impl MuxTree {
             if let Some(view) = self.client_views.get_mut(&id) {
                 view.window = window;
             }
+            self.follow_client_focus(id, window);
         }
         self.refit_reported_windows(&candidates)
     }
@@ -764,6 +831,7 @@ impl MuxTree {
             }
             None => return Vec::new(),
         }
+        self.follow_client_focus(client_id, window);
         Vec::new()
     }
 

@@ -153,7 +153,6 @@ impl Session {
     /// Point the pump at `pane`, select it daemon-side, and resync the
     /// redraw (the select-then-refresh contract every switch follows).
     pub(super) fn switch_to_pane(&mut self, pane: &str) {
-        let _ = self.conn.send_checked(&format!("select-pane -t {pane}"));
         self.pane = pane.to_string();
         self.exited = None;
         self.resync();

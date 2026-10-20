@@ -46,6 +46,28 @@ pub struct ClientView {
     pub chrome: PaneChrome,
 }
 
+/// What last placed a viewer's [`SeenFocus`], ordered by authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusSource {
+    /// The target-less size report: the newest session's active window,
+    /// a stand-in for what the client shows.
+    Fallback,
+    /// A targeted size report (`refresh-client -t <pane> -C`).
+    Report,
+    /// The client's own selection (`select-pane`/`select-window`/
+    /// `switch-client`/`select-workspace`) or a shared-selection follow.
+    Selection,
+}
+
+/// The window a viewer shows, as the seen rule reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeenFocus {
+    /// The window shown.
+    pub window: WindowId,
+    /// What placed it.
+    pub source: FocusSource,
+}
+
 /// Kill a pane the tree has already removed, off the tree lock: killing is
 /// signal-then-reap with a bounded wait (portable-pty polls its SIGHUP
 /// grace for ~200 ms before SIGKILL, and the reap adds a short wait after),
@@ -476,6 +498,10 @@ pub struct MuxTree {
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
     pub(crate) client_views: HashMap<u64, ClientView>,
+    /// Per-connection seen focus: the window each viewer shows, for the
+    /// `done` -> `idle` seen rule (`hooks::seen`). Kept apart from
+    /// [`Self::client_views`], whose window a late size report may move.
+    pub(crate) client_focus: HashMap<u64, SeenFocus>,
     /// Observer events from pane resizes and daemon notes, held until the
     /// tree lock drops. A layout mutation re-fits pane terminals under the
     /// tree mutex, and a spawn writes its start-dir note there; an observer
@@ -512,6 +538,7 @@ impl MuxTree {
             window_session: HashMap::new(),
             session_workspace: HashMap::new(),
             client_views: HashMap::new(),
+            client_focus: HashMap::new(),
             pending_observer_batches: Vec::new(),
             scrape_engine: None,
         }
