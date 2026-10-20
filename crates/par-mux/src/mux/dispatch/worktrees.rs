@@ -338,32 +338,36 @@ fn remove_checkout(
 /// for a repo row or when none is open); `branch` is `-` for a detached
 /// HEAD. The checkout path is last because it may contain spaces.
 fn cmd_list_worktrees(ctx: &Ctx<'_>) -> Outcome {
-    let guard = ctx.tree.lock();
+    let rows: Vec<String> = worktree_rows(&ctx.tree.lock())
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    Outcome::ok(ctx, &rows.join("\n"))
+}
+
+/// The `list-worktrees` rows, id order. Shared with `client-snapshot`'s
+/// `worktree` rows, so the side panel groups by the same facts.
+pub(super) fn worktree_rows(guard: &MuxTree) -> Vec<crate::mux::ipc::WorktreeRow> {
     let mut ids = guard.workspaces();
     ids.sort();
-    let rows: Vec<String> = ids
-        .iter()
+    ids.iter()
         .filter_map(|id| guard.workspace(*id))
         .filter_map(|ws| {
             let link = ws.worktree.as_ref()?;
-            let (kind, parent) = if link.is_linked() {
-                let parent = guard
-                    .repo_workspace(&link.repo)
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                ("worktree", parent)
+            let parent = if link.is_linked() {
+                guard.repo_workspace(&link.repo).map(|p| p.to_string())
             } else {
-                ("repo", "-".to_string())
+                None
             };
-            Some(format!(
-                "{} {kind} {parent} {} {}",
-                ws.id,
-                link.branch.as_deref().unwrap_or("-"),
-                link.checkout.display()
-            ))
+            Some(crate::mux::ipc::WorktreeRow {
+                id: ws.id.to_string(),
+                linked: link.is_linked(),
+                parent,
+                branch: link.branch.clone(),
+                checkout: link.checkout.display().to_string(),
+            })
         })
-        .collect();
-    Outcome::ok(ctx, &rows.join("\n"))
+        .collect()
 }
 
 #[cfg(test)]

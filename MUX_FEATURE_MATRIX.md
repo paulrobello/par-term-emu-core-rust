@@ -63,7 +63,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Extra grouping level | Workspaces sit above sessions (tmux has none); each tracks its own active session | Sessions are separate server namespaces; workspaces are project-level containers | PM-MUX / H-CONCEPTS |
 | Naming | Typed ids beat names; names match exactly; session names unique, duplicates refused | Opaque public ids never reused after close; rename supported | PM-MUX / H-SKILL |
 | Default tree | Empty attach creates workspace+session `default`, window `1`, one pane | Launch/attach reattaches the persistent default session | PM-MUX / H-CONCEPTS |
-| Git worktree workspaces | `worktree-create` / `worktree-open` / `worktree-remove [-f]` / `list-worktrees`; worktree workspaces grouped under the repo workspace by a persisted repo-key link; `kill-workspace -g` required to close a repo workspace with linked worktrees; checkouts default to `<repo>-worktrees/<slug>` beside the repo | `worktree create/open/remove`; worktree workspaces grouped under the parent repo workspace; `workspace close --group`; checkouts under a global `~/.herdr/worktrees` root | PM-MUX / H-CLI |
+| Git worktree workspaces | `worktree-create` / `worktree-open` / `worktree-remove [-f]` / `list-worktrees`; worktree workspaces grouped under the repo workspace by a persisted repo-key link; `kill-workspace -g` required to close a repo workspace with linked worktrees; checkouts default to `<repo>-worktrees/<slug>` beside the repo; the attach side panel tree-groups worktree workspaces under their repo row and the workspace menu turns a refused close into `close group` (`-g`) | `worktree create/open/remove`; worktree workspaces grouped under the parent repo workspace; `workspace close --group`; checkouts under a global `~/.herdr/worktrees` root | PM-MUX / H-CLI |
 | Layout portability | Binary `LayoutTree` emitting tmux layout strings | `layout.export` / `layout.apply` / `layout.set_split_ratio` socket methods | PM-SRC / H-API |
 | Workspace metadata | Agent roster grouped by workspace (`ws=+N`) | Per-workspace reportable tokens (e.g. `$jj_status`) in sidebar space rows | PM-MUX / H-CFG |
 
@@ -224,7 +224,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 - Agent breadth: 22 supported integrations + 5 self-reporting (par-mux: 9), with three-tier detection and `agent explain` diagnostics.
 - Mouse-first UX: drag-everything, context menus, rich theming (11 themes, auto light/dark), sounds, onboarding.
 - A plugin system with event hooks and link handlers.
-- Git worktree workspace UX: keybindings, sidebar grouping, and worktree events for plugins (par-mux has the control commands and grouping, no TUI surface yet).
+- Git worktree workspace UX: keybindings and worktree events for plugins (par-mux has the control commands, side-panel grouping, and the workspace menu's `close group`, but no worktree create/open/remove chords or dialog).
 - Remote operation: SSH thin client, saved machines, remote scripting without a TUI.
 - Orchestration primitives: a standalone `agent wait`, named agents (`agent start <name>`), and a server-owned wait API (par-mux now has `wait-output`, `agent-start`, and an anti-stall-gated `agent-prompt -w`).
 - Self-update channels and polished installers; native conversation restore across a wider agent set.

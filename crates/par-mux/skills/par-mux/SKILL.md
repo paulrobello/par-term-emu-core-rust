@@ -3,7 +3,7 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
-<!-- PAR_MUX_INTEGRATION_VERSION=3 -->
+<!-- PAR_MUX_INTEGRATION_VERSION=4 -->
 
 # par-mux
 
@@ -122,7 +122,8 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Set a sticky title | `select-pane -t %N -T 'dev server'` (``-T ''`` clears) |
 | Pane geometry | `pane-info -t %N` → `%N @W COLSxROWS`; `resize-pane -t %N -x 80 -y 24` (or `-L\|-R\|-U\|-D [cells]`) |
 | Rename | `rename-workspace -t +N <name>` / `rename-session -t $N <name>` / `rename-window -t @N <name>` |
-| Kill | `kill-pane -t %N` (the last pane of a window closes the window too), `kill-window -t @N`, `kill-session -t $N`, `kill-workspace -t +N` |
+| Kill | `kill-pane -t %N` (the last pane of a window closes the window too), `kill-window -t @N`, `kill-session -t $N`, `kill-workspace -t +N [-g]` (`-g` closes a repo workspace together with its linked worktree workspaces; see below) |
+| Git worktree workspace | `worktree-create -c <repo> -n <branch> [-B base] [-p path] [-s name]` → replies `+N` (checks out or creates the branch in a new worktree, opens it as a workspace grouped under the repo's); `worktree-open -c <checkout>` (focuses it if already open); `worktree-remove -t +N [-f]`; `list-worktrees` |
 | Paste buffer | `set-buffer <text>` / `show-buffer` / `paste-buffer -t %N` |
 | Notify the user | `show-notification [-b body] [--] <title>` — delivered by every attached TUI through its own notify-delivery channel (toast, OSC 9/99, or OS notifier) |
 | Session env | `set-environment -t $N KEY VALUE` (applies to panes spawned *after*) |
@@ -135,6 +136,37 @@ most-recently-created session. Quoted values (names, titles, `-c` dirs, env
 values) may contain spaces; everything else is whitespace-split. A pane whose
 child exited on its own is HELD with its exit code (when `[daemon]
 remain-on-exit` is on) — `respawn-pane` restarts it in place.
+
+## Git worktree workspaces
+
+Give each parallel task its own git worktree and workspace. The daemon runs
+git itself, so paths must be absolute or `~/`-relative (the daemon's cwd is
+not yours):
+
+```sh
+par-mux --cmd "worktree-create -c ~/Repos/app -n feat/login"   # +3; opens repo workspace "app" (+2) if needed
+par-mux --cmd list-worktrees
+# +2 repo - main /Users/me/Repos/app
+# +3 worktree +2 feat/login /Users/me/Repos/app-worktrees/feat-login
+par-mux --cmd "worktree-remove -t +3"      # git worktree remove + close the workspace
+par-mux --cmd "kill-workspace -t +2 -g"    # close app and every linked worktree workspace
+```
+
+- `list-worktrees` rows are `+N <repo|worktree> <parent|-> <branch|-> <checkout>`.
+  `parent` is the open repo workspace a worktree is grouped under. The
+  checkout path is the rest of the line, so it may contain spaces.
+- New checkouts default to `<repo-parent>/<repo>-worktrees/<branch-slug>`;
+  `-p` overrides. An existing local branch is checked out, otherwise it is
+  created from `-B` (default `HEAD`).
+- `kill-workspace -t <repo workspace>` with linked worktrees open is refused:
+  `workspace +2 has linked worktree workspaces (+3); use -g to close the group`.
+  Add `-g` to close them all. A linked worktree workspace closes alone with no
+  flag. Closing never deletes a checkout. Only `worktree-remove` does.
+- `worktree-remove` refuses a dirty checkout (modified or untracked files) or a
+  workspace with any agent pane (any `list-agents` row, `idle` included)
+  unless `-f`. It refuses a repo workspace. git runs first, so a refusal leaves
+  everything open.
+- `--cmd` allows `worktree-create`/`worktree-remove` 10 minutes to reply.
 
 ## The two gotchas
 

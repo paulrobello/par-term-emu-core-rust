@@ -334,6 +334,7 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// window @N <*|-> <name>
 /// pane %N [<title>]
 /// agent %N <agent> <state> <source> [key=value…]
+/// worktree +W <repo|worktree> <+P|-> <branch|-> <checkout>
 /// ```
 ///
 /// `workspace` rows in id order (`*` = the daemon's active workspace);
@@ -341,7 +342,8 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// window); `window` rows are the owner's windows (`*` = its active
 /// window); `pane` rows follow `Window::panes()` with every `\r`/`\n` in
 /// the title turned into a space; `agent` rows are exactly the
-/// `list-agents` rows. Additive rule: clients ignore unknown row kinds and
+/// `list-agents` rows; `worktree` rows are exactly the `list-worktrees`
+/// rows (the side panel's grouping). Additive rule: clients ignore unknown row kinds and
 /// trailing `key=value` tokens; a positional change bumps the version.
 pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
     let guard = ctx.tree.lock();
@@ -398,6 +400,11 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
         roster_rows(&guard)
             .into_iter()
             .map(|row| format!("agent {row}")),
+    );
+    lines.extend(
+        super::worktrees::worktree_rows(&guard)
+            .into_iter()
+            .map(|row| format!("worktree {row}")),
     );
     Outcome::ok(ctx, &lines.join("\n"))
 }

@@ -24,7 +24,7 @@
 
 use super::conn::AttachConn;
 use super::spell_key;
-use crate::mux::ipc::{AgentRow, WindowRow};
+use crate::mux::ipc::{AgentRow, WindowRow, WorktreeRow};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -102,6 +102,7 @@ struct StatusFacts {
     pane_title: Option<String>,
     pane_titles: Option<Vec<(u32, String)>>,
     agents: Option<Vec<RosterEntry>>,
+    worktrees: Option<Vec<WorktreeRow>>,
 }
 
 impl StatusFacts {
@@ -217,6 +218,10 @@ pub(crate) struct StatusState {
     /// The agent roster, pane-id order (the order `list-agents` sorts
     /// by), so a payload patch keeps it.
     agents: Vec<RosterEntry>,
+    /// The worktree-backed workspaces (`list-worktrees`' rows, from the
+    /// last `client-snapshot`; empty on the legacy query path) — the side
+    /// panel groups linked worktree workspaces under their repo's.
+    worktrees: Vec<WorktreeRow>,
 }
 
 /// One agent-roster row the client knows (ARC-140).
@@ -325,6 +330,7 @@ impl StatusState {
             pane_title,
             pane_titles,
             agents,
+            worktrees,
         } = facts;
         let triple = workspaces.clone();
         if let Some(parsed) = workspaces {
@@ -361,6 +367,9 @@ impl StatusState {
         }
         if let Some(agents) = agents {
             self.agents = agents;
+        }
+        if let Some(worktrees) = worktrees {
+            self.worktrees = worktrees;
         }
         triple
     }
@@ -441,6 +450,11 @@ impl StatusState {
                         }
                     }
                 }
+                "worktree" => {
+                    if let Some(row) = WorktreeRow::parse(rest) {
+                        facts.worktrees.get_or_insert_with(Vec::new).push(row);
+                    }
+                }
                 _ => {}
             }
         }
@@ -457,6 +471,7 @@ impl StatusState {
         facts.windows.get_or_insert_with(Vec::new);
         facts.pane_titles.get_or_insert_with(Vec::new);
         facts.agents.get_or_insert_with(Vec::new);
+        facts.worktrees.get_or_insert_with(Vec::new);
         Ok(self.commit(facts).unwrap_or_default())
     }
 
@@ -586,6 +601,12 @@ impl StatusState {
         &self.workspaces
     }
 
+    /// The worktree-backed workspaces the last snapshot reported, id
+    /// order — the side panel's grouping source.
+    pub(crate) fn worktrees(&self) -> &[WorktreeRow] {
+        &self.worktrees
+    }
+
     /// The focused pane's user title (the rename-pane prompt's seed).
     pub(crate) fn pane_title(&self) -> &str {
         &self.pane_title
@@ -678,6 +699,12 @@ impl StatusState {
         for entry in &mut self.agents {
             entry.project = Some(project.to_string());
         }
+    }
+
+    /// Apply a `client-snapshot` body (test seam for the render session).
+    #[cfg(test)]
+    pub(crate) fn apply_snapshot_for_test(&mut self, body: &[String]) {
+        self.apply_snapshot(body).expect("snapshot applies");
     }
 
     /// Patch a window's tab name from a `%window-renamed` payload. A
@@ -979,6 +1006,7 @@ mod tests {
                 kimi.message = Some("wait".to_string());
                 kimi
             }],
+            worktrees: Vec::new(),
         }
     }
 

@@ -140,6 +140,20 @@ fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
             checkout.display()
         )
     );
+    // client-snapshot carries the same rows, `worktree `-prefixed, after
+    // its agent rows: the side panel's grouping source.
+    let first_pane = h.spawns.0.lock()[0].0;
+    let window = h.tree.lock().window_of_pane(first_pane).unwrap();
+    let snapshot = h.ok(&format!("client-snapshot -t {window}"));
+    let worktree_rows: Vec<&str> = snapshot
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .collect();
+    assert_eq!(worktree_rows.join("\n"), list);
+    assert!(
+        snapshot.lines().last().unwrap().starts_with("worktree "),
+        "new row kinds append: {snapshot}"
+    );
 
     // A second create reuses the open repo workspace.
     let second =

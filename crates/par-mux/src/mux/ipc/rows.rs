@@ -140,6 +140,73 @@ impl WorkspaceRow {
     }
 }
 
+/// One `list-worktrees` row (also `client-snapshot`'s `worktree` row):
+/// `+N <kind> <parent> <branch> <checkout>`. `kind` is `repo` or
+/// `worktree`; `parent` the open repo workspace a worktree is grouped
+/// under (`-` for a repo row or when none is open); `branch` `-` for a
+/// detached HEAD. The checkout is the line remainder, so spaces survive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeRow {
+    /// The workspace id, `+N`.
+    pub id: String,
+    /// Whether this is a linked worktree workspace (`worktree`) rather
+    /// than the repo's main-checkout workspace (`repo`).
+    pub linked: bool,
+    /// The repo workspace this worktree groups under, if one is open.
+    pub parent: Option<String>,
+    /// The checked-out branch; `None` for a detached HEAD.
+    pub branch: Option<String>,
+    /// The checkout path.
+    pub checkout: String,
+}
+
+impl fmt::Display for WorktreeRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {} {} {}",
+            self.id,
+            if self.linked { "worktree" } else { "repo" },
+            self.parent.as_deref().unwrap_or("-"),
+            self.branch.as_deref().unwrap_or("-"),
+            self.checkout
+        )
+    }
+}
+
+impl WorktreeRow {
+    /// Parse one row; `None` when the id is not `+N`, the kind unknown,
+    /// the parent neither `+N` nor `-`, or a field is missing.
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut fields = line.splitn(5, ' ');
+        let id = fields.next()?;
+        let kind = fields.next()?;
+        let parent = fields.next()?;
+        let branch = fields.next()?;
+        let checkout = fields.next()?;
+        if !is_typed_id(id, '+') || checkout.is_empty() || branch.is_empty() {
+            return None;
+        }
+        let linked = match kind {
+            "worktree" => true,
+            "repo" => false,
+            _ => return None,
+        };
+        let parent = match parent {
+            "-" => None,
+            p if is_typed_id(p, '+') => Some(p.to_string()),
+            _ => return None,
+        };
+        Some(Self {
+            id: id.to_string(),
+            linked,
+            parent,
+            branch: (branch != "-").then(|| branch.to_string()),
+            checkout: checkout.to_string(),
+        })
+    }
+}
+
 /// One `list-agents` roster row: `%N <agent> <state> <source>` then zero
 /// or more whitespace-free `key=value` tokens (`reason=`, `telemetry=`,
 /// `host_telemetry=`, `ws=<+N>`), kept in wire order — unknown keys are
@@ -268,6 +335,13 @@ pub fn assert_round_trip(line: &str) {
             WorkspaceRow::parse(&row.to_string()),
             Some(row),
             "workspace: {line:?}"
+        );
+    }
+    if let Some(row) = WorktreeRow::parse(line) {
+        assert_eq!(
+            WorktreeRow::parse(&row.to_string()),
+            Some(row),
+            "worktree: {line:?}"
         );
     }
     if let Some(row) = AgentRow::parse(line) {
@@ -530,6 +604,43 @@ mod tests {
             assert_eq!(WorkspaceRow::parse(&row.to_string()), Some(row));
         }
         assert_eq!(WorkspaceRow::parse("$0: work"), None);
+    }
+
+    #[test]
+    fn worktree_row_round_trips() {
+        let rows = [
+            WorktreeRow {
+                id: "+2".to_string(),
+                linked: false,
+                parent: None,
+                branch: Some("main".to_string()),
+                checkout: "/r/app".to_string(),
+            },
+            WorktreeRow {
+                id: "+3".to_string(),
+                linked: true,
+                parent: Some("+2".to_string()),
+                branch: Some("feat/login".to_string()),
+                checkout: "/r/app worktrees/feat-login".to_string(),
+            },
+            WorktreeRow {
+                id: "+4".to_string(),
+                linked: true,
+                parent: None,
+                branch: None,
+                checkout: "/r/x".to_string(),
+            },
+        ];
+        for row in rows {
+            assert_eq!(WorktreeRow::parse(&row.to_string()), Some(row));
+        }
+        assert_eq!(
+            WorktreeRow::parse("+3 worktree +2 feat /r/a").map(|r| r.parent),
+            Some(Some("+2".to_string()))
+        );
+        assert_eq!(WorktreeRow::parse("+3 other +2 feat /r/a"), None);
+        assert_eq!(WorktreeRow::parse("+3 worktree %2 feat /r/a"), None);
+        assert_eq!(WorktreeRow::parse("+3 worktree +2 feat"), None);
     }
 
     #[test]

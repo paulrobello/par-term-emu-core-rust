@@ -265,6 +265,90 @@ fn status_style(status: AgentStatus) -> RtStyle {
     }
 }
 
+/// Group the workspace area's linked worktree workspaces under their
+/// repo workspace's row (herdr's indented group children): each child
+/// follows its parent in id order, labelled `├─ `/`└─ ` and with the
+/// parent's `<name>/` prefix dropped, so the default `<repo>/<branch>`
+/// name reads as the branch. `worktrees` is `list-worktrees`' facts
+/// (the daemon's `parent` column), never re-derived here; a child whose
+/// repo workspace is not open keeps its id-order place, unprefixed.
+pub(super) fn group_worktree_rows(
+    sections: &mut [SidebarSection],
+    worktrees: &[crate::mux::ipc::WorktreeRow],
+) {
+    let Some(section) = sections.iter_mut().find(|s| s.title == "workspaces") else {
+        return;
+    };
+    let parent_of = |id: &str| {
+        worktrees
+            .iter()
+            .find(|row| row.linked && row.id == id)
+            .and_then(|row| row.parent.clone())
+    };
+    let ids: Vec<String> = section
+        .rows
+        .iter()
+        .filter_map(|row| match &row.id {
+            SidebarRowId::Workspace(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    // A child groups only under a parent row the panel actually shows.
+    let grouped = |id: &str| parent_of(id).filter(|parent| ids.contains(parent));
+    if !ids.iter().any(|id| grouped(id).is_some()) {
+        return;
+    }
+    let mut rows: Vec<Option<SidebarRow>> = std::mem::take(&mut section.rows)
+        .into_iter()
+        .map(Some)
+        .collect();
+    let mut out = Vec::with_capacity(rows.len());
+    for i in 0..rows.len() {
+        let Some(row) = rows[i].take() else {
+            continue;
+        };
+        let SidebarRowId::Workspace(id) = &row.id else {
+            out.push(row);
+            continue;
+        };
+        if grouped(id).is_some() {
+            // Its parent's row emits it, wherever the parent sorts.
+            rows[i] = Some(row);
+            continue;
+        }
+        let parent_name = row.label.clone();
+        let parent_id = id.clone();
+        out.push(row);
+        let children: Vec<usize> = (0..rows.len())
+            .filter(|&j| {
+                rows[j].as_ref().is_some_and(|child| match &child.id {
+                    SidebarRowId::Workspace(cid) => {
+                        grouped(cid).as_deref() == Some(parent_id.as_str())
+                    }
+                    _ => false,
+                })
+            })
+            .collect();
+        let last = children.len().saturating_sub(1);
+        for (n, j) in children.into_iter().enumerate() {
+            let Some(mut child) = rows[j].take() else {
+                continue;
+            };
+            let branch = child
+                .label
+                .strip_prefix(&format!("{parent_name}/"))
+                .filter(|rest| !rest.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| child.label.clone());
+            let glyph = if n == last { "└─" } else { "├─" };
+            child.label = format!("{glyph} {branch}");
+            out.push(child);
+        }
+    }
+    out.extend(rows.into_iter().flatten());
+    section.rows = out;
+}
+
 /// A sidebar drag in flight: the width handle on the strip's right
 /// edge, or the split rule between the areas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,14 +597,24 @@ impl WindowSession {
         if !self.sidebar.is_on() {
             return;
         }
+        self.install_panel_sections(roster);
+    }
+
+    /// The one builder every panel refresh goes through: the sections
+    /// from `roster` and the cached agent roster, with linked worktree
+    /// workspaces grouped under their repo's ([`group_worktree_rows`]).
+    pub(super) fn install_panel_sections(&mut self, roster: &[(String, String, bool)]) {
         let focused = self.renderer.focused();
-        let sections = Self::sidebar_sections(
+        let mut sections = Self::sidebar_sections(
             roster,
             self.status.agents(),
             self.status.workspaces(),
             focused,
             &self.agent_rows,
         );
+        if let Some(sections) = sections.as_mut() {
+            group_worktree_rows(sections, self.status.worktrees());
+        }
         self.renderer.set_sidebar_sections(sections);
     }
 
@@ -545,15 +639,7 @@ impl WindowSession {
             .iter()
             .map(|(id, name)| (id.clone(), name.clone(), Some(id.as_str()) == active))
             .collect();
-        let focused = self.renderer.focused();
-        let sections = Self::sidebar_sections(
-            &roster,
-            self.status.agents(),
-            self.status.workspaces(),
-            focused,
-            &self.agent_rows,
-        );
-        self.renderer.set_sidebar_sections(sections);
+        self.install_panel_sections(&roster);
     }
 
     /// The panel's sections: the workspace rows (`roster` is `(id, name,

@@ -790,6 +790,10 @@ struct WindowSession {
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
     detach_requested: bool,
+    /// A workspace-menu close the daemon refused for its linked worktree
+    /// workspaces: until it lapses, that workspace's menu offers
+    /// `close group`, which sends `kill-workspace -g`.
+    group_close: Option<GroupCloseArm>,
     /// When the frame hold started (step 9's coalescing window): a push
     /// burst still streaming must not frame a partial state and re-frame
     /// a millisecond later — the whole-screen flash-and-repaint of the
@@ -863,7 +867,21 @@ enum MenuAction {
     Settings,
     ReloadConfig,
     Detach,
+    /// The armed group close: `kill-workspace -g` (see [`GroupCloseArm`]).
+    CloseGroup,
 }
+
+/// A refused workspace close's offer: the repo workspace, the linked
+/// worktree workspaces the refusal named, and when the offer lapses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GroupCloseArm {
+    workspace: String,
+    members: Vec<String>,
+    until: std::time::Instant,
+}
+
+/// How long a refused workspace close keeps offering `close group`.
+const GROUP_CLOSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The open menu's state: its target plus the action dispatched per
 /// overlay row (the parallel mapping `compose_menu_panel` returns; row
@@ -1065,6 +1083,7 @@ impl WindowSession {
             pointer: pointer::PointerState::default(),
             project_poll: std::time::Instant::now(),
             detach_requested: false,
+            group_close: None,
             frame_hold_since: None,
             pending_end: false,
             geometry,

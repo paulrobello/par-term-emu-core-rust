@@ -1038,6 +1038,115 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
     assert_eq!(session.window, "@0");
 }
 
+/// A repo workspace with linked worktree workspaces: the menu's close
+/// is refused by the group rule, so the client flashes the linked count
+/// and the `-g` remedy instead of silently doing nothing, and the
+/// workspace's next menu offers `close group`, which sends
+/// `kill-workspace -g` — landing on a survivor when the view's session
+/// lived in a linked member.
+#[test]
+fn refused_workspace_close_flashes_and_arms_the_group_close() {
+    let refusal = "workspace +0 has linked worktree workspaces (+1, +2); use -g to close the group";
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-sessions -t +0".to_string(),
+        "+0: app: $9: main".to_string(),
+    );
+    replies.insert("kill-workspace -t +0".to_string(), refusal.to_string());
+    replies.insert(
+        "list-sessions".to_string(),
+        "+0: app: $9: main\n+2: app/feat: $0: work\n+3: other: $4: misc".to_string(),
+    );
+    replies.insert(
+        "list-workspaces".to_string(),
+        "+3: other active".to_string(),
+    );
+    let failing = std::collections::HashSet::from(["kill-workspace -t +0".to_string()]);
+    let (rx, mut conn, mut session) = two_pane_session(
+        "closews-group",
+        FakeScript {
+            replies,
+            failing,
+            ..FakeScript::default()
+        },
+    );
+    session.status_dirty = false;
+    session.open_menu(MenuTarget::Workspace("+0".to_string()));
+    assert_eq!(overlay_text(&session)[2].trim(), "close");
+    session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec![
+            "list-sessions -t +0".to_string(),
+            "kill-workspace -t +0".to_string()
+        ],
+        "a refused close lands nowhere"
+    );
+    let flash = session.chrome.flash_text().expect("the refusal flashes");
+    assert!(
+        flash.contains("2 linked worktrees") && flash.contains("-g"),
+        "{flash}"
+    );
+    assert!(!session.status_dirty, "nothing closed");
+
+    // The same workspace's menu now offers the group close in place.
+    session.open_menu(MenuTarget::Workspace("+0".to_string()));
+    assert_eq!(overlay_text(&session)[2].trim(), "close group");
+    assert_eq!(
+        session.menu().expect("menu up").actions[2],
+        Some(MenuAction::CloseGroup)
+    );
+    // The offer lapsing while the menu is up never relabels a row that
+    // still dispatches the group close.
+    let until = session.group_close.as_ref().expect("armed").until;
+    session.group_close.as_mut().expect("armed").until = std::time::Instant::now();
+    session.repaint_menu();
+    assert_eq!(overlay_text(&session)[2].trim(), "close group");
+    session.group_close.as_mut().expect("armed").until = until;
+    // Another workspace's menu keeps the plain close.
+    session.leave_menu();
+    session.open_menu(MenuTarget::Workspace("+3".to_string()));
+    assert_eq!(overlay_text(&session)[2].trim(), "close");
+    session.leave_menu();
+
+    session.open_menu(MenuTarget::Workspace("+0".to_string()));
+    session.menu_click(&mut conn, 2);
+    settle(&mut session, &mut conn);
+    let lines = drained(&rx);
+    assert_eq!(
+        lines[..4].to_vec(),
+        vec![
+            "list-sessions",
+            "kill-workspace -t +0 -g",
+            "list-workspaces",
+            "select-workspace -t +3",
+        ],
+        "the view's session lived in linked member +2, so the group close lands"
+    );
+    assert!(session.group_close.is_none(), "the offer is spent");
+}
+
+/// The group refusal's member list parses out of the daemon's error
+/// text; any other reply is not a group refusal.
+#[test]
+fn group_refusal_parses_only_the_group_rule() {
+    assert_eq!(
+        crate::mux::attach::render::modal_menu::parse_group_refusal(
+            "workspace +0 has linked worktree workspaces (+4); use -g to close the group"
+        ),
+        Some(vec!["+4".to_string()])
+    );
+    assert_eq!(
+        crate::mux::attach::render::modal_menu::parse_group_refusal("no such workspace: +9"),
+        None
+    );
+    assert_eq!(
+        crate::mux::attach::render::modal_menu::group_refusal_flash("app", 1),
+        "app: 1 linked worktree - menu 'close group' sends -g"
+    );
+}
+
 /// The workspace menu's `respawn on exit` row sends the toggle and
 /// flashes the state the daemon replies.
 #[test]

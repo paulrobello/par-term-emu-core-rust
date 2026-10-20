@@ -19,7 +19,8 @@ fn session_height_carves_the_strip_and_status_out() {
 /// menus' vocabularies differ in the third action only.
 #[test]
 fn compose_menu_panel_maps_rows_to_actions() {
-    let (rows, mapping) = compose_menu_panel(&MenuTarget::Tab("@1".to_string()), Some("vim"));
+    let (rows, mapping) =
+        compose_menu_panel(&MenuTarget::Tab("@1".to_string()), Some("vim"), false);
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
     assert_eq!(rows[0].text, " vim ", "the header carries the name");
     assert_eq!(mapping[0], None, "the header consumes its clicks");
@@ -31,8 +32,11 @@ fn compose_menu_panel_maps_rows_to_actions() {
     assert_eq!(rows[3].text, " add tab ");
     assert_eq!(mapping[4], None, "the footer consumes its clicks");
 
-    let (_, ws_mapping) =
-        compose_menu_panel(&MenuTarget::Workspace("+0".to_string()), Some("main"));
+    let (_, ws_mapping) = compose_menu_panel(
+        &MenuTarget::Workspace("+0".to_string()),
+        Some("main"),
+        false,
+    );
     assert_eq!(
         ws_mapping,
         vec![
@@ -1847,7 +1851,7 @@ fn panel_up_menu_click_maps_raw_host_columns() {
 /// keybinds, reload config, detach), the footer.
 #[test]
 fn compose_command_menu_maps_rows_to_actions() {
-    let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, None);
+    let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, None, false);
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
     assert_eq!(rows[0].text, " settings ");
     assert_eq!(rows[1].text, " keybinds ");
@@ -3204,6 +3208,85 @@ fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) ->
         project: None,
         message: None,
     }
+}
+
+/// The workspace rows' `(id, label)` pairs, in panel order.
+fn workspace_area(session: &WindowSession) -> Vec<(String, String)> {
+    let sections = session.renderer.sidebar_sections.clone().expect("sections");
+    sections
+        .iter()
+        .find(|s| s.title == "workspaces")
+        .expect("workspace area")
+        .rows
+        .iter()
+        .filter_map(|row| match &row.id {
+            SidebarRowId::Workspace(id) => Some((id.clone(), row.label.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Linked worktree workspaces group under their repo workspace's row
+/// (herdr's indented children): each follows its parent, tree-prefixed
+/// and labelled by branch; the grouping comes from the snapshot's
+/// `worktree` rows (`list-worktrees`' facts) and survives the agent
+/// notification's no-round-trip rebuild. A worktree whose repo
+/// workspace is closed (`parent` `-`) keeps its id-order place.
+#[test]
+fn sidebar_groups_worktree_workspaces_under_their_repo() {
+    let lines = |body: &[&str]| body.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    let mut session = snapshot_session();
+    session.status.apply_snapshot_for_test(&lines(&[
+        "snapshot 1",
+        "workspace +0 * app",
+        "workspace +1 - notes",
+        "workspace +2 - app/feat/login",
+        "workspace +3 - app/fix",
+        "workspace +4 - lone/wip",
+        "session $0 * +0 main",
+        "window @0 * 1",
+        "worktree +0 repo - main /r/app",
+        "worktree +2 worktree +0 feat/login /r/app-worktrees/feat-login",
+        "worktree +3 worktree +0 fix /r/app-worktrees/fix",
+        "worktree +4 worktree - wip /r/lone-worktrees/wip",
+    ]));
+    session.rebuild_agent_section();
+    let want = vec![
+        ("+0".to_string(), "app".to_string()),
+        ("+2".to_string(), "├─ feat/login".to_string()),
+        ("+3".to_string(), "└─ fix".to_string()),
+        ("+1".to_string(), "notes".to_string()),
+        ("+4".to_string(), "lone/wip".to_string()),
+    ];
+    assert_eq!(workspace_area(&session), want);
+
+    // The full refresh path builds through the same helper.
+    let roster: Vec<(String, String, bool)> = session
+        .status
+        .workspaces()
+        .iter()
+        .map(|(id, name)| (id.clone(), name.clone(), id == "+0"))
+        .collect();
+    session.renderer.set_sidebar_sections(None);
+    session.install_panel_sections(&roster);
+    assert_eq!(workspace_area(&session), want);
+
+    // A snapshot without worktree rows ungroups.
+    session.status.apply_snapshot_for_test(&lines(&[
+        "snapshot 1",
+        "workspace +0 * app",
+        "workspace +2 - app/feat/login",
+        "session $0 * +0 main",
+        "window @0 * 1",
+    ]));
+    session.rebuild_agent_section();
+    assert_eq!(
+        workspace_area(&session),
+        vec![
+            ("+0".to_string(), "app".to_string()),
+            ("+2".to_string(), "app/feat/login".to_string()),
+        ]
+    );
 }
 
 /// A three-pane render session showing `@0` with the side panel up.

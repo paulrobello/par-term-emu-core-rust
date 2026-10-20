@@ -394,15 +394,7 @@ impl WindowSession {
         let rows = self.status.refresh(conn, &self.window, focused)?;
         if self.sidebar.is_on() {
             if let Some(roster) = rows.workspaces {
-                let focused = self.renderer.focused();
-                let sections = Self::sidebar_sections(
-                    &roster,
-                    self.status.agents(),
-                    self.status.workspaces(),
-                    focused,
-                    &self.agent_rows,
-                );
-                self.renderer.set_sidebar_sections(sections);
+                self.install_panel_sections(&roster);
             }
         }
         self.refresh_pane_titles(conn)

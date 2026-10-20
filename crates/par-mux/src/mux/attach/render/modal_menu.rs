@@ -2,9 +2,13 @@
 //! actions), open/leave, keys and bytes, click dispatch, and the
 //! window/workspace close actions the menu rows trigger.
 
-use super::{MenuAction, MenuState, MenuTarget, Modal, PromptTarget, WindowSession};
+use super::{
+    GroupCloseArm, MenuAction, MenuState, MenuTarget, Modal, PromptTarget, WindowSession,
+    GROUP_CLOSE_WINDOW,
+};
 use crate::mux::attach::panels::HelpRow;
-use crate::mux::attach::targets::{active_window_row, parse_session_line, parse_workspace_line};
+use crate::mux::attach::targets::{active_window_row, parse_workspace_line};
+use crate::mux::ipc::SessionRow;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The context menus' footer controls line.
@@ -18,19 +22,27 @@ pub(super) const MENU_TITLE: &str = " menu ";
 /// [`compose_prompt_panel`]'s row/footer shape. Returns the panel rows
 /// AND the action per row (`None` for the header and footer) — the
 /// click dispatch's pure mapping, so what a click highlights is exactly
-/// what painted there.
+/// what painted there. `group_armed` swaps the workspace menu's `close`
+/// for `close group` in the same row (a refused close armed it).
 pub(super) fn compose_menu_panel(
     target: &MenuTarget,
     name: Option<&str>,
+    group_armed: bool,
 ) -> (Vec<HelpRow>, Vec<Option<MenuAction>>) {
+    let close = if group_armed {
+        MenuAction::CloseGroup
+    } else {
+        MenuAction::Close
+    };
+    let ws_actions = [
+        MenuAction::Rename,
+        close,
+        MenuAction::NewWorkspace,
+        MenuAction::RespawnToggle,
+    ];
     let actions: &[MenuAction] = match target {
         MenuTarget::Tab(_) => &[MenuAction::Rename, MenuAction::Close, MenuAction::AddTab],
-        MenuTarget::Workspace(_) => &[
-            MenuAction::Rename,
-            MenuAction::Close,
-            MenuAction::NewWorkspace,
-            MenuAction::RespawnToggle,
-        ],
+        MenuTarget::Workspace(_) => &ws_actions,
         MenuTarget::Commands => &[
             MenuAction::Settings,
             MenuAction::Keybinds,
@@ -40,6 +52,9 @@ pub(super) fn compose_menu_panel(
     };
     let labels: &[&str] = match target {
         MenuTarget::Tab(_) => &["rename", "close", "add tab"],
+        MenuTarget::Workspace(_) if group_armed => {
+            &["rename", "close group", "new", "respawn on exit"]
+        }
         MenuTarget::Workspace(_) => &["rename", "close", "new", "respawn on exit"],
         MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
     };
@@ -94,13 +109,24 @@ impl WindowSession {
             MenuTarget::Commands => None,
         }
     }
+    /// Whether `target` is the workspace an unexpired refused close armed
+    /// for `close group`.
+    fn group_close_armed(&self, target: &MenuTarget) -> bool {
+        match (target, &self.group_close) {
+            (MenuTarget::Workspace(id), Some(arm)) => {
+                arm.workspace == *id && std::time::Instant::now() < arm.until
+            }
+            _ => false,
+        }
+    }
     /// Open the context menu for `target`: the tab menu (right-press on
     /// a tab), the workspace menu (a right-press on a workspace row), or
     /// the command menu (the panel's ` menu ` chip). The overlay rides
     /// the same modal machinery the picker uses.
     pub(super) fn open_menu(&mut self, target: MenuTarget) {
         let name = self.menu_name(&target);
-        let (rows, actions) = compose_menu_panel(&target, name.as_deref());
+        let armed = self.group_close_armed(&target);
+        let (rows, actions) = compose_menu_panel(&target, name.as_deref(), armed);
         self.open_modal(Modal::Menu(MenuState {
             target,
             actions,
@@ -135,13 +161,19 @@ impl WindowSession {
     /// Recompose the open menu's overlay rows with the current hover
     /// highlight. The highlight spans the hovered row's own label, not
     /// the panel width — the subtle cue, distinct from a selection.
-    fn repaint_menu(&mut self) {
-        let (target, hover) = match &self.modal {
-            Modal::Menu(state) => (state.target.clone(), state.hover),
+    pub(super) fn repaint_menu(&mut self) {
+        // The label follows the click mapping fixed at open, not the
+        // clock, so a row that still dispatches `close group` says so.
+        let (target, hover, armed) = match &self.modal {
+            Modal::Menu(state) => (
+                state.target.clone(),
+                state.hover,
+                state.actions.contains(&Some(MenuAction::CloseGroup)),
+            ),
             _ => return,
         };
         let name = self.menu_name(&target);
-        let (rows, _actions) = compose_menu_panel(&target, name.as_deref());
+        let (rows, _actions) = compose_menu_panel(&target, name.as_deref(), armed);
         let highlights = match hover
             .and_then(|row| rows.get(row).map(|label| (row, label.text.chars().count())))
         {
@@ -192,6 +224,9 @@ impl WindowSession {
         };
         let target = state.target.clone();
         self.leave_menu();
+        // Any menu action spends the offer: a stale arm must never
+        // group-close by surprise.
+        let arm = self.group_close.take();
         match (target, action) {
             (MenuTarget::Tab(window), MenuAction::Rename) => {
                 self.enter_prompt(PromptTarget::Window(window));
@@ -209,7 +244,14 @@ impl WindowSession {
                 self.enter_prompt(PromptTarget::NewWorkspace);
             }
             (MenuTarget::Workspace(workspace), MenuAction::Close) => {
-                self.close_workspace_from_menu(conn, &workspace);
+                self.close_workspace_from_menu(conn, &workspace, None);
+            }
+            (MenuTarget::Workspace(workspace), MenuAction::CloseGroup) => {
+                let members = arm
+                    .filter(|arm| arm.workspace == workspace)
+                    .map(|arm| arm.members)
+                    .unwrap_or_default();
+                self.close_workspace_from_menu(conn, &workspace, Some(members));
             }
             (MenuTarget::Workspace(workspace), MenuAction::RespawnToggle) => {
                 self.toggle_workspace_respawn(conn, &workspace);
@@ -294,77 +336,147 @@ impl WindowSession {
             },
         );
     }
-    /// The workspace menu's close: `kill-workspace -t {id}`; when the
-    /// killed workspace was the SHOWN one (the view's session lives in
-    /// it), land on the first surviving workspace through the
-    /// select+land contract — none remaining ends the view cleanly
-    /// (the daemon kills the session, the refresh's SessionGone fires).
-    /// Any other target just marks the status stale.
+    /// The workspace menu's close: `kill-workspace -t {id}` (with `-g`
+    /// when `group` carries the armed offer's linked members); when the
+    /// killed workspace — or, for a group, any member — held the view's
+    /// session, land on the first surviving workspace through the
+    /// select+land contract; none remaining ends the view cleanly (the
+    /// daemon kills the session, the refresh's SessionGone fires). Any
+    /// other target just marks the status stale. A refusal flashes its
+    /// reason ([`Self::workspace_close_refused`]).
     pub(super) fn close_workspace_from_menu(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         workspace: &str,
+        group: Option<Vec<String>>,
     ) {
-        // Was the view's session inside this workspace?
         let workspace = workspace.to_string();
+        let grouped = group.is_some();
+        let mut closing = group.unwrap_or_default();
+        closing.push(workspace.clone());
         match self.status.session_id.clone() {
             Some(session) => {
-                self.send_then(
-                    conn,
-                    &format!("list-sessions -t {workspace}"),
-                    move |s, c, listed| {
-                        let shown = listed.ok
-                            && listed
-                                .body
-                                .iter()
-                                .filter_map(|l| parse_session_line(l))
-                                .any(|(sid, _)| sid == session);
-                        s.kill_workspace_then_land(c, &workspace, shown);
-                    },
-                );
+                // A group's view may sit in a linked member, so the group
+                // close lists every session and matches the owner's
+                // workspace against the whole group.
+                let query = if grouped {
+                    "list-sessions".to_string()
+                } else {
+                    format!("list-sessions -t {workspace}")
+                };
+                self.send_then(conn, &query, move |s, c, listed| {
+                    let shown = listed.ok
+                        && listed
+                            .body
+                            .iter()
+                            .filter_map(|l| SessionRow::parse(l))
+                            .any(|row| {
+                                row.id == session
+                                    && (!grouped
+                                        || row
+                                            .workspace
+                                            .as_ref()
+                                            .is_some_and(|(ws, _)| closing.contains(ws)))
+                            });
+                    s.kill_workspace_then_land(c, &workspace, grouped, shown);
+                });
             }
-            None => self.kill_workspace_then_land(conn, &workspace, false),
+            None => self.kill_workspace_then_land(conn, &workspace, grouped, false),
         }
     }
     fn kill_workspace_then_land(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         workspace: &str,
+        group: bool,
         shown: bool,
     ) {
-        // In-order daemon: the list-workspaces below observes the kill.
-        if conn
-            .send_forget(&format!("kill-workspace -t {workspace}"))
-            .is_err()
-        {
-            return;
-        }
-        if !shown {
-            self.status_dirty = true;
-            return;
-        }
-        self.send_then(conn, "list-workspaces", |s, c, reply| {
+        let command = if group {
+            format!("kill-workspace -t {workspace} -g")
+        } else {
+            format!("kill-workspace -t {workspace}")
+        };
+        let workspace = workspace.to_string();
+        self.send_then(conn, &command, move |s, c, reply| {
             if !reply.ok {
+                s.workspace_close_refused(&workspace, &reply.body);
                 return;
             }
-            let survivor = reply
-                .body
-                .iter()
-                .filter_map(|l| parse_workspace_line(l))
-                .map(|(id, _, _)| id)
-                .next();
-            let Some(survivor) = survivor else {
-                // No workspace remains: the view ends cleanly through the
-                // next status refresh.
+            if !shown {
                 s.status_dirty = true;
                 return;
-            };
-            if c.send_forget(&format!("select-workspace -t {survivor}"))
-                .is_err()
-            {
-                return;
             }
-            s.land_on_workspace(c, &survivor);
+            s.send_then(c, "list-workspaces", |s, c, reply| {
+                if !reply.ok {
+                    return;
+                }
+                let survivor = reply
+                    .body
+                    .iter()
+                    .filter_map(|l| parse_workspace_line(l))
+                    .map(|(id, _, _)| id)
+                    .next();
+                let Some(survivor) = survivor else {
+                    // No workspace remains: the view ends cleanly through
+                    // the next status refresh.
+                    s.status_dirty = true;
+                    return;
+                };
+                if c.send_forget(&format!("select-workspace -t {survivor}"))
+                    .is_err()
+                {
+                    return;
+                }
+                s.land_on_workspace(c, &survivor);
+            });
         });
     }
+    /// A refused `kill-workspace`: the group rule's refusal (a repo
+    /// workspace with open linked worktree workspaces) flashes the linked
+    /// count and the `-g` remedy, and arms `close group` in that
+    /// workspace's menu for [`GROUP_CLOSE_WINDOW`]; any other refusal
+    /// flashes the daemon's reason.
+    fn workspace_close_refused(&mut self, workspace: &str, body: &[String]) {
+        let reason = body.first().map(String::as_str).unwrap_or("refused");
+        match parse_group_refusal(reason) {
+            Some(members) => {
+                let name = self
+                    .menu_name(&MenuTarget::Workspace(workspace.to_string()))
+                    .unwrap_or_else(|| workspace.to_string());
+                self.chrome.flash(group_refusal_flash(&name, members.len()));
+                self.group_close = Some(GroupCloseArm {
+                    workspace: workspace.to_string(),
+                    members,
+                    until: std::time::Instant::now() + GROUP_CLOSE_WINDOW,
+                });
+            }
+            None => self.chrome.flash(format!("close: {reason}")),
+        }
+        self.draw_status_row();
+    }
+}
+
+/// The linked worktree workspaces a `kill-workspace` group refusal names
+/// (`workspace +N has linked worktree workspaces (+A, +B); use -g …`);
+/// `None` for any other reply.
+pub(super) fn parse_group_refusal(reason: &str) -> Option<Vec<String>> {
+    let (_, rest) = reason.split_once("has linked worktree workspaces (")?;
+    let (list, tail) = rest.split_once(')')?;
+    if !tail.contains("-g") {
+        return None;
+    }
+    let members: Vec<String> = list
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!members.is_empty()).then_some(members)
+}
+
+/// The status-row flash for a group refusal: the workspace, its linked
+/// worktree count, and the `-g` remedy the menu now offers.
+pub(super) fn group_refusal_flash(name: &str, count: usize) -> String {
+    let noun = if count == 1 { "worktree" } else { "worktrees" };
+    format!("{name}: {count} linked {noun} - menu 'close group' sends -g")
 }
