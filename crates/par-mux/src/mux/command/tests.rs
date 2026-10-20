@@ -1979,7 +1979,15 @@ fn parses_workspace_commands() {
     assert_eq!(
         parse_command("kill-workspace -t dev").unwrap(),
         MuxCommand::KillWorkspace {
-            workspace: Target::Name("dev".to_string())
+            workspace: Target::Name("dev".to_string()),
+            group: false,
+        }
+    );
+    assert_eq!(
+        parse_command("kill-workspace -t +2 -g").unwrap(),
+        MuxCommand::KillWorkspace {
+            workspace: Target::Id(WorkspaceId(2)),
+            group: true,
         }
     );
     // select-workspace requires -t; rename-workspace requires a name.
@@ -2426,4 +2434,48 @@ fn list_commands_parses_the_schema_flag_and_refuses_others() {
     assert!(list_commands_body()
         .lines()
         .any(|line| line == "list-commands schema"));
+}
+#[test]
+fn worktree_commands_parse_quoted_paths_and_flags() {
+    assert_eq!(
+        parse_command("worktree-create -c '/src/my repo' -n feat/x -B main -p /wt/x -s 'my x'")
+            .unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/src/my repo".to_string(),
+            branch: "feat/x".to_string(),
+            base: Some("main".to_string()),
+            path: Some("/wt/x".to_string()),
+            name: Some("my x".to_string()),
+        }
+    );
+    assert!(
+        parse_command("worktree-create -c /src").is_err(),
+        "-n is required"
+    );
+    assert!(
+        parse_command("worktree-create -n x").is_err(),
+        "-c is required"
+    );
+    assert!(parse_command("worktree-create -c /src -n x extra").is_err());
+    assert_eq!(
+        parse_command("worktree-open -c /wt/x").unwrap(),
+        MuxCommand::WorktreeOpen {
+            checkout: "/wt/x".to_string(),
+            name: None,
+        }
+    );
+    assert_eq!(
+        parse_command("worktree-remove -t +3 -f").unwrap(),
+        MuxCommand::WorktreeRemove {
+            workspace: Target::Id(WorkspaceId(3)),
+            force: true,
+        }
+    );
+    assert!(parse_command("worktree-remove").is_err());
+    assert_eq!(
+        parse_command("list-worktrees").unwrap(),
+        MuxCommand::ListWorktrees
+    );
+    assert!(reply_timeout("worktree-create -c /src -n x").is_some());
+    assert!(reply_timeout("worktree-remove -t +1").is_some());
 }

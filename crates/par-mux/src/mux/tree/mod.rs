@@ -4,6 +4,7 @@ mod layout_ops;
 mod lifecycle;
 #[cfg(test)]
 mod tests;
+mod worktrees;
 
 use crate::mux::ids::{AnyTarget, IdAllocator, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::{LayoutTree, PaneChrome, SplitDirection};
@@ -142,6 +143,32 @@ pub struct MuxWorkspace {
     /// place (`respawn-pane` mechanics — same pane id, its stored command
     /// and cwd) instead of holding it dead. Off by default; persisted.
     pub respawn_last: bool,
+    /// The git worktree this workspace is backed by (`worktree-create` /
+    /// `worktree-open`); `None` for an ordinary workspace. Persisted.
+    pub worktree: Option<WorktreeLink>,
+}
+
+/// A workspace's git-worktree backing. Workspaces sharing a [`Self::repo`]
+/// form one group: the repo workspace (checkout == repo) and the linked
+/// worktree workspaces under it. Paths are canonical, so they compare
+/// across spellings of the same directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeLink {
+    /// The repo's main checkout — the group key.
+    pub repo: std::path::PathBuf,
+    /// This workspace's checkout: the main checkout itself for the repo
+    /// workspace, a linked worktree otherwise.
+    pub checkout: std::path::PathBuf,
+    /// The checkout's branch when it was linked; `None` for a detached
+    /// HEAD.
+    pub branch: Option<String>,
+}
+
+impl WorktreeLink {
+    /// Whether this is a linked worktree (not the repo's main checkout).
+    pub fn is_linked(&self) -> bool {
+        self.checkout != self.repo
+    }
 }
 
 /// A pane spawn reserved under the tree lock but not yet run — the first
@@ -949,6 +976,7 @@ impl MuxTree {
                 sessions: Vec::new(),
                 active: 0,
                 respawn_last: false,
+                worktree: None,
             },
         );
         self.active_workspace = Some(id);

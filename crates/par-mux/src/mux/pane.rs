@@ -58,6 +58,9 @@ pub enum MuxError {
     /// The pane has no bordering split of the requested orientation to
     /// adjust.
     PaneNotResizable(PaneId),
+    /// `kill-workspace` without `-g` on a repo workspace that still has
+    /// open linked worktree workspaces (listed).
+    GroupCloseRequired(WorkspaceId, Vec<WorkspaceId>),
 }
 
 impl std::fmt::Display for MuxError {
@@ -118,6 +121,14 @@ impl std::fmt::Display for MuxError {
             }
             MuxError::PaneNotResizable(id) => {
                 write!(f, "pane {id} cannot be resized in that direction")
+            }
+            MuxError::GroupCloseRequired(id, linked) => {
+                let linked: Vec<String> = linked.iter().map(ToString::to_string).collect();
+                write!(
+                    f,
+                    "workspace {id} has linked worktree workspaces ({}); use -g to close the group",
+                    linked.join(", ")
+                )
             }
         }
     }

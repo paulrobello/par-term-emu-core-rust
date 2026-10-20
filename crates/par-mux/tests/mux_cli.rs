@@ -1983,3 +1983,85 @@ fn print_schema_matches_the_daemons_list_commands_j() {
     let served = cmd_ok(fixture.socket(), "list-commands -J");
     assert_eq!(served.trim_end(), printed.stdout.trim_end());
 }
+/// A git command in `dir` isolated from the developer's global config.
+fn test_git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git {args:?}");
+}
+
+/// The worktree commands end to end through `--cmd`: create groups the
+/// worktree under the repo workspace, the group (and the `-g` refusal)
+/// survive a daemon restart, and remove deletes the checkout.
+#[test]
+fn worktree_workspaces_group_and_survive_a_restart() {
+    let fixture = MuxFixture::new("cliwt");
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let socket = fixture.socket();
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    test_git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("f"), "x").unwrap();
+    test_git(&repo, &["add", "f"]);
+    test_git(&repo, &["commit", "-q", "-m", "init"]);
+
+    let linked = cmd_ok(
+        socket,
+        &format!("worktree-create -c '{}' -n topic", repo.display()),
+    )
+    .trim()
+    .to_string();
+    let checkout = dir.path().join("repo-worktrees").join("topic");
+    assert!(checkout.is_dir(), "the checkout exists");
+    let list = cmd_ok(socket, "list-worktrees");
+    let parent = list
+        .lines()
+        .find(|l| l.contains(" repo "))
+        .and_then(|l| l.split_whitespace().next())
+        .expect("a repo row")
+        .to_string();
+    assert!(
+        list.lines()
+            .any(|l| l.starts_with(&format!("{linked} worktree {parent} topic "))),
+        "{list}"
+    );
+
+    let _ = cmd_ok(socket, "kill-server");
+    let _ = daemon.wait();
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(socket);
+    assert_eq!(
+        cmd_ok(socket, "list-worktrees"),
+        list,
+        "the groups persisted"
+    );
+
+    let refused = cmd(socket, &format!("kill-workspace -t {parent}"));
+    assert_ne!(refused.code, Some(0));
+    assert!(refused.stderr.contains("-g"), "{}", refused.stderr);
+
+    cmd_ok(socket, &format!("worktree-remove -t {linked}"));
+    assert!(!checkout.exists(), "the checkout was removed");
+    cmd_ok(socket, &format!("kill-workspace -t {parent}"));
+}

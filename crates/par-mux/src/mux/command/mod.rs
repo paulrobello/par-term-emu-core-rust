@@ -551,11 +551,52 @@ pub enum MuxCommand {
         change: Option<RespawnChange>,
     },
     /// Kill a workspace and every session, window, and pane in it
-    /// (`kill-workspace -t +N`).
+    /// (`kill-workspace -t +N [-g]`). A repo workspace with open linked
+    /// worktree workspaces is refused unless `-g` closes the whole group.
     KillWorkspace {
         /// Target workspace.
         workspace: Target<WorkspaceId>,
+        /// `-g`: also close the linked worktree workspaces grouped under
+        /// a repo workspace.
+        group: bool,
     },
+    /// `worktree-create -c <dir> -n <branch> [-B base] [-p path] [-s name]`:
+    /// `git worktree add` a checkout of the branch, then open a workspace
+    /// on it grouped under the repo's workspace (opened too when absent).
+    WorktreeCreate {
+        /// `-c`: a directory inside the repo (or one of its worktrees).
+        repo_dir: String,
+        /// `-n`: the branch to check out — created from `base` when no
+        /// local branch has that name.
+        branch: String,
+        /// `-B`: the new branch's start point (default `HEAD`).
+        base: Option<String>,
+        /// `-p`: the checkout path (default
+        /// `<parent>/<repo>-worktrees/<branch-slug>`).
+        path: Option<String>,
+        /// `-s`: the workspace name (default `<repo>/<branch>`).
+        name: Option<String>,
+    },
+    /// `worktree-open -c <checkout> [-s name]`: focus the workspace
+    /// already open on that checkout, or open one grouped under its
+    /// repo's workspace.
+    WorktreeOpen {
+        /// `-c`: the checkout (a directory inside it is accepted).
+        checkout: String,
+        /// `-s`: the workspace name for a newly opened workspace.
+        name: Option<String>,
+    },
+    /// `worktree-remove -t <workspace> [-f]`: `git worktree remove` the
+    /// workspace's linked checkout and close the workspace. Refused for a
+    /// dirty checkout or a pane with a running agent unless `-f`.
+    WorktreeRemove {
+        /// The linked worktree workspace.
+        workspace: Target<WorkspaceId>,
+        /// `-f`: remove despite a dirty checkout or a running agent.
+        force: bool,
+    },
+    /// `list-worktrees`: one row per worktree-backed workspace.
+    ListWorktrees,
     /// Report the daemon's build stamp — the `version` wire form of
     /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
     /// client can compare the daemon's core build against its own linked
@@ -618,7 +659,10 @@ impl MuxCommand {
             | MuxCommand::NewWorkspace { .. }
             | MuxCommand::SelectWorkspace { .. }
             | MuxCommand::RenameWorkspace { .. }
-            | MuxCommand::KillWorkspace { .. } => true,
+            | MuxCommand::KillWorkspace { .. }
+            | MuxCommand::WorktreeCreate { .. }
+            | MuxCommand::WorktreeOpen { .. }
+            | MuxCommand::WorktreeRemove { .. } => true,
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
@@ -631,6 +675,7 @@ impl MuxCommand {
             | MuxCommand::ListWindows { .. }
             | MuxCommand::ListSessions { .. }
             | MuxCommand::ListWorkspaces
+            | MuxCommand::ListWorktrees
             | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
@@ -685,6 +730,11 @@ pub fn reply_timeout(line: &str) -> Option<std::time::Duration> {
                 .saturating_add(GRACE)
                 .min(UNBOUNDED)
         })),
+        // `git worktree add`/`remove` on a large repo (checkout, LFS
+        // smudge) outlasts the default reply budget.
+        Ok(MuxCommand::WorktreeCreate { .. } | MuxCommand::WorktreeRemove { .. }) => {
+            Some(std::time::Duration::from_secs(600))
+        }
         _ => None,
     }
 }
@@ -723,11 +773,13 @@ mod keys;
 mod panes;
 mod sessions;
 mod windows;
+mod worktrees;
 use buffers::*;
 use keys::*;
 use panes::*;
 use sessions::*;
 use windows::*;
+use worktrees::*;
 
 /// One pre-split command line: the shared cursor every per-command parser
 /// reads flags, targets, and payloads through.
@@ -1269,7 +1321,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("select-workspace", parse_select_workspace, &[]),
     ("switch-client", parse_switch_client, &[]),
     ("rename-workspace", parse_rename_workspace, &[]),
-    ("kill-workspace", parse_kill_workspace, &[]),
+    ("kill-workspace", parse_kill_workspace, &["group"]),
     ("set-workspace-respawn", parse_set_workspace_respawn, &[]),
     ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
@@ -1324,6 +1376,10 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("paste-buffer", parse_paste_buffer, &[]),
     ("version", parse_version, &[]),
     ("reload-config", parse_reload_config, &[]),
+    ("worktree-create", parse_worktree_create, &[]),
+    ("worktree-open", parse_worktree_open, &[]),
+    ("worktree-remove", parse_worktree_remove, &["force"]),
+    ("list-worktrees", parse_list_worktrees, &[]),
 ];
 
 /// Whether `name` spells a control command this daemon parses — the

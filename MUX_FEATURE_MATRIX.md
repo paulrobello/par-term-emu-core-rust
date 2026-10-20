@@ -63,7 +63,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Extra grouping level | Workspaces sit above sessions (tmux has none); each tracks its own active session | Sessions are separate server namespaces; workspaces are project-level containers | PM-MUX / H-CONCEPTS |
 | Naming | Typed ids beat names; names match exactly; session names unique, duplicates refused | Opaque public ids never reused after close; rename supported | PM-MUX / H-SKILL |
 | Default tree | Empty attach creates workspace+session `default`, window `1`, one pane | Launch/attach reattaches the persistent default session | PM-MUX / H-CONCEPTS |
-| Git worktree workspaces | No worktree management (host probe only names the work tree) | `worktree create/open/remove`; worktree workspaces grouped under the parent repo workspace | PM-MUX / H-CLI |
+| Git worktree workspaces | `worktree-create` / `worktree-open` / `worktree-remove [-f]` / `list-worktrees`; worktree workspaces grouped under the repo workspace by a persisted repo-key link; `kill-workspace -g` required to close a repo workspace with linked worktrees; checkouts default to `<repo>-worktrees/<slug>` beside the repo | `worktree create/open/remove`; worktree workspaces grouped under the parent repo workspace; `workspace close --group`; checkouts under a global `~/.herdr/worktrees` root | PM-MUX / H-CLI |
 | Layout portability | Binary `LayoutTree` emitting tmux layout strings | `layout.export` / `layout.apply` / `layout.set_split_ratio` socket methods | PM-SRC / H-API |
 | Workspace metadata | Agent roster grouped by workspace (`ws=+N`) | Per-workspace reportable tokens (e.g. `$jj_status`) in sidebar space rows | PM-MUX / H-CFG |
 
@@ -204,7 +204,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Style | tmux verbs sent over the socket via `--cmd`; subcommands for lifecycle | Noun-verb JSON CLI (`workspace/pane/agent/...`), identical arguments over the socket API | PM-MUX / H-CLI |
-| Scale | 49 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
+| Scale | 53 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
 | Full enumerations | See [Appendix](#appendix-command-enumerations) | See [Appendix](#appendix-command-enumerations) | — |
 
 ## Where each leads
@@ -224,7 +224,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 - Agent breadth: 22 supported integrations + 5 self-reporting (par-mux: 9), with three-tier detection and `agent explain` diagnostics.
 - Mouse-first UX: drag-everything, context menus, rich theming (11 themes, auto light/dark), sounds, onboarding.
 - A plugin system with event hooks and link handlers.
-- Git worktree workspaces as a first-class concept.
+- Git worktree workspace UX: keybindings, sidebar grouping, and worktree events for plugins (par-mux has the control commands and grouping, no TUI surface yet).
 - Remote operation: SSH thin client, saved machines, remote scripting without a TUI.
 - Orchestration primitives: `pane wait-output`, `agent prompt --wait`, `agent wait`, anti-stall gating.
 - Self-update channels and polished installers; native conversation restore across a wider agent set.
@@ -237,7 +237,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (wire commands)
 
-`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`.
+`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
 
 ### herdr (CLI noun groups)
 

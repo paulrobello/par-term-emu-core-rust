@@ -265,10 +265,11 @@ pub(super) fn parse_set_workspace_respawn(a: &Args<'_>) -> Result<MuxCommand, St
     Ok(MuxCommand::SetWorkspaceRespawn { workspace, change })
 }
 
-/// `kill-workspace -t +N`.
+/// `kill-workspace -t +N [-g]`.
 pub(super) fn parse_kill_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::KillWorkspace {
         workspace: a.workspace("-t")?,
+        group: a.has_flag("-g"),
     })
 }
 

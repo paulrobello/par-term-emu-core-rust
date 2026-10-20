@@ -27,6 +27,7 @@ impl MuxTree {
                 sessions: Vec::new(),
                 active: 0,
                 respawn_last: false,
+                worktree: None,
             },
         );
         self.active_workspace = Some(id);

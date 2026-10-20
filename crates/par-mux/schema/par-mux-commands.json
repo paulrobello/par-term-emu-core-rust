@@ -98,11 +98,14 @@
     },
     {
       "name": "kill-workspace",
-      "features": [],
+      "features": [
+        "group"
+      ],
       "flags": [
+        "-g",
         "-t"
       ],
-      "synopsis": "-t <workspace>"
+      "synopsis": "-t <workspace> [-g]"
     },
     {
       "name": "list-agents",
@@ -160,6 +163,12 @@
     },
     {
       "name": "list-workspaces",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "list-worktrees",
       "features": [],
       "flags": [],
       "synopsis": ""
@@ -463,6 +472,38 @@
         "-t"
       ],
       "synopsis": "-t <pane> (-m TEXT | -r REGEX) [-T ms] [-S start] [-E end]"
+    },
+    {
+      "name": "worktree-create",
+      "features": [],
+      "flags": [
+        "-B",
+        "-c",
+        "-n",
+        "-p",
+        "-s"
+      ],
+      "synopsis": "-c <dir> -n <branch> [-B base] [-p path] [-s name]"
+    },
+    {
+      "name": "worktree-open",
+      "features": [],
+      "flags": [
+        "-c",
+        "-s"
+      ],
+      "synopsis": "-c <checkout> [-s name]"
+    },
+    {
+      "name": "worktree-remove",
+      "features": [
+        "force"
+      ],
+      "flags": [
+        "-f",
+        "-t"
+      ],
+      "synopsis": "-t <workspace> [-f]"
     }
   ]
 }

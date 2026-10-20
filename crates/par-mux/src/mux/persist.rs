@@ -199,6 +199,52 @@ pub struct PersistWorkspace {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub respawn_last: bool,
+    /// The workspace's git-worktree backing
+    /// ([`crate::mux::tree::MuxWorkspace::worktree`]). Absent in files
+    /// written before worktree workspaces existed and omitted for an
+    /// ordinary workspace, so the envelope version stays put.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub worktree: Option<PersistWorktreeLink>,
+}
+
+/// A persisted [`crate::mux::tree::WorktreeLink`]. Paths are stored the
+/// way pane cwds are (lossy UTF-8 strings).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PersistWorktreeLink {
+    /// The repo's main checkout — the group key.
+    pub repo: String,
+    /// This workspace's checkout.
+    pub checkout: String,
+    /// The checkout's branch; `None` for a detached HEAD.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub branch: Option<String>,
+}
+
+impl From<&crate::mux::tree::WorktreeLink> for PersistWorktreeLink {
+    fn from(link: &crate::mux::tree::WorktreeLink) -> Self {
+        Self {
+            repo: link.repo.to_string_lossy().into_owned(),
+            checkout: link.checkout.to_string_lossy().into_owned(),
+            branch: link.branch.clone(),
+        }
+    }
+}
+
+impl From<&PersistWorktreeLink> for crate::mux::tree::WorktreeLink {
+    fn from(link: &PersistWorktreeLink) -> Self {
+        Self {
+            repo: PathBuf::from(&link.repo),
+            checkout: PathBuf::from(&link.checkout),
+            branch: link.branch.clone(),
+        }
+    }
 }
 
 /// One persisted session.
@@ -380,6 +426,7 @@ struct WorkspaceCapture {
     active: usize,
     sessions: Vec<SessionId>,
     respawn_last: bool,
+    worktree: Option<crate::mux::tree::WorktreeLink>,
 }
 
 struct SessionCapture {
@@ -424,6 +471,7 @@ impl PersistCapture {
                 name: workspace.name,
                 active_session_index: workspace.active,
                 respawn_last: workspace.respawn_last,
+                worktree: workspace.worktree.as_ref().map(PersistWorktreeLink::from),
                 sessions: workspace
                     .sessions
                     .into_iter()
@@ -511,6 +559,7 @@ impl MuxTree {
                     active: workspace.active,
                     sessions: workspace.sessions.clone(),
                     respawn_last: workspace.respawn_last,
+                    worktree: workspace.worktree.clone(),
                 })
                 .collect(),
             active_workspace: self.active_workspace,
@@ -720,6 +769,10 @@ impl MuxTree {
                     sessions,
                     active,
                     respawn_last: workspace.respawn_last,
+                    worktree: workspace
+                        .worktree
+                        .as_ref()
+                        .map(crate::mux::tree::WorktreeLink::from),
                 },
             );
             if state.active_workspace == Some(workspace.id) {
@@ -2512,6 +2565,53 @@ mod tests {
         let term = term.read();
         assert_eq!(term.current_directory(), Some("/some/path"));
         assert_eq!(term.shell_integration().hostname(), Some("remote-host"));
+    }
+
+    /// A workspace's worktree link rides the state file as a `worktree`
+    /// object, an ordinary workspace carries no key (so files written
+    /// before worktree workspaces existed keep their shape), and a file
+    /// without the key restores an unlinked workspace.
+    #[test]
+    fn worktree_link_persists_and_old_files_load_unlinked() {
+        let (mut tree, pane_id) = held_dead_tree(Some(0));
+        let ws = tree.workspace_of_pane(pane_id).unwrap();
+        let plain = serde_json::to_value(tree.to_persist_state()).unwrap();
+        assert!(
+            plain["workspaces"][0].get("worktree").is_none(),
+            "an unlinked workspace serializes without the key"
+        );
+        let link = crate::mux::tree::WorktreeLink {
+            repo: PathBuf::from("/src/app"),
+            checkout: PathBuf::from("/src/app-worktrees/x"),
+            branch: Some("x".to_string()),
+        };
+        tree.set_worktree_link(ws, Some(link.clone())).unwrap();
+        let mut value = serde_json::to_value(tree.to_persist_state()).unwrap();
+        assert_eq!(
+            value["workspaces"][0]["worktree"],
+            serde_json::json!({"repo": "/src/app", "checkout": "/src/app-worktrees/x", "branch": "x"})
+        );
+        let state: PersistState = serde_json::from_value(value.clone()).unwrap();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
+        assert_eq!(restored.workspace(ws).unwrap().worktree, Some(link));
+
+        value["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("worktree");
+        let state: PersistState = serde_json::from_value(value).expect("old file decodes");
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(RecordingFactory::default()),
+            true,
+        )
+        .unwrap();
+        assert_eq!(restored.workspace(ws).unwrap().worktree, None);
     }
 
     /// A save file written before `cwd_host` existed decodes with no host

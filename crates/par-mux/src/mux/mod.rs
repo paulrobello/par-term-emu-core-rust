@@ -34,6 +34,7 @@ pub mod server;
 pub mod skill_installer;
 pub mod tree;
 pub mod win_resume;
+pub(crate) mod worktree;
 
 /// Per-command dispatch — private, reached only through `server` (the
 /// socket loop) and its line-level test shims.
@@ -54,7 +55,7 @@ pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
 pub use persist::{PersistError, PersistState, FORMAT_VERSION};
 pub use scrape::{scrape_tick, ScrapeEngine};
 pub use server::MuxServer;
-pub use tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace};
+pub use tree::{MuxSession, MuxTree, MuxWindow, MuxWorkspace, WorktreeLink};
 
 /// `s` without its control characters (C0, DEL, C1 — `char::is_control`).
 /// User-supplied names and titles are echoed into the status row and

@@ -53,12 +53,14 @@ mod client;
 mod panes;
 mod sessions;
 mod windows;
+mod worktrees;
 use buffers::*;
 use client::*;
 use panes::*;
 use sessions::*;
 pub(crate) use sessions::{workspace_roster_changed, workspace_roster_fingerprint};
 use windows::*;
+use worktrees::*;
 
 // QA-113 test hook: when set on the dispatching thread, `dispatch_command`
 // panics before running the command, so the containment tests can drive a
@@ -254,6 +256,10 @@ fn route_command(
         command @ (MuxCommand::RefreshClient { .. }
         | MuxCommand::ListAgents
         | MuxCommand::ClientSnapshot { .. }) => route_client_command(ctx, command),
+        command @ (MuxCommand::WorktreeCreate { .. }
+        | MuxCommand::WorktreeOpen { .. }
+        | MuxCommand::WorktreeRemove { .. }
+        | MuxCommand::ListWorktrees) => route_worktree_command(ctx, command),
     }
 }
 

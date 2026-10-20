@@ -40,7 +40,7 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
         MuxCommand::RenameWorkspace { workspace, name } => {
             cmd_rename_workspace(ctx, workspace, name)
         }
-        MuxCommand::KillWorkspace { workspace } => cmd_kill_workspace(ctx, workspace),
+        MuxCommand::KillWorkspace { workspace, group } => cmd_kill_workspace(ctx, workspace, group),
         MuxCommand::SetWorkspaceRespawn { workspace, change } => {
             cmd_set_workspace_respawn(ctx, workspace, change)
         }
@@ -588,12 +588,16 @@ pub(super) fn cmd_set_workspace_respawn(
     Outcome::ok(ctx, if next { "on" } else { "off" })
 }
 
-pub(super) fn cmd_kill_workspace(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>) -> Outcome {
+pub(super) fn cmd_kill_workspace(
+    ctx: &Ctx<'_>,
+    workspace: Target<WorkspaceId>,
+    group: bool,
+) -> Outcome {
     let killed = match kill_target(
         ctx,
         workspace,
         MuxTree::resolve_workspace_target,
-        MuxTree::kill_workspace,
+        |tree, id| tree.kill_workspace_grouped(id, group),
     ) {
         Ok(killed) => killed,
         Err(outcome) => return outcome,
