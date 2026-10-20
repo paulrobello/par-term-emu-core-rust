@@ -116,6 +116,34 @@ impl Fixture {
         assert!(reply.contains("%end"), "{reply}");
         self.wait_for_line("SHELL-UP");
     }
+
+    /// Block until the in-flight `start` has tagged the pane `kind`.
+    ///
+    /// agent-start tags only after its shell-readiness gate: a process-table
+    /// snapshot (1.7 s cold at host load ~400) re-checked for up to
+    /// `SHELL_READY_RETRY` while a non-shell runs in the foreground. A hook
+    /// report filed before the tag claims the pane itself, and the start
+    /// refuses with "already hosts agent" — so a test drives its reports
+    /// from the tag, never from a fixed sleep. A start that replies before
+    /// tagging fails here with its reply instead of waiting out the ceiling.
+    fn tagged<'s>(
+        &self,
+        kind: &str,
+        start: std::thread::ScopedJoinHandle<'s, String>,
+    ) -> std::thread::ScopedJoinHandle<'s, String> {
+        let deadline = Instant::now() + crate::mux::test_wait::CEILING;
+        while self.metadata("agent").as_deref() != Some(kind) {
+            if start.is_finished() {
+                panic!(
+                    "agent-start replied before tagging {kind}: {}",
+                    start.join().unwrap()
+                );
+            }
+            assert!(Instant::now() < deadline, "agent-start never tagged {kind}");
+            std::thread::sleep(crate::mux::test_wait::POLL);
+        }
+        start
+    }
 }
 
 impl Drop for Fixture {
@@ -152,6 +180,7 @@ fn agent_start_replies_only_after_a_hook_claim() {
                 "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
             ))
         });
+        let start = f.tagged("testagent", start);
         std::thread::sleep(Duration::from_millis(600));
         assert!(!start.is_finished(), "no reply before detection");
         assert_eq!(f.metadata("agent").as_deref(), Some("testagent"));
@@ -177,7 +206,7 @@ fn agent_start_waits_through_a_working_startup() {
                 "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
             ))
         });
-        std::thread::sleep(Duration::from_millis(300));
+        let start = f.tagged("testagent", start);
         f.report("testagent", "working", 1);
         std::thread::sleep(Duration::from_millis(500));
         assert!(!start.is_finished(), "working is not ready");
@@ -189,19 +218,21 @@ fn agent_start_waits_through_a_working_startup() {
     });
 }
 
+/// -T counts from the command, readiness gate included, so it leaves the
+/// report seconds of room after the tag.
 #[test]
 fn agent_start_timeout_names_a_working_agent() {
     let f = Fixture::new();
     f.wait_for_shell();
     std::thread::scope(|scope| {
-        let start = scope.spawn(|| f.run("agent-start -t %0 -T 900 -x cat testagent"));
-        std::thread::sleep(Duration::from_millis(300));
+        let start = scope.spawn(|| f.run("agent-start -t %0 -T 4000 -x cat testagent"));
+        let start = f.tagged("testagent", start);
         f.report("testagent", "working", 1);
         let (lines, ok) = body(&start.join().unwrap());
         assert!(!ok);
         assert_eq!(
             lines,
-            vec!["agent-start: timed out after 900ms waiting for testagent on %0 (still working)"]
+            vec!["agent-start: timed out after 4000ms waiting for testagent on %0 (still working)"]
         );
     });
     assert_eq!(
@@ -324,6 +355,41 @@ fn agent_start_times_out_and_untags() {
     assert_eq!(f.metadata("agent"), None, "the failed start's tag is gone");
 }
 
+/// The test-side contract behind [`Fixture::tagged`]: a non-shell in the
+/// foreground holds agent-start's readiness gate, so the tag lands late.
+/// The fixed-sleep version (report 400 ms in) collided with the start
+/// here: "agent-start: pane %0 already hosts agent testagent".
+#[test]
+fn agent_start_reports_wait_for_the_tag_through_the_readiness_gate() {
+    let f = Fixture::new();
+    f.wait_for_shell();
+    let pid = f.tree.lock().pane(PANE).unwrap().child_pid().unwrap();
+    let reply = f.run(&format!("send-keys -t {PANE} 'sleep 1' Enter"));
+    assert!(reply.contains("%end"), "{reply}");
+    crate::mux::test_wait::until(
+        "sleep in the foreground",
+        crate::mux::test_wait::CEILING,
+        || {
+            crate::mux::foreground::ProcessTable::snapshot()
+                .and_then(|table| table.foreground_command(pid))
+                .filter(|name| name == "sleep")
+        },
+        String::new,
+    );
+    std::thread::scope(|scope| {
+        let start = scope.spawn(|| {
+            f.run(&format!(
+                "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
+            ))
+        });
+        let start = f.tagged("testagent", start);
+        f.report("testagent", "idle", 1);
+        let (lines, ok) = body(&start.join().unwrap());
+        assert!(ok, "{lines:?}");
+        assert_eq!(lines, vec!["%0 testagent idle hook"]);
+    });
+}
+
 /// A blocked startup is an error, not a ready agent, and a pane already
 /// carrying an agent label is refused.
 #[test]
@@ -336,7 +402,7 @@ fn agent_start_refuses_a_blocked_start_and_a_claimed_pane() {
                 "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
             ))
         });
-        std::thread::sleep(Duration::from_millis(400));
+        let start = f.tagged("testagent", start);
         f.report("testagent", "blocked", 1);
         let (lines, ok) = body(&start.join().unwrap());
         assert!(!ok);
