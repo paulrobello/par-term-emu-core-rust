@@ -277,6 +277,7 @@ impl WindowSession {
         self.set_pane_gaps(chords.pane_gaps);
         self.set_scrollbar_gutter(chords.scrollbar_gutter);
         self.cursor.drag_shape = chords.drag_cursor_shape;
+        self.set_kitty_enabled(chords.kitty_graphics);
         let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
         self.set_border_colors(
             crate::mux::config::parse_hex_color(&eff.border_active_color)
@@ -338,6 +339,7 @@ impl WindowSession {
                 self.observe_host_appearance(appearance);
                 self.notify.outbox.extend_from_slice(b"\x1b]11;?\x1b\\");
             }
+            HostReport::KittyGraphics(ok) => self.set_kitty_supported(ok),
         }
     }
 
@@ -524,6 +526,10 @@ impl WindowSession {
         // cursor, so the frame's place_cursor must fire even if the
         // mapped state matches the hidden default.
         self.cursor.invalidate();
+        let stale = self.kitty.invalidate();
+        if !stale.is_empty() {
+            sink.write_raw(&stale);
+        }
         sink.repaint_all();
         self.frame(sink);
         Ok(())
@@ -561,7 +567,7 @@ impl WindowSession {
             if let Ok(reply) = conn.send_checked(&format!("refresh-client -t %{id}")) {
                 if reply.ok {
                     let bytes = reply.body.join("\n").into_bytes();
-                    self.renderer.feed_output(id, &bytes);
+                    self.renderer.feed_replay(id, &bytes);
                 }
             }
         }
@@ -761,6 +767,10 @@ impl WindowSession {
         self.draw_status_row();
         self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
+        let stale = self.kitty.invalidate();
+        if !stale.is_empty() {
+            sink.write_raw(&stale);
+        }
         sink.repaint_all();
         self.frame(sink);
         Ok(())
@@ -802,6 +812,11 @@ impl WindowSession {
             flushed = true;
         }
         if self.flush_status_row(sink) {
+            flushed = true;
+        }
+        let covered =
+            self.renderer.overlay.is_some() || self.modal.hides_cursor() || self.popup_active();
+        if self.frame_graphics(sink, covered) {
             flushed = true;
         }
         // An open popup owns the cursor: its tracked cell inside the box

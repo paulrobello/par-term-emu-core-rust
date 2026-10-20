@@ -104,6 +104,26 @@ fn spawn_attach_with_env(
     client_config: &str,
     env: &[(&str, &str)],
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
+    spawn_attach_host(fixture, extra, mode, client_config, env, false)
+}
+
+/// The kitty graphics support query the render client's launch probe
+/// writes (`a=q` for its image id 31), answered by a kitty-capable host.
+const KITTY_QUERY_PREFIX: &[u8] = b"\x1b_Gi=31,";
+
+/// [`spawn_attach_with_env`] whose fake host also models kitty graphics
+/// support: with `kitty_host` it answers the probe's kitty query with
+/// `OK` (then DA1, as a real kitty answers the query's DA1 sentinel);
+/// without it the host answers DA1 alone, as a terminal without the
+/// protocol does.
+fn spawn_attach_host(
+    fixture: &MuxFixture,
+    extra: &[&str],
+    mode: &str,
+    client_config: &str,
+    env: &[(&str, &str)],
+    kitty_host: bool,
+) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
     std::fs::write(fixture.client_config_path(), client_config).expect("write client config");
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -161,10 +181,25 @@ fn spawn_attach_with_env(
                         // answered once per query.
                         pending.drain(..pos + 4);
                     }
+                    while let Some(pos) = pending
+                        .windows(KITTY_QUERY_PREFIX.len())
+                        .position(|w| w == KITTY_QUERY_PREFIX)
+                    {
+                        let reply: &[u8] = if kitty_host {
+                            b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22c"
+                        } else {
+                            b"\x1b[?62;22c"
+                        };
+                        let mut w = answer.0.lock().expect("writer lock");
+                        let _ = w.write_all(reply);
+                        let _ = w.flush();
+                        pending.drain(..pos + KITTY_QUERY_PREFIX.len());
+                    }
                     // Bound the carryover: only a trailing partial query
-                    // prefix (up to 3 bytes) can legitimately wait here.
-                    if pending.len() > 3 {
-                        pending.drain(..pending.len() - 3);
+                    // prefix can legitimately wait here.
+                    let keep = KITTY_QUERY_PREFIX.len() - 1;
+                    if pending.len() > keep {
+                        pending.drain(..pending.len() - keep);
                     }
                     if tx.send(buf[..n].to_vec()).is_err() {
                         break;
@@ -8050,5 +8085,221 @@ fn render_mode_popup_runs_a_command_in_a_floating_box_and_closes() {
         );
     }
     let _ = stderr;
+    host.killer.kill().ok();
+}
+
+/// `ESC _ … ST` (APC) sequences removed, so [`reconstructed_screen`]
+/// never reads a kitty upload's base64 body as glyphs.
+#[cfg(unix)]
+fn strip_apc(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'_') {
+            match bytes[i + 2..].windows(2).position(|w| w == b"\x1b\\") {
+                Some(end) => i += 2 + end + 2,
+                None => break,
+            }
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+/// A file the pane `cat`s: clear, park the cursor at pane cell (5, 3),
+/// a 20x40 px RGBA kitty image (2x2 cells at the 10x20 cell size the
+/// client reported) with no `c=`/`r=`/`C=1` — so it moves the cursor
+/// below itself like a real `icat` — then a text marker.
+#[cfg(unix)]
+fn kitty_image_script(dir: &std::path::Path) -> std::path::PathBuf {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(vec![0x7fu8; 20 * 40 * 4]);
+    let mut bytes = b"\x1b[2J\x1b[4;6H".to_vec();
+    bytes.extend_from_slice(format!("\x1b_Ga=T,f=32,s=20,v=40;{b64}\x1b\\").as_bytes());
+    bytes.extend_from_slice(b"KITTY-AFTER-MARKER");
+    let path = dir.join("img.bin");
+    std::fs::write(&path, bytes).expect("write image script");
+    path
+}
+
+/// Run `cat <script>` in `pane` and collect the host output through
+/// `needle`, with the boot and settle output before it.
+#[cfg(unix)]
+fn cat_into_pane(
+    client: &mut par_mux::mux::MuxClient,
+    host: &AttachHost,
+    pane: &str,
+    script: &std::path::Path,
+    needle: &[u8],
+    what: &str,
+) -> Vec<u8> {
+    let mut seen = expect_output(
+        host,
+        b"\x1b[?1003h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    std::thread::sleep(Duration::from_millis(600));
+    seen.extend(wait_for_output(
+        host,
+        b"\x00-never",
+        Duration::from_millis(300),
+    ));
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'cat {}'",
+            script.display()
+        ))
+        .expect("send-keys");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("Enter");
+    seen.extend(expect_output(host, needle, Duration::from_secs(15), what));
+    seen
+}
+
+#[cfg(unix)]
+const KITTY_CLIENT_CONFIG: &str =
+    "[client]\nborder-lines = \"unicode\"\nsidebar-on-launch = false\n";
+
+/// The render client under a PTY with kitty graphics support modeled
+/// (the fake host answers the probe's `a=q` with `OK`): a kitty image a
+/// pane prints reaches the host as an upload plus a placement at the
+/// image's host cell (pane cell (5, 3) + the tab strip row = CUP 5;6),
+/// sized 2x2 cells with `C=1`. The text after the image lands on the
+/// row the daemon's own pane put it (capture-pane ground truth), so the
+/// mirror's image math matches the daemon's.
+#[cfg(unix)]
+#[test]
+fn render_mode_kitty_graphics_reach_a_kitty_host_positioned() {
+    let (fixture, _daemon, mut client) = fixture_with_session("kittyhost");
+    let pane = session_first_pane(&mut client, "att");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = kitty_image_script(dir.path());
+    let (mut host, _stderr) = spawn_attach_host(
+        &fixture,
+        &["-t", &pane],
+        "render",
+        KITTY_CLIENT_CONFIG,
+        &[],
+        true,
+    );
+    let placement: &[u8] = b"\x1b[5;6H\x1b_Ga=p,i=10000,p=1,c=2,r=2,C=1,q=2,w=20,h=40;\x1b\\";
+    let mut out = cat_into_pane(
+        &mut client,
+        &host,
+        &pane,
+        &script,
+        placement,
+        "the pane's image is placed on the host at its cell",
+    );
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let upload = text
+        .find("\x1b_Ga=t,t=d,f=32,s=20,v=40,i=10000,q=2,m=1;")
+        .expect("the image uploads (3200 RGBA bytes: two base64 chunks)");
+    let placed = text
+        .find(std::str::from_utf8(placement).unwrap())
+        .expect("placed");
+    assert!(upload < placed, "upload before placement");
+
+    out.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(500),
+    ));
+    let (screen, _) = reconstructed_screen(&strip_apc(&out), 24, 80);
+    let capture = client
+        .send(&format!("capture-pane -t {pane}"))
+        .expect("capture")
+        .join("\n");
+    let daemon_row = capture
+        .lines()
+        .position(|l| l.contains("KITTY-AFTER-MARKER"))
+        .expect("the daemon's pane holds the marker");
+    assert_eq!(
+        daemon_row, 5,
+        "the image moved the daemon's cursor 2 rows: {capture}"
+    );
+    assert!(
+        screen[daemon_row + 1].starts_with("KITTY-AFTER-MARKER"),
+        "the client's mirror put the marker on the daemon's row (+ the strip): {screen:#?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// A host without kitty graphics (it answers the probe's DA1 sentinel
+/// and never the kitty query — the probe's definite "unsupported"): the
+/// pane's image never reaches it — no upload, no placement, no APC at
+/// all past the one probe query — while the pane's text still paints.
+#[cfg(unix)]
+#[test]
+fn render_mode_kitty_graphics_stay_off_a_silent_host() {
+    let (fixture, _daemon, mut client) = fixture_with_session("kittysilent");
+    let pane = session_first_pane(&mut client, "att");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = kitty_image_script(dir.path());
+    let (mut host, _stderr) = spawn_attach_host(
+        &fixture,
+        &["-t", &pane],
+        "render",
+        KITTY_CLIENT_CONFIG,
+        &[],
+        false,
+    );
+    let mut seen = cat_into_pane(
+        &mut client,
+        &host,
+        &pane,
+        &script,
+        b"KITTY-AFTER-MARKER",
+        "the pane's text paints",
+    );
+    seen.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(500),
+    ));
+    let text = String::from_utf8_lossy(&seen);
+    assert!(text.contains("\x1b_Gi=31,"), "the probe asked: {text:?}");
+    assert_eq!(
+        text.matches("\x1b_G").count(),
+        1,
+        "nothing but the probe query reaches a silent host: {text:?}"
+    );
+    host.killer.kill().ok();
+}
+
+/// `kitty-graphics = false`: the client never asks the host and never
+/// draws, even on a kitty-capable host.
+#[cfg(unix)]
+#[test]
+fn render_mode_kitty_graphics_config_off_sends_nothing() {
+    let (fixture, _daemon, mut client) = fixture_with_session("kittyoff");
+    let pane = session_first_pane(&mut client, "att");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = kitty_image_script(dir.path());
+    let config = format!("{KITTY_CLIENT_CONFIG}kitty-graphics = false\n");
+    let (mut host, _stderr) =
+        spawn_attach_host(&fixture, &["-t", &pane], "render", &config, &[], true);
+    let mut seen = cat_into_pane(
+        &mut client,
+        &host,
+        &pane,
+        &script,
+        b"KITTY-AFTER-MARKER",
+        "the pane's text paints",
+    );
+    seen.extend(wait_for_output(
+        &host,
+        b"\x00-never",
+        Duration::from_millis(500),
+    ));
+    let text = String::from_utf8_lossy(&seen);
+    assert!(
+        !text.contains("\x1b_G"),
+        "no kitty query and no graphics with the option off: {text:?}"
+    );
     host.killer.kill().ok();
 }

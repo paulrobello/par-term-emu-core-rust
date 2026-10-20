@@ -32,6 +32,7 @@ mod cursor;
 mod drag;
 mod geometry;
 mod input_route;
+mod kitty;
 mod modal;
 mod modal_help;
 mod modal_menu;
@@ -205,6 +206,23 @@ impl PaneEmulator {
             scroll: 0,
             hold_scroll: false,
         }
+    }
+
+    /// A fresh emulator whose image math uses `cell_px` pixels per cell.
+    pub(crate) fn with_cell_px(cols: u16, rows: u16, cell_px: (u32, u32)) -> Self {
+        let mut emulator = Self::new(cols, rows);
+        emulator.term.set_cell_dimensions(cell_px.0, cell_px.1);
+        emulator
+    }
+
+    /// Re-derive image cell spans from `cell_px` pixels per cell.
+    pub(crate) fn set_cell_px(&mut self, cell_px: (u32, u32)) {
+        self.term.set_cell_dimensions(cell_px.0, cell_px.1);
+    }
+
+    /// Drop every graphic the emulator holds.
+    pub(crate) fn clear_graphics(&mut self) {
+        self.term.clear_graphics();
     }
 
     /// The emulator's grid state.
@@ -413,6 +431,11 @@ pub struct PaneRenderer {
     /// The color theme's palette (config `theme`); `None` = the built-in
     /// look. Explicit border colors win over it.
     palette: Option<crate::mux::theme::Palette>,
+    /// The per-cell pixel size this client reported to the daemon (the
+    /// handshake's 10x20 until the host probe answers): every emulator's
+    /// image cell-span math uses it, so an image advances the mirror's
+    /// cursor by the same rows the daemon's pane advanced.
+    cell_px: (u32, u32),
     dirty: bool,
 }
 
@@ -588,7 +611,13 @@ fn render_session_inner(
     // pixels follow as their own `refresh-client -C … -p …` — the
     // handshake already reported the 10x20 construction default and the
     // daemon's client cell-size record is latest-report-wins.
-    let probe = super::conn::probe_host_terminal();
+    // With `kitty-graphics` on, the probe also asks the host whether it
+    // speaks the kitty graphics protocol; nothing is drawn unless it
+    // answers OK (a late answer arrives through the stdin parser).
+    let probe = super::conn::probe_host_terminal(chords.kitty_graphics);
+    if let Some(ok) = probe.kitty_graphics {
+        session.set_kitty_supported(ok);
+    }
     if let Some((r, g, b)) = probe.background {
         session.observe_host_background((r, g, b));
         let _ = conn.send_checked(&format!(
@@ -598,6 +627,7 @@ fn render_session_inner(
     if let Some((cw, ch)) = probe.cell_pixels {
         let (cols, rows) = super::conn::terminal_grid();
         let _ = conn.send_checked(&format!("refresh-client -C {cols}x{rows} -p {cw}x{ch}"));
+        session.renderer.set_cell_px((u32::from(cw), u32::from(ch)));
     }
     // Keystrokes the probe consumed get back into the stream instead of
     // being eaten.
@@ -605,6 +635,12 @@ fn render_session_inner(
 
     let result = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
     session.popup_teardown(&mut conn);
+    // Host-side images outlive the alternate screen on some terminals:
+    // delete them while the screen guard still holds the screen.
+    let teardown = session.kitty.clear();
+    if !teardown.is_empty() {
+        StdoutSink.write_raw(&teardown);
+    }
     result
 }
 
@@ -834,6 +870,9 @@ struct WindowSession {
     /// The host POINTER's shape (OSC 22): the divider resize cue
     /// `drag-cursor-shape` raises on hover/drag (see [`pointer::PointerState`]).
     pointer: pointer::PointerState,
+    /// The panes' kitty graphics as the host holds them (config
+    /// `kitty-graphics`, gated on the host's query answer).
+    kitty: kitty::HostGraphics,
     /// The color theme choice and the host appearance it follows (config
     /// `theme`/`theme-dark`/`theme-light`; the OSC 11 background and
     /// mode-2031 reports feed the appearance).
@@ -1140,6 +1179,7 @@ impl WindowSession {
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             pointer: pointer::PointerState::default(),
+            kitty: kitty::HostGraphics::default(),
             theme: crate::mux::theme::ThemeSelection::default(),
             project_poll: std::time::Instant::now(),
             detach_requested: false,

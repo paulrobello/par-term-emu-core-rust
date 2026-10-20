@@ -320,11 +320,39 @@ fn host_colors() -> (&'static str, &'static str) {
 /// was not a probed reply, in stream order, for `Stdin::new_with_primer`.
 /// A field stays `None` when the host never answered within the deadline;
 /// callers keep their construction defaults then.
+/// `kitty_graphics` is the kitty query's answer: `Some(true)` for an
+/// `OK`, `Some(false)` for an error reply or a DA1 that arrived with no
+/// kitty answer before it (the host does not speak the protocol), `None`
+/// when the query was not sent or nothing answered in the window.
 #[derive(Default)]
 pub(crate) struct HostProbe {
     pub background: Option<(u8, u8, u8)>,
     pub cell_pixels: Option<(u16, u16)>,
+    pub kitty_graphics: Option<bool>,
     pub primer: Vec<u8>,
+}
+
+/// The image id the kitty support query carries — the client's own; the
+/// host never stores it (`a=q` only validates).
+pub(crate) const KITTY_QUERY_ID: u32 = 31;
+
+/// The kitty graphics support query (a 1x1 RGB direct-data image,
+/// `a=q`) followed by DA1: every terminal answers DA1, and a kitty-capable
+/// one answers the query first, so a DA1 reply with no kitty reply
+/// before it is a definite "unsupported" (kitty's documented detection).
+#[cfg(unix)]
+pub(crate) const KITTY_QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+
+/// Whether a kitty graphics reply payload — the bytes between `ESC _ G`
+/// and the ST — answers [`KITTY_QUERY`]: `Some(true)` for `OK`,
+/// `Some(false)` for an error message, `None` for another id.
+pub(crate) fn kitty_query_reply(payload: &[u8]) -> Option<bool> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let (keys, message) = text.split_once(';')?;
+    let id = format!("i={KITTY_QUERY_ID}");
+    keys.split(',')
+        .any(|kv| kv == id)
+        .then(|| message.starts_with("OK"))
 }
 
 /// Probe the host terminal's background color (OSC 11, `ESC ] 11 ; ? ST`)
@@ -353,17 +381,27 @@ pub(crate) struct HostProbe {
 /// `PaneRenderer::set_background` — and the 10x20 construction cell
 /// size, so a missed probe can never paint a wrong color or size a pane
 /// grid wrong.
+///
+/// With `kitty_query` the probe also writes [`KITTY_QUERY`] and waits for
+/// its answer (the kitty reply or the DA1 sentinel) within the same
+/// window; a missed answer stays `None` and a late one reaches the stdin
+/// parser, which reports it.
 #[cfg(unix)]
-pub(crate) fn probe_host_terminal() -> HostProbe {
+pub(crate) fn probe_host_terminal(kitty_query: bool) -> HostProbe {
     use nix::poll;
     use std::io::{Read as _, Write as _};
     use std::os::fd::AsFd as _;
     {
         let mut out = std::io::stdout().lock();
-        if out.write_all(b"\x1b]11;?\x1b\\\x1b[16t").is_err() || out.flush().is_err() {
+        let mut query = b"\x1b]11;?\x1b\\\x1b[16t".to_vec();
+        if kitty_query {
+            query.extend_from_slice(KITTY_QUERY);
+        }
+        if out.write_all(&query).is_err() || out.flush().is_err() {
             return HostProbe::default();
         }
     }
+    let mut kitty_pending = kitty_query;
     let deadline = std::time::Instant::now() + Duration::from_millis(150);
     let mut probe = HostProbe::default();
     let mut acc: Vec<u8> = Vec::new();
@@ -399,10 +437,21 @@ pub(crate) fn probe_host_terminal() -> HostProbe {
             match reply {
                 ProbeReply::Background(color) => probe.background = Some(color),
                 ProbeReply::CellPixels(size) => probe.cell_pixels = Some(size),
+                ProbeReply::Kitty(ok) => {
+                    if kitty_pending {
+                        probe.kitty_graphics = Some(ok);
+                    }
+                }
+                ProbeReply::DeviceAttributes => {
+                    if kitty_pending && probe.kitty_graphics.is_none() {
+                        probe.kitty_graphics = Some(false);
+                    }
+                    kitty_pending = false;
+                }
             }
             acc = leftover;
         }
-        if probe.background.is_some() && probe.cell_pixels.is_some() {
+        if probe.background.is_some() && probe.cell_pixels.is_some() && !kitty_pending {
             break;
         }
         if acc.len() > 256 {
@@ -487,36 +536,67 @@ fn find_xtwinops_cell_reply(bytes: &[u8]) -> Option<((u16, u16), core::ops::Rang
     Some(((width, height), start..start + "\x1b[6;".len() + end + 1))
 }
 
+/// Locate a complete kitty graphics reply to [`KITTY_QUERY`]
+/// (`ESC _ G i=31 ; OK|<error> ST`) and return whether it is `OK`, plus
+/// its byte span. `None` while absent or incomplete, or when the reply
+/// carries another id.
+#[cfg(unix)]
+fn find_kitty_reply(bytes: &[u8]) -> Option<(bool, core::ops::Range<usize>)> {
+    let start = bytes.windows(3).position(|w| w == b"\x1b_G")?;
+    let body = &bytes[start + 3..];
+    let end = body.windows(2).position(|w| w == b"\x1b\\")?;
+    let ok = kitty_query_reply(&body[..end])?;
+    Some((ok, start..start + 3 + end + 2))
+}
+
+/// Locate a complete primary device-attributes reply (`CSI ? Ps… c`, the
+/// DA1 answer that follows [`KITTY_QUERY`]) and return its byte span.
+#[cfg(unix)]
+fn find_da1_reply(bytes: &[u8]) -> Option<core::ops::Range<usize>> {
+    let mut from = 0;
+    while let Some(offset) = bytes[from..].windows(3).position(|w| w == b"\x1b[?") {
+        let start = from + offset;
+        let params = &bytes[start + 3..];
+        let len = params
+            .iter()
+            .position(|b| !(b.is_ascii_digit() || *b == b';'))?;
+        if params[len] == b'c' {
+            return Some(start..start + 3 + len + 1);
+        }
+        from = start + 3;
+    }
+    None
+}
+
 /// One probed reply kind, for [`split_around_reply`].
 #[cfg(unix)]
 enum ProbeReply {
     Background((u8, u8, u8)),
     CellPixels((u16, u16)),
+    Kitty(bool),
+    DeviceAttributes,
 }
 
-/// The probe's seam: when `acc` holds a complete reply of either kind,
-/// return it with every byte around it (keystrokes before plus bytes
+/// The probe's seam: when `acc` holds a complete reply of any probed
+/// kind, return it with every byte around it (keystrokes before plus bytes
 /// trailing) in stream order — the caller re-primes this remainder
 /// through `Stdin::new_with_primer` so keystrokes that landed inside the
-/// probe window still reach their consumer. When both kinds are complete,
-/// the reply that starts earliest comes back first. `None` keeps the
-/// probe polling (reply absent, incomplete, or split across reads).
+/// probe window still reach their consumer. When several kinds are
+/// complete, the reply that starts earliest comes back first. `None`
+/// keeps the probe polling (reply absent, incomplete, or split across
+/// reads).
 #[cfg(unix)]
 fn split_around_reply(acc: &[u8]) -> Option<(ProbeReply, Vec<u8>)> {
-    let color = find_osc_color_reply(acc);
-    let cell = find_xtwinops_cell_reply(acc);
-    let (reply, span) = match (color, cell) {
-        (Some((c, cs)), Some((p, ps))) => {
-            if cs.start <= ps.start {
-                (ProbeReply::Background(c), cs)
-            } else {
-                (ProbeReply::CellPixels(p), ps)
-            }
-        }
-        (Some((c, cs)), None) => (ProbeReply::Background(c), cs),
-        (None, Some((p, ps))) => (ProbeReply::CellPixels(p), ps),
-        (None, None) => return None,
-    };
+    let candidates = [
+        find_osc_color_reply(acc).map(|(c, span)| (ProbeReply::Background(c), span)),
+        find_xtwinops_cell_reply(acc).map(|(p, span)| (ProbeReply::CellPixels(p), span)),
+        find_kitty_reply(acc).map(|(ok, span)| (ProbeReply::Kitty(ok), span)),
+        find_da1_reply(acc).map(|span| (ProbeReply::DeviceAttributes, span)),
+    ];
+    let (reply, span) = candidates
+        .into_iter()
+        .flatten()
+        .min_by_key(|(_, span)| span.start)?;
     let mut leftover = Vec::with_capacity(acc.len() - span.len());
     leftover.extend_from_slice(&acc[..span.start]);
     leftover.extend_from_slice(&acc[span.end..]);
@@ -524,7 +604,7 @@ fn split_around_reply(acc: &[u8]) -> Option<(ProbeReply, Vec<u8>)> {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn probe_host_terminal() -> HostProbe {
+pub(crate) fn probe_host_terminal(_kitty_query: bool) -> HostProbe {
     HostProbe::default()
 }
 
@@ -655,6 +735,7 @@ mod tests {
             match reply {
                 ProbeReply::Background(c) => background = Some(c),
                 ProbeReply::CellPixels(p) => cell_pixels = Some(p),
+                ProbeReply::Kitty(_) | ProbeReply::DeviceAttributes => {}
             }
             acc = leftover;
         }
@@ -672,6 +753,7 @@ mod tests {
             match reply {
                 ProbeReply::Background(c) => background = Some(c),
                 ProbeReply::CellPixels(p) => cell_pixels = Some(p),
+                ProbeReply::Kitty(_) | ProbeReply::DeviceAttributes => {}
             }
             acc = leftover;
         }
@@ -710,6 +792,35 @@ mod tests {
         };
         assert_eq!(size, (10, 20));
         assert!(leftover.is_empty());
+    }
+
+    /// The kitty support query's two answer shapes: a kitty host replies
+    /// to the query before DA1; a host without the protocol answers only
+    /// DA1. Both strip in stream order with keystrokes kept for the
+    /// primer, and a reply for another image id is not the query's.
+    #[test]
+    fn kitty_query_reply_and_da1_sentinel_strip_in_order() {
+        let mut acc: Vec<u8> = b"x\x1b_Gi=31;OK\x1b\\\x1b[?62;4;22cy".to_vec();
+        let mut seen = Vec::new();
+        while let Some((reply, leftover)) = split_around_reply(&acc) {
+            seen.push(match reply {
+                ProbeReply::Kitty(ok) => format!("kitty {ok}"),
+                ProbeReply::DeviceAttributes => "da1".to_string(),
+                _ => "other".to_string(),
+            });
+            acc = leftover;
+        }
+        assert_eq!(seen, ["kitty true", "da1"]);
+        assert_eq!(acc, b"xy");
+
+        let (reply, leftover) = split_around_reply(b"\x1b[?1;2c").expect("da1 alone");
+        assert!(matches!(reply, ProbeReply::DeviceAttributes));
+        assert!(leftover.is_empty());
+
+        let (reply, _) = split_around_reply(b"\x1b_Gi=31;ENOENT:bad\x1b\\").expect("error reply");
+        assert!(matches!(reply, ProbeReply::Kitty(false)));
+        assert!(split_around_reply(b"\x1b_Gi=9;OK\x1b\\").is_none());
+        assert!(split_around_reply(b"\x1b_Gi=31;OK").is_none(), "incomplete");
     }
 
     /// No reply in the window: the probe's fallback shapes — the locator

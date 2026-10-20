@@ -180,6 +180,9 @@ pub(crate) enum HostReport {
     Background((u8, u8, u8)),
     /// A mode-2031 color-scheme report (`CSI ? 997 ; 1|2 n`).
     Appearance(crate::mux::theme::Appearance),
+    /// The kitty graphics support query's answer arriving after the
+    /// launch probe (`true` = the host answered `OK`).
+    KittyGraphics(bool),
 }
 
 impl InputParser {
@@ -316,6 +319,26 @@ impl InputParser {
                     return EscapeScan::Token(Token::Bytes(Vec::new()), data.len());
                 }
                 EscapeScan::Incomplete(data.len())
+            }
+            // A kitty graphics reply (`ESC _ G … ST`) the probe's window
+            // missed: the support query's late answer, reported to the
+            // session; any other is dropped whole. Without this arm the
+            // reply would forward to the pane as Alt+_ and typed text.
+            b'_' if data.len() >= 3 && data[2] == b'G' => {
+                match data[3..].windows(2).position(|w| w == b"\x1b\\") {
+                    Some(end) => {
+                        if let Some(ok) =
+                            crate::mux::attach::conn::kitty_query_reply(&data[3..3 + end])
+                        {
+                            self.host_reports.push(HostReport::KittyGraphics(ok));
+                        }
+                        EscapeScan::Token(Token::Bytes(Vec::new()), 3 + end + 2)
+                    }
+                    None if data.len() > 512 => {
+                        EscapeScan::Token(Token::Bytes(Vec::new()), data.len())
+                    }
+                    None => EscapeScan::Incomplete(data.len()),
+                }
             }
             // ESC + a UTF-8 lead byte: Alt on a non-ASCII character (an
             // ESC-prefix Option key over a CJK layout). The whole
@@ -871,6 +894,40 @@ mod tests {
             parser.take_host_reports(),
             vec![HostReport::Background((0xff, 0xff, 0xff))]
         );
+    }
+
+    /// A kitty graphics reply that missed the probe window is consumed
+    /// whole (split reads included), never forwarded as Alt+_ and text:
+    /// the support query's answer queues as a host report, a reply for
+    /// another id is dropped silently, and typing around it survives.
+    #[test]
+    fn late_kitty_reply_reports_and_never_reaches_the_pane() {
+        let forwarded = |tokens: &[Token]| -> Vec<u8> {
+            tokens
+                .iter()
+                .flat_map(|t| match t {
+                    Token::Bytes(b) => b.clone(),
+                    _ => b"<key>".to_vec(),
+                })
+                .collect()
+        };
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(b"a\x1b_Gi=31;OK\x1b\\b");
+        assert_eq!(forwarded(&tokens), b"ab");
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::KittyGraphics(true)]
+        );
+        assert!(parser.feed(b"\x1b_Gi=31;ENOT").is_empty(), "split held");
+        let tokens = parser.feed(b"SUP:no\x1b\\");
+        assert_eq!(forwarded(&tokens), b"");
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::KittyGraphics(false)]
+        );
+        let tokens = parser.feed(b"\x1b_Gi=7;OK\x1b\\x");
+        assert_eq!(forwarded(&tokens), b"x");
+        assert!(parser.take_host_reports().is_empty());
     }
 
     /// The mode-2031 color-scheme report (`CSI ? 997 ; 1|2 n`) is

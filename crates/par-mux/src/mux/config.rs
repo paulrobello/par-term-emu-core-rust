@@ -352,6 +352,16 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub drag_cursor_shape: Option<bool>,
+    /// Draw kitty graphics protocol images the panes emit on the host
+    /// terminal (render mode; herdr's `terminal.kitty_graphics`). Only
+    /// takes effect when the host answers the launch kitty query.
+    /// Default on.
+    #[serde(
+        default,
+        rename = "kitty-graphics",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub kitty_graphics: Option<bool>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -706,6 +716,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             pane_gaps: Some(defaults.pane_gaps),
             scrollbar_gutter: Some(defaults.scrollbar_gutter),
             drag_cursor_shape: Some(defaults.drag_cursor_shape),
+            kitty_graphics: Some(defaults.kitty_graphics),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
             theme: Some(defaults.theme.clone()),
@@ -798,6 +809,9 @@ pub struct Chords {
     /// resize pointer (OSC 22) over divider hovers/drags plus the
     /// DECSCUSR steady block during a live drag. Default off.
     pub drag_cursor_shape: bool,
+    /// Kitty graphics drawn on a kitty-capable host (config
+    /// `kitty-graphics`). Default on.
+    pub kitty_graphics: bool,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
@@ -920,6 +934,7 @@ impl Chords {
             pane_gaps: 0,
             scrollbar_gutter: false,
             drag_cursor_shape: false,
+            kitty_graphics: true,
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
@@ -1200,6 +1215,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .drag_cursor_shape
         .unwrap_or(current.drag_cursor_shape);
+    let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
     // reload error.
@@ -1234,6 +1250,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         pane_gaps,
         scrollbar_gutter,
         drag_cursor_shape,
+        kitty_graphics,
         border_lines,
         sidebar_width,
         sidebar_on_launch,
@@ -1976,6 +1993,7 @@ remain-on-exit = true
         assert_eq!(c.pane_gaps, Some(defaults.pane_gaps));
         assert_eq!(c.scrollbar_gutter, Some(defaults.scrollbar_gutter));
         assert_eq!(c.drag_cursor_shape, Some(defaults.drag_cursor_shape));
+        assert_eq!(c.kitty_graphics, Some(defaults.kitty_graphics));
         assert_eq!(
             reload_client_chords(&file, &Chords::with_defaults()).expect("resolves"),
             defaults

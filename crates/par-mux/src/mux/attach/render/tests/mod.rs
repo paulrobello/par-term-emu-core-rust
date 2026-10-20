@@ -20,6 +20,7 @@ use ratatui::style::Modifier as RtModifier;
 use std::io::BufRead as _;
 
 mod chords;
+mod kitty;
 mod popup;
 mod scrollback_edit;
 mod session;

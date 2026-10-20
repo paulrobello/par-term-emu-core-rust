@@ -367,6 +367,8 @@ only relax them in trusted environments where large images are expected.
 
 The `par-mux attach` render client's chrome colors are not terminal settings: they come from the par-mux config file's `[client] theme`, `theme-dark`, and `theme-light` keys (herdr's presets, or `auto` to follow the host's light/dark appearance). See [MUX.md Themes](MUX.md#themes).
 
+The same file's `[client] kitty-graphics` (default `true`) draws the kitty graphics protocol images panes emit on the host terminal, only after the host answers the client's launch kitty query (`a=q`) with `OK`; `false` sends neither the query nor any image. See [MUX.md Kitty graphics](MUX.md#kitty-graphics).
+
 The same file's `[[client.popup]]` tables (`key`, `command`, optional `width`/`height` as cells or `"N%"`, and `description`) bind popup command windows: prefix + the key runs the command in a floating box over the attach TUI. See [MUX.md Popups](MUX.md#popups).
 
 ### Default Colors

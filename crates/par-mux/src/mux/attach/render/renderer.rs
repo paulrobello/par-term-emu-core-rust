@@ -124,6 +124,7 @@ impl PaneRenderer {
             border_active: options.border_active,
             border_plain: options.border_plain,
             palette: None,
+            cell_px: (10, 20),
             dirty: true,
         }
     }
@@ -302,7 +303,7 @@ impl PaneRenderer {
             let emulator = self
                 .emulators
                 .entry(rect.pane)
-                .or_insert_with(|| PaneEmulator::new(cols, rows));
+                .or_insert_with(|| PaneEmulator::with_cell_px(cols, rows, self.cell_px));
             if emulator.terminal().size() != (usize::from(cols), usize::from(rows)) {
                 emulator.resize(cols, rows);
             }
@@ -780,7 +781,8 @@ impl PaneRenderer {
             return;
         };
         let (cols, rows) = self.emulator_size(&rect);
-        self.emulators.insert(pane, PaneEmulator::new(cols, rows));
+        self.emulators
+            .insert(pane, PaneEmulator::with_cell_px(cols, rows, self.cell_px));
         self.dirty = true;
     }
 
