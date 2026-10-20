@@ -2664,3 +2664,29 @@ fn parses_show_notification() {
         .lines()
         .any(|l| l == "show-notification"));
 }
+
+#[test]
+fn parses_the_pane_stream_verbs() {
+    assert_eq!(
+        parse_command("observe-pane -t %4").unwrap(),
+        MuxCommand::PaneStream {
+            pane: Target::Id(PaneId(4)),
+            control: false,
+        }
+    );
+    assert_eq!(
+        parse_command("control-pane -t 'my pane'").unwrap(),
+        MuxCommand::PaneStream {
+            pane: Target::Name("my pane".to_string()),
+            control: true,
+        }
+    );
+    assert!(!parse_command("control-pane -t %4").unwrap().mutates());
+    for line in ["observe-pane", "control-pane", "observe-pane -t %4 extra"] {
+        assert!(parse_command(line).is_err(), "{line} is refused");
+    }
+    let body = list_commands_body();
+    for line in ["observe-pane", "control-pane"] {
+        assert!(body.lines().any(|l| l == line), "{line}: {body}");
+    }
+}

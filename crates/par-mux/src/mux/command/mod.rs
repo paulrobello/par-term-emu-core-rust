@@ -477,6 +477,17 @@ pub enum MuxCommand {
         /// Target pane.
         pane: Target<PaneId>,
     },
+    /// Turn this connection into a raw stream of one pane
+    /// (`observe-pane` read-only, `control-pane` writable): the reply
+    /// carries the pane's seed, and from then on the connection receives
+    /// only that pane's output and lifecycle lines.
+    PaneStream {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// `control-pane`: the connection keeps its command grammar for
+        /// input and resize; `observe-pane` refuses every later command.
+        control: bool,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -730,6 +741,7 @@ impl MuxCommand {
             | MuxCommand::WaitOutput { .. }
             | MuxCommand::AgentPrompt { .. }
             | MuxCommand::AgentExplain { .. }
+            | MuxCommand::PaneStream { .. }
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::PaneExitedReplay
@@ -837,6 +849,7 @@ mod buffers;
 mod keys;
 mod panes;
 mod sessions;
+mod streams;
 mod windows;
 mod worktrees;
 use agents::*;
@@ -846,6 +859,7 @@ pub use buffers::{NOTIFICATION_BODY_MAX, NOTIFICATION_TITLE_MAX};
 use keys::*;
 use panes::*;
 use sessions::*;
+use streams::*;
 use windows::*;
 use worktrees::*;
 
@@ -1452,6 +1466,8 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("worktree-open", parse_worktree_open, &[]),
     ("worktree-remove", parse_worktree_remove, &["force"]),
     ("list-worktrees", parse_list_worktrees, &[]),
+    ("observe-pane", parse_observe_pane, &[]),
+    ("control-pane", parse_control_pane, &[]),
 ];
 
 /// Whether `name` spells a control command this daemon parses — the

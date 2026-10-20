@@ -149,6 +149,7 @@ pub(super) fn handle_client(
         evicted,
         registration,
         command_number: 0,
+        stream: None,
     };
     connection.serve(&mut reader);
     connection.teardown();
@@ -167,6 +168,11 @@ fn spawn_writer(
 
     let mut writer = stream.try_clone()?;
     let _ = writer.set_send_timeout(Some(EVICTION_POLL));
+    // The pane a raw stream narrowed this connection to — set by the
+    // stream marker in queue order, so everything queued before the
+    // stream's reply is delivered unfiltered and everything after it is
+    // filtered.
+    let mut stream_pane: Option<String> = None;
     std::thread::spawn(move || loop {
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
@@ -175,6 +181,19 @@ fn spawn_writer(
                 // aggregate bound, never underflows (guard below).
                 if queued.load(Ordering::Relaxed) > 0 {
                     queued.fetch_sub(1, Ordering::Relaxed);
+                }
+                let line = match take_stream_marker(line) {
+                    (Some(pane), rest) => {
+                        stream_pane = Some(pane);
+                        rest
+                    }
+                    (None, line) => line,
+                };
+                if stream_pane
+                    .as_deref()
+                    .is_some_and(|pane| !pane_stream_passes(&line, pane))
+                {
+                    continue;
                 }
                 if write_line(&mut writer, &line, &evicted).is_err() {
                     break;
@@ -210,6 +229,83 @@ impl Flow {
     }
 }
 
+/// The in-band item that narrows a connection to one pane's raw stream:
+/// a NUL (never present in an emitted line) plus the pane id, ahead of the
+/// stream's reply block in the same queue item.
+fn stream_marker(pane: PaneId) -> String {
+    format!("\0{pane}\n")
+}
+
+/// Split a queue item into its stream marker's pane id (if it carries
+/// one) and the bytes to write.
+fn take_stream_marker(item: String) -> (Option<String>, String) {
+    match item
+        .strip_prefix('\0')
+        .and_then(|rest| rest.split_once('\n'))
+    {
+        Some((pane, rest)) => (Some(pane.to_string()), rest.to_string()),
+        None => (None, item),
+    }
+}
+
+/// What a raw pane stream delivers: reply blocks (the connection's own
+/// commands), the pane's `%output`/`%pane-exited`/`%pane-respawned`, and
+/// `%exit`. Every other broadcast is dropped at the writer.
+pub(super) fn pane_stream_passes(line: &str, pane: &str) -> bool {
+    if line.starts_with("%begin ") || line == "%exit\n" {
+        return true;
+    }
+    let names_pane = |rest: Option<&str>| {
+        rest.and_then(|rest| rest.strip_prefix(pane))
+            .is_some_and(|tail| tail.starts_with(' ') || tail.starts_with('\n'))
+    };
+    names_pane(line.strip_prefix("%output "))
+        || names_pane(line.strip_prefix("%pane-exited "))
+        || names_pane(line.strip_prefix("%pane-respawned "))
+}
+
+/// Queue `line` as `client_id`'s last item and flag the connection for
+/// teardown: its writer drains what is queued (this line included), then
+/// both connection threads exit on their next poll and the socket closes.
+fn end_connection_with(clients: &Clients, client_id: u64, line: String) {
+    let guard = clients.lock();
+    if let Some((_, tx, queued, evicted, _)) = guard.iter().find(|(id, ..)| *id == client_id) {
+        if tx.try_send(line).is_ok() {
+            queued.fetch_add(1, Ordering::Relaxed);
+        }
+        evicted.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A connection narrowed to one pane by `observe-pane`/`control-pane`.
+#[derive(Clone, Copy, Debug)]
+struct PaneStreamMode {
+    /// `control-pane`: later commands still dispatch.
+    control: bool,
+}
+
+/// Watch a streamed pane until it leaves the tree, then end the
+/// connection with `%exit`; returns early once the connection itself is
+/// gone. Polled at the eviction cadence: a pane's removal has no
+/// per-connection signal to park on.
+fn spawn_pane_stream_watch(
+    tree: Arc<Mutex<MuxTree>>,
+    clients: Clients,
+    client_id: u64,
+    pane: PaneId,
+) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(EVICTION_POLL);
+        if !clients.lock().iter().any(|(id, ..)| *id == client_id) {
+            return;
+        }
+        if tree.lock().pane(pane).is_none() {
+            end_connection_with(&clients, client_id, "%exit\n".to_string());
+            return;
+        }
+    });
+}
+
 /// One control connection's reader-side state: what every line handler
 /// needs to register, number, dispatch, and reply.
 struct Connection {
@@ -224,6 +320,7 @@ struct Connection {
     evicted: Arc<AtomicBool>,
     registration: Registration,
     command_number: u32,
+    stream: Option<PaneStreamMode>,
 }
 
 impl Connection {
@@ -318,6 +415,21 @@ impl Connection {
     fn on_control(&mut self, command: crate::mux::command::MuxCommand, line: &str) -> Flow {
         let command_number = self.next_command();
         let client_id = self.client_id;
+        if let Some(mode) = self.stream {
+            let refusal = if !mode.control {
+                Some("observe-pane: this connection is a read-only pane stream")
+            } else if matches!(command, crate::mux::command::MuxCommand::PaneStream { .. }) {
+                Some("control-pane: this connection is already a pane stream")
+            } else {
+                None
+            };
+            if let Some(refusal) = refusal {
+                return Flow::after_send(self.tx.send(emit_block(command_number, refusal, false)));
+            }
+        }
+        if let crate::mux::command::MuxCommand::PaneStream { pane, control } = command {
+            return self.on_pane_stream(command_number, pane, control);
+        }
         par_term_emu_core::debug_log!(
             "MUX",
             "received #{} from client {}: {}",
@@ -359,6 +471,77 @@ impl Connection {
         }
         self.registration
             .announce_if_sized(&self.tree, &self.clients, client_id);
+        Flow::Continue
+    }
+
+    /// `observe-pane`/`control-pane`: reply with the pane's seed and
+    /// narrow this connection to the pane. The seed is read and the
+    /// marker-plus-reply item queued under the clients lock — the lock
+    /// every `%output` push takes — so no push for this connection lands
+    /// between the two: output queued ahead of the reply is already in the
+    /// seed, output queued behind it is not.
+    fn on_pane_stream(
+        &mut self,
+        command_number: u32,
+        target: crate::mux::ids::Target<PaneId>,
+        control: bool,
+    ) -> Flow {
+        let verb = if control {
+            "control-pane"
+        } else {
+            "observe-pane"
+        };
+        let streamed = {
+            let guard = self.tree.lock();
+            // A typed id resolves without an existence check.
+            let resolved = guard.resolve_pane_target(target).and_then(|id| {
+                guard
+                    .pane(id)
+                    .map(|pane| (id, pane))
+                    .ok_or(crate::mux::pane::MuxError::NoSuchPane(id))
+            });
+            let (pane_id, pane) = match resolved {
+                Ok(found) => found,
+                Err(err) => {
+                    drop(guard);
+                    return Flow::after_send(self.tx.send(emit_block(
+                        command_number,
+                        &format!("{verb}: {err}"),
+                        false,
+                    )));
+                }
+            };
+            let exited = pane.dead().then(|| {
+                pane.exit_code()
+                    .map_or_else(|| " exited=?".to_string(), |code| format!(" exited={code}"))
+            });
+            let _clients = self.clients.lock();
+            let (seed, (cols, rows)) = {
+                let terminal = pane.terminal();
+                let term = terminal.read();
+                (term.export_screen_restore_sequence(), term.size())
+            };
+            let body = format!(
+                "pane {pane_id} {cols}x{rows}{}\n{seed}",
+                exited.unwrap_or_default()
+            );
+            let item = format!(
+                "{}{}",
+                stream_marker(pane_id),
+                emit_block(command_number, &body, true)
+            );
+            match self.tx.try_send(item) {
+                Ok(()) => pane_id,
+                Err(_) => return Flow::Close,
+            }
+        };
+        self.stream = Some(PaneStreamMode { control });
+        spawn_pane_stream_watch(
+            Arc::clone(&self.tree),
+            Arc::clone(&self.clients),
+            self.client_id,
+            streamed,
+        );
         Flow::Continue
     }
 
@@ -416,6 +599,47 @@ impl Connection {
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pane_stream_tests {
+    use super::{pane_stream_passes, stream_marker, take_stream_marker};
+    use crate::mux::ids::PaneId;
+
+    #[test]
+    fn the_filter_passes_replies_exit_and_only_the_streamed_panes_lines() {
+        for line in [
+            "%begin 1 2 1\n",
+            "%exit\n",
+            "%output %3 abc\n",
+            "%pane-exited %3 0\n",
+            "%pane-exited %3\n",
+            "%pane-respawned %3\n",
+        ] {
+            assert!(pane_stream_passes(line, "%3"), "{line:?} passes");
+        }
+        for line in [
+            "%output %30 abc\n",
+            "%output %4 abc\n",
+            "%layout-change @1 x x \n",
+            "%sessions-changed\n",
+            "%agent-state-changed %3 claude idle\n",
+            "%pane-exited %31 0\n",
+        ] {
+            assert!(!pane_stream_passes(line, "%3"), "{line:?} is dropped");
+        }
+    }
+
+    #[test]
+    fn the_marker_splits_off_ahead_of_the_reply_it_rides_with() {
+        let item = format!("{}%begin 1 1 1\n%end 1 1 1\n", stream_marker(PaneId(7)));
+        let (pane, rest) = take_stream_marker(item);
+        assert_eq!(pane.as_deref(), Some("%7"));
+        assert_eq!(rest, "%begin 1 1 1\n%end 1 1 1\n");
+        let (none, plain) = take_stream_marker("%output %7 x\n".to_string());
+        assert_eq!(none, None);
+        assert_eq!(plain, "%output %7 x\n");
     }
 }
 

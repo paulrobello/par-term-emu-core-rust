@@ -116,7 +116,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Environment scoping | `set-environment` per session (durable, persisted) | `pane split --env` per spawn | PM-MUX / H-CLI |
 | Capability discovery | `list-commands` feature tokens; versioned JSON command schema (`list-commands -J`, `par-mux --print-schema`, bundled at `crates/par-mux/schema/par-mux-commands.json`, generated from the `COMMANDS` table and gated by `make mux-schema-check`); `client-snapshot` one-round-trip read | `herdr api schema` (JSON-Schema, bundled in docs); `herdr api snapshot` | PM-MUX / H-API |
 | Event stream | `%`-notification broadcasts to registered clients; late-client replay of held state | `events.subscribe` / `events.wait`, live with no replay, `events_lost` backpressure signal | PM-MUX / H-API |
-| Raw terminal streams | Not exposed directly (streaming server mirrors instead) | `terminal attach`, `terminal session control` (writable), `terminal session observe` (read-only, multiple observers) | PM-MUX / H-CLI |
+| Raw terminal streams | `observe-pane -t %N` (read-only, multiple observers) and `control-pane -t %N` (writable: `send-keys` input + connection-scoped `refresh-client -C` resize) narrow a control connection to one pane: screen seed, then that pane's raw `%output` and lifecycle lines, `%exit` when it closes. Shell wrappers `par-mux observe` / `par-mux control` write raw bytes to stdout (control forwards stdin, follows the terminal size); `par_mux::mux::pane_stream` for embedders. No takeover, no full-TUI single-pane attach | `terminal attach`, `terminal session control` (writable), `terminal session observe` (read-only, multiple observers) | PM-MUX / H-CLI |
 | Shell completions | Not found | zsh, bash, fish, powershell, elvish | — / H-CLI |
 
 ## 6. AI agent integration
@@ -204,7 +204,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Style | tmux verbs sent over the socket via `--cmd`; subcommands for lifecycle | Noun-verb JSON CLI (`workspace/pane/agent/...`), identical arguments over the socket API | PM-MUX / H-CLI |
-| Scale | 57 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
+| Scale | 59 wire commands, 9 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
 | Full enumerations | See [Appendix](#appendix-command-enumerations) | See [Appendix](#appendix-command-enumerations) | — |
 
 ## Where each leads
@@ -233,11 +233,11 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (binary flags and subcommands)
 
-`par-mux [NAME]`, `--socket`, `--state-dir`, `--foreground`, `--no-attach`, `--stop`, `--restart`, `--cmd/-c`, `--list-servers`, `--pane-endpoints`, `--expose-control-socket`, `--gen-config [--force]`, `--install-skill [--skills-dir]`, `--install-agent-hooks`, `--uninstall-agent-hooks`, `--agent-hooks-status`, `--integration-status`, `--install-agent-extensions`, `--uninstall-agent-extensions`, `--heal-agent-hooks`, `--print-schema`; subcommands `start`, `stop`, `restart`, `status`, `ls`, `attach`, `config`.
+`par-mux [NAME]`, `--socket`, `--state-dir`, `--foreground`, `--no-attach`, `--stop`, `--restart`, `--cmd/-c`, `--list-servers`, `--pane-endpoints`, `--expose-control-socket`, `--gen-config [--force]`, `--install-skill [--skills-dir]`, `--install-agent-hooks`, `--uninstall-agent-hooks`, `--agent-hooks-status`, `--integration-status`, `--install-agent-extensions`, `--uninstall-agent-extensions`, `--heal-agent-hooks`, `--print-schema`; subcommands `start`, `stop`, `restart`, `status`, `ls`, `attach`, `config`, `observe`, `control`.
 
 ### par-mux (wire commands)
 
-`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `agent-start`, `agent-prompt`, `agent-explain`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-notification`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
+`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `agent-start`, `agent-prompt`, `agent-explain`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-notification`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`., `observe-pane`, `control-pane`.
 
 ### herdr (CLI noun groups)
 

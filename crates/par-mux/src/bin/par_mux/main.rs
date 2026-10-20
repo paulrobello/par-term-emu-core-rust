@@ -383,6 +383,33 @@ enum Sub {
     /// Write the config file with the current effective settings. Same
     /// as `--gen-config` (add `--force` to overwrite).
     Config(ConfigArgs),
+    /// Stream one pane's raw output to stdout, read-only (`observe-pane`):
+    /// the screen seed, then live PTY bytes until the pane closes. Any
+    /// number of observers may watch the same pane.
+    Observe(StreamArgs),
+    /// Drive one pane (`control-pane`): stream its output to stdout like
+    /// `observe`, forward stdin bytes to it until EOF (no raw mode — for
+    /// pipes and scripts; interactive use is `attach -t %N`), and report
+    /// this terminal's size (polled) or `--size` as a viewer of the
+    /// pane's window.
+    Control(StreamArgs),
+}
+
+/// `par-mux observe|control -t PANE` — the raw pane stream verbs.
+#[derive(clap::Args, Debug)]
+struct StreamArgs {
+    /// The pane (`%N` or a pane title).
+    #[arg(short = 't', value_name = "PANE")]
+    target: String,
+    /// Skip the screen seed: stdout carries only output that follows.
+    #[arg(long)]
+    no_seed: bool,
+    /// `control` only: report this fixed size (`WxH`) instead of following
+    /// the terminal's.
+    #[arg(long, value_name = "WxH")]
+    size: Option<String>,
+    #[command(flatten)]
+    at: TargetArgs,
 }
 
 /// `par-mux start` — the daemon-start flags, subcommand spelling.
@@ -430,6 +457,46 @@ struct ConfigArgs {
     /// Overwrite an existing config file.
     #[arg(long)]
     force: bool,
+}
+
+/// `par-mux observe|control`: resolve the socket like every client verb,
+/// then hand the stream to the library runner.
+fn run_pane_stream(cli: &mut Cli, args: StreamArgs, control: bool) -> std::process::ExitCode {
+    let StreamArgs {
+        target,
+        no_seed,
+        size,
+        at,
+    } = args;
+    cli.name = at.name.or(cli.name.take());
+    cli.socket = at.socket.or(cli.socket.take());
+    cli.state_dir = at.state_dir.or(cli.state_dir.take());
+    if refuse_reserved_server_name(cli.name.as_deref(), cli.socket.as_ref()) {
+        return std::process::ExitCode::from(2);
+    }
+    let size = match size.as_deref().map(parse_size).transpose() {
+        Ok(size) => size,
+        Err(message) => {
+            eprintln!("par-mux: {message}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let path = resolve_cli_socket(cli);
+    let options = par_mux::mux::pane_stream::StreamOptions {
+        control,
+        size,
+        no_seed,
+    };
+    let code = par_mux::mux::pane_stream::run(&path, &target, &options);
+    std::process::ExitCode::from(u8::try_from(code).unwrap_or(2))
+}
+
+/// `--size WxH`, both halves positive.
+fn parse_size(raw: &str) -> Result<(u16, u16), String> {
+    raw.split_once('x')
+        .and_then(|(c, r)| Some((c.parse::<u16>().ok()?, r.parse::<u16>().ok()?)))
+        .filter(|(c, r)| *c > 0 && *r > 0)
+        .ok_or_else(|| format!("--size expects WxH, got {raw:?}"))
 }
 
 /// Run one control command against the daemon on `path` (client mode).
@@ -964,6 +1031,8 @@ fn main() -> std::process::ExitCode {
                 cli.gen_config = true;
                 cli.force |= args.force;
             }
+            Sub::Observe(args) => return run_pane_stream(&mut cli, args, false),
+            Sub::Control(args) => return run_pane_stream(&mut cli, args, true),
         }
     }
     // `par-mux start server` and friends: the verb's own NAME argument

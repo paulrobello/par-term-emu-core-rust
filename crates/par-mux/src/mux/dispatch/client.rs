@@ -16,6 +16,17 @@ pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         } => cmd_refresh_client(ctx, pane, size, cell_pixels, chrome.unwrap_or_default()),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::ClientSnapshot { window } => cmd_client_snapshot(ctx, window),
+        // The socket's connection loop serves pane streams before dispatch
+        // (it owns the queue the stream narrows); a dispatch with no
+        // connection behind it has nothing to stream into.
+        MuxCommand::PaneStream { control, .. } => Outcome::err(
+            ctx,
+            if control {
+                "control-pane: needs a socket connection"
+            } else {
+                "observe-pane: needs a socket connection"
+            },
+        ),
         other => unreachable!("route_command sent a non-client command: {other:?}"),
     }
 }

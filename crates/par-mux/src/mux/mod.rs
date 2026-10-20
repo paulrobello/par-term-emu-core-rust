@@ -27,6 +27,7 @@ pub mod integrations;
 pub mod ipc;
 pub mod layout;
 pub mod pane;
+pub mod pane_stream;
 pub mod persist;
 pub mod scrape;
 pub mod server;

@@ -79,6 +79,14 @@
       "synopsis": "-t <window>"
     },
     {
+      "name": "control-pane",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
       "name": "has-session",
       "features": [],
       "flags": [
@@ -247,6 +255,14 @@
         "-n"
       ],
       "synopsis": "[-n name]"
+    },
+    {
+      "name": "observe-pane",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
     },
     {
       "name": "pane-exited-replay",

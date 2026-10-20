@@ -17,6 +17,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Protocol Overview](#protocol-overview)
 - [Command Reference](#command-reference)
 - [Git worktree workspaces](#git-worktree-workspaces)
+- [Raw pane streams](#raw-pane-streams)
 - [Notifications](#notifications)
 - [Agent Hook Reports](#agent-hook-reports)
 - [Host Telemetry Probe](#host-telemetry-probe)
@@ -221,6 +222,8 @@ The verb forms are the discoverable front door (every long-standing flag keeps w
 | `par-mux ls [NAME\|--socket P]` | `--cmd list-sessions` | The tmux-habit session listing |
 | `par-mux attach …` | the attach client | Feature `attach`; see [Attaching from a terminal](#attaching-from-a-terminal) |
 | `par-mux config [--force]` | `--gen-config [--force]` | Write the effective config file |
+| `par-mux observe -t PANE [--no-seed] [NAME\|--socket P]` | — | Stream one pane's screen and live output to stdout, read-only; see [Raw pane streams](#raw-pane-streams) |
+| `par-mux control -t PANE [--no-seed] [--size WxH] [NAME\|--socket P]` | — | `observe` plus stdin forwarded to the pane and this terminal's size reported; see [Raw pane streams](#raw-pane-streams) |
 
 A subcommand shadows the same-named NAME-form daemon start (`par-mux attach` never starts a daemon named "attach" — that needs `--socket`). The bare NAME form carries a collision guard of its own: a name that spells a control command (`par-mux list-sessions`) is refused with a "command word" hint instead of silently starting a stray daemon; an explicit `--socket` alongside the name reads as deliberate and is allowed. The daemon name `"server"` is reserved outright (Paul, 2026-10-18): `par-mux server stop` reads as "stop the server" but addresses a daemon literally named "server" (socket `par-mux-server.sock`), so every name position — bare, verb-first (`par-mux server stop`), or verb-last (`par-mux start server`, `status server`) — refuses it with the default-daemon spelling in the explanation; only `--socket` reads as deliberate (pinned by `the_reserved_name_server_is_refused_in_every_name_position`).
 
@@ -785,6 +788,8 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `worktree-open` | `-c <checkout> [-s name]` | The workspace id (`+N`). A checkout (or any directory inside it) already open is focused (`select-workspace`); otherwise its workspace opens grouped under the repo's — the main checkout opens the repo workspace itself | As `select-workspace` when focusing; as `worktree-create` when opening |
 | `worktree-remove` | `-t <workspace> [-f]` | empty. `git worktree remove`s the linked workspace's checkout, then closes the workspace. Refused without `-f` when the checkout has modified or untracked files or a pane carries an agent claim (any `list-agents` row, `idle` included); a repo workspace is refused (close it with `kill-workspace -g`). git runs first, so a refusal or git failure leaves the workspace open. Feature token `force` | `%window-close` per killed window, then `%sessions-changed` and `%workspaces-changed` |
 | `list-worktrees` | — | One `+N <kind> <parent> <branch> <checkout>` line per worktree-backed workspace, id order: `kind` is `repo` or `worktree`, `parent` the open repo workspace a worktree is grouped under (`-` for a repo row or when none is open), `branch` `-` for a detached HEAD; the checkout path is the line remainder, so spaces survive | — |
+| `observe-pane` | `-t <pane>` | `pane %N COLSxROWS [exited=<code\|?>]`, then the pane's screen-restore seed. The connection becomes a read-only raw stream of that pane: only its `%output`, `%pane-exited`, `%pane-respawned`, and `%exit` follow, and every later command is refused (see [Raw pane streams](#raw-pane-streams)) | — |
+| `control-pane` | `-t <pane>` | As `observe-pane`, but the connection stays writable: `send-keys` and `refresh-client -t <pane> -C WxH` keep working on it (see [Raw pane streams](#raw-pane-streams)) | — |
 
 Details worth knowing:
 
@@ -867,6 +872,36 @@ par-mux --cmd "kill-workspace -t +2 -g"      # -g closes app and every linked wo
 - **git hygiene.** git runs through argv only (no shell), with `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` cleared, `GIT_TERMINAL_PROMPT=0`, null stdin, and `LC_ALL=C`; a branch or base starting with `-` and a branch name `git check-ref-format` rejects are refused before anything runs. The repo's hooks stay live (an explicit user request, unlike the [host probe](#host-telemetry-probe)'s unrequested reads). git's multi-line diagnostics are collapsed to one `%error` line. `--cmd` gives `worktree-create`/`worktree-remove` a 10-minute reply budget, since a large checkout outlasts the default.
 - **Persistence.** The link persists with its workspace (an optional `worktree` object in the state file; format version unchanged), so groups survive a daemon restart. A checkout deleted while the daemon was down still restores its workspace (the pane lands in `$HOME` with the usual gone-cwd note); `worktree-remove` then prunes the stale entry.
 
+## Raw pane streams
+
+A local client can follow one pane's raw output, and optionally drive it, without parsing the whole broadcast stream (herdr's `terminal session observe` / `terminal session control`). Two control commands turn the connection that sends them into a pane stream, and two subcommands wrap them for the shell:
+
+```bash
+par-mux observe -t %3              # the pane's screen, then its live bytes, to stdout; read-only
+par-mux observe -t %3 --no-seed    # live bytes only
+par-mux control -t %3              # the same output, plus stdin forwarded to the pane until EOF
+par-mux control -t %3 --size 120x40   # report a fixed grid instead of following this terminal
+```
+
+`observe` and `control` take the client targeting trio (`[NAME]`, `--socket`, `--state-dir`). They exit 0 when the daemon ends the stream with `%exit` (the pane closed, or the daemon shut down) or `control`'s stdin reached EOF; 1 when the stream is refused (no daemon, no such pane, or a hook-only pane socket under `--pane-endpoints`, which closes without a reply — pass `--socket`); and 2 when the connection drops mid-stream without `%exit` (the observer was evicted for not draining, or the daemon died) or fails. `control` forwards stdin as a byte stream, as it arrives, in chunks of at most 4 KiB. It does not put the terminal into raw mode, so it is meant for pipes and scripts (`printf 'make test\r' | par-mux control -t %3 --no-seed`). Typed at a terminal, the tty echoes the input into the same stdout and delivers it a line at a time, and Ctrl-C ends the controller. For interactive single-pane use, run `par-mux attach -t %N`. `control` follows the terminal's size by re-reading it every 250 ms (stdout, then stdin; Unix) and reports each change. On Windows, or with no terminal, only `--size` reports a size.
+
+**The wire.** `observe-pane -t <pane>` (or `control-pane -t <pane>`) is answered with one reply block whose body is a header line `pane %N COLSxROWS` (plus ` exited=<code|?>` for a pane already held dead), then the pane's screen-restore seed — the same bytes `refresh-client -t` returns, so feeding the seed to a fresh emulator of that size reproduces the screen, scrollback, cursor, and modes. Strip exactly one header line and join the remaining body lines with `\n` to recover the seed. From then on the connection receives only:
+
+- `%output %N <data>` for that pane — raw PTY bytes, octal-escaped exactly as on the shared broadcast;
+- `%pane-exited %N [code]` and `%pane-respawned %N` for that pane;
+- `%exit` — the pane left the tree (killed, or removed when its process exited without remain-on-exit) or the daemon is shutting down. The daemon closes the connection after it;
+- the reply blocks of the connection's own later commands.
+
+Layout, session, agent, and other panes' lines never reach a stream connection. Frames are raw PTY bytes rather than rendered lines or screen diffs: the consumer runs its own terminal emulator (the seed initializes it), which keeps the stream lossless for escape sequences, graphics, and modes, and costs the daemon nothing beyond the fan-out it already does.
+
+**Ordering rule for consumers.** Ignore every line that arrives before the stream reply's `%end` — pre-reply `%output` (any pane), the registration replay of held panes and zoomed windows, other broadcasts — then apply the seed, then apply every later `%output` in order. The daemon reads the seed and queues it, together with the switch to the narrowed stream, while holding the lock every output push takes, so a pre-reply `%output` is always already contained in the seed and no post-reply one is. The one residual window is the one the attach client's seed shares: the PTY reader applies a chunk to the pane's terminal before forwarding it, so a chunk applied just before the seed is read but forwarded just after can appear twice. `par_mux::mux::pane_stream` (`StreamDecoder`, `StreamReader`, `open`, `run`) implements the rule for Rust embedders; `MuxClient` does not, because it splits replies and notifications onto separate channels and loses their relative order.
+
+**Multiple observers.** Each stream is an ordinary registered connection whose writer filters the shared broadcast, so any number of observers and controllers can follow the same pane at once. Each has its own bounded queue and the usual [eviction](#client-backpressure-and-eviction) rule, so a stalled observer is disconnected without slowing the others.
+
+**Read-only vs writable.** On an `observe-pane` connection every later command is refused with `%error observe-pane: this connection is a read-only pane stream`. A `control-pane` connection keeps the full command grammar on the same socket — a sidecar connection or mode switch is unnecessary because the control socket is already full-duplex: input goes through `send-keys -t %N -H <hex bytes…>` (the byte-exact form; `par-mux control` sends stdin this way) and size through `refresh-client -t %N -C WxH`. That size report is the connection's own contribution to the window's smallest-client size, exactly like an attach client's, and it is withdrawn when the connection closes, so the window re-fits to the clients still viewing it. It sizes the pane's WINDOW, not the pane: in a split window the pane gets its layout share of `WxH`. A controller that has reported a size is a full viewer, like an attach client. It is announced to the other clients (`%client-attached`/`%client-left`), and the daemon's seen pass clears a `done` agent to `idle` in every pane of that window. An observer, and a controller that never reports a size, does neither. A second `observe-pane`/`control-pane` on a connection that already streams is refused. A pane's death keeps the stream open (the `%pane-exited` line arrives, and a `respawn-pane` continues it with `%pane-respawned` and fresh output); only the pane leaving the tree ends it.
+
+**Limits.** A stream follows one pane; follow several with several connections. There is no takeover: input from a controller interleaves with every other writer to the same pane (attach clients, `send-keys` from scripts), as tmux's does. A controller's input rides the same `send-keys` dispatch every client uses, which writes to the PTY under the daemon's tree lock — a program that stops reading its input while a controller keeps pasting blocks other commands until its PTY drains. The integration tests run on Unix only. On Windows the stream logic is the same, `par-mux control` reports only `--size`, and after `%exit` the pipe stays open until the client hangs up (`par-mux observe`/`control` do so on `%exit`).
+
 ## Notifications
 
 Broadcast lines every connected (registered) client receives, emitted in this order per mutating dispatch: `%layout-change` first (it carries the geometry the pane-changed notification is read against), then lifecycle broadcasts, then issuer-only notifications.
@@ -895,7 +930,7 @@ Broadcast lines every connected (registered) client receives, emitted in this or
 | `%agent-released %N <agent>` | The pane's agent released its claim (`pane.release_agent`) — state, hook authority, session identity, and telemetry cleared; the pane left the roster |
 | `%agent-telemetry-changed %N <agent>` | An agent's telemetry changed (`pane.report_agent_telemetry` accepted a fresh sample). Identity only, no values — clients re-query `list-agents` for the fresh blob, the same shape `%sessions-changed` teaches |
 | `%pane-title-changed %N [title]` | A pane's user title changed — `select-pane -T` set it (title follows the pane id, spaces included) or cleared it (no title token). The user title is sticky over the program's OSC title; the notification carries the user title only |
-| `%exit` | Graceful shutdown — the daemon is ending deliberately, not dying |
+| `%exit` | Graceful shutdown — the daemon is ending deliberately, not dying. On a [raw pane stream](#raw-pane-streams) it also means the streamed pane left the tree; the daemon closes that connection after it |
 
 tmux control-mode clients ignore `%` lines they do not recognize, so a client that never learned `%agent-state-changed` (or any future variant) still sees the raw line rather than an error.
 
