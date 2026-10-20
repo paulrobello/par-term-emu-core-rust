@@ -896,6 +896,13 @@ impl<'a> Args<'a> {
     /// part of that value, and the flag is compared against the word's
     /// raw bytes, so a quoted `'-t'` is a value rather than the flag.
     fn flag_value_word(&self, flag: &str) -> Option<(usize, usize, String)> {
+        next_shell_word(self.line, self.flag_word_end(flag)?)
+    }
+
+    /// The end of the first shell word that IS `flag`, read as in
+    /// [`Self::flag_value_word`]: a `flag` inside a quoted value, or
+    /// quoted as a value, is not the flag.
+    fn flag_word_end(&self, flag: &str) -> Option<usize> {
         let rest = self
             .line
             .trim_start()
@@ -905,7 +912,7 @@ impl<'a> Args<'a> {
         while let Some((start, end, _)) = next_shell_word(self.line, pos) {
             pos = end;
             if &self.line[start..end] == flag {
-                return next_shell_word(self.line, pos);
+                return Some(end);
             }
         }
         None
@@ -979,8 +986,11 @@ impl<'a> Args<'a> {
 
     /// Presence check for valueless flags (`-h`, `-R`, …) — [`Self::flag`]
     /// cannot distinguish "absent" from "present with no following token".
+    /// Words are read as in [`Self::flag_value_word`], so a `-f` inside
+    /// another flag's quoted value (`-t 'x -f y'`) or quoted as that value
+    /// (`-t '-f'`) is not the flag.
     fn has_flag(&self, flag: &str) -> bool {
-        self.args.contains(&flag)
+        self.flag_word_end(flag).is_some()
     }
 
     /// A target flag's value: a typed `%N`/`@N`/`$N` id or a name (see

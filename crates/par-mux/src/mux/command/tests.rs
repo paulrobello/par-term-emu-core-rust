@@ -3094,17 +3094,148 @@ fn numeric_flags_skip_flags_inside_quoted_values() {
 }
 
 /// `select-pane` reads `-T` through the quote-aware scan, so a `-T` that
-/// only appears inside the quoted target is not a title: with the
-/// presence check still flat (`has_flag`), the line is refused rather
-/// than setting the title `b'`.
+/// only appears inside the quoted target is not a title: the line selects
+/// the pane and leaves its title alone.
 #[test]
 fn select_pane_title_is_not_read_from_a_quoted_target() {
-    assert!(parse_command("select-pane -t 'a -T b'").is_err());
+    assert_eq!(
+        parse_command("select-pane -t 'a -T b'").unwrap(),
+        MuxCommand::SelectPane {
+            pane: Target::Name("a -T b".into()),
+            title: None,
+        }
+    );
     assert_eq!(
         parse_command("select-pane -t 'a -T b' -T new").unwrap(),
         MuxCommand::SelectPane {
             pane: Target::Name("a -T b".into()),
             title: Some("new".into()),
+        }
+    );
+}
+
+/// A valueless flag inside another flag's quoted value, or quoted as that
+/// value, does not fire: the destructive ones (`-f` force, `-g` group
+/// kill) used to whenever the flag sat mid-value (`'x -f y'`), because
+/// `has_flag` matched whitespace tokens.
+#[test]
+fn boolean_flags_skip_flags_inside_quoted_values() {
+    let remove = |line: &str| match parse_command(line).unwrap() {
+        MuxCommand::WorktreeRemove { workspace, force } => (workspace, force),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        remove("worktree-remove -t 'x -f y'"),
+        (Target::Name("x -f y".into()), false)
+    );
+    assert_eq!(
+        remove("worktree-remove -t 'x -f'"),
+        (Target::Name("x -f".into()), false)
+    );
+    assert_eq!(
+        remove("worktree-remove -t \"x -f y\""),
+        (Target::Name("x -f y".into()), false)
+    );
+    assert_eq!(
+        remove("worktree-remove -t '-f'"),
+        (Target::Name("-f".into()), false)
+    );
+    assert_eq!(
+        remove("worktree-remove -t 'x' -f"),
+        (Target::Name("x".into()), true)
+    );
+
+    let kill = |line: &str| match parse_command(line).unwrap() {
+        MuxCommand::KillWorkspace { workspace, group } => (workspace, group),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        kill("kill-workspace -t 'a -g b'"),
+        (Target::Name("a -g b".into()), false)
+    );
+    assert_eq!(
+        kill("kill-workspace -t 'a -g'"),
+        (Target::Name("a -g".into()), false)
+    );
+    assert_eq!(
+        kill("kill-workspace -t \"-g\""),
+        (Target::Name("-g".into()), false)
+    );
+    assert_eq!(
+        kill("kill-workspace -t 'a' -g"),
+        (Target::Name("a".into()), true)
+    );
+}
+
+/// The geometry and mode flags read through the same scan: a `-h`/`-b`
+/// inside `split-window`'s quoted start dir, a `-h` inside `join-pane`'s
+/// quoted source, a `-Z` inside `resize-pane`'s quoted target, a `-a`
+/// inside `list-windows`' quoted format, and a `-e` inside
+/// `capture-pane`'s quoted target are all part of their values.
+#[test]
+fn mode_flags_skip_flags_inside_quoted_values() {
+    match parse_command("split-window -t %0 -c '/p -h -b x'").unwrap() {
+        MuxCommand::SplitWindow {
+            direction,
+            before,
+            start_dir,
+            ..
+        } => {
+            assert_eq!(direction, SplitDirection::Horizontal);
+            assert!(!before);
+            assert_eq!(start_dir.as_deref(), Some("/p -h -b x"));
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse_command("split-window -t %0 -c '/p' -h -b").unwrap() {
+        MuxCommand::SplitWindow {
+            direction, before, ..
+        } => {
+            assert_eq!(direction, SplitDirection::Vertical);
+            assert!(before);
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse_command("join-pane -s 'a -h b' -t %1").unwrap() {
+        MuxCommand::JoinPane { direction, .. } => {
+            assert_eq!(direction, SplitDirection::Horizontal)
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        parse_command("resize-pane -t 'a -Z b' -L").unwrap(),
+        MuxCommand::ResizePane {
+            pane: Target::Name("a -Z b".into()),
+            adjustment: ResizeAdjustment::Relative {
+                direction: ResizeDirection::Left,
+                cells: 5,
+            },
+        }
+    );
+    assert_eq!(
+        parse_command("resize-pane -t 'a' -Z").unwrap(),
+        MuxCommand::ResizePane {
+            pane: Target::Name("a".into()),
+            adjustment: ResizeAdjustment::Zoom,
+        }
+    );
+    // A direction flag only inside the target is no direction at all.
+    assert!(parse_command("resize-pane -t 'a -L b'").is_err());
+    assert_eq!(
+        parse_command("list-windows -F '#{window_name} -a #{window_id}' -t $1").unwrap(),
+        MuxCommand::ListWindows {
+            session: Some(Target::Id(SessionId(1))),
+            all: false,
+            format: Some("#{window_name} -a #{window_id}".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("capture-pane -t 'x -e y'").unwrap(),
+        MuxCommand::CapturePane {
+            pane: Target::Name("x -e y".into()),
+            start_line: None,
+            end_line: None,
+            escape: false,
         }
     );
 }
