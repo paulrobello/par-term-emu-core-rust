@@ -424,6 +424,13 @@ impl MuxPane {
         self.session.update_generation()
     }
 
+    /// A lock-free handle that blocks until this pane's terminal applies
+    /// new output — what `wait-output` parks on instead of polling, with
+    /// the tree lock released.
+    pub(crate) fn update_waiter(&self) -> par_term_emu_core::pty_session::UpdateWaiter {
+        self.session.update_waiter()
+    }
+
     /// Liveness for the reaper's periodic pass — the reader flag plus the OS
     /// child handle. On Windows ConPTY the reader never observes EOF after
     /// the child exits, so [`Self::is_running`] alone would leave an exited

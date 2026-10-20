@@ -443,7 +443,11 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
             return ExitCode::from(1);
         }
     };
-    let reply = match client.send_checked(command) {
+    let sent = match par_mux::mux::command::reply_timeout(command) {
+        Some(budget) => client.send_checked_timeout(command, budget),
+        None => client.send_checked(command),
+    };
+    let reply = match sent {
         Ok(reply) => reply,
         Err(err) => {
             // A pane endpoint (ENH-039) answers a control command with one

@@ -1700,3 +1700,226 @@ fn an_explicit_done_report_is_accepted_and_seen_when_in_view() {
         "idle"
     );
 }
+/// `wait-output` searches what is already there before parking: the
+/// matched line is the reply body, for a substring and a regex alike, and
+/// a line scrolled into recent history still matches under the default
+/// range (a marker printed and scrolled off within one PTY read).
+#[test]
+fn wait_output_matches_existing_screen_and_recent_history() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let p = h.panes_of(h.windows_of(h.session_named("main"))[0])[0];
+    {
+        let term = h.tree.lock().pane(p).unwrap().terminal();
+        let mut term = term.write();
+        term.process(b"MARKER-early 41\r\n");
+        for i in 0..40 {
+            term.process(format!("filler-{i}\r\n").as_bytes());
+        }
+        term.process(b"build READY-7 ok\r\n");
+    }
+    let visible = assert_ok(&h.run(&format!("capture-pane -t {p}"))).join("\n");
+    assert!(
+        !visible.contains("MARKER-early"),
+        "the marker scrolled off the screen: {visible}"
+    );
+    assert_eq!(
+        assert_ok(&h.run(&format!("wait-output -t {p} -m READY -T 0"))),
+        vec!["build READY-7 ok".to_string()]
+    );
+    assert_eq!(
+        assert_ok(&h.run(&format!(r"wait-output -t {p} -r 'READY-\d+ ok$' -T 0"))),
+        vec!["build READY-7 ok".to_string()]
+    );
+    assert_eq!(
+        assert_ok(&h.run(&format!("wait-output -t {p} -m MARKER-early -T 0"))),
+        vec!["MARKER-early 41".to_string()],
+        "recent history is searched by default"
+    );
+    // `-S 0` narrows the search to the screen, capture-pane's range rule;
+    // the harness pane has no process, so the miss ends as an exit.
+    assert_error(
+        &h.run(&format!("wait-output -t {p} -m MARKER-early -S 0")),
+        &format!("wait-output: pane {p} exited without a match"),
+    );
+}
+
+/// The content `wait-output` matches is exactly `capture-pane`'s: every
+/// line a `-S/-E` capture returns is matchable under the same range, and
+/// a line outside it is not.
+#[test]
+fn wait_output_sees_what_capture_pane_sees() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let p = h.panes_of(h.windows_of(h.session_named("main"))[0])[0];
+    {
+        let term = h.tree.lock().pane(p).unwrap().terminal();
+        let mut term = term.write();
+        for i in 0..60 {
+            term.process(format!("row-{i:02}\r\n").as_bytes());
+        }
+    }
+    let captured = assert_ok(&h.run(&format!("capture-pane -t {p} -S -5 -E 2")));
+    assert!(!captured.is_empty());
+    for line in captured
+        .iter()
+        .map(|l| l.trim_end())
+        .filter(|l| !l.is_empty())
+    {
+        assert_eq!(
+            assert_ok(&h.run(&format!("wait-output -t {p} -m '{line}' -S -5 -E 2 -T 0"))),
+            vec![line.to_string()]
+        );
+    }
+    assert_error(
+        &h.run(&format!("wait-output -t {p} -m row-00 -S -5 -E 2")),
+        &format!("wait-output: pane {p} exited without a match"),
+    );
+}
+
+/// Unknown targets and an unmatched pattern on a live pane error inside
+/// the reply block — the timeout message is the stable `timed out` text
+/// scripts can tell apart from a bad target.
+#[test]
+fn wait_output_times_out_on_a_live_pane_and_rejects_unknown_targets() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let ctx = Ctx {
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+    run("new-session -s main");
+    let pane = {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        guard.window(window).unwrap().panes()[0]
+    };
+    assert_error(&run("wait-output -t %99 -m x -T 0"), "no such pane: %99");
+    let started = std::time::Instant::now();
+    let reply = run(&format!(
+        "wait-output -t {pane} -m NEVER-PRINTED-9f3 -T 300"
+    ));
+    let waited = started.elapsed();
+    assert_error(
+        &reply,
+        &format!("wait-output: timed out after 300ms without a match on {pane}"),
+    );
+    assert!(
+        waited >= std::time::Duration::from_millis(300)
+            && waited < std::time::Duration::from_secs(5),
+        "the wait honors -T: {waited:?}"
+    );
+    let _ = tree.lock().pane_mut(pane).unwrap().kill();
+}
+
+/// A wait parked on a live pane holds no tree lock: another dispatch on
+/// the same tree runs while it waits, and killing the pane ends the wait
+/// with the `closed` error instead of leaving it parked.
+#[test]
+fn wait_output_holds_no_lock_and_ends_when_the_pane_closes() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let ctx = |n: u32| Ctx {
+        tree: &tree,
+        clients: &clients,
+        command_number: n,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run =
+        |n: u32, line: &str| dispatch_command(parse_command(line).unwrap(), &ctx(n), None, None);
+    run(1, "new-session -s main");
+    run(2, "split-window -t %0");
+    std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| {
+            let started = std::time::Instant::now();
+            let reply = run(3, "wait-output -t %0 -m NEVER-PRINTED-9f3 -T 20000");
+            (reply, started.elapsed())
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        let listed = run(4, "list-panes");
+        assert!(listed.contains("%0") && listed.contains("%1"), "{listed}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a parked wait must not hold the tree lock"
+        );
+        assert!(!run(5, "kill-pane -t %0").contains("%error"));
+        let (reply, waited) = waiting.join().expect("the wait thread");
+        assert_error(&reply, "wait-output: pane %0 closed without a match");
+        assert!(
+            waited < std::time::Duration::from_secs(10),
+            "the close ended the wait promptly: {waited:?}"
+        );
+    });
+    let _ = tree.lock().pane_mut(PaneId(1)).unwrap().kill();
+}
+
+/// A wait whose client left the broadcast registry (hung up, evicted)
+/// ends with the disconnect error instead of parking until `-T`.
+#[test]
+fn wait_output_ends_when_its_client_disconnects() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let run = |client_id: Option<u64>, line: &str| {
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id,
+        };
+        dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+    };
+    run(None, "new-session -s main");
+    let started = std::time::Instant::now();
+    let reply = run(Some(42), "wait-output -t %0 -m NEVER-PRINTED-9f3 -T 20000");
+    assert_error(&reply, "wait-output: client disconnected");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = tree.lock().pane_mut(PaneId(0)).unwrap().kill();
+}
+
+/// The bounded history walk a `-S/-E` capture reads composes to exactly
+/// what the full `export_scrollback` walk did, for every range shape.
+#[test]
+fn capture_history_tail_matches_the_full_export() {
+    let mut term = par_term_emu_core::terminal::Terminal::with_scrollback(20, 5, 100);
+    for i in 0..40 {
+        term.process(format!("line-{i:02}\r\n").as_bytes());
+    }
+    let full = term.export_scrollback(par_term_emu_core::terminal::ExportFormat::Plain, None);
+    let screen = term.content();
+    for (start, end) in [
+        (Some(-3), None),
+        (Some(-100), Some(2)),
+        (None, Some(-2)),
+        (Some(-5), Some(-8)),
+        (Some(0), Some(3)),
+        (Some(2), Some(-4)),
+        (Some(i64::MIN), Some(i64::MIN)),
+    ] {
+        assert_eq!(
+            super::buffers::capture_text(&term, start, end, false),
+            crate::mux::server::capture_range(&full, &screen, start, end),
+            "-S {start:?} -E {end:?}"
+        );
+    }
+}

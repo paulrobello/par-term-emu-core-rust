@@ -111,7 +111,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Self-targeting | Socket precedence `--socket` > name > `$PAR_MUX_SOCKET` > default; works from inside a pane | `--current` targets the calling pane; `pane split` defaults to the caller | PM-MUX / H-SKILL |
 | Capture output | `capture-pane -S/-E` tmux offsets; `-e` for SGR-styled lines | `pane read` / `agent read` with sources `visible \| recent \| recent-unwrapped \| detection`, `--lines`, text/ANSI | PM-MUX / H-CLI |
 | Send input | `send-keys` tmux contract (`-l` literal, `-H` hex, key re-encoding vs pane mode) | `pane send-text`, `pane send-keys` (combo syntax), `pane run` bracketed-paste-aware atomic submit | PM-MUX / H-CLI |
-| Wait on output | Not found (poll `capture-pane`) | `pane wait-output (--match \| --regex) --source --lines --timeout` | — / H-CLI |
+| Wait on output | `wait-output -t %N (-m TEXT \| -r REGEX) [-T ms] [-S/-E]` — blocks on the pane's update signal, matches `capture-pane`'s content (default: 100 history lines + screen), exit 0 match / 1 timeout or pane gone through `--cmd` | `pane wait-output (--match \| --regex) --source --lines --timeout` | PM-MUX / H-CLI |
 | Paste buffers | Single `default` slot: `set-buffer` / `show-buffer` / `paste-buffer` | No tmux-style buffers; copy-on-select and clipboard integration instead | PM-MUX / H-CFG |
 | Environment scoping | `set-environment` per session (durable, persisted) | `pane split --env` per spawn | PM-MUX / H-CLI |
 | Capability discovery | `list-commands` feature tokens; `client-snapshot` one-round-trip read | `herdr api schema` (JSON-Schema, bundled in docs); `herdr api snapshot` | PM-MUX / H-API |
@@ -204,7 +204,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Style | tmux verbs sent over the socket via `--cmd`; subcommands for lifecycle | Noun-verb JSON CLI (`workspace/pane/agent/...`), identical arguments over the socket API | PM-MUX / H-CLI |
-| Scale | ~47 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
+| Scale | 49 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
 | Full enumerations | See [Appendix](#appendix-command-enumerations) | See [Appendix](#appendix-command-enumerations) | — |
 
 ## Where each leads
@@ -237,7 +237,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (wire commands)
 
-`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `list-commands`, `client-snapshot`, `capture-pane`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`.
+`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`.
 
 ### herdr (CLI noun groups)
 

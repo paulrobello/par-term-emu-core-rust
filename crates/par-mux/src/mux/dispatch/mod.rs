@@ -242,6 +242,7 @@ fn route_command(
         | MuxCommand::JoinPane { .. }
         | MuxCommand::RespawnPane { .. }) => route_pane_command(ctx, command, issuer),
         command @ (MuxCommand::CapturePane { .. }
+        | MuxCommand::WaitOutput { .. }
         | MuxCommand::SetBuffer { .. }
         | MuxCommand::SetClientColors { .. }
         | MuxCommand::SetEnvironment { .. }

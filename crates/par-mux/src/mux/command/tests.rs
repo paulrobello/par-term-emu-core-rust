@@ -2292,4 +2292,77 @@ fn new_verbs_appear_in_list_commands() {
             "{name} must be discoverable via list-commands"
         );
     }
+    assert!(
+        body.lines().any(|line| line == "wait-output match regex"),
+        "wait-output advertises its matchers: {body}"
+    );
+}
+
+#[test]
+fn parses_wait_output_substring_and_regex() {
+    assert_eq!(
+        parse_command("wait-output -t %3 -m 'build done' -T 500").unwrap(),
+        MuxCommand::WaitOutput {
+            pane: Target::Id(PaneId(3)),
+            pattern: OutputPattern::Substring("build done".to_string()),
+            timeout_ms: Some(500),
+            start_line: None,
+            end_line: None,
+        }
+    );
+    assert_eq!(
+        parse_command(r"wait-output -t %3 -r 'READY-\d+' -S -200 -E -1").unwrap(),
+        MuxCommand::WaitOutput {
+            pane: Target::Id(PaneId(3)),
+            pattern: OutputPattern::Regex(r"READY-\d+".to_string()),
+            timeout_ms: None,
+            start_line: Some(-200),
+            end_line: Some(-1),
+        }
+    );
+    // A quoted pattern carrying flag-like words stays one value.
+    assert_eq!(
+        parse_command("wait-output -m 'x -r y' -t %1").unwrap(),
+        MuxCommand::WaitOutput {
+            pane: Target::Id(PaneId(1)),
+            pattern: OutputPattern::Substring("x -r y".to_string()),
+            timeout_ms: None,
+            start_line: None,
+            end_line: None,
+        }
+    );
+    assert!(!parse_command("wait-output -t %1 -m x").unwrap().mutates());
+}
+
+#[test]
+fn wait_output_rejects_bad_shapes() {
+    for (line, needle) in [
+        ("wait-output -m x", "requires -t"),
+        ("wait-output -t %1", "requires -m TEXT or -r REGEX"),
+        ("wait-output -t %1 -m a -r b", "exclusive"),
+        ("wait-output -t %1 -m ''", "non-empty"),
+        ("wait-output -t %1 -r '('", "invalid -r"),
+        ("wait-output -t %1 -m a -T soon", "invalid -T"),
+        ("wait-output -t %1 -m a -T -5", "invalid -T"),
+        ("wait-output -t %1 -m a -S top", "invalid -S"),
+        ("wait-output -t %1 -m a extra", "unexpected argument"),
+        ("wait-output -t %1 -m a -x 1", "unknown flag -x"),
+        ("wait-output -t %1 -m a -m b", "duplicate -m"),
+    ] {
+        let err = parse_command(line).expect_err(line);
+        assert!(err.contains(needle), "{line}: {err}");
+    }
+}
+
+#[test]
+fn wait_output_reply_timeout_covers_the_wait() {
+    use std::time::Duration;
+    assert_eq!(
+        reply_timeout("wait-output -t %1 -m x -T 30000"),
+        Some(Duration::from_millis(35_000))
+    );
+    assert!(reply_timeout("wait-output -t %1 -m x").unwrap() > Duration::from_secs(86_400));
+    assert!(reply_timeout(&format!("wait-output -t %1 -m x -T {}", u64::MAX)).is_some());
+    assert_eq!(reply_timeout("capture-pane -t %1"), None);
+    assert_eq!(reply_timeout("wait-output -t %1"), None);
 }

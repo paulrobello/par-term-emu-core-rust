@@ -20,6 +20,68 @@ pub(super) fn parse_capture_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+/// `wait-output -t <pane> (-m TEXT | -r REGEX) [-T ms] [-S start] [-E end]`.
+/// Read through [`split_leading_flags`] so a quoted pattern containing
+/// spaces or flag-like words stays one value.
+pub(super) fn parse_wait_output(a: &Args<'_>) -> Result<MuxCommand, String> {
+    use LeadingFlag::Valued;
+    let lead = split_leading_flags(
+        a.line,
+        a.name,
+        &[
+            Valued("-t"),
+            Valued("-m"),
+            Valued("-r"),
+            Valued("-T"),
+            Valued("-S"),
+            Valued("-E"),
+        ],
+    )?;
+    if !lead.tail.is_empty() {
+        return Err(format!("{}: unexpected argument {:?}", a.name, lead.tail));
+    }
+    let raw = match lead.value("-t") {
+        None => return Err(format!("{} requires -t", a.name)),
+        Some("") => return Err(format!("{}: -t requires a non-empty name", a.name)),
+        Some(raw) => raw,
+    };
+    let pane = Target::parse(raw).map_err(|_| format!("invalid pane target: {raw}"))?;
+    let pattern = match (lead.value("-m"), lead.value("-r")) {
+        (Some(_), Some(_)) => return Err(format!("{}: -m and -r are exclusive", a.name)),
+        (None, None) => return Err(format!("{} requires -m TEXT or -r REGEX", a.name)),
+        (Some(""), None) | (None, Some("")) => {
+            return Err(format!("{}: the pattern must be non-empty", a.name))
+        }
+        (Some(text), None) => OutputPattern::Substring(text.to_string()),
+        (None, Some(re)) => {
+            regex::Regex::new(re).map_err(|err| format!("{}: invalid -r: {err}", a.name))?;
+            OutputPattern::Regex(re.to_string())
+        }
+    };
+    let line_offset = |flag: &str| -> Result<Option<i64>, String> {
+        lead.value(flag)
+            .map(|raw| {
+                raw.parse::<i64>()
+                    .map_err(|_| format!("{}: invalid {flag}: {raw}", a.name))
+            })
+            .transpose()
+    };
+    let timeout_ms = lead
+        .value("-T")
+        .map(|raw| {
+            raw.parse::<u64>()
+                .map_err(|_| format!("{}: invalid -T milliseconds: {raw}", a.name))
+        })
+        .transpose()?;
+    Ok(MuxCommand::WaitOutput {
+        pane,
+        pattern,
+        timeout_ms,
+        start_line: line_offset("-S")?,
+        end_line: line_offset("-E")?,
+    })
+}
+
 pub(super) fn parse_set_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
     // `-H` carries the payload as hex bytes, one byte per token — the same
     // form `send-keys -H` uses. The control wire is line-delimited, so

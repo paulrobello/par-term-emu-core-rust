@@ -3,7 +3,7 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
-<!-- PAR_MUX_INTEGRATION_VERSION=2 -->
+<!-- PAR_MUX_INTEGRATION_VERSION=3 -->
 
 # par-mux
 
@@ -115,6 +115,7 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Type a command | `send-keys -t %N -l "make test" --enter` — the `--enter` flag appends Enter (one call); the two-step `… "make test" Enter` also works |
 | Capture screen | `capture-pane -t %N` — visible screen; `-S -200` adds 200 history lines |
 | Capture styled | `capture-pane -t %N -e` — one line per grid row with SGR escapes inline |
+| Wait for output | `wait-output -t %N (-m TEXT \| -r REGEX) [-T ms]` — blocks until a line matches; exit 0 + the line, exit 1 on timeout/exit/close |
 | Read a title | `pane-title -t %N` (empty reply = none set) |
 | Set a sticky title | `select-pane -t %N -T 'dev server'` (``-T ''`` clears) |
 | Pane geometry | `pane-info -t %N` → `%N @W COLSxROWS`; `resize-pane -t %N -x 80 -y 24` (or `-L\|-R\|-U\|-D [cells]`) |
@@ -151,10 +152,20 @@ content, send line-wise or set the buffer once per line before each
 
 ## Reading pane output
 
-`capture-pane` returns what is on screen right now — for a long-running
-command (dev server, test run, agent) capture repeatedly and diff, or send
-the command with `Enter` and poll. To wait for an agent verdict instead of
-polling its screen, read the roster:
+`capture-pane` returns what is on screen right now. To wait for a
+long-running command (dev server, test run) to print something, use
+`wait-output` instead of polling:
+
+```sh
+par-mux --cmd "wait-output -t %3 -r 'listening on|error' -T 60000"
+```
+
+It blocks until a line of the pane's capture (the last 100 history lines
+plus the screen; `-S/-E` as for `capture-pane`) matches `-m TEXT` or
+`-r REGEX`, prints that line, and exits 0; a timeout, pane exit, or pane
+close exits 1 with the reason on stderr. Output already on screen matches
+at once, so wait for a marker unique to this run. To wait for an agent
+verdict instead of watching its screen, read the roster:
 
 ```sh
 par-mux --cmd list-agents       # %3 claude blocked hook reason=<base64> ws=+0

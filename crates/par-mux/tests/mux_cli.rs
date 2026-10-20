@@ -1874,3 +1874,90 @@ fn list_panes_session_target_via_cli() {
         "both panes of the session's window: {run}"
     );
 }
+
+/// `wait-output` through the CLI: it blocks until the pane prints the
+/// marker, exits 0 with the matched line on stdout; a miss exits 1 with
+/// the timeout named on stderr.
+#[test]
+fn wait_output_blocks_until_the_pane_prints_then_exits_zero() {
+    let fixture = MuxFixture::new("cliwait");
+    let _daemon = daemon_with_session(&fixture, "cliwait");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    let socket_path = socket.to_path_buf();
+    let wait_pane = pane.clone();
+    // The regex only matches the EXECUTED output, never the echoed
+    // command line (whose quote/caret splits the marker).
+    let waiter = std::thread::spawn(move || {
+        cmd(
+            &socket_path,
+            &format!("wait-output -t {wait_pane} -r '^WAIT-DONE-[0-9]+$' -T 12000"),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    #[cfg(unix)]
+    let typed = r#"echo WAIT""-DONE-42"#;
+    #[cfg(windows)]
+    let typed = "echo WAIT^-DONE-42";
+    cmd_ok(socket, &format!("send-keys -t {pane} '{typed}' Enter"));
+    let run = waiter.join().expect("the waiting CLI");
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.stdout, "WAIT-DONE-42\n");
+
+    let missed = cmd(
+        socket,
+        &format!("wait-output -t {pane} -m NEVER-PRINTED-9f3 -T 200"),
+    );
+    assert_eq!(missed.code, Some(1), "stdout={:?}", missed.stdout);
+    assert!(
+        missed.stderr.contains("wait-output: timed out after 200ms"),
+        "{:?}",
+        missed.stderr
+    );
+}
+
+/// A parked `wait-output` does not block the daemon's other clients:
+/// list-panes and capture-pane on the same pane answer while it waits.
+#[test]
+fn wait_output_does_not_block_other_clients() {
+    let fixture = MuxFixture::new("cliwaitpar");
+    let _daemon = daemon_with_session(&fixture, "cliwaitpar");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    let socket_path = socket.to_path_buf();
+    let wait_pane = pane.clone();
+    let waiter = std::thread::spawn(move || {
+        cmd(
+            &socket_path,
+            &format!("wait-output -t {wait_pane} -m NEVER-PRINTED-9f3 -T 5000"),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    cmd_ok(socket, "list-panes");
+    cmd_ok(socket, &format!("capture-pane -t {pane}"));
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "other clients were served while the wait was parked: {:?}",
+        started.elapsed()
+    );
+    let run = waiter.join().expect("the waiting CLI");
+    assert_eq!(
+        run.code,
+        Some(1),
+        "the wait itself times out: {:?}",
+        run.stderr
+    );
+}

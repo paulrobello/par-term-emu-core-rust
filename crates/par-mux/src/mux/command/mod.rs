@@ -417,6 +417,24 @@ pub enum MuxCommand {
         /// text after the flags.
         command: Option<String>,
     },
+    /// Block until a line of the pane's captured text matches, or fail on
+    /// timeout, pane exit, or pane close — scripts wait on output instead
+    /// of polling `capture-pane` (herdr `pane wait-output` parity).
+    WaitOutput {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// `-m TEXT` (substring) or `-r REGEX`, matched per line.
+        pattern: OutputPattern,
+        /// `-T MS`: fail after this many milliseconds; `None` waits until a
+        /// match, the pane's exit or close, or the daemon's shutdown.
+        timeout_ms: Option<u64>,
+        /// `-S`: first line searched, `capture-pane`'s offset convention.
+        /// `None` searches [`WAIT_OUTPUT_DEFAULT_HISTORY`] history lines
+        /// plus the screen.
+        start_line: Option<i64>,
+        /// `-E`: last line searched, inclusive; `None` = the screen bottom.
+        end_line: Option<i64>,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -612,6 +630,7 @@ impl MuxCommand {
             | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
+            | MuxCommand::WaitOutput { .. }
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::PaneExitedReplay
@@ -630,6 +649,39 @@ impl MuxCommand {
             | MuxCommand::HasSession { .. }
             | MuxCommand::Version => false,
         }
+    }
+}
+
+/// What a `wait-output` line must contain. Patterns are kept as text so
+/// [`MuxCommand`] stays `Eq`; the parser has already proven a regex
+/// compiles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputPattern {
+    /// `-m`: a literal substring.
+    Substring(String),
+    /// `-r`: a Rust `regex` pattern.
+    Regex(String),
+}
+
+/// History lines `wait-output` searches above the screen when no `-S` is
+/// given, so a marker printed and scrolled off within one PTY read still
+/// matches (herdr searches its last 80 lines the same way).
+pub const WAIT_OUTPUT_DEFAULT_HISTORY: i64 = 100;
+
+/// The reply budget a client should give `line`'s command when it differs
+/// from the client's default: `wait-output -T MS` replies after up to `MS`
+/// (plus a grace for the reply to travel), and without `-T` it may block
+/// for as long as the pane lives.
+pub fn reply_timeout(line: &str) -> Option<std::time::Duration> {
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+    const UNBOUNDED: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
+    match parse_command(line) {
+        Ok(MuxCommand::WaitOutput { timeout_ms, .. }) => Some(timeout_ms.map_or(UNBOUNDED, |ms| {
+            std::time::Duration::from_millis(ms)
+                .saturating_add(GRACE)
+                .min(UNBOUNDED)
+        })),
+        _ => None,
     }
 }
 
@@ -1260,6 +1312,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("swap-window", parse_swap_windows, &[]),
     ("respawn-pane", parse_respawn_pane, &["kill", "start-dir"]),
     ("capture-pane", parse_capture_pane, &["escape"]),
+    ("wait-output", parse_wait_output, &["match", "regex"]),
     ("set-buffer", parse_set_buffer, &[]),
     ("set-client-colors", parse_set_client_colors, &[]),
     ("set-environment", parse_set_environment, &[]),
