@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -67,6 +67,8 @@ help:
 	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
 	@echo "  mux-schema      - Regenerate crates/par-mux/schema/par-mux-commands.json from the COMMANDS table + MUX.md Command Reference"
 	@echo "  mux-schema-check - Fail when the committed par-mux command schema drifts from the COMMANDS table or the MUX.md Command Reference"
+	@echo "  completions     - Regenerate the par-mux shell completions (bash/zsh/fish/powershell/elvish) under crates/par-mux/completions/"
+	@echo "  completions-check - Fail when the committed par-mux shell completions drift from the clap CLI surface"
 	@echo "  env-docs-check  - Fail when an env var production code reads is missing from CONFIG_REFERENCE (or vice versa)"
 	@echo "  pinned-tests-check - Fail when a 'pinned by <test>' doc citation names no test in the tree"
 	@echo "  rustdoc-check    - Fail when rustdoc has broken or private intra-doc links in par-mux, par-term-emu-core, or the root crate (RUSTDOCFLAGS=-D warnings)"
@@ -489,6 +491,34 @@ mux-schema-check:
 	python3 scripts/gen_mux_schema.py --check
 	python3 scripts/gen_mux_schema.py --self-test
 
+# par-mux shell completions, generated from the clap surface by the hidden
+# `--print-completions SHELL` flag (release feature set mux-bin,attach).
+# Names follow clap_complete's Shell::file_name. The check regenerates into
+# a temp dir and fails when the tracked scripts drift from the CLI.
+PAR_MUX_COMPLETIONS_DIR := crates/par-mux/completions
+PAR_MUX_COMPLETIONS := bash:par-mux.bash zsh:_par-mux fish:par-mux.fish powershell:_par-mux.ps1 elvish:par-mux.elv
+
+define gen_par_mux_completions
+	cargo build -q -p par-mux --bin par-mux --features mux-bin,attach
+	mkdir -p $(1)
+	@for pair in $(PAR_MUX_COMPLETIONS); do \
+		shell=$${pair%%:*}; file=$${pair#*:}; \
+		cargo run -q -p par-mux --bin par-mux --features mux-bin,attach -- --print-completions $$shell > $(1)/$$file || exit 1; \
+	done
+endef
+
+completions:
+	$(call gen_par_mux_completions,$(PAR_MUX_COMPLETIONS_DIR))
+
+completions-check:
+	@tmp=$$(mktemp -d); \
+	$(MAKE) --no-print-directory _completions-into DIR=$$tmp || { rm -rf $$tmp; exit 1; }; \
+	if diff -ru $(PAR_MUX_COMPLETIONS_DIR) $$tmp; then rm -rf $$tmp; echo "par-mux completions are in sync"; \
+	else rm -rf $$tmp; echo "par-mux completions drifted from the clap surface: run 'make completions' and commit $(PAR_MUX_COMPLETIONS_DIR)"; exit 1; fi
+
+_completions-into:
+	$(call gen_par_mux_completions,$(DIR))
+
 # ENH-057: every "pinned by `test`" citation in docs/*.md and CHANGELOG
 # [Unreleased] names a test fn or test target that exists. Pure python3.
 pinned-tests-check:
@@ -614,7 +644,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check completions-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

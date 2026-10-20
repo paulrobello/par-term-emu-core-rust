@@ -1,0 +1,113 @@
+# Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
+function __fish_par_mux_global_optspecs
+    string join \n socket= state-dir= stop restart foreground no-attach c/cmd= list-servers pane-endpoints expose-control-socket gen-config force install-skill skills-dir= install-agent-hooks uninstall-agent-hooks agent-hooks-status integration-status install-agent-extensions uninstall-agent-extensions heal-agent-hooks print-schema print-completions= h/help V/version
+end
+
+function __fish_par_mux_needs_command
+    # Figure out if the current invocation already has a command.
+    set -l cmd (commandline -opc)
+    set -e cmd[1]
+    argparse -s (__fish_par_mux_global_optspecs) -- $cmd 2>/dev/null
+    or return
+    if set -q argv[1]
+        # Also print the command, so this can be used to figure out what it is.
+        echo $argv[1]
+        return 1
+    end
+    return 0
+end
+
+function __fish_par_mux_using_subcommand
+    set -l cmd (__fish_par_mux_needs_command)
+    test -z "$cmd"
+    and return 1
+    contains -- $cmd[1] $argv
+end
+
+complete -c par-mux -n "__fish_par_mux_needs_command" -l socket -d 'Bind an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_needs_command" -l state-dir -d 'Override the platform state directory (D3.4) that persisted session trees are written under, instead of the OS-standard state/data dir' -r -F
+complete -c par-mux -n "__fish_par_mux_needs_command" -s c -l cmd -d 'Client mode: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A `%error` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous' -r
+complete -c par-mux -n "__fish_par_mux_needs_command" -l skills-dir -d 'With --install-skill: write under this skills root instead of the Claude Code default (tests, other agent harnesses)' -r -F
+complete -c par-mux -n "__fish_par_mux_needs_command" -l print-completions -d 'Print the shell-completion script for SHELL (bash, zsh, fish, powershell, elvish) generated from this CLI, and exit. Never contacts a daemon' -r -f -a "bash\t''
+elvish\t''
+fish\t''
+powershell\t''
+zsh\t''"
+complete -c par-mux -n "__fish_par_mux_needs_command" -l stop -d 'Stop the daemon serving this socket cleanly (final state save, `%exit` to clients) and wait for it to exit. Flags rather than subcommands: the positional NAME would otherwise be ambiguous with a session named `stop`'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l restart -d 'Stop the running daemon (as --stop), then start a fresh one on the same socket — it restores the tree the stop just saved. Use after rebuilding par-mux: clients attach to whatever daemon owns the socket, so an old daemon keeps serving old code until restarted'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l foreground -d 'Serve the daemon in the foreground of this process instead of the default daemonize-to-background: the debugging and supervision escape, and the shape programmatic spawners use (they own and kill the child they spawned). Not a daemon_mode member on purpose: it composes with --restart (stop, then serve here)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l no-attach -d 'Daemon-only: daemonize to background as usual but skip the auto-attach of the invoking terminal (and the isatty fallback that skips attaching for scripted starts)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l list-servers -d 'Client mode: list every live par-mux server this user can reach — registry entries plus the named-default sockets on disk — one line per server (`<name-or-path>  sessions=N  stamp`), pruning registry entries whose probe failed. Never starts a daemon. Honors `--state-dir`, so tests can point the registry at a fixture; with `--socket`/NAME, the named/default resolution is skipped for the target socket (discovery is user-wide, not per-socket)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l pane-endpoints -d 'Give each pane its own hook-only socket endpoint: `PAR_MUX_SOCKET` in a pane then names a socket that accepts ONLY hook reports for that pane, so its child processes cannot drive other panes or stop the server. Default off — the in-pane full-socket fallback is a core feature; see docs/MUX.md for the trade and the default-flip gate'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l expose-control-socket -d 'With --pane-endpoints: also export `PAR_MUX_CONTROL_SOCKET` (the full control socket) in every pane, so agent-driven pane control keeps working. A session env of `PAR_MUX_CONTROL=1` grants the same per session without this flag'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l gen-config -d 'Write the config file with the CURRENT EFFECTIVE settings (file if present > env > built-in defaults; startup CLI flags are not introspectable after parse, so a flagged value that also appears here wins only where this code path sees the flag — the socket and the daemon bools). Never overwrites without --force. With no config file yet, this is how a user starts one'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l force -d 'With --gen-config: overwrite an existing config file'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l install-skill -d 'Install the bundled par-mux agent skill into the Claude Code skills directory and exit. Never starts or contacts a daemon, so it runs anywhere, including inside a pane; par-term invokes it after installing par-mux so the skill matches the shipped binary'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l install-agent-hooks -d 'Install the agent-state session hooks for claude, codex, grok, muse, droid, copilot, and cursor (script assets plus the config entries that run them) and exit. Never starts or contacts a daemon; par-term invokes it instead of embedding its own copies of the integrations'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l uninstall-agent-hooks -d 'Remove the agent-state session hooks par-mux installed: the config entries first, then the script assets. Never contacts a daemon'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l agent-hooks-status -d 'Print one line per agent — `<agent> installed` or `<agent> absent` — and exit: the read-only state behind the par-term Settings rows'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l integration-status -d 'Print one line per integration — the agent hooks, the pi/omp extensions, and the par-mux skill — naming each one\'s version and whether the installed asset matches the bundled copy (`v2`, `v1 → v2 outdated`, `asset missing`, or `absent`), and exit'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l install-agent-extensions -d 'Install the pi and omp agent-state extensions (a file drop into each agent extension directory) and exit. Never contacts a daemon'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l uninstall-agent-extensions -d 'Remove the pi and omp agent-state extensions par-mux installed'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l heal-agent-hooks -d 'Rewrite a registered hook script asset that went missing (the hooks directory has been deleted externally while the agent config entries survived) without touching any agent config — the startup self-heal par-term runs. Never contacts a daemon'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l print-schema -d 'Print the versioned JSON command schema (every control command, its flags, and its feature tokens) bundled with this binary, and exit. Never contacts a daemon; `list-commands -J` serves the same document from a running one'
+complete -c par-mux -n "__fish_par_mux_needs_command" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_needs_command" -s V -l version -d 'Print version'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "start" -d 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "stop" -d 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "restart" -d 'Stop, then start a fresh daemon that restores the saved tree. Same as `--restart`'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "status" -d 'One-shot orientation: the daemon\'s build stamp, its workspaces and sessions, the displayed session, and the pane count — the orient step in one invocation (R2)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "ls" -d 'List the resolved daemon\'s sessions (`list-sessions`, tmux\'s `ls`)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "attach" -d 'Attach a client to a running daemon; never starts one. The feature-gated interactive client'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "config" -d 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "observe" -d 'Stream one pane\'s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "control" -d 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal\'s size (polled) or `--size` as a viewer of the pane\'s window'
+complete -c par-mux -n "__fish_par_mux_needs_command" -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l socket -d 'Bind an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l state-dir -d 'Override the platform state directory' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l foreground -d 'Serve in this process instead of detaching'
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l no-attach -d 'Skip the auto-attach of the invoking terminal'
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l pane-endpoints -d 'Give each pane its own hook-only socket endpoint'
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -l expose-control-socket -d 'With --pane-endpoints: also export the full control socket'
+complete -c par-mux -n "__fish_par_mux_using_subcommand start" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand stop" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand stop" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand stop" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand restart" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand restart" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand restart" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand status" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand status" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand status" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand ls" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand ls" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand ls" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand attach" -s t -d 'Initial target (session/window/pane, tmux-style — resolves like a send-keys -t target); Phase A\'s view attaches to it' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand attach" -l prefix -d 'Detach prefix key, tmux spelling (e.g. `C-b`); Phase A routes it' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand attach" -l mode -d 'Render pipeline: `render` (the default — the Phase B pane renderer with the input router: mode-aware key re-encode, mouse routing, wheel scrollback) or `passthrough` (pane bytes to the host terminal verbatim, Phase A). Absent = the `[client] mode` from the config file, else render' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand attach" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand attach" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand config" -l force -d 'Overwrite an existing config file'
+complete -c par-mux -n "__fish_par_mux_using_subcommand config" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -s t -d 'The pane (`%N` or a pane title)' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -l size -d '`control` only: report this fixed size (`WxH`) instead of following the terminal\'s' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -l no-seed -d 'Skip the screen seed: stdout carries only output that follows'
+complete -c par-mux -n "__fish_par_mux_using_subcommand observe" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -s t -d 'The pane (`%N` or a pane title)' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -l size -d '`control` only: report this fixed size (`WxH`) instead of following the terminal\'s' -r
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -l socket -d 'Connect to an explicit socket path instead of the named default' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -l state-dir -d 'Override the platform state directory (the registry base for discovery-flavored reads)' -r -F
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -l no-seed -d 'Skip the screen seed: stdout carries only output that follows'
+complete -c par-mux -n "__fish_par_mux_using_subcommand control" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "start" -d 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "stop" -d 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "restart" -d 'Stop, then start a fresh daemon that restores the saved tree. Same as `--restart`'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "status" -d 'One-shot orientation: the daemon\'s build stamp, its workspaces and sessions, the displayed session, and the pane count — the orient step in one invocation (R2)'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "ls" -d 'List the resolved daemon\'s sessions (`list-sessions`, tmux\'s `ls`)'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "attach" -d 'Attach a client to a running daemon; never starts one. The feature-gated interactive client'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "config" -d 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "observe" -d 'Stream one pane\'s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "control" -d 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal\'s size (polled) or `--size` as a viewer of the pane\'s window'
+complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'

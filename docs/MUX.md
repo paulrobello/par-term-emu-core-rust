@@ -46,6 +46,8 @@ cargo run -p par-mux --bin par-mux --features mux-bin
 
 The Python wheel and the default `make dev` build do not include the daemon.
 
+`make completions` regenerates the tracked shell-completion scripts under `crates/par-mux/completions/` from the `mux-bin,attach` build, and `make completions-check` (part of `checkall`) fails when they drift from the CLI — run `make completions` and commit the result after changing any flag, subcommand, or flag doc comment. See [Shell completions](#shell-completions).
+
 ### Standalone binaries (GitHub Releases)
 
 Standalone `par-mux` executables — no Python and no par-term installation
@@ -116,6 +118,7 @@ par-mux --expose-control-socket   With --pane-endpoints: also export PAR_MUX_CON
 par-mux --gen-config [--force]    Write the config file with the current effective settings
 par-mux --install-skill [--skills-dir DIR]  Install the bundled agent skill into the Claude Code skills directory
 par-mux --print-schema            Print the bundled JSON command schema and exit (see list-commands -J)
+par-mux --print-completions SHELL Print the shell-completion script (bash, zsh, fish, powershell, elvish) and exit
 ```
 
 The `[daemon]` section of `<config dir>/par-mux/config.toml` carries
@@ -145,6 +148,24 @@ other agent harnesses). Like `--cmd`, it never starts or contacts a daemon,
 so it works with nothing running and from inside a pane. par-term invokes
 it after installing par-mux instead of embedding its own copy of the skill,
 so what an agent reads always matches the binary it drives.
+
+### Shell completions
+
+`--print-completions SHELL` writes a completion script for `bash`, `zsh`,
+`fish`, `powershell`, or `elvish` to stdout and exits; like `--print-schema`
+it never contacts a daemon. The scripts are generated from the clap
+definition itself, so they cover every flag and subcommand the binary
+parses. Generated copies are also tracked under `crates/par-mux/completions/`
+(`par-mux.bash`, `_par-mux`, `par-mux.fish`, `_par-mux.ps1`, `par-mux.elv`).
+par-mux never edits a shell rc file; install one by hand:
+
+```bash
+par-mux --print-completions bash > ~/.local/share/bash-completion/completions/par-mux
+par-mux --print-completions zsh > ~/.zfunc/_par-mux        # a directory on $fpath, before compinit
+par-mux --print-completions fish > ~/.config/fish/completions/par-mux.fish
+par-mux --print-completions powershell >> $PROFILE           # or dot-source a saved copy
+par-mux --print-completions elvish > ~/.config/elvish/lib/par-mux.elv   # then: use par-mux
+```
 
 ### Nested daemons
 

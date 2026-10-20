@@ -82,6 +82,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
             "uninstall_agent_extensions",
             "heal_agent_hooks",
             "print_schema",
+            "print_completions",
         ])
 ))]
 struct Cli {
@@ -123,7 +124,7 @@ struct Cli {
         "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
         "agent_hooks_status", "integration_status",
         "install_agent_extensions", "uninstall_agent_extensions",
-        "heal_agent_hooks", "print_schema",
+        "heal_agent_hooks", "print_schema", "print_completions",
     ])]
     foreground: bool,
 
@@ -135,7 +136,7 @@ struct Cli {
         "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
         "agent_hooks_status", "integration_status",
         "install_agent_extensions", "uninstall_agent_extensions",
-        "heal_agent_hooks", "print_schema",
+        "heal_agent_hooks", "print_schema", "print_completions",
     ])]
     no_attach: bool,
 
@@ -255,6 +256,24 @@ struct Cli {
     /// document from a running one.
     #[arg(long)]
     print_schema: bool,
+
+    /// Print the shell-completion script for SHELL (bash, zsh, fish,
+    /// powershell, elvish) generated from this CLI, and exit. Never
+    /// contacts a daemon.
+    // Not `hide = true`: clap_complete 4.6 still emits hidden args, and the
+    // flag's own completion (the shell names) is worth offering.
+    #[arg(long, value_name = "SHELL")]
+    print_completions: Option<clap_complete::Shell>,
+}
+
+/// The completion script for `shell`, generated from the live clap surface
+/// so it cannot drift from what `Cli` parses.
+fn completion_script(shell: clap_complete::Shell) -> String {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let mut out = Vec::new();
+    clap_complete::generate(shell, &mut cmd, "par-mux", &mut out);
+    String::from_utf8(out).expect("clap_complete emits UTF-8")
 }
 
 /// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
@@ -929,6 +948,10 @@ fn main() -> std::process::ExitCode {
 
     if cli.print_schema {
         print!("{}", par_mux::mux::command::COMMAND_SCHEMA_JSON);
+        return std::process::ExitCode::SUCCESS;
+    }
+    if let Some(shell) = cli.print_completions {
+        print!("{}", completion_script(shell));
         return std::process::ExitCode::SUCCESS;
     }
 
@@ -1850,6 +1873,7 @@ mod mode_group_tests {
             "--list-servers",
             "--install-agent-hooks",
             "--agent-hooks-status",
+            "--print-completions=zsh",
         ] {
             for modifier in ["--foreground", "--no-attach"] {
                 let err = Cli::try_parse_from(["par-mux", modifier, one_shot])
@@ -1883,6 +1907,7 @@ mod mode_group_tests {
             "--uninstall-agent-extensions",
             "--heal-agent-hooks",
             "--print-schema",
+            "--print-completions=bash",
         ];
         for (i, a) in flags.iter().enumerate() {
             assert!(
@@ -2034,5 +2059,55 @@ mod attach_cli_tests {
         let cli = Cli::try_parse_from(["par-mux", "--socket", "/tmp/d.sock"]).expect("parse");
         assert!(cli.sub.is_none());
         assert_eq!(cli.socket, Some(std::path::PathBuf::from("/tmp/d.sock")));
+    }
+}
+
+// The tracked scripts are generated from the full release surface
+// (`mux-bin,attach`): without `attach` the `attach` verb is absent and the
+// scripts legitimately differ.
+#[cfg(all(test, feature = "attach"))]
+mod completion_tests {
+    use super::completion_script;
+    use clap_complete::{Generator, Shell};
+
+    const SHELLS: [Shell; 5] = [
+        Shell::Bash,
+        Shell::Zsh,
+        Shell::Fish,
+        Shell::PowerShell,
+        Shell::Elvish,
+    ];
+
+    #[test]
+    fn completion_scripts_cover_the_cli_surface() {
+        for shell in [Shell::Bash, Shell::Zsh] {
+            let script = completion_script(shell);
+            for word in [
+                "--print-schema",
+                "--socket",
+                "--print-completions",
+                "powershell",
+                "observe",
+                "attach",
+                "status",
+            ] {
+                assert!(script.contains(word), "{shell} script lacks {word}");
+            }
+        }
+    }
+
+    #[test]
+    fn committed_completion_scripts_match_the_clap_surface() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("completions");
+        for shell in SHELLS {
+            let path = dir.join(shell.file_name("par-mux"));
+            let committed = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            assert!(
+                committed == completion_script(shell),
+                "{} is stale against the clap surface — run `make completions`",
+                path.display()
+            );
+        }
     }
 }
