@@ -1390,8 +1390,8 @@ sections; the numbers live here.
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:28` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
-| `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:179` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
-| `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:182` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
+| `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:180` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
+| `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:183` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:838` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:840` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:842` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |

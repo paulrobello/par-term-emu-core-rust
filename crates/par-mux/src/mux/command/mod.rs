@@ -878,7 +878,7 @@ struct Args<'a> {
     line: &'a str,
 }
 
-impl Args<'_> {
+impl<'a> Args<'a> {
     /// The value following `flag`, when present — `None` both for an absent
     /// flag and for one with no following token.
     fn flag(&self, flag: &str) -> Option<String> {
@@ -1048,11 +1048,16 @@ impl Args<'_> {
     /// `reject_flags` fail loudly (a flag this daemon ignores must not be
     /// silently dropped). Everything after a bare `--` is the command
     /// (the `--` itself is not part of it).
+    ///
+    /// Also returns this line cut where the flags end (at the `--` or the
+    /// command's first word). The command's own flags must be read through
+    /// that view: every other helper scans the whole line, and would take
+    /// `sh -c 'echo hi'`'s `-c` as the start directory.
     fn start_command(
         &self,
         value_flags: &[&str],
         reject_flags: &[&str],
-    ) -> Result<Option<String>, String> {
+    ) -> Result<(Option<String>, Args<'a>), String> {
         let rest = self
             .line
             .trim_start()
@@ -1060,15 +1065,18 @@ impl Args<'_> {
             .unwrap_or_default();
         let mut pos = self.line.len() - rest.len();
         let mut after_dashes = false;
+        let mut flags_end = None;
         while let Some((start, end, word)) = next_shell_word(self.line, pos) {
             if !after_dashes && word == "--" {
                 after_dashes = true;
+                flags_end = Some(start);
                 pos = end;
                 continue;
             }
             if after_dashes || !(word.len() > 1 && word.starts_with('-')) {
                 let tail = self.line[start..].trim_end();
-                return Ok((!tail.is_empty()).then(|| tail.to_string()));
+                let flags = self.bounded(flags_end.unwrap_or(start));
+                return Ok(((!tail.is_empty()).then(|| tail.to_string()), flags));
             }
             if let Some(rejected) = reject_flags.iter().find(|flag| **flag == word) {
                 return Err(format!(
@@ -1083,7 +1091,19 @@ impl Args<'_> {
                 }
             }
         }
-        Ok(None)
+        Ok((None, self.bounded(flags_end.unwrap_or(self.line.len()))))
+    }
+
+    /// This line cut at byte `end`, which must be the start of a shell
+    /// word, so the whitespace tokens before it are whole.
+    fn bounded(&self, end: usize) -> Args<'a> {
+        let line = &self.line[..end];
+        let tokens = line.split_whitespace().count().saturating_sub(1);
+        Args {
+            name: self.name,
+            args: &self.args[..tokens.min(self.args.len())],
+            line,
+        }
     }
 
     /// A positive single-dimension size flag (`-x 120`, `-y 40`) —

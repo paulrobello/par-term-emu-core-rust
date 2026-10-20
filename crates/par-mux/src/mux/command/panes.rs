@@ -109,11 +109,11 @@ pub(super) fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32)
 }
 
 pub(super) fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let target = a.any_target("-t", "pane")?;
-    let (direction, percent) = parse_split_geometry(a)?;
     // The trailing start command (R4): tmux's positional form. The
     // geometry flags are valueless, `-t`/`-c`/`-p` take values.
-    let command = a.start_command(&["-t", "-c", "-p"], &[])?;
+    let (command, a) = a.start_command(&["-t", "-c", "-p"], &[])?;
+    let target = a.any_target("-t", "pane")?;
+    let (direction, percent) = parse_split_geometry(&a)?;
     Ok(MuxCommand::SplitWindow {
         target,
         direction,

@@ -44,6 +44,7 @@ pub(super) fn reject_positionals(a: &Args<'_>, value_flags: &[&str]) -> Result<(
 }
 
 pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let (command, a) = a.start_command(NEW_SESSION_VALUE_FLAGS, NEW_SESSION_REJECT_FLAGS)?;
     let env = a
         .quoted_values("-e")
         .into_iter()
@@ -64,7 +65,6 @@ pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     let start_dir = a.quoted_flag("-c")?;
     let cols = a.size("-x")?;
     let rows = a.size("-y")?;
-    let command = a.start_command(NEW_SESSION_VALUE_FLAGS, NEW_SESSION_REJECT_FLAGS)?;
     Ok(MuxCommand::NewSession {
         name,
         env,

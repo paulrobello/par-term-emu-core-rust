@@ -2695,3 +2695,135 @@ fn parses_the_pane_stream_verbs() {
         assert!(body.lines().any(|l| l == line), "{line}: {body}");
     }
 }
+
+/// A start command's own flags are not the create command's: once `--`
+/// (or the command's first word) is seen, flag reading stops, so
+/// `sh -c 'echo hi'`'s `-c` is not the start directory.
+#[test]
+fn split_window_stops_reading_flags_at_the_start_command() {
+    for line in [
+        "split-window -t %0 -- sh -c 'echo hi'",
+        "split-window -t %0 sh -c 'echo hi'",
+    ] {
+        assert_eq!(
+            parse_command(line).unwrap(),
+            MuxCommand::SplitWindow {
+                target: AnyTarget::Pane(PaneId(0)),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+                before: false,
+                start_dir: None,
+                command: Some("sh -c 'echo hi'".into()),
+            },
+            "{line}"
+        );
+    }
+    // Flags before `--` still count.
+    assert_eq!(
+        parse_command("split-window -t %0 -h -b -p 30 -c '/a b' -- sh -c x").unwrap(),
+        MuxCommand::SplitWindow {
+            target: AnyTarget::Pane(PaneId(0)),
+            direction: SplitDirection::Vertical,
+            percent: 30,
+            before: true,
+            start_dir: Some("/a b".into()),
+            command: Some("sh -c x".into()),
+        }
+    );
+    // Geometry and target words inside the command are the command's.
+    assert_eq!(
+        parse_command("split-window -t %0 -- ls -h -b -p 30 -t %9").unwrap(),
+        MuxCommand::SplitWindow {
+            target: AnyTarget::Pane(PaneId(0)),
+            direction: SplitDirection::Horizontal,
+            percent: 50,
+            before: false,
+            start_dir: None,
+            command: Some("ls -h -b -p 30 -t %9".into()),
+        }
+    );
+    // `-p abc` inside the command used to fail the parse as a bad
+    // percentage.
+    assert!(parse_command("split-window -t %0 -- grep -p abc").is_ok());
+}
+
+#[test]
+fn new_session_and_new_window_stop_reading_flags_at_the_start_command() {
+    assert_eq!(
+        parse_command("new-session -s a -- ssh -t host -e X=1 -c /x -n w -x 10").unwrap(),
+        MuxCommand::NewSession {
+            name: Some("a".into()),
+            env: vec![],
+            workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: Some("ssh -t host -e X=1 -c /x -n w -x 10".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("new-session -s a sh -c 'echo hi'").unwrap(),
+        MuxCommand::NewSession {
+            name: Some("a".into()),
+            env: vec![],
+            workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: None,
+            rows: None,
+            command: Some("sh -c 'echo hi'".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("new-window -t $0 -- sh -c x -n y -t $9").unwrap(),
+        MuxCommand::NewWindow {
+            target: Some(AnyTarget::Session(SessionId(0))),
+            name: None,
+            start_dir: None,
+            command: Some("sh -c x -n y -t $9".into()),
+        }
+    );
+    // A quoted `--` is still the separator: words compare after quote
+    // removal, as getopt sees them (respawn-pane's rule too).
+    match parse_command("split-window -t %0 '--' sh -c x").unwrap() {
+        MuxCommand::SplitWindow {
+            start_dir, command, ..
+        } => {
+            assert_eq!(start_dir, None);
+            assert_eq!(command.as_deref(), Some("sh -c x"));
+        }
+        other => panic!("not a split-window: {other:?}"),
+    }
+}
+
+#[test]
+fn respawn_pane_start_command_keeps_its_own_flags() {
+    match parse_command("respawn-pane -t %0 -- sh -c 'echo hi'").unwrap() {
+        MuxCommand::RespawnPane {
+            start_dir, command, ..
+        } => {
+            assert_eq!(start_dir, None);
+            assert_eq!(command.as_deref(), Some("sh -c 'echo hi'"));
+        }
+        other => panic!("not a respawn-pane: {other:?}"),
+    }
+}
+
+/// Only a leading `-H` selects the hex form; a positional payload may
+/// contain the word.
+#[test]
+fn set_buffer_hex_mode_needs_a_leading_flag() {
+    assert_eq!(
+        parse_command("set-buffer 'grep -H x'").unwrap(),
+        MuxCommand::SetBuffer {
+            content: "grep -H x".into()
+        }
+    );
+    assert_eq!(
+        parse_command("set-buffer -H 61 62").unwrap(),
+        MuxCommand::SetBuffer {
+            content: "ab".into()
+        }
+    );
+}

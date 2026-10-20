@@ -7,12 +7,12 @@ use super::*;
 pub(super) const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e"];
 
 pub(super) fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // The trailing start command (R4): tmux's positional form, the raw
+    // text after the flags.
+    let (command, a) = a.start_command(NEW_WINDOW_VALUE_FLAGS, &["-F"])?;
     let target = a.any_target_opt("-t", "session")?;
     let name = a.quoted_flag("-n")?;
     let start_dir = a.quoted_flag("-c")?;
-    // The trailing start command (R4): tmux's positional form, the raw
-    // text after the flags.
-    let command = a.start_command(NEW_WINDOW_VALUE_FLAGS, &["-F"])?;
     Ok(MuxCommand::NewWindow {
         target,
         name,

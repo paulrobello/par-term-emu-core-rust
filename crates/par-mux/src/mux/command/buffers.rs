@@ -87,8 +87,9 @@ pub(super) fn parse_set_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
     // form `send-keys -H` uses. The control wire is line-delimited, so
     // content containing a newline cannot ride the positional form in ANY
     // quoting; hex is the byte-exact escape hatch (clipboard sync).
-    if let Some(at) = a.args.iter().position(|t| *t == "-H") {
-        let tokens = &a.args[at + 1..];
+    // Only a LEADING `-H` selects hex: a positional payload may contain the
+    // word (`set-buffer 'grep -H x'`).
+    if let Some(("-H", tokens)) = a.args.split_first().map(|(f, t)| (*f, t)) {
         if tokens.is_empty() {
             return Err("set-buffer -H requires a payload".to_string());
         }
