@@ -182,7 +182,8 @@ valid), and `respawn-pane` re-seeds them.
 ## Agent-state integrations
 
 par-mux installs the hooks and extensions that feed the roster itself:
-`par-mux --install-agent-hooks` (claude, codex, grok), `--install-agent-extensions`
+`par-mux --install-agent-hooks` (claude, codex, grok, muse, droid, copilot,
+cursor), `--install-agent-extensions`
 (pi, omp), with `--uninstall-agent-hooks`, `--uninstall-agent-extensions` and
 `--agent-hooks-status` counterparts. par-term runs these after installing
 par-mux. The hooks are inert and instant outside a par-mux pane, and silent on
@@ -212,7 +213,8 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   `pane.report_agent_telemetry` (versioned, display-only) exist too;
   `pane.release_agent` is the exit announcement and clears the whole claim.
 - A hook report makes the pane **hook-authoritative** — the automatic
-  screen-scrape for claude/codex/grok never overrides it. Panes whose agents
+  screen-scrape (claude/codex/grok/muse/droid/copilot/cursor) never
+  overrides it. Panes whose agents
   never report a hook get scraped state instead (roster `source=scrape`).
 - `nc -U` needs a netcat with Unix-socket support (macOS built-in works).
 

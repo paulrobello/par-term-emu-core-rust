@@ -37,7 +37,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Control protocol | tmux control-mode grammar + JSON agent-hook reports | JSON CLI and socket API with published JSON-Schema |
 | Terminal core | par-term-emu-core (VT100–VT520, Sixel/iTerm2/Kitty) | Vendored Ghostty VT core (`crates/ghostty-vt`) |
 | UI paradigm | Keyboard-first ratatui renderer, plus passthrough mode | Mouse-first ratatui UI; keyboard is an optional layer |
-| Agent breadth | 4 hooked agents + 2 extension agents, scrape fallback | 22 supported integrations + 5 self-reporting agents |
+| Agent breadth | 7 hooked agents + 2 extension agents, scrape fallback | 22 supported integrations + 5 self-reporting agents |
 | Remote access | Web/mobile mirror via `par-term-streamer --mux-socket` | SSH thin client (`--remote`), saved machines, `--machine` |
 | Distribution | crates.io + per-platform release archives with SHA256SUMS | curl / Homebrew / mise / Nix / install.ps1, self-update channels |
 
@@ -123,7 +123,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
-| Hooked / integrated agents | claude, codex, grok, muse hooks + pi/omp state extensions | 18 installable integrations; 22 agents supported + 5 self-reporting without install | PM-MUX / H-AGENTS |
+| Hooked / integrated agents | claude, codex, grok, muse, droid, copilot, cursor session hooks (scrape patterns for all seven) + pi/omp state extensions | 18 installable integrations; 22 agents supported + 5 self-reporting without install | PM-MUX / H-AGENTS |
 | Detection tiers | Hooks primary; scrape tier from screen text + OSC title using bundled herdr patterns (local override dir) | Foreground process discovery, evidence-based screen manifests, vendor hooks; `agent explain` shows the matched rule | PM-MUX / H-AGENTS |
 | States | working / blocked / idle (`unknown` never reported, `idle` never guessed) | blocked / working / done / idle / unknown (blocked deliberately strict; idle is never authorization) | PM-MUX / H-AGENTS |
 | Structured telemetry | `report_agent_telemetry`: model, effort, context used/remaining %, reset times | Metadata reports with `--seq`/`--ttl-ms`; no model/context telemetry equivalent | PM-MUX / H-CLI |
@@ -221,7 +221,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 **herdr** is stronger on:
 
-- Agent breadth: 22 supported integrations + 5 self-reporting, with three-tier detection and `agent explain` diagnostics.
+- Agent breadth: 22 supported integrations + 5 self-reporting (par-mux: 9), with three-tier detection and `agent explain` diagnostics.
 - Mouse-first UX: drag-everything, context menus, rich theming (11 themes, auto light/dark), sounds, onboarding.
 - A plugin system with event hooks and link handlers.
 - Git worktree workspaces as a first-class concept.

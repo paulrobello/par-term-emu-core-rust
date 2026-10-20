@@ -208,8 +208,9 @@ struct Cli {
     /// Claude Code default (tests, other agent harnesses).
     #[arg(long, value_name = "DIR", requires = "install_skill")]
     skills_dir: Option<std::path::PathBuf>,
-    /// Install the agent-state session hooks for claude, codex, grok, and muse
-    /// (script assets plus the config entries that run them) and exit.
+    /// Install the agent-state session hooks for claude, codex, grok, muse,
+    /// droid, copilot, and cursor (script assets plus the config entries
+    /// that run them) and exit.
     /// Never starts or contacts a daemon; par-term invokes it instead of
     /// embedding its own copies of the integrations.
     #[arg(long)]
@@ -617,7 +618,7 @@ enum AgentHookAction {
 /// by the first error.
 fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
     use par_mux::mux::integrations as integ;
-    let arms: [(&str, Arm); 4] = match action {
+    let arms: [(&str, Arm); 7] = match action {
         AgentHookAction::Install => [
             ("claude", || {
                 let r = integ::install_claude_hook()?;
@@ -659,6 +660,9 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
                     }
                 ))
             }),
+            ("droid", || config_hook_install(&integ::DROID)),
+            ("copilot", || config_hook_install(&integ::COPILOT)),
+            ("cursor", || config_hook_install(&integ::CURSOR)),
         ],
         AgentHookAction::Uninstall => [
             ("claude", || {
@@ -677,9 +681,43 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
                 let r = integ::uninstall_muse_hook()?;
                 Ok(arm_summary(r.settings_changed || r.hook_removed))
             }),
+            ("droid", || config_hook_uninstall(&integ::DROID)),
+            ("copilot", || config_hook_uninstall(&integ::COPILOT)),
+            ("cursor", || config_hook_uninstall(&integ::CURSOR)),
         ],
     };
-    run_arms(arms)
+    run_arms(&arms)
+}
+
+/// The install line detail for a droid/copilot/cursor arm. An agent whose
+/// config directory is absent is skipped, not failed: these arms joined a
+/// bulk flag whose exit status callers (par-term) treat as all-or-nothing.
+fn config_hook_install(arm: &par_mux::mux::integrations::ConfigHookArm) -> std::io::Result<String> {
+    if !arm.agent_present() {
+        return Ok(format!(
+            "skipped ({} not installed: no config directory)",
+            arm.agent
+        ));
+    }
+    let r = arm.install()?;
+    Ok(format!(
+        "{} (config {} {})",
+        r.hook_path.display(),
+        r.config_path.display(),
+        if r.config_changed {
+            "updated"
+        } else {
+            "already present"
+        }
+    ))
+}
+
+/// The uninstall line detail for a droid/copilot/cursor arm.
+fn config_hook_uninstall(
+    arm: &par_mux::mux::integrations::ConfigHookArm,
+) -> std::io::Result<String> {
+    let r = arm.uninstall()?;
+    Ok(arm_summary(r.config_changed || r.hook_removed))
 }
 
 /// One arm's one-word outcome for the uninstall lines.
@@ -693,7 +731,7 @@ fn arm_summary(removed_any: bool) -> String {
 
 /// Print one `par-mux: <arm> …` line per (name, action) pair, stdout for
 /// successes and stderr for failures; FAILURE when any arm failed.
-fn run_arms(arms: [(&str, Arm); 4]) -> std::process::ExitCode {
+fn run_arms(arms: &[(&str, Arm)]) -> std::process::ExitCode {
     let mut failed = false;
     for (name, action) in arms {
         match action() {
@@ -1062,7 +1100,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // The agent-state integration flags: install/uninstall/status for the
-    // claude/codex/grok/muse session hooks and the pi/omp extensions this
+    // claude/codex/grok/muse/droid/copilot/cursor session hooks and the pi/omp extensions this
     // binary owns. No socket, no daemon, so they run anywhere.
     if cli.install_agent_hooks {
         return run_agent_hook_action(AgentHookAction::Install);

@@ -1460,8 +1460,11 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 4, "stdout: {:?}", run.stdout);
-    for (agent, line) in ["claude", "codex", "grok", "muse"].iter().zip(&lines) {
+    let agents = [
+        "claude", "codex", "grok", "muse", "droid", "copilot", "cursor",
+    ];
+    assert_eq!(lines.len(), agents.len(), "stdout: {:?}", run.stdout);
+    for (agent, line) in agents.iter().zip(&lines) {
         let rest = line.strip_prefix(agent).expect("agent name leads the line");
         let Some(state) = rest.strip_prefix(" installed") else {
             assert!(
@@ -1477,8 +1480,53 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     }
 }
 
+/// `--install-agent-hooks` on a machine without droid, copilot, or cursor:
+/// those arms print a `skipped` line and do not fail the run, and none of
+/// their config directories is created. (claude/codex/grok/muse keep their
+/// missing-directory failure, so this asserts only the new arms' lines.)
+#[cfg(unix)]
+#[test]
+fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let home_str = home.to_str().expect("utf-8 home");
+    let config = root.path().join("pmx").join("config.toml");
+    let config_str = config.to_str().expect("utf-8 config");
+
+    let run = par_mux_with(
+        &["--install-agent-hooks"],
+        &[
+            ("HOME", home_str),
+            ("PAR_MUX_CONFIG", config_str),
+            ("COPILOT_HOME", ""),
+            ("CURSOR_CONFIG_DIR", ""),
+        ],
+    );
+
+    for agent in ["droid", "copilot", "cursor"] {
+        assert!(
+            run.stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("par-mux: {agent} hook: skipped"))),
+            "{agent} must skip, not fail: stdout {:?} stderr {:?}",
+            run.stdout,
+            run.stderr
+        );
+        assert!(
+            !run.stderr
+                .contains(&format!("par-mux: {agent} hook failed")),
+            "stderr: {}",
+            run.stderr
+        );
+    }
+    for dir in [".factory", ".copilot", ".cursor"] {
+        assert!(!home.join(dir).exists(), "{dir} must not be created");
+    }
+}
+
 /// `--integration-status` covers every bundled asset in one grammar: the
-/// four hook lines, the two extension lines, and the skill line, each
+/// seven hook lines, the two extension lines, and the skill line, each
 /// `<kind> <name> installed|absent [currency]`.
 #[test]
 fn integration_status_covers_hooks_extensions_and_skill() {
@@ -1486,14 +1534,27 @@ fn integration_status_covers_hooks_extensions_and_skill() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 7, "one line per asset: {:?}", run.stdout);
+    assert_eq!(lines.len(), 10, "one line per asset: {:?}", run.stdout);
     let kinds: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap_or(""))
         .collect();
+    let names: Vec<&str> = lines
+        .iter()
+        .map(|line| line.split(' ').nth(1).unwrap_or(""))
+        .collect();
+    assert_eq!(
+        names[..7],
+        ["claude", "codex", "grok", "muse", "droid", "copilot", "cursor"],
+        "stdout: {:?}",
+        run.stdout
+    );
     assert_eq!(
         kinds,
         [
+            "hook",
+            "hook",
+            "hook",
             "hook",
             "hook",
             "hook",

@@ -848,6 +848,8 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `CLAUDE_CONFIG_DIR` | `par-mux --install-agent-hooks` (claude) | `~/.claude` | Where the claude session hook is installed instead of the default config directory |
 | `CODEX_HOME` | `par-mux --install-agent-hooks` (codex) | `~/.codex` | Where the codex session hook is installed instead of the default config directory |
 | `GROK_HOME` | `par-mux --install-agent-hooks` (grok) | `~/.grok` | Where the grok session hook is installed instead of the default config directory |
+| `COPILOT_HOME` | `par-mux --install-agent-hooks` (copilot) | `~/.copilot` | Where the copilot settings file (`<dir>/settings.json`) the copilot session hook merges into lives |
+| `CURSOR_CONFIG_DIR` | `par-mux --install-agent-hooks` (cursor) | `~/.cursor` | Where the cursor hooks file (`<dir>/hooks.json`) the cursor session hook merges into lives |
 | `XDG_CONFIG_HOME` | `par-mux --install-agent-hooks` (muse) | `~/.config` | Root for the muse settings file (`<root>/muse/settings.json`) the muse hook merges into, and for the par-mux config directory when neither `PAR_MUX_CONFIG` nor the platform default applies |
 | `MUSE_SESSION_ID` | par-mux muse agent hook (`par-mux-muse-session-hook.sh`/`.ps1`, run by muse) | unset | Set (by muse) inside its hook processes — muse strips every other variable from the hook environment; the hook prefers it over the payload's `session_id` as the reported session identity |
 | `TEMP` | par-mux muse agent hook (`par-mux-muse-session-hook.ps1`, run by muse) | system temp root | Base directory the Windows reporter scans for `par-mux-*.sock` daemon marker files; muse strips the environment, so the .NET temp root is the fallback |

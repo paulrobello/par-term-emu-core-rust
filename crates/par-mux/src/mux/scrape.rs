@@ -32,12 +32,17 @@ use std::sync::Arc;
 /// The bundled pattern sets, one per scrape-supported agent. pi and omp
 /// need none (they report state through hooks); muse joins with herdr's
 /// proven captures — its hooks run with a cleared environment, so identity
-/// arrives by hook and state by scrape, the claude shape.
+/// arrives by hook and state by scrape, the claude shape. droid, copilot,
+/// and cursor follow the same split: a session hook for identity, these
+/// sets for state. Each key must equal its file's TOML `id`.
 const BUNDLED_PATTERNS: &[(&str, &str)] = &[
     ("claude", include_str!("patterns/claude.toml")),
     ("codex", include_str!("patterns/codex.toml")),
     ("grok", include_str!("patterns/grok.toml")),
     ("muse", include_str!("patterns/muse.toml")),
+    ("droid", include_str!("patterns/droid.toml")),
+    ("copilot", include_str!("patterns/copilot.toml")),
+    ("cursor", include_str!("patterns/cursor.toml")),
 ];
 
 /// The states a rule may assert. `unknown` is not among them: it is the
@@ -671,12 +676,24 @@ contains = ["Override Idle"]
     #[test]
     fn bundled_sets_compile_with_aliases() {
         let engine = ScrapeEngine::load(None);
-        for agent in ["claude", "codex", "grok", "muse"] {
+        for agent in [
+            "claude", "codex", "grok", "muse", "droid", "copilot", "cursor",
+        ] {
             assert!(engine.set_for(agent).is_some(), "{agent} bundled");
         }
         assert!(engine.set_for("claude-code").is_some(), "claude alias");
         assert!(engine.set_for("grok-build").is_some(), "grok alias");
         assert!(engine.set_for("muse-code").is_some(), "muse alias");
+        assert!(engine.set_for("github-copilot").is_some(), "copilot alias");
+        assert!(engine.set_for("cursor-agent").is_some(), "cursor alias");
+        // A bundled set that fails to compile is only logged and dropped,
+        // so each file is compiled directly here; its id must also equal
+        // the BUNDLED_PATTERNS key or the override lookup misses it.
+        for (agent, text) in BUNDLED_PATTERNS {
+            let (_, id, _) = CompiledSet::compile(text)
+                .unwrap_or_else(|err| panic!("bundled {agent} fails to compile: {err}"));
+            assert_eq!(&id, agent, "the TOML id is the bundled key");
+        }
         assert!(engine.set_for("pi").is_none(), "pi reports by hook");
         assert!(engine.set_for("omp").is_none(), "omp reports by hook");
     }
@@ -1541,5 +1558,114 @@ contains = ["Override Idle"]
             set.evaluate(&footer).map(|(s, _)| s.to_string()),
             Some("idle".to_string())
         );
+    }
+
+    /// Evaluate `screen` against `agent`'s bundled set: (state, rule id).
+    fn scrape_screen(agent: &str, screen: &str) -> Option<(String, String)> {
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for(agent).expect("bundled");
+        set.evaluate(&PaneSnapshot {
+            title: String::new(),
+            screen: screen.to_string(),
+        })
+        .map(|(state, rule)| (state.to_string(), rule.to_string()))
+    }
+
+    fn rule_of(agent: &str, screen: &str) -> Option<String> {
+        scrape_screen(agent, screen).map(|(_, rule)| rule)
+    }
+
+    #[test]
+    fn droid_rules_read_approval_menu_and_working() {
+        let approval = concat!(
+            "Execute command: rm -rf build\n",
+            "> Yes, allow\n",
+            "  No, cancel\n",
+            "Use ↑↓ to navigate, Enter to select, Esc to cancel\n",
+        );
+        assert_eq!(
+            scrape_screen("droid", approval),
+            Some((
+                "blocked".to_string(),
+                "execute_selection_blocker".to_string()
+            ))
+        );
+        assert_eq!(
+            rule_of(
+                "droid",
+                "Pick a model\n↑↓ navigate · enter select · esc cancel\n"
+            )
+            .as_deref(),
+            Some("selection_menu_blocker")
+        );
+        // The braille spinner outranks the bare stop hint.
+        assert_eq!(
+            rule_of("droid", "⠋ Thinking… (esc to stop)\n").as_deref(),
+            Some("spinner_stop_working")
+        );
+        assert_eq!(
+            rule_of("droid", "Running tool (esc to stop)\n").as_deref(),
+            Some("stop_hint_working")
+        );
+        assert_eq!(scrape_screen("droid", "> \n"), None, "no signal, no state");
+    }
+
+    #[test]
+    fn copilot_rules_read_selection_and_working() {
+        let selection = concat!(
+            "Allow this command?\n",
+            "❯ 1. Yes\n",
+            "  2. No\n",
+            "↑↓ to navigate · Enter to select · Esc to cancel\n",
+        );
+        assert_eq!(
+            scrape_screen("copilot", selection),
+            Some(("blocked".to_string(), "selection_blocker".to_string()))
+        );
+        assert_eq!(
+            rule_of("copilot", "◎ Waiting for background agents · 12s\n").as_deref(),
+            Some("background_agents_working")
+        );
+        // The cancel hint without a select/confirm control is a turn.
+        assert_eq!(
+            scrape_screen("copilot", "∙ Thinking (Esc to cancel)\n"),
+            Some(("working".to_string(), "working_cancel_hint".to_string()))
+        );
+        assert_eq!(scrape_screen("copilot", "> \n"), None);
+        assert!(ScrapeEngine::load(None).set_for("ghcs").is_some());
+    }
+
+    #[test]
+    fn cursor_rules_read_approvals_and_working() {
+        let write = concat!(
+            "src/main.rs\n",
+            "Write to this file?\n",
+            "→ Proceed (y)\n",
+            "  Reject & propose changes (esc or n or p)\n",
+        );
+        assert_eq!(
+            scrape_screen("cursor", write),
+            Some(("blocked".to_string(), "write_file_approval".to_string()))
+        );
+        let run = concat!(
+            "Waiting for approval...\n",
+            "Run this command?\n",
+            "→ Run (once) (y)\n",
+            "  Skip (esc or n)\n",
+        );
+        assert_eq!(rule_of("cursor", run).as_deref(), Some("approval_prompt"));
+        assert_eq!(
+            rule_of("cursor", "⬢ Generating\n  ctrl+c to stop\n").as_deref(),
+            Some("stop_hint_working")
+        );
+        assert_eq!(
+            rule_of("cursor", "2 background tasks\n").as_deref(),
+            Some("background_task_status_working")
+        );
+        assert_eq!(
+            scrape_screen("cursor", "⠋ Reading files\n"),
+            Some(("working".to_string(), "spinner_working".to_string()))
+        );
+        assert_eq!(scrape_screen("cursor", "→ Add a follow-up\n"), None);
     }
 }

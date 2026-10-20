@@ -1,8 +1,9 @@
 //! par-mux session-hook installer for config-entry agents.
 //!
 //! pi and omp load extensions from a directory ([`extensions`]
-//! drops a file in). claude, codex and grok have no extension directory: their
-//! hooks are ENTRIES inside config files the user owns and edits, so
+//! drops a file in). claude, codex, muse, droid, copilot, and cursor have no
+//! extension directory: their hooks are ENTRIES inside config files the user
+//! owns and edits (grok merges a whole file par-mux owns), so
 //! installing means MERGING into those files without disturbing anything
 //! par-mux did not add — the user's entries, comments, and formatting
 //! survive, proven by round-trip tests in the arm modules.
@@ -38,9 +39,14 @@
 
 mod claude;
 mod codex;
+mod config_hooks;
 pub mod extensions;
 mod grok;
 mod muse;
+
+pub use config_hooks::{
+    ConfigHookArm, ConfigHookInstall, ConfigHookUninstall, CONFIG_HOOK_ARMS, COPILOT, CURSOR, DROID,
+};
 
 pub use claude::{
     claude_settings_path, heal_claude_hook_asset, install_claude_hook, install_claude_hook_into,
@@ -77,12 +83,15 @@ pub fn heal_hook_assets() {
     claude::heal_claude_hook_asset();
     codex::heal_codex_hook_asset();
     muse::heal_muse_hook_asset();
+    for arm in CONFIG_HOOK_ARMS {
+        arm.heal();
+    }
 }
 
 /// Read-only install state of one agent session hook. Never writes anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentHookStatus {
-    /// The agent name (claude, codex, grok).
+    /// The agent name (claude, codex, grok, muse, droid, copilot, cursor).
     pub agent: String,
     /// Whether the session hook is registered in the agent config.
     pub installed: bool,
@@ -217,6 +226,11 @@ pub fn hook_status() -> Vec<AgentHookStatus> {
         ),
     ]
     .into_iter()
+    .chain(
+        CONFIG_HOOK_ARMS
+            .iter()
+            .map(|arm| (arm.agent, arm.installed(), arm.hook_asset_state())),
+    )
     .map(|(agent, installed, asset)| AgentHookStatus {
         agent: agent.to_string(),
         installed,
@@ -286,7 +300,10 @@ pub fn update_outdated_integrations() -> (Vec<String>, Vec<String>) {
             "pi" => extensions::install_pi_extension().map(|_| ()),
             "omp" => extensions::install_omp_extension().map(|_| ()),
             "skill" => crate::mux::skill_installer::install_skill().map(|_| ()),
-            _ => Ok(()),
+            other => match CONFIG_HOOK_ARMS.iter().find(|arm| arm.agent == other) {
+                Some(arm) => arm.install().map(|_| ()),
+                None => Ok(()),
+            },
         },
     )
 }
@@ -576,15 +593,37 @@ pub(crate) fn merge_hook_event(
         return Ok(None);
     }
 
-    let canonical = canonical_entry_json(matcher, command);
+    splice_event_entry(
+        content,
+        &root,
+        settings_path,
+        event,
+        &canonical_entry_json(matcher, command),
+        canonical_entry_value(matcher, command),
+    )
+    .map(Some)
+}
+
+/// Append one entry (`canonical` text, `value` its parsed form) to
+/// `hooks.<event>`, creating the array and the hooks object as needed, and
+/// verify the spliced text parses back to exactly the desired value — the
+/// shared tail of the nested-group and flat-entry merges.
+fn splice_event_entry(
+    content: &str,
+    root: &AstObject<'_>,
+    settings_path: &Path,
+    event: &str,
+    canonical: &str,
+    value: JsonValue,
+) -> io::Result<String> {
     let updated = match root.get_object("hooks") {
         Some(hooks) => match hooks.get_array(event) {
-            Some(event_array) => append_array_element(content, event_array, &canonical),
+            Some(event_array) => append_array_element(content, event_array, canonical),
             None => append_object_property(content, hooks, event, &format!("[{canonical}]")),
         },
         None => append_object_property(
             content,
-            &root,
+            root,
             "hooks",
             &format!("{{\"{event}\":[{canonical}]}}"),
         ),
@@ -599,7 +638,7 @@ pub(crate) fn merge_hook_event(
         .and_then(|hooks| hooks.get_mut(event))
         .and_then(JsonValue::as_array_mut)
     {
-        Some(entries) => entries.push(canonical_entry_value(matcher, command)),
+        Some(entries) => entries.push(value),
         None => {
             let Some(root_object) = desired.as_object_mut() else {
                 return Err(io::Error::other(format!(
@@ -615,21 +654,176 @@ pub(crate) fn merge_hook_event(
                             settings_path.display()
                         )));
                     };
-                    hooks_object.insert(
-                        event.to_string(),
-                        json!([canonical_entry_value(matcher, command)]),
-                    );
+                    hooks_object.insert(event.to_string(), json!([value]));
                 }
                 None => {
                     let mut fresh_hooks = serde_json::Map::new();
-                    fresh_hooks.insert(
-                        event.to_string(),
-                        json!([canonical_entry_value(matcher, command)]),
-                    );
+                    fresh_hooks.insert(event.to_string(), json!([value]));
                     root_object.insert("hooks".to_string(), JsonValue::Object(fresh_hooks));
                 }
             }
         }
+    }
+    verify_update(updated, settings_path, &desired)
+}
+
+/// Whether `hooks.<event>` holds an entry `is_ours` accepts — the presence
+/// check for the flat-entry shapes (copilot's `{type, bash}`, cursor's bare
+/// `{command}`), where the command is not nested under a group.
+pub(crate) fn has_flat_entry(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<bool> {
+    let value = parse_serde(content, settings_path)?;
+    Ok(value
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event))
+        .and_then(JsonValue::as_array)
+        .is_some_and(|entries| entries.iter().any(is_ours)))
+}
+
+/// Merge one flat entry into `hooks.<event>` under the same discipline as
+/// [`merge_hook_event`]. `Ok(None)` = an entry `is_ours` accepts is already
+/// present, a byte-exact no-op.
+pub(crate) fn merge_flat_entry(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    entry: &JsonValue,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<String>> {
+    let root = parse_root_object(content, settings_path)?;
+    reject_duplicate_keys(&root, settings_path)?;
+    if has_flat_entry(content, settings_path, event, is_ours)? {
+        return Ok(None);
+    }
+    let canonical = serde_json::to_string(entry).expect("hook entry is serializable");
+    splice_event_entry(
+        content,
+        &root,
+        settings_path,
+        event,
+        &canonical,
+        entry.clone(),
+    )
+    .map(Some)
+}
+
+/// Remove every flat entry `is_ours` accepts from `hooks.<event>`, one
+/// separator comma per cut, pruning the event array and the hooks object
+/// only when our removals emptied them. `Ok(None)` = nothing to remove.
+pub(crate) fn unmerge_flat_entries(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<String>> {
+    let root = parse_root_object(content, settings_path)?;
+    reject_duplicate_keys(&root, settings_path)?;
+    let original = parse_serde(content, settings_path)?;
+
+    let mut updated = content.to_string();
+    let mut changed = false;
+    while let Some(cut) = find_next_flat_cut(&updated, settings_path, event, is_ours)? {
+        let mut next = String::with_capacity(updated.len());
+        next.push_str(&updated[..cut.start]);
+        next.push_str(&updated[cut.end..]);
+        updated = next;
+        changed = true;
+    }
+    if !changed {
+        return Ok(None);
+    }
+    while let Some(cut) = find_next_empty_container_cut(&updated, settings_path, &[event])? {
+        let mut next = String::with_capacity(updated.len());
+        next.push_str(&updated[..cut.start]);
+        next.push_str(&updated[cut.end..]);
+        updated = next;
+    }
+
+    let mut desired = original;
+    if let Some(root_object) = desired.as_object_mut() {
+        if let Some(hooks) = root_object
+            .get_mut("hooks")
+            .and_then(JsonValue::as_object_mut)
+        {
+            if let Some(entries) = hooks.get_mut(event).and_then(JsonValue::as_array_mut) {
+                let had_entries = !entries.is_empty();
+                entries.retain(|entry| !is_ours(entry));
+                if had_entries && entries.is_empty() {
+                    hooks.remove(event);
+                }
+            }
+            if hooks.is_empty() {
+                root_object.remove("hooks");
+            }
+        }
+    }
+    verify_update(updated, settings_path, &desired).map(Some)
+}
+
+/// The next flat entry of ours to cut from `hooks.<event>`, each element
+/// judged by parsing its own text span.
+fn find_next_flat_cut(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<Range>> {
+    let root = parse_root_object(content, settings_path)?;
+    let Some(event_array) = root
+        .get_object("hooks")
+        .and_then(|hooks| hooks.get_array(event))
+    else {
+        return Ok(None);
+    };
+    for (index, element) in event_array.elements.iter().enumerate() {
+        let range = element.range();
+        let value = parse_serde(&content[range.start..range.end], settings_path)?;
+        if !is_ours(&value) {
+            continue;
+        }
+        return Ok(Some(member_cut(
+            index
+                .checked_sub(1)
+                .and_then(|prev| event_array.elements.get(prev))
+                .map(|prev| prev.range().end),
+            range.start,
+            range.end,
+            event_array
+                .elements
+                .get(index + 1)
+                .map(|next| next.range().start),
+        )));
+    }
+    Ok(None)
+}
+
+/// Add `"<key>": <value_json>` to the root object when the key is absent
+/// (cursor's required `version`), as a splice that leaves every other byte
+/// alone. `Ok(None)` = the key is already there.
+pub(crate) fn ensure_root_key(
+    content: &str,
+    settings_path: &Path,
+    key: &str,
+    value_json: &str,
+) -> io::Result<Option<String>> {
+    let root = parse_root_object(content, settings_path)?;
+    reject_duplicate_keys(&root, settings_path)?;
+    if root
+        .properties
+        .iter()
+        .any(|property| prop_name_text(&property.name) == Some(key))
+    {
+        return Ok(None);
+    }
+    let updated = append_object_property(content, &root, key, value_json);
+    let mut desired = parse_serde(content, settings_path)?;
+    let value: JsonValue = serde_json::from_str(value_json).map_err(io::Error::other)?;
+    if let Some(object) = desired.as_object_mut() {
+        object.insert(key.to_string(), value);
     }
     verify_update(updated, settings_path, &desired).map(Some)
 }
@@ -1193,7 +1387,31 @@ mod tests {
     /// out-of-date detection alone.
     #[test]
     fn every_bundled_asset_carries_a_parseable_version() {
-        let assets: [(&str, &str); 11] = [
+        let assets: [(&str, &str); 17] = [
+            (
+                "droid sh",
+                include_str!("../../../integrations/hooks/par-mux-droid-session-hook.sh"),
+            ),
+            (
+                "droid ps1",
+                include_str!("../../../integrations/hooks/par-mux-droid-session-hook.ps1"),
+            ),
+            (
+                "copilot sh",
+                include_str!("../../../integrations/hooks/par-mux-copilot-session-hook.sh"),
+            ),
+            (
+                "copilot ps1",
+                include_str!("../../../integrations/hooks/par-mux-copilot-session-hook.ps1"),
+            ),
+            (
+                "cursor sh",
+                include_str!("../../../integrations/hooks/par-mux-cursor-session-hook.sh"),
+            ),
+            (
+                "cursor ps1",
+                include_str!("../../../integrations/hooks/par-mux-cursor-session-hook.ps1"),
+            ),
             (
                 "claude sh",
                 include_str!("../../../integrations/hooks/par-mux-claude-session-hook.sh"),

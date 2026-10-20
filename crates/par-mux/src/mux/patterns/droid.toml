@@ -1,0 +1,62 @@
+# par-mux agent scrape patterns — droid (Factory's Droid CLI).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest version 2026.06.10.1
+# (updated_at 2026-06-10), ported 2026-10-19.
+#
+# Omissions vs upstream, with reasons:
+#   - visible_blocker/visible_working: herdr-only render markers with no
+#     par-mux engine meaning.
+#   - min_engine_version: herdr's catalog-compatibility key; par-mux ships
+#     its patterns with the binary.
+# Region remaps: whole_recent -> whole (herdr's whole_recent region is the
+# whole visible screen, so the remap is exact).
+#
+# Licensed under the Apache License, Version 2.0 as pattern data derived
+# from herdr; see herdr's LICENSE file for the license text.
+id = "droid"
+version = "2026.06.10.1-parmux1"
+updated_at = "2026-06-10T00:00:00Z"
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "execute_selection_blocker"
+state = "blocked"
+priority = 300
+region = "whole"
+contains = ["enter to select", "esc to cancel"]
+any = [
+  { contains = ["↑↓ to navigate"] },
+  { contains = ["use ↑↓ to navigate"] },
+]
+all = [
+  { any = [{ contains = ["> yes, allow"] }, { contains = ["> no, cancel"] }] },
+]
+
+[[rules]]
+id = "selection_menu_blocker"
+state = "blocked"
+priority = 290
+region = "bottom_non_empty_lines(8)"
+contains = ["enter select", "esc cancel"]
+any = [
+  { contains = ["↑/↓ navigate"] },
+  { contains = ["↑↓ navigate"] },
+]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "spinner_stop_working"
+state = "working"
+priority = 110
+region = "whole"
+contains = ["esc to stop"]
+line_regex = ['^\s*[⠀-⣿]']
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "stop_hint_working"
+state = "working"
+priority = 100
+region = "whole"
+contains = ["esc to stop"]

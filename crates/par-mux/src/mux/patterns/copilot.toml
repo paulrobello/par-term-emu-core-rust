@@ -1,0 +1,61 @@
+# par-mux agent scrape patterns — copilot (GitHub Copilot CLI).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest github-copilot.toml version
+# 2026.08.29.1 (updated_at 2026-08-29), ported 2026-10-19. The file is
+# named for the set's id (`copilot`), the label the copilot hook reports,
+# so the override lookup (`<override_dir>/copilot.toml`) finds it.
+#
+# Omissions vs upstream, with reasons:
+#   - visible_blocker/visible_working: herdr-only render markers with no
+#     par-mux engine meaning.
+#   - min_engine_version: herdr's catalog-compatibility key; par-mux ships
+#     its patterns with the binary.
+# Region remaps: whole_recent -> whole (herdr's whole_recent region is the
+# whole visible screen, so the remap is exact).
+#
+# Licensed under the Apache License, Version 2.0 as pattern data derived
+# from herdr; see herdr's LICENSE file for the license text.
+id = "copilot"
+version = "2026.08.29.1-parmux1"
+updated_at = "2026-08-29T00:00:00Z"
+aliases = ["github-copilot", "ghcs"]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "selection_blocker"
+state = "blocked"
+priority = 300
+region = "whole"
+all = [
+  { any = [
+    { contains = ["esc to cancel"] },
+    { contains = ["esc cancel"] },
+  ] },
+  { any = [
+    { contains = ["enter to select"] },
+    { contains = ["enter to confirm"] },
+    { contains = ["enter to submit"] },
+    { contains = ["enter accept"] },
+  ] },
+]
+
+[[rules]]
+id = "background_agents_working"
+state = "working"
+priority = 110
+region = "bottom_non_empty_lines(6)"
+line_regex = ['^\s*◎\s+Waiting for background agents(?:\s|·|$)']
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "working_cancel_hint"
+state = "working"
+priority = 100
+region = "whole"
+any = [
+  { contains = ["esc to cancel"] },
+  { contains = ["esc cancel"] },
+  { contains = ["esc again to cancel"] },
+  { contains = ["esc interrupt"] },
+]
