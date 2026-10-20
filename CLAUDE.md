@@ -20,6 +20,7 @@ make checkall            # All quality checks (run before every commit)
 make checkall-ci         # CI-parity gate: checkall + the CI mux-test job's suites (nextest, serial; run before pushing)
 make ffi-header          # Regenerate include/terminal_core.h with cbindgen (after FFI surface changes)
 make stubs               # Regenerate python/par_term_emu_core_rust/_native.pyi (after Rust-side binding changes; run after make dev)
+make completions         # Regenerate crates/par-mux/completions/ shell scripts (after any clap flag/subcommand/doc change in crates/par-mux/src/bin/par_mux/main.rs; completions-check in checkall fails otherwise)
 make release-check       # Pre-release gates: version-lockstep checks + release-notes presence
 make bench               # Criterion VTE throughput benchmarks
 make fuzz-all            # All nine cargo-fuzz targets (fuzz-terminal_process, fuzz-sixel, fuzz-kitty, fuzz-apc_filter, fuzz-tmux_control, fuzz-mux_parse_command, fuzz-mux_hook_report, fuzz-attach_input, fuzz-ipc_rows)
