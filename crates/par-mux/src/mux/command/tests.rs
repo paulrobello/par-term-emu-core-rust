@@ -2438,7 +2438,7 @@ fn list_commands_parses_the_schema_flag_and_refuses_others() {
 #[test]
 fn worktree_commands_parse_quoted_paths_and_flags() {
     assert_eq!(
-        parse_command("worktree-create -c '/src/my repo' -b feat/x -B main -p /wt/x -s 'my x'")
+        parse_command("worktree-create -c '/src/my repo' -b feat/x --base main -p /wt/x -s 'my x'")
             .unwrap(),
         MuxCommand::WorktreeCreate {
             repo_dir: "/src/my repo".to_string(),
@@ -2885,6 +2885,36 @@ fn worktree_create_n_refusal_ignores_n_inside_values() {
     );
     let err = parse_command("worktree-create -c /src -s 'a b' -n x").unwrap_err();
     assert!(err.contains("-b <branch>"), "{err}");
+}
+
+/// The start point is `--base` (long-only): git's `worktree add -B`
+/// means create-or-reset, so a short `-B` is refused with a pointer
+/// (D7, 2026-10-20) — and the refusal reads shell words, so a `-B`
+/// inside a quoted value or as a value is not the flag.
+#[test]
+fn worktree_create_b_refusal_points_at_base() {
+    let err = parse_command("worktree-create -c /src -b x -B main").unwrap_err();
+    assert!(err.contains("--base <base>"), "{err}");
+    assert_eq!(
+        parse_command("worktree-create -c /src -b x -s 'a -B b' --base dev").unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/src".to_string(),
+            branch: "x".to_string(),
+            base: Some("dev".to_string()),
+            path: None,
+            name: Some("a -B b".to_string()),
+        }
+    );
+    assert_eq!(
+        parse_command("worktree-create -c /src -b x --base -B").unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/src".to_string(),
+            branch: "x".to_string(),
+            base: Some("-B".to_string()),
+            path: None,
+            name: None,
+        }
+    );
 }
 
 /// `rename-window` drops one leading `--` (flags end there) and skips a

@@ -173,7 +173,7 @@ fn worktree_create_refuses_bad_input_before_running_git() {
     let (ok, err) = h.run("worktree-create -c relative/dir -b x");
     assert!(!ok && err.contains("absolute"), "{err}");
     let (ok, err) = h.run(&format!(
-        "worktree-create -c {} -b x -B --orphan",
+        "worktree-create -c {} -b x --base --orphan",
         quoted(&repo)
     ));
     assert!(!ok && err.contains("invalid base"), "{err}");

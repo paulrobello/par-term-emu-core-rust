@@ -533,13 +533,13 @@
       "name": "worktree-create",
       "features": [],
       "flags": [
-        "-B",
         "-b",
+        "--base",
         "-c",
         "-p",
         "-s"
       ],
-      "synopsis": "-c <dir> -b <branch> [-B base] [-p path] [-s name] (branch flag as in git worktree add -b, decision D7)"
+      "synopsis": "-c <dir> -b <branch> [--base base] [-p path] [-s name] (branch flag as in git worktree add -b, decision D7)"
     },
     {
       "name": "worktree-open",

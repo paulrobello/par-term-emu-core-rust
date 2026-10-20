@@ -5,14 +5,23 @@
 use super::*;
 
 /// `worktree-create`'s value-taking flags.
-const WORKTREE_CREATE_VALUE_FLAGS: &[&str] = &["-c", "-b", "-B", "-p", "-s"];
+const WORKTREE_CREATE_VALUE_FLAGS: &[&str] = &["-c", "-b", "--base", "-p", "-s"];
 
-/// `worktree-create -c <dir> -b <branch> [-B base] [-p path] [-s name]`.
+/// `worktree-create -c <dir> -b <branch> [--base base] [-p path] [-s name]`.
 pub(super) fn parse_worktree_create(a: &Args<'_>) -> Result<MuxCommand, String> {
     // D7 (docs/MUX_DECISIONS.md): the branch is `-b`, as in `git worktree
-    // add -b`; `-n` is the NAME flag on `new-workspace`.
+    // add -b`; `-n` is the NAME flag on `new-workspace`. The start point
+    // is `--base` (long-only): git's `worktree add -B` means
+    // create-or-reset, and a short `-B` here would be read as that
+    // (decided 2026-10-20 before the first release; `-B` is refused with
+    // a pointer).
     if has_shell_flag(a, "-n", WORKTREE_CREATE_VALUE_FLAGS) {
         return Err("worktree-create: the branch flag is -b <branch> (-n is not accepted)".into());
+    }
+    if has_shell_flag(a, "-B", WORKTREE_CREATE_VALUE_FLAGS) {
+        return Err(
+            "worktree-create: the start point is --base <base> (-B is not accepted)".into(),
+        );
     }
     reject_positionals(a, WORKTREE_CREATE_VALUE_FLAGS)?;
     let repo_dir = a
@@ -24,7 +33,7 @@ pub(super) fn parse_worktree_create(a: &Args<'_>) -> Result<MuxCommand, String> 
     Ok(MuxCommand::WorktreeCreate {
         repo_dir,
         branch,
-        base: a.quoted_flag("-B")?,
+        base: a.quoted_flag("--base")?,
         path: a.quoted_flag("-p")?,
         name: a.quoted_flag("-s")?,
     })
