@@ -558,6 +558,73 @@ fn wheel_scrolls_client_scrollback_when_pane_has_no_mouse_mode() {
     assert_eq!(painted, live, "back at the live view");
 }
 
+/// The defect behind "omp under par-mux: wheel scrolls up and instantly
+/// snaps back": a wheel-scrolled view must ARM the scroll hold, so a
+/// pane that keeps writing (omp's streaming chat, a log tail) cannot
+/// swallow the scroll within one output tick. The hold pins the view to
+/// its content — the offset grows by the lines the pane pushes — and
+/// scrolling back to the bottom releases it.
+#[test]
+fn wheel_scrolled_view_holds_against_pane_output() {
+    let layout = parse_layout(TWO_PANE_LAYOUT).expect("parses");
+    let mut renderer = PaneRenderer::new(80, 24, Glyphs::Unicode);
+    renderer.apply_layout(layout);
+    for i in 0..30 {
+        renderer.feed_output(1, format!("hist-{i:02}\r\n").as_bytes());
+    }
+    renderer.render_frame();
+
+    // Wheel up 3: the view is off live and held.
+    assert!(renderer.wheel_scroll(10, 5, 3));
+    assert_eq!(renderer.scroll_offset_of(1), 3);
+    // The pinned content: the newest 3-from-bottom history line.
+    let grid = renderer.pane_terminal(1).unwrap().active_grid().clone();
+    let len = grid.scrollback_len();
+    let line_text = |cells: &[par_term_emu_core::cell::Cell]| -> String {
+        cells
+            .iter()
+            .take(8)
+            .map(|c| c.c().to_string())
+            .collect::<String>()
+    };
+    let pinned_top = line_text(grid.scrollback_line(len - 3).expect("history"));
+
+    // Pane output while the wheel holds the view: the offset follows
+    // the pushed lines, the view shows the SAME content.
+    renderer.feed_output(1, b"stream-1\r\nstream-2\r\n");
+    assert_eq!(
+        renderer.scroll_offset_of(1),
+        5,
+        "the wheel-held view survives output, pinned to content"
+    );
+    renderer.render_frame();
+    let top: String = (0..8)
+        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .collect::<String>();
+    assert_eq!(top, pinned_top, "the pinned content did not move");
+
+    // Wheel back down to live releases the hold: the next output tick
+    // keeps the view live instead of pushing it up again.
+    assert!(renderer.wheel_scroll(10, 5, -5));
+    assert_eq!(renderer.scroll_offset_of(1), 0);
+    renderer.feed_output(1, b"stream-3\r\n");
+    assert_eq!(
+        renderer.scroll_offset_of(1),
+        0,
+        "a live view stays live under output once the wheel released it"
+    );
+
+    // Typing still snaps a held view back to live AND drops the hold.
+    assert!(renderer.wheel_scroll(10, 5, 2));
+    renderer.snap_to_live(1);
+    renderer.feed_output(1, b"stream-4\r\n");
+    assert_eq!(
+        renderer.scroll_offset_of(1),
+        0,
+        "typing returns the view to live and the hold is gone"
+    );
+}
+
 /// A pane that owns mouse tracking never scrolls client-side: the
 /// wheel is the pane's.
 #[test]
@@ -732,16 +799,24 @@ fn scroll_mode_holds_view_against_output_and_snaps_on_exit() {
     );
     assert!(renderer.scroll_mode_active(1));
 
-    // Pane output while held does NOT snap to live — the view holds.
+    // Pane output while held does NOT snap to live — the view stays on
+    // its content, so the offset GROWS by the lines the pane pushed
+    // into scrollback (one here), not stays numerically fixed.
     renderer.feed_output(1, b"NEW-LINE\r\n");
     assert_eq!(
         renderer.scroll_offset_of(1),
-        viewport,
-        "the hold survives pane output"
+        viewport + 1,
+        "the hold survives pane output, pinned to content"
     );
-    // The offset clamps when history shrinks relative to the view.
+    // The grown offset now sits AT the history extent (this pane's
+    // history is only one viewport deep); scrolling further up clamps
+    // at the extent instead of moving.
     renderer.scroll_viewport(1, 1);
-    assert_eq!(renderer.scroll_offset_of(1), viewport + 1);
+    assert_eq!(
+        renderer.scroll_offset_of(1),
+        viewport + 1,
+        "clamped at the history extent"
+    );
 
     // Arrows-equivalent: viewport down past live clamps to the max
     // (live is reached at offset 0 only via exit).

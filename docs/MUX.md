@@ -333,7 +333,7 @@ Drag and release forward the same path, gated by what the pane's mode asked for:
 
 #### Wheel
 
-Over a pane that does NOT own mouse tracking, the wheel scrolls the CLIENT's view of that pane into its scrollback (3 lines per notch, clamped to history; the rect's top rows show the newest history lines and the live screen shifts down; any forwarded keystroke snaps back to live). Over a pane that DOES own it, the wheel forwards pane-relative like any other mouse event.
+Over a pane that does NOT own mouse tracking, the wheel scrolls the CLIENT's view of that pane into its scrollback (3 lines per notch, clamped to history; the rect's top rows show the newest history lines and the live screen shifts down). A scrolled-off-live view is HELD against pane output — new lines push into history under the pinned view instead of snapping it back to the bottom, so the wheel works over a pane that keeps writing (a streaming agent chat, a log tail); the view releases when you scroll back down to the bottom, and any forwarded keystroke still snaps back to live. Over a pane that DOES own the mouse, the wheel forwards pane-relative like any other mouse event (the pane scrolls itself).
 
 #### Status bar (bottom row)
 

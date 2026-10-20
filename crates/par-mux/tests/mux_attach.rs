@@ -2247,6 +2247,117 @@ fn render_mode_wheel_forwards_to_a_pane_that_owns_mouse() {
     host.killer.kill().ok();
 }
 
+/// A scrolling gesture must deliver ONLY the forwarded reports to the
+/// pane: a burst of wheel-ups plus a pointer motion (what a trackpad
+/// gesture produces in iTerm2), then nothing else for a settle window.
+/// Filed from a report that omp under par-mux attach scrolls up and
+/// immediately snaps back to the bottom — if anything else is written
+/// to the pane after the gesture (a synthesized wheel-down, a focus
+/// report, a repaint), this prints the pane's full received bytes.
+#[cfg(unix)]
+#[test]
+fn render_mode_scroll_gesture_sends_nothing_but_the_reports() {
+    let (fixture, _daemon, mut client) = fixture_with_session("gesture");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    // cat -n -v prefixes every line, so an injected bare sequence that
+    // arrives without a newline is still visible in the capture.
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"\\033[?1000h\\033[?1002h\\033[?1003h\\033[?1004h\\033[?1006hMOUSE%sON\\n\" -; cat -n -v'"
+        ))
+        .expect("enable mouse + reader");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("MOUSE-ON") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never ran the mouse-enable printf: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut painted: Vec<u8> = Vec::new();
+    while !plain_text(&painted).contains("MOUSE-ON") {
+        assert!(
+            Instant::now() < deadline,
+            "the render client never painted the marker: {:?}\nstderr: {}",
+            plain_text(&painted),
+            stderr.lock().unwrap()
+        );
+        painted.extend(wait_for_output(&host, b"", Duration::from_millis(100)));
+    }
+
+    // The gesture: three wheel-ups, one no-button hover motion (cb 35,
+    // what 1003 all-event tracking produces as the pointer drifts), one
+    // more wheel-up.
+    for seq in [
+        "\x1b[<64;10;5M",
+        "\x1b[<64;10;5M",
+        "\x1b[<64;10;5M",
+        "\x1b[<35;12;6M",
+        "\x1b[<64;10;5M",
+    ] {
+        host.to_child.write_all(seq.as_bytes()).expect("gesture");
+        host.to_child.flush().ok();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    // Let any follow-on writer fire (heartbeats, sweeps), then read the
+    // pane's full received stream.
+    std::thread::sleep(Duration::from_millis(1500));
+    let body = client
+        .send(&format!("capture-pane -t {pane} -S -80"))
+        .expect("capture")
+        .join("\n");
+    host.killer.kill().ok();
+    let expected = [
+        "^[[<64;9;3M",
+        "^[[<64;9;3M",
+        "^[[<64;9;3M",
+        "^[[<35;11;4M",
+        "^[[<64;9;3M",
+    ];
+    for want in expected {
+        assert!(
+            body.contains(want),
+            "the pane missed forwarded report {want}: {body:?}\n\
+             stderr: {}",
+            stderr.lock().unwrap()
+        );
+    }
+    // The exact input the pane received, minus what it echoed to itself:
+    // every SGR report cat -n -v shows after the marker is input WE
+    // caused — count REPORTS, not lines (cat buffers a burst onto one
+    // line). The five reports must be the whole of it.
+    let reports: usize = body
+        .lines()
+        .filter(|l| l.contains("^[[<"))
+        .map(|l| l.matches("M").count())
+        .sum();
+    assert_eq!(
+        reports, 5,
+        "extra input reached the pane after the gesture (omp snaps to \
+         its bottom on unexpected input): {body:?}"
+    );
+}
+
 /// Reconstruct the screen a render-mode client painted, from its
 /// per-cell diff stream: each flush cell is `CUP row;col` + SGR run +
 /// one symbol. Returns `(final, ever)`: the final `rows` strings of

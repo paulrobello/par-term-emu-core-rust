@@ -806,11 +806,14 @@ impl PaneRenderer {
     }
 
     /// Reset a pane's client-side scroll offset to live (0). Typing
-    /// forwards, so the view snaps back to the bottom.
+    /// forwards, so the view snaps back to the bottom — and the scroll
+    /// hold must drop with it, or the pane's next output tick would push
+    /// the freshly-live view back up into history.
     pub fn snap_to_live(&mut self, pane: u32) {
         if let Some(emulator) = self.emulators.get_mut(&pane) {
             if emulator.scroll_offset() != 0 {
-                emulator.scroll_by(-(emulator.scroll_offset() as isize));
+                emulator.scroll_to_live();
+                emulator.set_scroll_hold(false);
                 self.dirty = true;
             }
         }
@@ -925,6 +928,14 @@ impl PaneRenderer {
     /// (positive = up into history). Returns `false` when the point is in
     /// no pane or that pane OWNS mouse tracking (its wheel is the pane's
     /// to consume, so the router forwards the event instead).
+    ///
+    /// A view scrolled off live ARMS the scroll hold: pane output keeps
+    /// pushing lines into history under a pinned view instead of snapping
+    /// it back to the bottom (without this, a pane that keeps writing —
+    /// omp's streaming chat, a log tail — swallows the scroll within one
+    /// output tick, and the wheel looks dead). Scrolling back to the
+    /// bottom (offset 0) releases the hold and the view follows live
+    /// again; typing snaps it back as before.
     pub fn wheel_scroll(&mut self, x: u16, y: u16, delta: isize) -> bool {
         let rect = self.pane_at(x, y).cloned();
         let pane_id = rect.as_ref().map(|r| r.pane);
@@ -939,6 +950,7 @@ impl PaneRenderer {
         }
         let before = emulator.scroll_offset();
         let after = emulator.scroll_by(delta);
+        emulator.set_scroll_hold(after > 0);
         let moved = after != before;
         if moved {
             self.dirty = true;

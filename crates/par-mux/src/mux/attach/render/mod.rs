@@ -186,10 +186,12 @@ pub struct PaneEmulator {
     /// Driven by the wheel when the pane does not own mouse mode; every
     /// keystroke forwarded to the pane snaps it back to live.
     scroll: usize,
-    /// Scroll-mode hold: pane output does not snap the view back to live
-    /// while held (the prefix-[ keyboard scroll viewport). The offset is
-    /// clamped to the new scrollback extent instead, so the view stays
-    /// put relative to the BOTTOM of history as lines push in.
+    /// Scroll hold: pane output does not snap the view back to live
+    /// while held (the prefix-[ keyboard viewport, or a wheel-scrolled
+    /// view — the wheel arms the hold so a pane that keeps writing,
+    /// like omp's streaming chat, cannot instantly swallow the scroll).
+    /// The offset grows by the lines the pane pushes into scrollback so
+    /// the view stays on its content, clamped to the extent.
     hold_scroll: bool,
 }
 
@@ -237,9 +239,16 @@ impl PaneEmulator {
     /// `%output` chunk — through the emulator. Any fed byte resets the
     /// pane's client scroll to live: the pane wrote, so the view snaps
     /// to the bottom. While scroll hold is set ([`Self::set_scroll_hold`],
-    /// the prefix-[ viewport), the offset survives and clamps to the new
-    /// scrollback extent instead.
+    /// the prefix-[ viewport or a wheel-scrolled view), the offset
+    /// survives instead and tracks the lines the pane pushes into
+    /// scrollback, so the view stays put relative to its CONTENT (tmux's
+    /// copy-mode behavior), clamped to the scrollback extent.
     pub fn feed(&mut self, bytes: &[u8]) {
+        let sb_before = if self.hold_scroll {
+            Some(self.term.active_grid().scrollback_len())
+        } else {
+            None
+        };
         self.term.process(bytes);
         // The daemon's PTY session already answers the pane's queries and
         // owns its bells; a mirror must never answer on its behalf, and
@@ -248,7 +257,8 @@ impl PaneEmulator {
         let _ = self.term.drain_bell_events();
         if self.hold_scroll {
             let max = self.term.active_grid().scrollback_len();
-            self.scroll = self.scroll.min(max);
+            let pushed = max.saturating_sub(sb_before.unwrap_or(max));
+            self.scroll = (self.scroll + pushed).min(max);
         } else {
             self.scroll = 0;
         }
