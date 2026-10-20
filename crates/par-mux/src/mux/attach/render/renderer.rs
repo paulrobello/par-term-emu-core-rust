@@ -308,7 +308,7 @@ impl PaneRenderer {
         let rows = &self.overlay.as_ref()?.1;
         let inner = rows
             .iter()
-            .map(|r| r.text.chars().count())
+            .map(|r| crate::mux::attach::text_input::display_width(&r.text))
             .max()
             .unwrap_or(0)
             .min(self.width.saturating_sub(2) as usize)
@@ -518,6 +518,22 @@ impl PaneRenderer {
     /// The style is the pane's tracked DECSCUSR shape, for the sink to
     /// re-emit (`CSI Ps SP q`).
     pub fn focused_cursor(&self) -> Option<(u16, u16, CursorStyle)> {
+        self.focused_cell(true)
+    }
+
+    /// Where the host cursor PARKS while the focused pane hides its
+    /// cursor (DECTCEM off): the same tracked cell as
+    /// [`Self::focused_cursor`], minus the visibility test. The host
+    /// terminal anchors IME preedit and the candidate window at its
+    /// cursor even when hidden, so a TUI that paints its own cursor
+    /// (agent CLIs) keeps the composition at the input line instead of
+    /// at whatever cell the last diff wrote. `None` for every other
+    /// hide reason (scrolled view, nothing focused, cell outside view).
+    pub fn focused_ime_anchor(&self) -> Option<(u16, u16)> {
+        self.focused_cell(false).map(|(x, y, _)| (x, y))
+    }
+
+    fn focused_cell(&self, require_visible: bool) -> Option<(u16, u16, CursorStyle)> {
         let Some(focus) = self.focused else {
             return super::trace_none(format_args!("no focused pane"));
         };
@@ -534,7 +550,7 @@ impl PaneRenderer {
             ));
         }
         let cursor = emulator.terminal().cursor();
-        if !cursor.visible {
+        if require_visible && !cursor.visible {
             return super::trace_none(format_args!("pane tracked cursor hidden by DECTCEM"));
         }
         let (col, row) = (cursor.col, cursor.row);

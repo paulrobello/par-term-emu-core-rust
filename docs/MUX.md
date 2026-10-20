@@ -480,6 +480,22 @@ A modal that owns the keyboard (rename prompt, menu, help, picker) receives the 
 A paste longer than 1 MiB streams out in chunks and stays in paste mode until its terminator, so no byte of it reaches the chord scanner.
 Passthrough mode tracks the paste markers and skips the prefix scan inside a paste; the bytes themselves flow through untouched.
 
+#### Input methods (IME / CJK)
+
+The host terminal owns IME composition (preedit and the candidate window) for every TUI, so the attach client only ever reads committed text as UTF-8 bytes on stdin; it does not use crossterm's event reader, and no terminal-side protocol reports preedit to a TUI. What the client controls:
+
+- **CJK text forwards verbatim.** Committed text typed without the prefix reaches the focused pane byte for byte.
+- **A non-ASCII key after the prefix is swallowed whole** (render and passthrough). An IME left in a CJK mode makes prefix chords commit as non-ASCII characters; the chord table is ASCII, so the client consumes every byte of the character (split across reads too) instead of forwarding a torn UTF-8 tail, and flashes `prefix X: chords are ASCII keys (switch the input method to ASCII)`. A fullwidth form (U+FF01..U+FF5E, what a CJK IME in fullwidth mode commits without preedit) folds to its ASCII chord, so prefix `ｄ` detaches and prefix `％` splits.
+- **Modal text fields take CJK.** The rename/create prompt, the picker and help filters, and the scroll-mode search reassemble multi-byte characters; a malformed byte never enters a field. A CJK window or pane name commits intact.
+- **Alt on a CJK character decodes whole.** An ESC-prefix Option key over a non-Latin layout (`ESC` + a multi-byte character) is one Alt key on the character, re-encoded for the pane; no continuation byte leaks as plain input.
+- **The tab strip, status rows, and overlay rows lay out by display width.** They measure text in cells, so a wide glyph takes two columns and is never split at a truncation edge. The side panel's names, pane border labels, and toast titles still count characters.
+- **Hidden-cursor IME anchor (render mode).** When the focused pane hides its cursor (`CSI ?25l`, as agent CLIs that paint their own cursor do), the frame still parks the hidden host cursor on the pane's tracked cell after hiding it, because the host terminal opens preedit and the candidate window at its cursor even when hidden. Without it the candidate window opened wherever the last diff cell was written. A scrolled-off-live view or an open modal parks nothing. Passthrough already ends every status draw on the tracked cell.
+
+Not ported from herdr, with the reason:
+
+- **Switching the host input source to ASCII while the prefix is armed** (herdr `experimental.switch_ascii_input_source_in_prefix`). It needs per-OS FFI (Carbon `TISSelectInputSource` on macOS, a Korean-IME-only toggle on Windows, nothing on Linux) and acts on the machine the client runs on, which is the wrong machine when `par-mux attach` runs over ssh. The swallow-and-hint rule plus the fullwidth fold cover the failure it prevents.
+- **Revealing a hidden pane cursor for IME** (herdr `experimental.reveal_hidden_cursor_for_cjk_ime`, with `cjk_ime_agents` and `cjk_ime_cursor_shape`). It shows an extra hardware cursor next to the TUI's own painted cursor. The hidden anchor above gives macOS candidate-window tracking without that cost; the visible-reveal mode stays a follow-up.
+
 #### Limitations
 
 Forward-only mouse re-encoding (the pane's negotiated dialect — SGR, or classic/urxvt when 1006 was never enabled) and wheel scrollback is view-only (no pane resize probe).

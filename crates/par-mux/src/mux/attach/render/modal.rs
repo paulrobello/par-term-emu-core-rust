@@ -17,6 +17,7 @@ impl WindowSession {
             }
         }
         self.modal = modal;
+        self.text_utf8 = Default::default();
     }
     /// Enter the sticky resize mode (the `resize` chord): arrows adjust
     /// the focused pane's edges until Enter/Escape/`q` — tmux's resize
@@ -224,6 +225,7 @@ impl WindowSession {
     /// route through [`Self::search_typing_byte`] until Enter or Escape.
     pub(super) fn begin_scroll_search(&mut self) {
         self.scroll_query = Some(String::new());
+        self.text_utf8 = Default::default();
         self.chrome.flash("search: ".to_string());
         self.draw_status_row();
     }
@@ -256,6 +258,14 @@ impl WindowSession {
                 query.push(b as char);
                 self.chrome.flash(format!("search: {query}"));
                 self.draw_status_row();
+                true
+            }
+            b if b >= 0x80 => {
+                if let Some(ch) = self.text_utf8.push_printable(b) {
+                    query.push(ch);
+                    self.chrome.flash(format!("search: {query}"));
+                    self.draw_status_row();
+                }
                 true
             }
             _ => true,

@@ -40,6 +40,13 @@ impl FlushSink for StdoutSink {
         let _ = stdout.flush();
     }
 
+    fn anchor_hidden_cursor(&mut self, x: u16, y: u16) {
+        super::trace_cursor(format_args!("anchor_hidden_cursor ({x}, {y})"));
+        let mut stdout = std::io::stdout().lock();
+        let _ = write!(stdout, "\x1b[{};{}H", y + 1, x + 1);
+        let _ = stdout.flush();
+    }
+
     fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
         super::trace_cursor(format_args!("place_cursor {cursor:?}"));
         let mut out = String::with_capacity(24);

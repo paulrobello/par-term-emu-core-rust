@@ -293,6 +293,30 @@ impl InputParser {
                 }
                 EscapeScan::Incomplete(data.len())
             }
+            // ESC + a UTF-8 lead byte: Alt on a non-ASCII character (an
+            // ESC-prefix Option key over a CJK layout). The whole
+            // character is the key; a malformed tail drops the ESC and
+            // lets the bytes flow as plain input.
+            lead @ 0xC2..=0xF4 => {
+                let len = match lead {
+                    0xC2..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    _ => 4,
+                };
+                if data.len() < 1 + len {
+                    return EscapeScan::Incomplete(data.len());
+                }
+                match std::str::from_utf8(&data[1..1 + len])
+                    .ok()
+                    .and_then(|s| s.chars().next())
+                {
+                    Some(ch) => EscapeScan::Token(
+                        Token::Key(TermKeyEvent::char_(ch, modifiers::ALT)),
+                        1 + len,
+                    ),
+                    None => EscapeScan::Token(Token::Bytes(Vec::new()), 1),
+                }
+            }
             // ESC + a printable/other byte: Alt+byte. Re-encode through the
             // key encoder so the pane's option/meta mode applies — an Alt
             // chord is a Key event on the char.
@@ -595,6 +619,21 @@ mod tests {
         if let Token::Key(ev) = &tokens[0] {
             assert_eq!(ev.modifiers, modifiers::CTRL);
         }
+    }
+
+    /// ESC + a multi-byte character is Alt on the whole character, even
+    /// split across feeds; no continuation byte leaks as plain input.
+    /// A malformed tail drops the ESC and the bytes stay plain.
+    #[test]
+    fn alt_on_a_non_ascii_character_decodes_whole() {
+        let mut p = InputParser::default();
+        let alt_kanji = Token::Key(TermKeyEvent::char_('中', modifiers::ALT));
+        assert_eq!(p.feed("\x1b中".as_bytes()), vec![alt_kanji.clone()]);
+        let bytes = "\x1b中".as_bytes();
+        assert!(p.feed(&bytes[..2]).is_empty(), "partial holds");
+        assert_eq!(p.feed(&bytes[2..]), vec![alt_kanji]);
+        let tokens = p.feed(&[0x1b, 0xE4, b'a', b'b']);
+        assert_eq!(bytes_of(&tokens), vec![0xE4, b'a', b'b']);
     }
 
     #[test]

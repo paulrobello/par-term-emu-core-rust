@@ -126,6 +126,12 @@ impl WindowSession {
                     help.filter.push(b as char);
                     self.refresh_help();
                 }
+                b if b >= 0x80 => {
+                    if let Some(ch) = self.text_utf8.push_printable(b) {
+                        help.filter.push(ch);
+                        self.refresh_help();
+                    }
+                }
                 _ => {}
             }
             return matches!(self.modal, Modal::Help(_));

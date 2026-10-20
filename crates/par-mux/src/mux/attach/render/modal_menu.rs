@@ -174,9 +174,14 @@ impl WindowSession {
         };
         let name = self.menu_name(&target);
         let (rows, _actions) = compose_menu_panel(&target, name.as_deref(), armed);
-        let highlights = match hover
-            .and_then(|row| rows.get(row).map(|label| (row, label.text.chars().count())))
-        {
+        let highlights = match hover.and_then(|row| {
+            rows.get(row).map(|label| {
+                (
+                    row,
+                    crate::mux::attach::text_input::display_width(&label.text),
+                )
+            })
+        }) {
             Some((row, len)) => vec![(row, 0, len)],
             None => Vec::new(),
         };

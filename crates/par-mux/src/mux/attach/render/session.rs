@@ -758,14 +758,30 @@ impl WindowSession {
         // the pane's cursor would draw it through the panel (the
         // manual-pass report). Hide the host cursor while a modal is up;
         // the next unmodaled frame restores placement.
-        if self.renderer.overlay.is_some() || self.modal.hides_cursor() {
+        let modal_up = self.renderer.overlay.is_some() || self.modal.hides_cursor();
+        if modal_up {
             cursor = None;
         }
-        if self
+        // A pane that hides its cursor (DECTCEM) still gets the hidden
+        // host cursor parked on its tracked cell: the host terminal
+        // anchors IME preedit and the candidate window there (herdr
+        // parks the same way). Not under a modal: the panel owns the
+        // screen there.
+        let anchor = if cursor.is_none() && !modal_up {
+            self.renderer
+                .focused_ime_anchor()
+                .map(|(x, y)| geometry.frame_to_host(x, y))
+        } else {
+            None
+        };
+        let emitted = self
             .cursor
-            .decide(cursor, flushed, std::time::Instant::now())
-        {
+            .decide(cursor, flushed, std::time::Instant::now());
+        if emitted {
             sink.place_cursor(cursor);
+        }
+        if let (true, Some((x, y))) = (self.cursor.decide_anchor(anchor, emitted), anchor) {
+            sink.anchor_hidden_cursor(x, y);
         }
     }
 

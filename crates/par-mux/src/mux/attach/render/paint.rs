@@ -306,8 +306,19 @@ impl PaneRenderer {
                     cell.set_style(band);
                 }
             }
-            for (j, ch) in row.text.chars().take(inner).enumerate() {
+            // A wide (CJK) glyph takes two columns; the next glyph starts
+            // past its right half.
+            let mut j = 0;
+            for ch in row.text.chars() {
+                let width = crate::mux::attach::text_input::char_width(ch);
+                if width == 0 {
+                    continue;
+                }
+                if j + width > inner {
+                    break;
+                }
                 let cell = &mut self.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
+                j += width;
                 cell.set_symbol(&ch.to_string());
                 if row.accent {
                     cell.set_style(accent_style);

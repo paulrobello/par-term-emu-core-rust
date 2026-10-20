@@ -554,6 +554,7 @@ fn prefix_router_detaches_forwards_and_sends_literal_prefix() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -595,6 +596,7 @@ fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -642,6 +644,7 @@ fn status_line_names_the_respawn_chord_when_the_pane_is_dead() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -698,6 +701,7 @@ fn resync_feeds_the_shadow_the_restore_stream_verbatim() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -746,6 +750,7 @@ fn resync_size_reports_the_target_window_before_the_replay() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -807,6 +812,7 @@ fn status_draw_places_the_cursor_at_the_tracked_cell() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -892,6 +898,7 @@ fn status_draw_keeps_the_cursor_inside_the_content_region_after_a_scroll() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -937,6 +944,7 @@ fn status_draw_tracks_the_frozen_cell_when_the_pane_is_dead() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -987,6 +995,7 @@ fn respawn_chord_resumes_forwarding_after_revival() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -1102,6 +1111,7 @@ fn management_session(tag: &str) -> (std::sync::mpsc::Receiver<(String, String)>
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -1280,6 +1290,7 @@ fn kill_of_the_last_pane_engages_the_dead_guard() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -1588,6 +1599,7 @@ fn help_chord_advances_the_pane_past_the_dump() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -2270,6 +2282,7 @@ fn reload_chord_rebinds_prefix_and_sends_reload_config() {
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -2476,6 +2489,7 @@ fn scripted_passthrough(
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,
@@ -2860,6 +2874,64 @@ fn passthrough_paste_body_skips_the_prefix_scan() {
     );
 }
 
+/// IME / CJK input after the prefix (passthrough): a non-ASCII chord
+/// key is swallowed whole, even split across bursts, so no torn UTF-8
+/// tail reaches the pane; a fullwidth form (an IME in fullwidth mode)
+/// folds to its ASCII chord; CJK typed without the prefix forwards
+/// verbatim.
+#[test]
+fn passthrough_non_ascii_chord_key_is_swallowed_whole_or_folded() {
+    let (rx, mut session) = management_session("cjk-prefix-pt");
+    let kanji = "中".as_bytes();
+    assert!(!session.route_bytes(&[0x02, kanji[0]]));
+    assert!(!session.route_bytes(&kanji[1..]));
+    assert!(!session.prefix_pending, "the character ends the chord");
+    assert!(
+        session
+            .flash
+            .as_deref()
+            .is_some_and(|f| f.contains("ASCII")),
+        "the hint names the fix: {:?}",
+        session.flash
+    );
+    assert!(!session.route_bytes("日本".as_bytes()));
+    // Fullwidth ｄ (U+FF44) after the prefix is prefix d: detach.
+    let mut chord = vec![0x02];
+    chord.extend_from_slice("ｄ".as_bytes());
+    assert!(session.route_bytes(&chord), "fullwidth d detaches");
+    let lines: Vec<String> = rx.try_iter().map(|(_, line)| line).collect();
+    let sends: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with("send-keys"))
+        .collect();
+    assert_eq!(
+        sends,
+        vec!["send-keys -t %0 -H e6 97 a5 e6 9c ac"],
+        "only the unprefixed CJK reached the pane: {lines:?}"
+    );
+}
+
+/// The passthrough status row fills its width in CELLS: a CJK session
+/// name (two columns per glyph) is truncated and padded so the row
+/// never wraps past the host's last column.
+#[test]
+fn passthrough_status_row_fits_cjk_names_by_display_width() {
+    let (_rx, mut session) = management_session("cjk-status-pt");
+    session.session_name = "日本語のセッション".repeat(8);
+    let bytes = session.status_draw_bytes(24, 40);
+    let text = String::from_utf8(bytes).expect("utf-8");
+    let row = text
+        .split("\x1b[7m")
+        .nth(1)
+        .and_then(|rest| rest.split("\x1b[0m").next())
+        .expect("the reverse-video row");
+    assert_eq!(
+        crate::mux::attach::text_input::display_width(row),
+        39,
+        "{row:?}"
+    );
+}
+
 /// SEC-208 (d'): a marker split across bursts still flips the paste
 /// state (the five-byte carry), and the carry stays bounded.
 #[test]
@@ -3222,6 +3294,7 @@ fn passthrough_session(conn: conn::AttachConn, window: &str, pane: &str) -> Sess
         settling: false,
         prefix: 0x02,
         prefix_pending: false,
+        prefix_utf8: None,
         reload_key: 0x12,
         management: crate::mux::config::Management::default(),
         resize_step: 1,

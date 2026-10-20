@@ -5,8 +5,16 @@ use super::renderer::{pane_in_direction, PaneDir};
 use super::{DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, WindowSession};
 use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::PaneRect;
+use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
 use crate::mux::attach::ManagementKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
+
+/// The status flash for a prefix chord typed as a non-ASCII character:
+/// chords are ASCII bytes, so an IME left in a non-Latin mode can only
+/// ever miss them.
+pub(super) fn non_ascii_chord_hint(ch: char) -> String {
+    format!("prefix {ch}: chords are ASCII keys (switch the input method to ASCII)")
+}
 
 /// What one host mouse report hits — the pure result of
 /// [`WindowSession::mouse_hit`], which [`WindowSession::route_mouse`]
@@ -146,7 +154,43 @@ impl WindowSession {
             return false;
         }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
-        for &byte in bytes {
+        for &raw in bytes {
+            let mut byte = raw;
+            // A non-ASCII chord key (IME / CJK input): the prefix stays
+            // armed while the character's bytes arrive, then a fullwidth
+            // form folds to its ASCII chord byte and anything else is
+            // consumed with a hint. No byte of it reaches the pane.
+            if let Some(mut utf8) = self.prefix_utf8.take() {
+                match utf8.push(raw) {
+                    Utf8Step::Pending => {
+                        self.prefix_utf8 = Some(utf8);
+                        continue;
+                    }
+                    Utf8Step::Char(ch) => match fold_fullwidth_ascii(ch) {
+                        Some(folded) => byte = folded,
+                        None => {
+                            self.arm_prefix(false);
+                            self.chrome.flash(non_ascii_chord_hint(ch));
+                            self.draw_status_row();
+                            continue;
+                        }
+                    },
+                    Utf8Step::Invalid => {
+                        self.arm_prefix(false);
+                        if raw >= 0x80 {
+                            continue;
+                        }
+                    }
+                }
+            } else if self.prefix_pending && raw >= 0x80 {
+                let mut utf8 = Utf8Assembler::default();
+                if utf8.push(raw) == Utf8Step::Pending {
+                    self.prefix_utf8 = Some(utf8);
+                } else {
+                    self.arm_prefix(false);
+                }
+                continue;
+            }
             if self.prefix_pending {
                 self.arm_prefix(false);
                 match self.prefix_chord(byte) {
@@ -197,6 +241,9 @@ impl WindowSession {
     /// change: the row's `prefix` cue is the indication the chord is
     /// up (tmux's status-line prefix indication).
     pub(super) fn arm_prefix(&mut self, on: bool) {
+        if !on {
+            self.prefix_utf8 = None;
+        }
         if self.prefix_pending == on {
             return;
         }

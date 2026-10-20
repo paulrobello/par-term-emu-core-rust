@@ -128,8 +128,8 @@ impl Session {
         let bottom = rows; // DECSTBM + CUP rows are 1-indexed inclusive
         let line = self.status_line();
         let width = (cols as usize).saturating_sub(1);
-        let mut text: String = line.chars().take(width).collect();
-        let used = text.chars().count();
+        let (head, used) = super::text_input::truncate_to_width(&line, width);
+        let mut text = head.to_string();
         if used < width {
             text.push_str(&" ".repeat(width - used));
         }

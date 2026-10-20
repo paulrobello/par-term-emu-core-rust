@@ -24,6 +24,9 @@ pub(super) struct CursorState {
     /// While a divider drag is live, the host cursor carries the resize
     /// shape (best-effort DECSCUSR steady block; restored on drag end).
     pub(super) drag_shape: bool,
+    /// The hidden-cursor IME anchor the last frame parked at (host
+    /// cell), `None` when none was parked.
+    anchor: Option<(u16, u16)>,
 }
 
 impl CursorState {
@@ -32,7 +35,18 @@ impl CursorState {
             placed: Some(None),
             last_emit: now,
             drag_shape: false,
+            anchor: None,
         }
+    }
+
+    /// Whether the frame must park the hidden cursor at `anchor`: after
+    /// every cursor emit (a flushed diff left the host cursor at its
+    /// last cell) and whenever the anchor moved. No heartbeat: a hidden
+    /// cursor has no visible state to drift, and every flush re-parks.
+    pub(super) fn decide_anchor(&mut self, anchor: Option<(u16, u16)>, emitted: bool) -> bool {
+        let moved = self.anchor != anchor;
+        self.anchor = anchor;
+        anchor.is_some() && (emitted || moved)
     }
 
     /// The frame's emit decision: true when the sink must be written with
@@ -62,6 +76,7 @@ impl CursorState {
     /// re-seed, a refit, a repaint-all).
     pub(super) fn invalidate(&mut self) {
         self.placed = Some(None);
+        self.anchor = None;
     }
 
     #[cfg(test)]

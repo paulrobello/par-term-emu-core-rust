@@ -1397,6 +1397,82 @@ fn plain_router_forwards_literals_and_consumes_unbound_keys() {
     assert!(drained(&rx).is_empty(), "and nothing leaks into the pane");
 }
 
+/// IME / CJK input after the prefix: a non-ASCII chord key is
+/// swallowed whole (split across runs too) with a hint, so the pane
+/// never receives a torn UTF-8 tail; a fullwidth form folds to its
+/// ASCII chord (fullwidth `ｄ` detaches); CJK typed without the prefix
+/// forwards verbatim.
+#[test]
+fn non_ascii_chord_key_is_swallowed_whole_or_folded() {
+    let (rx, mut conn, mut session) = two_pane_session("cjk-chord", FakeScript::default());
+    let kanji = "中".as_bytes();
+    assert!(!session.route_plain(&[crate::mux::attach::C_B, kanji[0]], &mut conn));
+    assert!(
+        session.prefix_pending,
+        "armed until the character completes"
+    );
+    assert!(!session.route_plain(&kanji[1..], &mut conn));
+    settle(&mut session, &mut conn);
+    assert!(!session.prefix_pending);
+    assert!(drained(&rx).is_empty(), "no byte of it reached the pane");
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some(super::super::input_route::non_ascii_chord_hint('中').as_str())
+    );
+
+    assert!(!session.route_plain("日本".as_bytes(), &mut conn));
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec!["send-keys -t %1 -H e6 97 a5 e6 9c ac".to_string()]
+    );
+
+    let mut chord = vec![crate::mux::attach::C_B];
+    chord.extend_from_slice("ｄ".as_bytes());
+    assert!(
+        session.route_plain(&chord, &mut conn),
+        "fullwidth d detaches"
+    );
+}
+
+/// The modal text fields take committed IME text: CJK typed into the
+/// rename prompt reassembles from its UTF-8 bytes and commits on the
+/// wire intact (quoted for select-pane, verbatim for rename-window),
+/// and the picker filter accepts it too.
+#[test]
+fn cjk_text_reaches_the_prompt_and_commits_intact() {
+    let (rx, mut conn, mut session) = two_pane_session("cjk-prompt", FakeScript::default());
+    session.enter_prompt(PromptTarget::Pane);
+    type_and_commit(&mut session, &mut conn, "ビルド 1");
+    assert_eq!(
+        drained(&rx),
+        vec!["select-pane -t %1 -T 'ビルド 1'".to_string()]
+    );
+    session.enter_prompt(PromptTarget::Window("@0".to_string()));
+    type_and_commit(&mut session, &mut conn, "編集");
+    assert_eq!(drained(&rx), vec!["rename-window -t @0 編集".to_string()]);
+
+    // A torn byte (stray continuation) never enters the field.
+    session.enter_prompt(PromptTarget::Pane);
+    session.prompt_mut().text.clear();
+    session.route_plain(&[0x80, b'a'], &mut conn);
+    assert_eq!(session.prompt().text, "a");
+}
+
+/// The scroll-mode search takes CJK and the render status row paints
+/// it whole: each wide glyph two columns, the next glyph past its right
+/// half (one char per cell would let the buffer diff skip the glyph
+/// after every wide one).
+#[test]
+fn cjk_search_echo_paints_whole_in_the_status_row() {
+    let (_rx, mut conn, mut session) = two_pane_session("cjk-search", FakeScript::default());
+    session.begin_scroll_search();
+    assert!(!session.route_plain("日本語".as_bytes(), &mut conn));
+    assert_eq!(session.scroll_query.as_deref(), Some("日本語"));
+    let text = status_row_text(&mut session);
+    assert!(text.contains("search: 日本語"), "{text:?}");
+}
+
 /// prefix + arrow focuses the neighbor in that direction (an edge
 /// sends nothing); Shift+arrow swaps with it and flashes, and at an
 /// edge flashes "no pane in that direction" without a swap. While

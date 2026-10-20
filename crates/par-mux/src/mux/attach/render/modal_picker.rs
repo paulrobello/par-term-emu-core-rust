@@ -456,6 +456,12 @@ impl WindowSession {
                     picker.filter.push(b as char);
                     self.refresh_picker();
                 }
+                b if b >= 0x80 => {
+                    if let Some(ch) = self.text_utf8.push_printable(b) {
+                        picker.filter.push(ch);
+                        self.refresh_picker();
+                    }
+                }
                 _ => {}
             }
             return matches!(self.modal, Modal::Picker(_));

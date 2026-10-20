@@ -25,6 +25,7 @@
 //! the click lands on — the same layout function paint uses, so what a
 //! click highlights is exactly what painted there.
 
+use super::text_input::{char_width, display_width, truncate_to_width};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -117,9 +118,8 @@ fn tab_text(_id: &str, name: &str, budget: Option<usize>) -> String {
     match budget {
         None => name.to_string(),
         Some(budget) => {
-            let chars: Vec<char> = name.chars().collect();
-            if chars.len() > budget {
-                let head: String = chars[..budget].iter().collect();
+            if display_width(&name) > budget {
+                let (head, _) = truncate_to_width(&name, budget);
                 format!("{head}{ELLIPSIS}")
             } else {
                 name.to_string()
@@ -209,7 +209,7 @@ pub(crate) fn layout_tabs(
             .collect();
         let widths: Vec<usize> = texts
             .iter()
-            .map(|text| text.chars().count() + 2 * PAD)
+            .map(|text| display_width(text) + 2 * PAD)
             .collect();
         (texts, widths)
     };
@@ -229,7 +229,7 @@ pub(crate) fn layout_tabs(
     // Stage 2.
     let max_name = windows
         .iter()
-        .map(|(_, name)| super::chrome_safe(name).chars().count())
+        .map(|(_, name)| display_width(&super::chrome_safe(name)))
         .max()
         .unwrap_or(1)
         .max(1);
@@ -484,13 +484,21 @@ impl TabStrip {
                     self.buffer[(x, 0)].set_style(style);
                 }
             }
-            for (x, ch) in (cell.col + PAD as u16..).zip(cell.text.chars()) {
-                if x >= self.cols {
+            // A wide (CJK) glyph spans two columns: the next glyph starts
+            // past its right half, which the buffer diff skips.
+            let mut x = cell.col + PAD as u16;
+            for ch in cell.text.chars() {
+                let width = char_width(ch) as u16;
+                if width == 0 {
+                    continue;
+                }
+                if x + width > self.cols {
                     break;
                 }
                 let buffer_cell = &mut self.buffer[(x, 0)];
                 buffer_cell.set_symbol(&ch.to_string());
                 buffer_cell.set_style(style);
+                x += width;
             }
         }
     }
@@ -688,6 +696,29 @@ mod tests {
         assert_eq!(strip.buffer[(23, 0)].symbol(), "\u{2026}");
         assert_eq!(strip.buffer[(23, 0)].fg, MUTED_FG);
         assert_eq!(strip.buffer[(23, 0)].bg, BAR_BG);
+    }
+
+    /// CJK tab names lay out and truncate by display width: a wide
+    /// glyph is two columns of block, the next glyph starts past its
+    /// right half, and stage 2 never splits a wide glyph at the budget.
+    #[test]
+    fn cjk_names_lay_out_and_truncate_by_display_width() {
+        let ws = vec![
+            ("@0".to_string(), "日本語".to_string()),
+            ("@1".to_string(), "vim".to_string()),
+        ];
+        let layout = layout_tabs(&ws, Some("@0"), 80, 0, 0);
+        assert_eq!(layout.cells[0].width, 6 + 2 * PAD as u16);
+        assert_eq!(layout.cells[1].col, layout.cells[0].width + GAP as u16);
+        let mut strip = TabStrip::new(80);
+        strip.paint(&ws, Some("@0"), None);
+        let text_start = PAD as u16;
+        assert_eq!(strip.buffer[(text_start, 0)].symbol(), "日");
+        assert_eq!(strip.buffer[(text_start + 2, 0)].symbol(), "本");
+        assert_eq!(strip.buffer[(text_start + 4, 0)].symbol(), "語");
+
+        assert_eq!(tab_text("@0", "日本語", Some(5)), "日本\u{2026}");
+        assert_eq!(tab_text("@0", "日本語", Some(6)), "日本語");
     }
 
     /// The painter draws herdr's blocks: the active one bright blue with

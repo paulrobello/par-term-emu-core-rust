@@ -423,6 +423,10 @@ pub(crate) trait FlushSink {
     fn place_cursor(&mut self, _cursor: Option<(u16, u16, CursorStyle)>) {
         let _ = _cursor;
     }
+    /// Park the HIDDEN host cursor at the window-relative 0-based cell
+    /// `(x, y)` (the IME anchor; see [`PaneRenderer::focused_ime_anchor`]).
+    /// Called after a `place_cursor(None)`. Default: nothing.
+    fn anchor_hidden_cursor(&mut self, _x: u16, _y: u16) {}
     /// Write raw bytes to the host between frames — a notification
     /// escape, which moves no cursor and paints no cell. Default: drop
     /// them.
@@ -709,6 +713,13 @@ struct WindowSession {
     /// status row shows the cue while it is up ([`Self::arm_prefix`]
     /// repaints on every flip).
     prefix_pending: bool,
+    /// A non-ASCII character is arriving as the prefix chord's key (IME
+    /// / CJK input): its remaining bytes are swallowed whole, never
+    /// forwarded as a torn UTF-8 tail.
+    prefix_utf8: Option<crate::mux::attach::text_input::Utf8Assembler>,
+    /// Reassembles multi-byte characters typed into the modal text
+    /// fields (prompt, picker/help filters, scroll search).
+    text_utf8: crate::mux::attach::text_input::Utf8Assembler,
     /// The window/pane management chords (split % / split " / kill x /
     /// new-window c): the key bytes matched after the prefix. Live
     /// rebindable by the reload.
@@ -1064,6 +1075,8 @@ impl WindowSession {
             prefix: chords.prefix,
             reload_key: chords.reload,
             prefix_pending: false,
+            prefix_utf8: None,
+            text_utf8: Default::default(),
             management: chords.management,
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),

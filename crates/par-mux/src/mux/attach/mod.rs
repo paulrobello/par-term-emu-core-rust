@@ -67,6 +67,7 @@ mod settings_write;
 mod sound;
 mod status_row;
 mod targets;
+pub(crate) mod text_input;
 use panels::*;
 use targets::*;
 
@@ -386,6 +387,9 @@ struct Session {
     prefix: u8,
     /// The prefix byte arrived; the next stdin byte is the command key.
     prefix_pending: bool,
+    /// A non-ASCII chord key (IME / CJK input) is mid-character: its
+    /// remaining bytes are swallowed, never forwarded as a torn tail.
+    prefix_utf8: Option<text_input::Utf8Assembler>,
     /// The reload chord: the key byte matched after the prefix, and the
     /// chord spelling for the status cue. Both are live-rebindable.
     reload_key: u8,
@@ -477,6 +481,7 @@ impl Session {
             settling: true,
             prefix,
             prefix_pending: false,
+            prefix_utf8: None,
             reload_key,
             management,
             resize_step,
@@ -558,13 +563,50 @@ impl Session {
         let mut detached = false;
         let mut index = 0;
         while index < bytes.len() {
-            let byte = bytes[index];
+            let mut byte = bytes[index];
             index += 1;
             let in_paste = self.paste.in_paste;
             self.paste.observe(byte);
             if in_paste {
                 // A paste body is text, never a chord.
                 to_send.push(byte);
+                continue;
+            }
+            // A non-ASCII chord key (IME / CJK input): the same rule as
+            // render mode's scanner — swallow the whole character, fold a
+            // fullwidth form to its ASCII chord byte, flash a hint
+            // otherwise.
+            if let Some(mut utf8) = self.prefix_utf8.take() {
+                match utf8.push(byte) {
+                    text_input::Utf8Step::Pending => {
+                        self.prefix_utf8 = Some(utf8);
+                        continue;
+                    }
+                    text_input::Utf8Step::Char(ch) => match text_input::fold_fullwidth_ascii(ch) {
+                        Some(folded) => byte = folded,
+                        None => {
+                            self.prefix_pending = false;
+                            self.flash = Some(format!(
+                                "prefix {ch}: chords are ASCII keys (switch the input method to ASCII)"
+                            ));
+                            self.draw_status();
+                            continue;
+                        }
+                    },
+                    text_input::Utf8Step::Invalid => {
+                        self.prefix_pending = false;
+                        if byte >= 0x80 {
+                            continue;
+                        }
+                    }
+                }
+            } else if self.prefix_pending && byte >= 0x80 {
+                let mut utf8 = text_input::Utf8Assembler::default();
+                if utf8.push(byte) == text_input::Utf8Step::Pending {
+                    self.prefix_utf8 = Some(utf8);
+                } else {
+                    self.prefix_pending = false;
+                }
                 continue;
             }
             if self.prefix_pending {

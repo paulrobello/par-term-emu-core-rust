@@ -1375,6 +1375,84 @@ fn frame_replaces_cursor_after_flush_and_quiets_when_idle() {
     assert_eq!(sink.placements[2], None);
 }
 
+/// Records hide placements and hidden-cursor IME anchors in order.
+#[derive(Default)]
+struct AnchorSink {
+    events: Vec<String>,
+}
+
+impl FlushSink for AnchorSink {
+    fn flush(&mut self, _diff: &[(u16, u16, RtCell)]) {}
+    fn repaint_all(&mut self) {}
+    fn place_cursor(&mut self, cursor: Option<(u16, u16, CursorStyle)>) {
+        self.events.push(match cursor {
+            Some((x, y, _)) => format!("show {x},{y}"),
+            None => "hide".to_string(),
+        });
+    }
+    fn anchor_hidden_cursor(&mut self, x: u16, y: u16) {
+        self.events.push(format!("anchor {x},{y}"));
+    }
+}
+
+/// IME anchor: a pane that hides its cursor (DECTCEM, as agent CLIs
+/// that paint their own do) still gets the hidden host cursor parked
+/// on its tracked cell after the hide — where the host terminal opens
+/// IME preedit and the candidate window. A moving anchor re-parks; a
+/// quiet frame emits nothing; a modal or a scrolled view parks nothing.
+#[test]
+fn hidden_pane_cursor_parks_the_host_cursor_as_the_ime_anchor() {
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    session.renderer.feed_output(1, b"\x1b[?25l> input");
+    let mut sink = AnchorSink::default();
+    session.frame(&mut sink);
+    let (x, y) = session.renderer.focused_ime_anchor().expect("anchor");
+    assert_eq!(session.renderer.focused_cursor(), None, "DECTCEM hides");
+    let parked = format!("anchor {x},{}", y + 1); // +1: the strip row
+    assert_eq!(sink.events, vec!["hide".to_string(), parked.clone()]);
+
+    session.frame(&mut sink);
+    assert_eq!(sink.events.len(), 2, "a quiet frame emits nothing");
+
+    session.renderer.feed_output(1, b"!");
+    session.frame(&mut sink);
+    assert_eq!(
+        sink.events.last(),
+        Some(&format!("anchor {},{}", x + 1, y + 1)),
+        "typing moves the anchor: {:?}",
+        sink.events
+    );
+
+    let before = sink.events.len();
+    session
+        .renderer
+        .set_overlay(Some(("keybinds", vec![], None)));
+    session.frame(&mut sink);
+    assert!(
+        !sink.events[before..]
+            .iter()
+            .any(|e| e.starts_with("anchor")),
+        "a modal parks nothing: {:?}",
+        sink.events
+    );
+    session.renderer.set_overlay(None);
+
+    for i in 0..30 {
+        session
+            .renderer
+            .feed_output(1, format!("h{i}\r\n").as_bytes());
+    }
+    assert!(session.renderer.wheel_scroll(10, 5, 3));
+    assert_eq!(
+        session.renderer.focused_ime_anchor(),
+        None,
+        "a scrolled view has no anchor"
+    );
+}
+
 /// Test-side reads of the open modal's state (ARC-127): each panics
 /// when a different modal is up, so an assertion on the state also
 /// asserts which modal owns input.

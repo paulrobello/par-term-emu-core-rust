@@ -113,6 +113,14 @@ impl WindowSession {
                 }
                 self.refresh_prompt();
             }
+            b if b >= 0x80 => {
+                if let (Some(ch), Modal::Prompt(prompt)) =
+                    (self.text_utf8.push_printable(b), &mut self.modal)
+                {
+                    prompt.text.push(ch);
+                    self.refresh_prompt();
+                }
+            }
             _ => {}
         }
         matches!(self.modal, Modal::Prompt(_))

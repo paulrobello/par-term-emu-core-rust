@@ -824,9 +824,10 @@ impl StatusState {
             if used >= width {
                 return false;
             }
-            let taken: String = segment.text.chars().take(width - used).collect();
-            used += taken.chars().count();
-            segment.text = taken;
+            let (taken, taken_width) =
+                super::text_input::truncate_to_width(&segment.text, width - used);
+            used += taken_width;
+            segment.text = taken.to_string();
             !segment.text.is_empty()
         });
         segments
@@ -916,14 +917,23 @@ impl StatusRow {
             } else {
                 RtStyle::default().add_modifier(RtModifier::REVERSED)
             };
+            // A wide (CJK) glyph spans two columns: the next glyph starts
+            // past its right half, which keeps the base style.
             for ch in segment.text.chars() {
-                if x >= content_limit {
+                let width = super::text_input::char_width(ch) as u16;
+                if width == 0 {
+                    continue;
+                }
+                if x + width > content_limit {
                     break 'content;
                 }
                 let cell = &mut self.buffer[(x, 0)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(style);
-                x += 1;
+                if width == 2 {
+                    self.buffer[(x + 1, 0)].set_style(style);
+                }
+                x += width;
             }
         }
         if let Some(chip) = chip {
