@@ -683,8 +683,11 @@ impl Terminal {
     ///   scrollback rows (None = all)
     ///
     /// Rows are emitted newest-first (the row directly above the screen
-    /// leads), so `Some(n)` is always the first `n` rows of the `None`
-    /// export. Returns the exported content as a string.
+    /// leads), so for Plain and Html `Some(n)` is always the first `n` rows
+    /// of the `None` export. Ansi joins soft-wrapped rows into one logical
+    /// line (see [`crate::grid::Grid::export_scrollback_styled`]), so a cut
+    /// inside a wrapped line keeps only that line's newest rows. Returns the
+    /// exported content as a string.
     pub fn export_scrollback(&self, format: ExportFormat, max_lines: Option<usize>) -> String {
         let scrollback_len = self.grid.scrollback_len();
         let lines_to_export = max_lines.unwrap_or(scrollback_len).min(scrollback_len);

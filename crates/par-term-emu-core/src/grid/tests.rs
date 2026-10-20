@@ -1041,7 +1041,7 @@ fn test_styled_exports_golden_bytes() {
     );
     assert_eq!(
         grid.export_scrollback_styled(None),
-        "\x1b[0;31;1mC\x1b[0m\n\x1b[0;31;1mA\x1b[0mb"
+        "\x1b[0;31;1mA\x1b[0mb\x1b[0;31;1mC\x1b[0m\n"
     );
     assert_eq!(
         grid.export_visible_screen_styled(),

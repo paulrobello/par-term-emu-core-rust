@@ -3439,6 +3439,67 @@ fn test_export_scrollback_html_format() {
     assert!(export.contains("Red"));
 }
 
+/// A 100-char line on an 80-col grid soft-wraps into two rows. The ansi
+/// export joins them into ONE logical line, head row first, between its
+/// true older and newer neighbors; Plain and Html never join, so they keep
+/// one line per grid row (newest-first).
+#[test]
+fn export_scrollback_joins_a_wrapped_line_with_the_row_it_continues() {
+    let mut term = Terminal::with_scrollback(80, 2, 100);
+    let head = "A".repeat(80);
+    let tail = "B".repeat(20);
+    term.process(format!("older\r\n{head}{tail}\r\nnewer\r\n\r\n").as_bytes());
+    let grid = term.grid();
+    assert_eq!(grid.scrollback_len(), 4, "older, head, tail, newer");
+    assert!(grid.is_scrollback_wrapped(1), "head row soft-wraps");
+    assert!(!grid.is_scrollback_wrapped(2), "tail row ends the line");
+
+    assert_eq!(
+        term.export_scrollback(ExportFormat::Ansi, None),
+        format!("newer\x1b[0m\n{head}{tail}\x1b[0m\nolder\x1b[0m\n")
+    );
+    // A cut inside the logical line keeps only its newest rows, terminated.
+    assert_eq!(
+        term.export_scrollback(ExportFormat::Ansi, Some(2)),
+        format!("newer\x1b[0m\n{tail}\x1b[0m\n")
+    );
+    assert_eq!(
+        term.export_scrollback(ExportFormat::Ansi, Some(3)),
+        format!("newer\x1b[0m\n{head}{tail}\x1b[0m\n")
+    );
+
+    let plain = term.export_scrollback(ExportFormat::Plain, None);
+    let plain_rows: Vec<&str> = plain.lines().map(str::trim_end).collect();
+    assert_eq!(plain_rows, ["newer", tail.as_str(), head.as_str(), "older"]);
+    let html = term.export_scrollback(ExportFormat::Html, None);
+    let html_rows: Vec<&str> = html
+        .strip_prefix("<pre>\n")
+        .and_then(|t| t.strip_suffix("</pre>"))
+        .expect("html framing")
+        .lines()
+        .map(str::trim_end)
+        .collect();
+    assert_eq!(html_rows, plain_rows);
+}
+
+/// The newest scrollback row soft-wraps into screen row 0: its continuation
+/// is not history, so the ansi export still terminates it rather than
+/// gluing it onto the older line that follows.
+#[test]
+fn export_scrollback_ansi_terminates_a_row_whose_continuation_is_on_screen() {
+    let mut term = Terminal::with_scrollback(80, 2, 100);
+    let head = "A".repeat(80);
+    term.process(format!("older\r\n{head}BB\r\nnext").as_bytes());
+    let grid = term.grid();
+    assert_eq!(grid.scrollback_len(), 2, "older, head");
+    assert!(grid.is_scrollback_wrapped(1), "head wraps onto the screen");
+
+    assert_eq!(
+        term.export_scrollback(ExportFormat::Ansi, None),
+        format!("{head}\x1b[0m\nolder\x1b[0m\n")
+    );
+}
+
 #[test]
 fn test_export_scrollback_ansi_format() {
     let mut term = Terminal::with_scrollback(80, 5, 100);

@@ -5700,8 +5700,10 @@ class Terminal:
         Returns:
             Exported content as string. Rows are newest-first (the row
             directly above the screen leads), so ``max_lines=n`` returns a
-            prefix of the full export: its first ``n`` rows ("ansi" joins
-            soft-wrapped rows, so it can hold fewer than ``n`` lines).
+            prefix of the full export: its first ``n`` rows. "ansi" joins
+            soft-wrapped rows into one line (head row first), so it can hold
+            fewer than ``n`` lines, and a cut inside a wrapped line keeps
+            only that line's newest rows.
 
         Raises:
             ValueError: If format is not "plain", "html", or "ansi"

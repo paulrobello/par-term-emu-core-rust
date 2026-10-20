@@ -369,22 +369,35 @@ impl Grid {
     /// selection and order (`max_lines` keeps the NEWEST rows, emitted
     /// newest-first like the Plain path), with per-run SGR so colors and
     /// attributes survive the export.
+    ///
+    /// Soft-wrapped rows are joined into their logical line: the logical
+    /// lines are emitted newest-first, each one's rows in grid order (a
+    /// wrapped row continues into the NEWER row below it). Every emitted
+    /// line ends with a reset and newline, including a line whose head is
+    /// cut off by `max_lines` (only its newest rows are exported) and a
+    /// newest row whose continuation is still on screen.
     pub fn export_scrollback_styled(&self, max_lines: Option<usize>) -> String {
         let lines_to_export = max_lines
             .unwrap_or(self.scrollback_lines)
             .min(self.scrollback_lines);
+        let first = self.scrollback_lines - lines_to_export;
         let mut result = String::new();
-        let mut state = SgrState::reset();
 
-        for i in (self.scrollback_lines - lines_to_export..self.scrollback_lines).rev() {
-            if let Some(line) = self.scrollback_line(i) {
-                let last_sig = self.find_last_significant(line);
-                push_styled_cells(&mut result, line, last_sig, &mut state);
-                if !self.is_scrollback_wrapped(i) {
-                    result.push_str("\x1b[0m\n");
-                    state = SgrState::reset();
+        let mut end = self.scrollback_lines;
+        while end > first {
+            let mut start = end - 1;
+            while start > first && self.is_scrollback_wrapped(start - 1) {
+                start -= 1;
+            }
+            let mut state = SgrState::reset();
+            for i in start..end {
+                if let Some(line) = self.scrollback_line(i) {
+                    let last_sig = self.find_last_significant(line);
+                    push_styled_cells(&mut result, line, last_sig, &mut state);
                 }
             }
+            result.push_str("\x1b[0m\n");
+            end = start;
         }
 
         result
