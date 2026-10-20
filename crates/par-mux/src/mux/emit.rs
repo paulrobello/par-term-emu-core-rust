@@ -211,6 +211,20 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::PaneRespawned { pane_id } => {
             format!("%pane-respawned {pane_id}\n")
         }
+        TmuxNotification::Notification { title, body } => {
+            // Title and body ride the standard base64 of their text: one
+            // whitespace-free token each, any text. The body token rides
+            // only when set, as a trailing key=value a parser may skip.
+            use base64::Engine as _;
+            let b64 =
+                |text: &str| base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            let tail = if body.is_empty() {
+                String::new()
+            } else {
+                format!(" body={}", b64(body))
+            };
+            format!("%notification {}{tail}\n", b64(title))
+        }
         // Parser-only variants the daemon never constructs. Listed, not
         // wildcarded: a new `TmuxNotification` variant fails to compile here
         // until someone decides whether the daemon emits it (ARC-094). Real
@@ -597,6 +611,25 @@ mod tests {
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn notification_round_trips_any_text() {
+        for (title, body) in [
+            ("build failed", "see the log: 3 errors"),
+            ("only a title", ""),
+            ("caf\u{e9} \u{b7} done", "line one\nline two"),
+        ] {
+            let original = TmuxNotification::Notification {
+                title: title.to_string(),
+                body: body.to_string(),
+            };
+            let line = emit(&original);
+            assert!(line.starts_with("%notification "), "{line:?}");
+            assert_eq!(line.matches('\n').count(), 1, "one wire line: {line:?}");
+            let parsed = round_trip(&original);
+            assert_eq!(parsed, vec![original], "round trip changed it");
+        }
     }
 
     #[test]

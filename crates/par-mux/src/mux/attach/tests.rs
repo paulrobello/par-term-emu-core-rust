@@ -2361,6 +2361,7 @@ fn reload_client_chords_errors_on_malformed_chords() {
                 sidebar: b's',
                 status_bar: b'S',
                 respawn: b'r',
+                notify_jump: b'j',
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()
@@ -2396,6 +2397,7 @@ fn reload_client_chords_errors_on_malformed_chords() {
                 sidebar: b's',
                 status_bar: b'S',
                 respawn: b'r',
+                notify_jump: b'j',
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()

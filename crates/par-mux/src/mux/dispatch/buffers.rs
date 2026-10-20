@@ -36,6 +36,9 @@ pub(super) fn route_buffer_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
         MuxCommand::Version => cmd_version(ctx),
         MuxCommand::ReloadConfig => cmd_reload_config(ctx),
+        MuxCommand::ShowNotification { title, body } => {
+            Outcome::ok(ctx, "").notifying(TmuxNotification::Notification { title, body })
+        }
         MuxCommand::ListCommands { schema } => cmd_list_commands(ctx, schema),
         other => unreachable!("route_command sent a non-buffer command: {other:?}"),
     }

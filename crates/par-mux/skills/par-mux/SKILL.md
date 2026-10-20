@@ -124,6 +124,7 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Rename | `rename-workspace -t +N <name>` / `rename-session -t $N <name>` / `rename-window -t @N <name>` |
 | Kill | `kill-pane -t %N` (the last pane of a window closes the window too), `kill-window -t @N`, `kill-session -t $N`, `kill-workspace -t +N` |
 | Paste buffer | `set-buffer <text>` / `show-buffer` / `paste-buffer -t %N` |
+| Notify the user | `show-notification [-b body] [--] <title>` — delivered by every attached TUI through its own notify-delivery channel (toast, OSC 9/99, or OS notifier) |
 | Session env | `set-environment -t $N KEY VALUE` (applies to panes spawned *after*) |
 | Live settings | `show-options` (applied `key=value` lines) / `set-option exit-empty off` (live keys: `exit-empty`, `remain-on-exit`; everything else is restart-required) |
 | Stop everything | `par-mux --stop` (or `kill-server`) — clean save, then exit |

@@ -673,6 +673,9 @@ fn malformed_known_notifications_are_dropped_and_parsing_continues() {
         "%pane-title-changed  title",
         "%pane-exited",
         "%pane-respawned",
+        "%notification",
+        "%notification not*base64",
+        "%notification  body=Ym9keQ==",
     ] {
         let mut parser = TmuxControlParser::new(true);
         let parsed = parser.parse(format!("{line}\n%exit\n").as_bytes());
@@ -844,6 +847,21 @@ fn par_mux_extension_optional_fields_decode() {
         vec![N::PaneRespawned {
             pane_id: "%5".into()
         }]
+    );
+    assert_eq!(
+        parse_one("%notification YnVpbGQgZmFpbGVk body=c2VlIGxvZw=="),
+        vec![N::Notification {
+            title: "build failed".into(),
+            body: "see log".into(),
+        }]
+    );
+    assert_eq!(
+        parse_one("%notification ZG9uZQ== future=x"),
+        vec![N::Notification {
+            title: "done".into(),
+            body: String::new(),
+        }],
+        "no body token, unknown keys ignored"
     );
     assert_eq!(
         parse_one("%pane-title-changed %5 my build pane"),

@@ -65,6 +65,9 @@ fn sanitize(text: &str) -> String {
 pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec<u8> {
     let (title, body) = (sanitize(title), sanitize(body));
     if kitty {
+        if body.is_empty() {
+            return format!("\x1b]99;i=1;{title}\x1b\\").into_bytes();
+        }
         format!("\x1b]99;i=1:d=0;{title}\x1b\\\x1b]99;i=1:p=body;{body}\x1b\\").into_bytes()
     } else {
         // iTerm2's OSC 9 never presented an escape whose body carried the
@@ -77,6 +80,9 @@ pub(crate) fn terminal_notification(title: &str, body: &str, kitty: bool) -> Vec
                 .map(|c| if c.is_ascii() { c } else { '?' })
                 .collect()
         };
+        if body.is_empty() {
+            return format!("\x1b]9;{}\x07", ascii(&title)).into_bytes();
+        }
         format!("\x1b]9;{}: {}\x07", ascii(&title), ascii(&body)).into_bytes()
     }
 }
@@ -185,6 +191,7 @@ impl WindowSession {
         } else {
             ws.to_string()
         };
+        self.notify.last_target = Some(pane);
         let workspace = self
             .status
             .workspaces()
@@ -214,7 +221,7 @@ impl WindowSession {
                     body: sanitize(&detail),
                     message: (!message.is_empty()).then_some(message),
                     status,
-                    pane,
+                    pane: Some(pane),
                 }));
                 // The card only shows while the user looks at this
                 // window; the bell makes the host flag the tab/window
@@ -230,6 +237,37 @@ impl WindowSession {
     }
 }
 
+impl WindowSession {
+    /// An ad-hoc `%notification` (a script's `show-notification`): deliver
+    /// `title` / `body` through the configured channel. Unlike an agent
+    /// transition it ignores `notify-states` and the background-only rule
+    /// (a script asked for it explicitly), carries no pane, and so never
+    /// moves the notification-jump target.
+    pub(super) fn notify_adhoc(&mut self, title: &str, body: &str) {
+        match self.notify.delivery {
+            NotifyDelivery::Off => {}
+            NotifyDelivery::Inside => {
+                let status = crate::mux::attach::panels::AgentStatus::None;
+                self.notify.toast_until =
+                    Some(std::time::Instant::now() + super::toast::toast_lifetime(status));
+                self.renderer.set_toast(Some(super::toast::Toast {
+                    title: sanitize(title),
+                    body: sanitize(body),
+                    message: None,
+                    status,
+                    pane: None,
+                }));
+                self.notify.outbox.push(0x07);
+            }
+            NotifyDelivery::Terminal => {
+                let bytes = terminal_notification(title, body, host_is_kitty());
+                self.notify.outbox.extend_from_slice(&bytes);
+            }
+            NotifyDelivery::System => system_notification(title, body),
+        }
+    }
+}
+
 /// The session's notification settings and the terminal escapes waiting
 /// for the next frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +279,9 @@ pub(super) struct NotifyState {
     pub outbox: Vec<u8>,
     /// When the in-app toast on screen expires.
     pub toast_until: Option<std::time::Instant>,
+    /// The pane behind the most recent agent notification this client
+    /// delivered — the notification-jump chord's target.
+    pub last_target: Option<u32>,
 }
 
 impl Default for NotifyState {
@@ -250,6 +291,7 @@ impl Default for NotifyState {
             states: Vec::new(),
             outbox: Vec::new(),
             toast_until: None,
+            last_target: None,
         }
     }
 }
@@ -271,6 +313,13 @@ mod tests {
         let kitty = String::from_utf8(terminal_notification("par-mux", "a\nb", true)).unwrap();
         assert!(kitty.contains("]99;i=1:d=0;par-mux\x1b\\"), "{kitty:?}");
         assert!(kitty.contains("]99;i=1:p=body;a b\x1b\\"), "{kitty:?}");
+        // An empty body (a title-only show-notification) is the title
+        // alone: no trailing `: `, no empty kitty body chunk.
+        assert_eq!(terminal_notification("done", "", false), b"\x1b]9;done\x07");
+        assert_eq!(
+            terminal_notification("done", "", true),
+            b"\x1b]99;i=1;done\x1b\\"
+        );
         assert_eq!(
             NotifyDelivery::parse("system"),
             Some(NotifyDelivery::System)

@@ -2606,3 +2606,61 @@ fn agent_verbs_appear_in_list_commands() {
         assert!(body.lines().any(|l| l == line), "{line}: {body}");
     }
 }
+
+/// `show-notification [-b body] [--] <title>`: the title is the rest of
+/// the line (one quoted word unquoted), `--` admits a leading dash,
+/// control characters fold, both fields truncate to their caps, and an
+/// empty title or an unknown flag is refused.
+#[test]
+fn parses_show_notification() {
+    let parsed = |line: &str| parse_command(line).expect(line);
+    assert_eq!(
+        parsed("show-notification build failed"),
+        MuxCommand::ShowNotification {
+            title: "build failed".into(),
+            body: String::new(),
+        }
+    );
+    assert_eq!(
+        parsed("show-notification -b 'see the log' 'tests: 3 failed'"),
+        MuxCommand::ShowNotification {
+            title: "tests: 3 failed".into(),
+            body: "see the log".into(),
+        }
+    );
+    assert_eq!(
+        parsed("show-notification -- -b is the title"),
+        MuxCommand::ShowNotification {
+            title: "-b is the title".into(),
+            body: String::new(),
+        }
+    );
+    assert_eq!(
+        parsed("show-notification -b \"a\tb\" t"),
+        MuxCommand::ShowNotification {
+            title: "t".into(),
+            body: "a b".into(),
+        }
+    );
+    let long = "x".repeat(NOTIFICATION_TITLE_MAX + 20);
+    let MuxCommand::ShowNotification { title, body } = parsed(&format!(
+        "show-notification -b {} {long}",
+        "y".repeat(NOTIFICATION_BODY_MAX + 5)
+    )) else {
+        panic!("variant");
+    };
+    assert_eq!(title.chars().count(), NOTIFICATION_TITLE_MAX);
+    assert_eq!(body.chars().count(), NOTIFICATION_BODY_MAX);
+    for bad in [
+        "show-notification",
+        "show-notification -b body",
+        "show-notification ''",
+        "show-notification -x title",
+    ] {
+        assert!(parse_command(bad).is_err(), "{bad} must be refused");
+    }
+    assert!(!parsed("show-notification t").mutates());
+    assert!(list_commands_body()
+        .lines()
+        .any(|l| l == "show-notification"));
+}

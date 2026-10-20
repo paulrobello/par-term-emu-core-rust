@@ -2290,9 +2290,9 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 24
-    // rows with break-pane and join-pane aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 24][..]);
+    // section holds every management chord plus prefix and reload — 25
+    // rows with break-pane, join-pane and notify-jump aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 25][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2305,7 +2305,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 24][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 25][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3561,7 +3561,7 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
     let toast = session.renderer.toast.clone().expect("a toast is up");
     assert_eq!(toast.title, "claude blocked");
     assert_eq!(toast.body, "main \u{b7} claude");
-    assert_eq!(toast.pane, 1);
+    assert_eq!(toast.pane, Some(1));
     // It paints at the content area's bottom-right, over the panes.
     let (tx, ty, tw, th) = session.renderer.toast_rect().expect("on screen");
     assert_eq!(tx + tw, session.renderer.width, "flush right");
@@ -3747,6 +3747,120 @@ fn done_notifies_and_the_seen_flip_does_not() {
     assert!(
         session.notify.outbox.is_empty(),
         "done -> idle is the seen flip, not news"
+    );
+}
+
+/// The notification-jump chord (prefix `j`, herdr's
+/// `open_notification_target`) focuses the pane behind the most recent
+/// agent notification this client delivered and dismisses the toast;
+/// with nothing delivered it flashes and sends nothing. A suppressed
+/// transition (an in-view agent) never becomes the target.
+#[test]
+fn notify_jump_chord_focuses_the_last_notified_pane() {
+    use super::super::notify::NotifyDelivery;
+    let (rx, mut conn) = fake_daemon("snapjump", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    session.refresh_status_facts(&mut conn).expect("seed");
+    drained(&rx);
+    assert_eq!(session.management.notify_jump, b'j');
+    // Nothing delivered yet: a flash, no command.
+    chord(&mut session, &mut conn, b'j');
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("no notification to jump to")
+    );
+    assert!(
+        !drained(&rx).iter().any(|l| l.starts_with("select-pane")),
+        "no target, no select"
+    );
+    let push = |session: &mut WindowSession, pane: &str, state: &str| {
+        session.handle_event(TmuxNotification::AgentStateChanged {
+            pane_id: pane.to_string(),
+            agent: "claude".to_string(),
+            state: state.to_string(),
+            source: "hook".to_string(),
+            ws: "+0".to_string(),
+            msg: String::new(),
+        });
+    };
+    // %1 is in the shown window: no notification, so no target.
+    push(&mut session, "%1", "blocked");
+    assert_eq!(session.notify.last_target, None);
+    // Background the agents; %3 then %1 notify — the latest wins.
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    push(&mut session, "%3", "working");
+    push(&mut session, "%3", "blocked");
+    push(&mut session, "%1", "working");
+    assert_eq!(session.notify.last_target, Some(3), "unselected keeps it");
+    push(&mut session, "%1", "blocked");
+    assert_eq!(session.notify.last_target, Some(1));
+    assert!(session.renderer.toast.is_some());
+    drained(&rx);
+    chord(&mut session, &mut conn, b'j');
+    assert!(session.renderer.toast.is_none(), "the jump dismisses it");
+    assert!(
+        drained(&rx).iter().any(|line| line == "select-pane -t %1"),
+        "the chord lands on the last notified pane"
+    );
+}
+
+/// An ad-hoc `%notification` (`show-notification`) rides the client's
+/// delivery channel with the script's own title — ignoring notify-states
+/// and the background-only rule — never moves the jump target, and its
+/// toast, which has no pane, only dismisses on a click.
+#[test]
+fn adhoc_notification_delivers_through_the_channel_without_a_target() {
+    use super::super::notify::NotifyDelivery;
+    let (rx, mut conn) = fake_daemon("snapadhoc", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.states = Vec::new();
+    session.refresh_status_facts(&mut conn).expect("seed");
+    drained(&rx);
+    let adhoc = |session: &mut WindowSession, body: &str| {
+        session.handle_event(TmuxNotification::Notification {
+            title: "build failed".to_string(),
+            body: body.to_string(),
+        });
+    };
+    adhoc(&mut session, "3 errors");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]9;build failed: 3 errors\x07",
+        "the script's title, not par-mux"
+    );
+    adhoc(&mut session, "");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]9;build failed\x07",
+        "a title-only notification has no trailing separator"
+    );
+    session.notify.delivery = NotifyDelivery::Off;
+    adhoc(&mut session, "x");
+    assert!(session.notify.outbox.is_empty(), "off delivers nothing");
+    session.notify.delivery = NotifyDelivery::Inside;
+    adhoc(&mut session, "see the log");
+    let toast = session.renderer.toast.clone().expect("a toast is up");
+    assert_eq!(toast.title, "build failed");
+    assert_eq!(toast.body, "see the log");
+    assert_eq!(toast.pane, None);
+    assert_eq!(session.notify.last_target, None, "no jump target");
+    let (tx, ty, _, _) = session.renderer.toast_rect().expect("on screen");
+    let (hx, hy) = session.geometry.frame_to_host(tx + 2, ty + 1);
+    session.route_mouse(&mut conn, sgr(0, hx + 1, hy + 1, false));
+    settle(&mut session, &mut conn);
+    assert!(session.renderer.toast.is_none(), "the click dismisses it");
+    assert!(
+        !drained(&rx).iter().any(|l| l.starts_with("select-pane")),
+        "an ad-hoc toast has no pane to focus"
     );
 }
 

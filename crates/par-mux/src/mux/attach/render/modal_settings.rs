@@ -304,6 +304,11 @@ impl SettingsSection {
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
+                    key: "notify-jump",
+                    label: "jump to notification",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
                     key: "respawn",
                     label: "respawn dead pane",
                     kind: SettingKind::Chord,
@@ -452,6 +457,7 @@ impl SettingsValues {
             "sidebar" => FieldVal::Text(spell_key(m.sidebar)),
             "status-bar" => FieldVal::Text(spell_key(m.status_bar)),
             "respawn" => FieldVal::Text(spell_key(m.respawn)),
+            "notify-jump" => FieldVal::Text(spell_key(m.notify_jump)),
             _ => FieldVal::Text(String::new()),
         }
     }

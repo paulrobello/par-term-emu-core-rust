@@ -436,6 +436,14 @@
       "synopsis": ""
     },
     {
+      "name": "show-notification",
+      "features": [],
+      "flags": [
+        "-b"
+      ],
+      "synopsis": "[-b body] [--] <title> (the title is the rest of the line; -- before a title that starts with -)"
+    },
+    {
       "name": "show-options",
       "features": [],
       "flags": [],

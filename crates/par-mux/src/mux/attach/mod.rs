@@ -633,7 +633,8 @@ impl Session {
                         | ManagementKey::Labels
                         | ManagementKey::WorkspacePicker
                         | ManagementKey::Sidebar
-                        | ManagementKey::StatusBar,
+                        | ManagementKey::StatusBar
+                        | ManagementKey::NotifyJump,
                     ) => {}
                     None => {
                         // The resize chord: a sticky mode — arrows adjust
@@ -816,6 +817,9 @@ pub(crate) enum ManagementKey {
     StatusBar,
     /// Respawn the focused pane when it is held dead (`respawn-pane`).
     Respawn,
+    /// Focus the pane behind the most recent agent notification this
+    /// client delivered (render mode).
+    NotifyJump,
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p

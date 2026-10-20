@@ -208,6 +208,15 @@ pub struct ClientSection {
     /// is left alone).
     #[serde(default, rename = "respawn", skip_serializing_if = "Option::is_none")]
     pub respawn: Option<String>,
+    /// The notification-jump chord: the key matched after the prefix that
+    /// focuses the pane behind the most recent agent notification this
+    /// client delivered (render mode).
+    #[serde(
+        default,
+        rename = "notify-jump",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub notify_jump: Option<String>,
     /// The side panel's width in columns (render mode; clamped 6..=60).
     #[serde(
         default,
@@ -611,6 +620,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             sidebar: None,
             status_bar: None,
             respawn: None,
+            notify_jump: None,
             sidebar_width: Some(defaults.sidebar_width),
             sidebar_on_launch: Some(defaults.sidebar_on_launch),
             agent_rows: Some(defaults.agent_rows.clone()),
@@ -883,6 +893,9 @@ pub struct Management {
     /// Respawn the focused pane when it is held dead — `respawn-pane -t
     /// <pane>`. A live pane is left alone.
     pub respawn: u8,
+    /// Focus the pane behind the most recent agent notification this
+    /// client delivered (herdr's `open_notification_target`; render mode).
+    pub notify_jump: u8,
 }
 
 impl Default for Management {
@@ -911,6 +924,7 @@ impl Default for Management {
             sidebar: b's',
             status_bar: b'S',
             respawn: b'r',
+            notify_jump: b'j',
         }
     }
 }
@@ -992,6 +1006,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         sidebar: chord!(sidebar, "sidebar"),
         status_bar: chord!(status_bar, "status-bar"),
         respawn: chord!(respawn, "respawn"),
+        notify_jump: chord!(notify_jump, "notify-jump"),
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -1556,6 +1571,7 @@ remain-on-exit = true
                 sidebar: b's',
                 status_bar: b'S',
                 respawn: b'r',
+                notify_jump: b'j',
             }
         );
         // Full override, tmux spellings and literals alike.

@@ -28,7 +28,7 @@ pub(super) enum Hit {
     /// A press outside the settings dialog: close it.
     SettingsClose,
     /// A press on the in-app toast: focus its agent's pane.
-    ToastPress { pane: u32 },
+    ToastPress { pane: Option<u32> },
     /// The side panel's ` new ` chip: open the new-workspace prompt.
     SidebarNewWorkspace,
     /// The side panel's ` menu ` chip: open the command menu.
@@ -363,6 +363,7 @@ impl WindowSession {
             (m.sidebar, ManagementKey::Sidebar),
             (m.status_bar, ManagementKey::StatusBar),
             (m.respawn, ManagementKey::Respawn),
+            (m.notify_jump, ManagementKey::NotifyJump),
         ];
         table
             .into_iter()
@@ -546,7 +547,9 @@ impl WindowSession {
             Hit::ToastPress { pane } => {
                 self.notify.toast_until = None;
                 self.renderer.set_toast(None);
-                self.focus_pane(conn, pane);
+                if let Some(pane) = pane {
+                    self.focus_pane(conn, pane);
+                }
             }
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => {

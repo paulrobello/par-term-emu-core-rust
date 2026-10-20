@@ -91,6 +91,10 @@ pub(crate) fn help_rows(
                 format!("{p} {}", spell_key(m.respawn)),
                 "respawn the held-dead pane".to_string(),
             ),
+            (
+                format!("{p} {}", spell_key(m.notify_jump)),
+                "jump to the last notification's pane".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -475,6 +479,7 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::StatusBar), "toggle status bar"),
     (Some(ManagementKey::WorkspaceNext), "next workspace"),
     (Some(ManagementKey::WorkspacePrev), "previous workspace"),
+    (Some(ManagementKey::NotifyJump), "jump to notification"),
 ];
 
 /// The picker's display rows from the queried entries: one accent

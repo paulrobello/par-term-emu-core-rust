@@ -218,6 +218,7 @@ impl TmuxControlParser {
             "pane-title-changed" => Self::parse_pane_title_changed(args),
             "pane-exited" => Self::parse_pane_exited(args),
             "pane-respawned" => Self::parse_pane_id_only(args),
+            "notification" => Self::parse_notification(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
             }),
@@ -433,6 +434,27 @@ impl TmuxControlParser {
         Some(TmuxNotification::PaneRespawned {
             pane_id: args.trim().to_string(),
         })
+    }
+
+    /// `%notification <b64 title> [body=<b64 body>]`: title and body ride
+    /// the standard base64 of their text, one whitespace-free token each.
+    /// A missing, malformed, non-UTF-8, or empty title drops the line; a
+    /// bad body token reads as no body.
+    fn parse_notification(args: &str) -> Option<TmuxNotification> {
+        use base64::Engine as _;
+        let decode = |token: &str| {
+            base64::engine::general_purpose::STANDARD
+                .decode(token)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        };
+        let mut parts = args.split_whitespace();
+        let title = decode(parts.next()?).filter(|t| !t.is_empty())?;
+        let body = parts
+            .find_map(|token| token.strip_prefix("body="))
+            .and_then(decode)
+            .unwrap_or_default();
+        Some(TmuxNotification::Notification { title, body })
     }
 
     fn parse_session_changed(args: &str) -> Option<TmuxNotification> {

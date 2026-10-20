@@ -1513,6 +1513,10 @@ impl WindowSession {
                 self.on_pane_respawned(&pane_id);
                 EventOutcome::Continue
             }
+            TmuxNotification::Notification { title, body } => {
+                self.notify_adhoc(&title, &body);
+                EventOutcome::Continue
+            }
             // Neither the status row nor the side panel renders
             // telemetry, so a telemetry sample changes nothing this
             // client shows.

@@ -349,6 +349,17 @@ pub enum TmuxNotification {
         pane_id: String,
     },
 
+    /// An ad-hoc notification a script raised with `show-notification`
+    /// (par-mux extension — real tmux never emits this). Clients deliver
+    /// it through their configured notification channel.
+    /// Arguments: base64 title, then an optional `body=<base64>` token
+    Notification {
+        /// Notification title (never empty).
+        title: String,
+        /// Notification body (empty when none was given).
+        body: String,
+    },
+
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
     Unknown {
@@ -404,6 +415,7 @@ impl TmuxNotification {
             Self::PaneTitleChanged { .. } => "pane-title-changed",
             Self::PaneExited { .. } => "pane-exited",
             Self::PaneRespawned { .. } => "pane-respawned",
+            Self::Notification { .. } => "notification",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
         }

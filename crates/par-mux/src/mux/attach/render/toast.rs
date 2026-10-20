@@ -1,7 +1,8 @@
 //! The in-app notification toast (herdr's `inside herdr` delivery): a
 //! bordered card at the pane area's bottom-right — the state dot and a
 //! bold title, the dim body below — shown for a few seconds over the
-//! panes. A click on it focuses the agent's pane.
+//! panes. A click on it focuses the agent's pane (an ad-hoc
+//! `show-notification` toast has none: the click only dismisses it).
 
 use super::PaneRenderer;
 use crate::mux::attach::panels::AgentStatus;
@@ -16,8 +17,9 @@ pub(crate) struct Toast {
     /// omitted when the push carried none.
     pub message: Option<String>,
     pub status: AgentStatus,
-    /// The agent's pane, focused by a click on the card.
-    pub pane: u32,
+    /// The agent's pane, focused by a click on the card; `None` for an
+    /// ad-hoc notification.
+    pub pane: Option<u32>,
 }
 
 /// How long a toast stays up: herdr's 8 s for needs-attention, 5 s
@@ -57,9 +59,10 @@ impl PaneRenderer {
         Some((self.width - w, self.height - h, w, h))
     }
 
-    /// The pane a toast click focuses, when the frame cell `(x, y)` is on
-    /// the card.
-    pub(crate) fn toast_pane_at(&self, x: u16, y: u16) -> Option<u32> {
+    /// When the frame cell `(x, y)` is on the card: `Some` of the pane a
+    /// click focuses (`None` inside for an ad-hoc toast, which a click
+    /// only dismisses).
+    pub(crate) fn toast_pane_at(&self, x: u16, y: u16) -> Option<Option<u32>> {
         let (tx, ty, tw, th) = self.toast_rect()?;
         (x >= tx && x < tx + tw && y >= ty && y < ty + th)
             .then(|| self.toast.as_ref().map(|t| t.pane))

@@ -65,7 +65,24 @@ impl WindowSession {
             ManagementKey::WorkspacePicker => self.enter_ws_picker(conn),
             ManagementKey::Sidebar => self.toggle_sidebar(conn),
             ManagementKey::Respawn => self.chord_respawn(conn),
+            ManagementKey::NotifyJump => self.chord_notify_jump(conn),
         }
+    }
+
+    /// The notification-jump chord (herdr's `open_notification_target`):
+    /// focus the pane behind the most recent agent notification this
+    /// client delivered — across windows and workspaces, through the same
+    /// select+land path a toast click takes — and dismiss the toast.
+    /// Nothing delivered yet flashes instead.
+    fn chord_notify_jump(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Some(pane) = self.notify.last_target else {
+            self.chrome.flash("no notification to jump to".to_string());
+            self.draw_status_row();
+            return;
+        };
+        self.notify.toast_until = None;
+        self.renderer.set_toast(None);
+        self.focus_pane(conn, pane);
     }
 
     /// The respawn chord: `respawn-pane -t <focused>`, but only when the

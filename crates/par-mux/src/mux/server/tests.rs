@@ -1350,6 +1350,34 @@ fn session_set_changes_broadcast_sessions_changed() {
     );
 }
 
+/// `show-notification` replies empty and broadcasts one `%notification`
+/// line every client receives, the title and body base64-encoded.
+#[test]
+fn show_notification_broadcasts_to_every_client() {
+    let (tree, clients) = quiet_harness();
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    clients.lock().push((
+        u64::MAX,
+        tx,
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        ConnectionAbort::none(),
+    ));
+    let reply = dispatch(
+        "show-notification -b 'see the log' build failed",
+        1,
+        &tree,
+        &clients,
+        None,
+    );
+    assert!(reply.contains("%end 1"), "{reply}");
+    let lines = drain_broadcasts(&rx);
+    assert_eq!(
+        lines,
+        vec!["%notification YnVpbGQgZmFpbGVk body=c2VlIHRoZSBsb2c=\n".to_string()]
+    );
+}
+
 /// The kill-pane cascade sends the same cue: a session emptied through
 /// its last pane is still a session-set change.
 #[test]

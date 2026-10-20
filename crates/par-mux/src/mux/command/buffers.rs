@@ -176,6 +176,44 @@ pub(super) fn parse_list_commands(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+/// cap: Characters of a `show-notification` title (herdr's 80); longer is truncated.
+pub const NOTIFICATION_TITLE_MAX: usize = 80;
+
+/// cap: Characters of a `show-notification` body (herdr's 240); longer is truncated.
+pub const NOTIFICATION_BODY_MAX: usize = 240;
+
+/// `show-notification [-b body] [--] <title>`: the title is the rest of
+/// the line (one quoted word is unquoted, like `agent-prompt`'s text), so
+/// a title starting with `-` follows `--`. Control characters fold to
+/// spaces and both fields are trimmed and truncated to their caps.
+pub(super) fn parse_show_notification(a: &Args<'_>) -> Result<MuxCommand, String> {
+    use LeadingFlag::Valued;
+    let lead = split_leading_flags(a.line, a.name, &[Valued("-b")])?;
+    let raw = match next_shell_word(lead.tail, 0) {
+        Some((0, end, word)) if end == lead.tail.len() && lead.tail.starts_with(['\'', '"']) => {
+            word
+        }
+        _ => lead.tail.to_string(),
+    };
+    let clean = |text: &str, max: usize| -> String {
+        text.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .trim()
+            .chars()
+            .take(max)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    };
+    let title = clean(&raw, NOTIFICATION_TITLE_MAX);
+    if title.is_empty() {
+        return Err(format!("{} requires a title", a.name));
+    }
+    let body = clean(lead.value("-b").unwrap_or_default(), NOTIFICATION_BODY_MAX);
+    Ok(MuxCommand::ShowNotification { title, body })
+}
+
 /// `reload-config` takes no arguments — it always re-reads the canonical
 /// config path; keeping it argument-free keeps the daemon's resolution
 /// (env included) the single source of truth.

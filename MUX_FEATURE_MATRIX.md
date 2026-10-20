@@ -142,8 +142,8 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | --- | --- | --- | --- |
 | Delivery channels | `inside` (in-app toast + bell), `terminal` (OSC 99 under kitty / OSC 9 elsewhere), `system` (osascript/notify-send), `off` | `herdr` toasts, `terminal`, `system`; configurable delay and toast positions | PM-MUX / H-CFG |
 | State filtering | `notify-states` (default blocked+done), background-only rule | Per agent state and background-workspace triggers | PM-MUX / H-README |
-| Click / jump to source | Not found | `open_notification_target` keybinding; Windows toast click focuses the pane | — / H-CFG |
-| Ad-hoc notification command | No (system channel is the OS notifier path) | `herdr notification show <title> [--body] [--position] [--sound]` | PM-MUX / H-CLI |
+| Click / jump to source | Toast click focuses the agent's pane; prefix `j` (`[client] notify-jump`, rebindable in the settings `keys` tab) focuses the pane behind the most recent notification the client delivered, across windows and workspaces | `open_notification_target` keybinding; Windows toast click focuses the pane | PM-MUX / H-CFG |
+| Ad-hoc notification command | `show-notification [-b body] [--] <title>` broadcasts `%notification`; each attached TUI delivers it through its own `notify-delivery` channel (toast, OSC 9/99, OS notifier). No position or sound options | `herdr notification show <title> [--body] [--position] [--sound]` | PM-MUX / H-CLI |
 | Plugin event hooks | No plugin system | Plugin manifest `[[events]] on = "worktree.created"` triggers; `[[link_handlers]]` for OSC 8 links | — / H-PLUG |
 | OSC handling | OSC 11 background probe, OSC 22 drag-cursor shape, kitty `t=t` media retention | OSC 0/2 titles tracked server-side (sidebar tokens), OSC 8 clickable links | PM-MUX / H-AGENTS |
 | Ad-hoc pane metadata | Not found | `pane report-metadata` sequenced, TTL-expiring, max 32 sources per pane | — / H-CLI |
@@ -204,7 +204,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Style | tmux verbs sent over the socket via `--cmd`; subcommands for lifecycle | Noun-verb JSON CLI (`workspace/pane/agent/...`), identical arguments over the socket API | PM-MUX / H-CLI |
-| Scale | 56 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
+| Scale | 57 wire commands, 8 subcommands, ~15 lifecycle/integration flags | ~15 noun groups with 3–20 verbs each (100+ commands) plus hidden bridge subcommands | PM-MUX / H-CLI |
 | Full enumerations | See [Appendix](#appendix-command-enumerations) | See [Appendix](#appendix-command-enumerations) | — |
 
 ## Where each leads
@@ -237,7 +237,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (wire commands)
 
-`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `agent-start`, `agent-prompt`, `agent-explain`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
+`new-session`, `new-workspace`, `list-workspaces`, `select-workspace`, `switch-client`, `rename-workspace`, `kill-workspace`, `set-workspace-respawn`, `new-window`, `select-window`, `kill-window`, `rename-window`, `rename-session`, `kill-session`, `split-window`, `select-pane`, `pane-title`, `pane-info`, `pane-exited-replay`, `clear-history`, `resize-pane`, `swap-pane`, `break-pane`, `join-pane`, `move-window`, `swap-window`, `respawn-pane`, `kill-pane`, `list-panes`, `list-windows`, `list-sessions`, `has-session`, `list-agents`, `agent-start`, `agent-prompt`, `agent-explain`, `list-commands`, `client-snapshot`, `capture-pane`, `wait-output`, `send-keys`, `refresh-client`, `set-buffer`, `set-client-colors`, `set-environment`, `show-buffer`, `paste-buffer`, `version`, `reload-config`, `show-notification`, `show-options`, `set-option`, `kill-server`, `worktree-create`, `worktree-open`, `worktree-remove`, `list-worktrees`.
 
 ### herdr (CLI noun groups)
 

@@ -236,6 +236,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             AgentTelemetryChanged { pane_id => pane_id: own, agent => name: own };
             PaneTitleChanged { pane_id => pane_id: own, title => name: own };
             PaneRespawned { pane_id => pane_id: own };
+            Notification { title => name: own, body => message: nonempty };
             Pause { pane_id => pane_id: own };
             ExtendedOutput { pane_id => pane_id: own, delay_ms => delay_ms: copy, data => data: own };
             Continue { pane_id => pane_id: own };
@@ -445,6 +446,7 @@ mod tests {
         "pane-exited | None | Some(\"p-exited\") | None | None | Some(\"3\") | Some(3) | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "pane-exited | None | Some(\"p-exited-signal\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "pane-respawned | None | Some(\"p-respawned\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "notification | None | None | None | None | Some(\"n-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "pause | None | Some(\"p-pause\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
         "extended-output | None | Some(\"p-extended\") | None | None | None | None | None | Some([101, 120, 116, 101, 110, 100, 101, 100, 45, 100, 97, 116, 97]) | None | None | None | Some(777) | None | None | None | None | None | None | None\n",
         "continue | None | Some(\"p-continue\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
@@ -575,6 +577,10 @@ mod tests {
             TmuxNotification::PaneRespawned {
                 pane_id: "p-respawned".to_string(),
             },
+            TmuxNotification::Notification {
+                title: "n-title".to_string(),
+                body: "n-body".to_string(),
+            },
             TmuxNotification::Pause {
                 pane_id: "p-pause".to_string(),
             },
@@ -656,6 +662,7 @@ mod tests {
                 TmuxNotification::PaneTitleChanged { .. } => (),
                 TmuxNotification::PaneExited { .. } => (),
                 TmuxNotification::PaneRespawned { .. } => (),
+                TmuxNotification::Notification { .. } => (),
                 TmuxNotification::Pause { .. } => (),
                 TmuxNotification::ExtendedOutput { .. } => (),
                 TmuxNotification::Continue { .. } => (),

@@ -640,6 +640,15 @@ pub enum MuxCommand {
     /// client can compare the daemon's core build against its own linked
     /// one and surface a stale daemon instead of silently missing fixes.
     Version,
+    /// `show-notification [-b body] [--] <title>`: broadcast an ad-hoc
+    /// `%notification` every attached render client delivers through its
+    /// own `notify-delivery` channel (herdr's `notification show`).
+    ShowNotification {
+        /// The title (non-empty, capped at [`NOTIFICATION_TITLE_MAX`]).
+        title: String,
+        /// The body (empty when none; capped at [`NOTIFICATION_BODY_MAX`]).
+        body: String,
+    },
     /// Re-read the config file and apply what can be applied live. One
     /// reply line per setting: `applied: <name>` or `restart-required:
     /// <name>` (see [`crate::mux::config`] for the per-setting semantics).
@@ -727,6 +736,7 @@ impl MuxCommand {
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::SetClientColors { .. }
+            | MuxCommand::ShowNotification { .. }
             // Reload-config mutates the daemon's in-memory settings
             // copies, but nothing the persistence format carries — the
             // config file on disk is the durable record. Like
@@ -832,6 +842,7 @@ mod worktrees;
 use agents::*;
 pub use agents::{AGENT_START_DEFAULT_TIMEOUT_MS, AGENT_START_MAX_TIMEOUT_MS};
 use buffers::*;
+pub use buffers::{NOTIFICATION_BODY_MAX, NOTIFICATION_TITLE_MAX};
 use keys::*;
 use panes::*;
 use sessions::*;
@@ -1436,6 +1447,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("paste-buffer", parse_paste_buffer, &[]),
     ("version", parse_version, &[]),
     ("reload-config", parse_reload_config, &[]),
+    ("show-notification", parse_show_notification, &[]),
     ("worktree-create", parse_worktree_create, &[]),
     ("worktree-open", parse_worktree_open, &[]),
     ("worktree-remove", parse_worktree_remove, &["force"]),
