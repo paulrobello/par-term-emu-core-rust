@@ -25,7 +25,7 @@ impl Conn {
     fn connect(path: &std::path::Path) -> Self {
         let stream = UnixStream::connect(path).expect("daemon accepts a client");
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(common::CEILING))
             .expect("timeout installs");
         let reader = BufReader::new(stream.try_clone().expect("clone"));
         Conn(stream, reader)
@@ -52,9 +52,9 @@ impl Conn {
         }
     }
 
-    /// Lines until one satisfies `ready` (inclusive), within 15 s.
+    /// Lines until one satisfies `ready` (inclusive), within the hang ceiling.
     fn until(&mut self, ready: impl Fn(&str) -> bool, what: &str) -> Vec<String> {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + common::CEILING;
         let mut lines = Vec::new();
         loop {
             let mut buf = String::new();
@@ -95,7 +95,7 @@ impl Conn {
         }
         if !eof {
             self.0
-                .set_read_timeout(Some(Duration::from_secs(10)))
+                .set_read_timeout(Some(common::CEILING))
                 .expect("timeout restores");
         }
         (lines, eof)
@@ -344,7 +344,7 @@ fn a_controller_writes_input_and_its_size_report_is_withdrawn_on_disconnect() {
     assert!(again.last().is_some_and(|l| l.starts_with("%error")));
 
     drop(controller);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::CEILING;
     while size_of(&mut ctl, &a) != before {
         assert!(
             Instant::now() < deadline,
@@ -352,4 +352,60 @@ fn a_controller_writes_input_and_its_size_report_is_withdrawn_on_disconnect() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Hang detection survives the load-independent waits: a WEDGED daemon (one
+/// SIGSTOPped after it answered once) still fails a positive wait at its
+/// ceiling, naming what it waited for. The tests pass `test_wait::CEILING`
+/// (90 s); this one passes a short ceiling so the demonstration is quick,
+/// through the same `until` helper and the same std socket read the suite's
+/// `Conn` uses.
+#[test]
+fn a_wedged_daemon_still_fails_a_positive_wait_at_its_ceiling() {
+    let (_fixture, daemon, mut ctl, a, _b) = two_panes("wedge");
+    // A healthy daemon answers the very query the wait will poll.
+    assert!(ctl
+        .command(&format!("pane-info -t {a}"))
+        .last()
+        .is_some_and(|l| l.starts_with("%end")));
+    ctl.0
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("timeout installs");
+
+    let pid = daemon.id() as libc::pid_t;
+    // SAFETY: signalling the daemon child this test spawned and owns.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0, "SIGSTOP");
+    let ceiling = Duration::from_secs(2);
+    let started = Instant::now();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ctl.send(&format!("pane-info -t {a}"));
+        common::test_wait::until(
+            "the wedged daemon's pane-info reply",
+            ceiling,
+            || {
+                let mut line = String::new();
+                match ctl.1.read_line(&mut line) {
+                    Ok(n) if n > 0 && line.starts_with("%end") => Some(()),
+                    _ => None,
+                }
+            },
+            || "no reply".to_string(),
+        )
+    }));
+    let elapsed = started.elapsed();
+    // SAFETY: as above; the guard's SIGKILL ends it either way.
+    unsafe { libc::kill(pid, libc::SIGCONT) };
+    let message = caught
+        .expect_err("a wedged daemon fails the wait")
+        .downcast::<String>()
+        .map(|s| *s)
+        .unwrap_or_default();
+    assert!(
+        message.contains("the wedged daemon's pane-info reply"),
+        "the failure names what it waited for: {message}"
+    );
+    assert!(
+        elapsed >= ceiling && elapsed < ceiling + Duration::from_secs(10),
+        "the wait failed at its ceiling, not before and not long after: {elapsed:?}"
+    );
 }

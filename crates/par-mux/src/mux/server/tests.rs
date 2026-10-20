@@ -2100,14 +2100,20 @@ fn mutating_dispatch_saves_state_and_read_only_dispatch_does_not() {
         "a read-only dispatch must not touch the state file"
     );
 
-    dispatch("new-session -s main", 2, &tree, &clients, Some(&tx));
+    let created = dispatch("new-session -s main", 2, &tree, &clients, Some(&tx));
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
     // The worker writes off the dispatch path, so poll for the landing
-    // rather than asserting synchronously (the wait_until shape).
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // rather than asserting synchronously (the wait_until shape). The
+    // ceiling only catches a worker that never writes.
+    let deadline = std::time::Instant::now() + crate::mux::test_wait::CEILING;
     while !target.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(target.exists(), "a mutating dispatch saves the state file");
+    assert!(
+        target.exists(),
+        "a mutating dispatch saves the state file within {:?}",
+        crate::mux::test_wait::CEILING
+    );
 
     match crate::mux::persist::load_or_quarantine(&target) {
         crate::mux::persist::Loaded::State(state) => {
@@ -2697,15 +2703,24 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
     std::thread::spawn(move || server.run());
 
     let mut client = crate::mux::MuxClient::connect(&path).expect("connect");
-    client.send("new-session -s t").expect("new-session");
-    client.send("kill-pane -t %0").expect("kill-pane");
+    // A failed spawn leaves no pane to kill and no window to close, so the
+    // wait below could only time out: fail here, naming the cause.
+    let created = client
+        .send_checked_timeout("new-session -s t", crate::mux::test_wait::CEILING)
+        .expect("new-session");
+    assert!(created.ok, "new-session failed: {:?}", created.body);
+    let killed = client
+        .send_checked_timeout("kill-pane -t %0", crate::mux::test_wait::CEILING)
+        .expect("kill-pane");
+    assert!(killed.ok, "kill-pane failed: {:?}", killed.body);
 
     // Load-tolerant by design: the wait polls the notification channel
-    // (no wall-clock sleep loop) and the 60 s cap only catches a wedged
+    // (no wall-clock sleep loop) and the ceiling only catches a wedged
     // server — the broadcast itself is signal-driven, so a starved host
     // delays the test without failing it. The old 5 s cap flaked at host
     // load >= 60 (twice on 2026-10-19, load 60-146, green in isolation).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + crate::mux::test_wait::CEILING;
+    let mut seen = Vec::new();
     loop {
         match client
             .notifications()
@@ -2715,11 +2730,12 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
                 assert_eq!(window_id, "@0");
                 return;
             }
-            Ok(_) => continue,
+            Ok(other) => seen.push(format!("{other:?}")),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "%window-close never arrived after kill-pane emptied the window"
+                    "%window-close never arrived after kill-pane emptied the window; \
+                     notifications seen: {seen:#?}"
                 );
             }
             Err(_) => panic!("notification channel died before %window-close"),

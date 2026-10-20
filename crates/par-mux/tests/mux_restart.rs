@@ -314,7 +314,7 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
     // SIGTERM, and the exercised interleaving is the one where the deaths
     // ARE persisted first.
     let flagged_at = {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + common::CEILING;
         loop {
             let left_info =
                 command(&mut writer, &mut reader, &format!("pane-info -t {left}")).join("");
@@ -332,7 +332,7 @@ fn a_shutdown_race_restores_the_pre_exit_layout() {
     };
     {
         let state = fixture.state_path();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + common::CEILING;
         // A structural command enqueues a save whose capture happens NOW —
         // strictly after both panes were flagged dead — so its write is a
         // post-death save by construction, whatever the reaper's own save
@@ -503,7 +503,7 @@ fn a_restored_dead_pane_replays_its_exit_once_and_is_never_re_announced() {
         client
     };
     assert!(
-        next_matching(&client, Duration::from_secs(10), is_pane_exited_0_code_3).is_some(),
+        next_matching(&client, common::CEILING, is_pane_exited_0_code_3).is_some(),
         "registration replays %pane-exited %0 3 for the restored dead pane"
     );
     // Many reap passes (250 ms each) pass; a reaper that re-observed the
@@ -596,7 +596,7 @@ fn respawn_of_a_restored_dead_pane_ignores_its_remote_osc7_cwd() {
         ))
         .expect("respawn");
     assert!(reply.ok, "respawn succeeds: {:?}", reply.body);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::CEILING;
     let landed = loop {
         let text = std::fs::read_to_string(&recorded).unwrap_or_default();
         if text.ends_with('\n') || Instant::now() >= deadline {
@@ -623,7 +623,7 @@ fn an_all_dead_restore_with_no_client_exits_after_the_grace() {
     let mut second = spawn_daemon(&fixture);
     // Production grace is 5 s; the bound is a starvation guard, not a
     // timing assertion.
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + common::CEILING;
     let status = loop {
         if let Some(status) = second.try_wait().expect("daemon waitable") {
             break status;
@@ -764,7 +764,7 @@ fn wait_exited(mut child: std::process::Child, what: &str) -> std::process::Outp
         let _ = stderr.read_to_end(&mut buf);
         buf
     });
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     loop {
         match child.try_wait().expect("--restart is waitable") {
             Some(status) => {
@@ -805,12 +805,13 @@ fn stop_via_cli(fixture: &MuxFixture) {
         .status()
         .expect("--stop runs");
     assert!(status.success(), "--stop exits 0: {status:?}");
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     while connect_local_stream(fixture.socket()).is_ok() {
         assert!(
             Instant::now() < deadline,
-            "the daemon on {} did not stop within 15s",
-            fixture.socket().display()
+            "the daemon on {} did not stop within {:?}",
+            fixture.socket().display(),
+            common::CEILING
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -922,7 +923,7 @@ fn cli_restart_after_emptying_announces_the_empty_restore() {
     // Zero sessions and zero clients: after EXIT_EMPTY_GRACE the daemon
     // exits itself, and its final save lands as an empty tree (which also
     // clears the last-good snapshot, so the restart cannot resurrect).
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     while connect_local_stream(path).is_ok() {
         assert!(
             Instant::now() < deadline,
@@ -945,7 +946,7 @@ fn cli_restart_after_emptying_announces_the_empty_restore() {
 
     // The fresh daemon comes up, then exits-when-empty per the docs.
     wait_listening(path);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + common::CEILING;
     while connect_local_stream(path).is_ok() {
         assert!(
             Instant::now() < deadline,

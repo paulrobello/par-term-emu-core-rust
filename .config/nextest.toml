@@ -1,24 +1,35 @@
 # QA-185: nextest profile for the Mux CI job. A test running past 30s is
-# flagged slow, and terminate-after kills it at 4x that — the harness bound
+# flagged slow, and terminate-after kills it at 8x that — the harness bound
 # for a wedged daemon or a hung PTY spawn, where the plain `cargo test` run
 # this replaces hung until the job's own timeout-minutes ceiling.
+#
+# The kill sits above the tests' own hang ceiling (test_wait::CEILING,
+# 90s, crates/par-mux/src/mux/test_wait.rs): a wedged wait fails with its
+# own message first, and a healthy test making several waits under host
+# load 200+ is not killed mid-run. 4x (120s) raced the 90s ceiling.
 [profile.ci]
-slow-timeout = { period = "30s", terminate-after = 4 }
+slow-timeout = { period = "30s", terminate-after = 8 }
 
-# The suite's PTY spawns contend under parallel test threads —
-# moving-target openpty failures observed locally (card
-# 01a0c64fc43e7913b474c038db0635d5) — so the cargo-test run this replaces
-# passed --test-threads=1; the ci profile keeps that serial execution.
-override-threads = true
-threads = 1
+# Concurrency: 8 tests at once (Paul, 2026-10-20). History: this profile
+# meant to run serially (the cargo-test run it replaced passed
+# --test-threads=1 after moving-target openpty failures under parallel PTY
+# spawns, card 01a0c64fc43e7913b474c038db0635d5), but it said so with
+# `threads`/`override-threads`, which are not nextest keys: nextest
+# ignored them ("unknown configuration keys") and ran at its default, one
+# test per CPU (16 on the 16-CPU dev machine). `test-threads` is the real
+# key. 8 is half the dev machine's CPUs, capping PTY contention there;
+# CI's mux job runs on ubuntu/windows-latest (4 vCPUs) and macos-latest
+# (3 vCPUs), where 8 is a mild oversubscription the PTY-bound tests
+# tolerate.
+test-threads = 8
 
 # The chords test is legitimately long, not wedged: ~123s in isolation
 # (several waits consume most of their 10s deadline), which straddles the
-# default 30s x4 kill. Give it 30s x8 instead of watering the harness
-# bound down for every other test.
+# old 30s x4 kill. Give it 30s x12 (above the 8x default) instead of
+# watering the harness bound down for every other test.
 [[profile.ci.overrides]]
 filter = "test(render_mode_zoom_rename_border_chords)"
-slow-timeout = { period = "30s", terminate-after = 8 }
+slow-timeout = { period = "30s", terminate-after = 12 }
 
 # The resize-storm race measurement is legitimately long under load, not
 # wedged: the emitter's 300 shell sleeps overshoot under contention, and
@@ -26,4 +37,4 @@ slow-timeout = { period = "30s", terminate-after = 8 }
 # 01a13c1464c374489bd71fd69b0e3aa9). Same rationale as the chords test.
 [[profile.ci.overrides]]
 filter = "test(resize_storm_post_reply_output_matches_daemon_ground_truth)"
-slow-timeout = { period = "30s", terminate-after = 8 }
+slow-timeout = { period = "30s", terminate-after = 12 }

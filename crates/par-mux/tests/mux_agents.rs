@@ -320,7 +320,7 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
 fn hook_report(path: &std::path::Path, json: &str) -> String {
     let mut stream = UnixStream::connect(path).expect("hook connection accepted");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(common::CEILING))
         .expect("timeout installs");
     writeln!(stream, "{json}").expect("write report");
     stream.flush().expect("flush");

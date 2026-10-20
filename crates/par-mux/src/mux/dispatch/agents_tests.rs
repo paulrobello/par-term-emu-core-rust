@@ -13,6 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// `agent-start -T` / `agent-prompt -T` for a start or turn the test DRIVES
+/// to completion: a hang ceiling, not a latency budget (the 10 s these
+/// used timed out at host load ~200 before the 3 s settle and the scrape
+/// tick could confirm the start).
+const DRIVEN_MS: u64 = crate::mux::test_wait::CEILING.as_secs() * 1000;
+
 struct Fixture {
     tree: Arc<Mutex<MuxTree>>,
     clients: crate::mux::server::Clients,
@@ -93,7 +99,7 @@ impl Fixture {
 
     /// Block until the pane's capture shows a line equal to `want`.
     fn wait_for_line(&self, want: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::mux::test_wait::CEILING;
         loop {
             let screen = self.run(&format!("capture-pane -t {PANE}"));
             if screen.lines().any(|l| l.trim() == want) {
@@ -141,7 +147,11 @@ fn agent_start_replies_only_after_a_hook_claim() {
     f.wait_for_shell();
     std::thread::scope(|scope| {
         let started = Instant::now();
-        let start = scope.spawn(|| f.run("agent-start -t %0 -T 10000 -x cat testagent"));
+        let start = scope.spawn(|| {
+            f.run(&format!(
+                "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
+            ))
+        });
         std::thread::sleep(Duration::from_millis(600));
         assert!(!start.is_finished(), "no reply before detection");
         assert_eq!(f.metadata("agent").as_deref(), Some("testagent"));
@@ -162,7 +172,11 @@ fn agent_start_waits_through_a_working_startup() {
     let f = Fixture::new();
     f.wait_for_shell();
     std::thread::scope(|scope| {
-        let start = scope.spawn(|| f.run("agent-start -t %0 -T 10000 -x cat testagent"));
+        let start = scope.spawn(|| {
+            f.run(&format!(
+                "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
+            ))
+        });
         std::thread::sleep(Duration::from_millis(300));
         f.report("testagent", "working", 1);
         std::thread::sleep(Duration::from_millis(500));
@@ -207,9 +221,9 @@ fn agent_start_is_confirmed_by_a_scrape_rule() {
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         scope.spawn(|| f.scrape_until(&stop));
-        let reply = f.run(
-            r#"agent-start -t %0 -T 10000 -x sh claude -c 'printf "\033]0;\342\234\263 ready\007"; exec sleep 30'"#,
-        );
+        let reply = f.run(&format!(
+            r#"agent-start -t %0 -T {DRIVEN_MS} -x sh claude -c 'printf "\033]0;\342\234\263 ready\007"; exec sleep 30'"#
+        ));
         stop.store(true, Ordering::Relaxed);
         let (lines, ok) = body(&reply);
         assert!(ok, "{reply}");
@@ -236,7 +250,7 @@ fn agent_start_confirms_droid_copilot_and_cursor_by_the_idle_fallback() {
         std::thread::scope(|scope| {
             scope.spawn(|| f.scrape_live_until(&stop));
             let started = Instant::now();
-            let reply = f.run(&idle_fallback_start(kind, 10000));
+            let reply = f.run(&idle_fallback_start(kind, DRIVEN_MS));
             stop.store(true, Ordering::Relaxed);
             let (lines, ok) = body(&reply);
             assert!(ok, "{kind}: {reply}");
@@ -317,7 +331,11 @@ fn agent_start_refuses_a_blocked_start_and_a_claimed_pane() {
     let f = Fixture::new();
     f.wait_for_shell();
     std::thread::scope(|scope| {
-        let start = scope.spawn(|| f.run("agent-start -t %0 -T 10000 -x cat testagent"));
+        let start = scope.spawn(|| {
+            f.run(&format!(
+                "agent-start -t %0 -T {DRIVEN_MS} -x cat testagent"
+            ))
+        });
         std::thread::sleep(Duration::from_millis(400));
         f.report("testagent", "blocked", 1);
         let (lines, ok) = body(&start.join().unwrap());
@@ -340,7 +358,11 @@ fn agent_prompt_waits_for_working_then_idle() {
     f.report("testagent", "idle", 1);
     std::thread::scope(|scope| {
         let started = Instant::now();
-        let prompt = scope.spawn(|| f.run("agent-prompt -t %0 -w -T 10000 -- do the thing"));
+        let prompt = scope.spawn(|| {
+            f.run(&format!(
+                "agent-prompt -t %0 -w -T {DRIVEN_MS} -- do the thing"
+            ))
+        });
         std::thread::sleep(Duration::from_millis(500));
         f.report("testagent", "working", 2);
         std::thread::sleep(Duration::from_millis(500));

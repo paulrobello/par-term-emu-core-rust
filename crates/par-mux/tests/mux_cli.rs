@@ -17,9 +17,14 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// `-T` for a wait or start the test DRIVES to completion: the hang
+/// ceiling, not a latency budget (10-15 s timed out at host load ~200).
+const DRIVEN_MS: u64 = common::CEILING.as_secs() * 1000;
+
 /// Upper bound on one CLI invocation. A client that never exits (a hung
-/// pipe read) must fail the test, not wedge the run.
-const CLI_DEADLINE: Duration = Duration::from_secs(15);
+/// pipe read) must fail the test, not wedge the run. Above [`DRIVEN_MS`],
+/// so a CLI whose own `-T` expires reports that instead of being killed.
+const CLI_DEADLINE: Duration = Duration::from_secs(common::CEILING.as_secs() + 30);
 
 /// What one `par-mux` invocation produced.
 struct Run {
@@ -1894,7 +1899,7 @@ fn wait_output_blocks_until_the_pane_prints_then_exits_zero() {
     let waiter = std::thread::spawn(move || {
         cmd(
             &socket_path,
-            &format!("wait-output -t {wait_pane} -r '^WAIT-DONE-[0-9]+$' -T 12000"),
+            &format!("wait-output -t {wait_pane} -r '^WAIT-DONE-[0-9]+$' -T {DRIVEN_MS}"),
         )
     });
     std::thread::sleep(Duration::from_millis(300));
@@ -1982,7 +1987,7 @@ fn wait_output_under_continuous_output_exits_zero() {
     let waiter = std::thread::spawn(move || {
         cmd(
             &socket_path,
-            &format!("wait-output -t {wait_pane} -r '^FLOOD-DONE$' -T 30000"),
+            &format!("wait-output -t {wait_pane} -r '^FLOOD-DONE$' -T {DRIVEN_MS}"),
         )
     });
     std::thread::sleep(Duration::from_millis(300));
@@ -2135,13 +2140,13 @@ fn agent_start_explain_and_prompt_stall_through_the_cli() {
     );
     cmd_ok(
         socket,
-        &format!("wait-output -t {pane} -r '^AGENT-READY$' -T 10000"),
+        &format!("wait-output -t {pane} -r '^AGENT-READY$' -T {DRIVEN_MS}"),
     );
     let started = Instant::now();
     let run = cmd(
         socket,
         &format!(
-            r#"agent-start -t {pane} -T 12000 -x sh claude -c 'printf "\033]0;\342\234\263 ready\007"; exec sleep 60'"#
+            r#"agent-start -t {pane} -T {DRIVEN_MS} -x sh claude -c 'printf "\033]0;\342\234\263 ready\007"; exec sleep 60'"#
         ),
     );
     assert_eq!(
@@ -2195,12 +2200,12 @@ fn agent_start_confirms_droid_by_the_idle_fallback_through_the_cli() {
     );
     cmd_ok(
         socket,
-        &format!("wait-output -t {pane} -r '^DROID-READY$' -T 10000"),
+        &format!("wait-output -t {pane} -r '^DROID-READY$' -T {DRIVEN_MS}"),
     );
     let started = Instant::now();
     let run = cmd(
         socket,
-        &format!("agent-start -t {pane} -T 15000 -x sh droid -c 'sleep 60; :' droid"),
+        &format!("agent-start -t {pane} -T {DRIVEN_MS} -x sh droid -c 'sleep 60; :' droid"),
     );
     assert_eq!(
         run.code,

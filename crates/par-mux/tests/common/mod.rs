@@ -13,6 +13,52 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// The lib's load-independent waits (`CEILING`, `until`), one
+/// source of truth for the unit and integration tests.
+#[path = "../../src/mux/test_wait.rs"]
+pub mod test_wait;
+
+pub use test_wait::CEILING;
+
+/// [`par_mux::mux::MuxClient::send`] bounded by the hang ceiling instead
+/// of the client's production 10 s reply budget, which expired on
+/// `pane-info` at host load ~360 against a healthy daemon.
+pub fn send(client: &mut par_mux::mux::MuxClient, line: &str) -> std::io::Result<Vec<String>> {
+    client
+        .send_checked_timeout(line, CEILING)
+        .map(|reply| reply.body)
+}
+
+/// Raise this test process's RLIMIT_NOFILE soft limit toward its hard
+/// limit, once. A session started from launchd or the Dock inherits a soft
+/// limit of 256 (hard unlimited), and the attach suites hold PTY masters
+/// and sockets for every client they spawn; the daemon raises its own
+/// limit, the test process must raise its own.
+fn raise_nofile_soft_limit() {
+    #[cfg(unix)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // SAFETY: plain rlimit FFI on an owned, zeroed struct.
+            unsafe {
+                let mut limit: libc::rlimit = std::mem::zeroed();
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    return;
+                }
+                let target = if limit.rlim_max == libc::RLIM_INFINITY {
+                    8192
+                } else {
+                    limit.rlim_max
+                };
+                if limit.rlim_cur < target {
+                    limit.rlim_cur = target;
+                    let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+                }
+            }
+        });
+    }
+}
+
 /// A socket path and state dir that no other test run can ever name,
 /// removed even when the test panics.
 ///
@@ -36,6 +82,7 @@ pub struct MuxFixture {
 
 impl MuxFixture {
     pub fn new(tag: &str) -> Self {
+        raise_nofile_soft_limit();
         // Short prefix and name: macOS caps a Unix socket path at 104 bytes
         // and `$TMPDIR` alone already spends ~49 of them.
         let dir = tempfile::Builder::new()
@@ -106,9 +153,9 @@ impl Drop for MuxFixture {
 /// the machine also runs concurrent suites, and `pane-info` was measured
 /// exceeding 10 s of dispatch latency under that load (card "mux_restart
 /// respawn test times out under full-gate load") while the isolated run
-/// finished in 1.1 s. 30 s keeps wedged-daemon detection where a healthy
-/// daemon answers in milliseconds and stops the suite in seconds.
-const COMMAND_DEADLINE: Duration = Duration::from_secs(30);
+/// finished in 1.1 s. The shared hang ceiling keeps wedged-daemon detection
+/// while a healthy daemon answers in milliseconds.
+const COMMAND_DEADLINE: Duration = CEILING;
 
 /// Run one command and drain its `%begin`…`%end` block. Pushed `%output`
 /// notifications may interleave with the reply; they are collected as body
@@ -350,7 +397,7 @@ pub fn rerun_isolated(test: &str, set: &[(&str, &str)], unset: &[&str]) -> bool 
 /// Panics on timeout: a silent return used to push the failure into a far
 /// later `connect`, away from the spawn that never came up.
 pub fn wait_listening(path: &std::path::Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + CEILING;
     loop {
         match connect_local_stream(path) {
             Ok(_) => return,
@@ -358,7 +405,7 @@ pub fn wait_listening(path: &std::path::Path) {
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(err) => panic!(
-                "daemon never listened on {} within 5s: {err}",
+                "daemon never listened on {} within {CEILING:?}: {err}",
                 path.display()
             ),
         }
@@ -394,7 +441,7 @@ pub fn wait_until(
     ready: impl Fn(&str) -> bool,
     what: &str,
 ) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CEILING;
     loop {
         let out = command(stream, reader, query).join("");
         if ready(&out) {

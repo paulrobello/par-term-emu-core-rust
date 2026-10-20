@@ -663,7 +663,7 @@ fn is_transient_accept_fault(err: &std::io::Error) -> bool {
 /// requested in that case instead. Failures are logged and survived — the
 /// raise is headroom, not a guarantee.
 #[cfg(unix)]
-fn raise_nofile_soft_limit() {
+pub(crate) fn raise_nofile_soft_limit() {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -692,6 +692,24 @@ fn raise_nofile_soft_limit() {
     }
     log::info!("par-mux: raised the RLIMIT_NOFILE soft limit {soft} -> {target}");
 }
+
+/// The lib test binary runs ~1300 tests in one process, in parallel, and
+/// hundreds of them open PTYs and sockets: a session started from launchd
+/// or the Dock inherits a soft limit of 256, and at that limit ~500 tests
+/// fail with EMFILE (`Too many open files`), and the ones that do not
+/// check their pane spawn wait out a whole deadline instead. Raise the
+/// limit before `main`, so before any test thread exists. A constructor
+/// rather than a fixture call: no single fixture is shared by every test.
+#[cfg(all(test, unix))]
+#[used]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(not(target_vendor = "apple"), link_section = ".init_array")]
+static RAISE_TEST_NOFILE: extern "C" fn() = {
+    extern "C" fn raise() {
+        raise_nofile_soft_limit();
+    }
+    raise
+};
 
 /// Execute one parsed-or-not command line and render its reply block, with
 /// an issuer channel — the line-level entry the unit tests below drive. The

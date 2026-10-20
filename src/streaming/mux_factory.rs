@@ -124,8 +124,9 @@ impl MuxSessionFactory {
         self
     }
 
-    /// A shorter handshake reply deadline, so a timeout test runs in
-    /// milliseconds instead of [`MUX_REPLY_TIMEOUT`].
+    /// A test's handshake reply deadline in place of [`MUX_REPLY_TIMEOUT`]:
+    /// shorter so a timeout test runs in milliseconds, or the hang ceiling
+    /// so a starved host cannot fail a healthy handshake.
     #[cfg(test)]
     fn with_reply_timeout(mut self, timeout: Duration) -> Self {
         self.reply_timeout = timeout;
@@ -596,8 +597,15 @@ fn forward(link: &MirrorLink, data: &[u8]) {
     }
 }
 
+/// par-mux's load-independent waits: the hang ceiling every positive wait
+/// in `tests` takes (one source of truth across the mux test suites).
+#[cfg(test)]
+#[path = "../../crates/par-mux/src/mux/test_wait.rs"]
+mod test_wait;
+
 #[cfg(test)]
 mod tests {
+    use super::test_wait::CEILING;
     use super::*;
 
     #[test]
@@ -761,12 +769,14 @@ mod tests {
             .expect("tokio runtime")
     }
 
-    /// A streaming server whose sessions mirror panes of the daemon.
+    /// A streaming server whose sessions mirror panes of the daemon. The
+    /// handshake's reply deadline is the hang ceiling: the production 10 s
+    /// expired on `pane-info` at host load ~200 against a healthy daemon.
     fn streaming(socket: &std::path::Path) -> Arc<StreamingServer> {
-        let factory = Arc::new(MuxSessionFactory::new(
-            socket,
-            MuxPaneSelector::FromSessionId,
-        ));
+        let factory = Arc::new(
+            MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)
+                .with_reply_timeout(CEILING),
+        );
         let server = Arc::new(StreamingServer::with_factory(
             "127.0.0.1:0".to_string(),
             StreamingConfig::default(),
@@ -791,7 +801,7 @@ mod tests {
     }
 
     fn wait(what: &str, mut ready: impl FnMut() -> Option<String>) {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + CEILING;
         loop {
             match ready() {
                 None => return,
@@ -1006,7 +1016,7 @@ mod tests {
             type_line(&a, &format!("cat >> {}", cat_file.display()));
             // The shell opens the redirect target before exec, so the file
             // existing means `cat` owns the terminal's input from here on.
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + CEILING;
             while !cat_file.exists() {
                 assert!(Instant::now() < deadline, "cat never started");
                 std::thread::sleep(Duration::from_millis(20));
@@ -1030,7 +1040,7 @@ mod tests {
             // exits and the queued frames arrive at the shell instead of
             // the file.
             a.enqueue_pty_input(b"\x04".to_vec());
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Instant::now() + CEILING;
             while expected_cat.len()
                 != std::fs::read_to_string(&cat_file)
                     .map(|t| t.lines().count())
@@ -1098,7 +1108,7 @@ mod tests {
                     // barrier keeps the send rate within what a pane can
                     // consume while preserving the size coverage.
                     let want = expected.len();
-                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let deadline = Instant::now() + CEILING;
                     while have() < want {
                         assert!(
                             Instant::now() < deadline,

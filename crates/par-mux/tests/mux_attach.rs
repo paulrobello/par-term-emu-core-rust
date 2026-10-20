@@ -234,14 +234,69 @@ impl Write for SharedWriter {
     }
 }
 
+/// Whether `needle` is in `bytes`: the raw bytes, the escape-stripped text,
+/// or (Unix) the reconstructed 24x80 screen.
+///
+/// The render client diffs cell by cell and skips a cell whose glyph is
+/// unchanged, so a space between two painted words can be a cursor jump on
+/// the wire (`reload\x1b[9;29Hconfig`, captured at host load ~200): the
+/// plain text then reads `reloadconfig`, and only the screen holds the
+/// phrase. The screen is rebuilt only when both cheaper checks miss.
+fn output_contains(bytes: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    if bytes.windows(needle.len()).any(|w| w == needle) {
+        return true;
+    }
+    let text_needle = String::from_utf8_lossy(needle);
+    if plain_text(bytes).contains(text_needle.as_ref()) {
+        return true;
+    }
+    screen_contains(bytes, &text_needle)
+}
+
+#[cfg(unix)]
+fn screen_contains(bytes: &[u8], text: &str) -> bool {
+    // Only a skipped blank cell splits a phrase, so only a phrase with a
+    // space needs the screen; escapes and drain sentinels (`\x00-never`)
+    // never reach a cell. The walk covers the recent tail only: a 24x80
+    // frame is a few KiB, and re-walking a passthrough flood's megabytes
+    // per chunk made the flood tests quadratic (6 s -> 60 s).
+    const TAIL: usize = 64 * 1024;
+    let tail = &bytes[bytes.len().saturating_sub(TAIL)..];
+    text.contains(' ')
+        && !text.chars().any(char::is_control)
+        && reconstructed_screen(tail, 24, 80)
+            .0
+            .iter()
+            .any(|row| row.contains(text))
+}
+
+/// The screen walk ([`reconstructed_screen`]) is Unix-only, as are the
+/// render-mode suites whose diffed frames need it.
+#[cfg(not(unix))]
+fn screen_contains(_bytes: &[u8], _text: &str) -> bool {
+    false
+}
+
 /// Collect host output until `needle` appears, the child exits, or the
 /// deadline passes. Returns everything read (joined).
+///
+/// Dual-use, so its deadline is the caller's: a drain (`b"\x00-never"`)
+/// waits the whole window by design, and some callers wait for a needle
+/// that legitimately never comes, then assert on what did. A positive
+/// wait that must not fail early belongs in [`expect_output`].
 fn wait_for_output(host: &AttachHost, needle: &[u8], deadline: Duration) -> Vec<u8> {
     let end = Instant::now() + deadline;
     let mut collected: Vec<u8> = Vec::new();
+    let mut checked = usize::MAX;
     loop {
-        if !needle.is_empty() && collected.windows(needle.len()).any(|w| w == needle) {
-            return collected;
+        if checked != collected.len() {
+            checked = collected.len();
+            if output_contains(&collected, needle) {
+                return collected;
+            }
         }
         let left = end.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -262,19 +317,26 @@ fn wait_for_output(host: &AttachHost, needle: &[u8], deadline: Duration) -> Vec<
 /// `needle` never arrives, so a missed barrier fails at its own line rather
 /// than as a confusing assertion further down.
 ///
-/// The needle matches the raw bytes OR the escape-stripped text: render
-/// mode paints cell by cell (one CUP+SGR run per cell), so a multi-char
-/// marker only exists in [`plain_text`].
+/// The needle matches per [`output_contains`]: the raw bytes, the
+/// escape-stripped text (render mode paints cell by cell, one CUP+SGR run
+/// per cell), or the reconstructed screen.
+///
+/// A positive wait, so `deadline` is raised to the shared hang ceiling
+/// ([`common::CEILING`]): the idle-calibrated budgets callers pass (5-15 s)
+/// failed at host load 300-560 before the paint could land, and a healthy
+/// run returns at the paint regardless.
 fn expect_output(host: &AttachHost, needle: &[u8], deadline: Duration, what: &str) -> Vec<u8> {
+    let deadline = deadline.max(common::CEILING);
     let text_needle = String::from_utf8_lossy(needle).into_owned();
-    let seen = |bytes: &[u8]| {
-        bytes.windows(needle.len()).any(|w| w == needle) || plain_text(bytes).contains(&text_needle)
-    };
     let end = Instant::now() + deadline;
     let mut collected: Vec<u8> = Vec::new();
+    let mut checked = usize::MAX;
     loop {
-        if seen(&collected) {
-            return collected;
+        if checked != collected.len() {
+            checked = collected.len();
+            if output_contains(&collected, needle) {
+                return collected;
+            }
         }
         let left = end.saturating_duration_since(Instant::now());
         assert!(
@@ -361,6 +423,84 @@ fn child_exit(host: &mut AttachHost, timeout: Duration) -> Option<i32> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Read host output into `all` until the reconstructed 24x80 screen
+/// satisfies `ready`, within the shared hang ceiling; panics naming `what`
+/// with the last screen. The paint barrier before injecting input at a
+/// screen position: a fixed settle (the 600 ms sleeps this replaces)
+/// races the paint under host load, and a click that lands before its
+/// target is laid out is lost.
+#[cfg(unix)]
+fn expect_screen(
+    host: &AttachHost,
+    all: &mut Vec<u8>,
+    ready: impl Fn(&[String]) -> bool,
+    what: &str,
+) {
+    let end = Instant::now() + common::CEILING;
+    loop {
+        let screen = reconstructed_screen(all, 24, 80).0;
+        if ready(&screen) {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "{what}: not on screen within {:?}; screen:\n{}",
+            common::CEILING,
+            screen.join("\n")
+        );
+        match host.output_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => {
+                all.extend_from_slice(&bytes);
+                // Batch what is already queued before re-walking the
+                // whole stream.
+                for more in host.output_rx.try_iter() {
+                    all.extend_from_slice(&more);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("{what}: the client exited; screen:\n{}", screen.join("\n"))
+            }
+        }
+    }
+}
+
+/// `len` cells of `screen`'s 0-based `row` from 0-based column `col`.
+/// [`reconstructed_screen`] keeps one byte per cell and a non-ASCII glyph
+/// renders as U+FFFD, so a column is a char index, never a byte offset.
+#[cfg(unix)]
+fn cells(screen: &[String], row: usize, col: usize, len: usize) -> String {
+    screen
+        .get(row)
+        .map(|r| r.chars().skip(col).take(len).collect())
+        .unwrap_or_default()
+}
+
+/// The side panel's ` menu ` chip is laid out where the `\x1b[<0;17;12M`
+/// press lands: host row 11 (0-based), cols 13..19.
+#[cfg(unix)]
+fn menu_chip_painted(screen: &[String]) -> bool {
+    cells(screen, 11, 13, 6) == " menu "
+}
+
+/// The output matcher finds a phrase the cell diff split with a cursor
+/// jump over an unchanged space — the wire shape captured when
+/// `render_mode_settings_dialog_opens_from_the_panel_menu` failed at host
+/// load ~200 with the menu fully painted.
+#[cfg(unix)]
+#[test]
+fn output_matcher_reads_a_phrase_split_by_a_skipped_cell() {
+    let wire = b"\x1b[9;22H\x1b[0mreload\x1b[9;29Hconfig\x1b[9;49H";
+    assert!(
+        !plain_text(wire).contains("reload config"),
+        "the escape-stripped text loses the skipped space"
+    );
+    assert!(output_contains(wire, b"reload config"));
+    assert!(output_contains(wire, b"reload"));
+    assert!(!output_contains(wire, b"reload  config"));
+    assert!(!output_contains(wire, b"\x00-never"));
 }
 
 /// A live daemon (the real binary — the production shape an attach client
@@ -527,12 +667,10 @@ fn render_mode_click_repaint_coalesces_into_one_frame() {
 #[test]
 fn two_attach_clients_do_not_war_over_the_window_size() {
     let (fixture, _daemon, mut client) = fixture_with_session("sizewar");
-    let panes = client.send("list-panes").expect("list-panes");
+    let panes = common::send(&mut client, "list-panes").expect("list-panes");
     let pane = panes.first().cloned().unwrap_or_default();
     fn pane_size(client: &mut par_mux::mux::MuxClient, pane: &str) -> (u16, u16) {
-        let body = client
-            .send(&format!("pane-info -t {pane}"))
-            .expect("pane-info");
+        let body = common::send(client, &format!("pane-info -t {pane}")).expect("pane-info");
         let row = body.first().expect("pane-info row");
         let size = row.split_whitespace().nth(2).expect("size token");
         let (cols, rows) = size.split_once('x').expect("WxH");
@@ -653,7 +791,7 @@ fn fixture_with_session(tag: &str) -> (MuxFixture, common::DaemonGuard, par_mux:
     let daemon = common::spawn_daemon(&fixture);
     wait_listening(fixture.socket());
     let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
-    client.send("new-session -s att").expect("new-session");
+    common::send(&mut client, "new-session -s att").expect("new-session");
     (fixture, daemon, client)
 }
 
@@ -982,7 +1120,12 @@ fn prefix_o_switches_panes_and_resyncs() {
     // Prefix o cycles to pane B; the resync redraw carries B's marker.
     host.to_child.write_all(&[0x02, b'o']).expect("prefix o");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"PANE-B-MARKER", Duration::from_secs(15));
+    let got = expect_output(
+        &host,
+        b"PANE-B-MARKER",
+        common::CEILING,
+        "prefix o resyncs to pane B",
+    );
     assert!(
         got.windows(b"PANE-B-MARKER".len())
             .any(|w| w == b"PANE-B-MARKER"),
@@ -1963,7 +2106,7 @@ fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
     // Settle: the renderer painted the pane's marker, so its emulator
     // consumed the DECCKM before it. Then send an Up arrow (the
     // harness's stdin is the client's host stdin).
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     let mut painted: Vec<u8> = Vec::new();
     while !plain_text(&painted).contains("CKM-ON") {
         assert!(
@@ -2159,7 +2302,7 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     }
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     let mut painted: Vec<u8> = Vec::new();
     while !plain_text(&painted).contains("MOUSE-ON") {
         assert!(
@@ -2247,7 +2390,7 @@ fn render_mode_wheel_forwards_to_a_pane_that_owns_mouse() {
     }
 
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + common::CEILING;
     let mut painted: Vec<u8> = Vec::new();
     while !plain_text(&painted).contains("MOUSE-ON") {
         assert!(
@@ -2413,7 +2556,7 @@ fn place_pending(
                 };
                 if let Some(pos) = *cur {
                     place(ch, pos);
-                    *cur = Some((pos.0, pos.1 + ch.width().unwrap_or(0) as u16));
+                    *cur = Some((pos.0, pos.1.saturating_add(ch.width().unwrap_or(0) as u16)));
                 }
                 pending.drain(..ch.len_utf8());
                 if pending.is_empty() {
@@ -2428,7 +2571,8 @@ fn place_pending(
                     for ch in head.chars() {
                         if let Some(pos) = *cur {
                             place(ch, pos);
-                            *cur = Some((pos.0, pos.1 + ch.width().unwrap_or(0) as u16));
+                            *cur =
+                                Some((pos.0, pos.1.saturating_add(ch.width().unwrap_or(0) as u16)));
                         }
                     }
                     continue;
@@ -2553,7 +2697,7 @@ fn hook_report(path: &std::path::Path, json: &str) -> String {
     use std::io::{BufRead as _, BufReader, Write as _};
     let mut stream = std::os::unix::net::UnixStream::connect(path).expect("hook connection");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(common::CEILING))
         .expect("timeout installs");
     writeln!(stream, "{json}").expect("write report");
     stream.flush().expect("flush");
@@ -3923,16 +4067,14 @@ fn render_mode_tab_click_switches_the_active_window() {
 /// takes a window or pane target, not a session id.
 #[cfg(unix)]
 fn session_first_pane(client: &mut par_mux::mux::MuxClient, session: &str) -> String {
-    let window = client
-        .send(&format!("list-windows -t {session}"))
+    let window = common::send(client, &format!("list-windows -t {session}"))
         .expect("list-windows")
         .iter()
         .filter_map(|l| l.split_whitespace().next())
         .find(|t| t.starts_with('@'))
         .expect("a window")
         .to_string();
-    client
-        .send(&format!("list-panes -t {window}"))
+    common::send(client, &format!("list-panes -t {window}"))
         .expect("list-panes")
         .iter()
         .filter_map(|l| l.split_whitespace().next())
@@ -4594,30 +4736,26 @@ fn render_mode_sidebar_toggle_refits_pane_geometry() {
 #[cfg(unix)]
 fn print_marker_line(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str) {
     let (head, tail) = marker.split_at(marker.len() / 2);
-    client
-        .send(&format!(
-            "send-keys -t {pane} -l 'echo; echo {head}\"\"{tail}'"
-        ))
-        .expect("marker");
-    client
-        .send(&format!("send-keys -t {pane} Enter"))
-        .expect("Enter");
+    common::send(
+        client,
+        &format!("send-keys -t {pane} -l 'echo; echo {head}\"\"{tail}'"),
+    )
+    .expect("marker");
+    common::send(client, &format!("send-keys -t {pane} Enter")).expect("Enter");
 }
 
 /// A two-pane session whose right pane printed `marker`, for the
 /// sidebar-on-launch geometry reads. Returns the left pane's id.
 #[cfg(unix)]
 fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -> String {
-    let pane_a = client
-        .send("list-panes")
+    let pane_a = common::send(client, "list-panes")
         .expect("list-panes")
         .join("")
         .split_whitespace()
         .next()
         .expect("a pane")
         .to_string();
-    let pane_b = client
-        .send(&format!("split-window -h -t {pane_a}"))
+    let pane_b = common::send(client, &format!("split-window -h -t {pane_a}"))
         .expect("split")
         .join("");
     let pane_b = pane_b.trim().to_string();
@@ -4632,8 +4770,7 @@ fn split_with_right_marker(client: &mut par_mux::mux::MuxClient, marker: &str) -
 fn wait_pane_echo(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str) {
     let end = Instant::now() + Duration::from_secs(10);
     loop {
-        let screen = client
-            .send(&format!("capture-pane -t {pane}"))
+        let screen = common::send(client, &format!("capture-pane -t {pane}"))
             .expect("capture-pane")
             .join("\n");
         if screen.contains(marker) {
@@ -5025,18 +5162,25 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
         "render",
         "[client]\ndrag-cursor-shape = true\nsidebar-on-launch = false\n",
     );
-    expect_output(
+    let mut seed = expect_output(
         &host,
         b"\x1b[?1003h",
-        Duration::from_secs(10),
+        common::CEILING,
         "render client up (any-event mouse reporting)",
     );
-    // Settle the seed paint before probing, then drain the tail.
-    std::thread::sleep(Duration::from_millis(600));
-    let _ = wait_for_output(&host, b"\x00-never", Duration::from_millis(300));
-
     // Two side-by-side panes in the 80-col window put the divider at
     // host col 40 (SGR col 40); content rows sit under the tab strip.
+    // Probe once the divider is laid out where the hover lands (row 5,
+    // 0-based col 39), so the layout the client hit-tests is the split.
+    expect_screen(
+        &host,
+        &mut seed,
+        |s| cells(s, 5, 39, 1) != " ",
+        "the divider between the two panes",
+    );
+    // The seed's trailing bytes must not reach the hover's collector.
+    while host.output_rx.try_recv().is_ok() {}
+
     // 1) A no-button hover ON the divider (cb 35).
     host.to_child
         .write_all(b"\x1b[<35;40;6M")
@@ -5049,7 +5193,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
     let hover_out = expect_output(
         &host,
         b"]22;ew-resize",
-        Duration::from_secs(5),
+        common::CEILING,
         "hover on the divider writes the resize pointer",
     );
     assert!(
@@ -5067,7 +5211,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
     expect_output(
         &host,
         b"]22;text",
-        Duration::from_secs(5),
+        common::CEILING,
         "leaving the divider restores the pointer",
     );
     // 3) A live drag: press on the divider, motion with the button
@@ -5083,7 +5227,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
     expect_output(
         &host,
         b"]22;ew-resize",
-        Duration::from_secs(5),
+        common::CEILING,
         "a live drag keeps the resize pointer",
     );
     // 4) Release ends the drag off the divider: the pointer restores.
@@ -5092,7 +5236,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
     expect_output(
         &host,
         b"]22;text",
-        Duration::from_secs(5),
+        common::CEILING,
         "release restores the pointer",
     );
 
@@ -5100,7 +5244,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
     // rides the same bytes.
     host.to_child.write_all(&[0x02, b'd']).expect("prefix d");
     host.to_child.flush().ok();
-    let code = child_exit(&mut host, Duration::from_secs(10));
+    let code = child_exit(&mut host, common::CEILING);
     assert_eq!(
         code,
         Some(0),
@@ -5291,8 +5435,7 @@ fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env()
 #[cfg(unix)]
 fn shown_and_background_panes(client: &mut par_mux::mux::MuxClient) -> (String, String) {
     let first_pane = |client: &mut par_mux::mux::MuxClient, cmd: &str| {
-        client
-            .send(cmd)
+        common::send(client, cmd)
             .expect(cmd)
             .join("")
             .split_whitespace()
@@ -5301,8 +5444,7 @@ fn shown_and_background_panes(client: &mut par_mux::mux::MuxClient) -> (String, 
             .to_string()
     };
     let shown = first_pane(client, "list-panes");
-    let background_window = client
-        .send("new-window -d")
+    let background_window = common::send(client, "new-window -d")
         .expect("new-window")
         .join("")
         .trim()
@@ -5607,17 +5749,27 @@ fn render_mode_inside_delivery_paints_a_toast() {
         reply.contains(r#""result":"ok""#),
         "claim accepted: {reply}"
     );
-    // Under load the client's frames pace out past one second; a 10s
-    // deadline exhausted before the toast's frames all landed (card
-    // 01a13e1c). The stable window needs no change — it resets on screen
-    // CHANGE, so the 1s cursor heartbeat cannot starve it — but the
-    // deadline must tolerate slow frame pacing.
-    screen_stable(
-        &host,
-        &mut all,
-        Duration::from_millis(800),
-        Duration::from_secs(30),
-    );
+    // Under load the client's frames pace out past one second. A quiet
+    // window (screen_stable 800 ms) returned between two frames of the
+    // toast's progressive paint (`w`, `wo`, `wor`, … at load ~360), so
+    // the barrier is the toast itself plus the bell it rings, within the
+    // hang ceiling.
+    let painted = |bytes: &[u8]| {
+        reconstructed_screen(bytes, 24, 80)
+            .1
+            .iter()
+            .any(|snaps| snaps.iter().any(|r| r.contains("toastagent blocked")))
+            && bytes.contains(&0x07)
+    };
+    let end = Instant::now() + common::CEILING;
+    while !painted(&all) && Instant::now() < end {
+        if let Ok(bytes) = host.output_rx.recv_timeout(Duration::from_millis(50)) {
+            all.extend_from_slice(&bytes);
+            for more in host.output_rx.try_iter() {
+                all.extend_from_slice(&more);
+            }
+        }
+    }
     let screen = reconstructed_screen(&all, 24, 80).1;
     let ever: String = screen
         .iter()
@@ -5659,58 +5811,57 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
         .to_string();
     let (mut host, stderr) =
         spawn_attach_with_config(&fixture, &["-t", &pane_a], "render", "[client]\n");
-    expect_output(
+    let mut got = expect_output(
         &host,
         b"\x1b[?1002h",
-        Duration::from_secs(10),
+        common::CEILING,
         "render client up (mouse reporting enabled)",
     );
-    // output settle: the panel is up at launch; let the first frames land
-    std::thread::sleep(Duration::from_millis(600));
+    // The panel is up at launch: click the chip once it is laid out.
+    expect_screen(&host, &mut got, menu_chip_painted, "the menu chip");
     // The ` menu ` chip on the workspace area's last row (SGR 17;12).
     host.to_child
         .write_all(b"\x1b[<0;17;12M")
         .expect("menu chip press");
     host.to_child.flush().ok();
-    expect_output(
-        &host,
-        b"reload config",
-        Duration::from_secs(10),
-        "the chip opens the command menu",
-    );
     // `settings` is panel row 1 of the menu anchored beside its chip
     // (x0 = 19, y0 = 3): frame row y0 + 2, host row y0 + 3, SGR y0 + 4.
     let (x0, y0) = (19usize, 3usize);
+    expect_screen(
+        &host,
+        &mut got,
+        |s| {
+            s.iter().any(|r| r.contains("reload config"))
+                && cells(s, y0 + 3, x0 + 2, 8) == "settings"
+        },
+        "the chip opens the command menu",
+    );
     host.to_child
         .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
         .expect("settings click");
     host.to_child.flush().ok();
-    let mut got = wait_for_output(&host, b"integrations", Duration::from_secs(10));
-    got.extend(wait_for_output(
+    expect_screen(
         &host,
-        b"\x00-never",
-        Duration::from_millis(400),
-    ));
-    let text = plain_text(&got);
-    assert!(
-        text.contains("integrations") && text.contains("side panel"),
-        "the dialog paints its tabs and the first section. stderr: {} text: {text:?}",
-        stderr.lock().unwrap()
+        &mut got,
+        |s| {
+            let screen = s.join("\n");
+            screen.contains("integrations") && screen.contains("side panel")
+        },
+        &format!(
+            "the dialog paints its tabs and the first section. stderr: {}",
+            stderr.lock().unwrap()
+        ),
     );
     host.to_child.write_all(b"\x1b").expect("escape");
     host.to_child.flush().ok();
-    // Escape closes it: the panes repaint over the box, so the final
-    // screen no longer shows the dialog's tab row.
-    screen_stable(
+    // Escape closes it: the panes repaint over the box, so the screen no
+    // longer shows the dialog's tab row (a condition, not a quiet window:
+    // under load an 800 ms lull fell before the close repaint).
+    expect_screen(
         &host,
         &mut got,
-        Duration::from_millis(800),
-        Duration::from_secs(10),
-    );
-    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
-    assert!(
-        !screen.contains("integrations"),
-        "Escape closed the dialog: {screen}"
+        |s| !s.join("\n").contains("integrations"),
+        "Escape closes the dialog",
     );
     host.killer.kill().ok();
 }
@@ -5737,77 +5888,98 @@ fn render_mode_settings_notify_delivery_cycles() {
         "render",
         "[client]\nborder-lines = \"herdr\"\nnotify-states = [\"working\", \"blocked\", \"idle\"]\nnotify-delivery = \"off\"\nscrollbar-gutter = true\ndrag-cursor-shape = true\npane-gaps = 0\n",
     );
-    expect_output(
+    let mut got = expect_output(
         &host,
         b"\x1b[?1002h",
-        Duration::from_secs(10),
+        common::CEILING,
         "render client up (mouse reporting enabled)",
     );
-    std::thread::sleep(Duration::from_millis(600));
+    expect_screen(&host, &mut got, menu_chip_painted, "the menu chip");
     host.to_child
         .write_all(b"\x1b[<0;17;12M")
         .expect("menu chip press");
     host.to_child.flush().ok();
-    expect_output(
+    let (x0, y0) = (19usize, 3usize);
+    expect_screen(
         &host,
-        b"reload config",
-        Duration::from_secs(10),
+        &mut got,
+        |s| {
+            s.iter().any(|r| r.contains("reload config"))
+                && cells(s, y0 + 3, x0 + 2, 8) == "settings"
+        },
         "the chip opens the command menu",
     );
-    let (x0, y0) = (19usize, 3usize);
     host.to_child
         .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
         .expect("settings click");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"integrations", Duration::from_secs(10));
-    let text = plain_text(&got);
-    assert!(
-        text.contains("side panel"),
-        "the dialog is up on its first section. stderr: {} text: {text:?}",
-        stderr.lock().unwrap()
-    );
     // The box centers over the 22-row frame: 14 panel rows + ring →
     // y0 = frame 3; the tab row (panel row 0) paints frame 4 = host 5 =
     // SGR 6. Inner cols are box x0+1.. : x0 = (80-66)/2 = 7, so inner
     // col c is host col 8+c = SGR col 9+c. ` notify ` spans inner
     // 27..35 — click SGR col 38.
+    expect_screen(
+        &host,
+        &mut got,
+        |s| s.join("\n").contains("side panel") && cells(s, 5, 8 + 27, 8) == " notify ",
+        &format!(
+            "the dialog is up on its first section. stderr: {}",
+            stderr.lock().unwrap()
+        ),
+    );
     host.to_child
         .write_all(b"\x1b[<0;38;6M")
         .expect("notify tab click");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"how agent state", Duration::from_secs(10));
-    let text = plain_text(&got);
-    assert!(
-        text.contains("delivery"),
-        "the notify tab is up. text: {text:?}"
-    );
     // The delivery row is the section's only row: body row 0 = panel
-    // row 5 = frame 9 = host 10 = SGR 11. Click it: off cycles to
-    // inside.
+    // row 5 = frame 9 = host 10 = SGR 11.
+    expect_screen(
+        &host,
+        &mut got,
+        |s| s.join("\n").contains("how agent state") && s[10].contains("delivery"),
+        "the notify tab is up",
+    );
+    let config_reads = |want: &str, what: &str| {
+        common::test_wait::until(
+            what,
+            common::CEILING,
+            || {
+                let written = std::fs::read_to_string(fixture.client_config_path()).ok()?;
+                written.contains(want).then_some(())
+            },
+            || std::fs::read_to_string(fixture.client_config_path()).unwrap_or_default(),
+        )
+    };
+    // Click it: off cycles to inside.
     host.to_child
         .write_all(b"\x1b[<0;20;11M")
         .expect("delivery row click");
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"inside", Duration::from_secs(10));
-    let screen = reconstructed_screen(&got, 24, 80).0.join("\n");
-    assert!(
-        screen.contains("inside"),
-        "the dialog shows the cycled value. stderr: {} screen: {screen}",
-        stderr.lock().unwrap()
+    expect_screen(
+        &host,
+        &mut got,
+        |s| s[10].contains("inside"),
+        &format!(
+            "the dialog shows the cycled value. stderr: {}",
+            stderr.lock().unwrap()
+        ),
     );
-    let written = std::fs::read_to_string(fixture.client_config_path()).unwrap();
-    assert!(
-        written.contains("notify-delivery = \"inside\""),
-        "the config carries the new value: {written}"
+    config_reads(
+        "notify-delivery = \"inside\"",
+        "the config carries the new value",
     );
     // The arrow gesture: → cycles again (inside → terminal).
     host.to_child.write_all(b"\x1b[C").expect("right arrow");
     host.to_child.flush().ok();
-    let _ = wait_for_output(&host, b"terminal", Duration::from_secs(10));
-    let written = std::fs::read_to_string(fixture.client_config_path()).unwrap();
-    assert!(
-        written.contains("notify-delivery = \"terminal\""),
-        "the arrow cycled the value: {written}"
+    expect_screen(
+        &host,
+        &mut got,
+        |s| s[10].contains("terminal"),
+        "the arrow cycles the shown value",
+    );
+    config_reads(
+        "notify-delivery = \"terminal\"",
+        "the arrow cycled the value",
     );
     host.killer.kill().ok();
 }
@@ -6103,7 +6275,12 @@ fn render_mode_border_style_survives_split() {
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
     // herdr is the DEFAULT: the seed's first frame (which flushes before
     // the shell's prompt bytes) already paints per-pane boxes.
-    let pre = wait_for_output(&host, b"$", Duration::from_secs(10));
+    let pre = expect_output(
+        &host,
+        b"\xe2\x95\xad",
+        common::CEILING,
+        "herdr corner at seed",
+    );
     // plain_text latin-1s multi-byte glyphs, so a painted ╭ is matched
     // on the raw bytes (the glyph's UTF-8 is contiguous in one cell's
     // flush); the wait needle is the same three bytes.
@@ -6259,7 +6436,12 @@ fn render_mode_border_label_paints_the_user_title() {
         host.to_child.write_all(&[0x02, b'B']).expect("prefix B");
     }
     host.to_child.flush().ok();
-    let got = wait_for_output(&host, b"MY-TEST-LABEL", Duration::from_secs(10));
+    let got = expect_output(
+        &host,
+        b"MY-TEST-LABEL",
+        common::CEILING,
+        "the user label in the border",
+    );
     assert!(
         plain_text(&got).contains("MY-TEST-LABEL"),
         "the user label must paint in the border. stderr: {} tail: {:?}",
@@ -6381,6 +6563,9 @@ fn panel_ever_contains(
 /// placement every second, so the stream never goes quiet that long.
 #[cfg(unix)]
 fn screen_stable(host: &AttachHost, all: &mut Vec<u8>, stable: Duration, deadline: Duration) {
+    // `deadline` only catches a screen that never settles: the shared
+    // hang ceiling, not a latency budget.
+    let deadline = deadline.max(common::CEILING);
     let end = Instant::now() + deadline;
     let mut last = reconstructed_screen(all, 24, 80).0;
     let mut since = Instant::now();
@@ -6592,7 +6777,7 @@ fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
     );
     a.to_child.write_all(&[0x02, b'(']).expect("prefix (");
     a.to_child.flush().ok();
-    let landed = wait_for_output(&a, b"MULTI-", Duration::from_secs(10));
+    let landed = expect_output(&a, b"MULTI-", common::CEILING, "the multi-pane session");
     assert!(
         landed.windows(b"MULTI-".len()).any(|w| w == b"MULTI-"),
         "passthrough lands on the multi-pane session. stderr: {}",
@@ -7234,7 +7419,7 @@ fn render_mode_border_ring_keeps_the_tui_last_row_visible() {
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
     let mut all = Vec::new();
     echo_marker(&mut client, &pane, "ATTACHED-OK");
-    let shown = screen_until(&host, &mut all, Duration::from_secs(15), |s| {
+    let shown = screen_until(&host, &mut all, common::CEILING, |s| {
         s.contains("ATTACHED-OK")
     });
     assert!(
@@ -7702,11 +7887,15 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
         "render client enabled host mouse reporting",
     );
     // The emitter is already running: settle on its live output before
-    // the storm, so the resizes land under genuine output pressure.
+    // the storm, so the resizes land under genuine output pressure. Any
+    // emitted line will do, not the first ones: under load the client
+    // attached after `R099` had scrolled away (its seed showed `R265-…`).
+    // The zero padding exists only in executed output, never in the
+    // echoed `%085d` command line.
     expect_output(
         &host,
-        b"R00",
-        Duration::from_secs(10),
+        b"-0000000",
+        common::CEILING,
         "emitter output on the host screen",
     );
 
@@ -8423,18 +8612,15 @@ fn cat_into_pane(
     needle: &[u8],
     what: &str,
 ) -> Vec<u8> {
-    let mut seen = expect_output(
+    let mut seen = expect_output(host, b"\x1b[?1003h", common::CEILING, "render client up");
+    // The pane's seed frame is on the host (its content rows sit under
+    // the tab strip) before the pane prints anything new.
+    expect_screen(
         host,
-        b"\x1b[?1003h",
-        Duration::from_secs(10),
-        "render client up",
+        &mut seen,
+        |s| s[1..].iter().any(|r| !r.trim().is_empty()),
+        "the pane's seed frame",
     );
-    std::thread::sleep(Duration::from_millis(600));
-    seen.extend(wait_for_output(
-        host,
-        b"\x00-never",
-        Duration::from_millis(300),
-    ));
     client
         .send(&format!(
             "send-keys -t {pane} -l 'cat {}'",
@@ -8444,7 +8630,7 @@ fn cat_into_pane(
     client
         .send(&format!("send-keys -t {pane} Enter"))
         .expect("Enter");
-    seen.extend(expect_output(host, needle, Duration::from_secs(15), what));
+    seen.extend(expect_output(host, needle, common::CEILING, what));
     seen
 }
 

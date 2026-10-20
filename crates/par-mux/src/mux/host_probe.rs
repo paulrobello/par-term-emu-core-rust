@@ -186,6 +186,10 @@ struct HostProbe {
 /// have not returned.
 struct ProbeBounds {
     deadline: Instant,
+    /// One git run's own cap: [`GIT_TIMEOUT`] in production, the unit
+    /// tests' hang ceiling, so a starved host cannot kill a git run whose
+    /// result a test asserts.
+    git_timeout: Duration,
     shutdown: Arc<AtomicBool>,
     outstanding: Arc<AtomicUsize>,
 }
@@ -411,7 +415,7 @@ fn git_command(cwd: &Path) -> Command {
 fn run_git(cwd: &Path, args: &[&str], stdout_cap: usize, bounds: &ProbeBounds) -> Option<Output> {
     let mut command = git_command(cwd);
     command.args(args);
-    let deadline = bounds.deadline.min(Instant::now() + GIT_TIMEOUT);
+    let deadline = bounds.deadline.min(Instant::now() + bounds.git_timeout);
     run_bounded(command, stdout_cap, deadline, bounds)
 }
 
@@ -619,6 +623,7 @@ pub(crate) fn host_probe_sweep(
         let wait_until = sweep_deadline.min(Instant::now() + PANE_PROBE_BUDGET);
         let bounds = ProbeBounds {
             deadline: wait_until - PROBE_SETTLE,
+            git_timeout: GIT_TIMEOUT,
             shutdown: Arc::clone(shutdown),
             outstanding: Arc::clone(&state.outstanding),
         };
@@ -731,7 +736,8 @@ mod tests {
     /// Bounds for a test probe: a generous deadline, no shutdown.
     fn test_bounds() -> ProbeBounds {
         ProbeBounds {
-            deadline: Instant::now() + PANE_PROBE_BUDGET,
+            deadline: Instant::now() + crate::mux::test_wait::CEILING,
+            git_timeout: crate::mux::test_wait::CEILING,
             shutdown: Arc::new(AtomicBool::new(false)),
             outstanding: Arc::new(AtomicUsize::new(0)),
         }
@@ -845,6 +851,11 @@ mod tests {
     /// SEC-133: `ls-files` output larger than the pipe buffer must not
     /// deadlock git until the timeout kill. The files sit at the repo root:
     /// `--directory` collapses an untracked subdirectory into one line.
+    ///
+    /// The value alone pins it: a deadlocked git is killed at its deadline
+    /// and `run_bounded` serves `None`, never `Some(true)` (the pre-SEC-133
+    /// read-after-wait shape fails this assertion). No wall-clock bound:
+    /// a 2 s one failed at host load ~200 with the fix in place.
     #[test]
     fn git_dirty_survives_output_larger_than_the_pipe_buffer() {
         let repo = git_repo();
@@ -852,14 +863,8 @@ mod tests {
             let name = format!("untracked-{i:05}-{}", "x".repeat(24));
             std::fs::write(repo.path().join(name), "x").unwrap();
         }
-        let started = Instant::now();
         let dirty = git_dirty(repo.path(), &test_bounds());
-        let elapsed = started.elapsed();
         assert_eq!(dirty, Some(true), "untracked files read dirty");
-        assert!(
-            elapsed < Duration::from_secs(2),
-            "the check finished without the timeout kill: {elapsed:?}"
-        );
     }
 
     /// SEC-133: a raised shutdown flag kills an in-flight child promptly
