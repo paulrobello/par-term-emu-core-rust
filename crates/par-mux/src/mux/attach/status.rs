@@ -855,6 +855,52 @@ pub(crate) struct StatusRow {
     cols: u16,
     buffer: Buffer,
     prev: Buffer,
+    /// The color theme (config `theme`); `None` = the built-in reversed
+    /// row with the indexed bright-blue shading.
+    pub(crate) palette: Option<crate::mux::theme::Palette>,
+}
+
+/// One status-row cell's style. Built-in: the REVERSED base, the shaded
+/// block dark-on-bright-blue (indexed, so the host theme applies). A
+/// theme: text on surface0, dim as overlay0, the shaded block panel_bg
+/// on the accent.
+fn row_style(
+    palette: Option<crate::mux::theme::Palette>,
+    shaded: bool,
+    bold: bool,
+    dim: bool,
+) -> RtStyle {
+    use crate::mux::theme::rt;
+    let Some(p) = palette else {
+        if shaded {
+            return RtStyle::default()
+                .fg(RtColor::Indexed(0))
+                .bg(RtColor::Indexed(12))
+                .add_modifier(RtModifier::BOLD);
+        }
+        let base = RtStyle::default().add_modifier(RtModifier::REVERSED);
+        return if bold {
+            base.add_modifier(RtModifier::BOLD)
+        } else if dim {
+            base.add_modifier(RtModifier::DIM)
+        } else {
+            base
+        };
+    };
+    if shaded {
+        return RtStyle::default()
+            .fg(rt(p.panel_bg))
+            .bg(rt(p.accent))
+            .add_modifier(RtModifier::BOLD);
+    }
+    let base = RtStyle::default().bg(rt(p.surface0));
+    if bold {
+        base.fg(rt(p.text)).add_modifier(RtModifier::BOLD)
+    } else if dim {
+        base.fg(rt(p.overlay0))
+    } else {
+        base.fg(rt(p.text))
+    }
 }
 
 impl StatusRow {
@@ -866,6 +912,7 @@ impl StatusRow {
             cols,
             buffer: Buffer::empty(area),
             prev: Buffer::empty(area),
+            palette: None,
         }
     }
 
@@ -894,29 +941,19 @@ impl StatusRow {
         for x in 0..self.cols {
             let cell = &mut self.buffer[(x, 0)];
             cell.reset();
-            cell.set_style(RtStyle::default().add_modifier(RtModifier::REVERSED));
+            cell.set_style(row_style(self.palette, false, false, false));
         }
         let mut x = 0u16;
         'content: for segment in segments {
             // The herdr tab shading: the active tab drops the strip's
             // REVERSED base for a solid bright block (dark on bright
             // blue); inactive tabs dim, the rest the base.
-            let style = if segment.shaded {
-                RtStyle::default()
-                    .fg(RtColor::Indexed(0))
-                    .bg(RtColor::Indexed(12))
-                    .add_modifier(RtModifier::BOLD)
-            } else if segment.dim {
-                RtStyle::default()
-                    .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(RtModifier::DIM)
-            } else if segment.bold {
-                RtStyle::default()
-                    .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(RtModifier::BOLD)
-            } else {
-                RtStyle::default().add_modifier(RtModifier::REVERSED)
-            };
+            let style = row_style(
+                self.palette,
+                segment.shaded,
+                segment.bold && !segment.dim,
+                segment.dim,
+            );
             // A wide (CJK) glyph spans two columns: the next glyph starts
             // past its right half, which keeps the base style.
             for ch in segment.text.chars() {
@@ -944,22 +981,7 @@ impl StatusRow {
                 return;
             }
             let start = self.cols - chip_cols;
-            let style = if chip.shaded {
-                RtStyle::default()
-                    .fg(RtColor::Indexed(0))
-                    .bg(RtColor::Indexed(12))
-                    .add_modifier(RtModifier::BOLD)
-            } else {
-                RtStyle::default()
-                    .add_modifier(RtModifier::REVERSED)
-                    .add_modifier(if chip.bold {
-                        RtModifier::BOLD
-                    } else if chip.dim {
-                        RtModifier::DIM
-                    } else {
-                        RtModifier::empty()
-                    })
-            };
+            let style = row_style(self.palette, chip.shaded, chip.bold, chip.dim);
             for (offset, ch) in chip.text.chars().enumerate() {
                 let x = start + offset as u16;
                 if x >= self.cols {
@@ -1453,6 +1475,35 @@ mod tests {
         let diff = row.diff();
         assert!(!diff.is_empty());
         assert!(diff.len() < 80, "a title change must not repaint the row");
+    }
+
+    /// A theme drops the REVERSED base for the palette: text on
+    /// surface0, the shaded block panel_bg on the accent.
+    #[test]
+    fn status_row_uses_the_theme_palette() {
+        use crate::mux::theme::{palette, rt};
+        let p = palette("tokyo-night").expect("preset");
+        let mut row = StatusRow::new(20);
+        row.palette = Some(p);
+        let plain = Segment {
+            text: "ab".into(),
+            bold: false,
+            dim: false,
+            shaded: false,
+        };
+        let shaded = Segment {
+            text: "cd".into(),
+            bold: false,
+            dim: false,
+            shaded: true,
+        };
+        row.paint(&[plain, shaded], None);
+        let cell = &row.buffer[(0, 0)];
+        assert_eq!((cell.fg, cell.bg), (rt(p.text), rt(p.surface0)));
+        assert!(!cell.modifier.contains(RtModifier::REVERSED));
+        let cell = &row.buffer[(2, 0)];
+        assert_eq!((cell.fg, cell.bg), (rt(p.panel_bg), rt(p.accent)));
+        assert_eq!(row.buffer[(19, 0)].bg, rt(p.surface0), "padding");
     }
 
     /// The painter pads the row with reversed spaces, so a shorter line

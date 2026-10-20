@@ -2110,6 +2110,75 @@ fn session_defaults_come_from_chords_with_defaults() {
         defaults.scrollbar_gutter
     );
     assert_eq!(session.cursor.drag_shape, defaults.drag_cursor_shape);
+    // No theme key: the built-in look, no palette anywhere.
+    assert_eq!(defaults.theme, "default");
+    assert!(session.renderer.palette().is_none());
+    assert!(session.chrome.tab_strip.palette.is_none());
+    assert!(session.chrome.status_row.palette.is_none());
+}
+
+/// `[client] theme`: a preset reaches every painter (renderer, tab
+/// strip, status row) through the launch/reload path; `auto` re-picks
+/// when the host background answers AFTER the chords applied (the launch
+/// order: config first, then the OSC 11 probe) and when a mode-2031
+/// report arrives; explicit border colors beat the theme's.
+#[test]
+fn theme_presets_and_auto_follow_the_host() {
+    use crate::mux::theme::{palette, Appearance};
+    let resolve = |text: &str| {
+        let file: crate::mux::config::ConfigFile = toml::from_str(text).expect("parses");
+        let chords = crate::mux::config::reload_client_chords(
+            &file,
+            &crate::mux::config::Chords::with_defaults(),
+        )
+        .expect("resolves");
+        (file, chords)
+    };
+    let mut session = WindowSession::new(80, 25);
+
+    let (file, chords) = resolve("[client]\ntheme = \"nord\"\n");
+    session.apply_chords(&chords, &file);
+    let nord = palette("nord");
+    assert!(nord.is_some());
+    assert_eq!(session.renderer.palette(), nord);
+    assert_eq!(session.chrome.tab_strip.palette, nord);
+    assert_eq!(session.chrome.status_row.palette, nord);
+    let accent = crate::mux::theme::rt(nord.unwrap().accent);
+    let overlay = crate::mux::theme::rt(nord.unwrap().overlay0);
+    assert_eq!(
+        session.renderer.border_colors(),
+        (Some(accent), Some(overlay))
+    );
+
+    // Explicit border colors win over the theme.
+    let (file, chords) = resolve("[client]\ntheme = \"nord\"\nborder-active-color = \"#010203\"\n");
+    session.apply_chords(&chords, &file);
+    assert_eq!(
+        session.renderer.border_colors(),
+        (Some(RtColor::Rgb(1, 2, 3)), Some(overlay))
+    );
+
+    // auto: no probe answer yet = the dark pick (`default`).
+    let (file, chords) = resolve("[client]\ntheme = \"auto\"\ntheme-light = \"one-light\"\n");
+    session.apply_chords(&chords, &file);
+    assert!(session.renderer.palette().is_none(), "dark host = default");
+    // The probe answers light afterwards: the fill and the pick follow.
+    session.observe_host_background((0xfa, 0xfa, 0xfa));
+    assert_eq!(
+        session.renderer.background(),
+        Some(RtColor::Rgb(250, 250, 250))
+    );
+    assert_eq!(session.renderer.palette(), palette("one-light"));
+    assert_eq!(session.chrome.status_row.palette, palette("one-light"));
+    // A mode-2031 dark report flips it back and outranks inference.
+    session.observe_host_appearance(Appearance::Dark);
+    assert!(session.renderer.palette().is_none());
+    session.observe_host_background((0xff, 0xff, 0xff));
+    assert!(session.renderer.palette().is_none(), "the report wins");
+    // A reload to a fixed preset ignores the host.
+    let (file, chords) = resolve("[client]\ntheme = \"dracula\"\n");
+    session.apply_chords(&chords, &file);
+    assert_eq!(session.renderer.palette(), palette("dracula"));
 }
 
 /// ARC-129: the render screen guard restores on an early `?` return —

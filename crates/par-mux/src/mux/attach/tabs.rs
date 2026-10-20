@@ -105,6 +105,29 @@ pub(crate) struct TabStrip {
     /// The overflowing strip's visible-run start (the wheel's offset);
     /// 0 keeps the active-centered auto run.
     scroll: usize,
+    /// The color theme (config `theme`); `None` = the measured herdr
+    /// constants above.
+    pub(crate) palette: Option<crate::mux::theme::Palette>,
+}
+
+/// The strip's colors: `(bar, inactive block, muted text, active block,
+/// active text, accent)` — the theme's panel_bg / surface0 / overlay0 /
+/// accent / panel_bg / accent, or the built-in constants.
+fn strip_colors(
+    palette: Option<crate::mux::theme::Palette>,
+) -> (RtColor, RtColor, RtColor, RtColor, RtColor, RtColor) {
+    use crate::mux::theme::rt;
+    match palette {
+        Some(p) => (
+            rt(p.panel_bg),
+            rt(p.surface0),
+            rt(p.overlay0),
+            rt(p.accent),
+            rt(p.panel_bg),
+            rt(p.accent),
+        ),
+        None => (BAR_BG, INACTIVE_BG, MUTED_FG, ACTIVE_BG, ACTIVE_FG, ACCENT),
+    }
 }
 
 /// The display text of one tab at a name budget: the bare NAME (the
@@ -355,6 +378,7 @@ impl TabStrip {
             prev: Buffer::empty(area),
             layout: TabLayout::default(),
             scroll: 0,
+            palette: None,
         }
     }
 
@@ -419,8 +443,10 @@ impl TabStrip {
         let lead_w = lead.map_or(0, |(_, w)| w);
         let layout = layout_tabs(windows, active, self.cols as usize, lead_w, self.scroll);
         self.layout = layout.clone();
-        let bar = RtStyle::default().bg(BAR_BG);
-        let muted = bar.fg(MUTED_FG);
+        let (bar_bg, inactive_bg, muted_fg, active_bg, active_fg, accent) =
+            strip_colors(self.palette);
+        let bar = RtStyle::default().bg(bar_bg);
+        let muted = bar.fg(muted_fg);
         for x in 0..self.cols {
             let cell = &mut self.buffer[(x, 0)];
             cell.reset();
@@ -429,7 +455,7 @@ impl TabStrip {
         // The lead title: the panel's header — accent, clipped to the
         // lead segment. Clicks on it hit nothing (no cells below).
         if let Some((title, width)) = lead {
-            let style = bar.fg(ACCENT);
+            let style = bar.fg(accent);
             for (offset, ch) in format!(" {title} ").chars().enumerate() {
                 let x = offset as u16;
                 if x >= width || x >= self.cols {
@@ -472,11 +498,11 @@ impl TabStrip {
                 // text — not a foreground tint (a tint read as "hovered",
                 // not "current"; the round-5 report).
                 RtStyle::default()
-                    .fg(ACTIVE_FG)
-                    .bg(ACTIVE_BG)
+                    .fg(active_fg)
+                    .bg(active_bg)
                     .add_modifier(RtModifier::BOLD)
             } else {
-                RtStyle::default().fg(MUTED_FG).bg(INACTIVE_BG)
+                RtStyle::default().fg(muted_fg).bg(inactive_bg)
             };
             // Every block covers the tab's full width, pads included.
             for x in cell.col..cell.col + cell.width {
@@ -755,6 +781,23 @@ mod tests {
             assert_eq!(strip.buffer[(col, 0)].bg, BAR_BG, "bar col {col}");
             assert_eq!(strip.buffer[(col, 0)].symbol(), " ", "bar col {col}");
         }
+    }
+
+    /// A theme repaints the strip from its palette: the bar panel_bg,
+    /// inactive blocks surface0 with overlay0 text, the active block the
+    /// accent with panel_bg text.
+    #[test]
+    fn paint_uses_the_theme_palette() {
+        use crate::mux::theme::{palette, rt};
+        let p = palette("gruvbox-light").expect("preset");
+        let mut strip = TabStrip::new(40);
+        strip.palette = Some(p);
+        strip.paint(&windows(), Some("@1"), None);
+        assert_eq!(strip.buffer[(11, 0)].bg, rt(p.accent));
+        assert_eq!(strip.buffer[(11, 0)].fg, rt(p.panel_bg));
+        assert_eq!(strip.buffer[(2, 0)].bg, rt(p.surface0));
+        assert_eq!(strip.buffer[(2, 0)].fg, rt(p.overlay0));
+        assert_eq!(strip.buffer[(36, 0)].bg, rt(p.panel_bg));
     }
 
     /// The strip diffs: the first paint flushes everything, an

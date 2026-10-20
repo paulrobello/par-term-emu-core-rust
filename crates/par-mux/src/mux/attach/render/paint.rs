@@ -180,6 +180,7 @@ impl PaneRenderer {
         // column, blanked full-height — and the cue must not occlude
         // content the pane does not own.
         if self.scrollbar_gutter && view_h > 0 {
+            let accent = self.accent();
             let gx = rect.x + self.geometry.sidebar_w + inset_x + view_w;
             if gx < self.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
@@ -196,7 +197,7 @@ impl PaneRenderer {
                     }
                     if scroll > 0 && u32::from(gy) == indicator_row {
                         cell.set_symbol("\u{2590}");
-                        cell.set_fg(RtColor::Indexed(14));
+                        cell.set_fg(accent);
                     }
                 }
             }
@@ -237,7 +238,7 @@ impl PaneRenderer {
         scroll: Option<(usize, usize, usize)>,
     ) {
         let accent_style = RtStyle::default()
-            .fg(RtColor::Indexed(14))
+            .fg(self.accent())
             .add_modifier(RtModifier::BOLD);
         // The box: the widest row clamped so the ring fits, centered or
         // anchored — the same geometry every overlay hit-test reads.

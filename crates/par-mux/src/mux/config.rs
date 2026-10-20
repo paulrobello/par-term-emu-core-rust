@@ -369,6 +369,29 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub border_color: Option<String>,
+    /// The render-mode color theme (herdr's presets): `default` (the
+    /// built-in look), `auto` (follow the host's light/dark appearance
+    /// through `theme-dark` / `theme-light`), or a preset name — see
+    /// [`crate::mux::theme::THEME_NAMES`]. An unknown name warns and
+    /// uses `default`.
+    #[serde(default, rename = "theme", skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// The preset `theme = "auto"` uses on a dark host. Default
+    /// `default`.
+    #[serde(
+        default,
+        rename = "theme-dark",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub theme_dark: Option<String>,
+    /// The preset `theme = "auto"` uses on a light host. Default
+    /// `catppuccin-latte`.
+    #[serde(
+        default,
+        rename = "theme-light",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub theme_light: Option<String>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -679,6 +702,9 @@ pub fn render(eff: &EffectiveConfig) -> String {
             drag_cursor_shape: Some(defaults.drag_cursor_shape),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
+            theme: Some(defaults.theme.clone()),
+            theme_dark: Some(defaults.theme_dark.clone()),
+            theme_light: Some(defaults.theme_light.clone()),
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -785,6 +811,13 @@ pub struct Chords {
     pub notify_states: Vec<String>,
     /// The agent state-change sounds (config `sound*`).
     pub sound: SoundSettings,
+    /// The color theme (config `theme`): `default`, `auto`, or a preset
+    /// name, kept as spelled (an unknown one warns and uses `default`).
+    pub theme: String,
+    /// The `auto` theme's dark-host preset (config `theme-dark`).
+    pub theme_dark: String,
+    /// The `auto` theme's light-host preset (config `theme-light`).
+    pub theme_light: String,
 }
 
 /// The notification sounds (config `sound`, `sound-player`,
@@ -836,6 +869,7 @@ pub fn display_option_warnings(chords: &Chords) -> Vec<String> {
             ));
         }
     }
+    warnings.extend(crate::mux::theme::theme_warnings(chords));
     warnings
 }
 
@@ -883,6 +917,9 @@ impl Chords {
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "done".to_string()],
             sound: SoundSettings::default(),
+            theme: crate::mux::theme::DEFAULT.to_string(),
+            theme_dark: crate::mux::theme::DEFAULT.to_string(),
+            theme_light: crate::mux::theme::DEFAULT_LIGHT.to_string(),
         }
     }
 }
@@ -1160,6 +1197,18 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .border_lines
         .clone()
         .unwrap_or_else(|| current.border_lines.clone());
+    let theme = client
+        .theme
+        .clone()
+        .unwrap_or_else(|| current.theme.clone());
+    let theme_dark = client
+        .theme_dark
+        .clone()
+        .unwrap_or_else(|| current.theme_dark.clone());
+    let theme_light = client
+        .theme_light
+        .clone()
+        .unwrap_or_else(|| current.theme_light.clone());
     Ok(Chords {
         prefix,
         reload,
@@ -1177,6 +1226,9 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         notify_delivery,
         notify_states,
         sound,
+        theme,
+        theme_dark,
+        theme_light,
     })
 }
 

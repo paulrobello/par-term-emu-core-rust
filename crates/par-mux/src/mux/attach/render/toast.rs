@@ -115,13 +115,22 @@ impl PaneRenderer {
                 cell.set_style(style);
             }
         };
-        let dot = match toast.status {
-            AgentStatus::Blocked => RtColor::Indexed(1),
-            AgentStatus::Working => RtColor::Indexed(3),
-            AgentStatus::Done => RtColor::Indexed(6),
-            AgentStatus::Idle => RtColor::Indexed(4),
-            AgentStatus::None => RtColor::Indexed(14),
-        };
+        let themed = self.palette.map(|p| match toast.status {
+            AgentStatus::Blocked => p.red,
+            AgentStatus::Working => p.yellow,
+            AgentStatus::Done => p.teal,
+            AgentStatus::Idle => p.green,
+            AgentStatus::None => p.accent,
+        });
+        let dot = themed
+            .map(crate::mux::theme::rt)
+            .unwrap_or(match toast.status {
+                AgentStatus::Blocked => RtColor::Indexed(1),
+                AgentStatus::Working => RtColor::Indexed(3),
+                AgentStatus::Done => RtColor::Indexed(6),
+                AgentStatus::Idle => RtColor::Indexed(4),
+                AgentStatus::None => RtColor::Indexed(14),
+            });
         put(x0 + 2, y0 + 1, "\u{25CF}", RtStyle::default().fg(dot));
         put(
             x0 + 4,

@@ -2079,6 +2079,36 @@ fn settings_rows_write_and_apply_live() {
     );
 }
 
+/// The borders tab's theme rows write and apply live: Enter on `theme`
+/// cycles default → auto, the reload re-picks (no probe = the dark
+/// preset), and `→` on `auto: dark host` steps to catppuccin, which the
+/// auto pick then paints.
+#[test]
+fn settings_theme_rows_write_and_apply_live() {
+    let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-theme");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    // The borders tab, `theme` (row 6).
+    session.route_stdin_bytes(&mut conn, b"\tjjjjjj\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("theme = \"auto\""), "{written}");
+    assert_eq!(session.theme.theme, "auto", "applied live");
+    assert!(session.renderer.palette().is_none(), "dark default");
+    // `auto: dark host` (row 7): → steps default → catppuccin.
+    session.route_stdin_bytes(&mut conn, b"j\x1b[C");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("theme-dark = \"catppuccin\""), "{written}");
+    assert_eq!(
+        session.renderer.palette(),
+        crate::mux::theme::palette("catppuccin")
+    );
+}
+
 /// The notify tab's sound rows write and apply live: `sounds` flips on,
 /// `muted agents` takes a comma list from the prompt, `done sound` a
 /// path, and an empty prompt clears the list back to none.

@@ -406,6 +406,9 @@ pub struct PaneRenderer {
     /// focused boundary half, DIM for unfocused dividers).
     border_active: Option<RtColor>,
     border_plain: Option<RtColor>,
+    /// The color theme's palette (config `theme`); `None` = the built-in
+    /// look. Explicit border colors win over it.
+    palette: Option<crate::mux::theme::Palette>,
     dirty: bool,
 }
 
@@ -582,7 +585,7 @@ fn render_session_inner(
     // daemon's client cell-size record is latest-report-wins.
     let probe = super::conn::probe_host_terminal();
     if let Some((r, g, b)) = probe.background {
-        session.set_background(Some(RtColor::Rgb(r, g, b)));
+        session.observe_host_background((r, g, b));
         let _ = conn.send_checked(&format!(
             "set-client-colors -f ffffff -b {r:02x}{g:02x}{b:02x}"
         ));
@@ -610,10 +613,14 @@ pub(crate) struct RenderScreenGuard {
 impl RenderScreenGuard {
     fn enter(tty: bool) -> Self {
         if tty {
+            // Mode 2031: the host reports light/dark switches as
+            // `CSI ? 997 ; 1|2 n` (the `auto` theme's live signal); a host
+            // without it ignores the private mode.
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 crossterm::terminal::EnterAlternateScreen,
-                crossterm::event::EnableMouseCapture
+                crossterm::event::EnableMouseCapture,
+                crossterm::style::Print("\x1b[?2031h")
             );
         }
         Self { active: tty }
@@ -631,7 +638,7 @@ impl Drop for RenderScreenGuard {
             // host shell should not inherit the resize cue.
             let _ = crossterm::execute!(
                 std::io::stdout(),
-                crossterm::style::Print("\x1b]22;text\x1b\\"),
+                crossterm::style::Print("\x1b]22;text\x1b\\\x1b[?2031l"),
                 crossterm::event::DisableMouseCapture,
                 crossterm::terminal::LeaveAlternateScreen,
                 crossterm::cursor::Show
@@ -811,6 +818,10 @@ struct WindowSession {
     /// The host POINTER's shape (OSC 22): the divider resize cue
     /// `drag-cursor-shape` raises on hover/drag (see [`pointer::PointerState`]).
     pointer: pointer::PointerState,
+    /// The color theme choice and the host appearance it follows (config
+    /// `theme`/`theme-dark`/`theme-light`; the OSC 11 background and
+    /// mode-2031 reports feed the appearance).
+    theme: crate::mux::theme::ThemeSelection,
     /// A mouse path (the command menu's `detach` row) asked to end the
     /// view; the pump takes it after the mouse token and exits the same
     /// way prefix `d` does.
@@ -1109,6 +1120,7 @@ impl WindowSession {
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             pointer: pointer::PointerState::default(),
+            theme: crate::mux::theme::ThemeSelection::default(),
             project_poll: std::time::Instant::now(),
             detach_requested: false,
             group_close: None,
@@ -1630,6 +1642,9 @@ impl WindowSession {
         bytes: &[u8],
     ) -> bool {
         let tokens = self.parser.feed(bytes);
+        for report in self.parser.take_host_reports() {
+            self.on_host_report(conn, report);
+        }
         for token in tokens {
             match token {
                 Token::Bytes(run) => {

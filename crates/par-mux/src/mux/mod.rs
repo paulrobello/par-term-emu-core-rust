@@ -33,6 +33,7 @@ pub mod scrape;
 pub mod server;
 #[cfg(feature = "mux-bin")]
 pub mod skill_installer;
+pub mod theme;
 pub mod tree;
 pub mod win_resume;
 pub(crate) mod worktree;

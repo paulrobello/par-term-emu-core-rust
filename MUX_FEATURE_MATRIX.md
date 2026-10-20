@@ -94,7 +94,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Pickers / palette | Session/window picker, workspace picker, command palette (`:`) | Go To picker (`prefix+g`) with search and state filters | PM-MUX / H-KEYS |
 | Help | Themed modal with `/` filter, categories | Live keybind help `prefix+?` with `/` filter | PM-MUX / H-KEYS |
 | Copy / scroll mode | Viewport over client scrollback; `v`/`y` copy via OSC 52; `/` search with `n`/`N`; `e` opens the scrollback in `$VISUAL`/`$EDITOR` in a temporary zoomed pane (scratch copy, as herdr) | hjkl/w/b/e motions, `/`/`?` search, select/copy, edit scrollback in `$EDITOR` | PM-MUX / H-KEYS |
-| Theming | Border styles (`herdr`/unicode/double/heavy/ascii), border colors, OSC 11 background probe | 11 built-in themes, auto light/dark switching, per-token overrides, accent color | PM-MUX / H-CFG |
+| Theming | `[client] theme`: herdr's 17 palette presets (all but its 16-color `terminal`) over the chrome, plus `default`; `theme = "auto"` with `theme-dark`/`theme-light` follows the host via the OSC 11 probe, late OSC 11 replies, and mode 2031 reports; border styles (`herdr`/unicode/double/heavy/ascii) and explicit border colors on top; all in the settings `borders` tab. No per-token overrides | 18 built-in themes, auto light/dark switching (mode 2031 + OSC 11), per-token and per-appearance overrides | PM-MUX / H-CFG |
 | Graphics in UI | Kitty `t=t` temp-file media retained daemon-side for client mirrors | Kitty graphics rendered in panes (enabled by default) | PM-MUX / H-CFG |
 | IME / CJK | Non-ASCII prefix keys swallowed whole with a switch-to-ASCII hint, fullwidth forms fold to their ASCII chord; CJK in modal text fields; tab strip, status rows, and overlays laid out by display width; Alt on a CJK character decoded whole; hidden-cursor IME anchor at the focused pane's tracked cell. No host input-source switching and no visible cursor reveal (rationale in MUX.md "Input methods") | ASCII input-source switch in prefix mode, CJK cursor reveal with agent allow-list | PM-MUX / H-CFG |
 | Sounds | `[client] sound` (default off): `blocked` (even in view) and background `done` sounds, custom files (`sound-done`/`sound-blocked`) over OS stock built-ins, a configurable `sound-player` (afplay/paplay default; bell fallback, no Windows player), per-agent `sound-mute` list; all in the settings `notify` tab. No per-call sound on `show-notification` | Built-in per-event sounds, custom paths, per-agent mute | PM-MUX / H-CFG |
@@ -222,7 +222,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 **herdr** is stronger on:
 
 - Agent breadth: 22 supported integrations + 5 self-reporting (par-mux: 9), with three-tier detection and `agent explain` diagnostics.
-- Mouse-first UX: drag-everything, context menus, rich theming (11 themes, auto light/dark), sounds, onboarding.
+- Mouse-first UX: drag-everything, context menus, per-token theme overrides (par-mux has the presets and auto light/dark, not the overrides), sounds, onboarding.
 - A plugin system with event hooks and link handlers.
 - Git worktree workspace UX: keybindings and worktree events for plugins (par-mux has the control commands, side-panel grouping, and the workspace menu's `close group`, but no worktree create/open/remove chords or dialog).
 - Remote operation: SSH thin client, saved machines, remote scripting without a TUI.

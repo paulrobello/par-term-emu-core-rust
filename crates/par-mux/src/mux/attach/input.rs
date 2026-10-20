@@ -166,9 +166,29 @@ pub struct InputParser {
     pending: Vec<u8>,
     /// Inside a bracketed paste: everything until `PASTE_END` is opaque.
     paste: bool,
+    /// Host terminal reports consumed from the stream (never forwarded to
+    /// a pane), drained by [`Self::take_host_reports`].
+    host_reports: Vec<HostReport>,
+}
+
+/// A host terminal report the parser consumed instead of forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostReport {
+    /// An OSC 11 background color reply (`ESC ] 11 ; rgb:… ST|BEL`) that
+    /// arrived after the launch probe: a slow host, or the re-query a
+    /// mode-2031 report triggers.
+    Background((u8, u8, u8)),
+    /// A mode-2031 color-scheme report (`CSI ? 997 ; 1|2 n`).
+    Appearance(crate::mux::theme::Appearance),
 }
 
 impl InputParser {
+    /// Take the host reports consumed since the last call, in stream
+    /// order.
+    pub(crate) fn take_host_reports(&mut self) -> Vec<HostReport> {
+        std::mem::take(&mut self.host_reports)
+    }
+
     /// Feed one stdin burst, returning every complete token in order.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Token> {
         self.pending.extend_from_slice(bytes);
@@ -276,9 +296,13 @@ impl InputParser {
                 let mut i = 5;
                 while i < data.len() {
                     match data[i] {
-                        0x07 => return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1),
+                        0x07 => {
+                            self.note_background(&data[5..i]);
+                            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1);
+                        }
                         0x1b if i + 1 < data.len() && data[i + 1] == b'\\' => {
-                            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 2)
+                            self.note_background(&data[5..i]);
+                            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 2);
                         }
                         // A stray ESC without the ST partner ends the
                         // malformed report; consume through it.
@@ -368,6 +392,40 @@ impl InputParser {
             return EscapeScan::Incomplete(data.len());
         }
 
+        // A private-mode host report (`CSI ? params final`): no key uses
+        // the `?` marker, so the whole sequence is consumed. The mode-2031
+        // color-scheme report `CSI ? 997 ; 1|2 n` is queued for the
+        // theme; any other is dropped (it must never reach a pane).
+        if data.len() > 2 && data[2] == b'?' {
+            let mut i = 3;
+            while i < data.len()
+                && (data[i].is_ascii_digit() || data[i] == b';' || (0x20..=0x2F).contains(&data[i]))
+            {
+                i += 1;
+            }
+            if i >= data.len() {
+                if data.len() > 32 {
+                    return EscapeScan::Token(Token::Bytes(Vec::new()), data.len());
+                }
+                return EscapeScan::Incomplete(data.len());
+            }
+            // A malformed report (no final byte) ends before the stray
+            // byte, so a following ESC still starts its own sequence.
+            if !(0x40..=0x7E).contains(&data[i]) {
+                return EscapeScan::Token(Token::Bytes(Vec::new()), i);
+            }
+            match &data[3..=i] {
+                b"997;1n" => self
+                    .host_reports
+                    .push(HostReport::Appearance(crate::mux::theme::Appearance::Dark)),
+                b"997;2n" => self
+                    .host_reports
+                    .push(HostReport::Appearance(crate::mux::theme::Appearance::Light)),
+                _ => {}
+            }
+            return EscapeScan::Token(Token::Bytes(Vec::new()), i + 1);
+        }
+
         // A key sequence: params (digits and `;`) then one final byte
         // 0x40..=0x7E.
         let mut i = 2;
@@ -407,6 +465,20 @@ impl InputParser {
 enum EscapeScan {
     Token(Token, usize),
     Incomplete(usize),
+}
+
+impl InputParser {
+    /// Queue a late OSC 11 reply's color (`body` is the text between
+    /// `11;` and the terminator); a malformed body is dropped silently.
+    fn note_background(&mut self, body: &[u8]) {
+        let color = std::str::from_utf8(body)
+            .ok()
+            .and_then(|text| text.strip_prefix("rgb:"))
+            .and_then(crate::mux::attach::conn::parse_rgb_spec);
+        if let Some(color) = color {
+            self.host_reports.push(HostReport::Background(color));
+        }
+    }
 }
 
 /// `params` text (`"1;5"`, `""`, `"3"`) → (first param, modifier param).
@@ -775,16 +847,77 @@ mod tests {
     /// An OSC 11 color-report reply that arrived AFTER the probe's 150 ms
     /// window (the stdin reader owns the stream now) is dropped WHOLE -
     /// no fragment of it forwards to a pane. The graceful half of the
-    /// probe-race contract.
+    /// probe-race contract. Its color still reaches the theme as a host
+    /// report (16-bit and BEL-terminated spellings alike).
     #[test]
     fn late_osc11_reply_is_dropped_not_forwarded() {
         let mut parser = InputParser::default();
         let tokens = parser.feed(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\");
         assert_eq!(tokens.len(), 1);
         assert!(matches!(tokens[0], Token::Bytes(ref b) if b.is_empty()));
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::Background((0x1e, 0x1e, 0x1e))]
+        );
+        assert!(parser.take_host_reports().is_empty(), "drained");
         // The parser stays healthy for the next keystroke.
         let tokens = parser.feed(b"x");
         resync_health_check(&tokens);
+        let tokens = parser.feed(b"\x1b]11;rgb:ff/ff/ff\x07");
+        assert!(tokens
+            .iter()
+            .all(|t| matches!(t, Token::Bytes(b) if b.is_empty())));
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::Background((0xff, 0xff, 0xff))]
+        );
+    }
+
+    /// The mode-2031 color-scheme report (`CSI ? 997 ; 1|2 n`) is
+    /// consumed whole (split reads included) and queued as the host
+    /// appearance; another private report is dropped, never forwarded.
+    #[test]
+    fn color_scheme_reports_reach_the_theme_not_the_pane() {
+        use crate::mux::theme::Appearance;
+        let mut parser = InputParser::default();
+        let tokens = parser.feed(b"a\x1b[?997;2nb");
+        let forwarded: Vec<u8> = tokens
+            .iter()
+            .flat_map(|t| match t {
+                Token::Bytes(b) => b.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(forwarded, b"ab");
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::Appearance(Appearance::Light)]
+        );
+        assert!(parser.feed(b"\x1b[?99").is_empty(), "split report held");
+        let tokens = parser.feed(b"7;1n");
+        assert!(tokens
+            .iter()
+            .all(|t| matches!(t, Token::Bytes(b) if b.is_empty())));
+        assert_eq!(
+            parser.take_host_reports(),
+            vec![HostReport::Appearance(Appearance::Dark)]
+        );
+        let tokens = parser.feed(b"\x1b[?2031;1$y");
+        assert!(
+            tokens
+                .iter()
+                .all(|t| matches!(t, Token::Bytes(b) if b.is_empty())),
+            "{tokens:?}"
+        );
+        assert!(parser.take_host_reports().is_empty());
+        resync_health_check(&parser.feed(b"x"));
+        // A malformed report running into the next key keeps that key.
+        let tokens = parser.feed(b"\x1b[?99\x1b[A");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Key(_))),
+            "{tokens:?}"
+        );
+        assert!(parser.take_host_reports().is_empty());
     }
 
     /// Hostile-input helpers shared by the adversarial suite below.

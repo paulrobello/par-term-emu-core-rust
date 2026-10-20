@@ -79,7 +79,7 @@ impl SettingsSection {
     fn heading(self) -> (&'static str, &'static str) {
         match self {
             Self::Sidebar => ("side panel", "what the workspace side panel shows"),
-            Self::Borders => ("borders", "the divider and border look"),
+            Self::Borders => ("borders", "the divider and border look, and the theme"),
             Self::General => ("general", "client behavior and the attach mode"),
             Self::Notify => ("notifications", "how agent state changes are announced"),
             Self::States => (
@@ -153,6 +153,21 @@ impl SettingsSection {
                     key: "border-color",
                     label: "border color",
                     kind: SettingKind::Hex,
+                },
+                SettingSpec {
+                    key: "theme",
+                    label: "theme",
+                    kind: SettingKind::Choice(crate::mux::theme::THEME_NAMES),
+                },
+                SettingSpec {
+                    key: "theme-dark",
+                    label: "auto: dark host",
+                    kind: SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
+                },
+                SettingSpec {
+                    key: "theme-light",
+                    label: "auto: light host",
+                    kind: SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
                 },
             ],
             Self::General => &[
@@ -422,6 +437,7 @@ pub(super) struct SettingsValues {
     pub pane_gaps: u16,
     pub border_active_color: String,
     pub border_color: String,
+    pub theme: crate::mux::theme::ThemeSelection,
     pub scrollbar_gutter: bool,
     pub drag_cursor_shape: bool,
     pub resize_step: u32,
@@ -431,6 +447,13 @@ pub(super) struct SettingsValues {
     pub prefix: u8,
     pub reload: u8,
     pub management: Management,
+}
+
+/// A theme key's canonical spelling (an alias like `tokyonight` must
+/// match its choice-list entry, or Enter would cycle from the first
+/// entry); an unknown name shows as spelled.
+fn theme_spelling(name: &str) -> String {
+    crate::mux::theme::canonical(name).map_or_else(|| name.to_string(), str::to_string)
 }
 
 /// One row's current value: what the row displays and what Enter acts on.
@@ -456,6 +479,9 @@ impl SettingsValues {
             "pane-gaps" => FieldVal::Num(self.pane_gaps as u32),
             "border-active-color" => FieldVal::Text(self.border_active_color.clone()),
             "border-color" => FieldVal::Text(self.border_color.clone()),
+            "theme" => FieldVal::Text(theme_spelling(&self.theme.theme)),
+            "theme-dark" => FieldVal::Text(theme_spelling(&self.theme.dark)),
+            "theme-light" => FieldVal::Text(theme_spelling(&self.theme.light)),
             "mode" => FieldVal::Text(file_mode.to_string()),
             "scrollbar-gutter" => FieldVal::Bool(self.scrollbar_gutter),
             "drag-cursor-shape" => FieldVal::Bool(self.drag_cursor_shape),
@@ -756,6 +782,7 @@ impl WindowSession {
             pane_gaps: self.render_opts.pane_gaps,
             border_active_color: hex(self.render_opts.border_active),
             border_color: hex(self.render_opts.border_plain),
+            theme: self.theme.clone(),
             scrollbar_gutter: self.render_opts.scrollbar_gutter,
             drag_cursor_shape: self.cursor.drag_shape,
             resize_step: self.resize_step,
@@ -1180,6 +1207,10 @@ mod tests {
             pane_gaps: 0,
             border_active_color: String::new(),
             border_color: "#00ffff".to_string(),
+            theme: crate::mux::theme::ThemeSelection {
+                theme: "Tokyo_Night".to_string(),
+                ..crate::mux::theme::ThemeSelection::default()
+            },
             scrollbar_gutter: false,
             drag_cursor_shape: false,
             resize_step: 1,
@@ -1263,6 +1294,44 @@ mod tests {
         assert!(rows[1].trim_end().ends_with("off"), "{rows:?}");
         assert!(rows[4].trim_end().ends_with("built-in"), "{rows:?}");
         assert!(rows[5].trim_end().ends_with("#00ffff"), "{rows:?}");
+    }
+
+    /// The borders section carries the theme rows (`theme`, `theme-dark`,
+    /// `theme-light`) as choice lists, scrolled into view; an alias in
+    /// force shows its canonical spelling so Enter cycles from it.
+    #[test]
+    fn borders_section_lists_the_theme_rows() {
+        let keys: Vec<&str> = SettingsSection::Borders
+            .rows()
+            .iter()
+            .map(|spec| spec.key)
+            .collect();
+        assert_eq!(
+            &keys[keys.len() - 3..],
+            ["theme", "theme-dark", "theme-light"]
+        );
+        for spec in &SettingsSection::Borders.rows()[keys.len() - 3..] {
+            assert!(matches!(spec.kind, SettingKind::Choice(_)), "{}", spec.key);
+        }
+        let mut st = state(SettingsSection::Borders);
+        st.selected = keys.len() - 3;
+        st.top = keys.len() - BODY_ROWS;
+        let composed = compose_settings(&st, &values());
+        let rows: Vec<&str> = composed.rows[5..5 + BODY_ROWS]
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        let theme = rows
+            .iter()
+            .find(|r| r.starts_with(" \u{25B8} theme"))
+            .expect("theme row visible");
+        assert!(theme.trim_end().ends_with("tokyo-night"), "{rows:?}");
+        assert!(rows
+            .iter()
+            .any(|r| r.contains("auto: dark host") && r.trim_end().ends_with("default")));
+        assert!(rows
+            .iter()
+            .any(|r| r.contains("auto: light host") && r.trim_end().ends_with("catppuccin-latte")));
     }
 
     /// The notify section lists every sound key with its value in force:

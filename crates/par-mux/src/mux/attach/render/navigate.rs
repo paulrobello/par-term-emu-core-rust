@@ -653,6 +653,9 @@ impl WindowSession {
                 notify_delivery: self.notify.delivery.name().to_string(),
                 notify_states: self.notify.states.clone(),
                 sound: self.notify.sound.clone(),
+                theme: self.theme.theme.clone(),
+                theme_dark: self.theme.dark.clone(),
+                theme_light: self.theme.light.clone(),
             },
         ) {
             Ok(chords) => {

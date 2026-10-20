@@ -154,6 +154,7 @@ impl PaneRenderer {
         vertical: &[BoundaryCell],
     ) {
         let len = cells.len() as u16;
+        let (active, plain) = self.border_colors();
         for (index, &(along, a, b)) in cells.iter().enumerate() {
             let (x, y) = axis.cell(*boundary, along);
             if x >= self.width || y >= self.height {
@@ -180,8 +181,8 @@ impl PaneRenderer {
                 b,
                 index as u16,
                 len,
-                self.border_active,
-                self.border_plain,
+                active,
+                plain,
             );
             let cell = &mut self.buffer[(x, y)];
             cell.reset();
@@ -227,12 +228,13 @@ impl PaneRenderer {
     pub(super) fn paint_pane_borders(&mut self) {
         // (x, y, label chars, owning pane) per pane with a label.
         let mut labels: Vec<(u16, u16, Vec<char>, u32)> = Vec::new();
+        let (active, plain) = self.border_colors();
         for layout_rect in &self.layout {
             let rect = self.display_rect(layout_rect);
             let style = if Some(rect.pane) == self.focused {
-                active_border_style(self.border_active)
+                active_border_style(active)
             } else {
-                plain_border_style(self.border_plain)
+                plain_border_style(plain)
             };
             let x1 = rect.x + rect.width.saturating_sub(1);
             let y1 = rect.y + rect.height.saturating_sub(1);
@@ -280,9 +282,9 @@ impl PaneRenderer {
         }
         for (x, y, chars, pane) in labels {
             let style = if Some(pane) == self.focused {
-                active_border_style(self.border_active)
+                active_border_style(active)
             } else {
-                plain_border_style(self.border_plain)
+                plain_border_style(plain)
             };
             for (j, ch) in chars.into_iter().enumerate() {
                 let cell = &mut self.buffer[(x + j as u16, y)];

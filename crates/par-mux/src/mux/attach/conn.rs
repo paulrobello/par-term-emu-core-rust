@@ -413,20 +413,9 @@ pub(crate) fn probe_host_terminal() -> HostProbe {
     probe
 }
 
-/// Locate a complete OSC 11 color report in a raw byte stream and return
-/// its color plus the byte span (start..end, end exclusive) covering the
-/// whole reply — introducer through terminator — so the caller can split
-/// around it and re-prime the surrounding bytes.
-///
-/// `None` while the reply is incomplete (split across reads): the probe
-/// keeps the bytes and polls again.
-#[cfg(unix)]
-fn find_osc_color_reply(bytes: &[u8]) -> Option<((u8, u8, u8), core::ops::Range<usize>)> {
-    let text = core::str::from_utf8(bytes).ok()?;
-    let start = text.find("\x1b]11;")?;
-    let value = text[start + "\x1b]11;".len()..].strip_prefix("rgb:")?;
-    let end = value.find(['\x1b', '\x07'])?;
-    let body = &value[..end];
+/// Parse an X11 color spec body after `rgb:` (`rr/gg/bb` with 1-4 hex
+/// digits per component) into 8-bit channels.
+pub(crate) fn parse_rgb_spec(body: &str) -> Option<(u8, u8, u8)> {
     let mut parts = body.split('/');
     let component = |raw: &str| -> Option<u8> {
         // Scale a 1-4 hex-digit component to 8 bits. The max must be
@@ -441,6 +430,23 @@ fn find_osc_color_reply(bytes: &[u8]) -> Option<((u8, u8, u8), core::ops::Range<
     let r = component(parts.next()?)?;
     let g = component(parts.next()?)?;
     let b = component(parts.next()?)?;
+    Some((r, g, b))
+}
+
+/// Locate a complete OSC 11 color report in a raw byte stream and return
+/// its color plus the byte span (start..end, end exclusive) covering the
+/// whole reply — introducer through terminator — so the caller can split
+/// around it and re-prime the surrounding bytes.
+///
+/// `None` while the reply is incomplete (split across reads): the probe
+/// keeps the bytes and polls again.
+#[cfg(unix)]
+fn find_osc_color_reply(bytes: &[u8]) -> Option<((u8, u8, u8), core::ops::Range<usize>)> {
+    let text = core::str::from_utf8(bytes).ok()?;
+    let start = text.find("\x1b]11;")?;
+    let value = text[start + "\x1b]11;".len()..].strip_prefix("rgb:")?;
+    let end = value.find(['\x1b', '\x07'])?;
+    let (r, g, b) = parse_rgb_spec(&value[..end])?;
     // ST is the two-byte ESC \ ; BEL is one byte. When the ESC here is a
     // bare introducer of the NEXT escape sequence rather than an ST, stop
     // the span at the ESC so that sequence stays intact for the primer.

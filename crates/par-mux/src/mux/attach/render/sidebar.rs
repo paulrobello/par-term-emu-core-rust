@@ -158,7 +158,10 @@ impl PaneRenderer {
                 }
             }
         }
-        let band = active_row_bg(self.bg);
+        let band = self.palette.map_or_else(
+            || active_row_bg(self.bg),
+            |p| crate::mux::theme::rt(p.active_row_bg),
+        );
         for line in self.sidebar_lines() {
             // herdr's active treatment: the active entry (the active
             // workspace, or the focused pane's agent) sits on a subtle
@@ -186,7 +189,7 @@ impl PaneRenderer {
                 .as_ref()
                 .filter(|id| !matches!(id, SidebarRowId::Collapse))
                 .map(|id| {
-                    let glyph = status_style(self.sidebar_row_status(id));
+                    let glyph = status_style(self.sidebar_row_status(id), self.palette);
                     if line.active {
                         glyph.bg(band)
                     } else {
@@ -254,8 +257,18 @@ pub(super) fn active_row_bg(bg: Option<RtColor>) -> RtColor {
 /// A rail status glyph's style: herdr's palette mapped onto the host's
 /// indexed colors (so the host theme applies) — working yellow, blocked
 /// red, done teal (cyan), idle green, no agent dim.
-fn status_style(status: AgentStatus) -> RtStyle {
+fn status_style(status: AgentStatus, palette: Option<crate::mux::theme::Palette>) -> RtStyle {
+    use crate::mux::theme::rt;
     let base = RtStyle::default();
+    if let Some(p) = palette {
+        return match status {
+            AgentStatus::Working => base.fg(rt(p.yellow)),
+            AgentStatus::Done => base.fg(rt(p.teal)),
+            AgentStatus::Blocked => base.fg(rt(p.red)),
+            AgentStatus::Idle => base.fg(rt(p.green)),
+            AgentStatus::None => base.fg(rt(p.overlay0)),
+        };
+    }
     match status {
         AgentStatus::Working => base.fg(RtColor::Indexed(3)),
         AgentStatus::Done => base.fg(RtColor::Indexed(6)),

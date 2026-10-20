@@ -122,6 +122,7 @@ impl PaneRenderer {
             prev_buffer: Buffer::empty(area),
             border_active: options.border_active,
             border_plain: options.border_plain,
+            palette: None,
             dirty: true,
         }
     }
@@ -151,6 +152,41 @@ impl PaneRenderer {
             self.border_plain = plain;
             self.dirty = true;
         }
+    }
+
+    /// Set the color theme's palette (`None` = the built-in look). A
+    /// change dirties the frame.
+    pub(crate) fn set_palette(&mut self, palette: Option<crate::mux::theme::Palette>) {
+        if self.palette != palette {
+            self.palette = palette;
+            self.dirty = true;
+        }
+    }
+
+    /// The theme palette in force, if any.
+    pub(crate) fn palette(&self) -> Option<crate::mux::theme::Palette> {
+        self.palette
+    }
+
+    /// The focused and unfocused border colors in force: the explicit
+    /// config colors, else the theme's accent / overlay0, else `None`
+    /// (the built-in bright-cyan accent and DIM).
+    pub(super) fn border_colors(&self) -> (Option<RtColor>, Option<RtColor>) {
+        let theme = |pick: fn(&crate::mux::theme::Palette) -> crate::mux::theme::Rgb| {
+            self.palette
+                .as_ref()
+                .map(|p| crate::mux::theme::rt(pick(p)))
+        };
+        (
+            self.border_active.or_else(|| theme(|p| p.accent)),
+            self.border_plain.or_else(|| theme(|p| p.overlay0)),
+        )
+    }
+
+    /// The overlay/indicator accent: the theme's, else bright cyan.
+    pub(super) fn accent(&self) -> RtColor {
+        self.palette
+            .map_or(RtColor::Indexed(14), |p| crate::mux::theme::rt(p.accent))
     }
 
     /// Set the background the next frame fills every cell with — the

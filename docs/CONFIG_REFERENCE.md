@@ -365,6 +365,8 @@ only relax them in trusted environments where large images are expected.
 
 ## Color Configuration
 
+The `par-mux attach` render client's chrome colors are not terminal settings: they come from the par-mux config file's `[client] theme`, `theme-dark`, and `theme-light` keys (herdr's presets, or `auto` to follow the host's light/dark appearance). See [MUX.md Themes](MUX.md#themes).
+
 ### Default Colors
 
 Default colors can be queried and are used when SGR reset (0) is applied.

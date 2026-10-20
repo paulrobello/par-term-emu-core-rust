@@ -283,7 +283,69 @@ impl WindowSession {
             crate::mux::config::parse_hex_color(&eff.border_color)
                 .map(|(r, g, b)| RtColor::Rgb(r, g, b)),
         );
+        self.theme.theme = chords.theme.clone();
+        self.theme.dark = chords.theme_dark.clone();
+        self.theme.light = chords.theme_light.clone();
+        self.apply_theme();
         known_style
+    }
+
+    /// Push the effective theme's palette to every painter — the panes'
+    /// renderer, the tab strip, the status row. A change dirties the
+    /// frame and repaints both chrome rows whole.
+    pub(super) fn apply_theme(&mut self) {
+        let palette = crate::mux::theme::palette(self.theme.effective());
+        if self.renderer.palette() == palette && self.chrome.tab_strip.palette == palette {
+            return;
+        }
+        self.renderer.set_palette(palette);
+        self.chrome.tab_strip.palette = palette;
+        self.chrome.status_row.palette = palette;
+        self.chrome.status_row.invalidate();
+        self.draw_status_row();
+        self.chrome.tab_strip.invalidate();
+        self.draw_tab_strip();
+    }
+
+    /// A host background report (the launch probe, or a later OSC 11
+    /// reply): the fill follows it and an `auto` theme re-picks.
+    pub(super) fn observe_host_background(&mut self, (r, g, b): (u8, u8, u8)) {
+        self.set_background(Some(RtColor::Rgb(r, g, b)));
+        if self.theme.observe_background((r, g, b)) {
+            self.apply_theme();
+        }
+    }
+
+    /// A host report the stdin parser consumed. A late background reply
+    /// updates the fill, the `auto` pick, and the daemon's theme record
+    /// (as the launch probe does); an appearance report re-picks and
+    /// re-queries OSC 11 so the fill follows the host's switch too.
+    pub(super) fn on_host_report(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        report: crate::mux::attach::input::HostReport,
+    ) {
+        use crate::mux::attach::input::HostReport;
+        match report {
+            HostReport::Background((r, g, b)) => {
+                self.observe_host_background((r, g, b));
+                let _ = conn.send_forget(&format!(
+                    "set-client-colors -f ffffff -b {r:02x}{g:02x}{b:02x}"
+                ));
+            }
+            HostReport::Appearance(appearance) => {
+                self.observe_host_appearance(appearance);
+                self.notify.outbox.extend_from_slice(b"\x1b]11;?\x1b\\");
+            }
+        }
+    }
+
+    /// An explicit host appearance report (mode 2031 `CSI ? 997 ; 1|2 n`):
+    /// it beats background inference for the `auto` pick.
+    pub(super) fn observe_host_appearance(&mut self, appearance: crate::mux::theme::Appearance) {
+        if self.theme.observe_report(appearance) {
+            self.apply_theme();
+        }
     }
 
     pub(super) fn set_border_lines(&mut self, spec: &str) -> bool {
@@ -552,7 +614,9 @@ impl WindowSession {
     pub(super) fn draw_status_row(&mut self) {
         let cols = self.geometry.host_cols;
         if self.chrome.status_row.cols() != cols {
+            let palette = self.chrome.status_row.palette;
             self.chrome.status_row = StatusRow::new(cols);
+            self.chrome.status_row.palette = palette;
         }
         if !self.chrome.status_bar_on {
             return;
@@ -793,7 +857,9 @@ impl WindowSession {
     pub(super) fn draw_tab_strip(&mut self) {
         let cols = self.geometry.host_cols;
         if self.chrome.tab_strip.cols() != cols {
+            let palette = self.chrome.tab_strip.palette;
             self.chrome.tab_strip = TabStrip::new(cols);
+            self.chrome.tab_strip.palette = palette;
         }
         // The rail is too narrow for the title; its columns stay blank.
         let strip = self.renderer.sidebar_width();
