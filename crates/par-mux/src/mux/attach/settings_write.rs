@@ -14,6 +14,16 @@ pub(crate) enum SettingValue {
     List(Vec<String>),
     /// An array of arrays (the `agent-rows` token lines).
     Rows(Vec<Vec<String>>),
+    /// An array of tables (`[[client.popup]]`): each entry's fields as
+    /// `(name, value)` string or integer pairs. Empty writes `key = []`.
+    Tables(Vec<Vec<(String, TableField)>>),
+}
+
+/// One field of a [`SettingValue::Tables`] entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TableField {
+    Str(String),
+    Int(i64),
 }
 
 /// `text` with `[client] <key> = value` set: the key's existing entry is
@@ -34,6 +44,28 @@ pub(crate) fn set_client_key(
     let client = doc["client"]
         .as_table_mut()
         .ok_or_else(|| "config.toml's `client` is not a table".to_string())?;
+    if let SettingValue::Tables(entries) = value {
+        if entries.is_empty() {
+            // An empty array, not a removed key: a reload keeps the live
+            // value for an ABSENT key, so only `key = []` clears it.
+            client.remove(key);
+            client.insert(key, toml_edit::value(toml_edit::Array::new()));
+        } else {
+            let mut tables = toml_edit::ArrayOfTables::new();
+            for fields in entries {
+                let mut table = toml_edit::Table::new();
+                for (name, field) in fields {
+                    table[name.as_str()] = match field {
+                        TableField::Str(s) => toml_edit::value(s.as_str()),
+                        TableField::Int(n) => toml_edit::value(*n),
+                    };
+                }
+                tables.push(table);
+            }
+            client[key] = toml_edit::Item::ArrayOfTables(tables);
+        }
+        return Ok(doc.to_string());
+    }
     let new = match value {
         SettingValue::Bool(b) => toml_edit::value(*b),
         SettingValue::Str(s) => toml_edit::value(s.as_str()),
@@ -56,6 +88,7 @@ pub(crate) fn set_client_key(
             }
             toml_edit::value(outer)
         }
+        SettingValue::Tables(_) => unreachable!("written above"),
     };
     match client.get_mut(key).and_then(|item| item.as_value_mut()) {
         // Keep the entry's own decor (an inline comment after it).

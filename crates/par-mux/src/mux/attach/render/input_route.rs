@@ -154,7 +154,7 @@ impl WindowSession {
             return false;
         }
         let mut to_send: Vec<u8> = Vec::with_capacity(bytes.len());
-        for &raw in bytes {
+        for (at, &raw) in bytes.iter().enumerate() {
             let mut byte = raw;
             // A non-ASCII chord key (IME / CJK input): the prefix stays
             // armed while the character's bytes arrive, then a fullwidth
@@ -212,7 +212,15 @@ impl WindowSession {
                     }
                     PrefixChord::Switch => self.prefix_switch(byte, conn),
                     PrefixChord::Literal => to_send.push(byte),
-                    PrefixChord::Unbound => {}
+                    PrefixChord::Unbound => {
+                        if self.popup_for_key(byte).is_some() {
+                            self.open_popup(conn, byte);
+                            // The popup owns the rest of the run.
+                            self.forward_run(conn, &to_send);
+                            let rest = &bytes[at + 1..];
+                            return !rest.is_empty() && self.popup_route_plain(conn, rest);
+                        }
+                    }
                 }
             } else if byte == self.prefix {
                 self.arm_prefix(true);
@@ -234,14 +242,19 @@ impl WindowSession {
                 to_send.push(byte);
             }
         }
-        // Typing snaps this pane's client scroll back to live.
+        self.forward_run(conn, &to_send);
+        false
+    }
+
+    /// Forward a routed run to the focused pane. Typing snaps the pane's
+    /// client scroll back to live.
+    fn forward_run(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, to_send: &[u8]) {
         if !to_send.is_empty() {
             if let Some(id) = self.renderer.focused() {
                 self.renderer.snap_to_live(id);
             }
-            self.forward_keys(conn, self.focused_pane(), &to_send);
+            self.forward_keys(conn, self.focused_pane(), to_send);
         }
-        false
     }
 
     /// Flip the prefix-armed state and repaint the status row on a

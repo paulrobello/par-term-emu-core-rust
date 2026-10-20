@@ -168,7 +168,10 @@ impl WindowSession {
         let empty_clears = matches!(
             &target,
             PromptTarget::Setting(edit)
-                if matches!(edit.kind, SettingKind::Hex | SettingKind::Text | SettingKind::List)
+                if matches!(
+                    edit.kind,
+                    SettingKind::Hex | SettingKind::Text | SettingKind::List | SettingKind::Popup(_)
+                )
         );
         if text.is_empty() && !empty_clears {
             self.leave_prompt();

@@ -111,6 +111,7 @@ impl PaneRenderer {
             overlay: None,
             overlay_anchor: None,
             toast: None,
+            popup: None,
             selection: None,
             overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
@@ -1066,6 +1067,7 @@ impl PaneRenderer {
         }
         self.paint_window_padding();
         self.paint_sidebar();
+        self.paint_popup();
         self.paint_toast();
         if let Some((title, rows, scroll)) = self.overlay.clone() {
             self.paint_overlay(title, &rows, scroll);

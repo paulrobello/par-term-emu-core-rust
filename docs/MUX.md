@@ -428,7 +428,7 @@ Toggling reports the restored grid, so panes re-divide back to the full width.
 
 #### Settings dialog
 
-The command menu's `settings` row opens herdr's tabbed settings dialog over the panes — one row per `[client]` key that faces the TUI: a tab row (`sidebar`, `borders`, `general`, `notify`, `states`, `keys`, `integrations`), the section's heading and description, and its rows — each key's label with the value in force right-aligned, `▸` on the selection (a reversed band). Tab / `l` / `h` switch sections (a click on a tab too), `↑` / `↓` / `j` / `k` move the selection, and Enter, space, or `→` / `←` on a discrete row applies it (a click on a row selects and applies): toggles flip (`sidebar-on-launch`, `pane-borders`, `show-label-in-border`, `scrollbar-gutter`, `drag-cursor-shape`, `sound`), choice lists cycle (`border-lines`, `theme`, `theme-dark`, `theme-light`, `notify-delivery`, `mode` — the attach pipeline, applied at the next launch — and the sidebar's `agent-rows` as named layouts: `default`, `compact`, `detailed`, `verbose`; `→` steps forward, `←` back), and numbers, hex colors, and chords (`sidebar-width`, `pane-gaps`, `resize-step`, `border-active-color`, `border-color`, the `prefix`, and every management chord in the `keys` tab, which scrolls) and the `notify` tab's sound texts (`sound-done`, `sound-blocked`, `sound-player`, and `sound-mute` as a comma list; an empty commit clears each) open the prompt modal seeded with the value in force — on those rows `→` / `←` still switch sections — the commit validates before writing (a bad number range, malformed `#rrggbb`, or a chord that does not parse flashes on the status row and writes nothing; an empty hex clears the override to the built-in) and Escape cancels back to the dialog. The `states` section stays a multi-select toggling one entry of `notify-states` (`[x]` / `[ ]`). Applying writes the one key into the config file in place — `toml_edit` keeps the user's comments, layout, and every other key, a file that does not parse is never overwritten — then runs the reload chord's path, so the client rebinds from the file it just wrote and the daemon re-reads it (`sidebar-width` also applies to the live panel like a drag release). The `integrations` section lists the agent session hooks' install state, and Enter (or `u`) is its update button: it reinstalls every integration whose installed asset is not the bundled copy (`v1 → v2 outdated`, or `asset missing` under a surviving registration), leaving never-installed rows alone — the outcome flashes on the status row (`integrations: updated claude, codex` / `everything current`, or the failures with reasons) and the rows re-grade in place (pinned by `update_outdated_reinstalls_only_stale_installed_integrations` and `integrations_footer_offers_the_update_outdated_button`); install fresh integrations with `par-mux --install-agent-hooks` / `--install-agent-extensions`. Escape or `q` closes, and so does a press anywhere outside the box (pinned by `tabs_and_rows_fit_the_panel`, `row_sections_show_labels_and_values`, `keys_section_scrolls_and_spells_chords`, `settings_rows_write_and_apply_live`, `settings_prompt_rows_edit_numbers_hex_and_chords`, `settings_keys_section_scrolls_to_every_row`, `command_menu_settings_opens_the_dialog_and_applies`, `set_client_key_preserves_the_user_file` and `render_mode_settings_dialog_opens_from_the_panel_menu`).
+The command menu's `settings` row opens herdr's tabbed settings dialog over the panes — one row per `[client]` key that faces the TUI: a tab row (`sidebar`, `borders`, `general`, `notify`, `states`, `keys`, `integrations`), the section's heading and description, and its rows — each key's label with the value in force right-aligned, `▸` on the selection (a reversed band). Tab / `l` / `h` switch sections (a click on a tab too), `↑` / `↓` / `j` / `k` move the selection, and Enter, space, or `→` / `←` on a discrete row applies it (a click on a row selects and applies): toggles flip (`sidebar-on-launch`, `pane-borders`, `show-label-in-border`, `scrollbar-gutter`, `drag-cursor-shape`, `sound`), choice lists cycle (`border-lines`, `theme`, `theme-dark`, `theme-light`, `notify-delivery`, `mode` — the attach pipeline, applied at the next launch — and the sidebar's `agent-rows` as named layouts: `default`, `compact`, `detailed`, `verbose`; `→` steps forward, `←` back), and numbers, hex colors, and chords (`sidebar-width`, `pane-gaps`, `resize-step`, `border-active-color`, `border-color`, the `prefix`, and every management chord in the `keys` tab, which scrolls) and the `notify` tab's sound texts (`sound-done`, `sound-blocked`, `sound-player`, and `sound-mute` as a comma list; an empty commit clears each) open the prompt modal seeded with the value in force — on those rows `→` / `←` still switch sections — the commit validates before writing (a bad number range, malformed `#rrggbb`, or a chord that does not parse flashes on the status row and writes nothing; an empty hex clears the override to the built-in) and Escape cancels back to the dialog. The `general` tab ends with one row per `[[client.popup]]` entry plus `+ add popup`, edited in the prompt as `KEY [WxH] COMMAND` (see [Popups](#popups)). The `states` section stays a multi-select toggling one entry of `notify-states` (`[x]` / `[ ]`). Applying writes the one key into the config file in place — `toml_edit` keeps the user's comments, layout, and every other key, a file that does not parse is never overwritten — then runs the reload chord's path, so the client rebinds from the file it just wrote and the daemon re-reads it (`sidebar-width` also applies to the live panel like a drag release). The `integrations` section lists the agent session hooks' install state, and Enter (or `u`) is its update button: it reinstalls every integration whose installed asset is not the bundled copy (`v1 → v2 outdated`, or `asset missing` under a surviving registration), leaving never-installed rows alone — the outcome flashes on the status row (`integrations: updated claude, codex` / `everything current`, or the failures with reasons) and the rows re-grade in place (pinned by `update_outdated_reinstalls_only_stale_installed_integrations` and `integrations_footer_offers_the_update_outdated_button`); install fresh integrations with `par-mux --install-agent-hooks` / `--install-agent-extensions`. Escape or `q` closes, and so does a press anywhere outside the box (pinned by `tabs_and_rows_fit_the_panel`, `row_sections_show_labels_and_values`, `keys_section_scrolls_and_spells_chords`, `settings_rows_write_and_apply_live`, `settings_prompt_rows_edit_numbers_hex_and_chords`, `settings_keys_section_scrolls_to_every_row`, `command_menu_settings_opens_the_dialog_and_applies`, `set_client_key_preserves_the_user_file` and `render_mode_settings_dialog_opens_from_the_panel_menu`).
 
 #### Agent state notifications
 
@@ -479,6 +479,40 @@ The color comes from an OSC 11 probe (`ESC ] 11 ; ? ST`, 150 ms deadline, poll(2
 A preset recolors the chrome: pane rings and dividers (accent focused, overlay0 unfocused), the tab strip (panel bar, surface0 inactive blocks, accent active block), the status row (text on surface0, the shaded block on the accent), the side panel's active band and agent-state glyphs, toast dots, and overlay rings. Pane content keeps its own colors, and an explicit `border-active-color` / `border-color` still wins over the theme.
 `theme = "auto"` follows the host's light/dark appearance: `theme-dark` (default `default`) on a dark host, `theme-light` (default `catppuccin-latte`) on a light one. The appearance comes from the launch OSC 11 background probe (herdr's rule: Rec. 601 luma at or above half scale is light), from a late OSC 11 reply the stdin parser consumes, and from mode 2031: the render client enables `CSI ? 2031 h` (and disables it on exit), and a host that supports it reports each switch as `CSI ? 997 ; 1|2 n`, which outranks background inference and re-queries OSC 11 so the fill follows. A host that answers neither (Windows consoles, non-xtermish terminals) counts as dark, so `auto` shows `theme-dark` there.
 All three keys are live on reload and editable in the settings dialog's `borders` tab (pinned by `theme_presets_and_auto_follow_the_host`, `auto_picks_from_the_host_appearance`, `color_scheme_reports_reach_the_theme_not_the_pane`, and `settings_theme_rows_write_and_apply_live`).
+
+#### Popups
+
+Popup command windows (herdr's `type = "popup"` custom commands): a `[[client.popup]]` table binds an after-prefix key to a command that runs in a floating, bordered box over the panes without touching the tiled layout.
+
+```toml
+[[client.popup]]
+key = "t"              # the key after the prefix (tmux spelling: t, C-g)
+command = "lazygit"    # shell text, one line (run through /bin/sh on unix)
+width = "80%"          # outer width: cells (an integer) or "N%" of the pane area
+height = "80%"         # outer height, same spelling; both default to half the area
+description = "git"    # optional: the box's border title (default: the command)
+```
+
+Prefix + the key opens the popup. The size is the OUTER box, border included, centered over the pane area (right of the side panel), clamped to that area with a 6x4 minimum. A string size must be a percentage (`"120"` is refused; write `120` for cells), as in herdr. Only one popup is up at a time. An area under the minimum refuses with `popup: the pane area is too small`.
+
+The command runs on the daemon. The client opens a scratch window named `popup` beside the shown window (par-mux's `new-window` never selects it) and mirrors its one pane into the box over a [`control-pane`](#raw-pane-streams) stream on a second connection. The stream seeds the box atomically, and its size report sizes the scratch window to the box's inner grid, so the command sees the box's columns and rows and follows host resizes and side-panel toggles. On unix the command runs from a private, owner-only launcher script that removes itself first, because `new-window`'s flag scan would misread a `-c`/`-t`/`-n` inside an inline command. Elsewhere it runs as written through the pane shell.
+
+While the popup is up it owns all input, as herdr's session-modal popup does: typed bytes, pastes (framed by the popup's own bracketed-paste mode) and keys (re-encoded against the popup's own input modes, so DECCKM arrows reach a TUI) go to its pane. The host cursor sits in the box and mouse reports are consumed. The prefix stays live:
+
+- prefix + the popup's key closes it;
+- prefix prefix sends the literal prefix;
+- prefix `d` closes it and detaches;
+- every other chord is consumed.
+
+The popup also closes when its command exits. Closing kills the scratch window and the tiled view takes input again. herdr has no close key (a popup closes only on exit or its `popup.close` API), so the toggle key is a par-mux addition.
+
+Known deviations:
+
+- The command starts in the daemon's working directory, not the focused pane's.
+- The scratch window appears in OTHER clients' tab strips while the popup is up. This client's strip hides it.
+- A client killed without its exit path (SIGKILL) leaves the scratch window running. Close it with `kill-window`.
+
+The popups are editable in the settings dialog's `general` tab: one `popup` row per entry spelled `KEY [WxH] COMMAND` (`t 80%x20 lazygit`, a missing axis as `-`), plus a `+ add popup` row. Enter opens the prompt. A bad spelling or a key another popup holds flashes and writes nothing, and an empty commit deletes the popup (written as `popup = []`). A popup key that a built-in chord already owns never fires and warns at launch and on reload. An invalid entry (no key or command, a multi-line command, a duplicate key, a size like `"120"`) never makes the file unreadable, so the daemon's own settings still load. The attach client refuses it the way it refuses a bad chord: launch fails with the reason, and a reload flashes `reload failed: …` and keeps the live popups. Pinned by `popup_size_parses_cells_and_percentages`, `popup_tables_deserialize_and_round_trip`, `geometry_centers_clamps_and_floors`, `popup_key_opens_a_scratch_window_and_mirrors_its_stream`, `popup_captures_input_and_its_key_closes_it`, `popup_closes_when_its_command_exits_and_on_detach`, `settings_popup_rows_add_edit_and_delete`, and the end-to-end `render_mode_popup_runs_a_command_in_a_floating_box_and_closes`.
 
 #### Bracketed paste
 
@@ -577,6 +611,14 @@ theme = "default"             # render mode color theme: default | auto | a herd
 theme-dark = "default"        # the preset theme = "auto" uses on a dark host
 theme-light = "catppuccin-latte"   # the preset theme = "auto" uses on a light host
 
+# Popup command windows (render mode; see Popups): prefix + key runs the
+# command in a floating box over the panes.
+# [[client.popup]]
+# key = "t"
+# command = "lazygit"
+# width = "80%"   # cells (integer) or "N%"; default half the pane area
+# height = "80%"
+
 [daemon]
 socket = "default"    # named default socket, or an absolute path
 state-dir = ""        # empty = the OS default state directory
@@ -604,6 +646,7 @@ setting:
 | `client.border-lines` | **Live** — the border style re-applies on reload (`herdr`, `unicode`, `double`, `heavy`, `ascii`; an unknown value keeps the current set and says so on the status row). |
 | `client.theme` / `theme-dark` / `theme-light` | **Live** — the theme re-applies on reload and `auto` re-picks from the last host appearance (an unknown name uses `default` and says so on the status row). |
 | `client.resize-step` | **Live** — cells per resize step; a file value below 1 clamps to 1. |
+| `client.popup` | **Live** — the `[[client.popup]]` tables re-apply on reload (an open popup stays up until it closes); `popup = []` clears them, an absent key keeps the live set, and an invalid entry fails the reload with the reason on the status row. |
 | `client.mode` | Startup-only — changing it needs a re-attach. |
 | `daemon.socket` | Startup-only by definition (the socket is bound at start). |
 | `daemon.remain-on-exit` | **Live** — a `reload-config` whose file states a different value applies it at once and reports `applied: daemon.remain-on-exit`; the NEXT observed death honors it (the reaper reads the flag at every pass). |

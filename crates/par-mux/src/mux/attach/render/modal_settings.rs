@@ -391,6 +391,9 @@ pub(super) enum SettingKind {
     Text,
     /// A comma-separated list (an empty prompt clears it).
     List,
+    /// One `[[client.popup]]` entry by index (`usize::MAX` = a new one),
+    /// spelled `KEY [WxH] COMMAND`; an empty prompt deletes it.
+    Popup(usize),
 }
 
 /// One editable `[client]` key.
@@ -423,6 +426,8 @@ pub(super) struct SettingsState {
     pub top: usize,
     pub integrations: Vec<(String, String)>,
     pub file_mode: String,
+    /// The configured popups: the general section's trailing rows.
+    pub popups: Vec<crate::mux::popup::PopupEntry>,
 }
 
 /// The current config values the dialog shows.
@@ -666,27 +671,33 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
                 format!(" {pointer} {mark} {choice}")
             })
             .collect(),
-        section => section
-            .rows()
-            .iter()
-            .enumerate()
-            .map(|(at, spec)| {
-                let pointer = if at == state.selected {
-                    "\u{25B8}"
-                } else {
-                    " "
-                };
-                let value = field_display(spec.key, &values.field(spec.key, &state.file_mode));
-                format!(
-                    " {} {:<width$} {:>vwidth$}",
-                    pointer,
-                    spec.label,
-                    value,
-                    width = LABEL_WIDTH,
-                    vwidth = PANEL_WIDTH - 4 - LABEL_WIDTH
-                )
-            })
-            .collect(),
+        section => {
+            let mut body: Vec<String> = section
+                .rows()
+                .iter()
+                .enumerate()
+                .map(|(at, spec)| {
+                    let pointer = if at == state.selected {
+                        "\u{25B8}"
+                    } else {
+                        " "
+                    };
+                    let value = field_display(spec.key, &values.field(spec.key, &state.file_mode));
+                    format!(
+                        " {} {:<width$} {:>vwidth$}",
+                        pointer,
+                        spec.label,
+                        value,
+                        width = LABEL_WIDTH,
+                        vwidth = PANEL_WIDTH - 4 - LABEL_WIDTH
+                    )
+                })
+                .collect();
+            if section == SettingsSection::General {
+                body.extend(state.popup_row_texts(section.rows().len(), LABEL_WIDTH, PANEL_WIDTH));
+            }
+            body
+        }
     };
     // The selection's highlight rides the composed pointer row inside
     // the body's scrolled window.
@@ -761,6 +772,7 @@ impl WindowSession {
             top: 0,
             integrations,
             file_mode,
+            popups: self.popup_entries(),
         };
         self.open_modal(Modal::Settings(state));
         self.refresh_settings();
@@ -862,7 +874,7 @@ impl WindowSession {
     /// body's window following the selection.
     fn settings_move_selection(&mut self, delta: isize) {
         if let Modal::Settings(state) = &mut self.modal {
-            let count = state.section.row_count();
+            let count = state.section.row_count() + state.popup_rows();
             if count > 0 {
                 state.selected =
                     (state.selected as isize + delta).clamp(0, count as isize - 1) as usize;
@@ -927,6 +939,10 @@ impl WindowSession {
             }
             SettingsSection::Integrations => self.settings_update_integrations(),
             section => {
+                if section == SettingsSection::General && selected >= section.rows().len() {
+                    self.edit_popup_row(selected - section.rows().len(), back);
+                    return;
+                }
                 let Some(spec) = section.rows().get(selected) else {
                     return;
                 };
@@ -961,7 +977,8 @@ impl WindowSession {
                     | SettingKind::Chord
                     | SettingKind::ReloadChord
                     | SettingKind::Text
-                    | SettingKind::List) => {
+                    | SettingKind::List
+                    | SettingKind::Popup(_)) => {
                         let seed = match values.field(spec.key, &file_mode) {
                             FieldVal::Text(text) => text,
                             FieldVal::Num(n) => n.to_string(),
@@ -978,7 +995,7 @@ impl WindowSession {
     /// Open the prompt modal on one setting row, seeded with its value in
     /// force; the prompt's commit validates and writes, and closing it
     /// (either way) restores this dialog.
-    fn enter_setting_prompt(
+    pub(super) fn enter_setting_prompt(
         &mut self,
         spec: &SettingSpec,
         kind: SettingKind,
@@ -1057,6 +1074,7 @@ impl WindowSession {
                     .map(str::to_string)
                     .collect(),
             )),
+            SettingKind::Popup(index) => return self.popup_setting_commit(conn, edit, index, text),
             SettingKind::Toggle | SettingKind::Choice(_) => None,
         };
         let Some(value) = value else {
@@ -1074,7 +1092,7 @@ impl WindowSession {
     /// Write one `[client]` key and run the reload chord's path (the
     /// client rebinds from the file it just wrote, the daemon re-reads
     /// too). Returns whether the write happened.
-    fn settings_write_and_reload(
+    pub(super) fn settings_write_and_reload(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         key: &str,
@@ -1181,7 +1199,7 @@ impl WindowSession {
         let Some(index) = row.checked_sub(panel.body_start) else {
             return;
         };
-        let count = state.section.row_count();
+        let count = state.section.row_count() + state.popup_rows();
         if index < BODY_ROWS && state.top + index < count {
             let selected = state.top + index;
             if let Modal::Settings(state) = &mut self.modal {
@@ -1230,6 +1248,7 @@ mod tests {
             top: 0,
             integrations: Vec::new(),
             file_mode: "render".to_string(),
+            popups: Vec::new(),
         }
     }
 

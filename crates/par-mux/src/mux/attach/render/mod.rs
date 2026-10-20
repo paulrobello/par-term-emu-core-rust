@@ -44,6 +44,7 @@ mod paint;
 mod pane_chrome;
 mod pending_cmd;
 mod pointer;
+mod popup;
 mod renderer;
 mod scrollback_edit;
 mod session;
@@ -351,6 +352,9 @@ pub struct PaneRenderer {
     overlay_anchor: Option<(u16, u16)>,
     /// The in-app notification card (notify-delivery `inside`).
     toast: Option<toast::Toast>,
+    /// The popup command window painted over the panes (above the
+    /// side panel, under the toast and modal overlays).
+    pub(super) popup: Option<popup::PopupView>,
     /// The scroll-mode line selection: the pane and its INCLUSIVE
     /// absolute line span — scrollback lines first (0 = the oldest),
     /// then the live grid rows. `None` when nothing is selected.
@@ -557,6 +561,7 @@ fn render_session_inner(
         session.sidebar.set_prefs_path(path);
     }
     session.settings_path = crate::mux::config::config_file_path();
+    session.socket = Some(path.clone());
     session.applied_client = client.file.client.clone();
     // `sidebar-on-launch`: the panel width lands on the renderer BEFORE
     // the seed, so the seed's first `refresh-client -C` already reports
@@ -598,7 +603,9 @@ fn render_session_inner(
     // being eaten.
     session.stdin_primer = probe.primer;
 
-    session.run(&mut conn, options.target.as_deref(), &mut StdoutSink)
+    let result = session.run(&mut conn, options.target.as_deref(), &mut StdoutSink);
+    session.popup_teardown(&mut conn);
+    result
 }
 
 /// RAII owner of the render client's alternate screen and mouse
@@ -753,6 +760,15 @@ struct WindowSession {
     /// Copy mode's editor lookup, `($VISUAL, $EDITOR)`: the process
     /// environment in a real attach, swapped by tests.
     editor_lookup: fn() -> (Option<String>, Option<String>),
+    /// The popup command windows (config `[[client.popup]]`).
+    popups: Vec<crate::mux::popup::Popup>,
+    /// The popup on screen or opening; it owns the input while set.
+    popup: Option<popup::OpenPopup>,
+    /// Opens a popup's pane stream; tests swap it for a fake.
+    popup_opener: popup::PopupOpener,
+    /// The daemon socket a popup's stream connects to; set only by a
+    /// real attach.
+    socket: Option<std::path::PathBuf>,
     /// The `[client]` section last re-resolved (launch or reload). A
     /// `%config-changed` whose re-read file states the same section is
     /// a no-op — the client whose own reload caused the broadcast.
@@ -1106,6 +1122,10 @@ impl WindowSession {
             sidebar_on_launch: chords.sidebar_on_launch,
             settings_path: None,
             editor_lookup: scrollback_edit::env_editor_lookup,
+            popups: chords.popups.clone(),
+            popup: None,
+            popup_opener: popup::open_stream,
+            socket: None,
             applied_client: crate::mux::config::ClientSection::default(),
             drag: None,
             render_opts: RenderOptions::default(),
@@ -1165,6 +1185,7 @@ impl WindowSession {
                 return Ok(());
             }
             self.dispatch_replies(conn);
+            self.drain_popup(conn);
 
             // 2. Parked work the event handlers queued (a layout re-fit,
             //    shared-selection follows), so this tick's input routes
@@ -1323,6 +1344,7 @@ impl WindowSession {
             self.draw_status_row();
             self.chrome.tab_strip.invalidate();
             self.draw_tab_strip();
+            self.fit_popup(conn);
         }
         Ok(std::ops::ControlFlow::Continue(()))
     }
@@ -1343,6 +1365,7 @@ impl WindowSession {
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
         self.dispatch_replies(conn);
+        self.drain_popup(conn);
         std::ops::ControlFlow::Continue(())
     }
 
@@ -1400,6 +1423,7 @@ impl WindowSession {
             if self.sidebar.is_on() {
                 self.refresh_sidebar(conn);
             }
+            self.fit_popup(conn);
         }
         Ok(())
     }
@@ -1646,6 +1670,21 @@ impl WindowSession {
             self.on_host_report(conn, report);
         }
         for token in tokens {
+            // An open popup owns every input (herdr's session-modal
+            // popup); its own router handles the prefix chords.
+            if self.popup_active() {
+                match token {
+                    Token::Bytes(run) => {
+                        if self.popup_route_plain(conn, &run) {
+                            return true;
+                        }
+                    }
+                    Token::Key(ev) => self.popup_route_key(conn, &ev),
+                    Token::Paste(body) => self.popup_route_paste(conn, &body),
+                    Token::Mouse(_) => {}
+                }
+                continue;
+            }
             match token {
                 Token::Bytes(run) => {
                     if self.route_plain(&run, conn) {

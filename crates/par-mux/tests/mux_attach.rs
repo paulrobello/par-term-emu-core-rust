@@ -7881,3 +7881,174 @@ fn render_mode_copy_mode_e_opens_the_scrollback_in_the_editor() {
     }
     host.killer.kill().ok();
 }
+
+/// The scratch window a popup opened: the `list-windows -a` row named
+/// `popup` (`$S @N <marker> popup`), as its `@N`.
+fn popup_window_id(reply: &str) -> Option<String> {
+    reply
+        .lines()
+        .find(|l| l.trim_end().ends_with(" popup"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .map(str::to_string)
+}
+
+/// Popup command windows (herdr's `type = "popup"`): prefix + the
+/// popup's key runs its command on the daemon in a scratch window the
+/// box mirrors. The command really runs (its output is on the daemon
+/// pane's screen AND painted in the box, with the description in the
+/// border); the scratch window is sized to the box's inner grid; keys
+/// typed while the popup is up reach its pane and not the tiled one;
+/// prefix + the key again closes it and kills the window; and a command
+/// that exits closes its popup on its own — typing then reaches the
+/// original pane again.
+#[cfg(unix)]
+#[test]
+fn render_mode_popup_runs_a_command_in_a_floating_box_and_closes() {
+    let (fixture, _daemon, mut client) = fixture_with_session("popup");
+    let pane0 = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    let config = "[client]\nsidebar-on-launch = false\n\
+        [[client.popup]]\nkey = \"t\"\n\
+        command = \"echo POPUP-UP-MARKER; read line; echo GOT-$line; sleep 30\"\n\
+        width = \"50%\"\nheight = 10\ndescription = \"scratchbox\"\n\
+        [[client.popup]]\nkey = \"y\"\ncommand = \"echo QUICK-MARKER; sleep 1\"\n";
+    let (mut host, stderr) = spawn_attach_with_config(&fixture, &["-t", &pane0], "render", config);
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up",
+    );
+    // input spacing: the pump must be past its seed before the chord.
+    std::thread::sleep(Duration::from_millis(300));
+
+    host.to_child.write_all(&[0x02, b't']).expect("prefix t");
+    host.to_child.flush().ok();
+    let windows = common::wait_daemon(
+        fixture.socket(),
+        "list-windows -a",
+        |reply| popup_window_id(reply).is_some(),
+        Duration::from_secs(15),
+        "the popup's scratch window exists",
+    );
+    let popup_window = popup_window_id(&windows).expect("scratch window");
+    let popup_pane = client
+        .send(&format!("list-panes -t {popup_window}"))
+        .expect("popup panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("popup pane")
+        .to_string();
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {popup_pane}"),
+        |screen| screen.contains("POPUP-UP-MARKER"),
+        Duration::from_secs(15),
+        "the popup command ran on the daemon",
+    );
+    // 50% of 80 columns = 40 outer, 38 inner; 10 outer rows, 8 inner.
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("pane-info -t {popup_pane}"),
+        |reply| reply.contains(" 38x8"),
+        Duration::from_secs(15),
+        "the scratch window is the box's inner grid",
+    );
+    // The box's first frames carry its border title and the output.
+    let painted = expect_output(
+        &host,
+        b"POPUP-UP-MARKER",
+        Duration::from_secs(15),
+        "the box mirrors the popup's output",
+    );
+    assert!(
+        plain_text(&painted).contains("scratchbox"),
+        "the box's border carries the description: {}",
+        plain_text(&painted)
+    );
+
+    // Typing goes to the popup, never the tiled pane.
+    host.to_child.write_all(b"ping\r").expect("type into popup");
+    host.to_child.flush().ok();
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {popup_pane}"),
+        |screen| screen.contains("GOT-ping"),
+        Duration::from_secs(15),
+        "typed input reached the popup's command",
+    );
+    let tiled = client
+        .send(&format!("capture-pane -t {pane0}"))
+        .expect("tiled capture")
+        .join("\n");
+    assert!(
+        !tiled.contains("ping"),
+        "the tiled pane saw popup input: {tiled}"
+    );
+
+    // prefix t again closes it: the scratch window is killed.
+    host.to_child
+        .write_all(&[0x02, b't'])
+        .expect("prefix t close");
+    host.to_child.flush().ok();
+    common::wait_daemon(
+        fixture.socket(),
+        "list-windows -a",
+        |reply| popup_window_id(reply).is_none(),
+        Duration::from_secs(15),
+        "closing the popup killed its scratch window",
+    );
+
+    // A command that exits closes its popup by itself.
+    std::thread::sleep(Duration::from_millis(300));
+    host.to_child.write_all(&[0x02, b'y']).expect("prefix y");
+    host.to_child.flush().ok();
+    expect_output(
+        &host,
+        b"QUICK-MARKER",
+        Duration::from_secs(15),
+        "the quick popup ran",
+    );
+    common::wait_daemon(
+        fixture.socket(),
+        "list-windows -a",
+        |reply| popup_window_id(reply).is_none(),
+        Duration::from_secs(20),
+        "an exited popup command leaves no scratch window",
+    );
+
+    // The tiled view has the input back. The window's removal can reach
+    // the daemon before the client's stream sees its end (the stream
+    // watch polls), and keys typed in between go to the closing popup by
+    // design — so re-type until the tiled pane runs the line.
+    let back = Instant::now() + Duration::from_secs(30);
+    loop {
+        host.to_child
+            .write_all(b"echo BACK-HOME-MARKER\r")
+            .expect("type into the tiled pane");
+        host.to_child.flush().ok();
+        let reached = (0..20).any(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            client
+                .send(&format!("capture-pane -t {pane0}"))
+                .map(|lines| echoed("BACK-HOME-MARKER")(&lines.join("\n")))
+                .unwrap_or(false)
+        });
+        if reached {
+            break;
+        }
+        assert!(
+            Instant::now() < back,
+            "typing never reached the original pane after the popup closed"
+        );
+    }
+    let _ = stderr;
+    host.killer.kill().ok();
+}

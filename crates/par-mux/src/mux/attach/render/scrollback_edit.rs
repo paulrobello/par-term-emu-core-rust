@@ -41,7 +41,7 @@ pub(super) struct ScrollbackFiles {
 
 /// Single-quote `value` for `/bin/sh`.
 #[cfg(unix)]
-fn sh_quote(value: &str) -> String {
+pub(super) fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
@@ -108,6 +108,30 @@ pub(super) fn write_scrollback_files(
         return Ok(files);
     }
     Err(last.unwrap_or_else(|| std::io::Error::other("no free scrollback file name")))
+}
+
+/// A popup's private launcher in `dir`: it removes itself, then runs
+/// `command` as shell text (herdr runs popup commands through the
+/// shell). Same exclusive, owner-only creation as the scrollback files.
+#[cfg(unix)]
+pub(super) fn write_popup_launcher(
+    dir: &std::path::Path,
+    command: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut last = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("par-mux-popup-{}-{n}.sh", std::process::id()));
+        let script = format!("rm -f {}\n{command}\n", sh_quote(&path.to_string_lossy()));
+        match write_private(&path, &script) {
+            Ok(()) => return Ok(path),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last = Some(err),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free popup launcher name")))
 }
 
 #[cfg(unix)]

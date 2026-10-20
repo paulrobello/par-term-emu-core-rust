@@ -656,6 +656,7 @@ impl WindowSession {
                 theme: self.theme.theme.clone(),
                 theme_dark: self.theme.dark.clone(),
                 theme_light: self.theme.light.clone(),
+                popups: self.popups.clone(),
             },
         ) {
             Ok(chords) => {

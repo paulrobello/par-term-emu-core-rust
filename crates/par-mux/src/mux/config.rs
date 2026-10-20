@@ -392,6 +392,12 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub theme_light: Option<String>,
+    /// Popup command windows (herdr's `type = "popup"` custom commands):
+    /// `[[client.popup]]` tables of `key`, `command`, and optional
+    /// `width`/`height` (cells or `"N%"`) and `description`. See
+    /// [`crate::mux::popup`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popup: Option<Vec<crate::mux::popup::PopupEntry>>,
 }
 
 /// `[daemon]`: what the daemon reads at startup.
@@ -705,6 +711,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             theme: Some(defaults.theme.clone()),
             theme_dark: Some(defaults.theme_dark.clone()),
             theme_light: Some(defaults.theme_light.clone()),
+            popup: None,
         },
         daemon: DaemonSection {
             socket: Some(eff.socket.clone()),
@@ -818,6 +825,8 @@ pub struct Chords {
     pub theme_dark: String,
     /// The `auto` theme's light-host preset (config `theme-light`).
     pub theme_light: String,
+    /// The validated popup command windows (config `[[client.popup]]`).
+    pub popups: Vec<crate::mux::popup::Popup>,
 }
 
 /// The notification sounds (config `sound`, `sound-player`,
@@ -870,6 +879,7 @@ pub fn display_option_warnings(chords: &Chords) -> Vec<String> {
         }
     }
     warnings.extend(crate::mux::theme::theme_warnings(chords));
+    warnings.extend(crate::mux::popup::shadow_warnings(chords));
     warnings
 }
 
@@ -920,6 +930,7 @@ impl Chords {
             theme: crate::mux::theme::DEFAULT.to_string(),
             theme_dark: crate::mux::theme::DEFAULT.to_string(),
             theme_light: crate::mux::theme::DEFAULT_LIGHT.to_string(),
+            popups: Vec::new(),
         }
     }
 }
@@ -1209,6 +1220,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .theme_light
         .clone()
         .unwrap_or_else(|| current.theme_light.clone());
+    let popups = match client.popup.as_deref() {
+        Some(entries) => crate::mux::popup::validate(entries)?,
+        None => current.popups.clone(),
+    };
     Ok(Chords {
         prefix,
         reload,
@@ -1229,6 +1244,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         theme,
         theme_dark,
         theme_light,
+        popups,
     })
 }
 

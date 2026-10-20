@@ -29,6 +29,7 @@ pub mod layout;
 pub mod pane;
 pub mod pane_stream;
 pub mod persist;
+pub mod popup;
 pub mod scrape;
 pub mod server;
 #[cfg(feature = "mux-bin")]

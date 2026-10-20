@@ -260,6 +260,7 @@ impl WindowSession {
         self.notify.states = chords.notify_states.clone();
         self.notify.sound = chords.sound.clone();
         self.sidebar_on_launch = chords.sidebar_on_launch;
+        self.popups = chords.popups.clone();
         // The border style first, the explicit `pane-borders` flag after
         // it — the style implies a paint mode (herdr = per-pane boxes),
         // and the explicit config key still overrides for any glyph set.
@@ -803,7 +804,14 @@ impl WindowSession {
         if self.flush_status_row(sink) {
             flushed = true;
         }
-        let mut cursor = self.renderer.focused_cursor().map(|(x, y, style)| {
+        // An open popup owns the cursor: its tracked cell inside the box
+        // (hidden while it opens or hides its own cursor).
+        let mut cursor = if self.popup_active() {
+            self.renderer.popup_cursor()
+        } else {
+            self.renderer.focused_cursor()
+        }
+        .map(|(x, y, style)| {
             let (hx, hy) = geometry.frame_to_host(x, y);
             (hx, hy, style)
         });
@@ -831,7 +839,7 @@ impl WindowSession {
         // anchors IME preedit and the candidate window there (herdr
         // parks the same way). Not under a modal: the panel owns the
         // screen there.
-        let anchor = if cursor.is_none() && !modal_up {
+        let anchor = if cursor.is_none() && !modal_up && !self.popup_active() {
             self.renderer
                 .focused_ime_anchor()
                 .map(|(x, y)| geometry.frame_to_host(x, y))
@@ -869,11 +877,17 @@ impl WindowSession {
             "workspaces"
         };
         let lead = (strip > 0).then_some((title, strip));
-        self.chrome.tab_strip.paint(
-            self.status.windows(),
-            self.status.active_window.as_deref(),
-            lead,
-        );
+        // An open popup's scratch window is not a tab of this view.
+        let windows: Vec<(String, String)> = self
+            .status
+            .windows()
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != self.popup_window())
+            .cloned()
+            .collect();
+        self.chrome
+            .tab_strip
+            .paint(&windows, self.status.active_window.as_deref(), lead);
     }
 
     /// Flush the tab strip's changed cells to the host's top row.
