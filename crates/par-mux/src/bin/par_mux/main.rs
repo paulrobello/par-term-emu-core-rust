@@ -593,14 +593,10 @@ fn run_list_servers(cli: &Cli) -> std::process::ExitCode {
     let base = discovery_base(cli);
     let found = par_mux::mux::discovery::enumerate(&base);
     let mut out = std::io::stdout().lock();
+    let default_socket = par_mux::mux::resolve_socket_path(None, None, None);
     for server in &found.live {
-        let label = par_mux::mux::discovery::display_label(&server.socket);
-        let sessions = server
-            .sessions
-            .map(|count| count.to_string())
-            .unwrap_or_else(|| "?".to_owned());
-        let stamp = server.stamp.as_deref().unwrap_or("?");
-        if writeln!(out, "{label}  sessions={sessions}  {stamp}").is_err() {
+        let row = par_mux::mux::discovery::describe_server(server, Some(&default_socket));
+        if writeln!(out, "{row}").is_err() {
             break;
         }
     }
@@ -1149,16 +1145,16 @@ fn main() -> std::process::ExitCode {
                 let _ = writeln!(
                     err,
                     "par-mux: multiple par-mux servers are running — attach to one with \
-                     `par-mux attach <name|path>`:"
+                     `par-mux attach <name|path>` (append `-t <session>` when it holds \
+                     several sessions):"
                 );
+                let default_socket = par_mux::mux::resolve_socket_path(None, None, None);
                 for server in &found.live {
-                    let label = par_mux::mux::discovery::display_label(&server.socket);
-                    let sessions = server
-                        .sessions
-                        .map(|count| count.to_string())
-                        .unwrap_or_else(|| "?".to_owned());
-                    let stamp = server.stamp.as_deref().unwrap_or("?");
-                    let _ = writeln!(err, "  {label}  sessions={sessions}  {stamp}");
+                    let _ = writeln!(
+                        err,
+                        "  {}",
+                        par_mux::mux::discovery::describe_server(server, Some(&default_socket))
+                    );
                 }
                 return std::process::ExitCode::from(1);
             }

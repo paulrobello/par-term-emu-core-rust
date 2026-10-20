@@ -34,6 +34,12 @@ pub struct ServerInfo {
     pub stamp: Option<String>,
     /// Live session count (`list-sessions` reply lines), when it answered.
     pub sessions: Option<usize>,
+    /// The daemon's process id from its registry entry, when one exists
+    /// (a scanned named-default socket the daemon never registered has
+    /// none).
+    pub pid: Option<u32>,
+    /// The daemon's registration time (unix ms), from the same entry.
+    pub started_unix_ms: Option<u64>,
 }
 
 /// What [`enumerate`] found under one state base: the servers that answered
@@ -242,6 +248,57 @@ pub fn display_label(socket: &Path) -> String {
     default_name_of(socket).unwrap_or_else(|| socket.to_string_lossy().into_owned())
 }
 
+/// One roster row for `--list-servers` and the multi-server attach
+/// refusal: everything needed to tell the servers apart — label, socket
+/// path, the daemon's pid and age from its registry entry, session count,
+/// build stamp, whether the label is a real name or an unnamed socket,
+/// and which one default resolution would pick.
+pub fn describe_server(server: &ServerInfo, default_socket: Option<&Path>) -> String {
+    let label = display_label(&server.socket);
+    let sessions = server
+        .sessions
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "?".to_owned());
+    let stamp = server.stamp.as_deref().unwrap_or("?");
+    let process = match (server.pid, server.started_unix_ms) {
+        (Some(pid), Some(started)) => {
+            format!(
+                "pid={pid} up={}",
+                format_up_duration(started, now_unix_ms())
+            )
+        }
+        _ => "pid=?".to_owned(),
+    };
+    let mut row = format!(
+        "{label}  {}  {process}  sessions={sessions}  {stamp}",
+        server.socket.display()
+    );
+    if default_socket == Some(&server.socket) {
+        row.push_str("  [default]");
+    }
+    // A `$NN` label is a generated pid-shaped name (test harnesses pass
+    // them), not a name a human chose — say so, so a leaked test daemon
+    // is recognizable at a glance.
+    if label.starts_with('$') && label[1..].chars().all(|c| c.is_ascii_digit()) {
+        row.push_str("  (pid-named)");
+    }
+    row
+}
+
+/// `25m` / `3h40m` / `2d5h` — the daemon's age, coarse enough to spot a
+/// just-leaked test socket at a glance.
+pub fn format_up_duration(started_unix_ms: u64, now_unix_ms: u64) -> String {
+    let secs = now_unix_ms.saturating_sub(started_unix_ms) / 1000;
+    let (days, hours, minutes) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    if days > 0 {
+        format!("{days}d{hours}h")
+    } else if hours > 0 {
+        format!("{hours}h{minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 /// The name behind a named-default socket path, or `None` when the path is
 /// not one (explicit `--socket`, a pane endpoint, or a foreign layout).
 fn default_name_of(socket: &Path) -> Option<String> {
@@ -282,6 +339,8 @@ fn probe(socket: &Path) -> Option<ServerInfo> {
         socket: socket.to_path_buf(),
         stamp,
         sessions,
+        pid: None,
+        started_unix_ms: None,
     })
 }
 
@@ -319,6 +378,11 @@ fn stems_match(file: &Path, entry: &RegistryEntry) -> bool {
 /// otherwise linger forever.
 pub fn enumerate(base: &Path) -> Enumeration {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    // The registry entry each candidate socket came from, for the pid and
+    // registration time the roster rows show (scan-found sockets without
+    // an entry get none).
+    let mut pointers: std::collections::HashMap<PathBuf, (u32, u64)> =
+        std::collections::HashMap::new();
     if let Ok(entries) = std::fs::read_dir(registry_dir(base)) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -328,8 +392,11 @@ pub fn enumerate(base: &Path) -> Enumeration {
                         if stems_match(&path, &parsed) {
                             let socket = PathBuf::from(&parsed.socket);
                             if !candidates.contains(&socket) {
-                                candidates.push(socket);
+                                candidates.push(socket.clone());
                             }
+                            pointers
+                                .entry(socket)
+                                .or_insert((parsed.pid, parsed.started_unix_ms));
                         } else {
                             // Corrupt by the stem-keyed contract. Prune
                             // through a re-read: a daemon that has
@@ -362,7 +429,13 @@ pub fn enumerate(base: &Path) -> Enumeration {
     let mut found = Enumeration::default();
     for socket in candidates {
         match probe(&socket) {
-            Some(info) => found.live.push(info),
+            Some(mut info) => {
+                if let Some(&(pid, started)) = pointers.get(&socket) {
+                    info.pid = Some(pid);
+                    info.started_unix_ms = Some(started);
+                }
+                found.live.push(info);
+            }
             None => {
                 // Prune only through `unregister`, which refuses to remove
                 // a file that has come to name a different socket since it
@@ -378,6 +451,60 @@ pub fn enumerate(base: &Path) -> Enumeration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The roster row names everything a user needs to pick a server:
+    /// label, socket path, pid, age, sessions, stamp, the default
+    /// marker, and whether the label is a generated pid-shaped name —
+    /// so a leaked test daemon is recognizable at a glance (Paul,
+    /// 2026-10-20).
+    #[test]
+    fn describe_server_names_the_pickers_dimensions() {
+        let named = ServerInfo {
+            socket: default_socket_dir().join("par-mux-default.sock"),
+            stamp: Some("0.62.0+dacba503".to_owned()),
+            sessions: Some(5),
+            pid: Some(50192),
+            started_unix_ms: Some(now_unix_ms().saturating_sub(20 * 3600 * 1000)),
+        };
+        let row = describe_server(&named, Some(&named.socket));
+        assert!(row.starts_with("default  "), "{row}");
+        assert!(row.contains("par-mux-default.sock"), "{row}");
+        assert!(row.contains("pid=50192"), "{row}");
+        assert!(row.contains("up=20h"), "{row}");
+        assert!(row.contains("sessions=5"), "{row}");
+        assert!(row.contains("0.62.0+dacba503"), "{row}");
+        assert!(row.ends_with("[default]"), "{row}");
+        assert!(!row.contains("(pid-named)"), "{row}");
+
+        let leaked_test = ServerInfo {
+            socket: default_socket_dir().join("par-mux-$10.sock"),
+            stamp: None,
+            sessions: None,
+            pid: None,
+            started_unix_ms: None,
+        };
+        let row = describe_server(&leaked_test, Some(&named.socket));
+        assert!(row.starts_with("$10  "), "{row}");
+        assert!(row.contains("pid=?"), "{row}");
+        assert!(row.contains("sessions=?"), "{row}");
+        assert!(row.ends_with("(pid-named)"), "{row}");
+        assert!(!row.contains("[default]"), "{row}");
+    }
+
+    #[test]
+    fn up_duration_renders_minutes_hours_and_days() {
+        let minute = 60 * 1000u64;
+        assert_eq!(format_up_duration(0, 25 * minute), "25m");
+        assert_eq!(
+            format_up_duration(0, 3 * 60 * minute + 40 * minute),
+            "3h40m"
+        );
+        assert_eq!(
+            format_up_duration(0, 2 * 1440 * minute + 5 * 60 * minute),
+            "2d5h"
+        );
+        assert_eq!(format_up_duration(10 * minute, 0), "0m");
+    }
 
     fn temp_base(_tag: &str) -> tempfile::TempDir {
         tempfile::Builder::new()

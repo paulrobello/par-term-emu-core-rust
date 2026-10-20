@@ -189,7 +189,10 @@ pub(crate) fn multi_session_error(sessions: &[(String, String)]) -> String {
     for (id, name) in sessions {
         message.push_str(&format!("  {id}: {name}\n"));
     }
-    message.push_str("attach to one with `par-mux attach -t <session>`");
+    message.push_str(
+        "attach to one with `par-mux attach -t <session>` — with several servers \
+         running, name the server too: `par-mux attach <server> -t <session>`",
+    );
     message
 }
 
@@ -467,7 +470,8 @@ mod tests {
     use super::multi_session_error;
 
     /// The refusal names every session and the `-t` hint, so the user can
-    /// act on it directly.
+    /// act on it directly — including the server-qualified spelling, so
+    /// the suggested form never fails against a second running server.
     #[test]
     fn multi_session_error_lists_every_session_and_the_hint() {
         let message = multi_session_error(&[
@@ -478,5 +482,6 @@ mod tests {
         assert!(message.contains("$0: att"));
         assert!(message.contains("$1: second"));
         assert!(message.contains("par-mux attach -t <session>"));
+        assert!(message.contains("par-mux attach <server> -t <session>"));
     }
 }

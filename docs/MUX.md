@@ -250,13 +250,15 @@ A subcommand shadows the same-named NAME-form daemon start (`par-mux attach` nev
 
 ### Discovering servers
 
-`par-mux --list-servers` enumerates every par-mux daemon this user can reach and prints one line per LIVE server (`<name-or-path>  sessions=N  <build stamp>`), so `attach` has something to enumerate:
+`par-mux --list-servers` enumerates every par-mux daemon this user can reach and prints one line per LIVE server — the label, socket path, the daemon's pid and age from its registry entry, session count, build stamp, a `[default]` marker on the socket default resolution picks, and a `(pid-named)` marker on generated `$NN` names (a leaked test daemon is recognizable at a glance) — so `attach` has something to enumerate:
 
 ```bash
 par-mux --list-servers
-# work  sessions=2  0.58.1+a1b2c3d
-# /tmp/scratch.sock  sessions=0  0.58.1+a1b2c3d
+# work  /…/par-mux-work.sock  pid=50192 up=3h40m  sessions=2  0.62.0+a1b2c3d
+# $10  /…/par-mux-$10.sock  pid=?  sessions=1  0.62.0+d4e5f6a  (pid-named)
 ```
+
+The multi-server attach refusal prints the same rows (marking the default) and names the composed form: `par-mux attach <name|path>` with `-t <session>` appended when the server holds several sessions; the multi-session refusal names the server-qualified spelling too, so a suggested form never fails against a second running server.
 
 Each daemon writes one pointer file into its state directory at bind (`<state-base>/servers/<socket-stem>.json`: socket path, pid, start time, build stamp) and removes it on the clean shutdown path (`kill-server`/`--stop`). A crash leaves the file behind; the next list-servers run probes every registered socket with `version` + `list-servers` through the same transport a client uses and prunes the entries whose probe fails silently (the enumeration owns cleanup; the per-entry "pruned" notes were noise in every caller's output), and — when the registry base is the platform default — also sweeps the named-default socket directory, so named daemons an older binary never registered still appear. `--list-servers` honors `--state-dir`, which scopes both the registry and the sweep to that base (what tests and sandboxes use). Registry failure never blocks a daemon from serving; discovery then simply falls back to the directory sweep.
 
