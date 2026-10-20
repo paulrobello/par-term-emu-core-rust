@@ -2942,3 +2942,139 @@ fn split_window_refuses_size_env_and_format_flags() {
         }
     );
 }
+
+/// A flag word inside another flag's quoted value is part of that value:
+/// `Args::flag`/`quoted_flag` used to find the `-t` in `-n 'a -t b'` and
+/// send the command to target `b'`.
+#[test]
+fn flag_scan_skips_flags_inside_quoted_values() {
+    assert_eq!(
+        parse_command("new-window -n 'a -t b' -t s1").unwrap(),
+        MuxCommand::NewWindow {
+            target: Some(AnyTarget::Name("s1".into())),
+            name: Some("a -t b".into()),
+            start_dir: None,
+            command: None,
+        }
+    );
+    assert_eq!(
+        parse_command("worktree-create -s 'a -c b' -c /r -b x").unwrap(),
+        MuxCommand::WorktreeCreate {
+            repo_dir: "/r".into(),
+            branch: "x".into(),
+            base: None,
+            path: None,
+            name: Some("a -c b".into()),
+        }
+    );
+    // A quoted value that IS a flag word, ahead of the real flag whose own
+    // value is quoted: the re-split used to take the first `-t` word.
+    assert_eq!(
+        parse_command("new-window -n '-t' -t 'my s'").unwrap(),
+        MuxCommand::NewWindow {
+            target: Some(AnyTarget::Name("my s".into())),
+            name: Some("-t".into()),
+            start_dir: None,
+            command: None,
+        }
+    );
+}
+
+/// Every target helper reads through `quoted_flag`, so each kind skips
+/// a flag hidden in an earlier quoted value.
+#[test]
+fn target_helpers_skip_flags_inside_quoted_values() {
+    assert_eq!(
+        parse_command("swap-pane -s 'x -t %9' -t %1").unwrap(),
+        MuxCommand::SwapPanes {
+            target: Target::Id(PaneId(1)),
+            source: Target::Name("x -t %9".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("break-pane -n 'w -s %9' -s %2").unwrap(),
+        MuxCommand::BreakPane {
+            source: Target::Id(PaneId(2)),
+            name: Some("w -s %9".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("list-windows -F '#{window_name} -t $9' -t $1").unwrap(),
+        MuxCommand::ListWindows {
+            session: Some(Target::Id(SessionId(1))),
+            all: false,
+            format: Some("#{window_name} -t $9".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("list-sessions -F '#{session_name} -t +9' -t +1").unwrap(),
+        MuxCommand::ListSessions {
+            workspace: Some(Target::Id(WorkspaceId(1))),
+            format: Some("#{session_name} -t +9".into()),
+        }
+    );
+    assert_eq!(
+        parse_command("new-session -s 'w -t +9' -t +1 -n 'x -c /bad' -c /good").unwrap(),
+        MuxCommand::NewSession {
+            name: Some("w -t +9".into()),
+            env: vec![],
+            workspace: Some(Target::Id(WorkspaceId(1))),
+            window_name: Some("x -c /bad".into()),
+            start_dir: Some("/good".into()),
+            cols: None,
+            rows: None,
+            command: None,
+        }
+    );
+}
+
+/// The numeric `Args::flag` readers skip quoted values too: the size
+/// scan used to read `5'` out of the quoted name and fail the command.
+#[test]
+fn numeric_flags_skip_flags_inside_quoted_values() {
+    assert_eq!(
+        parse_command("new-session -s 'w -x 5' -x 80").unwrap(),
+        MuxCommand::NewSession {
+            name: Some("w -x 5".into()),
+            env: vec![],
+            workspace: None,
+            window_name: None,
+            start_dir: None,
+            cols: Some(80),
+            rows: None,
+            command: None,
+        }
+    );
+    assert_eq!(
+        parse_command("move-window -s 'w -t 9' -t 1").unwrap(),
+        MuxCommand::MoveWindow {
+            source: Target::Name("w -t 9".into()),
+            index: 1,
+        }
+    );
+    assert_eq!(
+        parse_command("capture-pane -t 'p -S -5' -S -2").unwrap(),
+        MuxCommand::CapturePane {
+            pane: Target::Name("p -S -5".into()),
+            start_line: Some(-2),
+            end_line: None,
+            escape: false,
+        }
+    );
+}
+
+/// `select-pane` reads `-T` through the quote-aware scan, so a `-T` that
+/// only appears inside the quoted target is not a title: with the
+/// presence check still flat (`has_flag`), the line is refused rather
+/// than setting the title `b'`.
+#[test]
+fn select_pane_title_is_not_read_from_a_quoted_target() {
+    assert!(parse_command("select-pane -t 'a -T b'").is_err());
+    assert_eq!(
+        parse_command("select-pane -t 'a -T b' -T new").unwrap(),
+        MuxCommand::SelectPane {
+            pane: Target::Name("a -T b".into()),
+            title: Some("new".into()),
+        }
+    );
+}

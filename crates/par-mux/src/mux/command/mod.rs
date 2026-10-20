@@ -880,25 +880,48 @@ struct Args<'a> {
 
 impl<'a> Args<'a> {
     /// The value following `flag`, when present — `None` both for an absent
-    /// flag and for one with no following token.
+    /// flag and for one with no following token. The value is its first
+    /// whitespace-delimited token, verbatim.
     fn flag(&self, flag: &str) -> Option<String> {
-        self.args
-            .iter()
-            .position(|a| *a == flag)
-            .and_then(|i| self.args.get(i + 1))
-            .map(|v| (*v).to_string())
+        let (start, _, _) = self.flag_value_word(flag)?;
+        self.line[start..]
+            .split_whitespace()
+            .next()
+            .map(str::to_string)
     }
 
-    /// The value following `flag`, read through [`shell_split`] so a quoted
-    /// value survives as one word.
+    /// The shell word after the first word that IS `flag`, as
+    /// `(start, end, unquoted)`. Words are read with [`next_shell_word`],
+    /// so a `-t` inside another flag's quoted value (`-n 'a -t b'`) is
+    /// part of that value, and the flag is compared against the word's
+    /// raw bytes, so a quoted `'-t'` is a value rather than the flag.
+    fn flag_value_word(&self, flag: &str) -> Option<(usize, usize, String)> {
+        let rest = self
+            .line
+            .trim_start()
+            .strip_prefix(self.name)
+            .unwrap_or_default();
+        let mut pos = self.line.len() - rest.len();
+        while let Some((start, end, _)) = next_shell_word(self.line, pos) {
+            pos = end;
+            if &self.line[start..end] == flag {
+                return next_shell_word(self.line, pos);
+            }
+        }
+        None
+    }
+
+    /// The value following `flag`, read as a shell word so a quoted value
+    /// survives as one word.
     ///
-    /// [`Self::flag`] reads the pre-split `args`, so it takes only the first
-    /// whitespace-delimited token of a value — for a target that is a typed
-    /// `$N`/`@N`/`%N` id that is exactly right, but a NAME may legitimately
-    /// contain spaces. This re-splits the whole line with the same bounded
-    /// quoting grammar `send-keys` payloads use, so `-s 'Par Mux Test'`
-    /// yields `Par Mux Test` rather than `'Par` (par-term filed this against
-    /// `new-session`: a spaced name silently created a session called `Par`).
+    /// [`Self::flag`] takes only the first whitespace-delimited token of a
+    /// value — for a target that is a typed `$N`/`@N`/`%N` id that is
+    /// exactly right, but a NAME may legitimately contain spaces. A value
+    /// that opens a quote is read as the whole shell word instead (the
+    /// bounded quoting grammar `send-keys` payloads use), so
+    /// `-s 'Par Mux Test'` yields `Par Mux Test` rather than `'Par`
+    /// (par-term filed this against `new-session`: a spaced name silently
+    /// created a session called `Par`).
     ///
     /// A value that does not open a quote keeps [`Self::flag`]'s verbatim
     /// result, so an unquoted name is byte-identical to what it parsed to
@@ -924,22 +947,21 @@ impl<'a> Args<'a> {
     /// operation needs (`select-pane -T ''`, where empty is meaningful
     /// rather than a client bug).
     fn quoted_flag_allowing_empty(&self, flag: &str) -> Result<Option<String>, String> {
-        // The flat scan already answers every unquoted name, and answers it
-        // byte-for-byte: only re-split when the value actually opens a
-        // quote. A bare `a\b` is a name containing a backslash, not an
-        // escape — re-splitting unconditionally would silently eat it.
-        let flat = self.flag(flag);
-        let opens_quote = flat
-            .as_deref()
-            .is_some_and(|v| v.starts_with('\'') || v.starts_with('"'));
-        let value = if opens_quote {
-            let words = shell_split(self.line);
-            let at = words.iter().position(|w| w == flag);
-            at.and_then(|i| words.get(i + 1)).cloned()
-        } else {
-            flat
+        let Some((start, end, word)) = self.flag_value_word(flag) else {
+            return Ok(None);
         };
-        Ok(value)
+        // Only a value that opens a quote is unquoted: a bare `a\b` is a
+        // name containing a backslash, not an escape, and keeps the flat
+        // token's bytes.
+        let raw = &self.line[start..end];
+        if raw.starts_with('\'') || raw.starts_with('"') {
+            Ok(Some(word))
+        } else {
+            Ok(self.line[start..]
+                .split_whitespace()
+                .next()
+                .map(str::to_string))
+        }
     }
 
     /// Every value following `flag`, in order, read through
