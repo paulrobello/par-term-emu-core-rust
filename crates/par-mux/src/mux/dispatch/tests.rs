@@ -1,5 +1,5 @@
 use super::{dispatch_command, resolve_start_dir, roster_row, Ctx, RosterTokens};
-use crate::mux::command::parse_command;
+use crate::mux::command::{parse_command, COMMAND_SCHEMA_JSON};
 use crate::mux::ids::PaneId;
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
 use crate::mux::tree::MuxTree;
@@ -1922,4 +1922,21 @@ fn capture_history_tail_matches_the_full_export() {
             "-S {start:?} -E {end:?}"
         );
     }
+}
+
+/// H-API: `list-commands -J` replies with the embedded schema verbatim
+/// (the same bytes `par-mux --print-schema` prints); the bare form keeps
+/// the token lines.
+#[test]
+fn list_commands_j_replies_with_the_embedded_schema() {
+    let h = Harness::new();
+    let body = assert_ok(&h.run("list-commands -J")).join("\n");
+    assert_eq!(body, COMMAND_SCHEMA_JSON.trim_end_matches('\n'));
+    let schema: serde_json::Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(schema["version"], 1);
+    let lines = assert_ok(&h.run("list-commands"));
+    assert!(
+        lines.iter().any(|l| l == "list-commands schema"),
+        "{lines:?}"
+    );
 }

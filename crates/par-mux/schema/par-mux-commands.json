@@ -1,0 +1,468 @@
+{
+  "version": 1,
+  "format": "par-mux-command-schema",
+  "source": "crates/par-mux/src/mux/command/mod.rs COMMANDS + docs/MUX.md Command Reference",
+  "daemon_features": [
+    "replay-held-state"
+  ],
+  "commands": [
+    {
+      "name": "break-pane",
+      "features": [],
+      "flags": [
+        "-n",
+        "-s"
+      ],
+      "synopsis": "-s <pane> [-n name]"
+    },
+    {
+      "name": "capture-pane",
+      "features": [
+        "escape"
+      ],
+      "flags": [
+        "-E",
+        "-e",
+        "-S",
+        "-t"
+      ],
+      "synopsis": "-t <pane> [-S start] [-E end] [-e]"
+    },
+    {
+      "name": "clear-history",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
+      "name": "client-snapshot",
+      "features": [
+        "v1"
+      ],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window>"
+    },
+    {
+      "name": "has-session",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <session>"
+    },
+    {
+      "name": "join-pane",
+      "features": [],
+      "flags": [
+        "-h",
+        "-p",
+        "-s",
+        "-t",
+        "-v"
+      ],
+      "synopsis": "-s <pane> -t <pane> [-h|-v] [-p 1-99]"
+    },
+    {
+      "name": "kill-pane",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
+      "name": "kill-server",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "kill-session",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <session>"
+    },
+    {
+      "name": "kill-window",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window>"
+    },
+    {
+      "name": "kill-workspace",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace>"
+    },
+    {
+      "name": "list-agents",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "list-commands",
+      "features": [
+        "schema"
+      ],
+      "flags": [
+        "-J"
+      ],
+      "synopsis": "[-J]"
+    },
+    {
+      "name": "list-panes",
+      "features": [
+        "targeted",
+        "format"
+      ],
+      "flags": [
+        "-F",
+        "-t"
+      ],
+      "synopsis": "[-t <window|session|pane>] [-F format]"
+    },
+    {
+      "name": "list-sessions",
+      "features": [
+        "workspace",
+        "format"
+      ],
+      "flags": [
+        "-F",
+        "-t"
+      ],
+      "synopsis": "[-t <workspace>] [-F format]"
+    },
+    {
+      "name": "list-windows",
+      "features": [
+        "targeted",
+        "all",
+        "format"
+      ],
+      "flags": [
+        "-a",
+        "-F",
+        "-t"
+      ],
+      "synopsis": "[-t <session>], -a, [-F format]"
+    },
+    {
+      "name": "list-workspaces",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "move-window",
+      "features": [],
+      "flags": [
+        "-s",
+        "-t"
+      ],
+      "synopsis": "-s <window> -t <position>"
+    },
+    {
+      "name": "new-session",
+      "features": [
+        "workspace"
+      ],
+      "flags": [
+        "-c",
+        "-e",
+        "-n",
+        "-s",
+        "-t",
+        "-x",
+        "-y"
+      ],
+      "synopsis": "[-s name] [-e NAME=VALUE]… [-t <workspace>] [-n window-name] [-c dir] [-x cols] [-y rows] [--] [command]"
+    },
+    {
+      "name": "new-window",
+      "features": [],
+      "flags": [
+        "-c",
+        "-n",
+        "-t"
+      ],
+      "synopsis": "[-t <session|window|pane>] [-n name] [-c dir] [--] [command]"
+    },
+    {
+      "name": "new-workspace",
+      "features": [],
+      "flags": [
+        "-n"
+      ],
+      "synopsis": "[-n name]"
+    },
+    {
+      "name": "pane-exited-replay",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "pane-info",
+      "features": [
+        "cmd"
+      ],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t %N"
+    },
+    {
+      "name": "pane-title",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
+      "name": "paste-buffer",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane>"
+    },
+    {
+      "name": "refresh-client",
+      "features": [
+        "cell-pixels",
+        "chrome"
+      ],
+      "flags": [
+        "-C",
+        "-I",
+        "-p",
+        "-t"
+      ],
+      "synopsis": "-t <pane> [-C WxH] [-p WxH] [-I border=B,gap=N,gutter=G] or [-C WxH] [-p WxH] [-I …]"
+    },
+    {
+      "name": "reload-config",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "rename-session",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <session> <name>"
+    },
+    {
+      "name": "rename-window",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window> <name>"
+    },
+    {
+      "name": "rename-workspace",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace> <name>"
+    },
+    {
+      "name": "resize-pane",
+      "features": [
+        "zoom",
+        "absolute"
+      ],
+      "flags": [
+        "-D",
+        "-L",
+        "-R",
+        "-t",
+        "-U",
+        "-x",
+        "-y",
+        "-Z"
+      ],
+      "synopsis": "-t <pane> (-L|-R|-U|-D [cells] | -x COLS [-y ROWS] | -Z)"
+    },
+    {
+      "name": "respawn-pane",
+      "features": [
+        "kill",
+        "start-dir"
+      ],
+      "flags": [
+        "-c",
+        "-k",
+        "-t"
+      ],
+      "synopsis": "-t <pane> [-k] [-c dir] [--] [command] (flags before the command)"
+    },
+    {
+      "name": "select-pane",
+      "features": [],
+      "flags": [
+        "-T",
+        "-t"
+      ],
+      "synopsis": "-t <pane> [-T 'title']"
+    },
+    {
+      "name": "select-window",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window>"
+    },
+    {
+      "name": "select-workspace",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace>"
+    },
+    {
+      "name": "send-keys",
+      "features": [],
+      "flags": [
+        "--enter",
+        "-t"
+      ],
+      "synopsis": "-t <pane> <keys> [--enter]"
+    },
+    {
+      "name": "set-buffer",
+      "features": [],
+      "flags": [
+        "-H"
+      ],
+      "synopsis": "<content> or -H <hex bytes…> (one byte per token, the send-keys -H form — the escape hatch for content a line-delimited wire cannot carry, newlines included)"
+    },
+    {
+      "name": "set-client-colors",
+      "features": [],
+      "flags": [
+        "-b",
+        "-f"
+      ],
+      "synopsis": "-f rrggbb and/or -b rrggbb"
+    },
+    {
+      "name": "set-environment",
+      "features": [],
+      "flags": [
+        "-t",
+        "-u"
+      ],
+      "synopsis": "-t <session> NAME VALUE or -t <session> -u NAME"
+    },
+    {
+      "name": "set-option",
+      "features": [],
+      "flags": [],
+      "synopsis": "<key> <value>"
+    },
+    {
+      "name": "set-workspace-respawn",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace> [on|off|toggle]"
+    },
+    {
+      "name": "show-buffer",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "show-options",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "split-window",
+      "features": [
+        "before",
+        "start-dir"
+      ],
+      "flags": [
+        "-b",
+        "-c",
+        "-h",
+        "-p",
+        "-t",
+        "-v"
+      ],
+      "synopsis": "-t <pane|window|session> [-h|-v] [-b] [-p 1-99] [-c dir] [--] [command]"
+    },
+    {
+      "name": "swap-pane",
+      "features": [],
+      "flags": [
+        "-s",
+        "-t"
+      ],
+      "synopsis": "-t <pane> -s <pane>"
+    },
+    {
+      "name": "swap-window",
+      "features": [],
+      "flags": [
+        "-s",
+        "-t"
+      ],
+      "synopsis": "-s <window> -t <window>"
+    },
+    {
+      "name": "switch-client",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "[-t <session|window|pane>]"
+    },
+    {
+      "name": "version",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
+      "name": "wait-output",
+      "features": [
+        "match",
+        "regex"
+      ],
+      "flags": [
+        "-E",
+        "-m",
+        "-r",
+        "-S",
+        "-T",
+        "-t"
+      ],
+      "synopsis": "-t <pane> (-m TEXT | -r REGEX) [-T ms] [-S start] [-E end]"
+    }
+  ]
+}

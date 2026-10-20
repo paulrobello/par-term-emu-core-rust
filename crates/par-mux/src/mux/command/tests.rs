@@ -2366,3 +2366,64 @@ fn wait_output_reply_timeout_covers_the_wait() {
     assert_eq!(reply_timeout("capture-pane -t %1"), None);
     assert_eq!(reply_timeout("wait-output -t %1"), None);
 }
+
+/// H-API: the embedded JSON schema is the COMMANDS table, row for row —
+/// names, feature tokens, and the daemon-level `features` line. A table
+/// edit without `make mux-schema` fails here as well as in the gate.
+#[test]
+fn command_schema_matches_the_commands_table() {
+    let schema: serde_json::Value =
+        serde_json::from_str(COMMAND_SCHEMA_JSON).expect("schema is valid JSON");
+    assert_eq!(schema["version"], 1);
+    assert_eq!(schema["format"], "par-mux-command-schema");
+    let commands = schema["commands"].as_array().expect("commands array");
+    let mut table: Vec<(&str, Vec<&str>)> = COMMANDS
+        .iter()
+        .map(|(name, _, features)| (*name, features.to_vec()))
+        .collect();
+    table.sort();
+    let schema_rows: Vec<(&str, Vec<&str>)> = commands
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().expect("name"),
+                c["features"]
+                    .as_array()
+                    .expect("features")
+                    .iter()
+                    .map(|f| f.as_str().expect("token"))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        schema_rows, table,
+        "stale crates/par-mux/schema/par-mux-commands.json — run: make mux-schema"
+    );
+    let body = list_commands_body();
+    let daemon_line = body.lines().last().expect("trailing features line");
+    let daemon: Vec<&str> = schema["daemon_features"]
+        .as_array()
+        .expect("daemon_features")
+        .iter()
+        .map(|f| f.as_str().expect("token"))
+        .collect();
+    assert_eq!(daemon_line, format!("features {}", daemon.join(" ")));
+}
+
+#[test]
+fn list_commands_parses_the_schema_flag_and_refuses_others() {
+    assert_eq!(
+        parse_command("list-commands").expect("bare"),
+        MuxCommand::ListCommands { schema: false }
+    );
+    assert_eq!(
+        parse_command("list-commands -J").expect("-J"),
+        MuxCommand::ListCommands { schema: true }
+    );
+    assert!(parse_command("list-commands -F '#{name}'").is_err());
+    assert!(parse_command("list-commands extra").is_err());
+    assert!(list_commands_body()
+        .lines()
+        .any(|line| line == "list-commands schema"));
+}

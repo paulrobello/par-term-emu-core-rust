@@ -114,7 +114,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Wait on output | `wait-output -t %N (-m TEXT \| -r REGEX) [-T ms] [-S/-E]` — blocks on the pane's update signal, matches `capture-pane`'s content (default: 100 history lines + screen), exit 0 match / 1 timeout or pane gone through `--cmd` | `pane wait-output (--match \| --regex) --source --lines --timeout` | PM-MUX / H-CLI |
 | Paste buffers | Single `default` slot: `set-buffer` / `show-buffer` / `paste-buffer` | No tmux-style buffers; copy-on-select and clipboard integration instead | PM-MUX / H-CFG |
 | Environment scoping | `set-environment` per session (durable, persisted) | `pane split --env` per spawn | PM-MUX / H-CLI |
-| Capability discovery | `list-commands` feature tokens; `client-snapshot` one-round-trip read | `herdr api schema` (JSON-Schema, bundled in docs); `herdr api snapshot` | PM-MUX / H-API |
+| Capability discovery | `list-commands` feature tokens; versioned JSON command schema (`list-commands -J`, `par-mux --print-schema`, bundled at `crates/par-mux/schema/par-mux-commands.json`, generated from the `COMMANDS` table and gated by `make mux-schema-check`); `client-snapshot` one-round-trip read | `herdr api schema` (JSON-Schema, bundled in docs); `herdr api snapshot` | PM-MUX / H-API |
 | Event stream | `%`-notification broadcasts to registered clients; late-client replay of held state | `events.subscribe` / `events.wait`, live with no replay, `events_lost` backpressure signal | PM-MUX / H-API |
 | Raw terminal streams | Not exposed directly (streaming server mirrors instead) | `terminal attach`, `terminal session control` (writable), `terminal session observe` (read-only, multiple observers) | PM-MUX / H-CLI |
 | Shell completions | Not found | zsh, bash, fish, powershell, elvish | — / H-CLI |
@@ -233,7 +233,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ### par-mux (binary flags and subcommands)
 
-`par-mux [NAME]`, `--socket`, `--state-dir`, `--foreground`, `--no-attach`, `--stop`, `--restart`, `--cmd/-c`, `--list-servers`, `--pane-endpoints`, `--expose-control-socket`, `--gen-config [--force]`, `--install-skill [--skills-dir]`, `--install-agent-hooks`, `--uninstall-agent-hooks`, `--agent-hooks-status`, `--integration-status`, `--install-agent-extensions`, `--uninstall-agent-extensions`, `--heal-agent-hooks`; subcommands `start`, `stop`, `restart`, `status`, `ls`, `attach`, `config`.
+`par-mux [NAME]`, `--socket`, `--state-dir`, `--foreground`, `--no-attach`, `--stop`, `--restart`, `--cmd/-c`, `--list-servers`, `--pane-endpoints`, `--expose-control-socket`, `--gen-config [--force]`, `--install-skill [--skills-dir]`, `--install-agent-hooks`, `--uninstall-agent-hooks`, `--agent-hooks-status`, `--integration-status`, `--install-agent-extensions`, `--uninstall-agent-extensions`, `--heal-agent-hooks`, `--print-schema`; subcommands `start`, `stop`, `restart`, `status`, `ls`, `attach`, `config`.
 
 ### par-mux (wire commands)
 

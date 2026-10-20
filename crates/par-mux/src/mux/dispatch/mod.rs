@@ -250,7 +250,7 @@ fn route_command(
         | MuxCommand::PasteBuffer { .. }
         | MuxCommand::Version
         | MuxCommand::ReloadConfig
-        | MuxCommand::ListCommands) => route_buffer_command(ctx, command),
+        | MuxCommand::ListCommands { .. }) => route_buffer_command(ctx, command),
         command @ (MuxCommand::RefreshClient { .. }
         | MuxCommand::ListAgents
         | MuxCommand::ClientSnapshot { .. }) => route_client_command(ctx, command),

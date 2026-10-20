@@ -1,0 +1,3 @@
+# Embedded via include_str! and served byte-for-byte (list-commands -J,
+# par-mux --print-schema): a CRLF checkout would change the served bytes.
+crates/par-mux/schema/*.json text eol=lf

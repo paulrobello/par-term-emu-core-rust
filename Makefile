@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -65,6 +65,8 @@ help:
 	@echo "  ffi-header-check - Fail when the committed terminal_core.h is not what cbindgen generates"
 	@echo "  ffi-surface-check - Fail when the FFI docs drift: exported fns, header typedefs, TERM_* constants, the ABI table, or a stale 'hand-written header' claim"
 	@echo "  mux-docs-check  - Fail when MUX.md / the API_REFERENCE notification_type list drifts from the mux code, or a doc claims a par-mux --flag clap lacks"
+	@echo "  mux-schema      - Regenerate crates/par-mux/schema/par-mux-commands.json from the COMMANDS table + MUX.md Command Reference"
+	@echo "  mux-schema-check - Fail when the committed par-mux command schema drifts from the COMMANDS table or the MUX.md Command Reference"
 	@echo "  env-docs-check  - Fail when an env var production code reads is missing from CONFIG_REFERENCE (or vice versa)"
 	@echo "  pinned-tests-check - Fail when a 'pinned by <test>' doc citation names no test in the tree"
 	@echo "  rustdoc-check    - Fail when rustdoc has broken or private intra-doc links in par-mux, par-term-emu-core, or the root crate (RUSTDOCFLAGS=-D warnings)"
@@ -477,6 +479,16 @@ mux-docs-check:
 	python3 scripts/check_mux_docs.py
 	python3 scripts/check_mux_docs.py --self-test
 
+# H-API: the versioned JSON command schema (list-commands -J,
+# par-mux --print-schema) is generated from the COMMANDS table and the
+# MUX.md Command Reference; the check fails when the committed file drifts.
+mux-schema:
+	python3 scripts/gen_mux_schema.py
+
+mux-schema-check:
+	python3 scripts/gen_mux_schema.py --check
+	python3 scripts/gen_mux_schema.py --self-test
+
 # ENH-057: every "pinned by `test`" citation in docs/*.md and CHANGELOG
 # [Unreleased] names a test fn or test target that exists. Pure python3.
 pinned-tests-check:
@@ -602,7 +614,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

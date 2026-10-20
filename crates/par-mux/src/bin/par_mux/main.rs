@@ -81,6 +81,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
             "install_agent_extensions",
             "uninstall_agent_extensions",
             "heal_agent_hooks",
+            "print_schema",
         ])
 ))]
 struct Cli {
@@ -122,7 +123,7 @@ struct Cli {
         "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
         "agent_hooks_status", "integration_status",
         "install_agent_extensions", "uninstall_agent_extensions",
-        "heal_agent_hooks",
+        "heal_agent_hooks", "print_schema",
     ])]
     foreground: bool,
 
@@ -134,7 +135,7 @@ struct Cli {
         "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
         "agent_hooks_status", "integration_status",
         "install_agent_extensions", "uninstall_agent_extensions",
-        "heal_agent_hooks",
+        "heal_agent_hooks", "print_schema",
     ])]
     no_attach: bool,
 
@@ -247,6 +248,13 @@ struct Cli {
     /// self-heal par-term runs. Never contacts a daemon.
     #[arg(long)]
     heal_agent_hooks: bool,
+
+    /// Print the versioned JSON command schema (every control command,
+    /// its flags, and its feature tokens) bundled with this binary, and
+    /// exit. Never contacts a daemon; `list-commands -J` serves the same
+    /// document from a running one.
+    #[arg(long)]
+    print_schema: bool,
 }
 
 /// `par-mux attach [-t TARGET] [--prefix KEY] [NAME | --socket PATH]` — the
@@ -851,6 +859,11 @@ fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
 
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
+
+    if cli.print_schema {
+        print!("{}", par_mux::mux::command::COMMAND_SCHEMA_JSON);
+        return std::process::ExitCode::SUCCESS;
+    }
 
     // The verb surface (R1): translate a subcommand into the flag fields
     // the existing paths read (or a direct return for the client-side
@@ -1800,6 +1813,7 @@ mod mode_group_tests {
             "--install-agent-extensions",
             "--uninstall-agent-extensions",
             "--heal-agent-hooks",
+            "--print-schema",
         ];
         for (i, a) in flags.iter().enumerate() {
             assert!(

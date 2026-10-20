@@ -3,7 +3,7 @@
 //! reload-config, list-commands.
 
 use super::*;
-use crate::mux::command::{OutputPattern, WAIT_OUTPUT_DEFAULT_HISTORY};
+use crate::mux::command::{OutputPattern, COMMAND_SCHEMA_JSON, WAIT_OUTPUT_DEFAULT_HISTORY};
 use par_term_emu_core::pty_session::UpdateWaiter;
 use parking_lot::RwLock;
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ pub(super) fn route_buffer_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
         MuxCommand::Version => cmd_version(ctx),
         MuxCommand::ReloadConfig => cmd_reload_config(ctx),
-        MuxCommand::ListCommands => cmd_list_commands(ctx),
+        MuxCommand::ListCommands { schema } => cmd_list_commands(ctx, schema),
         other => unreachable!("route_command sent a non-buffer command: {other:?}"),
     }
 }
@@ -416,6 +416,10 @@ pub(super) fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
 /// ENH-037: capability discovery — the sorted command roster with feature
 /// tokens, generated from the same `COMMANDS` table the parser dispatches
 /// from, so a new command is discoverable the moment its row lands.
-pub(super) fn cmd_list_commands(ctx: &Ctx<'_>) -> Outcome {
-    Outcome::ok(ctx, &list_commands_body())
+pub(super) fn cmd_list_commands(ctx: &Ctx<'_>, schema: bool) -> Outcome {
+    if schema {
+        Outcome::ok(ctx, COMMAND_SCHEMA_JSON)
+    } else {
+        Outcome::ok(ctx, &list_commands_body())
+    }
 }

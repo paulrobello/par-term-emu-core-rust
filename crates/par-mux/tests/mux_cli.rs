@@ -1961,3 +1961,25 @@ fn wait_output_does_not_block_other_clients() {
         run.stderr
     );
 }
+
+/// H-API: `--print-schema` needs no daemon and prints the same JSON a
+/// live daemon serves for `list-commands -J`.
+#[test]
+fn print_schema_matches_the_daemons_list_commands_j() {
+    let printed = par_mux(&["--print-schema"]);
+    assert_eq!(printed.code, Some(0), "{:?}", printed.stderr);
+    let schema: serde_json::Value =
+        serde_json::from_str(&printed.stdout).expect("--print-schema prints JSON");
+    assert_eq!(schema["version"], 1);
+    assert!(schema["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .any(|c| c["name"] == "list-commands"));
+
+    let fixture = MuxFixture::new("clischema");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let served = cmd_ok(fixture.socket(), "list-commands -J");
+    assert_eq!(served.trim_end(), printed.stdout.trim_end());
+}

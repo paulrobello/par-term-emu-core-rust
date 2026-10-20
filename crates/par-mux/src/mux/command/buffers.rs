@@ -163,8 +163,17 @@ pub(super) fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::Version)
 }
 
-pub(super) fn parse_list_commands(_a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::ListCommands)
+/// `list-commands [-J]`: `-J` selects the JSON schema reply. tmux's own
+/// `-F format` is not taken: the reply rows have no format variables.
+pub(super) fn parse_list_commands(a: &Args<'_>) -> Result<MuxCommand, String> {
+    for word in a.args {
+        if *word != "-J" {
+            return Err(format!("{}: unknown flag {word}", a.name));
+        }
+    }
+    Ok(MuxCommand::ListCommands {
+        schema: a.has_flag("-J"),
+    })
 }
 
 /// `reload-config` takes no arguments — it always re-reads the canonical
