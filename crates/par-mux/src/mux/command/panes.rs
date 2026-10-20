@@ -4,12 +4,13 @@
 use super::*;
 
 pub(super) fn parse_list_panes(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(LIST_PANES_VALUE_FLAGS);
     // `-t <window|session|pane>` scopes the listing (R7): a window lists
     // its own panes, a session its active window's, a pane its owning
     // window's — every scope a client can name. The bare form stays
     // global.
     let target = a.any_target_opt("-t", "window")?;
-    reject_positionals(a, LIST_PANES_VALUE_FLAGS)?;
+    reject_positionals(&a, LIST_PANES_VALUE_FLAGS)?;
     Ok(MuxCommand::ListPanes {
         target,
         format: a.quoted_flag("-F")?,
@@ -108,12 +109,18 @@ pub(super) fn parse_split_geometry(a: &Args<'_>) -> Result<(SplitDirection, u32)
     Ok((direction, percent))
 }
 
+/// `split-window`'s value-taking flags.
+const SPLIT_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-c", "-p"];
+
 pub(super) fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     // The trailing start command (R4): tmux's positional form. The
     // geometry flags are valueless, `-t`/`-c`/`-p` take values. tmux's
     // other value flags are refused, so their value is never read as the
     // start command (`-l 30` would otherwise run `30`).
-    let (command, a) = a.start_command(&["-t", "-c", "-p"], &["-l", "-e", "-F"])?;
+    let (command, a) = a.start_command(
+        SPLIT_WINDOW_VALUE_FLAGS,
+        &[("-l", ""), ("-e", ""), ("-F", "")],
+    )?;
     let target = a.any_target("-t", "pane")?;
     let (direction, percent) = parse_split_geometry(&a)?;
     Ok(MuxCommand::SplitWindow {
@@ -127,6 +134,7 @@ pub(super) fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 pub(super) fn parse_select_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(&["-t", "-T"]);
     let pane = a.pane("-t")?;
     // `-T` carries the user title. Unlike a NAME flag, an explicitly empty
     // value is meaningful — `-T ''` is the clear operation — so the value
@@ -167,6 +175,9 @@ pub(super) fn parse_clear_history(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 pub(super) fn parse_resize_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // The direction flags' cell count is optional, so they are not listed:
+    // `-L -Z` must stay two flags.
+    let a = a.with_value_flags(&["-t", "-x", "-y"]);
     let pane = a.pane("-t")?;
     // The zoom form: -Z toggles, standalone.
     if a.has_flag("-Z") {
@@ -227,10 +238,18 @@ pub(super) fn parse_break_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+/// `join-pane`'s value-taking flags.
+const JOIN_PANE_VALUE_FLAGS: &[&str] = &["-s", "-t", "-p"];
+
+/// `join-pane -s <pane> -t <pane> [-h|-v] [-p 1-99]`. Every other word is
+/// refused, as `split-window` refuses tmux's `-l`: a dropped `-l 30` once
+/// joined at 50% without a word.
 pub(super) fn parse_join_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(JOIN_PANE_VALUE_FLAGS);
+    reject_leftovers(&a, &["-h", "-v"])?;
     let source = a.pane("-s")?;
     let target = a.pane("-t")?;
-    let (direction, percent) = parse_split_geometry(a)?;
+    let (direction, percent) = parse_split_geometry(&a)?;
     Ok(MuxCommand::JoinPane {
         source,
         target,

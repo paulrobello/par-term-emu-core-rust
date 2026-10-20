@@ -9,6 +9,7 @@ const WORKTREE_CREATE_VALUE_FLAGS: &[&str] = &["-c", "-b", "--base", "-p", "-s"]
 
 /// `worktree-create -c <dir> -b <branch> [--base base] [-p path] [-s name]`.
 pub(super) fn parse_worktree_create(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = &a.with_value_flags(WORKTREE_CREATE_VALUE_FLAGS);
     // D7 (docs/MUX_DECISIONS.md): the branch is `-b`, as in `git worktree
     // add -b`; `-n` is the NAME flag on `new-workspace`. The start point
     // is `--base` (long-only): git's `worktree add -B` means
@@ -65,7 +66,8 @@ fn has_shell_flag(a: &Args<'_>, flag: &str, value_flags: &[&str]) -> bool {
 
 /// `worktree-open -c <checkout> [-s name]`.
 pub(super) fn parse_worktree_open(a: &Args<'_>) -> Result<MuxCommand, String> {
-    reject_positionals(a, &["-c", "-s"])?;
+    let a = &a.with_value_flags(&["-c", "-s"]);
+    reject_positionals(a, a.value_flags)?;
     let checkout = a
         .quoted_flag("-c")?
         .ok_or("worktree-open requires -c <checkout>")?;
@@ -77,7 +79,8 @@ pub(super) fn parse_worktree_open(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 /// `worktree-remove -t <workspace> [-f]`.
 pub(super) fn parse_worktree_remove(a: &Args<'_>) -> Result<MuxCommand, String> {
-    reject_positionals(a, &["-t"])?;
+    let a = a.with_value_flags(&["-t"]);
+    reject_positionals(&a, a.value_flags)?;
     Ok(MuxCommand::WorktreeRemove {
         workspace: a.workspace("-t")?,
         force: a.has_flag("-f"),

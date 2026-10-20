@@ -868,6 +868,7 @@ use worktrees::*;
 ///
 /// Private by design — it is the grammar's internal shape, not part of the
 /// [`MuxCommand`] contract callers consume.
+#[derive(Clone, Copy)]
 struct Args<'a> {
     /// The command name (the first whitespace-separated token).
     name: &'a str,
@@ -876,9 +877,23 @@ struct Args<'a> {
     /// The raw, untrimmed line — `send-keys` re-slices its payload from it,
     /// because its quoting cannot survive the whitespace split.
     line: &'a str,
+    /// The command's value-taking flags ([`Self::with_value_flags`]): the
+    /// flag scans skip the word after each, so a value spelled like a flag
+    /// (`worktree-remove -t -f`) is that value, not the flag. Empty for a
+    /// command that has not declared its list.
+    value_flags: &'static [&'static str],
 }
 
 impl<'a> Args<'a> {
+    /// This line with `value_flags` declared as the command's value-taking
+    /// flags (see [`Self::value_flags`]).
+    fn with_value_flags(&self, value_flags: &'static [&'static str]) -> Args<'a> {
+        Args {
+            value_flags,
+            ..*self
+        }
+    }
+
     /// The value following `flag`, when present — `None` both for an absent
     /// flag and for one with no following token. The value is its first
     /// whitespace-delimited token, verbatim.
@@ -901,21 +916,37 @@ impl<'a> Args<'a> {
 
     /// The end of the first shell word that IS `flag`, read as in
     /// [`Self::flag_value_word`]: a `flag` inside a quoted value, or
-    /// quoted as a value, is not the flag.
+    /// quoted as a value, is not the flag. Each declared value flag
+    /// ([`Self::value_flags`]) consumes the word after it, so `flag`
+    /// spelled as another flag's value is not the flag either.
     fn flag_word_end(&self, flag: &str) -> Option<usize> {
+        self.flag_word_ends(flag).next()
+    }
+
+    /// The end of every shell word that IS `flag`, in line order, under
+    /// [`Self::flag_word_end`]'s rules — the repeatable-flag scan.
+    fn flag_word_ends<'s>(&'s self, flag: &'s str) -> impl Iterator<Item = usize> + 's {
         let rest = self
             .line
             .trim_start()
             .strip_prefix(self.name)
             .unwrap_or_default();
         let mut pos = self.line.len() - rest.len();
-        while let Some((start, end, _)) = next_shell_word(self.line, pos) {
-            pos = end;
-            if &self.line[start..end] == flag {
-                return Some(end);
+        std::iter::from_fn(move || {
+            while let Some((start, end, _)) = next_shell_word(self.line, pos) {
+                pos = end;
+                let raw = &self.line[start..end];
+                if raw == flag {
+                    return Some(end);
+                }
+                if self.value_flags.contains(&raw) {
+                    if let Some((_, value_end, _)) = next_shell_word(self.line, pos) {
+                        pos = value_end;
+                    }
+                }
             }
-        }
-        None
+            None
+        })
     }
 
     /// The value following `flag`, read as a shell word so a quoted value
@@ -971,16 +1002,13 @@ impl<'a> Args<'a> {
         }
     }
 
-    /// Every value following `flag`, in order, read through
-    /// [`shell_split`] so a quoted value survives as one word — the
-    /// repeatable-flag form (`-e A=1 -e 'B=two words'`).
+    /// Every value following `flag`, in order, unquoted as shell words so
+    /// a quoted value survives as one word — the repeatable-flag form
+    /// (`-e A=1 -e 'B=two words'`). The flag words are found as in
+    /// [`Self::flag_word_end`], so a quoted `'-e'` value is not the flag.
     fn quoted_values(&self, flag: &str) -> Vec<String> {
-        let words = shell_split(self.line);
-        words
-            .iter()
-            .enumerate()
-            .filter(|(_, w)| *w == flag)
-            .filter_map(|(i, _)| words.get(i + 1).cloned())
+        self.flag_word_ends(flag)
+            .filter_map(|end| next_shell_word(self.line, end).map(|(_, _, word)| word))
             .collect()
     }
 
@@ -1065,7 +1093,7 @@ impl<'a> Args<'a> {
     /// whitespace intact — the same contract `respawn-pane`'s tail has.
     /// Words in `value_flags` consume their following word; words in
     /// `reject_flags` fail loudly (a flag this daemon ignores must not be
-    /// silently dropped). Everything after a bare `--` is the command
+    /// silently dropped), each with its pointer text appended. Everything after a bare `--` is the command
     /// (the `--` itself is not part of it).
     ///
     /// Also returns this line cut where the flags end (at the `--` or the
@@ -1074,8 +1102,8 @@ impl<'a> Args<'a> {
     /// `sh -c 'echo hi'`'s `-c` as the start directory.
     fn start_command(
         &self,
-        value_flags: &[&str],
-        reject_flags: &[&str],
+        value_flags: &'static [&'static str],
+        reject_flags: &[(&str, &str)],
     ) -> Result<(Option<String>, Args<'a>), String> {
         let rest = self
             .line
@@ -1094,12 +1122,14 @@ impl<'a> Args<'a> {
             }
             if after_dashes || !(word.len() > 1 && word.starts_with('-')) {
                 let tail = self.line[start..].trim_end();
-                let flags = self.bounded(flags_end.unwrap_or(start));
+                let flags = self
+                    .bounded(flags_end.unwrap_or(start))
+                    .with_value_flags(value_flags);
                 return Ok(((!tail.is_empty()).then(|| tail.to_string()), flags));
             }
-            if let Some(rejected) = reject_flags.iter().find(|flag| **flag == word) {
+            if let Some((rejected, pointer)) = reject_flags.iter().find(|(flag, _)| *flag == word) {
                 return Err(format!(
-                    "{}: the {rejected} flag is not supported here",
+                    "{}: the {rejected} flag is not supported here{pointer}",
                     self.name
                 ));
             }
@@ -1110,7 +1140,11 @@ impl<'a> Args<'a> {
                 }
             }
         }
-        Ok((None, self.bounded(flags_end.unwrap_or(self.line.len()))))
+        Ok((
+            None,
+            self.bounded(flags_end.unwrap_or(self.line.len()))
+                .with_value_flags(value_flags),
+        ))
     }
 
     /// This line cut at byte `end`, which must be the start of a shell
@@ -1122,6 +1156,7 @@ impl<'a> Args<'a> {
             name: self.name,
             args: &self.args[..tokens.min(self.args.len())],
             line,
+            value_flags: self.value_flags,
         }
     }
 
@@ -1314,7 +1349,10 @@ fn split_leading_flags<'a>(
     let base = line.len() - rest.len();
     let mut lead = LeadingFlags::default();
     let mut pos = base;
-    while let Some((start, end, word)) = next_shell_word(line, pos) {
+    while let Some((start, end, _)) = next_shell_word(line, pos) {
+        // Raw bytes, as in `Args::flag_word_end`: a quoted `'-u'` or `'--'`
+        // is a word of the tail, not a flag.
+        let word = &line[start..end];
         if word == "--" {
             lead.tail = line[end..].trim();
             return Ok(lead);
@@ -1585,7 +1623,12 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let Some((name, args)) = parts.split_first() else {
         return Err("empty command".to_string());
     };
-    let a = Args { name, args, line };
+    let a = Args {
+        name,
+        args,
+        line,
+        value_flags: &[],
+    };
     let (_, parse, _) = COMMANDS
         .iter()
         .find(|(known, _, _)| known == name)

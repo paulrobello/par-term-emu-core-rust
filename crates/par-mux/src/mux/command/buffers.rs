@@ -3,6 +3,7 @@
 use super::*;
 
 pub(super) fn parse_capture_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(&["-t", "-S", "-E"]);
     let pane = a.pane("-t")?;
     // tmux's `-S`/`-E` select a start/end line; the raw offsets are
     // kept as-is (negative counts back from the screen top into

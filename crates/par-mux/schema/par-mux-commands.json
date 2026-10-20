@@ -434,8 +434,10 @@
     {
       "name": "set-option",
       "features": [],
-      "flags": [],
-      "synopsis": "<key> <value>"
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "[-t <target>] <key> <value>"
     },
     {
       "name": "set-workspace-respawn",

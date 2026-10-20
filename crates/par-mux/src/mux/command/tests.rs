@@ -3239,3 +3239,225 @@ fn mode_flags_skip_flags_inside_quoted_values() {
         }
     );
 }
+
+/// The `-t` verbs with free words after the target read their flags only
+/// until the first other word: a key, name, or value that is literally
+/// `-t` (bare after `--`, or quoted) used to be eaten as a second `-t`.
+#[test]
+fn value_shaped_t_is_a_word_not_the_target_flag() {
+    assert_eq!(
+        parse_command("set-option -- remain-on-exit -t").unwrap(),
+        MuxCommand::SetOption {
+            key: "remain-on-exit".into(),
+            value: "-t".into(),
+        }
+    );
+    assert_eq!(
+        parse_command("set-option exit-empty '-t'").unwrap(),
+        MuxCommand::SetOption {
+            key: "exit-empty".into(),
+            value: "-t".into(),
+        }
+    );
+    assert_eq!(
+        parse_command("set-option -t $1 '-t' on").unwrap(),
+        MuxCommand::SetOption {
+            key: "-t".into(),
+            value: "on".into(),
+        }
+    );
+    assert_eq!(
+        parse_command("rename-session -t $1 -- -t").unwrap(),
+        MuxCommand::RenameSession {
+            session: Target::Id(SessionId(1)),
+            name: "-t".into(),
+        }
+    );
+    assert_eq!(
+        parse_command("rename-session -t $1 '-t'").unwrap(),
+        MuxCommand::RenameSession {
+            session: Target::Id(SessionId(1)),
+            name: "-t".into(),
+        }
+    );
+    assert_eq!(
+        parse_command("rename-workspace -t +1 '-t'").unwrap(),
+        MuxCommand::RenameWorkspace {
+            workspace: Target::Id(WorkspaceId(1)),
+            name: "-t".into(),
+        }
+    );
+    // The value word used to vanish, turning a set into the read-only
+    // query; now it is refused as the bad value it is.
+    let err = parse_command("set-workspace-respawn -t +1 '-t'").unwrap_err();
+    assert!(err.contains("expected on, off, or toggle"), "{err}");
+    let err = parse_command("set-workspace-respawn -t +1 -- -t").unwrap_err();
+    assert!(err.contains("expected on, off, or toggle"), "{err}");
+    // A second unquoted `-t` in flag position is a loud duplicate.
+    assert!(parse_command("rename-session -t $1 -t $2 x").is_err());
+    // The flag-free and missing/empty-target shapes keep their errors.
+    assert!(parse_command("rename-session x").is_err(), "-t required");
+    let err = parse_command("rename-workspace -t '' x").unwrap_err();
+    assert!(err.contains("non-empty"), "{err}");
+}
+
+/// `new-window -e` is refused with a pointer, never dropped: a pane's
+/// environment is its session's, which respawn and restore re-seed from.
+#[test]
+fn new_window_refuses_e_with_a_pointer() {
+    let err = parse_command("new-window -t $1 -e A=1").unwrap_err();
+    assert!(err.contains("the -e flag is not supported here"), "{err}");
+    assert!(err.contains("set-environment"), "{err}");
+    // Inside the start command it belongs to the command.
+    assert_eq!(
+        parse_command("new-window -t $1 -- env -e A=1").unwrap(),
+        MuxCommand::NewWindow {
+            target: Some(AnyTarget::Session(SessionId(1))),
+            name: None,
+            start_dir: None,
+            command: Some("env -e A=1".into()),
+        }
+    );
+}
+
+/// `join-pane` refuses what it does not read, the way `split-window`
+/// refuses `-l`: tmux's `-l 30` used to be dropped silently.
+#[test]
+fn join_pane_refuses_leftover_arguments() {
+    for line in [
+        "join-pane -s %1 -t %2 -l 30",
+        "join-pane -s %1 -t %2 -h -l 30%",
+        "join-pane -s %1 -t %2 -d",
+    ] {
+        let err = parse_command(line).unwrap_err();
+        assert!(err.contains("flag is not supported here"), "{line}: {err}");
+    }
+    let err = parse_command("join-pane -s %1 -t %2 extra").unwrap_err();
+    assert!(err.contains("unexpected argument"), "{err}");
+    assert_eq!(
+        parse_command("join-pane -s %1 -t %2 -h -p 30").unwrap(),
+        MuxCommand::JoinPane {
+            source: Target::Id(PaneId(1)),
+            target: Target::Id(PaneId(2)),
+            direction: SplitDirection::Vertical,
+            percent: 30,
+        }
+    );
+    // A pane named `-h` is a value, not the arrangement flag.
+    assert_eq!(
+        parse_command("join-pane -s -h -t %2").unwrap(),
+        MuxCommand::JoinPane {
+            source: Target::Name("-h".into()),
+            target: Target::Id(PaneId(2)),
+            direction: SplitDirection::Horizontal,
+            percent: 50,
+        }
+    );
+}
+
+/// `new-session -e` reads only real flag words: a quoted `'-e'` value is
+/// a name, not an environment flag swallowing the next word.
+#[test]
+fn quoted_e_value_is_not_an_env_flag() {
+    match parse_command("new-session -s '-e' -e A=1 -e 'B=two words'").unwrap() {
+        MuxCommand::NewSession { name, env, .. } => {
+            assert_eq!(name.as_deref(), Some("-e"));
+            assert_eq!(
+                env,
+                vec![("A".into(), "1".into()), ("B".into(), "two words".into())]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse_command("new-session -n '-e' -s x").unwrap() {
+        MuxCommand::NewSession { name, env, .. } => {
+            assert_eq!(name.as_deref(), Some("x"));
+            assert!(env.is_empty(), "{env:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// An unquoted flag word spelled as another flag's value is that value:
+/// `worktree-remove -t -f` used to set force AND target `-f`.
+#[test]
+fn flag_spelled_value_is_read_once() {
+    assert_eq!(
+        parse_command("worktree-remove -t -f").unwrap(),
+        MuxCommand::WorktreeRemove {
+            workspace: Target::Name("-f".into()),
+            force: false,
+        }
+    );
+    assert_eq!(
+        parse_command("worktree-remove -t -f -f").unwrap(),
+        MuxCommand::WorktreeRemove {
+            workspace: Target::Name("-f".into()),
+            force: true,
+        }
+    );
+    assert_eq!(
+        parse_command("kill-workspace -t -g").unwrap(),
+        MuxCommand::KillWorkspace {
+            workspace: Target::Name("-g".into()),
+            group: false,
+        }
+    );
+    match parse_command("split-window -t -h").unwrap() {
+        MuxCommand::SplitWindow {
+            target, direction, ..
+        } => {
+            assert_eq!(target, AnyTarget::Name("-h".into()));
+            assert_eq!(direction, SplitDirection::Horizontal);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        parse_command("capture-pane -t -e").unwrap(),
+        MuxCommand::CapturePane {
+            pane: Target::Name("-e".into()),
+            start_line: None,
+            end_line: None,
+            escape: false,
+        }
+    );
+    assert_eq!(
+        parse_command("resize-pane -t -Z -L").unwrap(),
+        MuxCommand::ResizePane {
+            pane: Target::Name("-Z".into()),
+            adjustment: ResizeAdjustment::Relative {
+                direction: ResizeDirection::Left,
+                cells: 5,
+            },
+        }
+    );
+    assert_eq!(
+        parse_command("select-pane -t -T").unwrap(),
+        MuxCommand::SelectPane {
+            pane: Target::Name("-T".into()),
+            title: None,
+        }
+    );
+    assert_eq!(
+        parse_command("list-windows -t -a").unwrap(),
+        MuxCommand::ListWindows {
+            session: Some(Target::Name("-a".into())),
+            all: false,
+            format: None,
+        }
+    );
+}
+
+/// `split_leading_flags` compares raw words: a quoted `'-u'` NAME is the
+/// name, not `set-environment`'s unset flag.
+#[test]
+fn leading_flags_read_a_quoted_flag_word_as_the_tail() {
+    assert_eq!(
+        parse_command("set-environment -t $1 '-u' v").unwrap(),
+        MuxCommand::SetEnvironment {
+            session: Target::Id(SessionId(1)),
+            name: "-u".into(),
+            value: Some("v".into()),
+        }
+    );
+}

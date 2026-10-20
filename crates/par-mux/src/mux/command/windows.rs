@@ -2,14 +2,26 @@
 
 use super::*;
 
-/// tmux's value-taking `new-window` flags (QA-219). `-F` is not here: the
-/// parser rejects it loudly rather than dropping the format request.
-pub(super) const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c", "-e"];
+/// tmux's value-taking `new-window` flags (QA-219). `-F` and `-e` are not
+/// here: the parser rejects them loudly ([`NEW_WINDOW_REJECT_FLAGS`]).
+pub(super) const NEW_WINDOW_VALUE_FLAGS: &[&str] = &["-t", "-n", "-c"];
+
+/// The flags `new-window` refuses rather than ignores. `-e` is refused,
+/// not implemented: a pane's environment is its SESSION's (`respawn-pane`
+/// and restore re-seed it from there), so a per-window variable would
+/// vanish on the first respawn.
+pub(super) const NEW_WINDOW_REJECT_FLAGS: &[(&str, &str)] = &[
+    ("-F", ""),
+    (
+        "-e",
+        " (a pane's environment is its session's: set it with set-environment, or new-session -e)",
+    ),
+];
 
 pub(super) fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     // The trailing start command (R4): tmux's positional form, the raw
     // text after the flags.
-    let (command, a) = a.start_command(NEW_WINDOW_VALUE_FLAGS, &["-F"])?;
+    let (command, a) = a.start_command(NEW_WINDOW_VALUE_FLAGS, NEW_WINDOW_REJECT_FLAGS)?;
     let target = a.any_target_opt("-t", "session")?;
     let name = a.quoted_flag("-n")?;
     let start_dir = a.quoted_flag("-c")?;
@@ -63,12 +75,13 @@ pub(super) fn parse_rename_window(a: &Args<'_>) -> Result<MuxCommand, String> {
 pub(super) fn parse_list_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
     // `-t <session>` scopes the listing to one session (tmux's
     // `list-windows -t <session>`); the bare form stays global.
+    let a = a.with_value_flags(LIST_WINDOWS_VALUE_FLAGS);
     let session = a.session("-t")?;
     let all = a.has_flag("-a");
     if all && session.is_some() {
         return Err("list-windows: -a and -t are mutually exclusive".to_string());
     }
-    reject_positionals(a, LIST_WINDOWS_VALUE_FLAGS)?;
+    reject_positionals(&a, LIST_WINDOWS_VALUE_FLAGS)?;
     Ok(MuxCommand::ListWindows {
         session,
         all,
