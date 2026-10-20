@@ -1353,6 +1353,7 @@ fn a_session_report_that_relabels_the_pane_clears_the_previous_agents_state() {
 
 // --- pane.report_agent_session_cwd: the muse arm's cwd-resolved reports ---
 
+#[cfg(unix)]
 use crate::mux::layout::SplitDirection;
 
 /// A live pane whose OSC 7 report names `dir` locally — the cwd a muse

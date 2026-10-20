@@ -23,6 +23,7 @@ use std::io::{Read, Write};
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
+#[cfg(unix)]
 use unicode_width::UnicodeWidthChar as _;
 
 /// One PTY-master side of a spawned `par-mux attach`.
@@ -367,6 +368,7 @@ fn child_exit(host: &mut AttachHost, timeout: Duration) -> Option<i32> {
 /// DaemonGuard outlives the client and reaps the daemon even on panic.
 /// Whether real htop exists (the frame-coalescing test's pane app; the
 /// brew paths cover the dev machines, PATH the rest).
+#[cfg(unix)]
 fn htop_available() -> bool {
     std::path::Path::new("/opt/homebrew/bin/htop").exists()
         || std::path::Path::new("/usr/local/bin/htop").exists()
@@ -2393,18 +2395,11 @@ fn render_mode_scroll_gesture_sends_nothing_but_the_reports() {
     );
 }
 
-/// Reconstruct the screen a render-mode client painted, from its
-/// per-cell diff stream: each flush cell is `CUP row;col` + SGR run +
-/// one symbol. Returns `(final, ever)`: the final `rows` strings of
-/// `cols` symbols, and per-row snapshots of the row text after every
-/// cell write, so a row fact that a later repaint removed (the agent
-/// liveness sweep clearing a test claim) is still observable. Style is
-/// not tracked.
-#[cfg(unix)]
 /// Decode `pending` incrementally, invoking `place` for every complete
 /// char (advancing `cur` by the char's width) and recovering from an
 /// invalid byte by dropping it — a wedged pending buffer would otherwise
 /// swallow the rest of the stream. An incomplete tail stays pending.
+#[cfg(unix)]
 fn place_pending(
     pending: &mut Vec<u8>,
     cur: &mut Option<(u16, u16)>,
@@ -2452,6 +2447,14 @@ fn place_pending(
     }
 }
 
+/// Reconstruct the screen a render-mode client painted, from its
+/// per-cell diff stream: each flush cell is `CUP row;col` + SGR run +
+/// one symbol. Returns `(final, ever)`: the final `rows` strings of
+/// `cols` symbols, and per-row snapshots of the row text after every
+/// cell write, so a row fact that a later repaint removed (the agent
+/// liveness sweep clearing a test claim) is still observable. Style is
+/// not tracked.
+#[cfg(unix)]
 fn reconstructed_screen(
     bytes: &[u8],
     rows: u16,
@@ -3977,6 +3980,7 @@ fn render_mode_sidebar_toggle_minimal() {
 /// exists after escape stripping — walk the stream keeping the last CUP
 /// column and attach it to every plain char, then locate the needle in
 /// the stripped text. The geometry read for the sidebar-refit asserts.
+#[cfg(unix)]
 fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
     // The live 1-based cursor: CUPs set it, glyphs advance it by their
     // width (the client's run-length encoding rides the auto-advance; the
@@ -4042,6 +4046,7 @@ fn cup_col_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
 /// The 1-based row attached to `needle`'s last occurrence — the CUP that
 /// positioned it, read from the same per-cell CUP stream
 /// [`cup_col_of_text`] walks.
+#[cfg(unix)]
 fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
     // Same live-cursor walk as [`cup_col_of_text`], recording each glyph's
     // row instead of its column.
@@ -4109,6 +4114,7 @@ fn cup_row_of_text(bytes: &[u8], needle: &str) -> Option<u16> {
 /// (CUPs move it, glyphs advance by width) that reads per-cell and
 /// run-length encodings identically. The byte-window form
 /// [`row24_paints`] assumed a CUP+SGR immediately before the glyph.
+#[cfg(unix)]
 fn row24_paints_char(bytes: &[u8], glyph: char) -> bool {
     let mut cur: Option<(u16, u16)> = None;
     let mut pending: Vec<u8> = Vec::new();
@@ -4161,6 +4167,7 @@ fn row24_paints_char(bytes: &[u8], glyph: char) -> bool {
 /// The furthest column painted on `row_want` (0 when the row never
 /// paints) — a full-row repaint reaches the last column; a partial one
 /// stops early.
+#[cfg(unix)]
 fn row24_furthest_col_on(bytes: &[u8], row_want: u16) -> usize {
     let mut furthest = 0usize;
     let mut cur: Option<(u16, u16)> = None;
@@ -7587,6 +7594,7 @@ fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
 }
 
 /// Strip SGR (CSI …m) runs from a `capture-pane -e` row.
+#[cfg(unix)]
 fn strip_sgr(row: &str) -> String {
     let bytes = row.as_bytes();
     let mut out = Vec::new();
@@ -7919,6 +7927,7 @@ fn render_mode_copy_mode_e_opens_the_scrollback_in_the_editor() {
 
 /// The scratch window a popup opened: the `list-windows -a` row named
 /// `popup` (`$S @N <marker> popup`), as its `@N`.
+#[cfg(unix)]
 fn popup_window_id(reply: &str) -> Option<String> {
     reply
         .lines()

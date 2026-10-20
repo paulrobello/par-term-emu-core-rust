@@ -1203,6 +1203,7 @@ mod atomic {
         Ok(())
     }
 
+    #[cfg_attr(not(unix), allow(unused_variables))]
     fn write_staged(temp_path: &Path, target: &Path, contents: &str) -> io::Result<()> {
         use std::io::Write as _;
         let mut file = std::fs::File::create(temp_path)?;

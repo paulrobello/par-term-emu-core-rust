@@ -1435,11 +1435,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // a spawner that kills the child it spawned would orphan a detached
     // grandchild it can never name.
     #[cfg(unix)]
-    let detached = !cli.foreground;
-    #[cfg(not(unix))]
-    let detached = false;
-    #[cfg(unix)]
-    if detached {
+    if !cli.foreground {
         // The nested-daemon refusal, delivered on the terminal rather than
         // buried in the daemon log (--restart stays exempt: it may be
         // typed inside a pane deliberately; the guard below still runs in

@@ -94,6 +94,37 @@ fn edit_scrollback_refuses_without_an_editor() {
     );
 }
 
+/// Off unix the launcher needs a POSIX shell that is not there: even
+/// with an editor set, `e` is refused on the flash, copy mode stays up,
+/// and no pane is split.
+#[cfg(not(unix))]
+#[test]
+fn edit_scrollback_refuses_without_a_posix_shell() {
+    let (rx, mut conn, mut session) = two_pane_session("editnoposix", FakeScript::default());
+    session.editor_lookup = || (Some("notepad".to_string()), None);
+    for i in 0..40 {
+        session
+            .renderer
+            .feed_output(1, format!("l{i}\r\n").as_bytes());
+    }
+    session.renderer.focus(1);
+    chord(&mut session, &mut conn, b'[');
+    assert!(session.is_scroll());
+    drained(&rx);
+    session.route_plain(b"e", &mut conn);
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("edit scrollback: needs a POSIX shell (unix only)")
+    );
+    assert!(session.is_scroll(), "the refusal keeps copy mode up");
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(150))
+            .is_err(),
+        "nothing reaches the daemon"
+    );
+}
+
 /// A typed `e` in copy mode writes the pane's grid export to a private
 /// file, splits a pane off the focused one running `/bin/sh <launcher>`,
 /// focuses and zooms it, and leaves copy mode. The launcher names the

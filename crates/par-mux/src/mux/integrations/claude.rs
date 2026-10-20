@@ -728,22 +728,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn install_preserves_the_settings_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
         let root = temp_root();
         let settings = root.path().join("settings.json");
         let hook = root.path().join("par-mux-claude-session-hook.sh");
         fs::write(&settings, REAL_WORLD_SETTINGS).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
 
-            install_claude_hook_into(&settings, &hook).unwrap();
+        install_claude_hook_into(&settings, &hook).unwrap();
 
-            let mode = fs::metadata(&settings).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "the atomic rewrite preserves the mode");
-        }
+        let mode = fs::metadata(&settings).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the atomic rewrite preserves the mode");
     }
 
     #[test]
