@@ -12,7 +12,9 @@ task-level design and plan for the multiplexer, and it is maintained in the
 - **Local path (this machine):** `~/Repos/par-agent-os/par-mux.md`
 
 One-line summaries of every cited decision are in
-[MUX_DECISIONS.md](MUX_DECISIONS.md).
+[MUX_DECISIONS.md](MUX_DECISIONS.md). Decisions taken in this repository
+after the plan (`D7` onward) are recorded there in full rather than
+summarized.
 
 The operational reference for the daemon as shipped — build, CLI, socket and
 state paths, the command table, hook reports, scrape tier, persistence, and

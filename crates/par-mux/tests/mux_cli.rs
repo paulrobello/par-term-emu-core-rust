@@ -2028,7 +2028,7 @@ fn worktree_workspaces_group_and_survive_a_restart() {
 
     let linked = cmd_ok(
         socket,
-        &format!("worktree-create -c '{}' -n topic", repo.display()),
+        &format!("worktree-create -c '{}' -b topic", repo.display()),
     )
     .trim()
     .to_string();

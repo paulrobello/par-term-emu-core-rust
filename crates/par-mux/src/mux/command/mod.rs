@@ -609,13 +609,13 @@ pub enum MuxCommand {
         /// a repo workspace.
         group: bool,
     },
-    /// `worktree-create -c <dir> -n <branch> [-B base] [-p path] [-s name]`:
+    /// `worktree-create -c <dir> -b <branch> [-B base] [-p path] [-s name]`:
     /// `git worktree add` a checkout of the branch, then open a workspace
     /// on it grouped under the repo's workspace (opened too when absent).
     WorktreeCreate {
         /// `-c`: a directory inside the repo (or one of its worktrees).
         repo_dir: String,
-        /// `-n`: the branch to check out — created from `base` when no
+        /// `-b`: the branch to check out — created from `base` when no
         /// local branch has that name.
         branch: String,
         /// `-B`: the new branch's start point (default `HEAD`).

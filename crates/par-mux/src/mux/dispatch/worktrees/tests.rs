@@ -102,7 +102,7 @@ fn quoted(path: &Path) -> String {
 fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
-    let body = h.ok(&format!("worktree-create -c {} -n feat/one", quoted(&repo)));
+    let body = h.ok(&format!("worktree-create -c {} -b feat/one", quoted(&repo)));
     let linked = Harness::workspace_id(&body);
 
     let checkout = canonical(&default_checkout_path(&repo, "feat/one"));
@@ -157,7 +157,7 @@ fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
 
     // A second create reuses the open repo workspace.
     let second =
-        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n two", quoted(&repo))));
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b two", quoted(&repo))));
     assert_eq!(
         h.tree.lock().linked_worktrees_of(parent),
         vec![linked, second]
@@ -168,17 +168,17 @@ fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
 fn worktree_create_refuses_bad_input_before_running_git() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
-    let (ok, err) = h.run(&format!("worktree-create -c {} -n -bad", quoted(&repo)));
+    let (ok, err) = h.run(&format!("worktree-create -c {} -b -bad", quoted(&repo)));
     assert!(!ok && err.contains("invalid branch"), "{err}");
-    let (ok, err) = h.run("worktree-create -c relative/dir -n x");
+    let (ok, err) = h.run("worktree-create -c relative/dir -b x");
     assert!(!ok && err.contains("absolute"), "{err}");
     let (ok, err) = h.run(&format!(
-        "worktree-create -c {} -n x -B --orphan",
+        "worktree-create -c {} -b x -B --orphan",
         quoted(&repo)
     ));
     assert!(!ok && err.contains("invalid base"), "{err}");
     let (ok, err) = h.run(&format!(
-        "worktree-create -c {} -n x -p {}",
+        "worktree-create -c {} -b x -p {}",
         quoted(&repo),
         quoted(&repo)
     ));
@@ -191,7 +191,7 @@ fn worktree_open_focuses_an_open_checkout_and_opens_a_closed_one() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
     let linked =
-        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n topic", quoted(&repo))));
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b topic", quoted(&repo))));
     let checkout = canonical(&default_checkout_path(&repo, "topic"));
     let parent = h.tree.lock().repo_workspace(&repo).unwrap();
 
@@ -227,7 +227,7 @@ fn worktree_open_of_an_orphaned_checkout_reopens_the_parent_and_focuses_the_targ
     let (_dir, repo) = test_repo();
     let h = Harness::new();
     let linked =
-        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n orphan", quoted(&repo))));
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b orphan", quoted(&repo))));
     let checkout = canonical(&default_checkout_path(&repo, "orphan"));
     let parent = h.tree.lock().repo_workspace(&repo).unwrap();
     let parent_session = h.tree.lock().workspace(parent).unwrap().sessions[0];
@@ -253,8 +253,8 @@ fn worktree_open_of_an_orphaned_checkout_reopens_the_parent_and_focuses_the_targ
 fn kill_workspace_of_a_parent_with_linked_worktrees_requires_g() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
-    let a = Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n a", quoted(&repo))));
-    let b = Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n b", quoted(&repo))));
+    let a = Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b a", quoted(&repo))));
+    let b = Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b b", quoted(&repo))));
     let parent = h.tree.lock().repo_workspace(&repo).unwrap();
 
     let (ok, err) = h.run(&format!("kill-workspace -t {parent}"));
@@ -282,7 +282,7 @@ fn worktree_remove_refuses_dirty_and_running_agents_unless_forced() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
     let linked =
-        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n wip", quoted(&repo))));
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b wip", quoted(&repo))));
     let checkout = canonical(&default_checkout_path(&repo, "wip"));
     let parent = h.tree.lock().repo_workspace(&repo).unwrap();
 
@@ -338,7 +338,7 @@ fn worktree_links_survive_a_persist_round_trip() {
     let (_dir, repo) = test_repo();
     let h = Harness::new();
     let linked =
-        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -n keep", quoted(&repo))));
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b keep", quoted(&repo))));
     let parent = h.tree.lock().repo_workspace(&repo).unwrap();
     let state = h.tree.lock().to_persist_state();
     let restored = MuxTree::from_persist_state(&state, Box::new(CwdFactory::default())).unwrap();

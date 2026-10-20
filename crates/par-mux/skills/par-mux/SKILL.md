@@ -3,7 +3,7 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
-<!-- PAR_MUX_INTEGRATION_VERSION=4 -->
+<!-- PAR_MUX_INTEGRATION_VERSION=5 -->
 
 # par-mux
 
@@ -124,7 +124,7 @@ check use the exit-code probe: `has-session -t work` (0 = live, 1 = absent).
 | Pane geometry | `pane-info -t %N` → `%N @W COLSxROWS`; `resize-pane -t %N -x 80 -y 24` (or `-L\|-R\|-U\|-D [cells]`) |
 | Rename | `rename-workspace -t +N <name>` / `rename-session -t $N <name>` / `rename-window -t @N <name>` |
 | Kill | `kill-pane -t %N` (the last pane of a window closes the window too), `kill-window -t @N`, `kill-session -t $N`, `kill-workspace -t +N [-g]` (`-g` closes a repo workspace together with its linked worktree workspaces; see below) |
-| Git worktree workspace | `worktree-create -c <repo> -n <branch> [-B base] [-p path] [-s name]` → replies `+N` (checks out or creates the branch in a new worktree, opens it as a workspace grouped under the repo's); `worktree-open -c <checkout>` (focuses it if already open); `worktree-remove -t +N [-f]`; `list-worktrees` |
+| Git worktree workspace | `worktree-create -c <repo> -b <branch> [-B base] [-p path] [-s name]` → replies `+N` (checks out or creates the branch in a new worktree, opens it as a workspace grouped under the repo's); `worktree-open -c <checkout>` (focuses it if already open); `worktree-remove -t +N [-f]`; `list-worktrees` |
 | Paste buffer | `set-buffer <text>` / `show-buffer` / `paste-buffer -t %N` |
 | Notify the user | `show-notification [-b body] [--] <title>` — delivered by every attached TUI through its own notify-delivery channel (toast, OSC 9/99, or OS notifier) |
 | Session env | `set-environment -t $N KEY VALUE` (applies to panes spawned *after*) |
@@ -145,7 +145,7 @@ git itself, so paths must be absolute or `~/`-relative (the daemon's cwd is
 not yours):
 
 ```sh
-par-mux --cmd "worktree-create -c ~/Repos/app -n feat/login"   # +3; opens repo workspace "app" (+2) if needed
+par-mux --cmd "worktree-create -c ~/Repos/app -b feat/login"   # +3; opens repo workspace "app" (+2) if needed
 par-mux --cmd list-worktrees
 # +2 repo - main /Users/me/Repos/app
 # +3 worktree +2 feat/login /Users/me/Repos/app-worktrees/feat-login

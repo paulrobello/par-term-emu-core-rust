@@ -2438,7 +2438,7 @@ fn list_commands_parses_the_schema_flag_and_refuses_others() {
 #[test]
 fn worktree_commands_parse_quoted_paths_and_flags() {
     assert_eq!(
-        parse_command("worktree-create -c '/src/my repo' -n feat/x -B main -p /wt/x -s 'my x'")
+        parse_command("worktree-create -c '/src/my repo' -b feat/x -B main -p /wt/x -s 'my x'")
             .unwrap(),
         MuxCommand::WorktreeCreate {
             repo_dir: "/src/my repo".to_string(),
@@ -2450,13 +2450,18 @@ fn worktree_commands_parse_quoted_paths_and_flags() {
     );
     assert!(
         parse_command("worktree-create -c /src").is_err(),
-        "-n is required"
+        "-b is required"
     );
     assert!(
-        parse_command("worktree-create -n x").is_err(),
+        parse_command("worktree-create -b x").is_err(),
         "-c is required"
     );
-    assert!(parse_command("worktree-create -c /src -n x extra").is_err());
+    assert!(parse_command("worktree-create -c /src -b x extra").is_err());
+    let err = parse_command("worktree-create -c /src -n x").unwrap_err();
+    assert!(
+        err.contains("-b <branch>"),
+        "the pre-D7 -n spelling points at -b: {err}"
+    );
     assert_eq!(
         parse_command("worktree-open -c /wt/x").unwrap(),
         MuxCommand::WorktreeOpen {
@@ -2476,7 +2481,7 @@ fn worktree_commands_parse_quoted_paths_and_flags() {
         parse_command("list-worktrees").unwrap(),
         MuxCommand::ListWorktrees
     );
-    assert!(reply_timeout("worktree-create -c /src -n x").is_some());
+    assert!(reply_timeout("worktree-create -c /src -b x").is_some());
     assert!(reply_timeout("worktree-remove -t +1").is_some());
 }
 #[test]
