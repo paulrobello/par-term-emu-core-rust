@@ -43,6 +43,9 @@ fn emit_build_stamp() {
 
 /// `git rev-parse <args>` run from the manifest dir, trimmed; `None` on any
 /// failure.
+///
+/// fsmonitor: safe unbypassed. `rev-parse` reads refs and paths, never the
+/// worktree, so no monitor is consulted.
 fn git_rev_parse(args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("rev-parse")
@@ -150,6 +153,8 @@ fn git_short_sha() -> Option<String> {
     if manifest_dir != toplevel && manifest_dir != toplevel.join("crates").join("par-mux") {
         return None;
     }
+    // fsmonitor: safe unbypassed. `ls-files --error-unmatch` asks the index
+    // whether a path is tracked and never walks the worktree.
     let tracked = std::process::Command::new("git")
         .args(["ls-files", "--error-unmatch", "Cargo.toml"])
         .output()
@@ -159,8 +164,18 @@ fn git_short_sha() -> Option<String> {
     }
 
     let sha = git_rev_parse(&["--short", "HEAD"])?;
+    // fsmonitor: bypassed. The `-dirty` suffix lands in build_stamp(),
+    // which attach compares against the daemon's, and a monitor lagging an
+    // edit would stamp a dirty build clean. `--no-optional-locks` keeps the
+    // build from rewriting the developer's index.
     let status = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+        ])
         .output()
         .ok()?;
     let dirty = status.status.success()

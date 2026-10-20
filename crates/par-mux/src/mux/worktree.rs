@@ -27,6 +27,14 @@ use std::process::{Command, Stdio};
 /// delivery under load), so status reported a dirty checkout clean and
 /// `worktree remove` without `--force` deleted its untracked files. `-c`
 /// reaches the child status `worktree remove` runs, too.
+///
+/// fsmonitor: every daemon git run against a user's checkout goes through
+/// here, bypassed: `status` ([`is_dirty`], `--no-optional-locks`),
+/// `worktree add`/`remove`/`prune`, `worktree list` ([`main_checkout`]),
+/// `rev-parse --show-toplevel`, `symbolic-ref` ([`current_branch`]),
+/// `check-ref-format`, `show-ref`. Only `is_dirty` is a read that
+/// refreshes the index; the other reads never consult fsmonitor or write
+/// the index, so they need no `--no-optional-locks`.
 fn git(dir: &Path) -> Command {
     let mut command = Command::new("git");
     command
@@ -259,6 +267,10 @@ pub(crate) mod tests {
 
     /// A git command isolated from the developer's global and system
     /// config (signing, hooks, templates), with a fixed identity.
+    ///
+    /// fsmonitor: deliberately not bypassed. Global config is already
+    /// isolated, so only a repo-local hook reaches it, and
+    /// [`lagging_fsmonitor`] primes that hook's token through it.
     pub(crate) fn test_git(dir: &Path, args: &[&str]) {
         let status = Command::new("git")
             .arg("-C")
@@ -361,7 +373,7 @@ pub(crate) mod tests {
     /// pinned to `all` because the cache resets when a run's mode differs
     /// from the one it was built with.
     #[cfg(unix)]
-    fn lagging_fsmonitor(dir: &Path, repo: &Path, checkout: &Path) {
+    pub(crate) fn lagging_fsmonitor(dir: &Path, repo: &Path, checkout: &Path) {
         use std::os::unix::fs::PermissionsExt;
         let hook = dir.join("fsmonitor-hook");
         std::fs::write(&hook, "#!/bin/sh\nprintf 'tok\\0'\n").unwrap();

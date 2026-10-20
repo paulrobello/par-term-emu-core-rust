@@ -383,6 +383,12 @@ fn git_dirty(cwd: &Path, bounds: &ProbeBounds) -> Option<bool> {
 /// `GIT_TERMINAL_PROMPT=0` stops it waiting on a prompt; and clearing
 /// `GIT_DIR`/`GIT_WORK_TREE` stops an inherited environment from
 /// redirecting the repo root away from `-C`.
+///
+/// fsmonitor: bypassed for every probe read: `symbolic-ref`
+/// ([`git_branch`]), `diff-index --cached` and `ls-files --others`
+/// ([`git_dirty`]). Neither dirty half walks tracked worktree content, so
+/// a lagging monitor cannot hide a change from them even unbypassed; the
+/// bypass is for SEC-115 (the hook never runs).
 fn git_command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     command
@@ -757,29 +763,38 @@ mod tests {
         );
     }
 
+    /// One fixture git run in `dir`.
+    ///
+    /// fsmonitor: bypassed. A developer's global `core.fsmonitor=true`
+    /// reaches this run, and a monitor that has not delivered a fresh
+    /// write's event makes `git add` skip the file as unchanged, so the
+    /// fixture would stage nothing and the probe would truthfully read the
+    /// index clean (`staged_edit_reads_dirty_despite_a_lagging_fsmonitor`).
+    fn fixture_git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "core.fsmonitor=false"])
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} in fixture");
+    }
+
     /// A git repo fixture answering the probe's three questions.
     fn git_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .expect("git runs");
-            assert!(status.success(), "git {args:?} in fixture");
-        };
-        run(&["init", "--quiet", "--initial-branch=main"]);
+        fixture_git(dir.path(), &["init", "--quiet", "--initial-branch=main"]);
         std::fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "--quiet", "--message", "fixture"]);
+        fixture_git(dir.path(), &["add", "."]);
+        fixture_git(dir.path(), &["commit", "--quiet", "--message", "fixture"]);
         dir
     }
 
@@ -814,30 +829,12 @@ mod tests {
         std::fs::write(repo.path().join("tracked.txt"), "two\n").unwrap();
         let probe = probe_dir(repo.path());
         assert_eq!(probe.git_dirty, Some(false), "unstaged-only edit is clean");
-        let staged = Command::new("git")
-            .arg("-C")
-            .arg(repo.path())
-            .args(["add", "--all"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        assert!(staged.expect("git runs").success(), "git add in fixture");
-        // Measured once under make checkall-ci at host load 14-17 (2026-10-15):
-        // the first probe after a successful add read Some(false) — the
-        // mechanism was never pinned (a timeout would read None, not
-        // Some(false), so the anomaly is diff-index exiting 0 against the
-        // pre-add index). The probe re-queries until the staged edit reads
-        // dirty or a short deadline passes; a reading that stays wrong still
-        // fails below, so a real probe bug is not masked.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let probe = loop {
-            let probe = probe_dir(repo.path());
-            if probe.git_dirty == Some(true) || Instant::now() >= deadline {
-                break probe;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        };
+        // A staged edit reads dirty. The once-measured Some(false) here
+        // (make checkall-ci, host load 14-17, 2026-10-15) was this fixture's
+        // own `git add` running under the developer's global fsmonitor and
+        // staging nothing, not the probe: `fixture_git` now bypasses it.
+        fixture_git(repo.path(), &["add", "--all"]);
+        let probe = probe_dir(repo.path());
         assert_eq!(probe.git_dirty, Some(true), "staged edit is dirty");
 
         // Not a repo at all: every git field absent, disk still measured.
@@ -846,6 +843,23 @@ mod tests {
         assert_eq!(probe.git_branch, None);
         assert_eq!(probe.git_dirty, None);
         assert!(probe.disk_free_percent.is_some() || cfg!(windows));
+    }
+
+    /// The staged-edit anomaly pinned: under a monitor that answers "no
+    /// changes", the fixture's `git add` must still stage the edit, so the
+    /// probe's `diff-index --cached` reads it dirty. Only a tracked file is
+    /// staged and nothing untracked exists, so `ls-files --others` cannot
+    /// supply the dirty verdict on its own. The hook lives outside the repo
+    /// for the same reason.
+    #[cfg(unix)]
+    #[test]
+    fn staged_edit_reads_dirty_despite_a_lagging_fsmonitor() {
+        let repo = git_repo();
+        let hook_dir = tempfile::tempdir().unwrap();
+        crate::mux::worktree::tests::lagging_fsmonitor(hook_dir.path(), repo.path(), repo.path());
+        std::fs::write(repo.path().join("tracked.txt"), "two\n").unwrap();
+        fixture_git(repo.path(), &["add", "tracked.txt"]);
+        assert_eq!(probe_dir(repo.path()).git_dirty, Some(true));
     }
 
     /// SEC-133: `ls-files` output larger than the pipe buffer must not
@@ -1041,6 +1055,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fsmonitor_hook_does_not_run() {
+        // fsmonitor: `git --version` reads no repo.
         if !Command::new("git")
             .arg("--version")
             .stdin(Stdio::null())

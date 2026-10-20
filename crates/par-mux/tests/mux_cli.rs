@@ -2038,6 +2038,9 @@ fn print_schema_matches_the_daemons_list_commands_j() {
     assert_eq!(served.trim_end(), printed.stdout.trim_end());
 }
 /// A git command in `dir` isolated from the developer's global config.
+///
+/// fsmonitor: safe unbypassed. Global and system config are isolated and
+/// the throwaway repo configures no monitor, so none can answer for it.
 fn test_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
