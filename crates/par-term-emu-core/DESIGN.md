@@ -141,6 +141,24 @@ with no features compiles neither pyo3 nor swash nor portable-pty
 5. **Test-count preservation.** Each pre-move `make test-rust` invocation's
    test total equals the sum of its root + member counterparts after the move.
 
+## Locking design note — the single `Arc<RwLock<Terminal>>` (ARC-007 finding)
+
+The PTY reader thread's `process()` takes the write lock and every query
+takes read locks (`pty_session/`), so a full-scrollback export under heavy
+output delays PTY ingestion, and vice versa. Accepted, not an impairment:
+
+- Consumers are interactive; queries are short and the reader applies
+  output in bounded chunks.
+- `UpdateWaiter` plus the generation counter (`updates.rs`) bound how long
+  a waiter can be starved and give pollers a cheap change signal instead
+  of a held lock.
+- The snapshot machinery (`GridSnapshot`, `grid/snapshot.rs`) already
+  exists for replay.
+
+Remedy when it bites: export from a snapshot copy — take the read lock
+only to clone the snapshot, then build the export from the copy — rather
+than walking the live grid under the read lock.
+
 ## Cross-boundary edits (Phase 1)
 
 Visibility promotions (`pub(crate)` → `#[doc(hidden)] pub`, feature gates
