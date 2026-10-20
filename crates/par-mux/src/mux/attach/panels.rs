@@ -219,6 +219,10 @@ pub(crate) fn help_rows(
             ),
             (format!("{p} ["), "scroll the pane's history".to_string()),
             (
+                format!("{p} [ then e"),
+                "open the scrollback in $VISUAL/$EDITOR".to_string(),
+            ),
+            (
                 "wheel".to_string(),
                 "scrollback; forwarded when the pane owns mouse".to_string(),
             ),

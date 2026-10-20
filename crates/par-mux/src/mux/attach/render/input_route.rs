@@ -216,12 +216,19 @@ impl WindowSession {
                 }
             } else if byte == self.prefix {
                 self.arm_prefix(true);
+            } else if self.scroll_query.is_some() {
+                // A `/` earlier in this run opened the search line: the
+                // rest of the run is the query.
+                self.search_typing_byte(byte);
             } else if matches!(self.modal, Modal::Scroll) {
-                // Scroll mode's plain keys: q and Enter exit (the
-                // viewport is a modal view — keys do not leak into the
-                // pane).
+                // Scroll mode's plain keys: q and Enter exit, the
+                // copy-mode letters (v y / n N e) reach the key handler
+                // (the viewport is a modal view — keys do not leak into
+                // the pane).
                 if byte == b'q' || byte == b'\r' {
                     self.leave_scroll_mode();
+                } else if byte.is_ascii_graphic() {
+                    self.scroll_mode_input(conn, &TermKeyEvent::char_(byte as char, 0));
                 }
             } else {
                 to_send.push(byte);
@@ -436,7 +443,7 @@ impl WindowSession {
             return;
         }
         match &self.modal {
-            Modal::Scroll => return self.scroll_mode_key(ev),
+            Modal::Scroll => return self.scroll_mode_input(conn, ev),
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
             Modal::Menu(_) => return self.menu_key(ev),
             Modal::Help(_) => return self.help_key(ev),

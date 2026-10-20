@@ -462,8 +462,11 @@ impl Grid {
     pub(in crate::grid) fn flatten_scrollback(rows: &[Box<[Cell]>], cols: usize) -> Vec<Cell> {
         let mut flat = Vec::with_capacity(rows.len() * cols);
         for row in rows {
-            flat.extend_from_slice(row);
-            flat.resize(flat.len() + (cols - row.len()), Cell::default());
+            // A row pushed before the grid narrowed is wider than `cols`:
+            // the flat format is fixed-width, so it truncates.
+            let start = flat.len();
+            flat.extend_from_slice(&row[..row.len().min(cols)]);
+            flat.resize(start + cols, Cell::default());
         }
         flat
     }

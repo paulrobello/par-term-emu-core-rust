@@ -7775,3 +7775,109 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
     );
     host.killer.kill().ok();
 }
+
+/// Copy mode's `e` against a live daemon (herdr's `edit_scrollback`):
+/// prefix [ then a typed `e` writes the pane's text to a private temp
+/// file and runs `$VISUAL` on it in a zoomed pane split off the focused
+/// one. The "editor" is a script that copies the file it was handed out;
+/// the launcher removes the temp files when the editor exits.
+#[cfg(unix)]
+#[test]
+fn render_mode_copy_mode_e_opens_the_scrollback_in_the_editor() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (fixture, _daemon, mut client) = fixture_with_session("editsb");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 40); do echo EDITLINE-$i; done'"
+        ))
+        .expect("fill");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {pane}"),
+        |s| s.contains("EDITLINE-40"),
+        Duration::from_secs(10),
+        "the EDITLINE loop ran",
+    );
+
+    let work = tempfile::tempdir().expect("work dir");
+    let tmp = work.path().join("tmp");
+    std::fs::create_dir(&tmp).expect("tmp dir");
+    let copy = work.path().join("edited.txt");
+    let editor = work.path().join("editor.sh");
+    std::fs::write(
+        &editor,
+        format!("#!/bin/sh\ncp \"$1\" '{}'\n", copy.display()),
+    )
+    .expect("editor script");
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let (mut host, stderr) = spawn_attach_with_env(
+        &fixture,
+        &["-t", &pane],
+        "render",
+        DEFAULT_CLIENT_CONFIG,
+        &[
+            ("VISUAL", editor.to_str().expect("utf-8 path")),
+            ("TMPDIR", tmp.to_str().expect("utf-8 path")),
+        ],
+    );
+    expect_output(
+        &host,
+        b"EDITLINE-40",
+        Duration::from_secs(10),
+        "EDITLINE-40 on the host screen",
+    );
+    host.to_child.write_all(&[0x02, b'[']).expect("prefix [");
+    host.to_child.flush().ok();
+    // input spacing: the chord and the copy-mode key are separate keypresses
+    std::thread::sleep(Duration::from_millis(200));
+    host.to_child.write_all(b"e").expect("e");
+    host.to_child.flush().ok();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !copy.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the editor never ran on the scrollback. panes: {:?} tmp: {:?} stderr: {}",
+            client.send("list-panes"),
+            std::fs::read_dir(&tmp)
+                .map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
+                .ok(),
+            stderr.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // cp may still be writing when the file first appears.
+    std::thread::sleep(Duration::from_millis(200));
+    let edited = std::fs::read_to_string(&copy).expect("editor copy");
+    assert!(
+        edited.contains("EDITLINE-1\n") && edited.contains("EDITLINE-40\n"),
+        "the editor saw the scrollback + screen: {edited:?}"
+    );
+    let cleanup = Instant::now() + Duration::from_secs(5);
+    loop {
+        let left: Vec<_> = std::fs::read_dir(&tmp)
+            .expect("tmp")
+            .flatten()
+            .map(|e| e.file_name())
+            .filter(|n| n.to_string_lossy().starts_with("par-mux-scrollback-"))
+            .collect();
+        if left.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < cleanup, "temp files left behind: {left:?}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    host.killer.kill().ok();
+}

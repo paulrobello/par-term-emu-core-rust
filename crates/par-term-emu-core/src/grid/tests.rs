@@ -86,6 +86,24 @@ fn snapshot_round_trips_per_line_storage() {
 }
 
 #[test]
+fn snapshot_after_narrowing_truncates_wider_scrollback_rows() {
+    // Scrollback rows keep the width they were pushed at; a grid narrowed
+    // without reflow must still flatten to fixed-width lines (it used to
+    // underflow `cols - row.len()` and panic every snapshot).
+    let mut grid = Grid::new(10, 3, 100);
+    for col in 0..10 {
+        grid.set(col, 0, Cell::new('W'));
+    }
+    grid.scroll_up(1);
+    grid.resize_without_reflow(4, 3);
+    assert_eq!(grid.scrollback_line(0).unwrap().len(), 10);
+
+    let snap = grid.capture_snapshot();
+    assert_eq!(snap.scrollback_cells.len(), 4);
+    assert!(snap.scrollback_cells.iter().all(|c| c.c == 'W'));
+}
+
+#[test]
 fn resize_with_large_scrollback_preserves_row_allocations() {
     // Acceptance 3: resize cost is bounded by the viewport. The stored
     // per-line rows are untouched by a resize (same allocations survive —

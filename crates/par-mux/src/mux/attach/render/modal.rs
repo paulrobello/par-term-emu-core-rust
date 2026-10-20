@@ -108,6 +108,23 @@ impl WindowSession {
             self.renderer.exit_scroll_mode(id);
         }
     }
+    /// One key while scroll mode is up, from either input path (a Key
+    /// token or a plain byte): `e` opens the scrollback in the editor
+    /// (it needs the connection), everything else is
+    /// [`Self::scroll_mode_key`]'s.
+    pub(super) fn scroll_mode_input(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+    ) {
+        use par_term_emu_core::keyboard::TermKey;
+        if ev.key() == TermKey::Char && ev.modifiers == 0 && ev.codepoint == u32::from(b'e') {
+            self.edit_scrollback(conn);
+            return;
+        }
+        self.scroll_mode_key(ev);
+    }
+
     /// One functional key while scroll mode is up: arrows line-scroll,
     /// PgUp/PgDn page by the pane's height, Home jumps to the top of
     /// history, End and q and Enter exit. Keys never reach the pane

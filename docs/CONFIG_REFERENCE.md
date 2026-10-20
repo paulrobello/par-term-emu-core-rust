@@ -859,6 +859,8 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `TERM_PROGRAM` | `par-mux attach` agent-state notifications | — | Refines `KITTY_WINDOW_ID`: any value other than unset or `kitty` forces the OSC 9 escape, so a kitty window id leaked through a nested environment cannot send OSC 99 to a terminal that does not parse it |
 | `XDG_RUNTIME_DIR` | par-mux default socket path (Unix) | unset: a per-UID directory under the temp directory | Directory for the default socket |
 | `TMPDIR` | System temp directory (Unix) | `/tmp` | Base for the per-UID socket fallback and debug logs |
+| `VISUAL` | `par-mux attach` copy mode `e` | unset | The editor the scrollback opens in; an empty value counts as unset |
+| `EDITOR` | `par-mux attach` copy mode `e` | unset | Fallback editor when `VISUAL` is unset; with neither set the key is refused |
 | `HOME` | par-mux | — | Fallback start directory when a pane's directory is gone |
 | `PATH` | par-mux client and Windows resume | — | Locating the `par-mux` binary; resolving `argv[0]` for Windows agent resume |
 | `COMPUTERNAME` | par-mux (Windows) | — | Local hostname for deciding whether an OSC 7 directory report is from this machine |

@@ -20,6 +20,7 @@ use ratatui::style::Modifier as RtModifier;
 use std::io::BufRead as _;
 
 mod chords;
+mod scrollback_edit;
 mod session;
 
 /// The daemon's actual render output for a 50/50 vertical split of an
@@ -1630,6 +1631,7 @@ fn fake_daemon(
                 continue;
             }
             let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+            let wildcard = format!("{name} *");
             let reply = match name.as_str() {
                 "version" => "9.9.9+deadbeef".to_string(),
                 // A script may override the feature roster (the `chrome`
@@ -1638,7 +1640,13 @@ fn fake_daemon(
                     .get("list-commands")
                     .cloned()
                     .unwrap_or_else(|| "list-commands\nfeatures replay-held-state\n".to_string()),
-                _ => replies.get(trimmed).cloned().unwrap_or_default(),
+                // `"<name> *"` answers any line of that command whose
+                // exact text the test cannot know (a temp path in it).
+                _ => replies
+                    .get(trimmed)
+                    .or_else(|| replies.get(&wildcard))
+                    .cloned()
+                    .unwrap_or_default(),
             };
             number += 1;
             tx.send((name, trimmed.to_owned())).ok();
@@ -1648,7 +1656,7 @@ fn fake_daemon(
             if let Some(delay) = delays.get(trimmed) {
                 std::thread::sleep(*delay);
             }
-            let ok = !failing.contains(trimmed);
+            let ok = !failing.contains(trimmed) && !failing.contains(&wildcard);
             writer
                 .write_all(crate::mux::emit_block(number, &reply, ok).as_bytes())
                 .ok();

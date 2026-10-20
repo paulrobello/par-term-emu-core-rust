@@ -45,6 +45,7 @@ mod pane_chrome;
 mod pending_cmd;
 mod pointer;
 mod renderer;
+mod scrollback_edit;
 mod session;
 mod sidebar;
 mod sidebar_state;
@@ -742,6 +743,9 @@ struct WindowSession {
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
     settings_path: Option<std::path::PathBuf>,
+    /// Copy mode's editor lookup, `($VISUAL, $EDITOR)`: the process
+    /// environment in a real attach, swapped by tests.
+    editor_lookup: fn() -> (Option<String>, Option<String>),
     /// The `[client]` section last re-resolved (launch or reload). A
     /// `%config-changed` whose re-read file states the same section is
     /// a no-op — the client whose own reload caused the broadcast.
@@ -1090,6 +1094,7 @@ impl WindowSession {
             scroll_match_ix: 0,
             sidebar_on_launch: chords.sidebar_on_launch,
             settings_path: None,
+            editor_lookup: scrollback_edit::env_editor_lookup,
             applied_client: crate::mux::config::ClientSection::default(),
             drag: None,
             render_opts: RenderOptions::default(),
