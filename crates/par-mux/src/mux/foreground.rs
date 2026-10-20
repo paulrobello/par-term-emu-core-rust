@@ -393,9 +393,12 @@ fn snapshot_metas() -> Option<Vec<ProcMeta>> {
 /// the args of an exec'ing process).
 #[cfg(target_os = "macos")]
 fn read_argv(pid: i32) -> Option<Vec<String>> {
-    // KERN_PROCARGS2 lays out: native-endian argc, argv[0] (the executable
-    // path), argv[1..], envp… — all NUL-separated strings. Keeping the
-    // first argc strings after the count yields argv.
+    // KERN_PROCARGS2 lays out: native-endian argc, the executable path,
+    // argv[0..argc], envp… — all NUL-separated strings. The exec path is
+    // kept as the first entry (`foreground_command` names it) and all argc
+    // argv strings follow, so the result holds argc + 1 strings: keeping
+    // only argc dropped the last argument — the script path of a
+    // `node …/agent` CLI, or `$0` of an `sh -c … <name>` stand-in.
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut len: libc::size_t = 0;
     // SAFETY: sizing call — `mib` holds the 3 names passed and the buffer is
@@ -439,8 +442,8 @@ fn read_argv(pid: i32) -> Option<Vec<String>> {
         .filter(|slice| !slice.is_empty())
         .map(|slice| String::from_utf8_lossy(slice).into_owned())
         .collect();
-    if parts.len() > argc {
-        parts.truncate(argc);
+    if parts.len() > argc + 1 {
+        parts.truncate(argc + 1);
     }
     if parts.is_empty() {
         None
@@ -641,6 +644,33 @@ mod tests {
             table.agent_alive(me, &exe),
             Liveness::Matches,
             "the process's own executable name matches its own label"
+        );
+    }
+
+    /// The last argument survives the argv read: an interpreter-run agent
+    /// (`node …/droid`) is named only by its final argv element.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_real_argv_keeps_its_last_argument() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30; :", "last-arg-marker"])
+            .spawn()
+            .expect("sh spawns");
+        let pid = child.id() as i32;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let argv = loop {
+            match read_argv(pid) {
+                Some(argv) if argv.iter().any(|a| a.contains("sleep")) => break argv,
+                _ if std::time::Instant::now() >= deadline => panic!("argv never readable"),
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("last-arg-marker"),
+            "{argv:?}"
         );
     }
 }

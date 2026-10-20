@@ -8,7 +8,11 @@
 //! ruling protected survives mechanically: a scrape that matches no rule
 //! produces NO state (a prior scrape's guess is cleared, never coerced to
 //! `idle`), and every surfaced value carries `scrape` provenance beside
-//! the `hook` provenance of a claim.
+//! the `hook` provenance of a claim. The one exception is opt-in per set:
+//! `idle_fallback = true` ports herdr's known-agent idle default for CLIs
+//! that draw no idle marker (droid, copilot, cursor), and fires only while
+//! the process table proves the agent runs in the pane, stored under the
+//! rule id [`IDLE_FALLBACK_RULE`].
 //!
 //! Patterns ship bundled (`include_str!`, one TOML per agent under
 //! `patterns/`) and a local override file shadows the bundled set for its
@@ -49,6 +53,10 @@ const BUNDLED_PATTERNS: &[(&str, &str)] = &[
 /// absence of a match, produced by no rule at all.
 const VALID_STATES: &[&str] = &["working", "blocked", "done", "idle"];
 
+/// The rule id the scrape tier stores for a fallback `idle`: a set with
+/// `idle_fallback = true`, no rule matching, the agent's process alive.
+pub const IDLE_FALLBACK_RULE: &str = "idle_fallback";
+
 /// The metadata keys the scrape tier writes — and clears together when a
 /// pattern stops matching.
 const SCRAPE_KEYS: &[&str] = &["agent_state", "agent_state_source", "agent_state_rule"];
@@ -62,6 +70,13 @@ struct PatternSet {
     version: String,
     #[serde(default)]
     aliases: Vec<String>,
+    /// herdr's engine default for a known agent
+    /// (`DEFAULT_KNOWN_AGENT_IDLE_FALLBACK`): no matching rule reads as
+    /// `idle` — here only while the process table proves the agent runs in
+    /// the pane. Opt-in per set, for agents whose CLIs draw no idle marker
+    /// a rule could match.
+    #[serde(default)]
+    idle_fallback: bool,
     #[serde(default)]
     rules: Vec<Rule>,
 }
@@ -133,6 +148,11 @@ struct CompiledRule {
 pub struct CompiledSet {
     rules: Vec<CompiledRule>,
     version: String,
+    /// The set's `id`, which the fallback's liveness probe also accepts,
+    /// so an alias label (`github-copilot`) finds a `copilot` process.
+    id: String,
+    /// See [`PatternSet::idle_fallback`].
+    idle_fallback: bool,
     /// Where the set came from: `bundled:patterns/<id>.toml`, or the
     /// override file's path. `agent-explain` names it.
     origin: String,
@@ -349,6 +369,8 @@ impl CompiledSet {
             CompiledSet {
                 rules,
                 version: set.version,
+                id: id.clone(),
+                idle_fallback: set.idle_fallback,
                 origin: format!("bundled:patterns/{id}.toml"),
             },
             id,
@@ -365,6 +387,31 @@ impl CompiledSet {
     /// The set's `version` field.
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// Whether the set opts into the idle fallback ([`IDLE_FALLBACK_RULE`]).
+    pub fn idle_fallback(&self) -> bool {
+        self.idle_fallback
+    }
+
+    /// The fallback verdict for a pane no rule matched: `idle` when the set
+    /// opts in and the process table proves the agent (under its label or
+    /// the set's id) runs in the pane's process tree. No table (Windows)
+    /// proves nothing, so the pane stays unknown.
+    fn fallback(
+        &self,
+        label: &str,
+        child_pid: Option<u32>,
+        table: Option<&ProcessTable>,
+    ) -> Option<(&'static str, &'static str)> {
+        if !self.idle_fallback {
+            return None;
+        }
+        let (table, pid) = (table?, child_pid?);
+        [label, self.id.as_str()]
+            .iter()
+            .any(|name| table.agent_alive(pid, name) == Liveness::Matches)
+            .then_some(("idle", IDLE_FALLBACK_RULE))
     }
 
     /// The rule the scrape tick would pick, with what `agent-explain`
@@ -659,7 +706,10 @@ pub(crate) fn scrape_tick_with(
                 screen: term.content(),
             }
         };
-        match set.evaluate(&snapshot) {
+        let matched = set
+            .evaluate(&snapshot)
+            .or_else(|| set.fallback(&agent, pane.child_pid(), table));
+        match matched {
             Some((state, rule)) => {
                 let prior_state = pane.metadata().get("agent_state").map(String::as_str);
                 let state = crate::mux::hooks::derive_state(prior_state, state, in_view);
@@ -1789,5 +1839,97 @@ contains = ["Override Idle"]
             Some(("working".to_string(), "spinner_working".to_string()))
         );
         assert_eq!(scrape_screen("cursor", "→ Add a follow-up\n"), None);
+    }
+
+    /// The pane's labelled state after one tick against `table`:
+    /// (agent_state, agent_state_rule).
+    fn tick_state(
+        tree: &Arc<Mutex<MuxTree>>,
+        pane_id: PaneId,
+        table: Option<&ProcessTable>,
+    ) -> (Option<String>, Option<String>) {
+        scrape_tick_with(tree, &ScrapeEngine::load(None), table);
+        let guard = tree.lock();
+        let metadata = guard.pane(pane_id).expect("pane exists").metadata();
+        (
+            metadata.get("agent_state").cloned(),
+            metadata.get("agent_state_rule").cloned(),
+        )
+    }
+
+    /// A table where the pane's shell runs `agent_argv` as its child.
+    fn table_running(child: u32, agent_argv: &[&str]) -> ProcessTable {
+        ProcessTable::with_fixed_argv(&[
+            (child as i32, 1, argv(&["-bash"])),
+            (child as i32 + 8000, child as i32, argv(agent_argv)),
+        ])
+    }
+
+    #[test]
+    fn idle_fallback_needs_the_agents_process_and_loses_to_a_rule() {
+        let engine = ScrapeEngine::load(None);
+        for agent in ["droid", "copilot", "cursor"] {
+            assert!(engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
+        }
+        for agent in ["claude", "codex", "grok", "muse"] {
+            assert!(!engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
+        }
+
+        let (tree, pane_id) = tree_with_pane();
+        tree.lock()
+            .pane_mut(pane_id)
+            .expect("pane exists")
+            .set_metadata("agent", "droid");
+        let child = tree.lock().pane(pane_id).unwrap().child_pid().unwrap();
+        let alive = table_running(child, &["node", "/opt/factory/bin/droid"]);
+        let shell_only = ProcessTable::with_fixed_argv(&[(child as i32, 1, argv(&["-bash"]))]);
+
+        // No table (Windows) and a table without droid prove nothing.
+        assert_eq!(tick_state(&tree, pane_id, None), (None, None));
+        assert_eq!(tick_state(&tree, pane_id, Some(&shell_only)), (None, None));
+
+        // droid alive, no rule matching: idle under the fallback rule id.
+        assert_eq!(
+            tick_state(&tree, pane_id, Some(&alive)),
+            (Some("idle".into()), Some(IDLE_FALLBACK_RULE.into()))
+        );
+
+        // A matching rule outranks the fallback.
+        feed(&tree, pane_id, "⠋ Thinking… (esc to stop)\r\n".as_bytes());
+        assert_eq!(
+            tick_state(&tree, pane_id, Some(&alive)),
+            (Some("working".into()), Some("spinner_stop_working".into()))
+        );
+
+        // droid gone: the fallback stops and the guess is cleared.
+        feed(&tree, pane_id, b"\x1b[2J\x1b[H");
+        assert_eq!(tick_state(&tree, pane_id, Some(&shell_only)), (None, None));
+    }
+
+    #[test]
+    fn idle_fallback_probes_the_set_id_under_an_alias_label() {
+        let (tree, pane_id) = tree_with_pane();
+        tree.lock()
+            .pane_mut(pane_id)
+            .expect("pane exists")
+            .set_metadata("agent", "github-copilot");
+        let child = tree.lock().pane(pane_id).unwrap().child_pid().unwrap();
+        let alive = table_running(child, &["/usr/local/bin/copilot"]);
+        assert_eq!(
+            tick_state(&tree, pane_id, Some(&alive)).0.as_deref(),
+            Some("idle")
+        );
+    }
+
+    #[test]
+    fn a_set_without_idle_fallback_stays_unknown_on_no_match() {
+        let (tree, pane_id) = tree_with_pane();
+        tree.lock()
+            .pane_mut(pane_id)
+            .expect("pane exists")
+            .set_metadata("agent", "claude");
+        let child = tree.lock().pane(pane_id).unwrap().child_pid().unwrap();
+        let alive = table_running(child, &["claude"]);
+        assert_eq!(tick_state(&tree, pane_id, Some(&alive)), (None, None));
     }
 }

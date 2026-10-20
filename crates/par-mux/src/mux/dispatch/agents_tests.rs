@@ -80,6 +80,17 @@ impl Fixture {
         }
     }
 
+    /// [`Self::scrape_until`] with the real process table, which the idle
+    /// fallback needs to prove the agent runs in the pane.
+    fn scrape_live_until(&self, stop: &AtomicBool) {
+        let engine = crate::mux::scrape::ScrapeEngine::bundled();
+        while !stop.load(Ordering::Relaxed) {
+            let table = crate::mux::foreground::ProcessTable::snapshot();
+            crate::mux::scrape::scrape_tick_with(&self.tree, &engine, table.as_ref());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Block until the pane's capture shows a line equal to `want`.
     fn wait_for_line(&self, want: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -203,6 +214,84 @@ fn agent_start_is_confirmed_by_a_scrape_rule() {
         let (lines, ok) = body(&reply);
         assert!(ok, "{reply}");
         assert_eq!(lines, vec!["%0 claude idle scrape"]);
+    });
+}
+
+/// The stand-in for droid/copilot/cursor: an `sh` whose argv carries the
+/// agent's name (`$0`) and which stays alive (the trailing `:` keeps sh
+/// from exec'ing `sleep`), drawing nothing a pattern rule matches.
+fn idle_fallback_start(kind: &str, timeout_ms: u64) -> String {
+    format!("agent-start -t %0 -T {timeout_ms} -x sh {kind} -c 'sleep 30; :' {kind}")
+}
+
+/// droid, copilot, and cursor draw no idle marker: their start is
+/// confirmed by the idle fallback once the agent's process is in the pane,
+/// and not before the start settle.
+#[test]
+fn agent_start_confirms_droid_copilot_and_cursor_by_the_idle_fallback() {
+    for kind in ["droid", "copilot", "cursor"] {
+        let f = Fixture::new();
+        f.wait_for_shell();
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| f.scrape_live_until(&stop));
+            let started = Instant::now();
+            let reply = f.run(&idle_fallback_start(kind, 10000));
+            stop.store(true, Ordering::Relaxed);
+            let (lines, ok) = body(&reply);
+            assert!(ok, "{kind}: {reply}");
+            assert_eq!(lines, vec![format!("%0 {kind} idle scrape")]);
+            let waited = started.elapsed();
+            assert!(
+                waited >= Duration::from_secs(3),
+                "{kind}: settled, {waited:?}"
+            );
+        });
+        assert_eq!(
+            f.metadata("agent_state_rule").as_deref(),
+            Some(crate::mux::scrape::IDLE_FALLBACK_RULE)
+        );
+    }
+}
+
+/// The fallback needs the agent's process: a program that is not droid
+/// never reads as droid idle, so the start times out and untags.
+#[test]
+fn agent_start_idle_fallback_needs_the_agents_process() {
+    let f = Fixture::new();
+    f.wait_for_shell();
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| f.scrape_live_until(&stop));
+        let reply = f.run("agent-start -t %0 -T 1500 -x cat droid");
+        stop.store(true, Ordering::Relaxed);
+        let (lines, ok) = body(&reply);
+        assert!(!ok);
+        assert_eq!(
+            lines,
+            vec!["agent-start: timed out after 1500ms waiting for droid on %0"]
+        );
+    });
+    assert_eq!(f.metadata("agent"), None, "the failed start's tag is gone");
+}
+
+/// A deadline inside the settle window cannot be confirmed by the
+/// fallback, and the timeout says the agent was seen but still settling.
+#[test]
+fn agent_start_timeout_inside_the_settle_names_it() {
+    let f = Fixture::new();
+    f.wait_for_shell();
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| f.scrape_live_until(&stop));
+        let reply = f.run(&idle_fallback_start("droid", 2000));
+        stop.store(true, Ordering::Relaxed);
+        let (lines, ok) = body(&reply);
+        assert!(!ok);
+        assert_eq!(
+            lines,
+            vec!["agent-start: timed out after 2000ms waiting for droid on %0 (still settling)"]
+        );
     });
 }
 

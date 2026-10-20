@@ -2175,3 +2175,49 @@ fn agent_start_explain_and_prompt_stall_through_the_cli() {
         stalled.stderr
     );
 }
+
+/// droid draws no idle marker: through the real daemon's tick and process
+/// table, a stand-in whose argv names droid is confirmed by the idle
+/// fallback after the start settle, and agent-explain names that rule.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn agent_start_confirms_droid_by_the_idle_fallback_through_the_cli() {
+    let fixture = MuxFixture::new("clidroid");
+    let _daemon = daemon_with_session(&fixture, "clidroid");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    cmd_ok(
+        socket,
+        &format!(r#"send-keys -t {pane} 'echo DROID""-READY' Enter"#),
+    );
+    cmd_ok(
+        socket,
+        &format!("wait-output -t {pane} -r '^DROID-READY$' -T 10000"),
+    );
+    let started = Instant::now();
+    let run = cmd(
+        socket,
+        &format!("agent-start -t {pane} -T 15000 -x sh droid -c 'sleep 60; :' droid"),
+    );
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.stdout, format!("{pane} droid idle scrape\n"));
+    assert!(started.elapsed() >= Duration::from_secs(3), "settled");
+
+    let explain = cmd_ok(socket, &format!("agent-explain -t {pane}"));
+    for want in [
+        "source scrape",
+        "rule idle_fallback",
+        "patterns bundled:patterns/droid.toml",
+    ] {
+        assert!(explain.lines().any(|l| l == want), "{want}: {explain}");
+    }
+}

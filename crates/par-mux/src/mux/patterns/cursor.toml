@@ -12,12 +12,19 @@
 # Region remaps: whole_recent -> whole (herdr's whole_recent region is the
 # whole visible screen, so the remap is exact).
 #
+# idle_fallback ports herdr's engine default for a known agent with no
+# matching rule (DEFAULT_KNOWN_AGENT_IDLE_FALLBACK in detect/manifest.rs):
+# cursor draws no idle marker, so its idle is "running, nothing matched".
+# par-mux applies it only while the process table shows cursor (or
+# cursor-agent) in the pane.
+#
 # Licensed under the Apache License, Version 2.0 as pattern data derived
 # from herdr; see herdr's LICENSE file for the license text.
 id = "cursor"
-version = "2026.08.03.1-parmux1"
+version = "2026.08.03.1-parmux2"
 updated_at = "2026-08-03T01:08:04Z"
 aliases = ["cursor-agent"]
+idle_fallback = true
 
 [[rules]]
 id = "write_file_approval"

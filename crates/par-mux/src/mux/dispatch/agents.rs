@@ -19,6 +19,11 @@ const AGENT_POLL: Duration = Duration::from_millis(100);
 /// (herdr's `PANE_SHELL_READINESS_RETRY_TIMEOUT`).
 const SHELL_READY_RETRY: Duration = Duration::from_secs(2);
 
+/// How long after typing the command `agent-start` refuses a scrape `idle`
+/// that only the idle fallback produced: a TUI still drawing its first
+/// frame matches no rule either (herdr's `AGENT_START_SETTLE_DELAY`).
+const START_SETTLE: Duration = Duration::from_secs(3);
+
 /// The gap between a prompt's text and its Enter, so a TUI that reads a
 /// fast paste as typing commits the text before the submit key (herdr's
 /// `AGENT_PROMPT_SUBMIT_DELAY`).
@@ -146,12 +151,13 @@ enum Observed {
     Closed,
     /// The pane's process exited.
     Exited,
-    /// The pane is live; its claim's label, state, and source (any may be
-    /// absent), and its activity counter.
+    /// The pane is live; its claim's label, state, source, and scrape rule
+    /// (any may be absent), and its activity counter.
     Live {
         agent: Option<String>,
         state: Option<String>,
         source: Option<String>,
+        rule: Option<String>,
         activity: u64,
     },
 }
@@ -169,6 +175,7 @@ fn observe(tree: &Arc<Mutex<MuxTree>>, pane: PaneId) -> Observed {
         agent: get("agent"),
         state: get("agent_state"),
         source: get("agent_state_source"),
+        rule: get("agent_state_rule"),
         activity: target.agent_activity,
     }
 }
@@ -268,7 +275,9 @@ pub(super) fn cmd_agent_start(
         untag_undetected(ctx.tree, pane, kind);
         return Outcome::err(ctx, &format!("agent-start: {err}"));
     }
+    let typed_at = Instant::now();
     let mut still_working = false;
+    let mut settling = false;
     loop {
         match observe(ctx.tree, pane) {
             Observed::Closed => {
@@ -285,6 +294,7 @@ pub(super) fn cmd_agent_start(
                 agent,
                 state,
                 source,
+                rule,
                 ..
             } => match (agent, state) {
                 (None, _) => {
@@ -311,6 +321,13 @@ pub(super) fn cmd_agent_start(
                 // spinner), not readiness — replying then would let the
                 // next `agent-prompt -w` mistake startup's end for its turn.
                 (Some(_), Some(state)) if state == "working" => still_working = true,
+                (Some(_), Some(_))
+                    if source.as_deref() == Some("scrape")
+                        && rule.as_deref() == Some(crate::mux::scrape::IDLE_FALLBACK_RULE)
+                        && typed_at.elapsed() < START_SETTLE =>
+                {
+                    settling = true;
+                }
                 (Some(agent), Some(state)) => {
                     let source = source.unwrap_or_else(|| "hook".to_string());
                     return Outcome::ok(ctx, &format!("{pane} {agent} {state} {source}"));
@@ -322,6 +339,8 @@ pub(super) fn cmd_agent_start(
             untag_undetected(ctx.tree, pane, kind);
             let still = if still_working {
                 " (still working)"
+            } else if settling {
+                " (still settling)"
             } else {
                 ""
             };
@@ -465,6 +484,7 @@ pub(super) fn cmd_agent_prompt(
                 state,
                 source,
                 activity: now,
+                ..
             } => {
                 if current.as_deref() != Some(agent.as_str()) {
                     return Outcome::err(
