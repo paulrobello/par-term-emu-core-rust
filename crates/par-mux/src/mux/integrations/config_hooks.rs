@@ -792,6 +792,9 @@ mod tests {
                 Err(err) => panic!("accept failed: {err}"),
             }
         };
+        // BSD/macOS accept() inherits the listener's O_NONBLOCK; a hook
+        // that connected but has not written yet would read WouldBlock.
+        stream.set_nonblocking(false).expect("blocking read");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("read timeout");
