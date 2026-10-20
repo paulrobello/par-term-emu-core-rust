@@ -125,7 +125,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | --- | --- | --- | --- |
 | Hooked / integrated agents | claude, codex, grok, muse, droid, copilot, cursor session hooks (scrape patterns for all seven) + pi/omp state extensions | 18 installable integrations; 22 agents supported + 5 self-reporting without install | PM-MUX / H-AGENTS |
 | Detection tiers | Hooks primary; scrape tier from screen text + OSC title using bundled herdr patterns (local override dir) | Foreground process discovery, evidence-based screen manifests, vendor hooks; `agent explain` shows the matched rule | PM-MUX / H-AGENTS |
-| States | working / blocked / idle (`unknown` never reported, `idle` never guessed) | blocked / working / done / idle / unknown (blocked deliberately strict; idle is never authorization) | PM-MUX / H-AGENTS |
+| States | working / blocked / done / idle (`done` = finished while no client viewed the pane, cleared to `idle` daemon-side when a client views it; `unknown` never reported, `idle` never guessed) | blocked / working / done / idle / unknown (blocked deliberately strict; idle is never authorization) | PM-MUX / H-AGENTS |
 | Structured telemetry | `report_agent_telemetry`: model, effort, context used/remaining %, reset times | Metadata reports with `--seq`/`--ttl-ms`; no model/context telemetry equivalent | PM-MUX / H-CLI |
 | Claim liveness | Once-per-second descendant-tree probe clears stale claims (macOS/Linux) | Agent identity survives Ctrl+Z suspend / `fg` resume and follows pane moves | PM-MUX / H-SKILL |
 | Resume after restart | Per-agent resume argv table; failed resume drops onto a live shell | Native conversation restore for 18 integrations, staggered startup, per-agent minimum versions | PM-MUX / H-STATE |
@@ -141,7 +141,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Capability | par-mux | herdr | Refs |
 | --- | --- | --- | --- |
 | Delivery channels | `inside` (in-app toast + bell), `terminal` (OSC 99 under kitty / OSC 9 elsewhere), `system` (osascript/notify-send), `off` | `herdr` toasts, `terminal`, `system`; configurable delay and toast positions | PM-MUX / H-CFG |
-| State filtering | `notify-states` (default blocked+idle), background-only rule | Per agent state and background-workspace triggers | PM-MUX / H-README |
+| State filtering | `notify-states` (default blocked+done), background-only rule | Per agent state and background-workspace triggers | PM-MUX / H-README |
 | Click / jump to source | Not found | `open_notification_target` keybinding; Windows toast click focuses the pane | — / H-CFG |
 | Ad-hoc notification command | No (system channel is the OS notifier path) | `herdr notification show <title> [--body] [--position] [--sound]` | PM-MUX / H-CLI |
 | Plugin event hooks | No plugin system | Plugin manifest `[[events]] on = "worktree.created"` triggers; `[[link_handlers]]` for OSC 8 links | — / H-PLUG |

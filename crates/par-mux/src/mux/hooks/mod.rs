@@ -24,10 +24,12 @@
 
 mod release;
 mod report;
+mod seen;
 mod telemetry;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use seen::{derive_state, mark_viewed_done_seen, pane_in_view};
 pub(crate) use telemetry::{fresh_telemetry_b64, StoredTelemetry, TELEMETRY_FRESHNESS_MS};
 
 use release::handle_release_report;
@@ -199,7 +201,7 @@ pub(crate) struct AgentClaim {
     /// The roster label — the claim's anchor: a pane is claimed iff the
     /// `agent` key is present.
     pub agent: String,
-    /// The reported state (working/blocked/idle).
+    /// The stored state (working/blocked/done/idle).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     /// Who authored the state: `"hook"` (permanent once set) or `"scrape"`.

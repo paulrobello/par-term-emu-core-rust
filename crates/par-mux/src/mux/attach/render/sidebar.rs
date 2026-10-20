@@ -253,11 +253,12 @@ pub(super) fn active_row_bg(bg: Option<RtColor>) -> RtColor {
 
 /// A rail status glyph's style: herdr's palette mapped onto the host's
 /// indexed colors (so the host theme applies) — working yellow, blocked
-/// red, idle green, no agent dim.
+/// red, done teal (cyan), idle green, no agent dim.
 fn status_style(status: AgentStatus) -> RtStyle {
     let base = RtStyle::default();
     match status {
         AgentStatus::Working => base.fg(RtColor::Indexed(3)),
+        AgentStatus::Done => base.fg(RtColor::Indexed(6)),
         AgentStatus::Blocked => base.fg(RtColor::Indexed(1)),
         AgentStatus::Idle => base.fg(RtColor::Indexed(2)),
         AgentStatus::None => base.add_modifier(RtModifier::DIM),

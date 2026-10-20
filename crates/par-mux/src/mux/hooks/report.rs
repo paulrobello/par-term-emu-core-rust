@@ -8,7 +8,7 @@ use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-/// `pane.report_agent`: state (working/blocked/idle), plus whatever session
+/// `pane.report_agent`: state (working/blocked/done/idle), plus whatever session
 /// identity the hook happens to know.
 pub(super) fn handle_state_report(
     id: Option<serde_json::Value>,
@@ -27,14 +27,14 @@ pub(super) fn handle_state_report(
     else {
         return (error_reply(id, "missing state"), None);
     };
-    // herdr's fixed set, verbatim: anything else would ride the roster and
-    // broadcast lines as a word consumers cannot parse (or, with a
-    // newline, forge whole ones).
-    if !matches!(state, "working" | "blocked" | "idle" | "unknown") {
+    // herdr's fixed set plus its derived `done`: anything else would ride
+    // the roster and broadcast lines as a word consumers cannot parse (or,
+    // with a newline, forge whole ones).
+    if !matches!(state, "working" | "blocked" | "done" | "idle" | "unknown") {
         return (
             error_reply(
                 id,
-                &format!("invalid state: {state} (working, blocked, idle, or unknown)"),
+                &format!("invalid state: {state} (working, blocked, done, idle, or unknown)"),
             ),
             None,
         );
@@ -66,6 +66,7 @@ pub(super) fn handle_state_report(
             .workspace_of_pane(header.pane_id)
             .map(|w| w.to_string())
             .unwrap_or_default();
+        let in_view = super::pane_in_view(&guard, header.pane_id);
         let Some(pane) = guard.pane_mut(header.pane_id) else {
             return (
                 error_reply(id, &format!("no such pane: {}", header.pane_id)),
@@ -85,6 +86,7 @@ pub(super) fn handle_state_report(
         // present and CLEARED when a later report omits it, so a stale
         // reason cannot survive into a new state.
         let mut claim = pane.agent_claim().unwrap_or_default();
+        let state = super::derive_state(claim.state.as_deref(), state, in_view);
         claim.agent = header.agent.clone();
         claim.state = Some(state.to_string());
         // A hook state report makes this pane hook-authoritative from now

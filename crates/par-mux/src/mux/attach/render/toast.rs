@@ -115,6 +115,7 @@ impl PaneRenderer {
         let dot = match toast.status {
             AgentStatus::Blocked => RtColor::Indexed(1),
             AgentStatus::Working => RtColor::Indexed(3),
+            AgentStatus::Done => RtColor::Indexed(6),
             AgentStatus::Idle => RtColor::Indexed(4),
             AgentStatus::None => RtColor::Indexed(14),
         };

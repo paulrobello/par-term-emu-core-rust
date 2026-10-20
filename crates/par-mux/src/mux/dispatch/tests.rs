@@ -1580,3 +1580,123 @@ fn list_format_flags_expand_variables() {
     let panes = assert_ok(&h.run("list-panes -t work -F '#{pane_id} #{unknown}'"));
     assert_eq!(panes, vec!["%0 ".to_string()], "{panes:?}");
 }
+
+fn report_state(
+    h: &Harness,
+    pane: PaneId,
+    agent: &str,
+    state: &str,
+    seq: u64,
+) -> (
+    String,
+    Option<par_term_emu_core::tmux_control::TmuxNotification>,
+) {
+    crate::mux::hooks::handle_report(
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"{state}","seq":{seq},"source":"t"}}}}"#
+        ),
+        &h.tree,
+    )
+}
+
+fn pushed_state(push: Option<par_term_emu_core::tmux_control::TmuxNotification>) -> String {
+    match push {
+        Some(par_term_emu_core::tmux_control::TmuxNotification::AgentStateChanged {
+            state,
+            ..
+        }) => state,
+        other => panic!("expected an agent-state push, got {other:?}"),
+    }
+}
+
+/// herdr's `done`: an agent that finishes (working -> idle) while no
+/// render client shows its window is stored and listed as `done`; the
+/// first client view that shows the pane clears it to `idle` daemon-side
+/// and broadcasts the flip with the claim's own provenance and workspace.
+#[test]
+fn done_holds_until_a_client_views_the_pane_then_clears_to_idle() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s shown"));
+    assert_ok(&h.run("new-session -s background"));
+    let shown_pane = h.panes_of(h.windows_of(h.session_named("shown"))[0])[0];
+    let agent_pane = h.panes_of(h.windows_of(h.session_named("background"))[0])[0];
+    // A render client views the OTHER session's window.
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {shown_pane} -C 100x30"),
+    ));
+    pushed_state(report_state(&h, agent_pane, "claude", "working", 1).1);
+    assert_eq!(
+        pushed_state(report_state(&h, agent_pane, "claude", "idle", 2).1),
+        "done",
+        "finished out of view is done"
+    );
+    let roster = assert_ok(&h.run("list-agents"));
+    assert!(
+        roster[0].starts_with(&format!("{agent_pane} claude done hook")),
+        "{roster:?}"
+    );
+
+    // A command from a viewer still showing the other window clears
+    // nothing.
+    h.drain();
+    assert_ok(&h.run_as(Some(1), "list-agents"));
+    assert!(
+        !h.drain()
+            .iter()
+            .any(|l| l.starts_with("%agent-state-changed")),
+        "nothing was viewed"
+    );
+
+    // The client switches its view to the agent's window: seen.
+    assert_ok(&h.run_as(
+        Some(1),
+        &format!("refresh-client -t {agent_pane} -C 100x30"),
+    ));
+    let pushes = h.drain();
+    let flip = pushes
+        .iter()
+        .find(|l| l.starts_with("%agent-state-changed"))
+        .unwrap_or_else(|| panic!("the seen flip broadcasts: {pushes:?}"));
+    assert!(
+        flip.starts_with(&format!(
+            "%agent-state-changed {agent_pane} claude idle source=hook ws="
+        )),
+        "{flip}"
+    );
+    let roster = assert_ok(&h.run("list-agents"));
+    assert!(
+        roster[0].starts_with(&format!("{agent_pane} claude idle hook")),
+        "{roster:?}"
+    );
+
+    // While viewed, a finish is idle straight away.
+    pushed_state(report_state(&h, agent_pane, "claude", "working", 3).1);
+    assert_eq!(
+        pushed_state(report_state(&h, agent_pane, "claude", "idle", 4).1),
+        "idle",
+        "finished in view is idle"
+    );
+}
+
+/// An explicit `done` report is accepted; once a viewer shows the pane a
+/// `done` report is stored as `idle` (seen the moment it arrives).
+#[test]
+fn an_explicit_done_report_is_accepted_and_seen_when_in_view() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s one"));
+    let pane = h.panes_of(h.windows_of(h.session_named("one"))[0])[0];
+    let (reply, push) = report_state(&h, pane, "pi", "done", 1);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+    assert_eq!(pushed_state(push), "done");
+    let roster = assert_ok(&h.run("list-agents"));
+    assert!(
+        roster[0].starts_with(&format!("{pane} pi done hook")),
+        "{roster:?}"
+    );
+    assert_ok(&h.run_as(Some(2), &format!("refresh-client -t {pane} -C 80x24")));
+    assert_eq!(
+        pushed_state(report_state(&h, pane, "pi", "done", 2).1),
+        "idle"
+    );
+}

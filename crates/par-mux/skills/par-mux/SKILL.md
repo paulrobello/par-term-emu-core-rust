@@ -164,6 +164,11 @@ The blocked reason is standard base64 of the whitespace-collapsed message
 (`echo <b64> | base64 -d`), so a reason can never be mistaken for a grammar
 token.
 
+A finished agent reads `idle` OR `done`: `done` means it finished while no
+attached client was viewing its pane, and it stays `done` until one does. With
+no render client attached every finish reads `done`, so a script waiting for
+an agent to finish must accept both.
+
 Agent panes spawn with an env contract a script inside the pane can use:
 
 ```sh
@@ -205,7 +210,9 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   \"state\":\"blocked\",\"message\":\"waiting for review\"}}" | nc -U "$PAR_MUX_SOCKET"
 ```
 
-- `state` is `working` / `blocked` / `idle` (`unknown` accepted, never stored);
+- `state` is `working` / `blocked` / `done` / `idle` (`unknown` accepted, never
+  stored; the daemon stores an `idle` after work as `done` until a client views
+  the pane, so a reporter need not send `done` itself);
   `seq` must increase per pane **per source** — stale reports are dropped
   silently. Use an epoch clock (`date +%s`); a shell-start counter like
   `$SECONDS` restarts near 0 for every invocation and gets dropped.

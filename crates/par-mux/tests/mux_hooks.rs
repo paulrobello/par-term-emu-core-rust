@@ -675,6 +675,48 @@ fn stale_report_over_the_wire_writes_and_broadcasts_nothing() {
     sigterm_clean(&mut stage.daemon);
 }
 
+/// herdr's `done` over a live daemon: a finish while no render client
+/// shows the pane is `done` on the roster and the push; a control client
+/// reporting a view of the pane's window clears it to `idle` daemon-side
+/// and every client hears the flip.
+#[test]
+fn a_finish_out_of_view_is_done_until_a_client_views_the_pane() {
+    let mut stage = stage("done");
+    let pane = stage.pane.clone();
+    // The control client is not a viewer yet (no size report).
+    for (state, seq) in [("working", 1_000_u64), ("idle", 1_001)] {
+        let reply = hook_round_trip(&stage.path, &report(&pane, state, seq));
+        assert!(reply.contains(r#""result":"ok""#), "{reply}");
+    }
+    let done = stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed") && !line.contains(" working "),
+        "the finish broadcast",
+    );
+    assert!(
+        done.starts_with(&format!(
+            "%agent-state-changed {pane} kimi done source=hook"
+        )),
+        "{done}"
+    );
+    let roster = stage.control.command("list-agents").join("");
+    assert!(
+        roster.contains(&format!("{pane} kimi done hook")),
+        "{roster}"
+    );
+
+    stage
+        .control
+        .command(&format!("refresh-client -t {pane} -C 100x30"));
+    let roster = stage.control.command("list-agents").join("");
+    assert!(
+        roster.contains(&format!("{pane} kimi idle hook")),
+        "viewing the pane marks it seen: {roster}"
+    );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
 #[test]
 fn a_hook_connection_receives_no_broadcast_pushes() {
     let mut stage = stage("quiet");

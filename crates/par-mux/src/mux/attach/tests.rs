@@ -1956,9 +1956,12 @@ fn compose_sidebar_rail_shows_indices_statuses_and_the_expand_chevron() {
     assert_eq!(tall[8].text, "9·");
     assert_eq!(tall[9].text, "+·");
     // The workspace glyph is its agents' most urgent state.
-    assert!(AgentStatus::Blocked > AgentStatus::Working);
+    assert!(AgentStatus::Blocked > AgentStatus::Done);
+    assert!(AgentStatus::Done > AgentStatus::Working);
     assert!(AgentStatus::Working > AgentStatus::Idle);
     assert_eq!(AgentStatus::from_state("blocked"), AgentStatus::Blocked);
+    assert_eq!(AgentStatus::from_state("done"), AgentStatus::Done);
+    assert_eq!(AgentStatus::Done.glyph(), "●", "unseen reads as busy");
     assert_eq!(AgentStatus::from_state("unknown"), AgentStatus::None);
 }
 

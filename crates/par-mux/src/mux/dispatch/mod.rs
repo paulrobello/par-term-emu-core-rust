@@ -185,6 +185,10 @@ pub(super) fn dispatch_command(
     let mutates = command.mutates();
     let outcome = route_command(command, ctx, issuer);
     emit_outcome(&outcome, ctx, issuer);
+    let seen = crate::mux::hooks::mark_viewed_done_seen(&mut ctx.tree.lock());
+    for notification in &seen {
+        broadcast_notification(ctx.clients, notification);
+    }
     if mutates && outcome.succeeded {
         persist_state(ctx, persist);
     }

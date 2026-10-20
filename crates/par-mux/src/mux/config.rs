@@ -247,8 +247,8 @@ pub struct ClientSection {
     )]
     pub notify_delivery: Option<String>,
     /// The agent states whose arrival notifies (`working`, `blocked`,
-    /// `idle`). Default `["blocked", "idle"]` — needs attention, and
-    /// finished.
+    /// `done`, `idle`). Default `["blocked", "done"]` — needs attention,
+    /// and finished while out of view.
     #[serde(
         default,
         rename = "notify-states",
@@ -766,7 +766,7 @@ pub fn display_option_warnings(chords: &Chords) -> Vec<String> {
 }
 
 /// The agent states `notify-states` may select.
-pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "idle"];
+pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "done", "idle"];
 
 /// The agent entry's tokens a line may name (config `agent-rows`).
 pub const AGENT_ROW_TOKENS: &[&str] = &[
@@ -807,7 +807,7 @@ impl Chords {
             sidebar_on_launch: true,
             agent_rows: default_agent_rows(),
             notify_delivery: "terminal".to_string(),
-            notify_states: vec!["blocked".to_string(), "idle".to_string()],
+            notify_states: vec!["blocked".to_string(), "done".to_string()],
         }
     }
 }
@@ -1847,7 +1847,7 @@ remain-on-exit = true
         assert_eq!(file.client.agent_rows, Some(default_agent_rows()));
     }
 
-    /// The notification keys resolve to `terminal` + blocked/idle when
+    /// The notification keys resolve to `terminal` + blocked/done when
     /// absent, follow explicit values (an empty state list notifies
     /// nothing), and warn on unknown spellings without failing.
     #[test]
@@ -1861,7 +1861,7 @@ remain-on-exit = true
             resolve_with("").unwrap(),
             (
                 "terminal".to_string(),
-                vec!["blocked".to_string(), "idle".to_string()]
+                vec!["blocked".to_string(), "done".to_string()]
             )
         );
         assert_eq!(
@@ -1869,14 +1869,14 @@ remain-on-exit = true
             ("system".to_string(), Vec::new())
         );
         let file: ConfigFile = toml::from_str(
-            "[client]\nnotify-delivery = \"toast\"\nnotify-states = [\"done\", \"idle\"]\n",
+            "[client]\nnotify-delivery = \"toast\"\nnotify-states = [\"finished\", \"done\"]\n",
         )
         .unwrap();
         let chords = reload_client_chords(&file, &Chords::with_defaults()).expect("never an error");
         let warnings = display_option_warnings(&chords);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings[0].contains("\"toast\""), "{warnings:?}");
-        assert!(warnings[1].contains("\"done\""), "{warnings:?}");
+        assert!(warnings[1].contains("\"finished\""), "{warnings:?}");
         assert!(display_option_warnings(&Chords::with_defaults()).is_empty());
         let generated = render(&EffectiveConfig::default());
         assert!(

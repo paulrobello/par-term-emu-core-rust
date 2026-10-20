@@ -3251,6 +3251,38 @@ fn sidebar_agents_section_groups_by_workspace() {
     assert_eq!(rows[2], arow(5, None, "pi", "idle", false));
 }
 
+/// A `done` agent shows in the agents section with the done status, and
+/// its workspace row carries it over a working sibling (herdr's
+/// priority: blocked > done > working > idle).
+#[test]
+fn sidebar_shows_done_agents_and_ranks_them_over_working() {
+    use crate::mux::attach::panels::AgentStatus;
+    let roster = vec![("+0".to_string(), "main".to_string(), true)];
+    let agents = vec![
+        roster_entry(2, "claude", "working", Some("+0")),
+        roster_entry(3, "pi", "done", Some("+0")),
+    ];
+    let names = vec![("+0".to_string(), "main".to_string())];
+    let sections = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        None,
+        &crate::mux::config::default_agent_rows(),
+    )
+    .expect("sections");
+    assert_eq!(
+        sections[1].rows[1],
+        arow(3, Some("main"), "pi", "done", false)
+    );
+    assert_eq!(sections[1].rows[1].status, AgentStatus::Done);
+    assert_eq!(sections[0].rows[0].status, AgentStatus::Done);
+    let custom = vec![vec!["agent".to_string(), "state".to_string()]];
+    let sections =
+        WindowSession::sidebar_sections(&roster, &agents, &names, None, &custom).expect("sections");
+    assert_eq!(sections[1].rows[1].label, "pi \u{b7} done");
+}
+
 /// The agent entry follows `agent-rows`: the default puts the project
 /// beside the workspace (once a probe reported it), a custom table
 /// renders its own tokens and lines, and the entry's workspace row
@@ -3675,6 +3707,47 @@ fn agent_state_push_notifies_selected_transitions_only() {
     session.notify.delivery = NotifyDelivery::Off;
     push(&mut session, "%1", "blocked");
     assert!(session.notify.outbox.is_empty());
+}
+
+/// The default `notify-states` selects `done` (finished unseen); the
+/// daemon's seen flip (done -> idle, another client viewed the pane)
+/// never notifies, even with `idle` selected.
+#[test]
+fn done_notifies_and_the_seen_flip_does_not() {
+    use super::super::notify::NotifyDelivery;
+    let (_rx, mut conn) = fake_daemon("snapdone", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.states = crate::mux::config::Chords::with_defaults().notify_states;
+    assert_eq!(session.notify.states, vec!["blocked", "done"]);
+    session.refresh_status_facts(&mut conn).expect("seed");
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,80x24,0,0,9").expect("parses"));
+    let push = |session: &mut WindowSession, state: &str| {
+        session.handle_event(TmuxNotification::AgentStateChanged {
+            pane_id: "%1".to_string(),
+            agent: "claude".to_string(),
+            state: state.to_string(),
+            source: "hook".to_string(),
+            ws: "+0".to_string(),
+            msg: String::new(),
+        });
+    };
+    push(&mut session, "working");
+    push(&mut session, "done");
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]9;par-mux: main ? claude: done\x07"
+    );
+    session.notify.states.push("idle".to_string());
+    push(&mut session, "idle");
+    assert!(
+        session.notify.outbox.is_empty(),
+        "done -> idle is the seen flip, not news"
+    );
 }
 
 /// An agent whose project the probe has not reported yet keeps the

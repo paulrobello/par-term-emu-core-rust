@@ -5007,12 +5007,31 @@ fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
         .expect("focus main");
     let mut moved = wait_for_output(&host, b"\x00-never", Duration::from_millis(1500));
     all.append(&mut moved);
-    // Now in the background: working -> idle notifies.
-    assert!(report("idle", 2).contains(r#""result":"ok""#));
-    let got = wait_for_output(&host, b"labagent: idle", Duration::from_secs(10));
+    // Now in the background: working -> idle is a finish nobody saw, so
+    // the daemon stores `done`, which the default notify-states selects.
+    // The client's re-seed onto `main` lands asynchronously; until its
+    // size report moves the daemon-side view off the lab window, a finish
+    // is (correctly) seen. Retry the finish until the daemon calls it done.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut seq = 2;
+    loop {
+        assert!(report("idle", seq).contains(r#""result":"ok""#));
+        let roster = client.send("list-agents").expect("list-agents").join("\n");
+        if roster.contains("labagent done") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon never saw the lab pane leave view: {roster}"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(report("working", seq + 1).contains(r#""result":"ok""#));
+        seq += 2;
+    }
+    let got = wait_for_output(&host, b"labagent: done", Duration::from_secs(10));
     let text = String::from_utf8_lossy(&got);
     assert!(
-        text.contains("\x1b]9;par-mux: ") && text.contains("labagent: idle"),
+        text.contains("\x1b]9;par-mux: ") && text.contains("labagent: done"),
         "the left-behind agent notifies. stderr: {} bytes: {text:?}",
         stderr.lock().unwrap()
     );

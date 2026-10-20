@@ -719,6 +719,9 @@ pub(crate) enum AgentStatus {
     None,
     Idle,
     Working,
+    /// Finished while out of view (herdr's priority: above working, below
+    /// blocked).
+    Done,
     Blocked,
 }
 
@@ -728,17 +731,19 @@ impl AgentStatus {
         match state {
             "idle" => Self::Idle,
             "working" => Self::Working,
+            "done" => Self::Done,
             "blocked" => Self::Blocked,
             _ => Self::None,
         }
     }
 
-    /// The rail glyph: herdr's dots (`●` busy, `○` idle, `·` nothing).
+    /// The rail glyph: herdr's dots (`●` busy or unseen, `○` idle, `·`
+    /// nothing).
     pub(crate) fn glyph(self) -> &'static str {
         match self {
             Self::None => "·",
             Self::Idle => "○",
-            Self::Working | Self::Blocked => "●",
+            Self::Working | Self::Done | Self::Blocked => "●",
         }
     }
 }

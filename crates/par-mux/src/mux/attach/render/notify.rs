@@ -162,8 +162,12 @@ impl WindowSession {
         // Background-only (herdr's rule): an agent in the window this
         // client shows is already in view, so it never notifies.
         let in_view = self.renderer.layout().iter().any(|r| r.pane == pane);
+        // done -> idle is the daemon marking the pane seen (another client
+        // viewed it), not the agent changing anything.
+        let seen_flip = previous == Some("done") && state == "idle";
         if self.notify.delivery == NotifyDelivery::Off
             || in_view
+            || seen_flip
             || previous == Some(state)
             || !self.notify.states.iter().any(|s| s == state)
         {

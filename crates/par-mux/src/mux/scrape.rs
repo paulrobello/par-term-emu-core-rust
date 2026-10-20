@@ -47,7 +47,7 @@ const BUNDLED_PATTERNS: &[(&str, &str)] = &[
 
 /// The states a rule may assert. `unknown` is not among them: it is the
 /// absence of a match, produced by no rule at all.
-const VALID_STATES: &[&str] = &["working", "blocked", "idle"];
+const VALID_STATES: &[&str] = &["working", "blocked", "done", "idle"];
 
 /// The metadata keys the scrape tier writes — and clears together when a
 /// pattern stops matching.
@@ -552,6 +552,7 @@ pub(crate) fn scrape_tick_with(
             .workspace_of_pane(pane_id)
             .map(|w| w.to_string())
             .unwrap_or_default();
+        let in_view = crate::mux::hooks::pane_in_view(&guard, pane_id);
         let Some(pane) = guard.pane_mut(pane_id) else {
             continue;
         };
@@ -604,8 +605,10 @@ pub(crate) fn scrape_tick_with(
         };
         match set.evaluate(&snapshot) {
             Some((state, rule)) => {
-                let unchanged = prior_source.as_deref() == Some("scrape")
-                    && pane.metadata().get("agent_state").map(String::as_str) == Some(state);
+                let prior_state = pane.metadata().get("agent_state").map(String::as_str);
+                let state = crate::mux::hooks::derive_state(prior_state, state, in_view);
+                let unchanged =
+                    prior_source.as_deref() == Some("scrape") && prior_state == Some(state);
                 if !unchanged {
                     pane.set_metadata("agent_state", state);
                     pane.set_metadata("agent_state_source", "scrape");
@@ -1046,6 +1049,69 @@ contains = ["Override Idle"]
         assert_eq!(
             set.evaluate(&snapshot).map(|(s, _)| s.to_string()),
             Some("idle".to_string())
+        );
+    }
+
+    /// A rule may assert `done` directly (herdr's derived state, as a
+    /// pattern target).
+    #[test]
+    fn an_override_rule_can_match_done() {
+        let tmp = override_dir();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join("kimi.toml"),
+            OVERRIDE_SET
+                .replace("claude", "kimi")
+                .replace("state = \"idle\"", "state = \"done\""),
+        )
+        .expect("write");
+        let engine = ScrapeEngine::load(Some(dir));
+        let set = engine.set_for("kimi").expect("a done rule validates");
+        let snapshot = PaneSnapshot {
+            title: "Override Idle".to_string(),
+            screen: String::new(),
+        };
+        assert_eq!(
+            set.evaluate(&snapshot).map(|(s, _)| s.to_string()),
+            Some("done".to_string())
+        );
+    }
+
+    /// A scraped finish (working -> idle) on a pane no client views is
+    /// `done`, and later ticks that keep matching idle hold it quietly
+    /// rather than re-broadcasting every tick.
+    #[test]
+    fn a_scraped_finish_out_of_view_is_done_and_holds_quietly() {
+        let (tree, pane_id) = tree_with_pane();
+        tree.lock()
+            .pane_mut(pane_id)
+            .expect("pane exists")
+            .set_metadata("agent", "claude");
+        let engine = ScrapeEngine::load(None);
+        feed(&tree, pane_id, b"\x1b]0;\xe2\xa0\x8b Thinking hard\x07");
+        assert_eq!(scrape_tick(&tree, &engine).len(), 1, "working");
+        feed(&tree, pane_id, "\x1b]0;\u{2733} ready\x07".as_bytes());
+        let finished = scrape_tick(&tree, &engine);
+        assert!(
+            matches!(
+                finished.as_slice(),
+                [TmuxNotification::AgentStateChanged { state, source, .. }]
+                    if state == "done" && source == "scrape"
+            ),
+            "{finished:?}"
+        );
+        assert!(
+            scrape_tick(&tree, &engine).is_empty(),
+            "a held done does not re-broadcast"
+        );
+        assert_eq!(
+            tree.lock()
+                .pane(pane_id)
+                .expect("pane exists")
+                .metadata()
+                .get("agent_state")
+                .map(String::as_str),
+            Some("done")
         );
     }
 

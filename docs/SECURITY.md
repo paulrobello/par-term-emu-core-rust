@@ -1231,7 +1231,7 @@ one JSON reply). Validation is bounded and ordered:
   capped at **4 KiB**: these values persist into pane metadata and the
   on-disk state file, and the label also rides broadcast lines, so
   without a cap each field could pin up to the full line budget per pane.
-- `state` must be one of the fixed set (`working`, `blocked`, `idle`);
+- `state` must be one of the fixed set (`working`, `blocked`, `done`, `idle`);
   `unknown` is the absence of a claim and is never written or broadcast.
 - `session_resume_argv` must be an array of non-empty strings (its
   JSON-encoded form is under the same 4 KiB cap).
