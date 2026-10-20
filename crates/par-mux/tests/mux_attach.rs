@@ -2169,6 +2169,84 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     host.killer.kill().ok();
 }
 
+/// omp's fullscreen TUI (pi-mono) enables `?1000 ?1002 ?1004 ?1006` and
+/// scrolls on SGR wheel reports — the same enable shape as this repro.
+/// The wheel must forward to a mouse-owning pane exactly like a press
+/// does, re-encoded SGR pane-relative (wheel-up is button code 64).
+#[cfg(unix)]
+#[test]
+fn render_mode_wheel_forwards_to_a_pane_that_owns_mouse() {
+    let (fixture, _daemon, mut client) = fixture_with_session("wheelfwd");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"\\033[?1000h\\033[?1002h\\033[?1004h\\033[?1006hMOUSE%sON\\n\" -; cat -v'"
+        ))
+        .expect("enable mouse + reader");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("MOUSE-ON") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never ran the mouse-enable printf: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut painted: Vec<u8> = Vec::new();
+    while !plain_text(&painted).contains("MOUSE-ON") {
+        assert!(
+            Instant::now() < deadline,
+            "the render client never painted the pane's marker: {:?}\nstderr: {}",
+            plain_text(&painted),
+            stderr.lock().unwrap()
+        );
+        painted.extend(wait_for_output(&host, b"", Duration::from_millis(100)));
+    }
+
+    // Wheel-up at host col 10 row 5, the same geometry the click test
+    // maps to pane-relative (8, 2) 0-based: the pane must receive
+    // ESC[<64;9;3M.
+    host.to_child.write_all(b"\x1b[<64;10;5M").expect("wheel");
+    host.to_child.flush().ok();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("^[[<64;9;3M") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        body.contains("^[[<64;9;3M"),
+        "the owning pane must receive the pane-relative SGR wheel: {body:?}\n\
+         stderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
 /// Reconstruct the screen a render-mode client painted, from its
 /// per-cell diff stream: each flush cell is `CUP row;col` + SGR run +
 /// one symbol. Returns `(final, ever)`: the final `rows` strings of
